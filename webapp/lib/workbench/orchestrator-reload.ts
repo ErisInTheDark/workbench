@@ -17,6 +17,7 @@ export const ORCHESTRATOR_RELOAD_SCOPES = [
   "opencode-server",
   "next-dev",
   "orchestrator-server",
+  "reload-coordinator",
 ] as const satisfies readonly OrchestratorReloadScope[];
 
 export const ORCHESTRATOR_ALL_RELOAD_SCOPES = [

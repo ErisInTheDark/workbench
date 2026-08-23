@@ -16,6 +16,7 @@ const RELOAD_SWITCHES = [
   "--opencode-bridge",
   "--opencode-server",
   "--next-dev",
+  "--reload-coordinator",
 ] as const;
 
 const reloadScope = z.enum([
@@ -26,11 +27,19 @@ const reloadScope = z.enum([
   "opencode-bridge",
   "opencode-server",
   "next-dev",
+  "reload-coordinator",
 ]);
 
-function buildReloadRequest(scopes: readonly string[]) {
+function buildReloadRequest(scopes: readonly string[], context: { callerHarness: string; callerThreadId: string | null; cwd: string }) {
   return {
-    ...postWorkbenchAgentCommand("/api/orchestrator/reload", { scopes: [...scopes] }, "orchestrator-reload"),
+    ...postWorkbenchAgentCommand("/api/orchestrator/reload", {
+      ...(context.callerThreadId ? {
+        callerHarness: context.callerHarness,
+        callerThreadId: context.callerThreadId,
+        cwd: context.cwd,
+      } : {}),
+      scopes: [...scopes],
+    }, "orchestrator-reload"),
     waitForReload: true,
   } as const;
 }
@@ -39,7 +48,7 @@ const documentedReload = defineWorkbenchAgentCommand({
   description: "Reload selected Workbench runtime subsystems and wait for terminal reload status.",
   helpGroups: ["orchestrator"],
   words: ["orchestrator", "reload"],
-  usage: "wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--mcp] [--opencode-bridge] [--opencode-server] [--next-dev]",
+  usage: "wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--mcp] [--opencode-bridge] [--opencode-server] [--next-dev] [--reload-coordinator]",
   inputSchema: z.object({ scopes: z.array(reloadScope).min(1) }).strict().superRefine(({ scopes }, context) => {
     if (new Set(scopes).size !== scopes.length) context.addIssue({ code: "custom", message: "Reload scopes must be unique." });
   }),
@@ -53,8 +62,8 @@ const documentedReload = defineWorkbenchAgentCommand({
       ])),
     };
   },
-  buildRequest(input) {
-    return buildReloadRequest(input.scopes);
+  buildRequest(input, context) {
+    return buildReloadRequest(input.scopes, context);
   },
 });
 
@@ -65,7 +74,7 @@ const reload = {
     const selectedOrdinaryFlags = RELOAD_SWITCHES.filter((flag) => flags.has(flag));
     if (!flags.has("--hard")) return await documentedReload.buildRequestFromCli(args, context);
     if (flags.has("--all") || selectedOrdinaryFlags.length) throw new Error("--hard must be requested by itself.");
-    return buildReloadRequest(["orchestrator-server"]);
+    return buildReloadRequest(["orchestrator-server"], context);
   },
 };
 

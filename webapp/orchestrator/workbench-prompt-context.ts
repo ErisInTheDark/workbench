@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_PROMPT_CONTEXT_FIELD: private bridge request key carrying Workbench prompt context. Keywords: prompt, context, bridge.
- * - readWorkbenchPromptContext: parse Workbench prompt context from a bridge request. Keywords: prompt, parser, harness.
+ * - readWorkbenchPromptContext: parse Workbench prompt context from a bridge request. Keywords: prompt, parser, harness, cwd.
  */
 import type { WorkbenchProjectRoot } from "../lib/types";
 import type { WorkbenchPromptContext } from "../lib/workbench/instructions/WorkbenchPromptFiles";
@@ -71,6 +71,7 @@ export function readWorkbenchPromptContext(message: JsonRpcRequest): WorkbenchPr
 
   return {
     agentPath: asString(value.agentPath),
+    cwd: asString(value.cwd),
     instructionScope: readInstructionScope(value.instructionScope),
     instructionInjections: readInstructionInjections(value.instructionInjections),
     projectId: asString(value.projectId),

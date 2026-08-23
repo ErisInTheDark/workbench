@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - withWorkbenchCodexMcpConfig: add the Workbench-owned loopback MCP server to a managed Codex thread config. Keywords: workbench, Codex, MCP, thread config.
+ * - withWorkbenchCodexMcpConfig: add the capability-specific Workbench loopback MCP server to a managed Codex thread config. Keywords: workbench, Codex, MCP, thread config.
  */
 
 const WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS = 30 * 60;
@@ -11,17 +11,21 @@ function asRecord(value: unknown) {
     : {};
 }
 
-function getWorkbenchMcpUrl(bridgeUrl: string) {
+import type { WorkbenchProjectCapabilities } from "./workbench-project-capabilities";
+
+function getWorkbenchMcpUrl(bridgeUrl: string, capabilities: WorkbenchProjectCapabilities) {
   const url = new URL(bridgeUrl);
   if (url.protocol !== "ws:" && url.protocol !== "wss:") {
     throw new Error(`Workbench Codex bridge URL must use ws:// or wss://, received ${bridgeUrl}`);
   }
   const protocol = url.protocol === "wss:" ? "https:" : "http:";
   const port = url.port || (url.protocol === "wss:" ? "443" : "80");
-  return new URL(`/orchestrator/mcp`, `${protocol}//127.0.0.1:${port}`).toString();
+  const mcpUrl = new URL(`/orchestrator/mcp`, `${protocol}//127.0.0.1:${port}`);
+  if (capabilities.reloadScopes) mcpUrl.searchParams.set("capabilities", "reload-scopes");
+  return mcpUrl.toString();
 }
 
-export function withWorkbenchCodexMcpConfig(params: Record<string, unknown>, bridgeUrl: string) {
+export function withWorkbenchCodexMcpConfig(params: Record<string, unknown>, bridgeUrl: string, capabilities: WorkbenchProjectCapabilities = { reloadScopes: false }) {
   const config = asRecord(params.config);
   const mcpServers = asRecord(config.mcp_servers);
   return {
@@ -34,7 +38,7 @@ export function withWorkbenchCodexMcpConfig(params: Record<string, unknown>, bri
           default_tools_approval_mode: "approve",
           required: true,
           tool_timeout_sec: WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS,
-          url: getWorkbenchMcpUrl(bridgeUrl),
+          url: getWorkbenchMcpUrl(bridgeUrl, capabilities),
         },
       },
     },

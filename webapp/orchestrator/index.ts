@@ -57,7 +57,8 @@ import { createOrchestratorFeatureModuleLoader } from "./orchestrator-feature-lo
 import type { OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification } from "./orchestrator-feature-registry";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
-import type { WorkbenchHarnessReloadPlan, WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
+import ReloadableWorkbenchOrchestratorReloadController from "./ReloadableWorkbenchOrchestratorReloadController";
+import type { WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
@@ -172,6 +173,10 @@ const turnRecoveryController = new WorkbenchTurnRecoveryController(
 );
 const subagentStore = new WorkbenchSubagentStore(PROJECT_ROOT);
 const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
+const orchestratorReloadController = new ReloadableWorkbenchOrchestratorReloadController({
+  executeScopes: executeReloadScopes,
+  listClaims: async (cwd) => await featureHost.run("gitArc", (feature) => feature.listReloadScopeClaims(cwd)),
+});
 const featureHost = new OrchestratorFeatureHost<OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification>(
   createOrchestratorFeatureContext(),
   createOrchestratorFeatureModuleLoader(),
@@ -349,6 +354,7 @@ function finalizeReloadResponse(
 
 async function stopAllChildren() {
   codexRecoverySupervisor.dispose();
+  orchestratorReloadController.dispose();
   await featureHost.dispose();
 
   for (const entry of processes.values()) {
@@ -442,8 +448,31 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
     },
     notifyThreadLifecycle: (projectId, entry) => {
       for (const listener of threadStateLifecycleListeners) listener(projectId, entry);
+      orchestratorReloadController.notifyEligibilityChanged();
     },
+    notifyReloadEligibilityChanged: () => orchestratorReloadController.notifyEligibilityChanged(),
     publishThreadState,
+    requestOrchestratorReload: async (body, signal) => {
+      const record = asRecord(body);
+      const harness = record?.callerHarness;
+      const threadId = record?.callerThreadId;
+      const cwd = record?.cwd;
+      const scopes = normalizeOrchestratorReloadScopes(record?.scopes);
+      if ((harness !== "codex" && harness !== "copilot" && harness !== "opencode")
+        || typeof threadId !== "string" || !threadId.trim()
+        || typeof cwd !== "string" || !cwd.trim()
+        || !scopes.length) {
+        throw new Error("A managed thread identity, cwd, and at least one reload scope are required.");
+      }
+      const invalidCombination = validateOrchestratorReloadScopeCombination(scopes);
+      if (invalidCombination) throw new Error(invalidCombination);
+      return Response.json(await orchestratorReloadController.request({
+        cwd: cwd.trim(),
+        harness,
+        scopes,
+        threadId: threadId.trim(),
+      }, signal));
+    },
     requestSubagent: (request) => requestLiveHarness("codex", request),
     subagentStore,
     threadTransitions: threadTransitionCoordinator,
@@ -1119,53 +1148,51 @@ async function reloadOpenCodeBridge({ restartManagedServer = false }: { restartM
   }
 }
 
-function queueReload(scopes: OrchestratorReloadScope[], harnessPlan: WorkbenchHarnessReloadPlan) {
+async function executeReloadScopes(scopes: OrchestratorReloadScope[]) {
+  const coreScopes = new Set<OrchestratorReloadScope>(["orchestrator-logic", "browse-controller", "mcp", "next-dev", "orchestrator-server", "reload-coordinator"]);
+  const harnessPlan = featureHost.get("harnesses").planReload(scopes.filter((scope) => !coreScopes.has(scope)));
+  if (scopes.includes("orchestrator-server")) throw new Error("Full orchestrator restart requires the controlled restart boundary.");
+  if (scopes.includes("orchestrator-logic") || scopes.includes("mcp") || harnessPlan.reloadOrchestratorLogic) {
+    await reloadOrchestratorLogic();
+  }
+
+  if (scopes.includes("orchestrator-logic") || scopes.includes("browse-controller") || scopes.includes("mcp") || harnessPlan.refreshWorkbenchPromptFiles) {
+    await ensureWorkbenchPromptFiles();
+  }
+
+  await featureHost.get("harnesses").executeReloadPlan(harnessPlan);
+
+  if (scopes.includes("browse-controller")) await reloadBrowseController();
+  if (scopes.includes("next-dev")) {
+    const nextSpec = findProcessSpec("next-dev");
+    if (!nextSpec) throw new Error("Next.js dev process is not registered with the orchestrator.");
+    restartChild(nextSpec);
+    log("orchestrator", "queued Next.js dev restart");
+  }
+  if (scopes.includes("mcp")) {
+    const generation = codexMcpGenerationController.bump();
+    log("orchestrator", `advanced wb MCP generation to ${generation}`);
+  }
+}
+
+function queueReload(scopes: OrchestratorReloadScope[]) {
   const startedAt = lastReloadResponse.startedAt;
   setImmediate(() => {
-    void (async () => {
-      try {
-        if (scopes.includes("orchestrator-logic") || scopes.includes("mcp") || harnessPlan.reloadOrchestratorLogic) {
-          await reloadOrchestratorLogic();
-        }
-
-        if (scopes.includes("orchestrator-logic") || scopes.includes("browse-controller") || scopes.includes("mcp") || harnessPlan.refreshWorkbenchPromptFiles) {
-          await ensureWorkbenchPromptFiles();
-        }
-
-        await featureHost.get("harnesses").executeReloadPlan(harnessPlan);
-
-        if (scopes.includes("browse-controller")) {
-          await reloadBrowseController();
-        }
-
-        if (scopes.includes("next-dev")) {
-          const nextSpec = findProcessSpec("next-dev");
-          if (!nextSpec) {
-            throw new Error("Next.js dev process is not registered with the orchestrator.");
-          }
-
-          restartChild(nextSpec);
-          log("orchestrator", "queued Next.js dev restart");
-        }
-        if (scopes.includes("mcp")) {
-          const generation = codexMcpGenerationController.bump();
-          log("orchestrator", `advanced wb MCP generation to ${generation}`);
-        }
-        finalizeReloadResponse(startedAt, {
-          completedAt: Date.now(),
-          error: null,
-          state: "succeeded",
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        finalizeReloadResponse(startedAt, {
-          completedAt: Date.now(),
-          error: message,
-          state: "failed",
-        });
-        logError("orchestrator", error instanceof Error ? error.stack ?? error.message : message);
-      }
-    })();
+    void orchestratorReloadController.executeUnmanaged(scopes).then(() => {
+      finalizeReloadResponse(startedAt, {
+        completedAt: Date.now(),
+        error: null,
+        state: "succeeded",
+      });
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      finalizeReloadResponse(startedAt, {
+        completedAt: Date.now(),
+        error: message,
+        state: "failed",
+      });
+      logError("orchestrator", error instanceof Error ? error.stack ?? error.message : message);
+    });
   });
 }
 
@@ -1251,10 +1278,9 @@ async function handleReloadHttpRequest(request: http.IncomingMessage, response: 
     return;
   }
 
-  const coreScopes = new Set(["orchestrator-logic", "browse-controller", "mcp", "next-dev", "orchestrator-server"]);
-  let harnessPlan: WorkbenchHarnessReloadPlan;
+  const coreScopes = new Set(["orchestrator-logic", "browse-controller", "mcp", "next-dev", "orchestrator-server", "reload-coordinator"]);
   try {
-    harnessPlan = featureHost.get("harnesses").planReload(requestedScopes.filter((scope) => !coreScopes.has(scope)));
+    featureHost.get("harnesses").planReload(requestedScopes.filter((scope) => !coreScopes.has(scope)));
   } catch (error) {
     sendHttpJson(response, 400, { error: error instanceof Error ? error.message : "Invalid harness reload scope." });
     return;
@@ -1262,7 +1288,7 @@ async function handleReloadHttpRequest(request: http.IncomingMessage, response: 
   const scopes = requestedScopes as OrchestratorReloadScope[];
   lastReloadResponse = createReloadResponse(scopes);
   sendHttpJson(response, 202, lastReloadResponse);
-  queueReload(scopes, harnessPlan);
+  queueReload(scopes);
 }
 
 function scheduleRestart(spec: ProcessSpec) {

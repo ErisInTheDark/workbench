@@ -13,6 +13,7 @@ test("parses caller-owned selections but discards an untrusted harness selector"
     method: "turn/start",
     [WORKBENCH_PROMPT_CONTEXT_FIELD]: {
       agentPath: "agent://default.md",
+      cwd: "C:/git/web/workbench",
       harness: "copilot",
       instructionScope: "threadUtilities",
       projectId: "web/workbench",
@@ -21,6 +22,7 @@ test("parses caller-owned selections but discards an untrusted harness selector"
     },
   });
   assert.equal(context?.agentPath, "agent://default.md");
+  assert.equal(context?.cwd, "C:/git/web/workbench");
   assert.equal(context?.instructionScope, "threadUtilities");
   assert.equal(context?.harness, undefined);
   assert.deepEqual(context?.workflowIds, ["subagent"]);

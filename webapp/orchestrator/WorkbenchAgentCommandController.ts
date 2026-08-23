@@ -14,12 +14,11 @@ import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
-const RELOAD_TIMEOUT_MS = 60_000;
-
 interface WorkbenchAgentDirectPort {
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
+  requestOrchestratorReload?: (body: Record<string, unknown>, signal: AbortSignal) => Promise<Response>;
   requestSubagent?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
 }
 
@@ -165,13 +164,7 @@ export default class WorkbenchAgentCommandController {
   }
 
   async executeStructuredRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
-    if (!request.waitForReload) return await this.dispatchRequest(request, signal);
-    const admission = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
-    const text = await admission.text();
-    if (!admission.ok || readReloadState(text) !== "running") {
-      return new Response(text, { headers: admission.headers, status: admission.status });
-    }
-    return await this.pollReloadRequest(request, signal, text);
+    return await this.dispatchRequest(request, signal);
   }
 
   private buildRequestInit(request: WorkbenchAgentCliRequest, signal: AbortSignal): RequestInit {
@@ -197,6 +190,20 @@ export default class WorkbenchAgentCommandController {
     }
     if (request.path === "/api/git-checkpoint" && request.body && this.direct.executeGitArcRequest) {
       return await this.direct.executeGitArcRequest(request.body);
+    }
+    if (request.path === "/api/orchestrator/reload" && request.body) {
+      const scopes = Array.isArray(request.body.scopes) ? request.body.scopes : [];
+      const managed = typeof request.body.callerThreadId === "string" && request.body.callerThreadId.trim();
+      if (managed && !(scopes.length === 1 && scopes[0] === "orchestrator-server")) {
+        if (!this.direct.requestOrchestratorReload) throw new Error("Direct orchestrator reload dispatch is not configured.");
+        return await this.direct.requestOrchestratorReload(request.body, signal);
+      }
+      const admission = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
+      const text = await admission.text();
+      if (!admission.ok || readReloadState(text) !== "running") {
+        return new Response(text, { headers: admission.headers, status: admission.status });
+      }
+      return await this.pollUnmanagedReload(request, signal, text);
     }
     if (request.path.startsWith("/api/browse/sessions")) {
       return await this.direct.executeSessionRequest({ body, method: request.method, url: request.path }, signal);
@@ -285,37 +292,29 @@ export default class WorkbenchAgentCommandController {
   }
 
   private async admitReloadRequest(request: WorkbenchAgentCliRequest, response: http.ServerResponse, signal: AbortSignal) {
-    const admission = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
-    const text = await admission.text();
-    if (!admission.ok || readReloadState(text) !== "running") {
-      await this.writeCliResponse(request, response, new Response(text, { headers: admission.headers, status: admission.status }), signal);
-      return;
-    }
-
-    // Terminal polling intentionally outlives the feature-generation lease. The open HTTP response owns its deadline and cancellation.
-    void this.completeReloadResponse(request, response, signal, text);
+    // The stable reload coordinator owns the long wait after this feature-generation lease returns.
+    void this.completeReloadResponse(request, response, signal, this.dispatchRequest(request, signal));
   }
 
   private async completeReloadResponse(
     request: WorkbenchAgentCliRequest,
     target: http.ServerResponse,
     signal: AbortSignal,
-    initialText: string,
+    completion: Promise<Response>,
   ) {
     try {
-      await this.writeCliResponse(request, target, await this.pollReloadRequest(request, signal, initialText), signal);
+      await this.writeCliResponse(request, target, await completion, signal);
     } catch (error) {
       if (signal.aborted) return;
       sendText(target, 500, `${error instanceof Error ? error.message : String(error)}\n`);
     }
   }
 
-  private async pollReloadRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal, initialText: string) {
+  private async pollUnmanagedReload(request: WorkbenchAgentCliRequest, signal: AbortSignal, initialText: string) {
     let response: Response | null = null;
     let text = initialText;
     let state = readReloadState(text);
-    const deadline = Date.now() + RELOAD_TIMEOUT_MS;
-    while (state === "running" && Date.now() < deadline) {
+    while (state === "running") {
       await waitForDelay(RELOAD_POLL_INTERVAL_MS, signal);
       try {
         response = await this.fetchRequest(this.resolveUrl(request.path), { cache: "no-store", method: "GET", redirect: "error", signal });
@@ -326,9 +325,6 @@ export default class WorkbenchAgentCommandController {
       if (!response.ok) continue;
       text = await response.text();
       state = readReloadState(text);
-    }
-    if (state === "running") {
-      return new Response(JSON.stringify({ error: `Workbench orchestrator reload did not settle within ${RELOAD_TIMEOUT_MS}ms.` }), { status: 504 });
     }
     return new Response(text, { headers: response?.headers, status: response?.status ?? 200 });
   }

@@ -664,7 +664,8 @@ isolatedControllerTest("failed arc adoption publishes neither a successor ref no
 isolatedControllerTest("accepted proposals narrow claims, continue through successors, and resolve after disjoint commits", async (context) => {
   const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
   const controller = new WorkbenchGitCheckpointController();
-  const started = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  const registry = new GitArcRegistry(repository);
+  const started = await registry.find({ harness: "codex", threadId: "partial-thread" });
   assert.equal(started?.phase, "active");
   await fs.writeFile(path.join(source, "one.txt"), "committed one\n");
   await fs.writeFile(path.join(source, "two.txt"), "remaining two\n");

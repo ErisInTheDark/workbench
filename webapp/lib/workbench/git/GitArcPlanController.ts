@@ -5,6 +5,8 @@
  * - GitArcPlanResult/GitArcPlanState/GitArcStartResult: typed immutable plan, current-plan projection, and visible claim-transition receipts. Keywords: git, plan, start, claims.
  */
 import type { GitCheckpointFileChange } from "./checkpoint-contracts";
+import type { OrchestratorReloadScope } from "../../types";
+import { normalizeOrchestratorReloadScopes } from "../orchestrator-reload";
 import createGitArcStartDiagnosticError from "./git-arc-start-diagnostics";
 import GitArcRegistry, {
   findGitArcCollisions,
@@ -22,6 +24,7 @@ interface PlanInput {
   intentDescription?: string;
   intentName: string;
   paths: string[];
+  reloadScopes?: OrchestratorReloadScope[];
   threadId: string;
 }
 
@@ -38,6 +41,7 @@ export interface GitArcPlanResult {
   kind: "plan";
   preservedDriftPathCount: number;
   preservedDriftPaths: string[];
+  reloadScopes?: OrchestratorReloadScope[];
   repoRoot: string;
   scopePaths: string[];
 }
@@ -47,6 +51,7 @@ export interface GitArcPlanState {
   harness: string;
   intentDescription: string;
   intentName: string;
+  reloadScopes?: OrchestratorReloadScope[];
   scopePaths: string[];
   threadId: string;
   updatedAt: string;
@@ -59,6 +64,7 @@ export interface GitArcStartResult {
   checkpointRef: string;
   intentName: string | null;
   releasedClaims: string[];
+  reloadScopes: OrchestratorReloadScope[];
   repoRoot: string;
   scopePaths: string[];
 }
@@ -113,6 +119,7 @@ function presentation(entry: GitArcRegistryEntry) {
     intentName: entry.intentName,
     phase: entry.phase === "resolved" ? "resolved" as const : "active" as const,
     proposalIds: entry.proposalIds ?? [],
+    reloadScopes: normalizeOrchestratorReloadScopes(entry.reloadScopes),
   };
 }
 
@@ -130,11 +137,13 @@ export default class GitArcPlanController {
     return await Promise.all(entries.map(async (entry) => {
       const checkpoint = await store.readCheckpoint(normalizeHarness(entry.harness), entry.threadId, entry.checkpointCommit);
       const metadata = requirePlanMetadata(checkpoint.metadata);
+      const reloadScopes = normalizeOrchestratorReloadScopes(metadata.reloadScopes);
       return {
         checkpointCommit: entry.checkpointCommit,
         harness: entry.harness,
         intentDescription: metadata.intentDescription ?? "",
         intentName: metadata.intentName ?? entry.intentName,
+        ...(reloadScopes.length ? { reloadScopes } : {}),
         scopePaths: metadata.scopePaths.length ? repository.normalizePaths(metadata.scopePaths) : [],
         threadId: entry.threadId,
         updatedAt: entry.updatedAt,
@@ -161,6 +170,7 @@ export default class GitArcPlanController {
       intentDescription: input.intentDescription ?? "",
       intentName: input.intentName,
       paths: input.paths,
+      reloadScopes: normalizeOrchestratorReloadScopes(input.reloadScopes),
       retainedArc: current ? presentation(current) : null,
     }, current?.checkpointCommit, { baselinePlan });
   }
@@ -187,6 +197,7 @@ export default class GitArcPlanController {
       intentDescription: input.intentDescription ?? "",
       intentName: input.intentName,
       paths: input.paths,
+      reloadScopes: normalizeOrchestratorReloadScopes(input.reloadScopes),
       retainedArc: current ? presentation(current) : null,
     }, current?.checkpointCommit);
     const retainedArc = await this.prepareRetainedArc(
@@ -209,6 +220,7 @@ export default class GitArcPlanController {
       intentName: plan.metadata.intentName,
       kind: "arc",
       registryLifecycle: true,
+      reloadScopes: normalizeOrchestratorReloadScopes(plan.metadata.reloadScopes),
       scopePaths: plan.paths,
       version: 3,
     };
@@ -229,6 +241,7 @@ export default class GitArcPlanController {
       phase: "active",
       proposalId: null,
       proposalIds: [],
+      reloadScopes: normalizeOrchestratorReloadScopes(activeMetadata.reloadScopes),
       retainedArc: undefined,
       threadId: input.threadId,
     }, current ? { expectedCheckpointCommit: current.checkpointCommit } : undefined);
@@ -244,6 +257,7 @@ export default class GitArcPlanController {
       checkpointRef: active.checkpointRef,
       intentName: plan.metadata.intentName ?? null,
       releasedClaims: current ? liveClaims(current) : [],
+      reloadScopes: normalizeOrchestratorReloadScopes(activeMetadata.reloadScopes),
       repoRoot: repository.root,
       scopePaths: plan.paths,
     };
@@ -288,6 +302,7 @@ export default class GitArcPlanController {
         phase: "active",
         proposalId: null,
         proposalIds: [],
+        reloadScopes: normalizeOrchestratorReloadScopes(metadata.reloadScopes),
         retainedArc: undefined,
         threadId: input.threadId,
       });
@@ -298,6 +313,7 @@ export default class GitArcPlanController {
         checkpointRef: plan.checkpointRef,
         intentName: metadata.intentName ?? null,
         releasedClaims: [],
+        reloadScopes: normalizeOrchestratorReloadScopes(metadata.reloadScopes),
         repoRoot: repository.root,
         scopePaths: paths,
       };
@@ -343,6 +359,7 @@ export default class GitArcPlanController {
       intentName: metadata.intentName,
       kind: "arc",
       registryLifecycle: true,
+      reloadScopes: normalizeOrchestratorReloadScopes(metadata.reloadScopes),
       scopePaths: paths,
       version: 3,
     };
@@ -358,6 +375,7 @@ export default class GitArcPlanController {
       phase: "active",
       proposalId: null,
       proposalIds: [],
+      reloadScopes: normalizeOrchestratorReloadScopes(activeMetadata.reloadScopes),
       retainedArc: undefined,
       threadId: input.threadId,
     }, current ? { expectedCheckpointCommit: current.checkpointCommit } : undefined);
@@ -370,6 +388,7 @@ export default class GitArcPlanController {
       checkpointRef: prepared.checkpointRef,
       intentName: metadata.intentName ?? null,
       releasedClaims,
+      reloadScopes: normalizeOrchestratorReloadScopes(activeMetadata.reloadScopes),
       repoRoot: repository.root,
       scopePaths: paths,
     };
@@ -391,6 +410,7 @@ export default class GitArcPlanController {
         intentDescription: current.intentDescription,
         intentName: current.intentName,
         paths: [...new Set([...current.claimedPaths, ...paths])].sort((left, right) => left.localeCompare(right)),
+        reloadScopes: normalizeOrchestratorReloadScopes(current.reloadScopes),
         retainedArc: presentation(current),
       }, current.checkpointCommit);
     }
@@ -425,6 +445,7 @@ export default class GitArcPlanController {
       intentDescription: metadata.intentDescription ?? "",
       intentName: metadata.intentName ?? current.intentName,
       paths: nextPaths,
+      reloadScopes: normalizeOrchestratorReloadScopes(metadata.reloadScopes),
       retainedArc: current.retainedArc ?? null,
     }, current.checkpointCommit, {
       baselinePlan: plan,
@@ -437,7 +458,7 @@ export default class GitArcPlanController {
     registry: GitArcRegistry,
     harness: GitArcHarness,
     threadId: string,
-    input: { adoptPaths: string[]; intentDescription: string; intentName: string; paths: string[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null },
+    input: { adoptPaths: string[]; intentDescription: string; intentName: string; paths: string[]; reloadScopes: OrchestratorReloadScope[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null },
     expectedCheckpointCommit?: string,
     options: { baselinePlan?: StoredCheckpoint | null; refreshPaths?: string[] } = {},
   ): Promise<GitArcPlanResult> {
@@ -452,6 +473,7 @@ export default class GitArcPlanController {
       phase: "plan",
       proposalId: null,
       proposalIds: [],
+      reloadScopes: normalizeOrchestratorReloadScopes(plan.metadata.reloadScopes),
       retainedArc: retainedArc ?? undefined,
       threadId,
     }, expectedCheckpointCommit);
@@ -463,6 +485,7 @@ export default class GitArcPlanController {
       kind: "plan",
       preservedDriftPathCount: plan.preservedDriftPathCount,
       preservedDriftPaths: plan.preservedDriftPaths,
+      reloadScopes: normalizeOrchestratorReloadScopes(plan.metadata.reloadScopes),
       repoRoot: repository.root,
       scopePaths: plan.paths,
     };
@@ -473,7 +496,7 @@ export default class GitArcPlanController {
     registry: GitArcRegistry,
     harness: GitArcHarness,
     threadId: string,
-    input: { adoptPaths: string[]; intentDescription: string; intentName: string; paths: string[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null },
+    input: { adoptPaths: string[]; intentDescription: string; intentName: string; paths: string[]; reloadScopes: OrchestratorReloadScope[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null },
     amendedFrom?: string,
     options: { baselinePlan?: StoredCheckpoint | null; refreshPaths?: string[] } = {},
   ) {
@@ -508,6 +531,7 @@ export default class GitArcPlanController {
       intentName: input.intentName.trim(),
       kind: "plan",
       registryLifecycle: true,
+      reloadScopes: normalizeOrchestratorReloadScopes(input.reloadScopes),
       scopePaths,
       version: 3,
     };

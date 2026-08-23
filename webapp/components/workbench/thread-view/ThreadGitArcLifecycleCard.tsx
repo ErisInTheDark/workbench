@@ -24,6 +24,7 @@ import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
+import ThreadReloadScopeList from "./ThreadReloadScopeList";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 
 type ReleaseAction = "restore" | "unclaim";
@@ -184,6 +185,7 @@ export default function ThreadGitArcLifecycleCard({
             data-thread-git-arc-resolution="true"
             data-thread-git-arc-resolution-separator={visibleProposals.length ? "true" : undefined}
           >
+            <ThreadReloadScopeList scopes={claim.reloadScopes ?? []} />
             <ThreadDisclosure
               contentClassName="mt-1 pl-1"
               summary={(

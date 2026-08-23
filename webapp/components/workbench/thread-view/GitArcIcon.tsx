@@ -4,6 +4,7 @@
  * - GitArcClaimIcon: render the flag marker used by claimed-file rows. Keywords: git, arc, icon, claim, file.
  * - GitArcPlannedClaimIcon: render the dashed flag marker used by planned-file rows. Keywords: git, arc, icon, plan, claim, file.
  * - GitArcConflictIcon: render the square-x marker used for conflicting planned and active claims. Keywords: git, arc, icon, conflict, overlap.
+ * - GitArcReloadScopeIcon: render the circular-arrow marker used by runtime reload scopes. Keywords: git, arc, icon, reload, scope.
  */
 import type { ReactNode } from "react";
 
@@ -45,6 +46,15 @@ export function GitArcConflictIcon({ className = "size-4" }: { className?: strin
       <rect height="18" rx="2" ry="2" width="18" x="3" y="3" />
       <path d="m15 9-6 6" />
       <path d="m9 9 6 6" />
+    </SvgFrame>
+  );
+}
+
+export function GitArcReloadScopeIcon({ className = "size-4" }: { className?: string }) {
+  return (
+    <SvgFrame className={className}>
+      <path d="M20 11a8.1 8.1 0 1 0 1 4" />
+      <path d="M20 4v7h-7" />
     </SvgFrame>
   );
 }

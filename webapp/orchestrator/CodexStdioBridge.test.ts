@@ -371,6 +371,7 @@ test("managed thread starts, resumes, and forks receive wb MCP config without re
   };
   try {
     for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
+      const capable = method === "thread/start";
       const result = await owner.withWorkbenchPromptInstructions({
         method,
         params: {
@@ -380,7 +381,7 @@ test("managed thread starts, resumes, and forks receive wb MCP config without re
           },
           threadId: "thread",
         },
-        workbenchPromptContext: { instructionScope: "threadUtilities", threadId: "thread" },
+        workbenchPromptContext: { ...(capable ? { cwd: root } : {}), instructionScope: "threadUtilities", threadId: "thread" },
       }, method);
       const config = (result.params as { config: Record<string, unknown> }).config;
       assert.equal(config.existing_setting, "preserved");
@@ -389,7 +390,9 @@ test("managed thread starts, resumes, and forks receive wb MCP config without re
         default_tools_approval_mode: "approve",
         required: true,
         tool_timeout_sec: 1800,
-        url: "http://127.0.0.1:4500/orchestrator/mcp",
+        url: capable
+          ? "http://127.0.0.1:4500/orchestrator/mcp?capabilities=reload-scopes"
+          : "http://127.0.0.1:4500/orchestrator/mcp",
       });
     }
   } finally {

@@ -5,6 +5,7 @@
 import { z } from "zod";
 
 import { parseGitArcMoveArguments, type GitArcMoveArguments } from "../git/git-arc-move-arguments";
+import { normalizeOrchestratorReloadScopes, ORCHESTRATOR_RELOAD_SCOPES } from "../orchestrator-reload";
 import { preservePowerShellTrailingPaths, WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import {
   defineWorkbenchAgentCommand,
@@ -30,29 +31,39 @@ function baseBody(callerHarness: string, callerThreadId: string | null, cwd: str
   return { cwd, harness: requireCallerHarness(callerHarness), threadId: requireCallerThreadId(callerThreadId) };
 }
 
-const planSchema = z.object({
+const ordinaryPlanSchema = z.object({
   adoptPaths: paths.default([]).describe("Intentional dirty unclaimed work to adopt into this plan. Adopted paths may overlap ordinary scope; nested scope collapses to one minimal claim. Never use for sibling-owned changes or merely because raw Git output shows dirt."),
   intentDescription: z.string().default("").describe("Optional detail explaining the plan's approved intent."),
   intentName: requiredText.describe("Short name for the approved implementation intent."),
   paths: paths.default([]).describe("Ordinary inactive plan scope. Use for clean files and sibling-claimed files; planning these paths does not claim them."),
 }).strict();
+const planSchema = ordinaryPlanSchema.extend({
+  reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).default([]).describe("Shared runtime reload barriers required by this Workbench-project arc."),
+}).strict();
 
 function parsePlanArgs(args: string[], commandName: "Arc plan" | "Arc plan start") {
-  const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values: ["-m", "--adopt"] }), {
-    repeatable: ["-m", "--adopt"], trailing: true,
+  const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values: ["-m", "--adopt", "--reload-scope"] }), {
+    repeatable: ["-m", "--adopt", "--reload-scope"], trailing: true,
   });
   const messages = flags.repeated("-m").map((message) => message.trim());
   if (messages.length > 2) throw new Error(`${commandName} accepts at most two -m values.`);
   if (!messages[0]) throw new Error("-m is required.");
-  return { adoptPaths: flags.repeated("--adopt"), intentDescription: messages[1] ?? "", intentName: messages[0], paths: flags.trailing };
+  return {
+    adoptPaths: flags.repeated("--adopt"),
+    intentDescription: messages[1] ?? "",
+    intentName: messages[0],
+    paths: flags.trailing,
+    reloadScopes: normalizeOrchestratorReloadScopes(flags.repeated("--reload-scope")),
+  };
 }
 
 const plan = defineWorkbenchAgentCommand({
   description: "Create or replace this thread's inactive Git plan without claiming ordinary paths. Put clean and sibling-claimed files in paths; use adoptPaths only for intentional dirty unclaimed work, including nested work within ordinary scope.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "plan"],
-  usage: "wb git arc plan -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
+  usage: "wb git arc plan -m <short-intent> [-m <optional-description>] [--reload-scope <scope>]... [--adopt <dirty-path>]... [-- <path>...]",
   inputSchema: planSchema,
+  mcpInputSchema: ({ reloadScopes }) => reloadScopes ? planSchema : ordinaryPlanSchema,
   parseCliArgs: (args) => parsePlanArgs(args, "Arc plan"),
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
@@ -62,6 +73,7 @@ const plan = defineWorkbenchAgentCommand({
       intentDescription: input.intentDescription,
       intentName: input.intentName,
       paths: input.paths,
+      ...(input.reloadScopes.length ? { reloadScopes: input.reloadScopes } : {}),
     }, "git-arc-plan");
   },
 });
@@ -90,14 +102,16 @@ const planStart = defineWorkbenchAgentCommand({
   description: "Create and activate a plan atomically. Put clean files in paths; use adoptPaths only for intentional dirty unclaimed work, including nested work within ordinary scope, that this thread may claim now.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "plan", "start"],
-  usage: "wb git arc plan start -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
+  usage: "wb git arc plan start -m <short-intent> [-m <optional-description>] [--reload-scope <scope>]... [--adopt <dirty-path>]... [-- <path>...]",
   inputSchema: planSchema,
+  mcpInputSchema: ({ reloadScopes }) => reloadScopes ? planSchema : ordinaryPlanSchema,
   parseCliArgs: (args) => parsePlanArgs(args, "Arc plan start"),
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
       action: "planStart", adoptPaths: input.adoptPaths,
       ...baseBody(callerHarness, callerThreadId, cwd),
       intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
+      ...(input.reloadScopes.length ? { reloadScopes: input.reloadScopes } : {}),
     }, "git-arc-start");
   },
 });

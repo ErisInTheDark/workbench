@@ -39,6 +39,7 @@ import ReloadableWorkbenchSubagentController, {
   type ReloadableWorkbenchSubagentControllerState,
 } from "./ReloadableWorkbenchSubagentController";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
+import { getWorkbenchProjectCapabilities } from "./workbench-project-capabilities";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
 import WorkbenchSubagentController, { type WorkbenchSubagentControllerOptions } from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
@@ -1445,7 +1446,12 @@ export default class CodexStdioBridge {
 
     const params = asMutableParamsRecord(message.params);
     const workbenchPromptFiles = loadFreshWorkbenchPromptFiles();
-    const promptContext = { ...untrustedPromptContext, harness: "codex" as const };
+    const capabilities = getWorkbenchProjectCapabilities(untrustedPromptContext.cwd, this.storageRoot);
+    const promptContext = {
+      ...untrustedPromptContext,
+      harness: "codex" as const,
+      reloadScopesAvailable: capabilities.reloadScopes,
+    };
     const available = workbenchPromptFiles.listWorkbenchInstructionMechanics(promptContext);
     const filter = (value: string | null, field: string) => workbenchPromptFiles.filterWorkbenchInstructionContent(value, {
       available,
@@ -1471,6 +1477,7 @@ export default class CodexStdioBridge {
         params: withWorkbenchCodexMcpConfig(
           buildWorkbenchOwnedDeveloperInstructionParams(params, filter(developerInstructions, "developerInstructions")),
           this.bridgeUrl,
+          capabilities,
         ),
       };
     }
@@ -1484,6 +1491,7 @@ export default class CodexStdioBridge {
           developerInstructions: filter(promptInstructions.developerInstructions, "developerInstructions"),
         }),
         this.bridgeUrl,
+        capabilities,
       ),
     };
   }

@@ -2938,8 +2938,13 @@ function WorkbenchThreadClient(
     workflowIds: readonly string[] | undefined = undefined,
     instructionScope: "full" | "threadUtilities" = "full",
   ) {
+    const sourceCwd = threadSources.get(getThreadStateKey(harness, threadId))?.cwd;
+    const currentCwd = state.currentThread?.harness === harness && state.currentThread.id === threadId
+      ? state.currentThread.cwd
+      : null;
     return {
       agentPath: normalizeWorkbenchAgentPath(agentPath),
+      cwd: sourceCwd ?? currentCwd ?? state.projectRootPath,
       harness,
       ...(instructionScope !== "full" ? { instructionScope } : {}),
       ...(instructionInjections ? { instructionInjections } : {}),

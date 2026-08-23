@@ -71,6 +71,9 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   });
   const server = await startController(controller);
   const client = await connectClient(server.url);
+  const capableUrl = new URL(server.url);
+  capableUrl.searchParams.set("capabilities", "reload-scopes");
+  const capableClient = await connectClient(capableUrl);
   try {
     const inventory = await client.listTools();
     const eligible = listWorkbenchAgentCommands().filter(({ hideFromMcp }) => !hideFromMcp);
@@ -80,6 +83,9 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.ok(plan);
     assert.deepEqual(Object.keys(plan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths"]);
     assert.equal("args" in (plan.inputSchema.properties ?? {}), false);
+    const capablePlan = (await capableClient.listTools()).tools.find(({ name }) => name === "git_arc_plan");
+    assert.ok(capablePlan);
+    assert.deepEqual(Object.keys(capablePlan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths", "reloadScopes"]);
     const planProperties = plan.inputSchema.properties as Record<string, { description?: string }>;
     assert.match(plan.description ?? "", /sibling-claimed files in paths/u);
     assert.match(planProperties.paths?.description ?? "", /sibling-claimed files.*does not claim/u);
@@ -136,6 +142,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     });
     assert.ok(server.getReleasedRequestCount() >= 3);
   } finally {
+    await capableClient.close();
     await client.close();
     await server.close();
   }

@@ -342,6 +342,52 @@ test("reload admission releases the handler before terminal polling completes", 
   }
 });
 
+test("managed reloads wait on the direct coordinator without an internal fetch", async () => {
+  const handled = deferred<void>();
+  const started = deferred<{ body: Record<string, unknown>; signal: AbortSignal }>();
+  const terminal = deferred<Response>();
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      requestOrchestratorReload: async (body, signal) => {
+        started.resolve({ body, signal });
+        return await terminal.promise;
+      },
+    },
+    async () => { throw new Error("unexpected internal fetch"); },
+  );
+  const server = await startController(controller, () => handled.resolve());
+  try {
+    const body = new URLSearchParams(agentCommandBody(["orchestrator", "reload", "--mcp", "--reload-coordinator"]));
+    body.set("callerHarness", "codex");
+    body.set("callerThreadId", "thread-one");
+    const client = fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: body.toString(),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    const admitted = await started.promise;
+    await handled.promise;
+    assert.deepEqual(admitted.body, {
+      callerHarness: "codex",
+      callerThreadId: "thread-one",
+      cwd: process.cwd(),
+      scopes: ["mcp", "reload-coordinator"],
+    });
+    terminal.resolve(Response.json({
+      appliedScopes: ["mcp", "reload-coordinator"], completedAt: 2, error: null, ok: true,
+      queuedScopes: [], requestedScopes: ["mcp", "reload-coordinator"], startedAt: 1, state: "succeeded",
+    }));
+    const response = await client;
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /Applied: mcp, reload-coordinator/u);
+  } finally {
+    await server.close();
+  }
+});
+
 test("disconnecting after reload admission aborts terminal polling", async () => {
   const handled = deferred<void>();
   const pollStarted = deferred<AbortSignal>();

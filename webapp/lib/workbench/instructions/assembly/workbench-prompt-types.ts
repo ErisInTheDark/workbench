@@ -7,10 +7,12 @@ import type { WorkbenchHarness, WorkbenchProjectRoot } from "../../../types";
 
 export interface WorkbenchPromptContext {
   readonly agentPath?: string | null;
+  readonly cwd?: string | null;
   readonly harness?: WorkbenchHarness | null;
   readonly instructionScope?: "full" | "threadUtilities";
   readonly instructionInjections?: Readonly<Record<string, string>>;
   readonly projectId?: string | null;
+  readonly reloadScopesAvailable?: boolean;
   readonly roots?: readonly WorkbenchProjectRoot[];
   readonly subagentName?: string | null;
   readonly threadId?: string | null;
@@ -22,4 +24,3 @@ export interface WorkbenchPromptInstructions {
   readonly baseInstructions: string | null;
   readonly developerInstructions: string | null;
 }
-

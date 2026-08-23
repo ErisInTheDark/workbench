@@ -160,7 +160,7 @@ import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread
 import type { WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
-export type OrchestratorReloadScope = "browse-controller" | "codex-bridge" | "mcp" | "next-dev" | "opencode-bridge" | "opencode-server" | "orchestrator-logic" | "orchestrator-server";
+export type OrchestratorReloadScope = "browse-controller" | "codex-bridge" | "mcp" | "next-dev" | "opencode-bridge" | "opencode-server" | "orchestrator-logic" | "orchestrator-server" | "reload-coordinator";
 export type OrchestratorReloadState = "idle" | "running" | "succeeded" | "failed";
 
 export interface OrchestratorReloadRequest {

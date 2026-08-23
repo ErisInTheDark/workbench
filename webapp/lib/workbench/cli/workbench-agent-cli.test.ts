@@ -650,10 +650,11 @@ test("routes canonical, compatibility, and leaf help to the nearest owning group
 });
 
 test("maps composable reload switches to one deduplicated fixed request", async () => {
+  const unmanaged = { callerThreadId: null };
   const parsed = await parseWorkbenchAgentCliCommand([
     "orchestrator", "reload", "--next-dev", "--codex-bridge", "--opencode-server", "--next-dev",
     "--orchestrator-logic", "--browse-controller", "--opencode-bridge",
-  ]);
+  ], unmanaged);
   assert.equal(parsed.kind, "request");
   assert.deepEqual(parsed.request, {
     body: { scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "opencode-bridge", "opencode-server", "next-dev"] },
@@ -662,32 +663,43 @@ test("maps composable reload switches to one deduplicated fixed request", async 
     responseKind: "orchestrator-reload",
     waitForReload: true,
   });
-  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload"])).kind, "error");
-  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--unknown"])).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload"], unmanaged)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--unknown"], unmanaged)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand([
     "browse", "run", "--thread", "thread-1", "--command", "doctor", "--stream-progress",
   ])).kind, "error");
+  const managed = await parseWorkbenchAgentCliCommand([
+    "orchestrator", "reload", "--reload-coordinator", "--mcp",
+  ], { callerHarness: "codex", callerThreadId: "thread-one", cwd: "C:/workspace" });
+  assert.equal(managed.kind, "request");
+  if (managed.kind === "request") assert.deepEqual(managed.request.body, {
+    callerHarness: "codex",
+    callerThreadId: "thread-one",
+    cwd: "C:/workspace",
+    scopes: ["mcp", "reload-coordinator"],
+  });
 });
 
 test("expands safe reload all without server replacement and keeps hard restart hidden", async () => {
-  const parsed = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all"]);
+  const unmanaged = { callerThreadId: null };
+  const parsed = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all"], unmanaged);
   assert.equal(parsed.kind, "request");
   assert.deepEqual(parsed.request.body, {
     scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "mcp", "opencode-bridge", "next-dev"],
   });
-  const explicitServer = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all", "--opencode-server"]);
+  const explicitServer = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all", "--opencode-server"], unmanaged);
   assert.equal(explicitServer.kind, "request");
   if (explicitServer.kind === "request") {
     assert.deepEqual(explicitServer.request.body, {
       scopes: ["orchestrator-logic", "browse-controller", "codex-bridge", "mcp", "opencode-bridge", "next-dev", "opencode-server"],
     });
   }
-  const hard = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard"]);
+  const hard = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard"], unmanaged);
   assert.equal(hard.kind, "request");
   if (hard.kind === "request") assert.deepEqual(hard.request.body, { scopes: ["orchestrator-server"] });
-  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard", "--all"])).kind, "error");
-  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard", "--codex-bridge"])).kind, "error");
-  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--orchestrator-server"])).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard", "--all"], unmanaged)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard", "--codex-bridge"], unmanaged)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--orchestrator-server"], unmanaged)).kind, "error");
   const help = await parseWorkbenchAgentCliCommand(["--help"]);
   assert.equal(help.kind, "help");
   if (help.kind === "help") {
@@ -737,6 +749,8 @@ test("generates executable POSIX and working Windows shims", async (context) => 
     return;
   }
   delete env.WORKBENCH_ORIGIN;
+  env.WORKBENCH_THREAD_ID = "";
+  env.CODEX_THREAD_ID = "";
   reloadStatusReadCount = 0;
   const result = await execFileAsync(installed.windowsShimPath, [
     "orchestrator", "reload", "--codex-bridge", "--next-dev",
@@ -996,6 +1010,11 @@ test("parses current-plan creation and revision commands", async () => {
     paths: ["src/clean.ts"],
     threadId: "thread-1",
   });
+  const reloadPlan = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "plan", "-m", "Reload MCP", "--reload-scope", "mcp", "--reload-scope", "reload-coordinator", "--", "src/clean.ts",
+  ], gitArcOptions);
+  assert.equal(reloadPlan.kind, "request");
+  if (reloadPlan.kind === "request") assert.deepEqual(reloadPlan.request.body?.reloadScopes, ["mcp", "reload-coordinator"]);
   const add = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "add", "--", "src/a.ts"], gitArcOptions);
   assert.equal(add.kind, "request");
   assert.equal(add.request.body?.action, "planAdd");

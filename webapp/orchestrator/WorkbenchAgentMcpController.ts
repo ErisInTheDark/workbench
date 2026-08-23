@@ -24,6 +24,7 @@ import {
 } from "./workbench-agent-mcp-request-registry";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
+const RELOAD_SCOPES_CAPABILITY = "reload-scopes";
 type WorkbenchAgentMcpRequestId = number | string;
 
 export interface WorkbenchAgentMcpControllerOptions {
@@ -116,15 +117,16 @@ export default class WorkbenchAgentMcpController {
     }
 
     // The accepted HTTP request owns its response and transport after the reloadable feature lease returns.
-    void this.completeRequest(request, response);
+    const capabilities = new URL(request.url ?? "/", "http://localhost").searchParams.get("capabilities")?.split(",") ?? [];
+    void this.completeRequest(request, response, { reloadScopes: capabilities.includes(RELOAD_SCOPES_CAPABILITY) });
   }
 
-  private async completeRequest(request: http.IncomingMessage, response: http.ServerResponse) {
+  private async completeRequest(request: http.IncomingMessage, response: http.ServerResponse, schemaContext: { reloadScopes: boolean }) {
     const requestAbort = new AbortController();
     const abortDisconnectedRequest = () => {
       if (!requestAbort.signal.aborted) requestAbort.abort(new Error("Workbench MCP caller disconnected."));
     };
-    const server = this.createServer(requestAbort.signal);
+    const server = this.createServer(requestAbort.signal, schemaContext);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     let closed = false;
     const close = () => {
@@ -151,7 +153,7 @@ export default class WorkbenchAgentMcpController {
     }
   }
 
-  private createServer(requestSignal: AbortSignal) {
+  private createServer(requestSignal: AbortSignal, schemaContext: { reloadScopes: boolean }) {
     const server = new McpServer({ name: "wb", version: "1.0.0" });
     server.server.setNotificationHandler(CancelledNotificationSchema, (notification) => {
       this.requestRegistry.cancel(notification.params.requestId, notification.params.reason);
@@ -170,7 +172,7 @@ export default class WorkbenchAgentMcpController {
           readOnlyHint: definition.effects.readOnly ?? false,
         },
         description: `${definition.description}\n\nCLI equivalent: ${definition.usage}`,
-        inputSchema: definition.inputSchema,
+        inputSchema: definition.mcpInputSchema?.(schemaContext) ?? definition.inputSchema,
       }, async (input, extra) => await this.callTool(
         definition,
         input as object,

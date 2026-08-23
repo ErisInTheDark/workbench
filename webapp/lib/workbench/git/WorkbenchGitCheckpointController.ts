@@ -12,13 +12,15 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { projectRoot } from "../../project";
+import type { OrchestratorReloadScope } from "../../types";
+import { normalizeOrchestratorReloadScopes } from "../orchestrator-reload";
 import type {
   GitArcMoveRequest,
   GitCheckpointFileChange,
   GitCheckpointProposal,
 } from "./checkpoint-contracts";
 import { GitArcMissingClaimSetError } from "./git-arc-failures";
-import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcRegistry, { getGitArcLiveReloadScopes, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
 import GitArcPlanController, { GitCheckpointDirtyPathsError, type GitArcPlanState } from "./GitArcPlanController";
 import GitArcProposalController, {
@@ -77,9 +79,12 @@ export interface GitCheckpointCreateResult {
   kind: CheckpointKind;
   preservedDriftPathCount?: number;
   preservedDriftPaths?: string[];
+  reloadScopes?: OrchestratorReloadScope[];
   repoRoot: string;
   scopePaths: string[];
 }
+
+type GitArcContinuationResult = GitCheckpointCreateResult & { reloadScopes: OrchestratorReloadScope[] };
 
 export interface GitCheckpointCompareResult {
   changes: GitCheckpointFileChange[];
@@ -399,7 +404,7 @@ export default class WorkbenchGitCheckpointController {
     threadId: string;
     tree: string;
     withPublish?: (publish: () => Promise<void>) => Promise<void>;
-  }): Promise<GitCheckpointCreateResult> {
+  }): Promise<GitArcContinuationResult> {
     const nextMetadata: CheckpointMetadata = {
       amendedFrom: active.checkpointCommit,
       ...(active.intentDescription ? { intentDescription: active.intentDescription } : {}),
@@ -407,6 +412,7 @@ export default class WorkbenchGitCheckpointController {
       kind: "arc",
       ...(metadata.priorProposalId ? { priorProposalId: metadata.priorProposalId } : {}),
       registryLifecycle: true,
+      reloadScopes: normalizeOrchestratorReloadScopes(metadata.reloadScopes),
       scopePaths,
       version: 3,
     };
@@ -426,6 +432,10 @@ export default class WorkbenchGitCheckpointController {
       intentDescription: active.intentDescription,
       intentName: nextMetadata.intentName ?? active.intentName,
       proposalId: null,
+      proposalIds: [],
+      reloadScopes: normalizeOrchestratorReloadScopes(active.reloadScopes),
+      retainedArc: undefined,
+      phase: "active",
       threadId,
     }, { expectedCheckpointCommit: active.checkpointCommit });
     const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
@@ -449,6 +459,7 @@ export default class WorkbenchGitCheckpointController {
       checkpointRef,
       intentName: nextMetadata.intentName ?? null,
       kind: "arc",
+      reloadScopes: normalizeOrchestratorReloadScopes(active.reloadScopes),
       repoRoot: repository.root,
       scopePaths,
     };
@@ -465,6 +476,15 @@ export default class WorkbenchGitCheckpointController {
         ? (await store.readProposal(normalizeHarness(entry.harness), entry.threadId, entry.proposalId)).metadata.status
         : null,
     })));
+  }
+
+  async listReloadScopeClaims({ cwd }: { cwd: string }) {
+    const repository = await WorkbenchGitRepository.tryOpen(cwd);
+    if (!repository) return [];
+    return (await new GitArcRegistry(repository).list()).flatMap((entry) => {
+      const reloadScopes = getGitArcLiveReloadScopes(entry);
+      return reloadScopes.length ? [{ harness: entry.harness, reloadScopes, threadId: entry.threadId }] : [];
+    });
   }
 
   async findActiveClaim({ cwd, harness: rawHarness, threadId }: ControllerInput): Promise<GitArcActiveClaim | null> {
@@ -519,9 +539,10 @@ export default class WorkbenchGitCheckpointController {
     intentName,
     intentDescription = "",
     paths: rawPaths,
+    reloadScopes,
     threadId,
-  }: ControllerInput & { adoptPaths?: string[]; intentDescription?: string; intentName: string; paths: string[] }): Promise<GitCheckpointCreateResult> {
-    return await this.plans.createPlan({ adoptPaths, cwd, harness: rawHarness, intentDescription, intentName, paths: rawPaths, threadId });
+  }: ControllerInput & { adoptPaths?: string[]; intentDescription?: string; intentName: string; paths: string[]; reloadScopes?: OrchestratorReloadScope[] }): Promise<GitCheckpointCreateResult> {
+    return await this.plans.createPlan({ adoptPaths, cwd, harness: rawHarness, intentDescription, intentName, paths: rawPaths, reloadScopes, threadId });
   }
 
   async addToPlan(input: ControllerInput & { paths: string[] }) {
@@ -536,7 +557,7 @@ export default class WorkbenchGitCheckpointController {
     return await this.plans.removeFromPlan(input);
   }
 
-  async createAndStartPlan(input: ControllerInput & { adoptPaths?: string[]; intentDescription?: string; intentName: string; paths: string[] }) {
+  async createAndStartPlan(input: ControllerInput & { adoptPaths?: string[]; intentDescription?: string; intentName: string; paths: string[]; reloadScopes?: OrchestratorReloadScope[] }) {
     return await this.plans.createAndStartPlan(input);
   }
 
@@ -544,7 +565,7 @@ export default class WorkbenchGitCheckpointController {
     return await this.plans.startArc({ checkpointCommit, cwd, harness: rawHarness, threadId });
   }
 
-  async continueArc({ checkpointCommit: observedCheckpoint, cwd, harness: rawHarness, threadId }: CheckpointInput): Promise<GitCheckpointCreateResult> {
+  async continueArc({ checkpointCommit: observedCheckpoint, cwd, harness: rawHarness, threadId }: CheckpointInput): Promise<GitArcContinuationResult> {
     const repoRoot = await resolveRepoRoot(cwd);
     const harness = normalizeHarness(rawHarness);
     const repository = new WorkbenchGitRepository(repoRoot);
@@ -584,6 +605,7 @@ export default class WorkbenchGitCheckpointController {
         checkpointRef: source.checkpointRef,
         intentName: metadata.intentName ?? null,
         kind: "arc",
+        reloadScopes: normalizeOrchestratorReloadScopes(active.reloadScopes),
         repoRoot,
         scopePaths: metadata.scopePaths,
       };
@@ -629,6 +651,7 @@ export default class WorkbenchGitCheckpointController {
         intentDescription: successorMetadata.intentDescription ?? "",
         intentName: successorMetadata.intentName ?? "Continued arc",
         proposalId: null,
+        reloadScopes: normalizeOrchestratorReloadScopes(successorMetadata.reloadScopes),
         threadId,
       });
       return {
@@ -636,6 +659,7 @@ export default class WorkbenchGitCheckpointController {
         checkpointRef: successor.checkpointRef,
         intentName: successorMetadata.intentName ?? null,
         kind: "arc",
+        reloadScopes: normalizeOrchestratorReloadScopes(successorMetadata.reloadScopes),
         repoRoot,
         scopePaths: successorMetadata.scopePaths,
       };
@@ -665,6 +689,7 @@ export default class WorkbenchGitCheckpointController {
       kind: "arc",
       ...(outcome?.proposalId ? { priorProposalId: outcome.proposalId } : {}),
       registryLifecycle: true,
+      reloadScopes: normalizeOrchestratorReloadScopes(metadata.reloadScopes),
       scopePaths,
       version: 3,
     };
@@ -677,6 +702,7 @@ export default class WorkbenchGitCheckpointController {
       intentDescription: nextMetadata.intentDescription ?? "",
       intentName: nextMetadata.intentName ?? "Continued arc",
       proposalId: null,
+      reloadScopes: normalizeOrchestratorReloadScopes(nextMetadata.reloadScopes),
       threadId,
     });
     const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
@@ -697,6 +723,7 @@ export default class WorkbenchGitCheckpointController {
       checkpointRef,
       intentName: nextMetadata.intentName ?? null,
       kind: "arc",
+      reloadScopes: normalizeOrchestratorReloadScopes(nextMetadata.reloadScopes),
       repoRoot,
       scopePaths,
     };
@@ -793,7 +820,7 @@ export default class WorkbenchGitCheckpointController {
         reason: "The active Git arc was unclaimed without committing this proposal.",
         threadId,
       });
-      const registryMutation = await registry.prepareSet({ ...active, claimedPaths: [], phase: "resolved" }, active.checkpointCommit);
+      const registryMutation = await registry.prepareSet({ ...active, claimedPaths: [], phase: "resolved", reloadScopes: [] }, active.checkpointCommit);
       const previousOutcome = await readArcOutcome(repository, harness, threadId, checkpoint.checkpointCommit);
       const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
         acceptedProposals: previousOutcome?.acceptedProposals ?? [],
@@ -1169,6 +1196,7 @@ export default class WorkbenchGitCheckpointController {
         ...releasingArc.active,
         claimedPaths: [],
         phase: "resolved",
+        reloadScopes: [],
       }, releasingArc.active.checkpointCommit);
       const previousOutcome = await readArcOutcome(releasingArc.repository, harness, threadId, checkpoint.checkpointCommit);
       const outcomeUpdate = await prepareArcOutcome(releasingArc.repository, harness, threadId, {

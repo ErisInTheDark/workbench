@@ -46,6 +46,14 @@ test("managed top-level threads expose current-thread mechanics before and after
   assert.equal(buildThreadTitleInstructions(subagentContext), null);
 });
 
+test("Git reload-scope instructions appear only for the exact-root capability", () => {
+  const base = { harness: "codex" as const, threadId: "thread-1", workbenchOrigin: "http://localhost" };
+  assert.doesNotMatch(buildWorkbenchGitInstructions(base) ?? "", /shared barriers/u);
+  const capable = buildWorkbenchGitInstructions({ ...base, reloadScopesAvailable: true }) ?? "";
+  assert.match(capable, /reloadScopes/u);
+  assert.match(capable, /Do not retry it or bypass the queue/u);
+});
+
 test("default workflow filtering retains required thread behavior during materialization", () => {
   const available = listWorkbenchInstructionMechanics({ harness: "codex", threadId: "draft:123", workbenchOrigin: "http://localhost" });
   const warnings: string[] = [];

@@ -8,6 +8,7 @@ import { renderSubagentListOutput, renderSubagentSettleOutput } from "../subagen
 import type { WorkbenchSubagentSummary } from "../../types";
 import { formatGitArcFailureReceipt, GitArcFailureEnvelopeSchema } from "../git/git-arc-failures";
 import { formatGitArcReceipt, type GitArcAction } from "../git/git-arc-receipts";
+import { normalizeOrchestratorReloadScopes } from "../orchestrator-reload";
 
 export interface WorkbenchAgentCliAdaptedResponse {
   exitCode: number;
@@ -25,6 +26,7 @@ function createArcReceipt(
   const selectedPaths = action === "propose"
     ? readStringArray(payload, "paths")
     : readStringArray(request.body ?? null, "paths");
+  const reloadScopes = normalizeOrchestratorReloadScopes(readStringArray(payload, "reloadScopes"));
   return formatGitArcReceipt({
     action,
     ...(action === "mv" ? {
@@ -40,6 +42,7 @@ function createArcReceipt(
       ? { proposalId: readString(payload, "proposalId") }
       : {}),
     ref,
+    ...(reloadScopes.length ? { reloadScopes } : {}),
     ...(selectedPaths.length ? { selectedPaths } : {}),
     version: 1,
   });

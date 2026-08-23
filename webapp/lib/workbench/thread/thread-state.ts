@@ -17,6 +17,7 @@
 import { z } from "zod";
 
 import { gitArcPathsOverlap } from "../git/git-arc-paths";
+import { ORCHESTRATOR_RELOAD_SCOPES } from "../orchestrator-reload";
 import { areDeeplyEqual } from "../deep-equality";
 import { WorkbenchProjectsPayloadSchema, WorkbenchProjectStateUpdateSchema } from "../project/project-state";
 import { WorkbenchThreadDisplayOrderSchema } from "./thread-display-order";
@@ -127,6 +128,7 @@ export const WorkbenchGitArcLifecycleStateSchema = z.object({
     proposalId: z.string().min(1),
     status: z.enum(["committed", "proposed"]),
   }).strict()),
+  reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
   updatedAt: z.string().min(1),
 }).strict().superRefine((value, context) => {
   if (value.phase === "active" && !value.claimedPaths.length) {
@@ -146,6 +148,7 @@ export const WorkbenchGitArcPlanStateSchema = z.object({
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
   intentDescription: z.string(),
   intentName: z.string().min(1),
+  reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
   scopePaths: z.array(z.string().min(1)),
   updatedAt: z.string().min(1),
 }).strict();

@@ -132,6 +132,7 @@ test("terminal proposals and claim resolution share one lifecycle card", () => {
       intentDescription: "Keep the lifecycle visible.",
       intentName: "Harden arc lifecycle",
       proposalIds: ["proposal-one", "proposal-two"],
+      reloadScopes: ["orchestrator-logic", "mcp"],
       proposals: [
         { proposalId: "proposal-one", status: "proposed" },
         { proposalId: "proposal-two", status: "committed" },
@@ -155,6 +156,8 @@ test("terminal proposals and claim resolution share one lifecycle card", () => {
   assert.match(html, /data-thread-git-arc-resolution="true"/u);
   assert.match(html, /data-thread-git-arc-resolution-separator="true"/u);
   assert.match(html, /2 claimed files/u);
+  assert.match(html, /data-thread-reload-scopes="true"/u);
+  assert.match(html, /data-thread-reload-scope="orchestrator-logic"[\s\S]*data-thread-reload-scope="mcp"/u);
   assert.match(html, /Checking claimed files/u);
   assert.doesNotMatch(html, /Harden arc lifecycle/u);
 });
@@ -754,6 +757,26 @@ test("nested plan cards label planned changes without claiming them", () => {
   assert.match(removeHtml, />Reduced</u);
   assert.match(removeHtml, /Removed from plan/u);
   assert.doesNotMatch(removeHtml, />Claimed</u);
+});
+
+test("completed plan cards render reload scopes separately from file paths", () => {
+  const html = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: {
+      action: "plan",
+      intentName: "Reload safely",
+      paths: ["src/one.ts"],
+      ref: null,
+      reloadScopes: ["orchestrator-logic", "mcp"],
+    },
+    durationMs: 10,
+    outcome: "completed",
+    receipt: null,
+  }));
+  assert.match(html, /data-thread-reload-scopes="true"/u);
+  assert.match(html, /Runtime reload scopes/u);
+  assert.match(html, /data-thread-reload-scope="orchestrator-logic"/u);
+  assert.match(html, /data-thread-reload-scope="mcp"/u);
+  assert.equal((html.match(/src\/one\.ts/gu) ?? []).length, 1);
 });
 
 test("nested adoption plan cards render parent scope as a folder and adopted children as files", () => {

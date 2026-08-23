@@ -5,6 +5,8 @@
  * - parse/format/remap helpers: validate marked metadata and rewrite every embedded commit identity. Keywords: git, metadata, rewrite, migration.
  */
 
+import type { OrchestratorReloadScope } from "../../types";
+
 export const CHECKPOINT_METADATA_MARKER = "workbench-git-checkpoint-v1";
 export const PROPOSAL_METADATA_MARKER = "workbench-git-checkpoint-proposal-v1";
 const CHECKPOINT_COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu;
@@ -21,6 +23,7 @@ export interface CheckpointMetadata {
   intentName?: string;
   priorProposalId?: string;
   registryLifecycle?: true;
+  reloadScopes?: OrchestratorReloadScope[];
   scopePaths: string[];
   version: 1 | 2 | 3;
 }

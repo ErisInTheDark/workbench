@@ -2,9 +2,11 @@
  * Exports:
  * - default GitArcRegistry: own durable active arc claims and compare-and-swap registry transitions for one worktree. Keywords: git, arc, registry, claims, collision.
  * - GitArcIdentity/GitArcRegistryEntry/GitArcRegistryMutation: typed registry identities, entries, and prepared atomic transitions. Keywords: git, arc, registry, transaction.
- * - findGitArcCollisions/getGitArcLiveClaimPaths: share exact live-claim overlap semantics with diagnostics and registry enforcement. Keywords: git, arc, collision, overlap, diagnostics.
+ * - findGitArcCollisions/getGitArcLiveClaimPaths/getGitArcLiveReloadScopes: share exact live-claim semantics with diagnostics, registry enforcement, and reload coordination. Keywords: git, arc, collision, overlap, reload, diagnostics.
  */
 import { areDeeplyEqual } from "../deep-equality";
+import { normalizeOrchestratorReloadScopes } from "../orchestrator-reload";
+import type { OrchestratorReloadScope } from "../../types";
 import { gitArcPathsOverlap } from "./git-arc-paths";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 
@@ -23,6 +25,7 @@ export interface GitArcRegistryEntry extends GitArcIdentity {
   phase?: "active" | "plan" | "resolved";
   proposalId?: string | null;
   proposalIds?: string[];
+  reloadScopes?: OrchestratorReloadScope[];
   retainedArc?: {
     checkpointCommit: string;
     claimedPaths: string[];
@@ -30,6 +33,7 @@ export interface GitArcRegistryEntry extends GitArcIdentity {
     intentName: string;
     phase: "active" | "resolved";
     proposalIds: string[];
+    reloadScopes?: OrchestratorReloadScope[];
   } | null;
   updatedAt: string;
 }
@@ -38,6 +42,16 @@ export function getGitArcLiveClaimPaths(entry: Pick<GitArcRegistryEntry, "claime
   if (entry.phase === "resolved") return [];
   if (entry.phase === "plan") return entry.retainedArc?.claimedPaths ?? entry.claimedPaths;
   return entry.claimedPaths;
+}
+
+export function getGitArcLiveReloadScopes(entry: GitArcRegistryEntry) {
+  if (entry.phase === "resolved") return [];
+  if (entry.phase === "plan") {
+    return entry.retainedArc?.phase === "active"
+      ? normalizeOrchestratorReloadScopes(entry.retainedArc.reloadScopes)
+      : [];
+  }
+  return normalizeOrchestratorReloadScopes(entry.reloadScopes);
 }
 
 export interface GitArcCollision {
@@ -107,18 +121,28 @@ function parseState(contents: string): GitArcRegistryState {
         ? entry.proposalIds.filter((proposalId): proposalId is string => typeof proposalId === "string" && Boolean(proposalId.trim()))
         : entry.proposalId ? [entry.proposalId] : [];
       const phase = entry.phase ?? "active";
+      const reloadScopes = normalizeOrchestratorReloadScopes(entry.reloadScopes);
+      const retainedReloadScopes = normalizeOrchestratorReloadScopes(entry.retainedArc?.reloadScopes);
+      const { reloadScopes: _storedReloadScopes, ...storedEntry } = entry;
+      const retainedArc = entry.retainedArc;
+      const storedRetainedArc = retainedArc ? (() => {
+        const { reloadScopes: _storedRetainedReloadScopes, ...value } = retainedArc;
+        return value;
+      })() : null;
       return {
-        ...entry,
+        ...storedEntry,
         claimedPaths: phase === "resolved" ? [] : entry.claimedPaths,
         phase,
         proposalId: proposalIds.at(-1) ?? null,
         proposalIds,
-        retainedArc: entry.retainedArc ? {
-          ...entry.retainedArc,
+        ...(reloadScopes.length ? { reloadScopes } : {}),
+        retainedArc: storedRetainedArc ? {
+          ...storedRetainedArc,
           intentDescription: entry.retainedArc.intentDescription ?? entry.intentDescription,
           intentName: entry.retainedArc.intentName ?? entry.intentName,
           phase: entry.retainedArc.phase ?? "active",
           proposalIds: entry.retainedArc.proposalIds ?? [],
+          ...(retainedReloadScopes.length ? { reloadScopes: retainedReloadScopes } : {}),
         } : null,
       };
     }),
@@ -191,11 +215,14 @@ export default class GitArcRegistry {
     const collisions = findGitArcCollisions(state.entries, entry, getGitArcLiveClaimPaths(entry));
     if (collisions.length) throw new GitArcCollisionError(collisions);
     const proposalIds = entry.proposalIds ?? (entry.proposalId ? [entry.proposalId] : []);
+    const reloadScopes = normalizeOrchestratorReloadScopes(entry.reloadScopes);
+    const { reloadScopes: _inputReloadScopes, ...storedEntry } = entry;
     const nextEntry: GitArcRegistryEntry = {
-      ...entry,
+      ...storedEntry,
       phase: entry.phase ?? "active",
       proposalId: proposalIds.at(-1) ?? null,
       proposalIds,
+      ...(reloadScopes.length ? { reloadScopes } : {}),
       retainedArc: entry.retainedArc ?? null,
       updatedAt: new Date().toISOString(),
     };
@@ -247,12 +274,15 @@ export default class GitArcRegistry {
       throw new Error("This thread's current Git arc changed before the registry update completed.");
     }
     const proposalIds = entry.proposalIds ?? (entry.proposalId ? [entry.proposalId] : []);
+    const reloadScopes = normalizeOrchestratorReloadScopes(entry.reloadScopes);
+    const { reloadScopes: _inputReloadScopes, ...storedEntry } = entry;
     const nextEntry: GitArcRegistryEntry = {
-      ...entry,
+      ...storedEntry,
       claimedPaths: entry.phase === "resolved" ? [] : entry.claimedPaths,
       phase: entry.phase ?? "active",
       proposalId: proposalIds.at(-1) ?? null,
       proposalIds,
+      ...(reloadScopes.length ? { reloadScopes } : {}),
       retainedArc: entry.retainedArc ?? null,
       updatedAt: new Date().toISOString(),
     };

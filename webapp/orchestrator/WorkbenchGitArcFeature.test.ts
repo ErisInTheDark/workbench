@@ -438,8 +438,10 @@ test("failed Git mutations still refresh durable arc projection once", async () 
 
 test("plan creation and applied arc moves refresh Git arc state while move previews do not", async () => {
   let refreshCount = 0;
+  let reloadEligibilityChanges = 0;
   const feature = new WorkbenchGitArcFeature({
     getThreadClaimContext: async () => null,
+    onReloadEligibilityChanged: () => { reloadEligibilityChanges += 1; },
     refreshThreadGitArcState: async () => { refreshCount += 1; },
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: { run: async (_key, operation) => await operation() },
@@ -469,6 +471,41 @@ test("plan creation and applied arc moves refresh Git arc state while move previ
     ...common,
   })).status, 200);
   assert.equal(refreshCount, 2);
+  assert.equal(reloadEligibilityChanges, 2);
+});
+
+test("reload-scope plans require the exact running Workbench project root", async () => {
+  let dispatchedScopes: string[] = [];
+  const createFeature = (cwd: string) => {
+    const feature = new WorkbenchGitArcFeature({
+      getThreadClaimContext: async () => null,
+      refreshThreadGitArcState: async () => undefined,
+      reloadScopeProjectRoot: "C:/Git/Project",
+      resolveProjectFromCwd: async () => ({ cwd, project: { id: "project" } }),
+      transitions: { run: async (_key, operation) => await operation() },
+    });
+    Object.defineProperty(feature, "dispatch", {
+      value: async (request: { reloadScopes: string[] }) => {
+        dispatchedScopes = request.reloadScopes;
+        return Response.json({ ok: true });
+      },
+    });
+    return feature;
+  };
+  const request = {
+    action: "plan" as const,
+    cwd: "ignored",
+    harness: "codex" as const,
+    intentName: "reload",
+    paths: ["src/a.ts"],
+    reloadScopes: ["mcp"] as const,
+    threadId: "thread-one",
+  };
+  assert.equal((await createFeature("C:/Git/Project").executeRequest(request)).status, 200);
+  assert.deepEqual(dispatchedScopes, ["mcp"]);
+  const rejected = await createFeature("C:/Git/Project/webapp").executeRequest(request);
+  assert.equal(rejected.status, 400);
+  assert.match(JSON.stringify(await rejected.json()), /running Workbench project root/u);
 });
 
 test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actions", async () => {

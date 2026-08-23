@@ -58,8 +58,10 @@ export interface OrchestratorFeatureContext {
   localOrchestratorOrigin: string;
   localWorkbenchOrigin: string;
   nextDevHealthOptions: NextDevHealthSupervisorOptions;
+  notifyReloadEligibilityChanged(): void;
   notifyThreadLifecycle(projectId: string, entry: import("../lib/workbench/thread/thread-state").WorkbenchThreadSidebarEntry): void;
   publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
+  requestOrchestratorReload(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   requestSubagent(request: JsonRpcRequest): Promise<JsonRpcResponse>;
   subagentStore: { list(options: { projectId: string }): Promise<{ subagents: Array<{ createdAt: number; cwd: string; directSubagentIndex: number; harness: WorkbenchHarness; name: string; parentThreadId: string; profileId: string; profileName: string; projectId: string; threadId: string; title: string; updatedAt: number }> }> };
   threadTransitions: WorkbenchThreadTransitionCoordinator;
@@ -179,10 +181,12 @@ export function createOrchestratorFeatureGeneration(
       if (!threadState) throw new Error("Thread state is not ready for Git arc ownership.");
       return await threadState.controller.getThreadClaimContext(projectId, harness, threadId);
     },
+    onReloadEligibilityChanged: context.notifyReloadEligibilityChanged,
     refreshThreadGitArcState: async (projectId, harness, threadId) => {
       if (!threadState) throw new Error("Thread state is not ready for Git arc publication.");
       await threadState.controller.refreshGitArcState(projectId, harness, threadId);
     },
+    reloadScopeProjectRoot: context.legacyMigrationProjectRoot,
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
     transitions: worktreeGitTransitions,
   });
@@ -214,6 +218,7 @@ export function createOrchestratorFeatureGeneration(
     executeBrowseRequest: context.executeBrowseRequest,
     executeGitArcRequest: async (body) => await gitArc.executeRequest(body),
     executeSessionRequest: context.executeBrowseSessionRequest,
+    requestOrchestratorReload: context.requestOrchestratorReload,
     requestSubagent: async (request) => request.method?.startsWith("workbench/thread/")
       ? await threadState.handleManagedThreadRequest(request)
       : await context.requestSubagent(request),

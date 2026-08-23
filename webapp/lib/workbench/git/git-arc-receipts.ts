@@ -5,6 +5,8 @@
  */
 import { z } from "zod";
 
+import { ORCHESTRATOR_RELOAD_SCOPES } from "../orchestrator-reload";
+
 const RECEIPT_PREFIX = "Workbench arc receipt: ";
 
 const GitArcReceiptSchema = z.object({
@@ -13,6 +15,7 @@ const GitArcReceiptSchema = z.object({
   claimedPaths: z.array(z.string().min(1)),
   intentName: z.string().min(1).nullable(),
   proposalId: z.string().min(1).optional(),
+  reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
   ref: z.string().regex(/^[a-f0-9]{7,64}$/iu),
   matchedPathCount: z.number().int().nonnegative().optional(),
   mappings: z.array(z.object({ destination: z.string().min(1), source: z.string().min(1) })).optional(),

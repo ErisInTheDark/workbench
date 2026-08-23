@@ -300,6 +300,7 @@ export default class WorkbenchSubagentController {
   private buildPromptContext(caller: ResolvedSubagentCaller, profile: WorkbenchComposerProfile, threadId: string, name: string, workbenchOrigin: string | undefined, instructionScope?: "threadUtilities") {
     return {
       agentPath: profile.agentPath,
+      cwd: caller.cwd,
       harness: profile.harness,
       ...(instructionScope ? { instructionScope } : {}),
       projectId: caller.project.id,

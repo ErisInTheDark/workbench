@@ -36,3 +36,11 @@ test("derives secure loopback MCP transport and rejects non-WebSocket bridge URL
   assert.equal(((secure.config as { mcp_servers: { wb: { url: string } } }).mcp_servers.wb.url), "https://127.0.0.1:7443/orchestrator/mcp");
   assert.throws(() => withWorkbenchCodexMcpConfig({}, "http://127.0.0.1:4500"), /must use ws/u);
 });
+
+test("selects the reload-scope inventory only for a capable thread", () => {
+  const ordinary = withWorkbenchCodexMcpConfig({}, "ws://0.0.0.0:4500");
+  const capable = withWorkbenchCodexMcpConfig({}, "ws://0.0.0.0:4500", { reloadScopes: true });
+  const readUrl = (value: object) => ((value as { config: { mcp_servers: { wb: { url: string } } } }).config.mcp_servers.wb.url);
+  assert.equal(readUrl(ordinary), "http://127.0.0.1:4500/orchestrator/mcp");
+  assert.equal(readUrl(capable), "http://127.0.0.1:4500/orchestrator/mcp?capabilities=reload-scopes");
+});

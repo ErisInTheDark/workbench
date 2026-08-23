@@ -53,9 +53,10 @@ export async function buildWorkbenchBrowseInstructions(context: WorkbenchPromptC
 }
 
 export function buildWorkbenchGitInstructions(context: WorkbenchPromptContext) {
-  return isManagedPromptThread(context)
-    ? readInstructionSource("mechanics/workbench-git-instructions.md")
-    : null;
+  if (!isManagedPromptThread(context)) return null;
+  const instructions = readInstructionSource("mechanics/workbench-git-instructions.md");
+  if (!context.reloadScopesAvailable) return instructions;
+  return `${instructions}\n\n${readInstructionSource("mechanics/workbench-git-reload-scope-instructions.md")}`;
 }
 
 export function buildWorkbenchOrchestratorReloadInstructions(context: WorkbenchPromptContext) {

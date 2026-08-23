@@ -7,10 +7,13 @@
  */
 import { z } from "zod";
 
+import { ORCHESTRATOR_RELOAD_SCOPES } from "../orchestrator-reload";
+
 const nonEmptyString = z.string().trim().min(1);
 const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
 const checkpointPaths = z.array(nonEmptyString).min(1);
 const optionalCheckpointPaths = z.array(nonEmptyString);
+const reloadScopes = z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).default([]);
 
 export const GitArcMoveMappingSchema = z.object({
   destination: nonEmptyString,
@@ -45,6 +48,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     intentDescription: z.string().default(""),
     intentName: nonEmptyString,
     paths: optionalCheckpointPaths,
+    reloadScopes,
     ...checkpointBaseRequest,
   }),
   z.object({ action: z.literal("planAdd"), paths: checkpointPaths, ...checkpointBaseRequest }),
@@ -56,6 +60,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     intentDescription: z.string().default(""),
     intentName: nonEmptyString,
     paths: optionalCheckpointPaths,
+    reloadScopes,
     ...checkpointBaseRequest,
   }),
   z.object({

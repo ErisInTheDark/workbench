@@ -58,6 +58,10 @@ export interface WorkbenchAgentCommandEffects {
   readOnly?: boolean;
 }
 
+export interface WorkbenchAgentMcpSchemaContext {
+  reloadScopes: boolean;
+}
+
 export interface WorkbenchAgentCommandDefinition {
   aliases?: readonly (readonly string[])[];
   buildRequestFromCli(args: string[], context: WorkbenchAgentCommandContext): Promise<WorkbenchAgentCommandRequest>;
@@ -67,6 +71,7 @@ export interface WorkbenchAgentCommandDefinition {
   hideFromMcp?: boolean;
   helpGroups: readonly string[];
   inputSchema: z.ZodType;
+  mcpInputSchema?: (context: WorkbenchAgentMcpSchemaContext) => z.ZodType;
   usage: string;
   words: readonly string[];
 }
@@ -79,6 +84,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   hideFromMcp?: boolean;
   helpGroups: readonly string[];
   inputSchema: TSchema;
+  mcpInputSchema?: (context: WorkbenchAgentMcpSchemaContext) => z.ZodType;
   parseCliArgs(args: string[]): z.input<TSchema>;
   usage: string;
   words: readonly string[];
@@ -99,6 +105,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     hideFromMcp: definition.hideFromMcp,
     helpGroups: definition.helpGroups,
     inputSchema: definition.inputSchema,
+    mcpInputSchema: definition.mcpInputSchema,
     usage: definition.usage,
     words: definition.words,
   };

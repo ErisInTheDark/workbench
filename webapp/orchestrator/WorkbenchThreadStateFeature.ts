@@ -8,6 +8,7 @@ import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/Th
 import { getCurrentTurn } from "../lib/codex/thread-state";
 import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchHarness, WorkbenchProjectsPayload } from "../lib/types";
+import { normalizeOrchestratorReloadScopes } from "../lib/workbench/orchestrator-reload";
 import type { GitArcActiveClaim, GitArcLifecycleState, GitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
@@ -23,7 +24,7 @@ interface SubagentRelationshipList { subagents: Array<{ createdAt: number; cwd: 
 function projectGitArc(state: GitArcLifecycleState | undefined) {
   if (!state) return null;
   const { harness: _harness, threadId: _threadId, ...gitArc } = state;
-  return gitArc;
+  return { ...gitArc, reloadScopes: normalizeOrchestratorReloadScopes(state.reloadScopes) };
 }
 
 function legacyGitArc(claim: GitArcActiveClaim): GitArcLifecycleState {
@@ -37,6 +38,7 @@ function legacyGitArc(claim: GitArcActiveClaim): GitArcLifecycleState {
     proposals: claim.proposalId && (claim.proposalStatus === "proposed" || claim.proposalStatus === "committed")
       ? [{ proposalId: claim.proposalId, status: claim.proposalStatus }]
       : [],
+    reloadScopes: normalizeOrchestratorReloadScopes(claim.reloadScopes),
     threadId: claim.threadId,
     updatedAt: claim.updatedAt,
   };
@@ -74,7 +76,7 @@ function asRecord(value: unknown) {
 function projectGitArcPlan(state: GitArcPlanState | undefined) {
   if (!state) return null;
   const { harness: _harness, threadId: _threadId, ...gitArcPlan } = state;
-  return gitArcPlan;
+  return { ...gitArcPlan, reloadScopes: normalizeOrchestratorReloadScopes(state.reloadScopes) };
 }
 
 function normalizeOptionalTimestamp(value: unknown) {
