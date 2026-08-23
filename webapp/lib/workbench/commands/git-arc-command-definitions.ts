@@ -200,8 +200,11 @@ function inspectionCommand(action: "compare" | "diff") {
     effects: { idempotent: true, readOnly: true },
     helpGroups: ["git-arc"],
     words: ["git", "arc", action],
-    usage: `wb git arc ${action} [--ref <plan-ref>] [-- <path> [<path>...]]`,
-    inputSchema: z.object({ paths: paths.default([]), ref: requiredText.optional() }).strict(),
+    usage: `wb git arc ${action} [--ref <active-or-plan-ref>] [-- <path> [<path>...]]`,
+    inputSchema: z.object({
+      paths: paths.default([]),
+      ref: requiredText.optional().describe("The current active arc ref or an inactive or historical plan ref owned by this thread."),
+    }).strict(),
     parseCliArgs(args) {
       const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values: ["--ref"] }), { trailing: true, values: ["--ref"] });
       return { paths: flags.trailing, ref: flags.optional("--ref") ?? undefined };

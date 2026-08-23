@@ -17,6 +17,7 @@ import type {
   GitCheckpointFileChange,
   GitCheckpointProposal,
 } from "./checkpoint-contracts";
+import { GitArcMissingClaimSetError } from "./git-arc-failures";
 import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
 import GitArcPlanController, { GitCheckpointDirtyPathsError, type GitArcPlanState } from "./GitArcPlanController";
@@ -120,7 +121,7 @@ function isArcMetadata(metadata: CheckpointMetadata | null): metadata is Checkpo
 
 function requireArcMetadata(checkpoint: ReadCheckpointResult) {
   if (!isArcMetadata(checkpoint.metadata)) {
-    throw new Error("This checkpoint does not contain a claimed file set. Create a new plan with wb git arc plan.");
+    throw new GitArcMissingClaimSetError();
   }
   return checkpoint.metadata;
 }
@@ -892,7 +893,7 @@ export default class WorkbenchGitCheckpointController {
     };
   }
 
-  async compare({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths?: string[] }): Promise<GitCheckpointCompareResult> {
+  private async compareActiveArc({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths?: string[] }): Promise<GitCheckpointCompareResult> {
     const { checkpoint, harness, metadata, repository } = await this.requireActiveArc({ cwd, harness: rawHarness, threadId });
     const paths = rawPaths?.length ? repository.normalizePaths(rawPaths) : repository.normalizePaths(metadata.scopePaths);
     const baseline = await this.proposals.logicalBaseline({
@@ -913,13 +914,22 @@ export default class WorkbenchGitCheckpointController {
     };
   }
 
-  async diff(input: ControllerInput & { checkpointCommit?: string; paths?: string[] }): Promise<GitCheckpointDiffResult> {
+  async compare(input: ControllerInput & { checkpointCommit?: string; paths?: string[] }): Promise<GitCheckpointCompareResult> {
     if (input.checkpointCommit) {
       const repoRoot = await resolveRepoRoot(input.cwd);
       const harness = normalizeHarness(input.harness);
       const checkpoint = await readCheckpoint(repoRoot, harness, input.threadId, input.checkpointCommit);
       const metadata = checkpoint.metadata;
-      if (!metadata || metadata.kind !== "plan") throw new Error("Explicit arc diff refs must identify an inactive or historical plan.");
+      if (metadata?.kind === "arc") {
+        const active = await new GitArcRegistry(new WorkbenchGitRepository(repoRoot)).find({ harness, threadId: input.threadId });
+        if (!active || active.phase !== "active" || active.checkpointCommit !== checkpoint.checkpointCommit) {
+          throw new Error("Explicit arc inspection refs must identify this thread's current active arc or an inactive or historical plan.");
+        }
+        return await this.compareActiveArc(input);
+      }
+      if (!metadata || metadata.kind !== "plan") {
+        throw new Error("Explicit arc inspection refs must identify this thread's current active arc or an inactive or historical plan.");
+      }
       const paths = input.paths?.length ? normalizePaths(repoRoot, input.paths) : metadata.scopePaths;
       const currentTree = await writeScopedWorktreeTree(repoRoot, paths);
       const changes = await buildFileChanges(repoRoot, checkpoint.checkpointCommit, currentTree, paths);
@@ -927,12 +937,15 @@ export default class WorkbenchGitCheckpointController {
         changes,
         checkpointCommit: checkpoint.checkpointCommit,
         checkpointRef: checkpoint.checkpointRef,
-        diff: changes.map((change) => change.diff).join(""),
         intentName: metadata.intentName ?? null,
         repoRoot,
         scopePaths: metadata.scopePaths,
       };
     }
+    return await this.compareActiveArc(input);
+  }
+
+  async diff(input: ControllerInput & { checkpointCommit?: string; paths?: string[] }): Promise<GitCheckpointDiffResult> {
     const result = await this.compare(input);
     return {
       ...result,

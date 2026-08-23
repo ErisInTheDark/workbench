@@ -11,6 +11,8 @@ import {
   createGitArcOperationRejected,
   formatGitArcFailureText,
   GitArcFailureException,
+  GitArcMissingClaimSetError,
+  GitArcProposalAlreadyCommittedError,
   type GitArcFailure,
 } from "../lib/workbench/git/git-arc-failures";
 import { GitCheckpointDirtyPathsError } from "../lib/workbench/git/GitArcPlanController";
@@ -170,6 +172,23 @@ export default class WorkbenchGitArcFeature {
         version: 1,
       };
     }
+    if (error instanceof GitArcMissingClaimSetError) {
+      return {
+        action: request.action,
+        code: "missingClaimSet",
+        version: 1,
+      };
+    }
+    if (error instanceof GitArcProposalAlreadyCommittedError) {
+      return {
+        action: request.action,
+        code: "proposalAlreadyCommitted",
+        commitSha: error.commitSha,
+        proposalId: error.proposalId,
+        proposalTitle: error.proposalTitle,
+        version: 1,
+      };
+    }
     if (error instanceof GitCheckpointMissingObjectError) {
       return {
         action: request.action,
@@ -266,7 +285,7 @@ export default class WorkbenchGitArcFeature {
       case "arcMove": return Response.json(await this.controller.moveInArc({ ...common, move: input.move }));
       case "arcRemove": return Response.json(await this.controller.removeFromArc({ ...common, paths: input.paths }));
       case "compare": return Response.json(await this.controller.compare({
-        ...common, ...(input.paths ? { paths: input.paths } : {}),
+        ...common, ...(input.checkpointCommit ? { checkpointCommit: input.checkpointCommit } : {}), ...(input.paths ? { paths: input.paths } : {}),
       }));
       case "diff": return Response.json(await this.controller.diff({
         ...common, ...(input.checkpointCommit ? { checkpointCommit: input.checkpointCommit } : {}), ...(input.paths ? { paths: input.paths } : {}),

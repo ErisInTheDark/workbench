@@ -59,7 +59,7 @@ Use `mcp__wb__git_arc_mv` for approved path moves. Its `move` value accepts expl
 
 ### compare or diff an arc
 
-Use `mcp__wb__git_arc_compare` when paths and change counts are enough. Use `mcp__wb__git_arc_diff` when unified details are needed. Omit `paths` to inspect the claimed set. Use `ref` only for an inactive or historical plan owned by this thread.
+Use `mcp__wb__git_arc_compare` when paths and change counts are enough. Use `mcp__wb__git_arc_diff` when unified details are needed. Omit `paths` to inspect the claimed set. Omit `ref` for the current active arc. An explicit `ref` can identify that same current active arc or an inactive or historical plan owned by this thread. Do not use a superseded arc ref.
 
 In Review, choose one initial arc-scoped inspection. Do not run compare first when unified details are already required. At least one compare or diff is required before proposal creation.
 

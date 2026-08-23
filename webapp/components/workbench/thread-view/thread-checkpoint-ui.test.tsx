@@ -380,6 +380,10 @@ test("accepted proposal failures keep the failed continuation title and render c
     proposals: [{
       commitSha: "29c0dd7f52498b2fd740514c5d5e482605371807",
       proposalId: "80d73f22-2adc-4bd3-83e0-affa363743eb",
+      title: "fix accepted arc work",
+    }, {
+      commitSha: "c".repeat(40),
+      proposalId: "historical-proposal-without-title",
     }],
     version: 1,
   } as const;
@@ -393,10 +397,49 @@ test("accepted proposal failures keep the failed continuation title and render c
   assert.match(html, />Failed to continue</u);
   assert.match(html, /This Git arc is already resolved and owns no live claims\./u);
   assert.match(html, /data-thread-git-arc-accepted-proposals="true"/u);
-  assert.match(html, /80d73f22-2adc-4bd3-83e0-affa363743eb/u);
-  assert.match(html, /29c0dd7f52498b2fd740514c5d5e482605371807/u);
+  assert.match(html, /fix accepted arc work/u);
+  assert.match(html, /29c0dd7f/u);
+  assert.match(html, /Accepted commit/u);
+  assert.match(html, /cccccccc/u);
   assert.match(html, /data-thread-inline-code="true"/u);
-  assert.doesNotMatch(html, /mcp__wb__|wb git arc plan/u);
+  assert.doesNotMatch(html, /80d73f22-2adc-4bd3-83e0-affa363743eb|historical-proposal-without-title|mcp__wb__|wb git arc/u);
+});
+
+test("committed proposal failures render commit facts without agent recovery", () => {
+  const proposalId = "9cd56341-dcaa-45e8-9087-eba31189cb90";
+  const commitSha = "31bc36632553ac151dc3c3f9585625442f2d2208";
+  const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    committing: false,
+    description: "",
+    includeNewer: false,
+    onCommit: () => undefined,
+    onDescriptionChange: () => undefined,
+    onIncludeNewerChange: () => undefined,
+    onRetry: () => undefined,
+    onTitleChange: () => undefined,
+    paths: [],
+    sourceItemId: "committed-proposal-failure",
+    state: {
+      error: "agent-only formatted failure",
+      failure: {
+        action: "proposalCreate",
+        code: "proposalAlreadyCommitted",
+        commitSha,
+        proposalId,
+        proposalTitle: "fix stale Git arc state",
+        version: 1,
+      },
+      retryable: false,
+      status: "error",
+    },
+    title: "fix stale Git arc state and explicit ref rejection",
+  }));
+
+  assert.match(html, /data-thread-git-arc-failure="proposalAlreadyCommitted"/u);
+  assert.match(html, /fix stale Git arc state/u);
+  assert.match(html, /31bc3663/u);
+  assert.match(html, /data-thread-inline-code="true"/u);
+  assert.doesNotMatch(html, new RegExp(`${proposalId}|mcp__wb__|wb git arc`, "u"));
 });
 
 test("timed-out plans use timeout labels without inventing a Git failure", () => {

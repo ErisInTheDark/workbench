@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 
 import GitArcPublishState from "./GitArcPublishState";
 import GitArcProposalCache from "./GitArcProposalCache";
+import { GitArcProposalAlreadyCommittedError } from "./git-arc-failures";
 import { GitArcAcceptedProposalsError } from "./GitArcProposalController";
 import createGitArcStartDiagnosticError, { GitArcStartDiagnosticError } from "./git-arc-start-diagnostics";
 import { GitCheckpointDirtyPathsError } from "./GitArcPlanController";
@@ -744,6 +745,18 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
     cwd: source, harness: "codex", includeNewer: false, proposalId: rescindTarget.proposalId, threadId: "partial-thread",
   })).status, "rescinded");
 
+  const committedTarget = await controller.getProposal({
+    cwd: source, harness: "codex", includeNewer: false, proposalId: commitTarget.proposalId, threadId: "partial-thread",
+  });
+  assert.ok(committedTarget.committedSha);
+  const assertCommittedTarget = (error: unknown) => {
+    assert.ok(error instanceof GitArcProposalAlreadyCommittedError);
+    assert.equal(error.commitSha, committedTarget.committedSha);
+    assert.equal(error.proposalId, commitTarget.proposalId);
+    assert.equal(error.proposalTitle, committedTarget.title);
+    assert.doesNotMatch(error.message, /wb git arc/u);
+    return true;
+  };
   await assert.rejects(controller.createProposal({
     cwd: source,
     description: "",
@@ -751,7 +764,10 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
     replaceProposalId: commitTarget.proposalId,
     threadId: "partial-thread",
     title: "invalid replacement",
-  }), new RegExp(`already committed\\. Use wb git arc propose --amend ${commitTarget.proposalId}`, "u"));
+  }), assertCommittedTarget);
+  await assert.rejects(controller.rescindProposal({
+    cwd: source, harness: "codex", proposalId: commitTarget.proposalId, threadId: "partial-thread",
+  }), assertCommittedTarget);
   const amendment = await controller.createProposal({
     amendProposalId: commitTarget.proposalId,
     cwd: source,

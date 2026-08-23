@@ -8,6 +8,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { GitCheckpointProposal } from "./checkpoint-contracts";
+import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "./git-arc-failures";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import GitArcProposalCache from "./GitArcProposalCache";
 import GitArcPublishState from "./GitArcPublishState";
@@ -82,24 +83,24 @@ function lifecycleEntry(entry: GitArcRegistryEntry) {
   };
 }
 
-function acceptedReceiptMessage(receipts: Array<{ commitSha: string; proposalId: string }>, claimedPaths: string[]) {
+function acceptedReceiptMessage(receipts: Array<{ commitSha: string; proposalId: string; title: string }>, claimedPaths: string[]) {
   return [
     "Accepted commit proposals:",
-    ...receipts.map(({ commitSha, proposalId }) => `- ${proposalId} -> ${commitSha}`),
+    ...receipts.map(({ commitSha, title }) => `- ${title} (${commitSha})`),
     "",
     claimedPaths.length
       ? `This legacy Git arc still owns ${claimedPaths.length} claimed path${claimedPaths.length === 1 ? "" : "s"}.`
       : "This Git arc is resolved and owns no live claims.",
-    "Run wb git arc plan start -m <intent> -- <path> [...] with the explicit next paths when the approved plan is unchanged.",
-    "Run wb git arc plan -m <intent> -- <path> [...] when the plan changed.",
+    "Call mcp__wb__git_arc_plan_start with the explicit next paths when the approved plan is unchanged.",
+    "Return to Brief mode and call mcp__wb__git_arc_plan when the plan changed.",
   ].join("\n");
 }
 
 export class GitArcAcceptedProposalsError extends Error {
   readonly claimedPaths: string[];
-  readonly receipts: Array<{ commitSha: string; proposalId: string }>;
+  readonly receipts: Array<{ commitSha: string; proposalId: string; title: string }>;
 
-  constructor(receipts: Array<{ commitSha: string; proposalId: string }>, claimedPaths: string[]) {
+  constructor(receipts: Array<{ commitSha: string; proposalId: string; title: string }>, claimedPaths: string[]) {
     super(acceptedReceiptMessage(receipts, claimedPaths));
     this.name = "GitArcAcceptedProposalsError";
     this.receipts = receipts.map((receipt) => ({ ...receipt }));
@@ -109,9 +110,15 @@ export class GitArcAcceptedProposalsError extends Error {
 
 function requireArcMetadata(metadata: CheckpointMetadata | null) {
   if (!metadata || (metadata.kind !== "arc" && metadata.kind !== "implement") || !metadata.scopePaths.length) {
-    throw new Error("This checkpoint does not contain a claimed file set. Create a new plan with wb git arc plan.");
+    throw new GitArcMissingClaimSetError();
   }
   return metadata;
+}
+
+function proposalAlreadyCommitted(proposal: StoredProposal) {
+  const commitSha = proposal.metadata.committedSha;
+  if (!commitSha) throw new Error("Committed proposal metadata does not include a commit SHA.");
+  return new GitArcProposalAlreadyCommittedError(commitSha, proposal.metadata.proposalId, proposal.metadata.title);
 }
 
 function pathIsCoveredBy(candidate: string, scopePath: string) {
@@ -385,14 +392,20 @@ export default class GitArcProposalController {
   async requireNoAcceptedReceipts(input: ArcIdentityInput & { checkpointCommit: string }) {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
-    const outcome = await new GitCheckpointStore(repository).readOutcome(harness, input.threadId, input.checkpointCommit);
+    const store = new GitCheckpointStore(repository);
+    const outcome = await store.readOutcome(harness, input.threadId, input.checkpointCommit);
     const receipts = outcome?.acceptedProposals ?? [];
     if (receipts.length) {
       const entry = await new GitArcRegistry(repository).find({ harness, threadId: input.threadId });
       const claimedPaths = entry?.phase === "active" && entry.checkpointCommit === input.checkpointCommit
         ? entry.claimedPaths
         : [];
-      throw new GitArcAcceptedProposalsError(receipts, claimedPaths);
+      const titledReceipts = await Promise.all(receipts.map(async (receipt) => ({
+        commitSha: receipt.commitSha,
+        proposalId: receipt.proposalId,
+        title: (await store.readProposal(harness, input.threadId, receipt.proposalId)).metadata.title,
+      })));
+      throw new GitArcAcceptedProposalsError(titledReceipts, claimedPaths);
     }
   }
 
@@ -428,7 +441,7 @@ export default class GitArcProposalController {
     if (replaceProposalId) {
       replacementTarget = await store.readProposal(harness, threadId, replaceProposalId);
       if (replacementTarget.metadata.status === "committed") {
-        throw new Error(`Proposal ${replaceProposalId} is already committed. Use wb git arc propose --amend ${replaceProposalId}.`);
+        throw proposalAlreadyCommitted(replacementTarget);
       }
       if (replacementTarget.metadata.status !== "proposed" && replacementTarget.metadata.status !== "unavailable") {
         throw new Error("Only a pending or unavailable proposal can be replaced.");
@@ -557,7 +570,7 @@ export default class GitArcProposalController {
     const harness = normalizeHarness(input.harness);
     const proposal = await new GitCheckpointStore(repository).readProposal(harness, input.threadId, input.proposalId);
     if (proposal.metadata.status === "committed") {
-      throw new Error(`Proposal ${input.proposalId} is already committed. Use wb git arc propose --amend ${input.proposalId}.`);
+      throw proposalAlreadyCommitted(proposal);
     }
     if (proposal.metadata.status !== "proposed") throw new Error("Only a pending proposal can be rescinded.");
     const metadata = { ...proposal.metadata, status: "rescinded" as const, unavailableReason: null };

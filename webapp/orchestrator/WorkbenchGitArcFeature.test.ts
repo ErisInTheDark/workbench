@@ -5,7 +5,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { GitArcFailureEnvelope } from "../lib/workbench/git/git-arc-failures";
+import {
+  type GitArcFailureEnvelope,
+  GitArcMissingClaimSetError,
+  GitArcProposalAlreadyCommittedError,
+} from "../lib/workbench/git/git-arc-failures";
 import { GitArcAcceptedProposalsError } from "../lib/workbench/git/GitArcProposalController";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
@@ -34,6 +38,34 @@ test("sibling threads in one worktree share the Git arc transition lane", async 
   await feature.executeRequest({ ...request, harness: "opencode", threadId: "thread-two" });
 
   assert.deepEqual(keys, ["C:/Git/Project", "C:/Git/Project"]);
+});
+
+test("compare forwards an explicit checkpoint ref to the controller", async () => {
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async () => null,
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  let receivedCheckpointCommit: string | undefined;
+  const internal = (feature as unknown as {
+    controller: { compare: (input: { checkpointCommit?: string }) => Promise<object> };
+  }).controller;
+  internal.compare = async (input) => {
+    receivedCheckpointCommit = input.checkpointCommit;
+    return {};
+  };
+
+  const response = await feature.executeRequest({
+    action: "compare",
+    checkpointCommit: "a".repeat(40),
+    cwd: "C:/Git/Project",
+    harness: "codex",
+    threadId: "thread-one",
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(receivedCheckpointCommit, "a".repeat(40));
 });
 
 test("settled threads cannot start claims", async () => {
@@ -164,6 +196,7 @@ test("accepted proposal receipts remain structured when a resolved arc cannot co
       throw new GitArcAcceptedProposalsError([{
         commitSha: "b".repeat(40),
         proposalId: "80d73f22-2adc-4bd3-83e0-affa363743eb",
+        title: "fix accepted arc work",
       }], []);
     },
   });
@@ -184,12 +217,56 @@ test("accepted proposal receipts remain structured when a resolved arc cannot co
     proposals: [{
       commitSha: "b".repeat(40),
       proposalId: "80d73f22-2adc-4bd3-83e0-affa363743eb",
+      title: "fix accepted arc work",
     }],
     version: 1,
   });
   assert.match(result.error, /already resolved and owns no live claims/u);
-  assert.match(result.error, /80d73f22-2adc-4bd3-83e0-affa363743eb -> b{40}/u);
+  assert.match(result.error, /fix accepted arc work \(b{40}\)/u);
+  assert.doesNotMatch(result.error, /80d73f22-2adc-4bd3-83e0-affa363743eb|wb git arc/u);
   assert.match(result.error, /mcp__wb__git_arc_plan_start/u);
+});
+
+test("known proposal and claim-set errors keep recovery typed", async () => {
+  const cases = [{
+    action: "proposalCreate" as const,
+    error: new GitArcProposalAlreadyCommittedError(
+      "b".repeat(40),
+      "80d73f22-2adc-4bd3-83e0-affa363743eb",
+      "fix committed arc work",
+    ),
+    expected: {
+      action: "proposalCreate",
+      code: "proposalAlreadyCommitted",
+      commitSha: "b".repeat(40),
+      proposalId: "80d73f22-2adc-4bd3-83e0-affa363743eb",
+      proposalTitle: "fix committed arc work",
+      version: 1,
+    },
+  }, {
+    action: "compare" as const,
+    error: new GitArcMissingClaimSetError(),
+    expected: { action: "compare", code: "missingClaimSet", version: 1 },
+  }];
+
+  for (const item of cases) {
+    const feature = new WorkbenchGitArcFeature({
+      getThreadClaimContext: async () => null,
+      refreshThreadGitArcState: async () => undefined,
+      resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+      transitions: { run: async (_key, operation) => await operation() },
+    });
+    Object.defineProperty(feature, "dispatch", { value: async () => { throw item.error; } });
+    const request = item.action === "proposalCreate"
+      ? { action: item.action, amend: false, cwd: "C:/Git/Project", description: "", harness: "codex", threadId: "thread-one", title: "replacement" }
+      : { action: item.action, cwd: "C:/Git/Project", harness: "codex", threadId: "thread-one" };
+    const response = await feature.executeRequest(request);
+    const result = await response.json() as GitArcFailureEnvelope;
+    assert.equal(response.status, 400);
+    assert.deepEqual(result.gitArcFailure, item.expected);
+    assert.match(result.error, /mcp__wb__git_arc_/u);
+    assert.doesNotMatch(result.error, /wb git arc/u);
+  }
 });
 
 test("successful Git responses survive a failed thread claim refresh", async (context) => {

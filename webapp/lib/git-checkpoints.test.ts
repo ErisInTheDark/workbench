@@ -250,9 +250,14 @@ checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snaps
   });
   assert.deepEqual(refreshedCheckpoint.preservedDriftPaths, []);
   assert.equal(refreshedCheckpoint.preservedDriftPathCount, 0);
-  await startGitArc({
+  const started = await startGitArc({
     checkpointCommit: refreshedCheckpoint.checkpointCommit,
     cwd: repoRoot,
+    threadId: "thread-one",
+  });
+  const active = await addToGitArc({
+    cwd: repoRoot,
+    paths: ["planned-new.tsx"],
     threadId: "thread-one",
   });
   assert.equal(await git(repoRoot, ["show", `${refreshedCheckpoint.checkpointCommit}:unrelated.txt`]), "unrelated dirty at checkpoint\n");
@@ -267,16 +272,40 @@ checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snaps
     threadId: "thread-one",
   });
   assert.deepEqual(arcComparison.changes.map((change) => change.path), ["selected.txt"]);
+  const explicitArcComparison = await compareGitCheckpoint({
+    checkpointCommit: active.checkpointCommit,
+    cwd: repoRoot,
+    threadId: "thread-one",
+  });
+  assert.deepEqual(explicitArcComparison, arcComparison);
+  const explicitPlanComparison = await compareGitCheckpoint({
+    checkpointCommit: refreshedCheckpoint.checkpointCommit,
+    cwd: repoRoot,
+    threadId: "thread-one",
+  });
+  assert.equal(explicitPlanComparison.checkpointCommit, refreshedCheckpoint.checkpointCommit);
+  assert.deepEqual(explicitPlanComparison.changes.map((change) => change.path), ["selected.txt"]);
+  await assert.rejects(compareGitCheckpoint({
+    checkpointCommit: started.checkpointCommit,
+    cwd: repoRoot,
+    threadId: "thread-one",
+  }));
   const comparison = await compareGitCheckpoint({
     cwd: repoRoot,
     paths: ["selected.txt", "unrelated.txt"],
     threadId: "thread-one",
   });
   assert.deepEqual(comparison.changes.map((change) => change.path), ["selected.txt", "unrelated.txt"]);
-  assert.match((await diffGitCheckpoint({
+  const implicitDiff = await diffGitCheckpoint({
     cwd: repoRoot,
     threadId: "thread-one",
-  })).diff, /implementation/u);
+  });
+  assert.match(implicitDiff.diff, /implementation/u);
+  assert.deepEqual(await diffGitCheckpoint({
+    checkpointCommit: active.checkpointCommit,
+    cwd: repoRoot,
+    threadId: "thread-one",
+  }), implicitDiff);
   const proposal = await createGitCheckpointProposal({
     cwd: repoRoot,
     description: "",

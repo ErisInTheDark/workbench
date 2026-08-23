@@ -72,6 +72,8 @@ export default function ThreadGitArcFailure({
   };
   const message = failure.code === "missingArcRef"
     ? <>There is no git arc by the <ThreadInlineCode>{failure.ref}</ThreadInlineCode> ref.</>
+    : failure.code === "proposalAlreadyCommitted"
+      ? <>Commit <span className="font-medium">{failure.proposalTitle}</span> already exists at <ThreadInlineCode>{failure.commitSha.slice(0, 8)}</ThreadInlineCode>.</>
     : presentation.message;
 
   return (
@@ -110,12 +112,10 @@ export default function ThreadGitArcFailure({
           ) : null}
           {failure.code === "acceptedProposals" ? (
             <ul className="m-0 flex flex-col gap-1 py-1 text-[0.9em]" data-thread-git-arc-accepted-proposals="true">
-              {failure.proposals.map(({ commitSha, proposalId }) => (
+              {failure.proposals.map(({ commitSha, proposalId, title }) => (
                 <li className="flex min-w-0 flex-wrap items-baseline gap-x-2" key={proposalId}>
-                  <span className="text-muted">accepted proposal</span>
-                  <ThreadInlineCode>{proposalId}</ThreadInlineCode>
-                  <span className="text-muted">commit</span>
-                  <ThreadInlineCode>{commitSha}</ThreadInlineCode>
+                  <span className="font-medium text-text">{title || "Accepted commit"}</span>
+                  <ThreadInlineCode>{commitSha.slice(0, 8)}</ThreadInlineCode>
                 </li>
               ))}
             </ul>

@@ -2,7 +2,7 @@
  * Exports:
  * - GitArcFailureAction/GitArcFailure/GitArcFailureEnvelope: describe typed Git arc rejection identity, structured facts, and HTTP transport. Keywords: git, arc, failure, contract, transport.
  * - GitArcFailureSchema/GitArcFailureEnvelopeSchema/parseGitArcFailureEnvelope: validate failure payloads at server, CLI, transcript, and browser boundaries. Keywords: git, arc, failure, Zod, boundary.
- * - GitArcFailureException/createGitArcOperationRejected: preserve typed failures through internal async control flow and explicit generic fallback. Keywords: git, arc, error, exception, fallback.
+ * - GitArcFailureException/GitArcMissingClaimSetError/GitArcProposalAlreadyCommittedError/createGitArcOperationRejected: preserve typed operation failures and explicit generic fallback. Keywords: git, arc, error, exception, fallback.
  * - describeGitArcFailure/formatGitArcFailureText: share concise human and agent recovery wording from the typed failure. Keywords: git, arc, failure, presentation, recovery.
  * - formatGitArcFailureReceipt/parseGitArcFailureReceipt: encode and decode stable persisted failure metadata. Keywords: git, arc, failure, receipt, transcript.
  */
@@ -83,7 +83,17 @@ export const GitArcFailureSchema = z.discriminatedUnion("code", [
     proposals: z.array(z.object({
       commitSha: checkpointSha,
       proposalId: nonEmptyString.max(200),
+      title: z.string().max(300).optional(),
     }).strict()).min(1).max(20),
+  }).strict(),
+  GitArcFailureBaseSchema.extend({
+    code: z.literal("missingClaimSet"),
+  }).strict(),
+  GitArcFailureBaseSchema.extend({
+    code: z.literal("proposalAlreadyCommitted"),
+    commitSha: checkpointSha,
+    proposalId: nonEmptyString.max(200),
+    proposalTitle: nonEmptyString.max(300),
   }).strict(),
   GitArcFailureBaseSchema.extend({
     code: z.literal("operationRejected"),
@@ -104,6 +114,24 @@ export class GitArcFailureException extends Error {
   constructor(readonly failure: GitArcFailure) {
     super(formatGitArcFailureText(failure));
     this.name = "GitArcFailureException";
+  }
+}
+
+export class GitArcMissingClaimSetError extends Error {
+  constructor() {
+    super("This Git arc checkpoint does not contain any claimed paths.");
+    this.name = "GitArcMissingClaimSetError";
+  }
+}
+
+export class GitArcProposalAlreadyCommittedError extends Error {
+  constructor(
+    readonly commitSha: string,
+    readonly proposalId: string,
+    readonly proposalTitle: string,
+  ) {
+    super(`Commit ${proposalTitle} already exists at ${commitSha}.`);
+    this.name = "GitArcProposalAlreadyCommittedError";
   }
 }
 
@@ -177,6 +205,18 @@ export function describeGitArcFailure(failure: GitArcFailure) {
           message: "This Git arc is already resolved and owns no live claims.",
           userHint: "Start a new plan for any remaining approved work.",
         };
+    case "missingClaimSet":
+      return {
+        agentRecovery: "Return to Brief mode. Create a new plan with mcp__wb__git_arc_plan after the exact approved paths are known.",
+        message: "This Git arc checkpoint does not contain any claimed paths.",
+        userHint: "Create a new plan for the intended files.",
+      };
+    case "proposalAlreadyCommitted":
+      return {
+        agentRecovery: `Call mcp__wb__git_arc_propose with ${JSON.stringify({ amend: true, amendProposalId: failure.proposalId })} to amend this commit. Otherwise create a separate proposal without replaceProposalId or amendProposalId.`,
+        message: `Commit ${failure.proposalTitle} already exists at ${failure.commitSha}.`,
+        userHint: "Create a separate proposal, or amend the accepted commit.",
+      };
     case "operationRejected":
       return {
         agentRecovery: null,
@@ -220,7 +260,7 @@ export function formatGitArcFailureText(failure: GitArcFailure) {
     }
   } else if (failure.code === "acceptedProposals") {
     lines.push("", "Accepted commit proposals:");
-    failure.proposals.forEach(({ commitSha, proposalId }) => lines.push(`- ${proposalId} -> ${commitSha}`));
+    failure.proposals.forEach(({ commitSha, title }) => lines.push(`- ${title || "Accepted commit"} (${commitSha})`));
     if (failure.claimedPaths.length) {
       lines.push("", "Remaining claimed paths:", ...failure.claimedPaths.map((path) => `- ${path}`));
     }

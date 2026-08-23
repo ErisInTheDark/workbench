@@ -90,6 +90,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   }),
   z.object({
     action: z.literal("compare"),
+    checkpointCommit: checkpointSha.optional(),
     paths: checkpointPaths.optional(),
     ...checkpointBaseRequest,
   }),
