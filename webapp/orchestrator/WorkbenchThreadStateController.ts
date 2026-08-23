@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state and title ports, claim context, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification, title.
- * - default WorkbenchThreadStateController: own UI-independent thread records, durable metadata, provider observation, and sidebar projection. Keywords: drafts, project, lifecycle, headless.
+ * - default WorkbenchThreadStateController: own UI-independent thread records, fallback storage reads, durable display order, provider observation, and sidebar projection. Keywords: drafts, project, lifecycle, headless.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +10,16 @@ import type { WorkbenchProjectsPayload } from "../lib/types";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import {
+  getWorkbenchThreadDisplayKey,
+  isWorkbenchThreadDisplayOrderEmpty,
+  moveWorkbenchThreadDisplayOrder,
+  normalizeWorkbenchThreadDisplayOrder,
+  projectWorkbenchThreadDisplayOrder,
+  reconcileWorkbenchThreadDisplayOrder,
+  type WorkbenchThreadDisplayOrder,
+} from "../lib/workbench/thread/thread-display-order";
+import {
+  areAllUnsnoozedThreadEntriesSettlementReady,
   WorkbenchDurableQuestionnaireSchema,
   WorkbenchQuestionnaireHistoryEntrySchema,
   WorkbenchThreadDraftSchema,
@@ -53,7 +63,7 @@ interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot"
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
 interface StoredProjectStateV1 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
 interface StoredProjectStateV2 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
-interface StoredProjectState { drafts: StoredThreadDraft[]; records: WorkbenchThreadStateRecord[]; version: 3 }
+interface StoredProjectState { displayOrder?: WorkbenchThreadDisplayOrder; drafts: StoredThreadDraft[]; records: WorkbenchThreadStateRecord[]; version: 3 }
 type QuestionnaireStateMutation =
   | { kind: "clear"; requestKey: string }
   | { kind: "set"; questionnaire: WorkbenchDurableQuestionnaire };
@@ -132,6 +142,7 @@ export type WorkbenchObservedLifecycleEvent =
 
 interface ProjectState {
   abort: AbortController | null;
+  displayOrder: WorkbenchThreadDisplayOrder;
   drafts: Map<string, WorkbenchThreadDraft>;
   entries: Map<string, WorkbenchThreadStateEntry>;
   error: string | null;
@@ -273,6 +284,7 @@ export default class WorkbenchThreadStateController {
       case "workbench/thread-state/draft/delete": return { result: await this.deleteDraft(request.projectId, request.draftId, request.clientUpdatedAt) };
       case "workbench/thread-state/draft/pin/set":
       case "workbench/thread-state/draft/snooze/set": return { result: await this.mutateDraft(request) };
+      case "workbench/thread-state/display-order/move": return { result: await this.moveDisplayOrder(request) };
       default: return { result: await this.mutateThread(request) };
     }
   }
@@ -347,8 +359,8 @@ export default class WorkbenchThreadStateController {
     const state = await this.getProject(projectId);
     const key = entryKey(providerEntry);
     return await this.enqueue(`${projectId}:thread:${key}`, async () => {
-      this.installProviderSnapshot(projectId, state, providerEntry.identity.harness, [providerEntry], { complete: false });
-      await this.persist(projectId, state);
+      const changed = this.installProviderSnapshot(state, providerEntry.identity.harness, [providerEntry], { complete: false });
+      if (changed) await this.persist(projectId, state);
       const entry = state.entries.get(key);
       return entry?.entryKind === "draft" ? null : entry ?? null;
     });
@@ -386,7 +398,7 @@ export default class WorkbenchThreadStateController {
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
     return await this.enqueue(`${projectId}:thread:${key}`, async () => {
-      const activeBefore = this.countActiveQueueEntries(state);
+      const wakeReadyBefore = areAllUnsnoozedThreadEntriesSettlementReady(this.naturallyOrderedEntries(state));
       if (!state.entries.has(key) && providerEntry?.entryKind === "thread" && entryKey(providerEntry) === key) {
         state.entries.set(key, parseWorkbenchThreadStateEntry({ ...providerEntry, mcpGeneration: null, providerObserved: true }));
       }
@@ -435,9 +447,12 @@ export default class WorkbenchThreadStateController {
       const parsedNext = parseWorkbenchThreadStateEntry(next);
       if (parsedNext.entryKind === "draft") throw new Error("Lifecycle transitions cannot produce draft entries.");
       state.entries.set(key, parsedNext);
-      if (activeBefore > 0 && this.countActiveQueueEntries(state) === 0) {
-        for (const [candidateKey, candidate] of state.entries) {
-          if (candidate.entryKind !== "subagent" && !candidate.metadata.archived && candidate.metadata.snoozed) {
+      if (!wakeReadyBefore && areAllUnsnoozedThreadEntriesSettlementReady(this.naturallyOrderedEntries(state))) {
+        const highestSnoozed = this.snapshot(projectId, state).entries.find((candidate) => getThreadSidebarGroup(candidate) === "snoozed");
+        if (highestSnoozed) {
+          const candidateKey = getWorkbenchThreadDisplayKey(highestSnoozed);
+          const candidate = state.entries.get(candidateKey);
+          if (candidate && candidate.entryKind !== "subagent" && !candidate.metadata.archived && candidate.metadata.snoozed) {
             state.entries.set(candidateKey, parseWorkbenchThreadStateEntry({ ...candidate, metadata: { ...candidate.metadata, snoozed: false } }));
           }
         }
@@ -523,6 +538,7 @@ export default class WorkbenchThreadStateController {
         state.revision += 1;
         this.publishUpdate(state, {
           activityAt: next.activityAt,
+          displayOrder: state.displayOrder,
           identity: next.identity,
           ...(updatesOrder && next.entryKind === "thread" ? { orderAt: next.orderAt } : {}),
           projectId,
@@ -607,6 +623,7 @@ export default class WorkbenchThreadStateController {
       if (next.entryKind === "draft") return null;
       if (areDeeplyEqual(entry, next)) return next;
       state.entries.set(key, next);
+      await this.persist(projectId, state);
       this.publish(projectId, state, next);
       return next;
     });
@@ -643,7 +660,7 @@ export default class WorkbenchThreadStateController {
         if (!parsed.success || parsed.data.entryKind === "draft") continue;
         entries.set(entryKey(parsed.data), parsed.data);
       }
-      const state: ProjectState = { abort: null, drafts, entries, error: null, freshness: "loading", generation: 0, observers: new Set(), reconcilePromise: null, revision: 0, stopProjectObservation: null };
+      const state: ProjectState = { abort: null, displayOrder: stored.displayOrder ?? {}, drafts, entries, error: null, freshness: "loading", generation: 0, observers: new Set(), reconcilePromise: null, revision: 0, stopProjectObservation: null };
       state.stopProjectObservation = this.options.projectState.observe(projectId, (update) => this.publishUpdate(state, update));
       this.projects.set(projectId, state);
       setTimeout(() => {
@@ -656,27 +673,23 @@ export default class WorkbenchThreadStateController {
   }
 
   private loadProjectStorage(projectId: string) {
-    return this.enqueue(`${projectId}:storage:migrate`, async (): Promise<StoredProjectState> => {
+    return this.enqueue(`${projectId}:storage:read`, async (): Promise<StoredProjectState> => {
       const canonicalPath = this.filePath(projectId);
       const canonicalExists = await this.fileExists(canonicalPath);
       if (canonicalExists) {
         const stored = await this.json.read<StoredProjectState | StoredProjectStateV2 | StoredProjectStateV1>(canonicalPath, { drafts: [], records: [], version: 3 });
-        const canonical = this.toStoredProjectState(stored);
-        if (stored.version !== 3) await this.json.write(canonicalPath, canonical);
-        return canonical;
+        return this.decodeStoredProjectState(stored);
       }
 
       const projectRoot = await this.options.resolveProjectRoot(projectId);
       const legacyPath = this.legacyFilePath(projectRoot, projectId);
       if (!await this.fileExists(legacyPath)) return { drafts: [], records: [], version: 3 };
       const legacy = await this.json.read<StoredProjectStateV1>(legacyPath, { drafts: [], threads: [], version: 1 });
-      const canonical = this.toStoredProjectState(legacy);
-      await this.json.write(canonicalPath, canonical);
-      return canonical;
+      return this.decodeStoredProjectState(legacy);
     });
   }
 
-  private toStoredProjectState(stored: Partial<StoredProjectState | StoredProjectStateV2 | StoredProjectStateV1>): StoredProjectState {
+  private decodeStoredProjectState(stored: Partial<StoredProjectState | StoredProjectStateV2 | StoredProjectStateV1>): StoredProjectState {
     const records = stored.version === 3 && Array.isArray(stored.records)
       ? stored.records.flatMap((entry) => {
         const parsed = safeParseWorkbenchThreadStateEntry(entry);
@@ -689,6 +702,9 @@ export default class WorkbenchThreadStateController {
         })
         : [];
     return {
+      ...("displayOrder" in stored && !isWorkbenchThreadDisplayOrderEmpty(stored.displayOrder)
+        ? { displayOrder: normalizeWorkbenchThreadDisplayOrder(stored.displayOrder) }
+        : {}),
       drafts: Array.isArray(stored.drafts) ? stored.drafts : [],
       records,
       version: 3,
@@ -707,15 +723,17 @@ export default class WorkbenchThreadStateController {
   private filePath(projectId: string) { return path.join(this.options.storageRoot, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`); }
   private legacyFilePath(projectRoot: string, projectId: string) { return path.join(projectRoot, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`); }
   private draftEntry(draft: WorkbenchThreadDraft, metadata = { archived: false as const, pinned: false, snoozed: false }): Extract<WorkbenchThreadStateEntry, { entryKind: "draft" }> { return { activityAt: draft.updatedAt, draft, entryKind: "draft", metadata, title: draft.prompt.trim().split(/\r?\n/u).find(Boolean)?.trim().replace(/\s+/gu, " ") || "Draft" }; }
-  private snapshot(projectId: string, state: ProjectState): WorkbenchThreadSidebarSnapshot {
+  private naturallyOrderedEntries(state: ProjectState) {
     const entries = [...state.entries.values()].flatMap((entry) => {
       const projected = projectWorkbenchThreadStateEntry(entry);
       return projected ? [projected] : [];
     });
-    return { entries: sortThreadSidebarEntries(projectWorkbenchThreadSidebarEntries(entries)).filter((entry) => getThreadSidebarGroup(entry) !== "hidden"), error: state.error, freshness: state.freshness, projectId, revision: state.revision };
+    return sortThreadSidebarEntries(projectWorkbenchThreadSidebarEntries(entries)).filter((entry) => getThreadSidebarGroup(entry) !== "hidden");
   }
-  private countActiveQueueEntries(state: ProjectState) { return [...state.entries.values()].filter((entry) => { const projected = projectWorkbenchThreadStateEntry(entry); if (!projected) return false; const group = getThreadSidebarGroup(projected); return group === "drafts" || group === "needsAttentionActive" || group === "completed" || group === "working" || group === "needsAttentionPending"; }).length; }
-
+  private snapshot(projectId: string, state: ProjectState): WorkbenchThreadSidebarSnapshot {
+    const naturallyOrdered = this.naturallyOrderedEntries(state);
+    return { displayOrder: state.displayOrder, entries: projectWorkbenchThreadDisplayOrder(naturallyOrdered, state.displayOrder), error: state.error, freshness: state.freshness, projectId, revision: state.revision };
+  }
   private publish(projectId: string, state: ProjectState, changedEntry?: WorkbenchThreadStateEntry) {
     if (!this.active || !state.observers.size) return;
     state.revision += 1;
@@ -736,25 +754,37 @@ export default class WorkbenchThreadStateController {
     const abort = new AbortController();
     state.abort?.abort();
     state.abort = abort;
-    const reconcilePromise = this.options.reconcileProject(projectId, abort.signal, (harness, entries, options) => {
-      if (!this.active || generation !== state.generation) return;
-      this.installProviderSnapshot(projectId, state, harness, entries, options);
-      state.error = null;
-      state.freshness = "partial";
-      this.publish(projectId, state);
-    }).then((failures) => {
-      if (!this.active || generation !== state.generation) return;
-      state.error = failures.length
-        ? failures.map((failure) => `${failure.harness}: ${sanitizeError(failure.message)}`).join("; ").slice(0, 500)
-        : null;
-      state.freshness = failures.length ? "partial" : "fresh";
-      this.publish(projectId, state);
-    }, (error) => {
-      if (generation !== state.generation || abort.signal.aborted) return;
-      state.error = sanitizeError(error);
-      state.freshness = "partial";
-      this.publish(projectId, state);
-    }).finally(() => {
+    const dirtyHarnesses = new Set<WorkbenchHarnessId>();
+    const reconcilePromise = (async () => {
+      try {
+        const failures = await this.options.reconcileProject(projectId, abort.signal, (harness, entries, options) => {
+          if (!this.active || generation !== state.generation) return;
+          if (this.installProviderSnapshot(state, harness, entries, options)) dirtyHarnesses.add(harness);
+          if (options.complete && dirtyHarnesses.delete(harness)) {
+            void this.persist(projectId, state).catch((error) => {
+              if (!this.active || generation !== state.generation) return;
+              state.error = sanitizeError(error);
+              state.freshness = "partial";
+              this.publish(projectId, state);
+            });
+          }
+          state.error = null;
+          state.freshness = "partial";
+          this.publish(projectId, state);
+        });
+        if (!this.active || generation !== state.generation) return;
+        state.error = failures.length
+          ? failures.map((failure) => `${failure.harness}: ${sanitizeError(failure.message)}`).join("; ").slice(0, 500)
+          : null;
+        state.freshness = failures.length ? "partial" : "fresh";
+        this.publish(projectId, state);
+      } catch (error) {
+        if (generation !== state.generation || abort.signal.aborted) return;
+        state.error = sanitizeError(error);
+        state.freshness = "partial";
+        this.publish(projectId, state);
+      }
+    })().finally(() => {
       this.reconciliationPromises.delete(reconcilePromise);
       if (state.reconcilePromise === reconcilePromise) state.reconcilePromise = null;
       if (state.abort === abort) state.abort = null;
@@ -765,12 +795,17 @@ export default class WorkbenchThreadStateController {
   }
 
   private installProviderSnapshot(
-    projectId: string,
     state: ProjectState,
     harness: WorkbenchHarnessId,
     entries: WorkbenchThreadSidebarEntry[],
     { complete }: { complete: boolean },
   ) {
+    let changed = false;
+    const install = (key: string, entry: WorkbenchThreadStateEntry) => {
+      if (areDeeplyEqual(state.entries.get(key), entry)) return;
+      state.entries.set(key, entry);
+      changed = true;
+    };
     const providerKeys = new Set<string>();
     for (const candidate of entries) {
       const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(candidate);
@@ -789,7 +824,7 @@ export default class WorkbenchThreadStateController {
         : parsed.data;
       if (providerEntry.entryKind === "subagent") {
         const lifecycle = reconcileProviderLifecycle(providerEntry, existing);
-        state.entries.set(key, parseWorkbenchThreadStateEntry(existing ? {
+        install(key, parseWorkbenchThreadStateEntry(existing ? {
           ...providerEntry,
           lifecycle: gitArcPreventsThreadSettlement(providerEntry.gitArc) && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
           mcpGeneration: existing.mcpGeneration,
@@ -804,7 +839,7 @@ export default class WorkbenchThreadStateController {
         ? { archived: true as const, pinned: false as const, snoozed: false as const }
         : { archived: false as const, pinned: existing?.entryKind === "thread" ? existing.metadata.pinned : providerEntry.metadata.pinned, snoozed: existing?.entryKind === "thread" ? existing.metadata.snoozed : providerEntry.metadata.snoozed };
       const lifecycle = reconcileProviderLifecycle(providerEntry, existing);
-      state.entries.set(key, parseWorkbenchThreadStateEntry(existing ? {
+      install(key, parseWorkbenchThreadStateEntry(existing ? {
         ...providerEntry,
         lifecycle: gitArcPreventsThreadSettlement(providerEntry.gitArc) && lifecycle.settled
           ? { ...lifecycle, settled: false as const }
@@ -818,16 +853,16 @@ export default class WorkbenchThreadStateController {
         title: providerEntry.title === "New thread" ? existing.title : providerEntry.title,
       } : { ...providerEntry, mcpGeneration: null, providerObserved: true }));
     }
-    if (!complete) return;
+    if (!complete) return changed;
     for (const [key, entry] of state.entries) {
       const isAcceptedIntentAwaitingProvider = entry.entryKind !== "draft"
         && entry.lifecycle.kind === "working"
         && entry.lifecycle.reason === "acceptedIntent";
       if (entry.entryKind !== "draft" && entry.identity.harness === harness && !providerKeys.has(key) && !isAcceptedIntentAwaitingProvider) {
-        state.entries.set(key, { ...entry, providerObserved: false });
+        install(key, { ...entry, providerObserved: false });
       }
     }
-    void this.persist(projectId, state);
+    return changed;
   }
 
   private enqueue<TValue>(key: string, operation: () => Promise<TValue>) {
@@ -886,7 +921,26 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" }>) {
+  private async moveDisplayOrder(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/display-order/move" }>) {
+    const state = await this.getProject(request.projectId);
+    return await this.enqueue(`${request.projectId}:display-order`, async () => {
+      const next = moveWorkbenchThreadDisplayOrder(
+        this.naturallyOrderedEntries(state),
+        state.displayOrder,
+        request.section,
+        request.sourceKey,
+        request.beforeKey,
+      );
+      if (!next) return { accepted: false, revision: state.revision };
+      if (areDeeplyEqual(next, state.displayOrder)) return { accepted: true, revision: state.revision };
+      state.displayOrder = next;
+      await this.persist(request.projectId, state);
+      this.publish(request.projectId, state);
+      return { accepted: true, revision: state.revision };
+    });
+  }
+
+  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" | "workbench/thread-state/display-order/move" }>) {
     const state = await this.getProject(request.projectId);
     const key = `${request.identity.harness}:${request.identity.threadId}`;
     const mutate = async () => await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
@@ -971,6 +1025,7 @@ export default class WorkbenchThreadStateController {
   }
 
   private persist(projectId: string, state: ProjectState) {
+    state.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), state.displayOrder);
     return this.enqueue(`${projectId}:storage:write`, async () => {
       const drafts = [...state.drafts.values()].map((draft): StoredThreadDraft => {
         const entry = state.entries.get(`draft:${draft.draftId}`);
@@ -981,7 +1036,12 @@ export default class WorkbenchThreadStateController {
         };
       });
       const records = [...state.entries.values()].filter((entry): entry is WorkbenchThreadStateRecord => entry.entryKind !== "draft");
-      await this.json.write(this.filePath(projectId), { drafts, records, version: 3 } satisfies StoredProjectState);
+      await this.json.write(this.filePath(projectId), {
+        ...(!isWorkbenchThreadDisplayOrderEmpty(state.displayOrder) ? { displayOrder: state.displayOrder } : {}),
+        drafts,
+        records,
+        version: 3,
+      } satisfies StoredProjectState);
     });
   }
 }

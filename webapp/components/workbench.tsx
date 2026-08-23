@@ -33,7 +33,8 @@ import type {
 } from "../lib/types";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { writeTextToClipboard } from "../lib/workbench/dom/clipboard";
-import type { WorkbenchDragPayload } from "../lib/workbench/layout/workbench-drag";
+import WorkbenchDragController from "../lib/workbench/layout/WorkbenchDragController";
+import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID, type WorkbenchDragPayload } from "../lib/workbench/layout/workbench-drag";
 import WorkbenchMainLayout, {
   type WorkbenchDropPlacement,
   type WorkbenchMainLayout as WorkbenchMainLayoutState,
@@ -118,6 +119,9 @@ import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
+import DropTarget from "./workbench/drag/DropTarget";
+import DropTargetBoundary from "./workbench/drag/DropTargetBoundary";
+import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
 import PrimaryButton from "./workbench/PrimaryButton";
 import ProjectPicker from "./workbench/ProjectPicker";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
@@ -457,15 +461,6 @@ function getProjectTabLabel (projectName: string | null | undefined) {
   return projectName?.trim() || "Project";
 }
 
-interface PendingWorkbenchPointerDrag {
-  currentX: number;
-  currentY: number;
-  isDragging: boolean;
-  payload: WorkbenchDragPayload;
-  startX: number;
-  startY: number;
-}
-
 const THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 
 function filterVisibleUserInputRequestsByThreadId (
@@ -581,7 +576,6 @@ export default function Workbench () {
 
     return readStoredWorkbenchSidebarSectionOrder();
   });
-  const [sidebarDropTargetId, setSidebarDropTargetId] = useState<WorkbenchSidebarSectionId | "end" | null>(null);
   const [threadComposerDraftsByThreadId, setThreadComposerDraftsByThreadId] = useState<Record<string, WorkbenchComposerInputDraft | undefined>>({});
   const [threadQuestionnaireDraftsByKey, setThreadQuestionnaireDraftsByKey] = useState<Record<string, WorkbenchQuestionnaireDraft | undefined>>({});
   const editorRef = useRef<HTMLDivElement>(null);
@@ -619,14 +613,12 @@ export default function Workbench () {
   const pendingEditorFontSizeSyncRef = useRef<number | null>(null);
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
   const threadViewInstanceKeysByThreadIdRef = useRef(new Map<string, string>());
-  const pendingWorkbenchDragRef = useRef<PendingWorkbenchPointerDrag | null>(null);
-  const workbenchDragGhostRef = useRef<HTMLDivElement>(null);
-  const suppressNextWorkbenchClickRef = useRef(false);
-  const [activeWorkbenchDrag, setActiveWorkbenchDrag] = useState<{
-    payload: WorkbenchDragPayload;
-    x: number;
-    y: number;
-  } | null>(null);
+  const workbenchDragController = useMemo(() => new WorkbenchDragController(), []);
+  const workbenchDragSnapshot = useSyncExternalStore(workbenchDragController.subscribe, workbenchDragController.getSnapshot, workbenchDragController.getSnapshot);
+  const activeWorkbenchDrag = workbenchDragSnapshot.active && workbenchDragSnapshot.payload
+    ? { payload: workbenchDragSnapshot.payload, x: workbenchDragSnapshot.x, y: workbenchDragSnapshot.y }
+    : null;
+  useEffect(() => () => { workbenchDragController.dispose(); }, [workbenchDragController]);
 
   function getWorkbenchDomSurfaces (): WorkbenchDomSurfaces | null {
     if (
@@ -2081,7 +2073,7 @@ export default function Workbench () {
     return { kind: "empty" };
   }, [effectiveFilePath, effectiveThreadTarget, settingsScope, showFileView, showSettingsView, showThreadView]);
   const temporaryDropLayout = useMemo(() => (
-    !isMobile && !showMosaicView && activeWorkbenchDrag?.payload.type === "panel-target"
+    !isMobile && !showMosaicView && (activeWorkbenchDrag?.payload.type === "panel-target" || activeWorkbenchDrag?.payload.type === "thread-row")
       ? WorkbenchMainLayout.fromTarget(routePanelTarget)
       : null
   ), [activeWorkbenchDrag?.payload.type, isMobile, routePanelTarget, showMosaicView]);
@@ -2149,12 +2141,12 @@ export default function Workbench () {
     navigateToRoute(createMosaicRoute(explorer.currentProjectId || route.projectId, mosaicNode), options);
   }, [explorer.currentProjectId, navigateToRoute, route.projectId]);
 
-  const handleMainLayoutPanelDrop = useCallback((drop: { panelId: string; placement: WorkbenchDropPlacement }, payload: Extract<WorkbenchDragPayload, { readonly type: "new-thread" | "panel-target" }>) => {
+  const handleMainLayoutPanelDrop = useCallback((drop: { panelId: string; placement: WorkbenchDropPlacement }, payload: Extract<WorkbenchDragPayload, { readonly type: "new-thread" | "panel-target" | "thread-row" }>) => {
     if (payload.type === "new-thread" && !controls) {
       return;
     }
 
-    let target: WorkbenchPanelTarget = payload.type === "panel-target" ? payload.target : { kind: "empty" };
+    let target: WorkbenchPanelTarget = payload.type === "panel-target" || payload.type === "thread-row" ? payload.target : { kind: "empty" };
     if (payload.type === "new-thread") {
       const draftThread = controls!.createThreadDraft(payload.harness);
       setMosaicDraftThreadsById((current) => ({
@@ -2366,15 +2358,11 @@ export default function Workbench () {
   }), [sidebarSectionOrderIndex]);
 
   const endWorkbenchPointerDrag = useCallback(() => {
-    pendingWorkbenchDragRef.current = null;
-    setActiveWorkbenchDrag(null);
-    setSidebarDropTargetId(null);
-  }, []);
+    workbenchDragController.cancel();
+  }, [workbenchDragController]);
 
   const beginWorkbenchPointerDrag = useCallback((event: ReactPointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => {
-    if (isMobile || event.button !== 0) {
-      return;
-    }
+    if (isMobile || event.button !== 0) return;
     if (
       payload.type === "sidebar-section"
       && event.target instanceof HTMLElement
@@ -2384,115 +2372,21 @@ export default function Workbench () {
       return;
     }
 
-    pendingWorkbenchDragRef.current = {
-      currentX: event.clientX,
-      currentY: event.clientY,
-      isDragging: false,
+    const label = payload.type === "sidebar-section"
+      ? payload.sectionId
+      : payload.type === "new-thread"
+        ? "New thread"
+        : payload.target.kind === "file"
+          ? payload.target.filePath
+          : payload.target.kind === "thread" && (payload.target.target.kind === "provider" || payload.target.target.kind === "subagent")
+            ? payload.target.target.threadId
+            : payload.target.kind;
+    workbenchDragController.begin(event, {
+      dropTargetIds: payload.type === "sidebar-section" ? [WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID] : [WORKBENCH_MAIN_PANEL_DROP_TARGET_ID],
+      label,
       payload,
-      startX: event.clientX,
-      startY: event.clientY,
-    };
-
-    const handlePointerMove = (pointerEvent: PointerEvent) => {
-      const pendingDrag = pendingWorkbenchDragRef.current;
-      if (!pendingDrag) {
-        return;
-      }
-
-      pendingDrag.currentX = pointerEvent.clientX;
-      pendingDrag.currentY = pointerEvent.clientY;
-      if (workbenchDragGhostRef.current) {
-        workbenchDragGhostRef.current.style.transform = `translate3d(${pointerEvent.clientX + 12}px, ${pointerEvent.clientY + 12}px, 0)`;
-      }
-      const distance = Math.hypot(
-        pointerEvent.clientX - pendingDrag.startX,
-        pointerEvent.clientY - pendingDrag.startY,
-      );
-      if (!pendingDrag.isDragging && distance < 5) {
-        return;
-      }
-
-      const didStartDragging = !pendingDrag.isDragging;
-      pendingDrag.isDragging = true;
-      suppressNextWorkbenchClickRef.current = true;
-      pointerEvent.preventDefault();
-      if (didStartDragging) {
-        setActiveWorkbenchDrag({
-          payload: pendingDrag.payload,
-          x: pointerEvent.clientX,
-          y: pointerEvent.clientY,
-        });
-      }
-    };
-
-    const handlePointerUp = (pointerEvent: PointerEvent) => {
-      if (pendingWorkbenchDragRef.current?.isDragging) {
-        pointerEvent.preventDefault();
-      }
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-      window.removeEventListener("pointercancel", handlePointerUp);
-      window.setTimeout(() => {
-        endWorkbenchPointerDrag();
-      }, 0);
-    };
-
-    window.addEventListener("pointermove", handlePointerMove, { passive: false });
-    window.addEventListener("pointerup", handlePointerUp, { once: true });
-    window.addEventListener("pointercancel", handlePointerUp, { once: true });
-  }, [endWorkbenchPointerDrag, isMobile]);
-
-  const handleWorkbenchClickCapture = useCallback((event: MouseEvent<HTMLElement>) => {
-    if (!suppressNextWorkbenchClickRef.current) {
-      return;
-    }
-
-    suppressNextWorkbenchClickRef.current = false;
-    event.preventDefault();
-    event.stopPropagation();
-  }, []);
-
-  useEffect(() => {
-    if (!activeWorkbenchDrag || typeof document === "undefined") {
-      return;
-    }
-
-    const previousUserSelect = document.body.style.userSelect;
-    const previousCursor = document.body.style.cursor;
-    const previousOverflow = document.body.style.overflow;
-    const previousOverscrollBehavior = document.body.style.overscrollBehavior;
-    const previousTouchAction = document.body.style.touchAction;
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "grabbing";
-    document.body.style.overflow = "hidden";
-    document.body.style.overscrollBehavior = "none";
-    document.body.style.touchAction = "none";
-
-    return () => {
-      document.body.style.userSelect = previousUserSelect;
-      document.body.style.cursor = previousCursor;
-      document.body.style.overflow = previousOverflow;
-      document.body.style.overscrollBehavior = previousOverscrollBehavior;
-      document.body.style.touchAction = previousTouchAction;
-    };
-  }, [activeWorkbenchDrag]);
-
-  const getWorkbenchDragGhostLabel = useCallback((payload: WorkbenchDragPayload) => {
-    if (payload.type === "sidebar-section") {
-      return payload.sectionId;
-    }
-    if (payload.type === "new-thread") {
-      return "New thread";
-    }
-    if (payload.target.kind === "file") {
-      return payload.target.filePath;
-    }
-    if (payload.target.kind === "thread") {
-      return payload.target.target.kind === "provider" || payload.target.target.kind === "subagent" ? payload.target.target.threadId : null;
-    }
-
-    return payload.target.kind;
-  }, []);
+    });
+  }, [isMobile, workbenchDragController]);
 
   useEffect(() => {
     if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey) {
@@ -2900,13 +2794,13 @@ export default function Workbench () {
 
   return (
     <WorkbenchComposerProfileProvider controller={composerProfileController}>
-      <WorkbenchContextMenuProvider>
+      <WorkbenchDragProvider controller={workbenchDragController}>
+        <WorkbenchContextMenuProvider>
         <div
           className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isEffectiveDesktopSidebarCollapsed
             ? " md:grid-cols-[minmax(0,1fr)]"
             : " md:grid-cols-[minmax(16rem,21rem)_1fr]"
             }`}
-          onClickCapture={handleWorkbenchClickCapture}
           onClick={handleWorkbenchProjectFileLinkClick}
         >
           {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
@@ -2947,19 +2841,6 @@ export default function Workbench () {
               ) : null}
             </>
           ) : null}
-          {activeWorkbenchDrag ? (
-            <div
-              ref={workbenchDragGhostRef}
-              className="pointer-events-none fixed z-50 max-w-[18rem] truncate rounded-[0.7rem] bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] px-3 py-1.5 text-[0.78rem] font-medium text-text shadow-float backdrop-blur"
-              style={{
-                left: 0,
-                top: 0,
-                transform: `translate3d(${activeWorkbenchDrag.x + 12}px, ${activeWorkbenchDrag.y + 12}px, 0)`,
-              }}
-            >
-              {getWorkbenchDragGhostLabel(activeWorkbenchDrag.payload)}
-            </div>
-          ) : null}
           <div
             className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
             style={mobileTrackStyle}
@@ -2970,26 +2851,23 @@ export default function Workbench () {
                   className="flex h-full w-[200%] flex-row-reverse transition-transform duration-200 ease-out"
                   style={{ transform: sidebarTrackTransform }}
                 >
-                  <div className="explorer-scrollbar flex min-h-0 w-1/2 flex-col overflow-y-auto pb-8 pr-2">
-                    <section
-                      className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "project" ? " opacity-45" : ""}`}
+                  <DropTargetBoundary className="explorer-scrollbar flex min-h-0 w-1/2 flex-col overflow-y-auto pb-8 pr-2">
+                    <DropTarget
+                      dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
+                      enabled={(payload) => payload.type === "sidebar-section" && payload.sectionId !== "project"}
+                      onDrop={(payload) => {
+                        if (payload.type === "sidebar-section") moveSidebarSection(payload.sectionId, "project");
+                      }}
+                      range={{ x: 24, y: 18 }}
                       {...getSidebarSectionDragProps("project")}
-                      onPointerDown={(event) => {
-                        beginWorkbenchPointerDrag(event, { sectionId: "project", type: "sidebar-section" });
-                      }}
-                      onPointerMove={() => {
-                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "project") {
-                          setSidebarDropTargetId("project");
-                        }
-                      }}
-                      onPointerUp={() => {
-                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "project") {
-                          moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "project");
-                          endWorkbenchPointerDrag();
-                        }
-                      }}
                     >
-                      {sidebarDropTargetId === "project" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                      {({ selected }) => <section
+                        className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "project" ? " opacity-45" : ""}`}
+                        onPointerDown={(event) => {
+                          beginWorkbenchPointerDrag(event, { sectionId: "project", type: "sidebar-section" });
+                        }}
+                      >
+                      {selected ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
                       <div className="flex min-w-0 items-center gap-1">
                         <button
                           type="button"
@@ -3021,27 +2899,25 @@ export default function Workbench () {
                           </button>
                         ) : null}
                       </div>
-                    </section>
+                      </section>}
+                    </DropTarget>
 
-                    <section
-                      className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "threads" ? " opacity-45" : ""}`}
+                    <DropTarget
+                      dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
+                      enabled={(payload) => payload.type === "sidebar-section" && payload.sectionId !== "threads"}
+                      onDrop={(payload) => {
+                        if (payload.type === "sidebar-section") moveSidebarSection(payload.sectionId, "threads");
+                      }}
+                      range={{ x: 24, y: 18 }}
                       {...getSidebarSectionDragProps("threads")}
-                      onPointerDown={(event) => {
-                        beginWorkbenchPointerDrag(event, { sectionId: "threads", type: "sidebar-section" });
-                      }}
-                      onPointerMove={() => {
-                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "threads") {
-                          setSidebarDropTargetId("threads");
-                        }
-                      }}
-                      onPointerUp={() => {
-                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "threads") {
-                          moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "threads");
-                          endWorkbenchPointerDrag();
-                        }
-                      }}
                     >
-                      {sidebarDropTargetId === "threads" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                      {({ selected }) => <section
+                        className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "threads" ? " opacity-45" : ""}`}
+                        onPointerDown={(event) => {
+                          beginWorkbenchPointerDrag(event, { sectionId: "threads", type: "sidebar-section" });
+                        }}
+                      >
+                      {selected ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
                       <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
                         <p className="m-0 text-base font-semibold leading-tight">Threads</p>
                       </div>
@@ -3050,6 +2926,7 @@ export default function Workbench () {
                         controls={controls}
                         currentTarget={route.view === "thread" ? route.threadTarget : null}
                         harness={harness}
+                        isDragActive={Boolean(activeWorkbenchDrag)}
                         onBeginPointerDrag={beginWorkbenchPointerDrag}
                         onCreateThread={createThreadFromSidebar}
                         onOpenThread={openThreadFromExplorer}
@@ -3059,27 +2936,25 @@ export default function Workbench () {
                         store={threadSidebarStore}
                         threadSummariesById={threadSummariesById}
                       />
-                    </section>
+                      </section>}
+                    </DropTarget>
 
-                    <section
-                      className={`relative space-y-2 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "files" ? " opacity-45" : ""}`}
+                    <DropTarget
+                      dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
+                      enabled={(payload) => payload.type === "sidebar-section" && payload.sectionId !== "files"}
+                      onDrop={(payload) => {
+                        if (payload.type === "sidebar-section") moveSidebarSection(payload.sectionId, "files");
+                      }}
+                      range={{ x: 24, y: 18 }}
                       {...getSidebarSectionDragProps("files")}
-                      onPointerDown={(event) => {
-                        beginWorkbenchPointerDrag(event, { sectionId: "files", type: "sidebar-section" });
-                      }}
-                      onPointerMove={() => {
-                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "files") {
-                          setSidebarDropTargetId("files");
-                        }
-                      }}
-                      onPointerUp={() => {
-                        if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "files") {
-                          moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "files");
-                          endWorkbenchPointerDrag();
-                        }
-                      }}
                     >
-                      {sidebarDropTargetId === "files" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                      {({ selected }) => <section
+                        className={`relative space-y-2 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "files" ? " opacity-45" : ""}`}
+                        onPointerDown={(event) => {
+                          beginWorkbenchPointerDrag(event, { sectionId: "files", type: "sidebar-section" });
+                        }}
+                      >
+                      {selected ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
                       <div className="group/entry-row flex items-center justify-between gap-3 pr-2 md:pr-4.5">
                         <button
                           type="button"
@@ -3160,27 +3035,25 @@ export default function Workbench () {
                       {projectActionError ? (
                         <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger md:pr-4.5">{projectActionError}</p>
                       ) : null}
-                    </section>
+                      </section>}
+                    </DropTarget>
                     {browseSessions.length ? (
-                      <section
-                        className={`relative space-y-2 pt-6 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "browseSessions" ? " opacity-45" : ""}`}
+                      <DropTarget
+                        dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
+                        enabled={(payload) => payload.type === "sidebar-section" && payload.sectionId !== "browseSessions"}
+                        onDrop={(payload) => {
+                          if (payload.type === "sidebar-section") moveSidebarSection(payload.sectionId, "browseSessions");
+                        }}
+                        range={{ x: 24, y: 18 }}
                         {...getSidebarSectionDragProps("browseSessions")}
-                        onPointerDown={(event) => {
-                          beginWorkbenchPointerDrag(event, { sectionId: "browseSessions", type: "sidebar-section" });
-                        }}
-                        onPointerMove={() => {
-                          if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
-                            setSidebarDropTargetId("browseSessions");
-                          }
-                        }}
-                        onPointerUp={() => {
-                          if (activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId !== "browseSessions") {
-                            moveSidebarSection(activeWorkbenchDrag.payload.sectionId, "browseSessions");
-                            endWorkbenchPointerDrag();
-                          }
-                        }}
                       >
-                        {sidebarDropTargetId === "browseSessions" ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                        {({ selected }) => <section
+                          className={`relative space-y-2 pt-6 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "browseSessions" ? " opacity-45" : ""}`}
+                          onPointerDown={(event) => {
+                            beginWorkbenchPointerDrag(event, { sectionId: "browseSessions", type: "sidebar-section" });
+                          }}
+                        >
+                        {selected ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
                         <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
                           <p className="m-0 text-base font-semibold leading-tight">Browse sessions</p>
                         </div>
@@ -3194,25 +3067,22 @@ export default function Workbench () {
                             {browseSessionsError}
                           </p>
                         ) : null}
-                      </section>
+                        </section>}
+                      </DropTarget>
                     ) : null}
-                    <div
-                      className="relative h-5 shrink-0"
+                    <DropTarget
+                      dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
+                      enabled={(payload) => payload.type === "sidebar-section"}
+                      onDrop={(payload) => {
+                        if (payload.type === "sidebar-section") moveSidebarSectionToEnd(payload.sectionId);
+                      }}
+                      range={{ x: 24, y: 18 }}
                       style={{ order: sidebarSectionOrder.length }}
-                      onPointerMove={() => {
-                        if (activeWorkbenchDrag?.payload.type === "sidebar-section") {
-                          setSidebarDropTargetId("end");
-                        }
-                      }}
-                      onPointerUp={() => {
-                        if (activeWorkbenchDrag?.payload.type === "sidebar-section") {
-                          moveSidebarSectionToEnd(activeWorkbenchDrag.payload.sectionId);
-                          endWorkbenchPointerDrag();
-                        }
-                      }}
                     >
-                      {sidebarDropTargetId === "end" ? <div className="pointer-events-none absolute left-2 right-6 top-2 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                    </div>
+                      {({ selected }) => <div className="relative h-5 shrink-0">
+                        {selected ? <div className="pointer-events-none absolute left-2 right-6 top-2 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
+                      </div>}
+                    </DropTarget>
                     <footer
                       className="pr-2 pt-4 pb-1 md:pr-4.5"
                       style={{ order: sidebarSectionOrder.length + 1 }}
@@ -3251,7 +3121,7 @@ export default function Workbench () {
                         <p className="mt-2 text-[0.84rem] leading-6 text-danger">{reloadError}</p>
                       ) : null}
                     </footer>
-                  </div>
+                  </DropTargetBoundary>
 
                   <ProjectPicker
                     ref={projectsPaneRef}
@@ -3561,7 +3431,7 @@ export default function Workbench () {
                     </div>
                   </div>
                 ) : null}
-                {shouldRenderMainLayout && mainLayoutForRender && (!showFileView || isFileViewReady || activeWorkbenchDrag?.payload.type === "panel-target") ? (
+                {shouldRenderMainLayout && mainLayoutForRender && (!showFileView || isFileViewReady || activeWorkbenchDrag?.payload.type === "panel-target" || activeWorkbenchDrag?.payload.type === "thread-row") ? (
                   <WorkbenchMainLayoutView
                     activeDrag={activeWorkbenchDrag}
                     layout={mainLayoutForRender}
@@ -4059,7 +3929,8 @@ export default function Workbench () {
             </button>
           </div>
         </div>
-      </WorkbenchContextMenuProvider>
+        </WorkbenchContextMenuProvider>
+      </WorkbenchDragProvider>
     </WorkbenchComposerProfileProvider>
   );
 }

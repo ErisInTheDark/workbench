@@ -10,7 +10,7 @@ import type { ThreadSummary, WorkbenchControls, WorkbenchHarness, WorkbenchThrea
 import { writeTextToClipboard } from "../../lib/workbench/dom/clipboard";
 import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
 import { createThreadHref } from "../../lib/workbench/navigation/workbench-route";
-import { getThreadSidebarGroup, gitArcPreventsThreadSettlement, isWorkbenchThreadStatusProviderOwned, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
+import { getThreadSidebarGroup, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
 import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import { getNeedsAttentionThreadStatusTone } from "./workbench-thread-status-colors";
 import {
@@ -45,6 +45,7 @@ interface WorkbenchThreadSidebarProps {
   controls: WorkbenchControls | null;
   currentTarget: WorkbenchThreadTarget | null;
   harness: WorkbenchHarness;
+  isDragActive: boolean;
   onBeginPointerDrag: (event: PointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => void;
   onCreateThread: () => void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
@@ -60,6 +61,7 @@ export default memo(function WorkbenchThreadSidebar({
   controls,
   currentTarget,
   harness,
+  isDragActive,
   onBeginPointerDrag,
   onCreateThread,
   onOpenThread,
@@ -133,7 +135,7 @@ export default memo(function WorkbenchThreadSidebar({
       onSelect: () => onOpenThread(target),
     }];
 
-    if (terminal && (entry.lifecycle.settled || !gitArcPreventsThreadSettlement(entry.gitArc))) {
+    if (terminal && (entry.lifecycle.settled || isWorkbenchThreadSettlementAvailable(entry))) {
       items.push(entry.lifecycle.settled ? {
         icon: <RestoreThreadIcon className="size-4" />,
         id: "restore",
@@ -246,6 +248,7 @@ export default memo(function WorkbenchThreadSidebar({
           entries={entries}
           getThreadHref={(target) => createThreadHref(projectId, target)}
           getThreadContextMenu={getThreadContextMenu}
+          isDragActive={isDragActive}
           nowMs={relativeTimeNowMs}
           onAction={(entry, action) => {
             if (entry.entryKind === "draft") {
@@ -262,13 +265,16 @@ export default memo(function WorkbenchThreadSidebar({
             onBeginPointerDrag(event, { harness, type: "new-thread" });
           } : undefined}
           onOpenThread={onOpenThread}
-          projectId={projectId}
-          onThreadPointerDragStart={(event, entry) => {
-            const target = entry.entryKind === "draft"
-              ? { draftId: entry.draft.draftId, kind: "draft" as const }
-              : { harness: entry.identity.harness, kind: "provider" as const, threadId: entry.identity.threadId };
-            onBeginPointerDrag(event, { target: { kind: "thread", target }, type: "panel-target" });
+          onReorder={(sourceKey, section, beforeKey) => {
+            void controls?.updateThreadStateWithAcceptance({
+              beforeKey,
+              method: "workbench/thread-state/display-order/move",
+              projectId,
+              section,
+              sourceKey,
+            });
           }}
+          projectId={projectId}
         />
       </nav>
       {error ? <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">{error}</p> : null}

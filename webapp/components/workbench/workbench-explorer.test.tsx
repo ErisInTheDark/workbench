@@ -6,10 +6,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-test("threads render one keyboard-navigable tablist with settled rows inside one disclosure", async () => {
-  const [listSource, itemSource] = await Promise.all([
+test("threads render one keyboard-navigable tablist with settled rows and custom drag ownership", async () => {
+  const [draggableSource, listSource, itemSource, sidebarSource, workbenchSource] = await Promise.all([
+    readFile(new URL("./drag/Draggable.tsx", import.meta.url), "utf8"),
     readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8"),
     readFile(new URL("./WorkbenchThreadListItem.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../workbench.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(listSource, /role="tablist"/u);
   assert.match(listSource, /role="tab"/u);
@@ -18,7 +21,21 @@ test("threads render one keyboard-navigable tablist with settled rows inside one
   assert.match(listSource, /event\.key === "Home"/u);
   assert.match(listSource, /event\.key === "End"/u);
   assert.match(listSource, /summary="Settled threads"/u);
-  assert.match(listSource, /displayedSettledEntries\.map\(renderEntry\)/u);
+  assert.match(listSource, /renderReorderableSection\(displayedSettledEntries\.filter/u);
+  assert.match(listSource, /WORKBENCH_THREAD_ORDER_DROP_TARGET_ID/u);
+  assert.match(listSource, /THREAD_ORDER_DROP_RANGE = \{ x: 24, y: 100_000 \}/u);
+  assert.match(listSource, /range=\{THREAD_ORDER_DROP_RANGE\}/u);
+  assert.doesNotMatch(listSource, /payload\.sourceKey !== key/u);
+  assert.match(listSource, /<DropTargetBoundary/u);
+  assert.match(draggableSource, /draggable: false/u);
+  assert.match(draggableSource, /onDragStart[\s\S]*?event\.preventDefault\(\)/u);
+  assert.match(listSource, /draggable=\{draggable\}/u);
+  assert.match(itemSource, /<a[\s\S]*?draggable=\{draggable\}/u);
+  assert.match(workbenchSource, /isDragActive=\{Boolean\(activeWorkbenchDrag\)\}/u);
+  assert.match(sidebarSource, /<WorkbenchThreadList[\s\S]*?isDragActive=\{isDragActive\}/u);
+  assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?isDragActive=\{isDragActive\}/u);
+  assert.match(itemSource, /showTooltip && !isDragActive/u);
+  assert.match(itemSource, /isDragActive \? "" : " group-hover\/thread-row:opacity-100 group-focus-within\/thread-row:opacity-100"/u);
   assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?href=\{getThreadHref\(target\)\}[\s\S]*?role="tab"/u);
   assert.match(itemSource, /<a[\s\S]*?href=\{href\}[\s\S]*?role=\{role\}/u);
   assert.match(listSource, /href=\{getThreadHref\(\{ kind: "new" \}\)\}/u);
@@ -160,7 +177,7 @@ test("successful settlement leaves the still-selected thread for a fresh draft",
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");
   assert.match(sidebarSource, /const accepted = await controls\.updateThreadStateWithAcceptance\(request\);[\s\S]*?method === "settle" && accepted[\s\S]*?onThreadSettled/u);
-  assert.match(sidebarSource, /entry\.lifecycle\.settled \|\| !gitArcPreventsThreadSettlement\(entry\.gitArc\)/u);
+  assert.match(sidebarSource, /entry\.lifecycle\.settled \|\| isWorkbenchThreadSettlementAvailable\(entry\)/u);
   assert.match(workbenchSource, /currentRouteRef\.current[\s\S]*?isWorkbenchThreadTargetSelected\(settledTarget, currentRoute\.threadTarget\)[\s\S]*?createThreadRoute\(currentRoute\.projectId, \{ kind: "new" \}\)/u);
   assert.match(workbenchSource, /onThreadSettled=\{handleThreadSettled\}/u);
 });

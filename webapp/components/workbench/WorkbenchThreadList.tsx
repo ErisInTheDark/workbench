@@ -9,9 +9,10 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent,
 } from "react";
 
+import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, WORKBENCH_THREAD_ORDER_DROP_TARGET_ID } from "../../lib/workbench/layout/workbench-drag";
+import { getWorkbenchThreadDisplayKey, getWorkbenchThreadDisplaySection, type WorkbenchThreadDisplaySection } from "../../lib/workbench/thread/thread-display-order";
 import {
   groupWorkbenchThreadSidebarEntries,
   type WorkbenchThreadSidebarEntry,
@@ -23,8 +24,12 @@ import { workbenchThreadListButtonClassName, workbenchThreadListLabelClassName }
 import { SparkleIcon } from "./workbench-icons";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
+import Draggable from "./drag/Draggable";
+import DropTarget from "./drag/DropTarget";
+import DropTargetBoundary from "./drag/DropTargetBoundary";
 
 const SETTLED_THREAD_PAGE_SIZE = 50;
+const THREAD_ORDER_DROP_RANGE = { x: 24, y: 100_000 } as const;
 
 function targetForEntry(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadTarget {
   return entry.entryKind === "draft"
@@ -39,12 +44,13 @@ export default function WorkbenchThreadList({
   getThreadContextMenu,
   entries,
   getThreadHref,
+  isDragActive = false,
   nowMs = Date.now(),
   onAction,
   onCreateThread,
   onCreateThreadPointerDragStart,
-  onThreadPointerDragStart,
   onOpenThread,
+  onReorder,
   projectId,
 }: {
   attentionLabelsByThreadId?: Record<string, string | undefined>;
@@ -53,16 +59,19 @@ export default function WorkbenchThreadList({
   entries: WorkbenchThreadSidebarEntry[];
   getThreadHref: (target: WorkbenchThreadTarget) => string;
   getThreadContextMenu?: (entry: WorkbenchThreadSidebarEntry) => WorkbenchContextMenuDefinition | null;
+  isDragActive?: boolean;
   nowMs?: number;
   onAction?: (entry: WorkbenchThreadSidebarEntry, action: "complete" | "discard" | "restore" | "settle" | "wake") => void;
   onCreateThread: () => void;
-  onCreateThreadPointerDragStart?: (event: PointerEvent<HTMLAnchorElement>) => void;
-  onThreadPointerDragStart?: (event: PointerEvent<HTMLElement>, entry: WorkbenchThreadSidebarEntry) => void;
+  onCreateThreadPointerDragStart?: (event: import("react").PointerEvent<HTMLAnchorElement>) => void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
+  onReorder?: (sourceKey: string, section: WorkbenchThreadDisplaySection, beforeKey: string | null) => void;
   projectId: string;
 }) {
   const rowRefs = useRef<Array<HTMLAnchorElement | null>>([]);
-  const { primaryEntries, settledEntries } = groupWorkbenchThreadSidebarEntries(entries);
+  const { mainEntries, pinnedEntries, settledEntries, snoozedEntries } = groupWorkbenchThreadSidebarEntries(entries);
+  const settledPinnedEntries = settledEntries.filter((entry) => getWorkbenchThreadDisplaySection(entry) === "settledPinned");
+  const settledNaturalEntries = settledEntries.filter((entry) => getWorkbenchThreadDisplaySection(entry) !== "settledPinned");
   const [isOlderThreadsOpen, setIsOlderThreadsOpen] = useState(false);
   const [settledEntryLimit, setSettledEntryLimit] = useState(SETTLED_THREAD_PAGE_SIZE);
   const [isShiftPressed, setIsShiftPressed] = useState(false);
@@ -79,9 +88,10 @@ export default function WorkbenchThreadList({
       window.removeEventListener("blur", handleBlur);
     };
   }, []);
-  const displayedSettledEntries = settledEntries.slice(0, settledEntryLimit);
+  const displayedSettledEntries = [...settledPinnedEntries, ...settledNaturalEntries].slice(0, settledEntryLimit);
   const remainingSettledEntryCount = settledEntries.length - displayedSettledEntries.length;
   const nextSettledEntryCount = Math.min(SETTLED_THREAD_PAGE_SIZE, remainingSettledEntryCount);
+  const primaryEntries = [...pinnedEntries, ...mainEntries, ...snoozedEntries];
   const navigableEntries = isOlderThreadsOpen ? [...primaryEntries, ...displayedSettledEntries] : primaryEntries;
   const hasSelectedEntry = navigableEntries.some((entry) => isWorkbenchThreadTargetSelected(targetForEntry(entry), currentTarget));
   const moveFocus = (event: ReactKeyboardEvent<HTMLAnchorElement>, index: number) => {
@@ -94,24 +104,31 @@ export default function WorkbenchThreadList({
     event.preventDefault();
     rowRefs.current[next]?.focus();
   };
-  const renderEntry = (entry: WorkbenchThreadSidebarEntry) => {
+  const renderEntry = (entry: WorkbenchThreadSidebarEntry, reorderSection: WorkbenchThreadDisplaySection | null = null) => {
     const index = navigableEntries.indexOf(entry);
     const target = targetForEntry(entry);
     const selected = isWorkbenchThreadTargetSelected(target, currentTarget);
-    return (
+    const renderRow = ({ draggable, onDragStart, onPointerDown }: {
+      draggable: false;
+      onDragStart: import("react").DragEventHandler<HTMLElement>;
+      onPointerDown: import("react").PointerEventHandler<HTMLElement>;
+    }) => (
       <WorkbenchThreadListItem
         anchorRef={(node) => { if (index >= 0) rowRefs.current[index] = node; }}
         attentionLabel={entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId]}
         contextMenu={getThreadContextMenu?.(entry) ?? null}
+        draggable={draggable}
         entry={entry}
         href={getThreadHref(target)}
+        isDragActive={isDragActive}
         isShiftPressed={isShiftPressed}
         key={entry.entryKind === "draft" ? `draft:${entry.draft.draftId}` : `${entry.identity.harness}:${entry.identity.threadId}`}
         nowMs={nowMs}
         onAction={(action) => onAction?.(entry, action)}
         onActivate={onOpenThread}
+        onDragStart={(event) => onDragStart(event)}
         onKeyDown={(event) => moveFocus(event, index)}
-        onPointerDown={(event) => onThreadPointerDragStart?.(event, entry)}
+        onPointerDown={(event) => onPointerDown(event)}
         projectId={projectId}
         role="tab"
         selected={selected}
@@ -119,7 +136,54 @@ export default function WorkbenchThreadList({
         tabIndex={selected || (!hasSelectedEntry && index === 0) ? 0 : -1}
       />
     );
+    const sourceKey = getWorkbenchThreadDisplayKey(entry);
+    return (
+      <Draggable
+        dropTargetIds={reorderSection ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID, WORKBENCH_MAIN_PANEL_DROP_TARGET_ID] : [WORKBENCH_MAIN_PANEL_DROP_TARGET_ID]}
+        key={sourceKey}
+        label={entry.title}
+        payload={reorderSection
+          ? { section: reorderSection, sourceKey, target: { kind: "thread", target }, type: "thread-row" }
+          : { target: { kind: "thread", target }, type: "panel-target" }}
+      >
+        {renderRow}
+      </Draggable>
+    );
   };
+
+  const renderReorderableSection = (sectionEntries: WorkbenchThreadSidebarEntry[], section: WorkbenchThreadDisplaySection) => (
+    <DropTargetBoundary className="min-w-0">
+      <ul className="m-0 flex flex-col gap-1 p-0">
+        {sectionEntries.flatMap((entry) => {
+          const key = getWorkbenchThreadDisplayKey(entry);
+          return [
+            <DropTarget
+              as="li"
+              className="m-0 list-none"
+              dropTargetId={WORKBENCH_THREAD_ORDER_DROP_TARGET_ID}
+              key={`before:${key}`}
+              range={THREAD_ORDER_DROP_RANGE}
+              enabled={(payload) => payload.type === "thread-row" && payload.section === section}
+              onDrop={(payload) => { if (payload.type === "thread-row") onReorder?.(payload.sourceKey, section, key); }}
+            >
+              {({ selected }) => <div aria-hidden="true" className={`pointer-events-none relative z-10 h-px rounded-full transition-colors${selected ? " bg-accent" : " bg-transparent"}`} />}
+            </DropTarget>,
+            renderEntry(entry, section),
+          ];
+        })}
+        <DropTarget
+          as="li"
+          className="m-0 list-none"
+          dropTargetId={WORKBENCH_THREAD_ORDER_DROP_TARGET_ID}
+          range={THREAD_ORDER_DROP_RANGE}
+          enabled={(payload) => payload.type === "thread-row" && payload.section === section}
+          onDrop={(payload) => { if (payload.type === "thread-row") onReorder?.(payload.sourceKey, section, null); }}
+        >
+          {({ selected }) => <div aria-hidden="true" className={`pointer-events-none relative z-10 h-px rounded-full transition-colors${selected ? " bg-accent" : " bg-transparent"}`} />}
+        </DropTarget>
+      </ul>
+    </DropTargetBoundary>
+  );
 
   return (
     <div className="space-y-1">
@@ -143,7 +207,9 @@ export default function WorkbenchThreadList({
         </span>
       </a>
       <div role="tablist" aria-label="Threads" className="min-w-0">
-        {primaryEntries.length ? <ul className="m-0 flex flex-col gap-1 p-0">{primaryEntries.map(renderEntry)}</ul> : null}
+        {pinnedEntries.length ? renderReorderableSection(pinnedEntries, "pinned") : null}
+        {mainEntries.length ? <ul className="m-0 flex flex-col gap-1 p-0">{mainEntries.map((entry) => renderEntry(entry))}</ul> : null}
+        {snoozedEntries.length ? renderReorderableSection(snoozedEntries, "snoozed") : null}
         {settledEntries.length ? (
           <ThreadDisclosure
             className="mt-4"
@@ -153,7 +219,10 @@ export default function WorkbenchThreadList({
             summary="Settled threads"
             summaryClassName="text-[0.72rem] font-medium leading-[1.5] text-muted"
           >
-            <ul className="m-0 flex flex-col gap-1 p-0">{displayedSettledEntries.map(renderEntry)}</ul>
+            {settledPinnedEntries.length ? renderReorderableSection(displayedSettledEntries.filter((entry) => getWorkbenchThreadDisplaySection(entry) === "settledPinned"), "settledPinned") : null}
+            {displayedSettledEntries.some((entry) => getWorkbenchThreadDisplaySection(entry) !== "settledPinned") ? (
+              <ul className="m-0 flex flex-col gap-1 p-0">{displayedSettledEntries.filter((entry) => getWorkbenchThreadDisplaySection(entry) !== "settledPinned").map((entry) => renderEntry(entry))}</ul>
+            ) : null}
             {remainingSettledEntryCount > 0 ? (
               <button type="button" aria-label={`Load ${nextSettledEntryCount} more settled threads`} className={`${workbenchThreadListButtonClassName} mt-1 justify-center text-center text-[0.72rem] font-medium text-muted`} onClick={() => setSettledEntryLimit((current) => current + SETTLED_THREAD_PAGE_SIZE)}>
                 Load {nextSettledEntryCount} more

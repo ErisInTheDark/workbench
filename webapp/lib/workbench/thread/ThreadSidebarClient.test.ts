@@ -92,6 +92,30 @@ test("activity updates preserve turn order until a new turn-start order arrives"
   assert.deepEqual(installed.at(-1)?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["older-turn", "newer-turn"]);
 });
 
+test("activity updates project pinned rows through durable user ordering", async () => {
+  const entry = (threadId: string, orderAt: number): WorkbenchThreadSidebarSnapshot["entries"][number] => ({
+    activityAt: orderAt,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: true, snoozed: false },
+    orderAt,
+    title: threadId,
+  });
+  const initial: WorkbenchThreadSidebarSnapshot = {
+    ...snapshot(1),
+    displayOrder: { pinned: { "codex:older": { above: [], below: ["codex:newer"] } } },
+    entries: [entry("older", 1), entry("newer", 2)],
+  };
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => initial, upsertDraft: async () => undefined },
+  });
+  await client.open("project");
+  client.acceptActivity({ activityAt: 5, identity: { harness: "codex", threadId: "newer" }, orderAt: 5, projectId: "project", revision: 2, updateKind: "activity" });
+  assert.deepEqual(client.getSnapshot()?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["older", "newer"]);
+});
+
 test("external-store subscribers receive each installed snapshot and can unsubscribe", async () => {
   const initial: WorkbenchThreadSidebarSnapshot = {
     ...snapshot(1),

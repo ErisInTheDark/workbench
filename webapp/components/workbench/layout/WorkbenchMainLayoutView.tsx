@@ -6,7 +6,7 @@
 
 import { useEffect, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 
-import type { WorkbenchDragPayload } from "../../../lib/workbench/layout/workbench-drag";
+import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../../../lib/workbench/layout/workbench-drag";
 import WorkbenchMainLayout, {
   type WorkbenchDropPlacement,
   type WorkbenchMainLayout as WorkbenchMainLayoutState,
@@ -14,9 +14,10 @@ import WorkbenchMainLayout, {
   type WorkbenchMainLayoutNode,
   type WorkbenchPanelTarget,
 } from "../../../lib/workbench/layout/workbench-layout";
+import DropTarget from "../drag/DropTarget";
 
 type WorkbenchMosaicPanelMetadata = Extract<WorkbenchMainLayoutNode, { readonly type: "leaf" }>["mosaicPanel"];
-type WorkbenchPanelDropPayload = Extract<WorkbenchDragPayload, { readonly type: "new-thread" | "panel-target" }>;
+type WorkbenchPanelDropPayload = Extract<WorkbenchDragPayload, { readonly type: "new-thread" | "panel-target" | "thread-row" }>;
 type WorkbenchDropPreview = WorkbenchMainLayoutDrop & {
   readonly rect: {
     readonly height: number;
@@ -173,53 +174,19 @@ export default function WorkbenchMainLayoutView ({
       return;
     }
 
-    if (payload.type === "panel-target") {
+    if (payload.type === "panel-target" || payload.type === "thread-row") {
       onLayoutChange(WorkbenchMainLayout.applyDrop(layout, drop, payload.target));
     }
   }
 
   useEffect(() => {
-    if (activeDrag?.payload.type !== "panel-target" && activeDrag?.payload.type !== "new-thread") {
+    if (activeDrag?.payload.type !== "panel-target" && activeDrag?.payload.type !== "thread-row" && activeDrag?.payload.type !== "new-thread") {
       setDropPreview(null);
       return;
     }
 
     setDropPreview(getDropFromPoint(activeDrag.x, activeDrag.y, activeDrag.payload));
   }, [activeDrag]);
-
-  useEffect(() => {
-    if (activeDrag?.payload.type !== "panel-target" && activeDrag?.payload.type !== "new-thread") {
-      return;
-    }
-
-    const payload = activeDrag.payload;
-    const handlePointerMove = (event: globalThis.PointerEvent) => {
-      event.preventDefault();
-      setDropPreview(getDropFromPoint(event.clientX, event.clientY, payload));
-    };
-    const handlePointerUp = (event: globalThis.PointerEvent) => {
-      event.preventDefault();
-      const drop = getDropFromPoint(event.clientX, event.clientY, payload);
-      setDropPreview(null);
-      if (drop) {
-        applyPanelTargetDrop(drop, payload);
-      }
-      onPointerDrop();
-    };
-    const handlePointerCancel = () => {
-      setDropPreview(null);
-      onPointerDrop();
-    };
-
-    window.addEventListener("pointermove", handlePointerMove, { passive: false });
-    window.addEventListener("pointerup", handlePointerUp, { once: true });
-    window.addEventListener("pointercancel", handlePointerCancel, { once: true });
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-      window.removeEventListener("pointercancel", handlePointerCancel);
-    };
-  }, [activeDrag?.payload, layout, onLayoutChange, onPanelDrop, onPointerDrop]);
 
   function beginSplitResize(event: PointerEvent<HTMLDivElement>, node: Extract<WorkbenchMainLayoutNode, { type: "split" }>) {
     if (!onSplitResize || event.button !== 0) {
@@ -287,8 +254,21 @@ export default function WorkbenchMainLayoutView ({
     }
 
     return (
-      <section
+      <DropTarget
+        className="h-full min-h-0 min-w-0 flex-1"
+        dropTargetId={WORKBENCH_MAIN_PANEL_DROP_TARGET_ID}
+        enabled={(payload) => (payload.type === "panel-target" || payload.type === "thread-row" || payload.type === "new-thread")
+          && !(payload.type === "panel-target" && payload.sourcePanelId === node.id)}
         key={node.id}
+        onDrop={(payload, point) => {
+          if (payload.type !== "panel-target" && payload.type !== "thread-row" && payload.type !== "new-thread") return;
+          const drop = getDropFromPoint(point.x, point.y, payload);
+          setDropPreview(null);
+          if (drop) applyPanelTargetDrop(drop, payload);
+          onPointerDrop();
+        }}
+      >
+        <section
         className={joinClasses(
           "explorer-scrollbar relative h-full min-h-0 min-w-0 overflow-x-hidden border border-[color-mix(in_srgb,var(--text)_10%,transparent)]",
           isPanelScrollOwnedByContent(node.target) ? "overflow-hidden" : "overflow-y-auto",
@@ -297,20 +277,6 @@ export default function WorkbenchMainLayoutView ({
         onClick={() => {
           onFocusPanel(node.id);
         }}
-        onPointerMove={(event) => {
-          if (activeDrag?.payload.type !== "panel-target") {
-            return;
-          }
-
-          event.preventDefault();
-        }}
-        onPointerUp={(event) => {
-          if (activeDrag?.payload.type !== "panel-target") {
-            return;
-          }
-
-          event.preventDefault();
-        }}
       >
         {renderPanel({
           isFocused: layout.focusedPanelId === node.id,
@@ -318,7 +284,8 @@ export default function WorkbenchMainLayoutView ({
           panelId: node.id,
           target: node.target,
         })}
-      </section>
+        </section>
+      </DropTarget>
     );
   }
 

@@ -4,6 +4,7 @@
  * - default ThreadSidebarClient: subscribable browser observation, revision, optimistic draft, and leave-safe queue owner. Keywords: sidebar, external store, debounce, flush.
  */
 import type { WorkbenchThreadSidebarStore } from "../../types";
+import { normalizeWorkbenchThreadDisplayOrder, projectWorkbenchThreadDisplayOrder } from "./thread-display-order";
 import { createDraftTitle, sortThreadSidebarEntries, type WorkbenchHarnessId, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
 
 export interface ThreadSidebarTransport {
@@ -73,7 +74,8 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
         : { ...entry, activityAt: update.activityAt }
       : entry);
     this.revision = update.revision;
-    this.snapshot = { ...this.snapshot, entries: sortThreadSidebarEntries(entries), revision: update.revision };
+    const displayOrder = normalizeWorkbenchThreadDisplayOrder(update.displayOrder ?? this.snapshot.displayOrder);
+    this.snapshot = { ...this.snapshot, displayOrder, entries: projectWorkbenchThreadDisplayOrder(sortThreadSidebarEntries(entries), displayOrder), revision: update.revision };
     this.publish();
   }
   edit(draft: WorkbenchThreadDraft) {
@@ -126,14 +128,14 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       };
       this.snapshot = {
         ...this.snapshot,
-        entries: sortThreadSidebarEntries([
+        entries: projectWorkbenchThreadDisplayOrder(sortThreadSidebarEntries([
           ...this.snapshot.entries.filter((candidate) => {
             if (candidate.entryKind === "draft") return candidate.draft.draftId !== intent.draftId;
             if (candidate.entryKind === "subagent") return true;
             return candidate.identity.harness !== intent.identity.harness || candidate.identity.threadId !== intent.identity.threadId;
           }),
           entry,
-        ]),
+        ]), this.snapshot.displayOrder),
       };
       this.publish();
     }
@@ -160,7 +162,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.install(await this.options.transport.open(this.projectId));
   }
   async close() { if (!this.projectId) return; await this.flush(); const projectId = this.projectId; this.projectId = null; this.isOpen = false; this.snapshot = null; this.publish(); await this.options.transport.close(projectId).catch((error: unknown) => { console.warn("Unable to close the thread sidebar observation.", error); }); }
-  private install(snapshot: WorkbenchThreadSidebarSnapshot) { if (snapshot.revision <= this.revision) return; this.revision = snapshot.revision; this.snapshot = snapshot; this.publish(); }
+  private install(snapshot: WorkbenchThreadSidebarSnapshot) { if (snapshot.revision <= this.revision) return; this.revision = snapshot.revision; this.snapshot = { ...snapshot, displayOrder: normalizeWorkbenchThreadDisplayOrder(snapshot.displayOrder) }; this.publish(); }
   private installOptimisticDraft(draft: WorkbenchThreadDraft) {
     if (!this.snapshot) return;
     const existing = this.snapshot.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === draft.draftId);
@@ -173,10 +175,10 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     };
     this.snapshot = {
       ...this.snapshot,
-      entries: sortThreadSidebarEntries([
+      entries: projectWorkbenchThreadDisplayOrder(sortThreadSidebarEntries([
         ...this.snapshot.entries.filter((candidate) => candidate.entryKind !== "draft" || candidate.draft.draftId !== draft.draftId),
         entry,
-      ]),
+      ]), this.snapshot.displayOrder),
     };
     this.publish();
   }
