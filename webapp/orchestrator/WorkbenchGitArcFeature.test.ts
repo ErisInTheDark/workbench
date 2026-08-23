@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; feature tests prove repository-wide Git arc transition serialization. Keywords: git, arc, orchestrator, transition, concurrency, test.
+ * - No production exports; feature tests prove repository-wide Git arc transition serialization, card-read coalescing, and typed failures. Keywords: git, arc, orchestrator, transition, cache, concurrency, test.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -14,6 +14,7 @@ import { GitArcAcceptedProposalsError } from "../lib/workbench/git/GitArcProposa
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
+import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 
 test("sibling threads in one worktree share the Git arc transition lane", async () => {
   const keys: string[] = [];
@@ -38,6 +39,117 @@ test("sibling threads in one worktree share the Git arc transition lane", async 
   await feature.executeRequest({ ...request, harness: "opencode", threadId: "thread-two" });
 
   assert.deepEqual(keys, ["C:/Git/Project", "C:/Git/Project"]);
+});
+
+test("exact concurrent proposal and claim card reads share one transition operation", async () => {
+  for (const action of ["proposalState", "compare"] as const) {
+    let dispatchCount = 0;
+    let releaseDispatch: () => void = () => undefined;
+    let reportDispatchStarted: () => void = () => undefined;
+    const dispatchStarted = new Promise<void>((resolve) => { reportDispatchStarted = resolve; });
+    const dispatchGate = new Promise<void>((resolve) => { releaseDispatch = resolve; });
+    let transitionCount = 0;
+    const feature = new WorkbenchGitArcFeature({
+      getThreadClaimContext: async () => null,
+      refreshThreadGitArcState: async () => undefined,
+      resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+      transitions: {
+        run: async (_key, operation) => {
+          transitionCount += 1;
+          return await operation();
+        },
+      },
+    });
+    Object.defineProperty(feature, "dispatch", {
+      value: async () => {
+        dispatchCount += 1;
+        reportDispatchStarted();
+        await dispatchGate;
+        return Response.json({ action, shared: true });
+      },
+    });
+    const common = { action, cwd: "C:/Git/Project", harness: "codex" as const, threadId: "thread-one" };
+    const request = action === "proposalState"
+      ? { ...common, includeNewer: false, proposalId: "proposal-one" }
+      : common;
+
+    const first = feature.executeRequest(request);
+    const duplicate = feature.executeRequest(request);
+    await dispatchStarted;
+    assert.equal(dispatchCount, 1);
+    assert.equal(transitionCount, 1);
+    releaseDispatch();
+    const [firstResponse, duplicateResponse] = await Promise.all([first, duplicate]);
+
+    assert.deepEqual(await firstResponse.json(), { action, shared: true });
+    assert.deepEqual(await duplicateResponse.json(), { action, shared: true });
+  }
+});
+
+test("a Git arc mutation fences later card reads from an older shared result", async () => {
+  const coordinator = new WorkbenchThreadTransitionCoordinator();
+  const transitionActions: string[] = [];
+  let releaseFirstRead: () => void = () => undefined;
+  let reportFirstReadStarted: () => void = () => undefined;
+  let reportMutationQueued: () => void = () => undefined;
+  const firstReadStarted = new Promise<void>((resolve) => { reportFirstReadStarted = resolve; });
+  const firstReadGate = new Promise<void>((resolve) => { releaseFirstRead = resolve; });
+  const mutationQueued = new Promise<void>((resolve) => { reportMutationQueued = resolve; });
+  let transitionCount = 0;
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async () => null,
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: {
+      run: async (key, operation) => {
+        transitionCount += 1;
+        if (transitionCount === 2) reportMutationQueued();
+        return await coordinator.run(key, operation);
+      },
+    },
+  });
+  Object.defineProperty(feature, "dispatch", {
+    value: async (request: { action: string }) => {
+      transitionActions.push(request.action);
+      if (transitionActions.length === 1) {
+        reportFirstReadStarted();
+        await firstReadGate;
+      }
+      return Response.json({ action: request.action, order: transitionActions.length });
+    },
+  });
+  const readRequest = {
+    action: "proposalState" as const,
+    cwd: "C:/Git/Project",
+    harness: "codex" as const,
+    includeNewer: false,
+    proposalId: "proposal-one",
+    threadId: "thread-one",
+  };
+
+  const first = feature.executeRequest(readRequest);
+  const duplicate = feature.executeRequest(readRequest);
+  await firstReadStarted;
+  const mutation = feature.executeRequest({
+    action: "proposalRescind",
+    cwd: "C:/Git/Project",
+    harness: "codex",
+    proposalId: "proposal-one",
+    threadId: "thread-one",
+  });
+  await mutationQueued;
+  const afterMutation = feature.executeRequest(readRequest);
+  releaseFirstRead();
+  const [firstResponse, duplicateResponse, mutationResponse, afterMutationResponse] = await Promise.all([
+    first, duplicate, mutation, afterMutation,
+  ]);
+
+  assert.deepEqual(await firstResponse.json(), { action: "proposalState", order: 1 });
+  assert.deepEqual(await duplicateResponse.json(), { action: "proposalState", order: 1 });
+  assert.deepEqual(await mutationResponse.json(), { action: "proposalRescind", order: 2 });
+  assert.deepEqual(await afterMutationResponse.json(), { action: "proposalState", order: 3 });
+  assert.equal(transitionCount, 3);
+  assert.deepEqual(transitionActions, ["proposalState", "proposalRescind", "proposalState"]);
 });
 
 test("compare forwards an explicit checkpoint ref to the controller", async () => {

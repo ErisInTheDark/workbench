@@ -37,6 +37,7 @@ const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
   "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRemove", "arcStart", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "proposalCommit", "proposalCreate", "proposalRescind", "restore",
 ]);
+const COALESCED_CARD_READ_ACTIONS = new Set<GitCheckpointRequest["action"]>(["compare", "proposalState"]);
 const CLAIM_START_ACTIONS = new Set<GitCheckpointRequest["action"]>(["arcContinue", "arcStart", "planStart"]);
 
 function sanitizeError(error: unknown) {
@@ -80,6 +81,7 @@ async function sendResponse(response: http.ServerResponse, upstream: Response) {
 
 export default class WorkbenchGitArcFeature {
   private readonly controller = new WorkbenchGitCheckpointController();
+  private readonly pendingCardReads = new Map<string, Promise<Response>>();
 
   constructor(private readonly options: WorkbenchGitArcFeatureOptions) {}
 
@@ -124,7 +126,8 @@ export default class WorkbenchGitArcFeature {
     try {
       const project = await this.options.resolveProjectFromCwd(parsed.data.cwd);
       const request = { ...parsed.data, cwd: project.cwd };
-      return await this.options.transitions.run(project.cwd, async () => {
+      if (mutatesGitArcState(request)) this.fencePendingCardReads(project.cwd);
+      const execute = async () => await this.options.transitions.run(project.cwd, async () => {
         try {
           if (CLAIM_START_ACTIONS.has(request.action)) {
             const before = await this.options.getThreadClaimContext(project.project.id, request.harness, request.threadId);
@@ -151,6 +154,8 @@ export default class WorkbenchGitArcFeature {
           }
         }
       });
+      if (!COALESCED_CARD_READ_ACTIONS.has(request.action)) return await execute();
+      return await this.coalesceCardRead(project.cwd, request, execute);
     } catch (error) {
       const failure = error instanceof GitArcFailureException
         ? error.failure
@@ -159,6 +164,24 @@ export default class WorkbenchGitArcFeature {
           error instanceof Error ? error.message : "Unable to run Git arc operation.",
         );
       return failureResponse(failure);
+    }
+  }
+
+  private async coalesceCardRead(cwd: string, request: GitCheckpointRequest, execute: () => Promise<Response>) {
+    const key = `${cwd}\0${JSON.stringify(request)}`;
+    const existing = this.pendingCardReads.get(key);
+    if (existing) return (await existing).clone();
+    const pending = execute().finally(() => {
+      if (this.pendingCardReads.get(key) === pending) this.pendingCardReads.delete(key);
+    });
+    this.pendingCardReads.set(key, pending);
+    return (await pending).clone();
+  }
+
+  private fencePendingCardReads(cwd: string) {
+    const prefix = `${cwd}\0`;
+    for (const key of this.pendingCardReads.keys()) {
+      if (key.startsWith(prefix)) this.pendingCardReads.delete(key);
     }
   }
 

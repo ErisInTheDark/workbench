@@ -252,6 +252,8 @@ function acceptanceFailure(error: unknown) {
   );
 }
 
+const proposalFileChangesCache = new GitArcProposalCache();
+
 async function buildProposalFileChanges(
   repository: WorkbenchGitRepository,
   metadata: ProposalMetadata,
@@ -263,12 +265,13 @@ async function buildProposalFileChanges(
     repository.resolveTree(metadata.baseCommit),
     repository.resolveTree(target),
   ]);
-  return await new GitArcProposalCache(repository.root).readOrBuild({
+  return await proposalFileChangesCache.readOrBuild({
     baseTree,
     build: async () => await repository.buildFileChanges(metadata.baseCommit, target, metadata.paths),
     harness,
     paths: metadata.paths,
     proposalId: metadata.proposalId,
+    rootPath: repository.root,
     targetTree,
     threadId,
   });

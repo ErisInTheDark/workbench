@@ -270,13 +270,89 @@ sharedControllerTest("proposal cache reuses derived changes beneath the canonica
     harness: "opencode" as const,
     paths: ["one.txt"],
     proposalId: "proposal-one",
+    rootPath: repository.root,
     targetTree: tree,
     threadId,
   };
-  const cache = new GitArcProposalCache(repository.root);
+  const cache = new GitArcProposalCache();
   await cache.readOrBuild(input);
   await cache.readOrBuild(input);
   assert.equal(builds, 1);
+});
+
+isolatedControllerTest("proposal memory cache coalesces misses and extends its idle TTL without transcript storage", async (context) => {
+  const { repository } = await createRepository(context);
+  const tree = await repository.resolveTree("HEAD");
+  let builds = 0;
+  let now = 0;
+  let releaseBuild: () => void = () => undefined;
+  let reportBuildStarted: () => void = () => undefined;
+  const buildStarted = new Promise<void>((resolve) => { reportBuildStarted = resolve; });
+  const buildGate = new Promise<void>((resolve) => { releaseBuild = resolve; });
+  const cache = new GitArcProposalCache({ memoryTtlMs: 10, now: () => now });
+  const input = {
+    baseTree: tree,
+    build: async () => {
+      builds += 1;
+      if (builds === 1) {
+        reportBuildStarted();
+        await buildGate;
+      }
+      return [];
+    },
+    harness: "codex" as const,
+    paths: ["one.txt"],
+    proposalId: "memory-proposal",
+    rootPath: repository.root,
+    targetTree: tree,
+    threadId: "thread-without-transcript",
+  };
+
+  const first = cache.readOrBuild(input);
+  const duplicate = cache.readOrBuild(input);
+  await buildStarted;
+  assert.equal(builds, 1);
+  releaseBuild();
+  await Promise.all([first, duplicate]);
+
+  now = 9;
+  await cache.readOrBuild(input);
+  now = 18;
+  await cache.readOrBuild(input);
+  assert.equal(builds, 1);
+  now = 29;
+  await cache.readOrBuild(input);
+  assert.equal(builds, 2);
+});
+
+isolatedControllerTest("proposal memory cache evicts the least recently used immutable snapshot", async (context) => {
+  const { repository } = await createRepository(context);
+  const tree = await repository.resolveTree("HEAD");
+  const builds = new Map<string, number>();
+  const cache = new GitArcProposalCache({ maxMemoryEntries: 2, memoryTtlMs: 1_000, now: () => 0 });
+  const read = async (proposalId: string, targetTree: string) => await cache.readOrBuild({
+    baseTree: tree,
+    build: async () => {
+      builds.set(proposalId, (builds.get(proposalId) ?? 0) + 1);
+      return [];
+    },
+    harness: "codex",
+    paths: ["one.txt"],
+    proposalId,
+    rootPath: repository.root,
+    targetTree,
+    threadId: "thread-without-transcript",
+  });
+
+  await read("proposal-one", "1".repeat(40));
+  await read("proposal-two", "2".repeat(40));
+  await read("proposal-one", "1".repeat(40));
+  await read("proposal-three", "3".repeat(40));
+  await read("proposal-two", "2".repeat(40));
+
+  assert.equal(builds.get("proposal-one"), 1);
+  assert.equal(builds.get("proposal-two"), 2);
+  assert.equal(builds.get("proposal-three"), 1);
 });
 
 isolatedControllerTest("arc start requires fresh v3 plans but adopts dirty legacy arcs into the registry", async (context) => {
