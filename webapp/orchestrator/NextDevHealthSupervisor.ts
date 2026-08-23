@@ -139,11 +139,6 @@ export default class NextDevHealthSupervisor {
       return;
     }
 
-    if (!this.armed || result.status < 500) {
-      this.consecutiveServerErrors = 0;
-      return;
-    }
-
     this.consecutiveServerErrors += 1;
     this.options.log(
       `Next.js dev health check returned HTTP ${result.status} (${this.consecutiveServerErrors}/${this.options.serverErrorThreshold})`,
