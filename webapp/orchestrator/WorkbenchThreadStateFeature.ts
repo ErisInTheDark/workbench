@@ -10,9 +10,9 @@ import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchHarness, WorkbenchProjectsPayload } from "../lib/types";
 import type { GitArcActiveClaim, GitArcLifecycleState, GitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
-import { WorkbenchDurableQuestionnaireSchema, gitArcPreventsThreadSettlement, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
+import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchThreadGitArcSnapshot, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 
 interface ProjectRecord { id: string; rootPath: string }
@@ -196,7 +196,7 @@ export default class WorkbenchThreadStateFeature {
       getProjectCatalog: context.getProjectCatalog,
       projectState: context.projectState,
       publish: context.publish,
-      reconcileProject: (projectId, signal, acceptProviderSnapshot) => this.reconcileProject(projectId, signal, acceptProviderSnapshot),
+      reconcileProject: (projectId, signal, acceptProviderSnapshot, acceptGitArcSnapshot) => this.reconcileProject(projectId, signal, acceptProviderSnapshot, acceptGitArcSnapshot),
       renameThread: async (projectId, harness, threadId, candidateTitle) => {
         const title = normalizeThreadTitle(candidateTitle);
         if (!title) throw new Error("A non-empty thread title is required.");
@@ -330,28 +330,47 @@ export default class WorkbenchThreadStateFeature {
     projectId: string,
     signal: AbortSignal,
     acceptProviderSnapshot: (harness: WorkbenchHarness, entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void,
+    acceptGitArcSnapshot: (snapshot: WorkbenchThreadGitArcSnapshot) => Promise<void>,
   ) {
     const project = await this.context.resolveProjectById(projectId);
-    const [relationships, gitArcs, gitArcPlans] = await Promise.all([
-      this.context.listSubagents(projectId),
-      this.context.gitArcs.listLifecycleStates
-        ? this.context.gitArcs.listLifecycleStates(project.rootPath)
-        : this.context.gitArcs.listActiveClaims(project.rootPath).then((claims) => claims.map(legacyGitArc)),
-      this.context.gitArcs.listPlanStates?.(project.rootPath) ?? Promise.resolve([]),
-    ]);
-    const results = await Promise.all((["codex", "copilot", "opencode"] as const).map(async (harness): Promise<WorkbenchThreadReconciliationFailure | null> => {
+    const relationships = await this.context.listSubagents(projectId);
+    const readGitArcSnapshot = async (): Promise<WorkbenchThreadGitArcSnapshot> => {
+      const [gitArcs, gitArcPlans] = await Promise.all([
+        this.context.gitArcs.listLifecycleStates
+          ? this.context.gitArcs.listLifecycleStates(project.rootPath)
+          : this.context.gitArcs.listActiveClaims(project.rootPath).then((claims) => claims.map(legacyGitArc)),
+        this.context.gitArcs.listPlanStates?.(project.rootPath) ?? Promise.resolve([]),
+      ]);
+      return {
+        arcs: gitArcs.map(({ harness, threadId, ...state }) => ({ harness: harness as WorkbenchHarness, state, threadId })),
+        plans: gitArcPlans.map(({ harness, threadId, ...state }) => ({ harness: harness as WorkbenchHarness, state, threadId })),
+      };
+    };
+    await this.context.transitions.run(project.rootPath, async () => {
+      await acceptGitArcSnapshot(await readGitArcSnapshot());
+    });
+    const results = await Promise.all((["codex", "copilot", "opencode"] as const).map(async (harness): Promise<
+      | { entries: WorkbenchThreadSidebarEntry[]; harness: WorkbenchHarness }
+      | { failure: WorkbenchThreadReconciliationFailure }
+    > => {
       try {
         const providerEntries = await this.listProviderEntries(harness, project.rootPath, signal, (entries) => {
-          acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships, gitArcs, gitArcPlans), { complete: false });
+          acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships), { complete: false });
         });
-        acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, providerEntries, relationships, gitArcs, gitArcPlans), { complete: true });
-        return null;
+        return { entries: providerEntries, harness };
       } catch (error) {
         if (signal.aborted) throw signal.reason ?? new Error("Thread-state reconciliation cancelled.");
-        return { harness, message: error instanceof Error ? error.message : String(error) };
+        return { failure: { harness, message: error instanceof Error ? error.message : String(error) } };
       }
     }));
-    return results.filter((failure): failure is WorkbenchThreadReconciliationFailure => Boolean(failure));
+    const completed = results.filter((result): result is Extract<typeof result, { entries: WorkbenchThreadSidebarEntry[] }> => "entries" in result);
+    await this.context.transitions.run(project.rootPath, async () => {
+      completed.forEach(({ entries, harness }) => {
+        acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships), { complete: true });
+      });
+      await acceptGitArcSnapshot(await readGitArcSnapshot());
+    });
+    return results.flatMap((result) => "failure" in result ? [result.failure] : []);
   }
 
   private async listProviderEntries(
@@ -404,8 +423,6 @@ export default class WorkbenchThreadStateFeature {
     harness: WorkbenchHarness,
     providerEntries: WorkbenchThreadSidebarEntry[],
     relationships: SubagentRelationshipList,
-    gitArcs: GitArcLifecycleState[],
-    gitArcPlans: GitArcPlanState[],
   ) {
     const harnessRelationships = relationships.subagents.filter((relationship) => relationship.harness === harness);
     const relationshipKeys = new Set(harnessRelationships.map((relationship) => relationship.threadId));
@@ -413,25 +430,16 @@ export default class WorkbenchThreadStateFeature {
       .filter((entry) => entry.entryKind !== "thread" || !relationshipKeys.has(entry.identity.threadId))
       .map((entry) => {
         if (entry.entryKind === "draft") return entry;
-        const gitArc = projectGitArc(gitArcs.find((state) => state.harness === harness && state.threadId === entry.identity.threadId));
-        const gitArcPlan = projectGitArcPlan(gitArcPlans.find((state) => state.harness === harness && state.threadId === entry.identity.threadId));
-        return {
-          ...entry,
-          gitArc,
-          gitArcPlan,
-          lifecycle: gitArcPreventsThreadSettlement(gitArc) && entry.lifecycle.settled ? { ...entry.lifecycle, settled: false as const } : entry.lifecycle,
-        };
+        return entry;
       });
     const providerById = new Map(providerEntries.filter((entry): entry is Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => entry.entryKind === "thread").map((entry) => [entry.identity.threadId, entry]));
     return [...topLevelEntries, ...harnessRelationships.map((relationship): WorkbenchThreadSidebarEntry => {
       const provider = providerById.get(relationship.threadId);
-      const gitArc = projectGitArc(gitArcs.find((state) => state.harness === harness && state.threadId === relationship.threadId));
-      const gitArcPlan = projectGitArcPlan(gitArcPlans.find((state) => state.harness === harness && state.threadId === relationship.threadId));
       const lifecycle = normalizeSubagentProviderLifecycle(provider?.lifecycle);
       return {
         activityAt: provider?.activityAt ?? relationship.updatedAt, createdAt: relationship.createdAt, cwd: relationship.cwd,
         directSubagentIndex: relationship.directSubagentIndex, entryKind: "subagent", identity: { harness, threadId: relationship.threadId },
-        gitArc, gitArcPlan, lifecycle: gitArcPreventsThreadSettlement(gitArc) && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle, name: relationship.name,
+        lifecycle, name: relationship.name,
         parentThreadId: relationship.parentThreadId, pinned: false, profileId: relationship.profileId, profileName: relationship.profileName,
         projectId, title: relationship.title, updatedAt: relationship.updatedAt,
       };

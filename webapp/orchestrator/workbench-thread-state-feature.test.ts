@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect provider normalization, progressive reconciliation, managed resume, and controller-owned title mutation. Keywords: provider, sidebar, title, resume, reconciliation, test.
+ * - No production exports; tests protect provider normalization, progressive reconciliation, Git projection ordering, managed resume, and controller-owned title mutation. Keywords: provider, sidebar, title, resume, reconciliation, git, test.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -11,9 +11,9 @@ import test from "node:test";
 import WorkbenchThreadStateFeature, { mapProviderActivityNotification, mapProviderLifecycleNotification, normalizeProviderSidebarEntry, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
 import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 
-async function waitFor(predicate: () => boolean, message: string) {
+async function waitFor(predicate: () => boolean | Promise<boolean>, message: string) {
   const deadline = Date.now() + 1_000;
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() >= deadline) throw new Error(message);
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
@@ -244,7 +244,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
       scopePaths: planState.scopePaths,
       updatedAt: planState.updatedAt,
     },
-    lifecycleListCalls: 1,
+    lifecycleListCalls: 2,
   });
   const refreshedParent = await feature.controller.refreshGitArcState("project", "codex", "parent");
   assert.equal(refreshedParent?.identity.threadId, "parent");
@@ -374,11 +374,162 @@ test("managed title reads use the validated provider thread without mirrored tit
     method: "thread/read",
     params: { cwd: "C:/workspace", includeTurns: true, threadId: "thread-one" },
   });
+  await waitFor(() => requests.length === 4, "Provider reconciliation did not run after the managed title read.");
   assert.deepEqual(requests.slice(1).map(({ harness, method }) => ({ harness, method })), [
     { harness: "codex", method: "thread/list" },
     { harness: "copilot", method: "thread/list" },
     { harness: "opencode", method: "thread/list" },
   ]);
+  await feature.dispose();
+  await fs.rm(storageRoot, { force: true, recursive: true });
+});
+
+test("Git snapshot reconciliation failures reach the bounded feature log", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-git-failure-"));
+  const logs: string[] = [];
+  const feature = new WorkbenchThreadStateFeature({
+    getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
+    gitArcs: {
+      findActiveClaim: async () => null,
+      listActiveClaims: async () => [],
+      listLifecycleStates: async () => { throw new Error("Git snapshot exploded."); },
+    },
+    listSubagents: async () => ({ subagents: [] }),
+    log: (message) => logs.push(message),
+    projectState: {
+      getCurrentUpdate: () => null,
+      handleRequest: async () => ({ accepted: true }),
+      observe: () => () => undefined,
+    },
+    publish: () => undefined,
+    requestHarness: async () => { throw new Error("Provider reconciliation must not start after the initial Git snapshot fails."); },
+    requestThreadResume: async () => undefined,
+    resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
+    storageRoot,
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+
+  await feature.controller.open("observer", "project");
+  await waitFor(() => logs.length === 1, "Git snapshot reconciliation failure was not logged.");
+  assert.match(logs[0] ?? "", /reconciliation failed project=project error=Git snapshot exploded\./u);
+  assert.equal((await feature.controller.getSnapshot("project")).error, "Git snapshot exploded.");
+  await feature.dispose();
+  await fs.rm(storageRoot, { force: true, recursive: true });
+});
+
+test("provider reconciliation cannot overwrite a newer resolved Git arc projection", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-git-reconcile-"));
+  const secondPageGate = deferred<void>();
+  let resolved = false;
+  let secondPageStarted = false;
+  let transitionCount = 0;
+  const activeClaim = {
+    checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], harness: "codex" as const,
+    intentDescription: "", intentName: "settle projection", proposalId: "proposal-one",
+    proposalStatus: "proposed" as const, threadId: "thread-one", updatedAt: "2026-08-23T00:00:00.000Z",
+  };
+  const lifecycleState = () => ({
+    checkpointCommit: resolved ? "b".repeat(40) : activeClaim.checkpointCommit,
+    claimedPaths: resolved ? [] : activeClaim.claimedPaths,
+    harness: "codex" as const,
+    intentDescription: "",
+    intentName: "settle projection",
+    phase: resolved ? "resolved" as const : "active" as const,
+    proposals: resolved
+      ? [{ proposalId: "proposal-two", status: "committed" as const }]
+      : [{ proposalId: "proposal-one", status: "proposed" as const }],
+    threadId: "thread-one",
+    updatedAt: resolved ? "2026-08-23T00:01:00.000Z" : activeClaim.updatedAt,
+  });
+  const planState = {
+    checkpointCommit: "c".repeat(40), harness: "codex" as const, intentDescription: "",
+    intentName: "old plan", scopePaths: ["owned.ts"], threadId: "thread-one", updatedAt: "2026-08-23T00:00:00.000Z",
+  };
+  const feature = new WorkbenchThreadStateFeature({
+    getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
+    gitArcs: {
+      findActiveClaim: async () => resolved ? null : activeClaim,
+      findLifecycleState: async () => lifecycleState(),
+      findPlanState: async () => resolved ? null : planState,
+      listActiveClaims: async () => resolved ? [] : [activeClaim],
+      listLifecycleStates: async () => [lifecycleState()],
+      listPlanStates: async () => resolved ? [] : [planState],
+    },
+    listSubagents: async () => ({ subagents: [] }),
+    projectState: {
+      getCurrentUpdate: () => null,
+      handleRequest: async () => ({ accepted: true }),
+      observe: () => () => undefined,
+    },
+    publish: () => undefined,
+    requestThreadResume: async () => undefined,
+    requestHarness: async (harness, request) => {
+      if (harness !== "codex") return { error: { code: -32000, message: `${harness} unavailable` }, id: request.id ?? null };
+      const cursor = (request.params as { cursor?: string | null }).cursor;
+      if (cursor) {
+        secondPageStarted = true;
+        await secondPageGate.promise;
+        return { id: request.id ?? null, result: { data: [], nextCursor: null } };
+      }
+      return {
+        id: request.id ?? null,
+        result: { data: [{ id: "thread-one", name: "Thread one", status: { type: "idle" }, updatedAt: 1 }], nextCursor: "next" },
+      };
+    },
+    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
+    resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
+    storageRoot,
+    transitions: {
+      run: async (_key, operation) => {
+        transitionCount += 1;
+        return await operation();
+      },
+    },
+  });
+
+  await feature.controller.ensureProviderEntry("project", {
+    activityAt: 1,
+    entryKind: "thread",
+    gitArc: {
+      checkpointCommit: "d".repeat(40), claimedPaths: ["stale.ts"], intentDescription: "", intentName: "stale arc",
+      phase: "active", proposals: [{ proposalId: "stale-proposal", status: "proposed" }], updatedAt: "2026-08-22T00:00:00.000Z",
+    },
+    gitArcPlan: {
+      checkpointCommit: "e".repeat(40), intentDescription: "", intentName: "stale plan",
+      scopePaths: ["stale.ts"], updatedAt: "2026-08-22T00:00:00.000Z",
+    },
+    identity: { harness: "codex", threadId: "thread-one" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Thread one",
+  });
+  await feature.controller.open("observer", "project");
+  await waitFor(async () => {
+    const snapshot = await feature.controller.getSnapshot("project");
+    const entry = snapshot.entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "thread-one");
+    return transitionCount === 1 && secondPageStarted && entry?.entryKind === "thread"
+      && entry.gitArc?.checkpointCommit === activeClaim.checkpointCommit
+      && entry.gitArcPlan?.checkpointCommit === planState.checkpointCommit;
+  }, "The initial Git snapshot did not repair stale state before provider pagination.");
+  resolved = true;
+  const refreshed = await feature.controller.refreshGitArcState("project", "codex", "thread-one");
+  assert.equal(refreshed?.entryKind === "thread" ? refreshed.gitArc?.phase : null, "resolved");
+  secondPageGate.resolve();
+  await waitFor(async () => {
+    const snapshot = await feature.controller.getSnapshot("project");
+    const entry = snapshot.entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "thread-one");
+    return transitionCount === 2 && entry?.entryKind === "thread" && entry.gitArc?.phase === "resolved" && entry.gitArcPlan === null;
+  }, "The final reconciliation did not preserve the resolved Git projection.");
+  assert.equal(transitionCount, 2);
+  const final = await feature.controller.getSnapshot("project");
+  const thread = final.entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one");
+  assert.ok(thread && thread.entryKind === "thread");
+  assert.deepEqual(thread.gitArc, {
+    checkpointCommit: "b".repeat(40), claimedPaths: [], intentDescription: "", intentName: "settle projection",
+    phase: "resolved", proposals: [{ proposalId: "proposal-two", status: "committed" }], updatedAt: "2026-08-23T00:01:00.000Z",
+  });
+  assert.equal(thread.gitArcPlan, null);
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
 });

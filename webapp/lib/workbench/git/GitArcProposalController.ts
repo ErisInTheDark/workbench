@@ -2,6 +2,7 @@
  * Exports:
  * - default GitArcProposalController: own proposal creation, replacement, rescission, acceptance, receipts, and lifecycle projection. Keywords: git, arc, proposal, acceptance, lifecycle.
  * - GitArcLifecycleState: durable active or resolved arc projection with ordered visible proposal summaries. Keywords: git, arc, lifecycle, sidebar, proposals.
+ * - GitArcAcceptedProposalsError: preserve accepted proposal receipts and remaining claims when continuation must stop. Keywords: git, arc, proposal, accepted, error.
  * - GitCheckpointProposalReceipt: durable proposal identity returned after proposal publication. Keywords: git, proposal, receipt, commit.
  */
 import { randomUUID } from "node:crypto";
@@ -92,6 +93,18 @@ function acceptedReceiptMessage(receipts: Array<{ commitSha: string; proposalId:
     "Run wb git arc plan start -m <intent> -- <path> [...] with the explicit next paths when the approved plan is unchanged.",
     "Run wb git arc plan -m <intent> -- <path> [...] when the plan changed.",
   ].join("\n");
+}
+
+export class GitArcAcceptedProposalsError extends Error {
+  readonly claimedPaths: string[];
+  readonly receipts: Array<{ commitSha: string; proposalId: string }>;
+
+  constructor(receipts: Array<{ commitSha: string; proposalId: string }>, claimedPaths: string[]) {
+    super(acceptedReceiptMessage(receipts, claimedPaths));
+    this.name = "GitArcAcceptedProposalsError";
+    this.receipts = receipts.map((receipt) => ({ ...receipt }));
+    this.claimedPaths = [...claimedPaths];
+  }
 }
 
 function requireArcMetadata(metadata: CheckpointMetadata | null) {
@@ -379,7 +392,7 @@ export default class GitArcProposalController {
       const claimedPaths = entry?.phase === "active" && entry.checkpointCommit === input.checkpointCommit
         ? entry.claimedPaths
         : [];
-      throw new Error(acceptedReceiptMessage(receipts, claimedPaths));
+      throw new GitArcAcceptedProposalsError(receipts, claimedPaths);
     }
   }
 

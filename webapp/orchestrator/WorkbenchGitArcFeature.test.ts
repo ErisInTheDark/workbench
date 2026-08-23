@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { GitArcFailureEnvelope } from "../lib/workbench/git/git-arc-failures";
+import { GitArcAcceptedProposalsError } from "../lib/workbench/git/GitArcProposalController";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
@@ -146,6 +147,49 @@ test("missing arc refs return one typed message without unrelated recovery", asy
     version: 1,
   });
   assert.equal(result.error, "There is no git arc by the `deadbeef` ref.");
+});
+
+test("accepted proposal receipts remain structured when a resolved arc cannot continue", async () => {
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async () => ({
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      title: "Resolved thread",
+    }),
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  Object.defineProperty(feature, "dispatch", {
+    value: async () => {
+      throw new GitArcAcceptedProposalsError([{
+        commitSha: "b".repeat(40),
+        proposalId: "80d73f22-2adc-4bd3-83e0-affa363743eb",
+      }], []);
+    },
+  });
+
+  const response = await feature.executeRequest({
+    action: "arcContinue",
+    checkpointCommit: "a".repeat(40),
+    cwd: "C:/Git/Project",
+    harness: "codex",
+    threadId: "thread-one",
+  });
+  const result = await response.json() as GitArcFailureEnvelope;
+  assert.equal(response.status, 400);
+  assert.deepEqual(result.gitArcFailure, {
+    action: "arcContinue",
+    claimedPaths: [],
+    code: "acceptedProposals",
+    proposals: [{
+      commitSha: "b".repeat(40),
+      proposalId: "80d73f22-2adc-4bd3-83e0-affa363743eb",
+    }],
+    version: 1,
+  });
+  assert.match(result.error, /already resolved and owns no live claims/u);
+  assert.match(result.error, /80d73f22-2adc-4bd3-83e0-affa363743eb -> b{40}/u);
+  assert.match(result.error, /mcp__wb__git_arc_plan_start/u);
 });
 
 test("successful Git responses survive a failed thread claim refresh", async (context) => {

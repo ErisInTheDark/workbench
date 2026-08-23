@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state and title ports, claim context, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification, title.
+ * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadGitArcSnapshot/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state and title ports, Git projection, claim context, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification, title, git.
  * - default WorkbenchThreadStateController: own UI-independent thread records, fallback storage reads, durable display order, provider observation, and sidebar projection. Keywords: drafts, project, lifecycle, headless.
  */
 import fs from "node:fs/promises";
@@ -117,6 +117,7 @@ export interface WorkbenchThreadStateControllerOptions {
     projectId: string,
     signal: AbortSignal,
     acceptProviderSnapshot: (harness: WorkbenchHarnessId, entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void,
+    acceptGitArcSnapshot: (snapshot: WorkbenchThreadGitArcSnapshot) => Promise<void>,
   ) => Promise<WorkbenchThreadReconciliationFailure[]>;
   resolveGitArc: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<WorkbenchGitArcLifecycleState | LegacyGitArcClaim | null>;
   resolveGitArcPlan: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<WorkbenchGitArcPlanState | null>;
@@ -128,6 +129,11 @@ export interface WorkbenchThreadStateControllerOptions {
 export interface WorkbenchThreadReconciliationFailure {
   harness: WorkbenchHarnessId;
   message: string;
+}
+
+export interface WorkbenchThreadGitArcSnapshot {
+  arcs: Array<{ harness: WorkbenchHarnessId; state: WorkbenchGitArcLifecycleState; threadId: string }>;
+  plans: Array<{ harness: WorkbenchHarnessId; state: WorkbenchGitArcPlanState; threadId: string }>;
 }
 
 export interface WorkbenchThreadClaimContext {
@@ -771,6 +777,11 @@ export default class WorkbenchThreadStateController {
           state.error = null;
           state.freshness = "partial";
           this.publish(projectId, state);
+        }, async (snapshot) => {
+          if (!this.active || generation !== state.generation) return;
+          if (!this.installGitArcSnapshot(state, snapshot)) return;
+          await this.persist(projectId, state);
+          this.publish(projectId, state);
         });
         if (!this.active || generation !== state.generation) return;
         state.error = failures.length
@@ -780,7 +791,9 @@ export default class WorkbenchThreadStateController {
         this.publish(projectId, state);
       } catch (error) {
         if (generation !== state.generation || abort.signal.aborted) return;
-        state.error = sanitizeError(error);
+        const message = sanitizeError(error);
+        this.options.log?.(`reconciliation failed project=${sanitizeLogValue(projectId)} error=${message}`);
+        state.error = message;
         state.freshness = "partial";
         this.publish(projectId, state);
       }
@@ -861,6 +874,28 @@ export default class WorkbenchThreadStateController {
       if (entry.entryKind !== "draft" && entry.identity.harness === harness && !providerKeys.has(key) && !isAcceptedIntentAwaitingProvider) {
         install(key, { ...entry, providerObserved: false });
       }
+    }
+    return changed;
+  }
+
+  private installGitArcSnapshot(state: ProjectState, snapshot: WorkbenchThreadGitArcSnapshot) {
+    const arcs = new Map(snapshot.arcs.map(({ harness, state: gitArc, threadId }) => [`${harness}:${threadId}`, gitArc]));
+    const plans = new Map(snapshot.plans.map(({ harness, state: gitArcPlan, threadId }) => [`${harness}:${threadId}`, gitArcPlan]));
+    let changed = false;
+    for (const [key, entry] of state.entries) {
+      if (entry.entryKind === "draft") continue;
+      const gitArc = arcs.get(key) ?? null;
+      const next = parseWorkbenchThreadStateEntry({
+        ...entry,
+        gitArc,
+        gitArcPlan: plans.get(key) ?? null,
+        lifecycle: gitArcPreventsThreadSettlement(gitArc) && entry.lifecycle.settled
+          ? { ...entry.lifecycle, settled: false as const }
+          : entry.lifecycle,
+      });
+      if (next.entryKind === "draft" || areDeeplyEqual(entry, next)) continue;
+      state.entries.set(key, next);
+      changed = true;
     }
     return changed;
   }

@@ -135,7 +135,7 @@ export default class GitArcPlanController {
         harness: entry.harness,
         intentDescription: metadata.intentDescription ?? "",
         intentName: metadata.intentName ?? entry.intentName,
-        scopePaths: repository.normalizePaths(metadata.scopePaths),
+        scopePaths: metadata.scopePaths.length ? repository.normalizePaths(metadata.scopePaths) : [],
         threadId: entry.threadId,
         updatedAt: entry.updatedAt,
       };

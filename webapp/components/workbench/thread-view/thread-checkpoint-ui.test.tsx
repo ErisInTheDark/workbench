@@ -372,6 +372,33 @@ test("plan drift failures put drift meaning on claim rows and keep commands out 
   assert.doesNotMatch(html, /Dirty unclaimed|mcp__wb__|wb git arc/u);
 });
 
+test("accepted proposal failures keep the failed continuation title and render commit facts outside recovery copy", () => {
+  const failure = {
+    action: "arcContinue",
+    claimedPaths: [],
+    code: "acceptedProposals",
+    proposals: [{
+      commitSha: "29c0dd7f52498b2fd740514c5d5e482605371807",
+      proposalId: "80d73f22-2adc-4bd3-83e0-affa363743eb",
+    }],
+    version: 1,
+  } as const;
+  const html = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "continue", intentName: null, paths: [], ref: "a".repeat(40) },
+    durationMs: 597,
+    failureReason: `Workbench arc failure: ${JSON.stringify(failure)}`,
+    outcome: "failed",
+    receipt: null,
+  }));
+  assert.match(html, />Failed to continue</u);
+  assert.match(html, /This Git arc is already resolved and owns no live claims\./u);
+  assert.match(html, /data-thread-git-arc-accepted-proposals="true"/u);
+  assert.match(html, /80d73f22-2adc-4bd3-83e0-affa363743eb/u);
+  assert.match(html, /29c0dd7f52498b2fd740514c5d5e482605371807/u);
+  assert.match(html, /data-thread-inline-code="true"/u);
+  assert.doesNotMatch(html, /mcp__wb__|wb git arc plan/u);
+});
+
 test("timed-out plans use timeout labels without inventing a Git failure", () => {
   const html = renderToStaticMarkup(createElement(ThreadGitArcItem, {
     commandIntent: { action: "plan", intentName: "strengthen test quality guidance", paths: ["workbench-agents-prompt.md"], ref: null },

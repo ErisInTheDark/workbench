@@ -6,6 +6,7 @@
 import type http from "node:http";
 
 import WorkbenchGitCheckpointController, { type GitArcActiveClaim, type GitArcLifecycleState, type GitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import { GitArcAcceptedProposalsError } from "../lib/workbench/git/GitArcProposalController";
 import {
   createGitArcOperationRejected,
   formatGitArcFailureText,
@@ -160,6 +161,15 @@ export default class WorkbenchGitArcFeature {
   }
 
   private async createFailure(projectId: string, request: GitCheckpointRequest, error: unknown): Promise<GitArcFailure> {
+    if (error instanceof GitArcAcceptedProposalsError) {
+      return {
+        action: request.action,
+        claimedPaths: error.claimedPaths.slice(0, 20),
+        code: "acceptedProposals",
+        proposals: error.receipts.slice(0, 20),
+        version: 1,
+      };
+    }
     if (error instanceof GitCheckpointMissingObjectError) {
       return {
         action: request.action,

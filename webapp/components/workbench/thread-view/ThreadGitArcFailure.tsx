@@ -54,6 +54,7 @@ export default function ThreadGitArcFailure({
   const canRenderLiveThreads = Boolean(liveEntries.length && resolvedProjectId && presentationContext?.onOpenThread);
   const hasStructuredFacts = Boolean(
     (failure.code === "planDrift" && failure.commits.length)
+    || failure.code === "acceptedProposals"
     || canRenderLiveThreads
     || missingOwners.length,
   );
@@ -106,6 +107,18 @@ export default function ThreadGitArcFailure({
                 </div>
               ))}
             </div>
+          ) : null}
+          {failure.code === "acceptedProposals" ? (
+            <ul className="m-0 flex flex-col gap-1 py-1 text-[0.9em]" data-thread-git-arc-accepted-proposals="true">
+              {failure.proposals.map(({ commitSha, proposalId }) => (
+                <li className="flex min-w-0 flex-wrap items-baseline gap-x-2" key={proposalId}>
+                  <span className="text-muted">accepted proposal</span>
+                  <ThreadInlineCode>{proposalId}</ThreadInlineCode>
+                  <span className="text-muted">commit</span>
+                  <ThreadInlineCode>{commitSha}</ThreadInlineCode>
+                </li>
+              ))}
+            </ul>
           ) : null}
           {canRenderLiveThreads ? (
             <ThreadGitArcConflictList

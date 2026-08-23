@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 
 import GitArcPublishState from "./GitArcPublishState";
 import GitArcProposalCache from "./GitArcProposalCache";
+import { GitArcAcceptedProposalsError } from "./GitArcProposalController";
 import createGitArcStartDiagnosticError, { GitArcStartDiagnosticError } from "./git-arc-start-diagnostics";
 import { GitCheckpointDirtyPathsError } from "./GitArcPlanController";
 import GitArcRegistry, { GitArcCollisionError } from "./GitArcRegistry";
@@ -219,6 +220,37 @@ isolatedControllerTest("publish state fails closed when a configured remote cann
   if (state.kind === "unknown") assert.match(state.reason, /Unable to refresh remote refs/u);
   await git(local.source, ["checkout", "--detach", "--quiet"]);
   assert.deepEqual(await new GitArcPublishState(local.repository).classifyCurrentHead(), { kind: "detached" });
+});
+
+isolatedControllerTest("empty inactive plans remain visible through plan-state reads", async (context) => {
+  const { source } = await copyRepository(context, CONTROLLER_BASE_FIXTURE);
+  const controller = new WorkbenchGitCheckpointController();
+  const plan = await controller.createPlan({
+    cwd: source,
+    harness: "codex",
+    intentName: "empty diagnostic plan",
+    paths: [],
+    threadId: "empty-plan-thread",
+  });
+
+  assert.deepEqual(plan.scopePaths, []);
+  const states = await controller.listPlanStates({ cwd: source });
+  assert.equal(states.length, 1);
+  assert.deepEqual(states[0], {
+    checkpointCommit: plan.checkpointCommit,
+    harness: "codex",
+    intentDescription: "",
+    intentName: "empty diagnostic plan",
+    scopePaths: [],
+    threadId: "empty-plan-thread",
+    updatedAt: states[0]?.updatedAt,
+  });
+  await assert.rejects(controller.startArc({
+    checkpointCommit: plan.checkpointCommit,
+    cwd: source,
+    harness: "codex",
+    threadId: "empty-plan-thread",
+  }), /An empty Git arc plan cannot start/u);
 });
 
 sharedControllerTest("proposal cache reuses derived changes beneath the canonical harness transcript", async (context) => {
@@ -641,7 +673,14 @@ isolatedControllerTest("accepted proposals narrow claims, continue through succe
     cwd: source,
     harness: "codex",
     threadId: "partial-thread",
-  }), new RegExp(`Accepted commit proposals:[\\s\\S]*${firstProposal.proposalId}[\\s\\S]*${secondProposal.proposalId}[\\s\\S]*resolved and owns no live claims`, "u"));
+  }), (error) => {
+    assert.ok(error instanceof GitArcAcceptedProposalsError);
+    assert.deepEqual(error.claimedPaths, []);
+    assert.deepEqual(error.receipts.map(({ proposalId }) => proposalId), [firstProposal.proposalId, secondProposal.proposalId]);
+    error.receipts.forEach(({ commitSha }) => assert.match(commitSha, /^[a-f0-9]{40}$/u));
+    assert.match(error.message, /resolved and owns no live claims/u);
+    return true;
+  });
 });
 
 isolatedControllerTest("replacement plans target prior pending and committed proposals through the thread namespace", async (context) => {

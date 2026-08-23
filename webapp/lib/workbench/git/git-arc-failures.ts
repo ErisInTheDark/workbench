@@ -78,6 +78,14 @@ export const GitArcFailureSchema = z.discriminatedUnion("code", [
     ref: checkpointSha,
   }).strict(),
   GitArcFailureBaseSchema.extend({
+    claimedPaths: z.array(boundedPath).max(20),
+    code: z.literal("acceptedProposals"),
+    proposals: z.array(z.object({
+      commitSha: checkpointSha,
+      proposalId: nonEmptyString.max(200),
+    }).strict()).min(1).max(20),
+  }).strict(),
+  GitArcFailureBaseSchema.extend({
     code: z.literal("operationRejected"),
     message: nonEmptyString.max(4_000),
   }).strict(),
@@ -157,6 +165,18 @@ export function describeGitArcFailure(failure: GitArcFailure) {
         message: `There is no git arc by the \`${failure.ref}\` ref.`,
         userHint: null,
       };
+    case "acceptedProposals":
+      return failure.claimedPaths.length
+        ? {
+          agentRecovery: "Accepted proposals changed this arc's baseline. If the approved plan is unchanged, call mcp__wb__git_arc_plan_start with the explicit next paths. If the plan changed, return to Brief mode and create a new Git plan.",
+          message: `This Git arc has accepted commits and still owns ${failure.claimedPaths.length} live claim${failure.claimedPaths.length === 1 ? "" : "s"}.`,
+          userHint: "Create a new plan for the remaining approved paths.",
+        }
+        : {
+          agentRecovery: "This Git arc is resolved. If approved work remains unchanged, call mcp__wb__git_arc_plan_start with the explicit next paths. If the plan changed, return to Brief mode and create a new Git plan.",
+          message: "This Git arc is already resolved and owns no live claims.",
+          userHint: "Start a new plan for any remaining approved work.",
+        };
     case "operationRejected":
       return {
         agentRecovery: null,
@@ -197,6 +217,12 @@ export function formatGitArcFailureText(failure: GitArcFailure) {
     }
     if (failure.dirtyPaths.length) {
       lines.push("", "Dirty unclaimed paths:", ...failure.dirtyPaths.map((path) => `- ${path}`));
+    }
+  } else if (failure.code === "acceptedProposals") {
+    lines.push("", "Accepted commit proposals:");
+    failure.proposals.forEach(({ commitSha, proposalId }) => lines.push(`- ${proposalId} -> ${commitSha}`));
+    if (failure.claimedPaths.length) {
+      lines.push("", "Remaining claimed paths:", ...failure.claimedPaths.map((path) => `- ${path}`));
     }
   }
   if (presentation.agentRecovery) lines.push("", presentation.agentRecovery);
