@@ -2,6 +2,7 @@
  * Exports:
  * - default GitCheckpointStore: own durable checkpoint outcome and batched proposal metadata reads for one repository. Keywords: git, checkpoint, proposal, outcome, batch.
  * - GitArcProposalSummary: normalized proposal identity and terminal status used by lifecycle projection. Keywords: git, proposal, summary, status.
+ * - GitCheckpointMissingObjectError: preserve a requested checkpoint ref that Git cannot resolve. Keywords: git, checkpoint, missing, ref, error.
  */
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
@@ -48,6 +49,13 @@ export interface StoredProposal {
   proposalCommit: string;
   proposalRef: string;
   tree: string;
+}
+
+export class GitCheckpointMissingObjectError extends Error {
+  constructor(readonly requestedRef: string) {
+    super(`Git object ${requestedRef} is missing.`);
+    this.name = "GitCheckpointMissingObjectError";
+  }
 }
 
 function validateOutcome(value: Partial<ArcOutcome>, sourceCheckpoint: string) {
@@ -146,12 +154,12 @@ export default class GitCheckpointStore {
     const original = normalizeCommit(rawCommit);
     let checkpointCommit = original;
     let resolved = await this.repository.readCommitAt(checkpointCommit);
-    if (!resolved) throw new Error(`Git object ${checkpointCommit} is missing.`);
+    if (!resolved) throw new GitCheckpointMissingObjectError(original);
     let refs = await this.repository.refsPointingAt(checkpointCommit, checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId));
     if (!refs.length) {
       checkpointCommit = await new GitArcHistoryRewriter(this.repository).resolveAlias(checkpointCommit);
       resolved = await this.repository.readCommitAt(checkpointCommit);
-      if (!resolved) throw new Error(`Git object ${checkpointCommit} is missing.`);
+      if (!resolved) throw new GitCheckpointMissingObjectError(original);
       refs = await this.repository.refsPointingAt(checkpointCommit, checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId));
     }
     if (!refs.length) throw new Error("Checkpoint commit is not in this thread/worktree checkpoint timeline.");

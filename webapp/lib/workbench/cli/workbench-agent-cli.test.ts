@@ -20,6 +20,7 @@ import {
   type WorkbenchAgentCliRequest,
 } from "./workbench-agent-cli-commands.ts";
 import { adaptWorkbenchAgentCliResponse } from "./workbench-agent-cli-responses.ts";
+import { parseGitArcFailureReceipt } from "../git/git-arc-failures.ts";
 import { parseGitArcReceipt } from "../git/git-arc-receipts.ts";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
 
@@ -863,9 +864,11 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     scopePaths: ["src/one.ts", "src/two.ts"],
   }, { action: "planAdd", paths: ["src/three.ts"] });
   assert.match(driftResponse.stdout, /WARNING: These paths still use older plan baselines:[\s\S]*src\/one\.ts[\s\S]*src\/two\.ts/u);
-  assert.match(driftResponse.stdout, new RegExp(`wb git arc diff --ref ${successorRef} -- src/one\\.ts src/two\\.ts`, "u"));
-  assert.match(driftResponse.stdout, /wb git arc plan add -- src\/one\.ts src\/two\.ts/u);
-  assert.ok(driftResponse.stdout.indexOf("arc diff") < driftResponse.stdout.indexOf("arc plan add"));
+  assert.match(driftResponse.stdout, /mcp__wb__git_arc_diff/u);
+  assert.match(driftResponse.stdout, new RegExp(successorRef, "u"));
+  assert.match(driftResponse.stdout, /src\/one\.ts.*src\/two\.ts/u);
+  assert.match(driftResponse.stdout, /mcp__wb__git_arc_plan_add.*src\/one\.ts.*src\/two\.ts/u);
+  assert.ok(driftResponse.stdout.indexOf("mcp__wb__git_arc_diff") < driftResponse.stdout.indexOf("mcp__wb__git_arc_plan_add"));
   assert.match(driftResponse.stdout, /arc start will reject preserved drift/u);
   assert.deepEqual(parseGitArcReceipt(driftResponse.stdout), {
     action: "plan",
@@ -930,6 +933,22 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     exitCode: 1,
     stderr: "Plain failure\n",
     stdout: "",
+  });
+  const structuredFailure = adapt("git-arc-plan", {
+    error: "Adoption overlaps ordinary plan scope.",
+    gitArcFailure: {
+      action: "plan",
+      code: "adoptedPathOverlap",
+      overlaps: [{ adoptedPath: "src/dirty.ts", ordinaryPath: "src/dirty.ts" }],
+      version: 1,
+    },
+  }, { action: "plan", adoptPaths: ["src/dirty.ts"], paths: ["src/dirty.ts"] }, false);
+  assert.match(structuredFailure.stderr, /^Adoption overlaps ordinary plan scope\./u);
+  assert.deepEqual(parseGitArcFailureReceipt(structuredFailure.stderr), {
+    action: "plan",
+    code: "adoptedPathOverlap",
+    overlaps: [{ adoptedPath: "src/dirty.ts", ordinaryPath: "src/dirty.ts" }],
+    version: 1,
   });
 });
 

@@ -11,9 +11,10 @@ import { promisify } from "node:util";
 
 import GitArcPublishState from "./GitArcPublishState";
 import GitArcProposalCache from "./GitArcProposalCache";
-import createGitArcStartDiagnosticError from "./git-arc-start-diagnostics";
+import createGitArcStartDiagnosticError, { GitArcStartDiagnosticError } from "./git-arc-start-diagnostics";
+import { GitCheckpointDirtyPathsError } from "./GitArcPlanController";
 import GitArcRegistry, { GitArcCollisionError } from "./GitArcRegistry";
-import GitCheckpointStore from "./GitCheckpointStore";
+import GitCheckpointStore, { GitCheckpointMissingObjectError } from "./GitCheckpointStore";
 import GitTestFixtureCache, { type GitTestFixtureSpec } from "./GitTestFixtureCache";
 import {
   CONTROLLER_ADOPT_READY_FIXTURE,
@@ -248,14 +249,76 @@ sharedControllerTest("proposal cache reuses derived changes beneath the canonica
 isolatedControllerTest("arc start requires fresh v3 plans but adopts dirty legacy arcs into the registry", async (context) => {
   const { repository, source, state } = await copyRepository(context, CONTROLLER_START_READY_FIXTURE);
   const controller = new WorkbenchGitCheckpointController();
-  await assert.rejects(controller.createPlan({
-    adoptPaths: ["one.txt"],
+  await fs.writeFile(path.join(source, "duplicate.txt"), "intentional duplicate work\n");
+  const duplicate = await controller.createPlan({
+    adoptPaths: ["duplicate.txt"],
     cwd: source,
     harness: "codex",
     intentName: "duplicate adoption",
-    paths: ["one.txt"],
+    paths: ["duplicate.txt"],
     threadId: "overlap-thread",
-  }), /already join the plan scope[\s\S]*one\.txt \(--adopt\) overlaps one\.txt \(after --\)/u);
+  });
+  const duplicateCheckpoint = await new GitCheckpointStore(repository).readCheckpoint("codex", "overlap-thread", duplicate.checkpointCommit);
+  assert.deepEqual(duplicateCheckpoint.metadata?.scopePaths, ["duplicate.txt"]);
+  assert.deepEqual(duplicateCheckpoint.metadata?.adoptedPaths, ["duplicate.txt"]);
+  await fs.mkdir(path.join(source, "folder"));
+  await fs.writeFile(path.join(source, "folder", "file.txt"), "intentional nested work\n");
+  const nested = await controller.createPlan({
+    adoptPaths: ["folder/file.txt"],
+    cwd: source,
+    harness: "codex",
+    intentName: "nested adoption",
+    paths: ["folder"],
+    threadId: "nested-adoption-thread",
+  });
+  const nestedCheckpoint = await new GitCheckpointStore(repository).readCheckpoint("codex", "nested-adoption-thread", nested.checkpointCommit);
+  assert.deepEqual(nestedCheckpoint.metadata?.scopePaths, ["folder"]);
+  assert.deepEqual(nestedCheckpoint.metadata?.adoptedPaths, ["folder/file.txt"]);
+  const reverseNested = await controller.createPlan({
+    adoptPaths: ["folder"],
+    cwd: source,
+    harness: "codex",
+    intentName: "reverse nested adoption",
+    paths: ["folder/file.txt"],
+    threadId: "reverse-nested-adoption-thread",
+  });
+  const reverseNestedCheckpoint = await new GitCheckpointStore(repository).readCheckpoint(
+    "codex",
+    "reverse-nested-adoption-thread",
+    reverseNested.checkpointCommit,
+  );
+  assert.deepEqual(reverseNestedCheckpoint.metadata?.scopePaths, ["folder"]);
+  assert.deepEqual(reverseNestedCheckpoint.metadata?.adoptedPaths, ["folder"]);
+  await assert.rejects(controller.removeFromPlan({
+    cwd: source,
+    harness: "codex",
+    paths: ["folder/file.txt"],
+    threadId: "nested-adoption-thread",
+  }), (error: unknown) => {
+    assert(error instanceof GitCheckpointDirtyPathsError);
+    assert.deepEqual(error.dirtyPaths, ["folder/file.txt"]);
+    return true;
+  });
+  const startedNested = await controller.startArc({
+    checkpointCommit: nested.checkpointCommit,
+    cwd: source,
+    harness: "codex",
+    threadId: "nested-adoption-thread",
+  });
+  assert.deepEqual(startedNested.scopePaths, ["folder"]);
+  const startedNestedEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "nested-adoption-thread" });
+  assert.equal(startedNestedEntry?.phase, "active");
+  assert.deepEqual(startedNestedEntry?.claimedPaths, ["folder"]);
+  await assert.rejects(controller.startArc({
+    checkpointCommit: "deadbeef",
+    cwd: source,
+    harness: "codex",
+    threadId: "missing-ref-thread",
+  }), (error: unknown) => {
+    assert(error instanceof GitCheckpointMissingObjectError);
+    assert.equal(error.requestedRef, "deadbeef");
+    return true;
+  });
   await assert.rejects(controller.createPlan({
     adoptPaths: ["one.txt"],
     cwd: source,
@@ -372,6 +435,9 @@ isolatedControllerTest("arc start reports only causal commits, sibling claims, a
     snapshotDrift,
     threadId: "target-thread",
   });
+  assert(error instanceof GitArcStartDiagnosticError);
+  assert.deepEqual(error.details.dirtyUnclaimedPaths, ["three.txt"]);
+  assert.deepEqual(error.details.collisions.map(({ entry }) => entry.threadId), ["sibling-thread"]);
   assert.match(error.message, /New commits affecting planned files:/u);
   assert.match(error.message, new RegExp(`${relevantCommit.slice(0, 8)}[^\\n]*change planned one[\\s\\S]*one\\.txt`, "u"));
   assert.doesNotMatch(error.message, /unrelated housekeeping|unrelated\.txt/u);
@@ -381,7 +447,8 @@ isolatedControllerTest("arc start reports only causal commits, sibling claims, a
   const dirtySection = error.message.split("Dirty unclaimed planned files:")[1]?.split("Only dirty unclaimed files")[0] ?? "";
   assert.match(dirtySection, /three\.txt/u);
   assert.doesNotMatch(dirtySection, /two\.txt|claimed-dirty\.txt/u);
-  assert.match(error.message, new RegExp(`wb git arc diff --ref ${planHead} --`, "u"));
+  assert.match(error.message, new RegExp(`mcp__wb__git_arc_diff.*${planHead}`, "u"));
+  assert.match(error.message, /mcp__wb__git_arc_plan_start/u);
 
   const controller = new WorkbenchGitCheckpointController();
   const claimedPlan = await controller.createPlan({
@@ -405,6 +472,13 @@ isolatedControllerTest("arc start reports only causal commits, sibling claims, a
     cwd: source,
     harness: "codex",
     threadId: "target-thread",
+  }), assertSiblingCollision);
+  await assert.rejects(controller.createAndStartPlan({
+    cwd: source,
+    harness: "codex",
+    intentName: "start sibling-owned dirt",
+    paths: ["claimed-dirty.txt"],
+    threadId: "direct-start-thread",
   }), assertSiblingCollision);
   await assert.rejects(controller.adoptIntoPlan({
     cwd: source,

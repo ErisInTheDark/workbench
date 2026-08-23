@@ -1757,6 +1757,7 @@ function ThreadCommandExecutionDetails ({
       <ThreadCheckpointCommitItem
         commandOutcome={commandOutcome}
         cwd={item.cwd}
+        failureReason={commandOutcome === "failed" || commandOutcome === "declined" || commandOutcome === "timedOut" ? item.aggregatedOutput : null}
         intent={gitArcProposal?.intent ?? null}
         projectFilePaths={projectFilePaths}
         projectId={projectId}

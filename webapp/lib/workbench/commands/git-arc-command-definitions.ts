@@ -31,10 +31,10 @@ function baseBody(callerHarness: string, callerThreadId: string | null, cwd: str
 }
 
 const planSchema = z.object({
-  adoptPaths: paths.default([]),
-  intentDescription: z.string().default(""),
-  intentName: requiredText,
-  paths: paths.default([]),
+  adoptPaths: paths.default([]).describe("Intentional dirty unclaimed work to adopt into this plan. Adopted paths may overlap ordinary scope; nested scope collapses to one minimal claim. Never use for sibling-owned changes or merely because raw Git output shows dirt."),
+  intentDescription: z.string().default("").describe("Optional detail explaining the plan's approved intent."),
+  intentName: requiredText.describe("Short name for the approved implementation intent."),
+  paths: paths.default([]).describe("Ordinary inactive plan scope. Use for clean files and sibling-claimed files; planning these paths does not claim them."),
 }).strict();
 
 function parsePlanArgs(args: string[], commandName: "Arc plan" | "Arc plan start") {
@@ -48,7 +48,7 @@ function parsePlanArgs(args: string[], commandName: "Arc plan" | "Arc plan start
 }
 
 const plan = defineWorkbenchAgentCommand({
-  description: "Create or replace this thread's current inactive Git plan.",
+  description: "Create or replace this thread's inactive Git plan without claiming ordinary paths. Put clean and sibling-claimed files in paths; use adoptPaths only for intentional dirty unclaimed work, including nested work within ordinary scope.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "plan"],
   usage: "wb git arc plan -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
@@ -68,7 +68,7 @@ const plan = defineWorkbenchAgentCommand({
 
 function planMutation(operation: "add" | "adopt" | "remove") {
   return defineWorkbenchAgentCommand({
-    description: `${operation === "add" ? "Add clean paths to" : operation === "adopt" ? "Adopt dirty paths into" : "Remove paths from"} the current inactive plan.`,
+    description: `${operation === "add" ? "Add clean paths to" : operation === "adopt" ? "Adopt intentional dirty unclaimed paths into" : "Remove paths from"} the current inactive plan.`,
     helpGroups: ["git-arc"],
     words: ["git", "arc", "plan", operation],
     usage: `wb git arc plan ${operation} -- <path> [<path>...]`,
@@ -87,7 +87,7 @@ function planMutation(operation: "add" | "adopt" | "remove") {
 }
 
 const planStart = defineWorkbenchAgentCommand({
-  description: "Create and activate a plan atomically.",
+  description: "Create and activate a plan atomically. Put clean files in paths; use adoptPaths only for intentional dirty unclaimed work, including nested work within ordinary scope, that this thread may claim now.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "plan", "start"],
   usage: "wb git arc plan start -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
@@ -313,7 +313,7 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   start,
   continueArc,
   activePathCommand("add", "Continue an arc while claiming additional clean paths."),
-  activePathCommand("adopt", "Adopt existing dirty workspace paths into this thread's active arc."),
+  activePathCommand("adopt", "Adopt intentional dirty unclaimed workspace paths into this thread's active arc."),
   move,
   activePathCommand("remove", "Relinquish exact clean claims without changing working-tree files."),
   inspectionCommand("compare"),

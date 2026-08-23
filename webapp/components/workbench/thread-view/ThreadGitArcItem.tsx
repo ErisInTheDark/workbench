@@ -5,6 +5,11 @@
 import type { ReactNode } from "react";
 
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
+import {
+  createGitArcOperationRejected,
+  parseGitArcFailureReceipt,
+  type GitArcFailureAction,
+} from "../../../lib/workbench/git/git-arc-failures";
 import type { GitArcReceipt } from "../../../lib/workbench/git/git-arc-receipts";
 import type { GitArcAction } from "../../../lib/workbench/git/git-arc-receipts";
 import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../lib/workbench/thread/thread-command-matchers";
@@ -12,24 +17,25 @@ import GitArcIcon from "./GitArcIcon";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
+import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
 
 const ACTION_LABELS = {
-  add: { completed: "Extended", failed: "Failed to extend", inProgress: "Extending" },
-  adopt: { completed: "Adopted workspace changes", failed: "Failed to adopt workspace changes", inProgress: "Adopting workspace changes" },
-  compare: { completed: "Compared", failed: "Failed to compare", inProgress: "Comparing" },
-  continue: { completed: "Continued", failed: "Failed to continue", inProgress: "Continuing" },
-  diff: { completed: "Diffed", failed: "Failed to diff", inProgress: "Diffing" },
-  mv: { completed: "Moved", failed: "Failed to move", inProgress: "Moving" },
-  plan: { completed: "Planned", failed: "Failed to plan", inProgress: "Planning" },
-  planAdd: { completed: "Extended", failed: "Failed to extend plan", inProgress: "Extending plan" },
-  planAdopt: { completed: "Adopted changes", failed: "Failed to adopt changes into plan", inProgress: "Adopting changes into plan" },
-  planRemove: { completed: "Reduced", failed: "Failed to reduce plan", inProgress: "Reducing plan" },
-  planStart: { completed: "Started", failed: "Failed to create and start", inProgress: "Creating and starting" },
-  rescind: { completed: "Rescinded", failed: "Failed to rescind", inProgress: "Rescinding" },
-  remove: { completed: "Reduced", failed: "Failed to reduce", inProgress: "Reducing" },
-  restore: { completed: "Restored", failed: "Failed to restore", inProgress: "Restoring" },
-  start: { completed: "Started", failed: "Failed to start", inProgress: "Starting" },
+  add: { completed: "Extended", failed: "Failed to extend", inProgress: "Extending", timedOut: "Timed out extending" },
+  adopt: { completed: "Adopted workspace changes", failed: "Failed to adopt workspace changes", inProgress: "Adopting workspace changes", timedOut: "Timed out adopting workspace changes" },
+  compare: { completed: "Compared", failed: "Failed to compare", inProgress: "Comparing", timedOut: "Timed out comparing" },
+  continue: { completed: "Continued", failed: "Failed to continue", inProgress: "Continuing", timedOut: "Timed out continuing" },
+  diff: { completed: "Diffed", failed: "Failed to diff", inProgress: "Diffing", timedOut: "Timed out diffing" },
+  mv: { completed: "Moved", failed: "Failed to move", inProgress: "Moving", timedOut: "Timed out moving" },
+  plan: { completed: "Planned", failed: "Failed to plan", inProgress: "Planning", timedOut: "Timed out planning" },
+  planAdd: { completed: "Extended", failed: "Failed to extend plan", inProgress: "Extending plan", timedOut: "Timed out extending plan" },
+  planAdopt: { completed: "Adopted changes", failed: "Failed to adopt changes into plan", inProgress: "Adopting changes into plan", timedOut: "Timed out adopting changes into plan" },
+  planRemove: { completed: "Reduced", failed: "Failed to reduce plan", inProgress: "Reducing plan", timedOut: "Timed out reducing plan" },
+  planStart: { completed: "Started", failed: "Failed to create and start", inProgress: "Creating and starting", timedOut: "Timed out creating and starting" },
+  rescind: { completed: "Rescinded", failed: "Failed to rescind", inProgress: "Rescinding", timedOut: "Timed out rescinding" },
+  remove: { completed: "Reduced", failed: "Failed to reduce", inProgress: "Reducing", timedOut: "Timed out reducing" },
+  restore: { completed: "Restored", failed: "Failed to restore", inProgress: "Restoring", timedOut: "Timed out restoring" },
+  start: { completed: "Started", failed: "Failed to start", inProgress: "Starting", timedOut: "Timed out starting" },
 } as const;
 
 function iconAction(action: GitArcCommandAction): GitArcAction {
@@ -40,7 +46,29 @@ function iconAction(action: GitArcCommandAction): GitArcAction {
 }
 
 function actionState(outcome: ThreadCommandExecutionOutcome) {
-  return outcome === "completed" ? "completed" : outcome === "inProgress" ? "inProgress" : "failed";
+  return outcome === "completed" ? "completed" : outcome === "inProgress" ? "inProgress" : outcome === "timedOut" ? "timedOut" : "failed";
+}
+
+function failureAction(action: GitArcCommandAction): GitArcFailureAction {
+  const actions: Record<GitArcCommandAction, GitArcFailureAction> = {
+    add: "arcAdd",
+    adopt: "arcAdopt",
+    compare: "compare",
+    continue: "arcContinue",
+    diff: "diff",
+    mv: "arcMove",
+    plan: "plan",
+    planAdd: "planAdd",
+    planAdopt: "planAdopt",
+    planRemove: "planRemove",
+    planStart: "planStart",
+    propose: "proposalCreate",
+    remove: "arcRemove",
+    rescind: "proposalRescind",
+    restore: "restore",
+    start: "arcStart",
+  };
+  return actions[action];
 }
 
 function attemptedMoveMappings(commandIntent: GitArcCommandIntent) {
@@ -55,6 +83,13 @@ function attemptedMoveMappings(commandIntent: GitArcCommandIntent) {
     destination: `${destination.replace(/[\\/]+$/u, "")}/${source.split(/[\\/]/u).at(-1)}`,
     source,
   }));
+}
+
+function failureClaimPaths(failure: ReturnType<typeof parseGitArcFailureReceipt>) {
+  if (!failure || (failure.code !== "siblingClaimCollision" && failure.code !== "planDrift")) return [];
+  const paths = failure.conflicts.flatMap(({ overlaps }) => overlaps.map(({ requestedPath }) => requestedPath));
+  if (failure.code === "planDrift") paths.push(...failure.snapshotPaths);
+  return [...new Set(paths)];
 }
 
 export default function ThreadGitArcItem({
@@ -100,38 +135,68 @@ export default function ThreadGitArcItem({
     );
   }
   const state = actionState(outcome);
+  const adoptPaths = commandIntent.adoptPaths ?? [];
+  const adoptPathSet = new Set(adoptPaths);
   const movePreview = commandIntent.action === "mv" && (
     receipt?.mode === "preview"
     || (!receipt && commandIntent.move?.kind === "regex" && !commandIntent.move.confirm)
   );
-  const labels = movePreview
-    ? { completed: "Previewed", failed: "Failed to preview moves", inProgress: "Previewing moves" }
-    : ACTION_LABELS[commandIntent.action];
   const planName = receipt?.intentName ?? commandIntent.intentName ?? "git arc";
   const ref = receipt?.ref ?? commandIntent.ref;
   const claimedPaths = receipt?.claimedPaths ?? [];
   const selectedPaths = receipt?.selectedPaths ?? commandIntent.paths;
+  const ordinarySelectedPaths = selectedPaths.filter((candidate) => !adoptPathSet.has(candidate));
+  const labels = movePreview
+    ? { completed: "Previewed", failed: "Failed to preview moves", inProgress: "Previewing moves", timedOut: "Timed out previewing moves" }
+    : adoptPaths.length && ordinarySelectedPaths.length && commandIntent.action === "plan"
+      ? { completed: "Planned and adopted changes", failed: "Failed to plan and adopt changes", inProgress: "Planning and adopting changes", timedOut: "Timed out planning and adopting changes" }
+      : adoptPaths.length && commandIntent.action === "plan"
+        ? { completed: "Adopted changes into plan", failed: "Failed to adopt changes", inProgress: "Adopting changes into plan", timedOut: "Timed out adopting changes" }
+        : adoptPaths.length && ordinarySelectedPaths.length && commandIntent.action === "planStart"
+          ? { completed: "Started with adopted changes", failed: "Failed to adopt changes and start", inProgress: "Adopting changes and starting", timedOut: "Timed out adopting changes and starting" }
+          : adoptPaths.length && commandIntent.action === "planStart"
+            ? { completed: "Adopted changes and started", failed: "Failed to adopt and start", inProgress: "Adopting changes and starting", timedOut: "Timed out adopting changes and starting" }
+            : ACTION_LABELS[commandIntent.action];
   const moveMappings = commandIntent.action === "mv" ? receipt?.mappings ?? attemptedMoveMappings(commandIntent) : [];
+  const receiptFailure = state === "failed" || state === "timedOut" ? parseGitArcFailureReceipt(failureReason ?? "") : null;
+  const failure = receiptFailure ?? (state === "failed"
+    ? createGitArcOperationRejected(failureAction(commandIntent.action), failureReason?.trim() || "This Git arc action did not complete.")
+    : null);
   const primaryPaths = commandIntent.action === "plan" || commandIntent.action === "planStart"
-    ? claimedPaths.length ? claimedPaths : selectedPaths
+    ? adoptPaths.length ? ordinarySelectedPaths : claimedPaths.length ? claimedPaths : selectedPaths
     : commandIntent.action === "add" || commandIntent.action === "adopt" || commandIntent.action === "remove" || commandIntent.action === "restore"
       || commandIntent.action === "planAdd" || commandIntent.action === "planAdopt" || commandIntent.action === "planRemove"
       ? selectedPaths
+      : commandIntent.action === "start" || commandIntent.action === "continue"
+        ? failureClaimPaths(failure)
       : [];
-  const primaryPathLabel = state === "failed"
-    ? commandIntent.action === "plan"
-      ? "Attempted to plan"
+  const primaryPathLabel = state === "timedOut"
+    ? commandIntent.action === "plan" ? "Timed out planning"
+      : commandIntent.action === "planAdopt" || commandIntent.action === "adopt" ? "Timed out adopting"
+        : commandIntent.action === "planStart" || commandIntent.action === "start" || commandIntent.action === "continue" || commandIntent.action === "add" ? "Timed out claiming"
+          : commandIntent.action === "restore" ? "Timed out restoring" : "Timed out changing"
+    : state === "failed"
+    ? failure?.code === "dirtyPaths" && commandIntent.action === "plan"
+      ? "Failed to plan changed file"
+      : failure?.code === "planDrift"
+        ? "Failed to claim drifted file"
+        : commandIntent.action === "plan"
+      ? "Failed to plan"
       : commandIntent.action === "planAdd"
-        ? "Attempted to add to plan"
+        ? "Failed to add to plan"
         : commandIntent.action === "planRemove"
-          ? "Attempted to remove from plan"
+          ? "Failed to remove from plan"
           : commandIntent.action === "planAdopt"
-            ? "Attempted to adopt into plan"
+            ? "Failed to adopt"
             : commandIntent.action === "planStart"
-              ? "Attempted to claim"
-              : commandIntent.action === "add" || commandIntent.action === "adopt"
-                ? "Attempted to claim"
-                : commandIntent.action === "remove" ? "Attempted to remove" : "Attempted to restore"
+              ? "Failed to claim"
+              : commandIntent.action === "start" || commandIntent.action === "continue"
+                ? "Failed to claim"
+              : commandIntent.action === "adopt"
+                ? "Failed to adopt"
+                : commandIntent.action === "add"
+                  ? "Failed to claim"
+                  : commandIntent.action === "remove" ? "Failed to remove" : "Failed to restore"
     : commandIntent.action === "plan"
       ? "Planned"
       : commandIntent.action === "planAdd"
@@ -150,7 +215,6 @@ export default function ThreadGitArcItem({
     ? "planned"
     : "claimed";
   const showNestedClaims = commandIntent.action !== "plan" && commandIntent.action !== "planStart" && claimedPaths.length > 0;
-  const normalizedFailure = failureReason?.trim() || (state === "failed" ? "This Git arc action did not complete." : null);
 
   return (
     <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-2.5 py-1.5" data-thread-git-arc-card={commandIntent.action}>
@@ -161,7 +225,7 @@ export default function ThreadGitArcItem({
         leadingLabel={`${commandIntent.action} git arc`}
         summary={(
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <span className={state === "failed" ? "text-[color:var(--danger)]" : "text-text"}>
+            <span className={state === "failed" || state === "timedOut" ? "text-[color:var(--danger)]" : "text-text"}>
               {commandIntent.action === "mv" && state === "completed"
                 ? movePreview
                   ? `Previewed ${moveMappings.length} ${moveMappings.length === 1 ? "move" : "moves"}`
@@ -195,6 +259,19 @@ export default function ThreadGitArcItem({
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            tone={state === "failed" || state === "timedOut" ? "danger" : "default"}
+            workspaceRoots={workspaceRoots}
+          />
+        ) : null}
+        {adoptPaths.length ? (
+          <ThreadClaimedFileList
+            label={state === "failed" ? "Failed to adopt" : state === "timedOut" ? "Timed out adopting" : state === "inProgress" ? "Adopting" : commandIntent.action === "planStart" ? "Adopted and claimed" : "Adopted into plan"}
+            marker={commandIntent.action === "plan" ? "planned" : "claimed"}
+            paths={adoptPaths}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            tone={state === "failed" || state === "timedOut" ? "danger" : "default"}
             workspaceRoots={workspaceRoots}
           />
         ) : null}
@@ -215,7 +292,15 @@ export default function ThreadGitArcItem({
           </ThreadDisclosure>
         ) : null}
       </ThreadDisclosure>
-      {normalizedFailure ? <p className="m-0 mt-1 pl-[2.55rem] text-[0.76em] leading-[1.45] text-[color:var(--danger)]">{normalizedFailure}</p> : null}
+      {failure ? (
+        <ThreadGitArcFailure
+          failure={failure}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
+        />
+      ) : null}
     </article>
   );
 }

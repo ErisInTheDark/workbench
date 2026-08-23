@@ -31,6 +31,7 @@ import ChevronIcon from "../ChevronIcon";
 import ProjectFilePath from "../ProjectFilePath";
 import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-icons";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadInlineIcon from "./ThreadInlineIcon";
 import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
@@ -132,12 +133,9 @@ function renderThreadInlineNodes (nodes: ParsedInlineNode[], keyPrefix: string, 
         );
       case "code":
         return (
-          <code
-            className="rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.94em]"
-            key={key}
-          >
+          <ThreadInlineCode key={key}>
             {node.text}
-          </code>
+          </ThreadInlineCode>
         );
       case "break":
         return <br key={key} />;

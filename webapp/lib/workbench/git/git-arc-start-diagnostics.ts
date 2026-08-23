@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default createGitArcStartDiagnosticError: build a bounded causal arc-start failure from plan, Git, claim, and worktree truth. Keywords: git, arc, start, diagnostics, commits, claims, dirt.
+ * - GitArcStartDiagnosticError/GitArcStartDiagnosticDetails: preserve structured plan drift facts for transport and integrated rendering. Keywords: git, arc, start, drift, error.
  * - GitArcCollisionPresentation/formatGitArcCollisionLines: share markdown-like collision presentation between controller preflight and orchestrator race failures. Keywords: git, arc, collision, markdown, diagnostics.
  */
 import {
@@ -34,6 +35,22 @@ interface GitArcStartDiagnosticInput {
   repository: WorkbenchGitRepository;
   snapshotDrift: string[];
   threadId: string;
+}
+
+export interface GitArcStartDiagnosticDetails {
+  commitChanges: Array<{ changedPaths: string[]; commit: string; subject: string }>;
+  collisions: GitArcCollision[];
+  dirtyUnclaimedPaths: string[];
+  headMovement: "fast-forward" | "incompatible" | "same";
+  planCheckpointCommit: string;
+  snapshotDrift: string[];
+}
+
+export class GitArcStartDiagnosticError extends Error {
+  constructor(message: string, readonly details: GitArcStartDiagnosticDetails) {
+    super(message);
+    this.name = "GitArcStartDiagnosticError";
+  }
 }
 
 function boundedText(value: string, length = 160) {
@@ -139,10 +156,18 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     "Only dirty unclaimed files can potentially use --adopt. Committed files belong in ordinary plan scope.",
     "Snapshot drift alone does not invalidate approval. Inspect the stored plan diff before deciding whether the plan changed:",
     "",
-    code(`wb git arc diff --ref ${planCheckpointCommit} -- ${diagnosticPaths.join(" ")}`, 2_000),
+    `Call mcp__wb__git_arc_diff with ${code(JSON.stringify({ paths: diagnosticPaths, ref: planCheckpointCommit }), 2_000)}.`,
+    "If the approved plan is unchanged, follow the planned-path drift workflow with mcp__wb__git_arc_plan_start.",
   );
   if (snapshotDrift.length > MAX_PATHS) {
     lines.push(`${snapshotDrift.length - MAX_PATHS} more affected paths were omitted. Run the scoped diff again for those paths if needed.`);
   }
-  return new Error(lines.join("\n"));
+  return new GitArcStartDiagnosticError(lines.join("\n"), {
+    commitChanges,
+    collisions,
+    dirtyUnclaimedPaths: dirtyUnclaimed,
+    headMovement: movement.kind,
+    planCheckpointCommit,
+    snapshotDrift: diagnosticPaths,
+  });
 }

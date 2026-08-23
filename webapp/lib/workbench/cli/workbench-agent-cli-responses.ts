@@ -6,6 +6,7 @@
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands.ts";
 import { renderSubagentListOutput, renderSubagentSettleOutput } from "../subagent/subagent-output";
 import type { WorkbenchSubagentSummary } from "../../types";
+import { formatGitArcFailureReceipt, GitArcFailureEnvelopeSchema } from "../git/git-arc-failures";
 import { formatGitArcReceipt, type GitArcAction } from "../git/git-arc-receipts";
 
 export interface WorkbenchAgentCliAdaptedResponse {
@@ -53,7 +54,8 @@ function preservedPlanDriftLines(payload: Record<string, unknown> | null) {
   const count = readNumber(payload, "preservedDriftPathCount") ?? paths.length;
   const ref = readString(payload, "checkpointCommit");
   if (!count || !paths.length || !ref) return [];
-  const pathArgs = paths.join(" ");
+  const diffArgs = JSON.stringify({ paths, ref });
+  const refreshArgs = JSON.stringify({ paths });
   return [
     "",
     "WARNING: These paths still use older plan baselines:",
@@ -61,10 +63,10 @@ function preservedPlanDriftLines(payload: Record<string, unknown> | null) {
     ...(count > paths.length ? [`- ... ${count - paths.length} more`] : []),
     "",
     "Inspect this drift first:",
-    `wb git arc diff --ref ${ref} -- ${pathArgs}`,
+    `Call mcp__wb__git_arc_diff with ${diffArgs}.`,
     "",
     "If the approved plan still applies, re-snapshot only the inspected paths:",
-    `wb git arc plan add -- ${pathArgs}`,
+    `Call mcp__wb__git_arc_plan_add with ${refreshArgs}.`,
     "",
     "Otherwise, revise the plan. arc start will reject preserved drift.",
   ];
@@ -81,7 +83,11 @@ export function adaptWorkbenchAgentCliResponse({
 }): WorkbenchAgentCliAdaptedResponse {
   const payload = parseRecord(text);
   if (!httpOk) {
-    return failed(readError(payload) || text || "Workbench request failed.");
+    const failureEnvelope = GitArcFailureEnvelopeSchema.safeParse(payload);
+    const message = readError(payload) || text || "Workbench request failed.";
+    return failed(failureEnvelope.success
+      ? `${message}\n${formatGitArcFailureReceipt(failureEnvelope.data.gitArcFailure)}`
+      : message);
   }
 
   switch (request.responseKind) {

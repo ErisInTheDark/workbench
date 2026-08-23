@@ -2,7 +2,7 @@
  * Exports:
  * - GIT_CHECKPOINT_COMMAND_MATCHERS: distinct command summaries for named arc plan and lifecycle operations. Keywords: thread, command, matcher, git arc.
  * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect specialized arc renderers. Keywords: git, arc, matcher, renderer.
- * - parseGitArcCommand/GitArcCommandIntent/GitArcCommandAction: read canonical arc presentation action, ref, name, proposal, and selected paths. Keywords: git, arc, command, parser.
+ * - parseGitArcCommand/GitArcCommandIntent/GitArcCommandAction: read canonical arc presentation action, ref, name, proposal, ordinary paths, and adopted paths. Keywords: git, arc, command, parser, adoption.
  * - parseGitArcReceipt: decode persisted successful arc presentation metadata. Keywords: git, arc, receipt, parser.
  * - parseGitCheckpointCompareOutput: parse per-file checkpoint change counts. Keywords: checkpoint, compare, additions, deletions.
  * - parseGitCheckpointProposalId: parse the durable proposal id from CLI output. Keywords: checkpoint, proposal, commit.
@@ -55,6 +55,7 @@ export interface GitCheckpointCommitCommandIntent {
 
 export interface GitArcCommandIntent {
   action: GitArcCommandAction;
+  adoptPaths?: string[];
   intentName: string | null;
   move?: GitArcMoveArguments;
   paths: string[];
@@ -225,13 +226,17 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   let intentName: string | null = null;
   let proposalId: string | null = null;
   let ref: string | null = null;
+  const adoptPaths: string[] = [];
   for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
     const flag = tokens[cursor];
     const value = tokens[cursor + 1];
-    if (!value || (flag !== "--proposal" && flag !== "--ref" && flag !== "-m")) return null;
+    if (!value || (flag !== "--adopt" && flag !== "--proposal" && flag !== "--ref" && flag !== "-m")) return null;
     if (flag === "--ref") {
       if (ref) return null;
       ref = value;
+    } else if (flag === "--adopt") {
+      if (action !== "plan" && action !== "planStart") return null;
+      adoptPaths.push(value);
     } else if (flag === "--proposal") {
       if (proposalId) return null;
       proposalId = value;
@@ -242,7 +247,7 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   }
   const paths = tokens[cursor] === "--" ? tokens.slice(cursor + 1) : [];
   if (action === "plan" || action === "planStart") {
-    return intentName ? { action, intentName, paths, ref: null } : null;
+    return intentName ? { action, ...(adoptPaths.length ? { adoptPaths } : {}), intentName, paths, ref: null } : null;
   }
   if (action === "rescind") {
     return proposalId && !ref && !paths.length

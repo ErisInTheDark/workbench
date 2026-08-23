@@ -11,6 +11,13 @@ import type { WorkbenchHarness } from "../../../lib/types";
 import {
   GitCheckpointProposalSchema,
 } from "../../../lib/workbench/git/checkpoint-contracts";
+import {
+  createGitArcOperationRejected,
+  GitArcFailureException,
+  parseGitArcFailureEnvelope,
+  parseGitArcFailureReceipt,
+  type GitArcFailureAction,
+} from "../../../lib/workbench/git/git-arc-failures";
 import reportClientSchemaError from "../../../lib/workbench/report-client-schema-error";
 import type {
   GitCheckpointCommitCommandIntent,
@@ -22,15 +29,19 @@ import ThreadCheckpointCommitCard, {
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 
-async function readProposalResponse(response: Response) {
+async function readProposalResponse(response: Response, action: GitArcFailureAction) {
   const text = await response.text();
   if (!response.ok) {
     try {
+      const envelope = parseGitArcFailureEnvelope(text, (error) => {
+        reportClientSchemaError("Rejected Git arc proposal failure response", error);
+      });
+      if (envelope) throw new GitArcFailureException(envelope.gitArcFailure);
       const errorPayload = JSON.parse(text) as { error?: string };
-      throw new Error(errorPayload.error || "Unable to load checkpoint proposal.");
+      throw new GitArcFailureException(createGitArcOperationRejected(action, errorPayload.error || "Unable to load checkpoint proposal."));
     } catch (error) {
-      if (error instanceof Error && error.message !== "Unexpected end of JSON input") throw error;
-      throw new Error(text.trim() || "Unable to load checkpoint proposal.");
+      if (error instanceof GitArcFailureException) throw error;
+      throw new GitArcFailureException(createGitArcOperationRejected(action, text.trim() || "Unable to load checkpoint proposal."));
     }
   }
   const parsed = GitCheckpointProposalSchema.safeParse(JSON.parse(text));
@@ -43,6 +54,7 @@ async function readProposalResponse(response: Response) {
 
 interface ThreadCheckpointCommitItemProps {
   commandOutcome: ThreadCommandExecutionOutcome;
+  failureReason?: string | null;
   cwd: string;
   embedded?: boolean;
   harness?: WorkbenchHarness;
@@ -61,6 +73,7 @@ function ThreadCheckpointCommitController({
   commandOutcome,
   cwd,
   embedded,
+  failureReason,
   harness,
   intent,
   projectFilePaths,
@@ -88,7 +101,7 @@ function ThreadCheckpointCommitController({
         headers: { "Content-Type": "application/json" },
         method: "POST",
         signal,
-      }));
+      }), "proposalState");
       if (signal?.aborted) return;
       if (!hydratedFallbackIntent.current || proposal.status !== "proposed") {
         setTitle(proposal.title);
@@ -99,8 +112,12 @@ function ThreadCheckpointCommitController({
       setState({ proposal, status: "loaded" });
     } catch (error) {
       if (signal?.aborted) return;
+      const failure = error instanceof GitArcFailureException
+        ? error.failure
+        : createGitArcOperationRejected("proposalState", error instanceof Error ? error.message : "Unable to load checkpoint proposal.");
       setState({
         error: error instanceof Error ? error.message : "Unable to load checkpoint proposal.",
+        failure,
         retryable: true,
         status: "error",
       });
@@ -117,7 +134,13 @@ function ThreadCheckpointCommitController({
             ? "Checkpoint proposal creation timed out."
             : null;
       if (failure) {
-        setState({ error: failure, retryable: false, status: "error" });
+        setState({
+          error: failure,
+          failure: parseGitArcFailureReceipt(failureReason ?? "")
+            ?? createGitArcOperationRejected("proposalCreate", failureReason?.trim() || failure),
+          retryable: false,
+          status: "error",
+        });
       } else {
         setState({ status: "pending" });
       }
@@ -131,7 +154,7 @@ function ThreadCheckpointCommitController({
       controller.abort();
       window.removeEventListener("focus", refreshOnFocus);
     };
-  }, [commandOutcome, loadProposal, proposalId]);
+  }, [commandOutcome, failureReason, loadProposal, proposalId]);
 
   const commit = async () => {
     if (!title.trim() || committing) return;
@@ -151,13 +174,17 @@ function ThreadCheckpointCommitController({
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
         method: "POST",
-      }));
+      }), "proposalCommit");
       setTitle(proposal.title);
       setDescription(proposal.description);
       setState({ proposal, status: "loaded" });
     } catch (error) {
+      const failure = error instanceof GitArcFailureException
+        ? error.failure
+        : createGitArcOperationRejected("proposalCommit", error instanceof Error ? error.message : "Unable to commit checkpoint proposal.");
       setState({
         error: error instanceof Error ? error.message : "Unable to commit checkpoint proposal.",
+        failure,
         retryable: true,
         status: "error",
       });

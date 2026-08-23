@@ -83,6 +83,13 @@ function pathIsCoveredBy(candidate: string, scopePath: string) {
   return candidate === scopePath || candidate.startsWith(`${scopePath}/`);
 }
 
+function collapseScopePaths(paths: string[]) {
+  const uniquePaths = [...new Set(paths)].sort((left, right) => left.localeCompare(right));
+  return uniquePaths.filter((candidate) => !uniquePaths.some((scopePath) => (
+    candidate !== scopePath && pathIsCoveredBy(candidate, scopePath)
+  )));
+}
+
 function overlappingBaselinePaths(previousPaths: string[], nextPaths: string[]) {
   return [...new Set(previousPaths.flatMap((previousPath) => nextPaths.flatMap((nextPath) => {
     if (pathIsCoveredBy(nextPath, previousPath)) return [nextPath];
@@ -191,6 +198,8 @@ export default class GitArcPlanController {
     );
     if (!plan.paths.length) throw new Error("An empty Git arc plan cannot start. Add at least one path first.");
 
+    const collisions = findGitArcCollisions(await registry.list(), { harness, threadId: input.threadId }, plan.paths);
+    if (collisions.length) throw new GitArcCollisionError(collisions);
     const permittedDirty = [...plan.adoptPaths, ...(retainedArc?.claimedPaths ?? [])];
     const unexplained = plan.dirtyPaths.filter((candidate) => !permittedDirty.some((scopePath) => pathIsCoveredBy(candidate, scopePath)));
     if (unexplained.length) throw new GitCheckpointDirtyPathsError(unexplained, "Arc start");
@@ -396,7 +405,8 @@ export default class GitArcPlanController {
       if (collisions.length) throw new GitArcCollisionError(collisions);
     }
     if (operation === "remove") {
-      const unknown = paths.filter((candidate) => !existing.includes(candidate));
+      const knownEntries = new Set([...existingOrdinary, ...existingAdopted]);
+      const unknown = paths.filter((candidate) => !knownEntries.has(candidate));
       if (unknown.length) throw new Error(`Arc plan remove paths must exactly match planned entries: ${unknown.join(", ")}`);
     }
     const nextPaths = operation === "remove"
@@ -467,16 +477,11 @@ export default class GitArcPlanController {
     amendedFrom?: string,
     options: { baselinePlan?: StoredCheckpoint | null; refreshPaths?: string[] } = {},
   ) {
-    const paths = input.paths.length ? repository.normalizePaths(input.paths) : [];
+    const requestedPaths = input.paths.length ? repository.normalizePaths(input.paths) : [];
     const adoptPaths = input.adoptPaths.length ? repository.normalizePaths(input.adoptPaths) : [];
-    const overlap = adoptPaths.flatMap((adoptedPath) => paths
-      .filter((ordinaryPath) => pathIsCoveredBy(adoptedPath, ordinaryPath) || pathIsCoveredBy(ordinaryPath, adoptedPath))
-      .map((ordinaryPath) => ({ adoptedPath, ordinaryPath })));
-    if (overlap.length) {
-      const details = overlap.map(({ adoptedPath, ordinaryPath }) => `${adoptedPath} (--adopt) overlaps ${ordinaryPath} (after --)`).join(", ");
-      throw new Error(`Adopted paths already join the plan scope and must not overlap ordinary plan paths: ${details}. Keep dirty unclaimed paths under --adopt, and remove their duplicate ordinary scope after --.`);
-    }
-    const scopePaths = [...new Set([...paths, ...adoptPaths])].sort((left, right) => left.localeCompare(right));
+    const exactAdoptedPaths = new Set(adoptPaths);
+    const paths = requestedPaths.filter((candidate) => !exactAdoptedPaths.has(candidate));
+    const scopePaths = collapseScopePaths([...paths, ...adoptPaths]);
     const head = await repository.currentHead();
     const worktreeTree = await repository.writeWorktreeTree();
     const dirtyPaths = scopePaths.length ? await repository.listChangedPaths(head, worktreeTree, scopePaths) : [];

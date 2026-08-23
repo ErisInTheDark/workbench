@@ -9,13 +9,21 @@ import { useEffect, useMemo, useState } from "react";
 import type { FileUpdateChange } from "../../../lib/codex/generated/app-server/v2/FileUpdateChange";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import {
+  createGitArcOperationRejected,
+  GitArcFailureException,
+  parseGitArcFailureEnvelope,
+  type GitArcFailure,
+} from "../../../lib/workbench/git/git-arc-failures";
+import {
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
 } from "../../../lib/workbench/thread/thread-command-matchers";
+import reportClientSchemaError from "../../../lib/workbench/report-client-schema-error";
 import { ThreadFileChangeList } from "./ThreadFileChangeItem";
+import ThreadGitArcFailure from "./ThreadGitArcFailure";
 
 type CheckpointDiffState =
-  | { error: string; status: "error" }
+  | { failure: GitArcFailure; status: "error" }
   | { changes: FileUpdateChange[]; status: "loaded" }
   | { status: "loading" }
   | { status: "idle" };
@@ -88,7 +96,13 @@ export default function ThreadCheckpointDiffItem({
     }).then(async (response) => {
       const text = await response.text();
       if (!response.ok) {
-        throw new Error(text.trim() || "Unable to load checkpoint diff artifact.");
+        const envelope = parseGitArcFailureEnvelope(text, (error) => {
+          reportClientSchemaError("Rejected Git arc diff failure response", error);
+        });
+        throw new GitArcFailureException(envelope?.gitArcFailure ?? createGitArcOperationRejected(
+          "readDiffArtifact",
+          envelope?.error || text.trim() || "Unable to load checkpoint diff artifact.",
+        ));
       }
 
       if (!abortController.signal.aborted) {
@@ -103,7 +117,9 @@ export default function ThreadCheckpointDiffItem({
       }
 
       setState({
-        error: error instanceof Error ? error.message : "Unable to load checkpoint diff artifact.",
+        failure: error instanceof GitArcFailureException
+          ? error.failure
+          : createGitArcOperationRejected("readDiffArtifact", error instanceof Error ? error.message : "Unable to load checkpoint diff artifact."),
         status: "error",
       });
     });
@@ -145,9 +161,13 @@ export default function ThreadCheckpointDiffItem({
 
   if (state.status === "error") {
     return (
-      <p className="m-0 py-2 text-[0.92em] leading-[1.6] text-danger">
-        {state.error}
-      </p>
+      <ThreadGitArcFailure
+        failure={state.failure}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        workspaceRoots={workspaceRoots}
+      />
     );
   }
 

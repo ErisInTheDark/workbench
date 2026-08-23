@@ -6,8 +6,16 @@
 import type http from "node:http";
 
 import WorkbenchGitCheckpointController, { type GitArcActiveClaim, type GitArcLifecycleState, type GitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
-import { formatGitArcCollisionLines } from "../lib/workbench/git/git-arc-start-diagnostics";
+import {
+  createGitArcOperationRejected,
+  formatGitArcFailureText,
+  GitArcFailureException,
+  type GitArcFailure,
+} from "../lib/workbench/git/git-arc-failures";
+import { GitCheckpointDirtyPathsError } from "../lib/workbench/git/GitArcPlanController";
+import { GitArcStartDiagnosticError } from "../lib/workbench/git/git-arc-start-diagnostics";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
+import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
 import type { WorkbenchHarness } from "../lib/types";
 import { GitCheckpointRequestSchema, type GitCheckpointRequest } from "../lib/workbench/git/checkpoint-contracts";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
@@ -30,6 +38,17 @@ const CLAIM_START_ACTIONS = new Set<GitCheckpointRequest["action"]>(["arcContinu
 
 function sanitizeError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500);
+}
+
+function failureResponse(failure: GitArcFailure) {
+  return Response.json({
+    error: formatGitArcFailureText(failure),
+    gitArcFailure: failure,
+  }, { status: 400 });
+}
+
+function liveCollisionOwner(entry: GitArcCollisionError["collisions"][number]["entry"]) {
+  return entry.phase === "plan" && entry.retainedArc ? entry.retainedArc : entry;
 }
 
 function mutatesGitArcState(request: GitCheckpointRequest) {
@@ -89,15 +108,16 @@ export default class WorkbenchGitArcFeature {
     try {
       await sendResponse(response, await this.executeRequest(JSON.parse(await readBody(request)) as object));
     } catch (error) {
-      await sendResponse(response, Response.json({
-        error: error instanceof Error ? error.message : "Invalid Git arc request.",
-      }, { status: 400 }));
+      await sendResponse(response, failureResponse(createGitArcOperationRejected(
+        "unknown",
+        error instanceof Error ? error.message : "Invalid Git arc request.",
+      )));
     }
   }
 
   async executeRequest(input: object) {
     const parsed = GitCheckpointRequestSchema.safeParse(input);
-    if (!parsed.success) return Response.json({ error: "Invalid checkpoint request." }, { status: 400 });
+    if (!parsed.success) return failureResponse(createGitArcOperationRejected("unknown", "Invalid checkpoint request."));
     try {
       const project = await this.options.resolveProjectFromCwd(parsed.data.cwd);
       const request = { ...parsed.data, cwd: project.cwd };
@@ -112,25 +132,7 @@ export default class WorkbenchGitArcFeature {
           try {
             response = await this.dispatch(request);
           } catch (error) {
-            if (!(error instanceof GitArcCollisionError)) throw error;
-            const presentations = await Promise.all(error.collisions.map(async (collision) => {
-              const owner = await this.options.getThreadClaimContext(
-                project.project.id,
-                collision.entry.harness as WorkbenchHarness,
-                collision.entry.threadId,
-              );
-              return {
-                collision,
-                lifecycle: owner?.lifecycle.kind ?? "unknown lifecycle",
-                title: owner?.title.trim() || collision.entry.intentName,
-              };
-            }));
-            throw new Error([
-              "Git arc operation blocked by active sibling claims.",
-              "",
-              "Planned paths claimed by other arcs:",
-              ...formatGitArcCollisionLines(presentations),
-            ].join("\n"));
+            throw new GitArcFailureException(await this.createFailure(project.project.id, request, error));
           }
           if (response.ok && CLAIM_START_ACTIONS.has(request.action)) {
             const after = await this.options.getThreadClaimContext(project.project.id, request.harness, request.threadId);
@@ -147,8 +149,84 @@ export default class WorkbenchGitArcFeature {
         }
       });
     } catch (error) {
-      return Response.json({ error: error instanceof Error ? error.message : "Unable to run Git arc operation." }, { status: 400 });
+      const failure = error instanceof GitArcFailureException
+        ? error.failure
+        : createGitArcOperationRejected(
+          parsed.data.action,
+          error instanceof Error ? error.message : "Unable to run Git arc operation.",
+        );
+      return failureResponse(failure);
     }
+  }
+
+  private async createFailure(projectId: string, request: GitCheckpointRequest, error: unknown): Promise<GitArcFailure> {
+    if (error instanceof GitCheckpointMissingObjectError) {
+      return {
+        action: request.action,
+        code: "missingArcRef",
+        ref: error.requestedRef,
+        version: 1,
+      };
+    }
+    if (error instanceof GitCheckpointDirtyPathsError) {
+      return {
+        action: request.action,
+        code: "dirtyPaths",
+        paths: error.dirtyPaths.slice(0, 20),
+        version: 1,
+      };
+    }
+    const collisions = error instanceof GitArcCollisionError
+      ? error.collisions
+      : error instanceof GitArcStartDiagnosticError ? error.details.collisions : [];
+    const conflicts = await Promise.all(collisions.slice(0, 8).map(async (collision) => {
+      const ownerContext = await this.options.getThreadClaimContext(
+        projectId,
+        collision.entry.harness as WorkbenchHarness,
+        collision.entry.threadId,
+      );
+      const owner = liveCollisionOwner(collision.entry);
+      return {
+        overlaps: collision.overlaps.slice(0, 20),
+        owner: {
+          checkpointCommit: owner.checkpointCommit,
+          harness: collision.entry.harness,
+          intentName: owner.intentName,
+          lifecycle: ownerContext?.lifecycle.kind ?? "unknown",
+          threadId: collision.entry.threadId,
+          title: ownerContext?.title.trim() || owner.intentName,
+        },
+      };
+    }));
+    if (error instanceof GitArcCollisionError) {
+      return {
+        action: request.action,
+        code: "siblingClaimCollision",
+        conflicts,
+        version: 1,
+      };
+    }
+    if (error instanceof GitArcStartDiagnosticError) {
+      return {
+        action: request.action,
+        code: "planDrift",
+        commits: error.details.commitChanges.slice(0, 8).map(({ changedPaths, commit, subject }) => ({
+          commit,
+          paths: changedPaths.slice(0, 20),
+          subject,
+        })),
+        conflicts,
+        dirtyPaths: error.details.dirtyUnclaimedPaths.slice(0, 20),
+        headMovement: error.details.headMovement === "fast-forward" ? "fastForward" : error.details.headMovement,
+        planRef: error.details.planCheckpointCommit,
+        snapshotPaths: error.details.snapshotDrift.slice(0, 20),
+        version: 1,
+      };
+    }
+    return createGitArcOperationRejected(
+      request.action,
+      error instanceof Error ? error.message : "Unable to run Git arc operation.",
+    );
   }
 
   private async refreshThreadGitArcState(projectId: string, harness: WorkbenchHarness, threadId: string) {

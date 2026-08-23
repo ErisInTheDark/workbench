@@ -80,6 +80,11 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.ok(plan);
     assert.deepEqual(Object.keys(plan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths"]);
     assert.equal("args" in (plan.inputSchema.properties ?? {}), false);
+    const planProperties = plan.inputSchema.properties as Record<string, { description?: string }>;
+    assert.match(plan.description ?? "", /sibling-claimed files in paths/u);
+    assert.match(planProperties.paths?.description ?? "", /sibling-claimed files.*does not claim/u);
+    assert.match(planProperties.adoptPaths?.description ?? "", /dirty unclaimed work.*Never use for sibling-owned changes/u);
+    assert.match(planProperties.adoptPaths?.description ?? "", /may overlap ordinary scope.*minimal claim/u);
     const reload = inventory.tools.find(({ name }) => name === "orchestrator_reload");
     assert.ok(reload);
     const reloadScopes = reload.inputSchema.properties?.scopes as { items?: { enum?: string[] } } | undefined;

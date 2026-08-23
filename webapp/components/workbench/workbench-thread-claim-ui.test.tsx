@@ -236,15 +236,3 @@ test("thread tooltips expose every claimed path through interactive project link
   assert.match(source, /title=\{entry\.title\}/u);
   assert.doesNotMatch(source, /<a[\s\S]*?title=\{entry\.title\}[\s\S]*?onClick=/u);
 });
-
-test("sidebar and planned-conflict card share grouping and the real thread item", async () => {
-  const [listSource, cardSource] = await Promise.all([
-    readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8"),
-    readFile(new URL("./thread-view/ThreadPlanConflictCard.tsx", import.meta.url), "utf8"),
-  ]);
-  assert.match(listSource, /groupWorkbenchThreadSidebarEntries\(entries\)/u);
-  assert.match(listSource, /<WorkbenchThreadListItem/u);
-  assert.match(cardSource, /createWorkbenchThreadPlanConflictSelector/u);
-  assert.match(cardSource, /<WorkbenchThreadListItem[\s\S]*?compact[\s\S]*?showTooltip=\{false\}/u);
-  assert.doesNotMatch(cardSource, /\bborder-t(?:\s|")|\bdivide-y|WorkbenchTooltip/u);
-});

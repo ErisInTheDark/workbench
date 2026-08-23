@@ -13,12 +13,8 @@ import type {
 } from "../../../lib/workbench/thread/thread-command-matchers";
 
 import ProjectFilePath from "../ProjectFilePath";
+import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadSummaryText from "./ThreadSummaryText";
-
-const THREAD_INLINE_CODE_CLASS = [
-  "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)]",
-  "px-[0.34em] py-[0.08em] font-mono text-[0.94em]",
-].join(" ");
 
 const THREAD_SKILL_MENTION_CLASS = `
 ${getInlineMentionMarkClassName("skill")}
@@ -107,12 +103,12 @@ function ThreadCommandStageParts ({
         ) : (
           <span key={`text:${index}`} className="contents">
             {part.variant === "code" ? (
-              <code
-                className={`${THREAD_INLINE_CODE_CLASS} ${part.clamp ? "inline-block shrink-1 min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-bottom" : ""}`}
+              <ThreadInlineCode
+                className={part.clamp ? "inline-block shrink-1 min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-bottom" : ""}
                 title={part.clamp ? part.text : undefined}
               >
                 {part.text}
-              </code>
+              </ThreadInlineCode>
             ) : part.variant === "primary" ? (
               <span className="font-medium whitespace-nowrap text-text">
                 {part.text}

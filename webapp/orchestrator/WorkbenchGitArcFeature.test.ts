@@ -5,7 +5,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { GitArcFailureEnvelope } from "../lib/workbench/git/git-arc-failures";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
+import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 
 test("sibling threads in one worktree share the Git arc transition lane", async () => {
@@ -92,13 +94,58 @@ test("atomic claim collisions use structured owner and path diagnostics", async 
     harness: "codex",
     threadId: "starting-thread",
   });
-  const result = await response.json() as { error: string };
+  const result = await response.json() as GitArcFailureEnvelope;
   assert.equal(response.status, 400);
-  assert.match(result.error, /Git arc operation blocked by active sibling claims\./u);
-  assert.match(result.error, /Planned paths claimed by other arcs:/u);
+  assert.equal(result.gitArcFailure.code, "siblingClaimCollision");
+  assert.equal(result.gitArcFailure.action, "arcStart");
   assert.match(result.error, /opencode\/owner-thread.*Render ownership.*completed/u);
-  assert.match(result.error, /intent: change rendering/u);
-  assert.match(result.error, /claims `webapp\/components\/workbench` through planned path `webapp\/components\/workbench\/thread-view\/ThreadView\.tsx`/u);
+  assert.match(result.error, /claims webapp\/components\/workbench through requested path webapp\/components\/workbench\/thread-view\/ThreadView\.tsx/u);
+  if (result.gitArcFailure.code !== "siblingClaimCollision") throw new Error("Expected a collision failure.");
+  assert.deepEqual(result.gitArcFailure.conflicts[0], {
+    overlaps: [{
+      claimedPath: "webapp/components/workbench",
+      requestedPath: "webapp/components/workbench/thread-view/ThreadView.tsx",
+    }],
+    owner: {
+      checkpointCommit: "b".repeat(40),
+      harness: "opencode",
+      intentName: "change rendering",
+      lifecycle: "completed",
+      threadId: "owner-thread",
+      title: "Render ownership",
+    },
+  });
+});
+
+test("missing arc refs return one typed message without unrelated recovery", async () => {
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async () => ({
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      title: "Starting thread",
+    }),
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  Object.defineProperty(feature, "dispatch", {
+    value: async () => { throw new GitCheckpointMissingObjectError("deadbeef"); },
+  });
+
+  const response = await feature.executeRequest({
+    action: "arcStart",
+    checkpointCommit: "deadbeef",
+    cwd: "C:/Git/Project",
+    harness: "codex",
+    threadId: "thread-one",
+  });
+  const result = await response.json() as GitArcFailureEnvelope;
+  assert.deepEqual(result.gitArcFailure, {
+    action: "arcStart",
+    code: "missingArcRef",
+    ref: "deadbeef",
+    version: 1,
+  });
+  assert.equal(result.error, "There is no git arc by the `deadbeef` ref.");
 });
 
 test("successful Git responses survive a failed thread claim refresh", async (context) => {
@@ -150,7 +197,9 @@ test("failed Git mutations still refresh durable arc projection once", async () 
   });
 
   assert.equal(response.status, 400);
-  assert.match(JSON.stringify(await response.json()), /mutation failed/u);
+  const result = await response.json() as GitArcFailureEnvelope;
+  assert.equal(result.gitArcFailure.code, "operationRejected");
+  assert.match(result.error, /mutation failed/u);
   assert.equal(refreshCount, 1);
 });
 

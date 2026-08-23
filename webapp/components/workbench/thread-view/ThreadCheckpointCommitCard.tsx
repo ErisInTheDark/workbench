@@ -8,6 +8,7 @@
 import type { KeyboardEvent } from "react";
 
 import type { GitCheckpointProposal } from "../../../lib/workbench/git/checkpoint-contracts";
+import { createGitArcOperationRejected, type GitArcFailure } from "../../../lib/workbench/git/git-arc-failures";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import PrimaryButton from "../PrimaryButton";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
@@ -15,13 +16,14 @@ import { CheckIcon } from "../workbench-icons";
 import PlaintextEditable from "./PlaintextEditable";
 import GitArcIcon from "./GitArcIcon";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import {
   ThreadFileChangeList,
   ThreadFileChangeTotals,
 } from "./ThreadFileChangeItem";
 
 export type CheckpointCommitCardState =
-  | { error: string; retryable: boolean; status: "error" }
+  | { error: string; failure?: GitArcFailure; retryable: boolean; status: "error" }
   | { proposal: GitCheckpointProposal; status: "loaded" }
   | { status: "pending" };
 
@@ -71,6 +73,9 @@ export default function ThreadCheckpointCommitCard({
     ? `${fileCount} changed ${fileCount === 1 ? "file" : "files"}`
     : "Arc changes";
   const canCommit = proposal?.status === "proposed" && !committing && Boolean(title.trim());
+  const failure = state.status === "error"
+    ? state.failure ?? createGitArcOperationRejected("proposalCreate", state.error)
+    : null;
   const commitFromEditable = (event: KeyboardEvent<HTMLDivElement>) => {
     if (
       event.key !== "Enter"
@@ -126,7 +131,15 @@ export default function ThreadCheckpointCommitCard({
       </div>
 
       {state.status === "error" ? (
-        <p className="m-0 mt-1 text-[0.78em] text-[color:var(--danger)]" data-thread-checkpoint-card-error="true">{state.error}</p>
+        <div data-thread-checkpoint-card-error="true">
+          <ThreadGitArcFailure
+            failure={failure!}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            workspaceRoots={workspaceRoots}
+          />
+        </div>
       ) : null}
 
       <div data-thread-checkpoint-card-changes="true">

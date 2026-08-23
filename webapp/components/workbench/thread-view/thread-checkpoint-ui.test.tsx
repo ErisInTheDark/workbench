@@ -234,13 +234,156 @@ test("planned conflict card renders collapsed shared thread rows without tooltip
   assert.match(html, /Claiming thread/u);
 });
 
-test("planned conflict rows use the owning in-app thread navigation callback", async () => {
-  const [cardSource, viewSource] = await Promise.all([
-    readFile(new URL("./ThreadPlanConflictCard.tsx", import.meta.url), "utf8"),
-    readFile(new URL("./ThreadView.tsx", import.meta.url), "utf8"),
-  ]);
-  assert.match(cardSource, /<WorkbenchThreadListItem[\s\S]*?onActivate=\{onOpenThread\}/u);
-  assert.match(viewSource, /<ThreadPlanConflictCard[\s\S]*?onOpenThread=\{onOpenThread\}/u);
+test("claim collision failures reuse live compact thread rows and label failed paths directly", () => {
+  const claimant = {
+    activityAt: 10,
+    entryKind: "thread" as const,
+    gitArc: {
+      checkpointCommit: "b".repeat(40), claimedPaths: ["src/feature/card.tsx"], intentDescription: "", intentName: "claim",
+      phase: "active" as const, proposals: [], updatedAt: "2026-08-21T00:00:00.000Z",
+    },
+    gitArcPlan: null,
+    identity: { harness: "opencode" as const, threadId: "claimant" },
+    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false as const },
+    metadata: { archived: false as const, pinned: false, snoozed: false },
+    title: "Claiming thread",
+  };
+  const snapshot = { entries: [claimant], error: null, freshness: "fresh" as const, projectId: "project", revision: 1 };
+  const failure = {
+    action: "arcAdd",
+    code: "siblingClaimCollision",
+    conflicts: [{
+      overlaps: [{ claimedPath: "src/feature/card.tsx", requestedPath: "src/feature/card.tsx" }],
+      owner: {
+        checkpointCommit: "b".repeat(40), harness: "opencode", intentName: "claim", lifecycle: "completed",
+        threadId: "claimant", title: "Claiming thread",
+      },
+    }],
+    version: 1,
+  } as const;
+  const html = renderToStaticMarkup(createElement(
+    WorkbenchContextMenuContext.Provider,
+    { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+    createElement(ThreadGitArcPresentationContext.Provider, {
+      value: {
+        harness: "codex",
+        onOpenThread: () => undefined,
+        projectId: "project",
+        threadSidebarStore: { getSnapshot: () => snapshot, subscribe: () => () => undefined },
+      },
+      children: createElement(ThreadGitArcItem, {
+        commandIntent: { action: "add", intentName: null, paths: ["src/feature/card.tsx"], ref: null },
+        durationMs: 10,
+        failureReason: `Workbench arc failure: ${JSON.stringify(failure)}`,
+        outcome: "failed",
+        projectId: "project",
+        receipt: null,
+      }),
+    }),
+  ));
+  assert.match(html, />Failed to claim</u);
+  assert.match(html, /data-thread-git-arc-failure-panel="true"/u);
+  assert.match(html, /data-thread-git-arc-failure-facts="true"/u);
+  assert.match(html, /data-thread-git-arc-conflict-list="true"/u);
+  assert.match(html, /Claiming thread/u);
+  assert.doesNotMatch(html, /claims src\/feature\/card\.tsx through requested path/u);
+});
+
+test("arc start collision failures derive failed claim rows from the typed failure", () => {
+  const failure = {
+    action: "arcStart",
+    code: "siblingClaimCollision",
+    conflicts: [{
+      overlaps: [{ claimedPath: "src/feature", requestedPath: "src/feature/card.tsx" }],
+      owner: {
+        checkpointCommit: "b".repeat(40), harness: "opencode", intentName: "claim", lifecycle: "working",
+        threadId: "claimant", title: "Claiming thread",
+      },
+    }],
+    version: 1,
+  } as const;
+  const html = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "start", intentName: null, paths: [], ref: "a".repeat(40) },
+    durationMs: 10,
+    failureReason: `Workbench arc failure: ${JSON.stringify(failure)}`,
+    outcome: "failed",
+    projectId: "project",
+    receipt: null,
+  }));
+  assert.match(html, />Failed to claim</u);
+  assert.match(html, /card\.tsx/u);
+  assert.doesNotMatch(html, /claims src\/feature through requested path/u);
+});
+
+test("missing arc refs render one concise message without a hint", () => {
+  const failure = { action: "arcStart", code: "missingArcRef", ref: "deadbeef", version: 1 } as const;
+  const html = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "start", intentName: null, paths: [], ref: "deadbeef" },
+    durationMs: 10,
+    failureReason: `Workbench arc failure: ${JSON.stringify(failure)}`,
+    outcome: "failed",
+    receipt: null,
+  }));
+  assert.match(html, /There is no git arc by the <code[^>]*>deadbeef<\/code> ref\./u);
+  assert.match(html, /data-thread-inline-code="true"/u);
+  assert.doesNotMatch(html, /Git arc operation rejected|data-thread-git-arc-failure-hint/u);
+});
+
+test("dirty plan failures put changed-file meaning on danger path rows", () => {
+  const failure = { action: "plan", code: "dirtyPaths", paths: ["webapp/.git-arc-failure-demo.txt"], version: 1 } as const;
+  const html = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "plan", intentName: "Show dirty paths", paths: [...failure.paths], ref: null },
+    durationMs: 10,
+    failureReason: `Workbench arc failure: ${JSON.stringify(failure)}`,
+    outcome: "failed",
+    receipt: null,
+  }));
+  assert.match(html, /Failed to plan changed file/u);
+  assert.match(html, /data-thread-git-arc-path-tone="danger"/u);
+  assert.match(html, /Cannot plan against unclaimed workspace dirt\./u);
+  assert.match(html, /data-thread-git-arc-failure-panel="true"/u);
+  assert.match(html, /data-thread-git-arc-failure-hint="true"/u);
+  assert.doesNotMatch(html, /Selected paths contain workspace changes/u);
+});
+
+test("plan drift failures put drift meaning on claim rows and keep commands out of the user hint", () => {
+  const failure = {
+    action: "arcStart",
+    code: "planDrift",
+    commits: [],
+    conflicts: [],
+    dirtyPaths: ["webapp/.git-arc-failure-demo.txt"],
+    headMovement: "same",
+    planRef: "b".repeat(40),
+    snapshotPaths: ["webapp/.git-arc-failure-demo.txt"],
+    version: 1,
+  } as const;
+  const html = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "start", intentName: null, paths: [], ref: failure.planRef },
+    durationMs: 10,
+    failureReason: `Workbench arc failure: ${JSON.stringify(failure)}`,
+    outcome: "failed",
+    receipt: null,
+  }));
+  assert.match(html, /Failed to claim drifted file/u);
+  assert.match(html, /data-thread-git-arc-path-tone="danger"/u);
+  assert.match(html, /The plan baseline changed\./u);
+  assert.match(html, /data-thread-git-arc-failure-hint="true"/u);
+  assert.doesNotMatch(html, /Dirty unclaimed|mcp__wb__|wb git arc/u);
+});
+
+test("timed-out plans use timeout labels without inventing a Git failure", () => {
+  const html = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "plan", intentName: "strengthen test quality guidance", paths: ["workbench-agents-prompt.md"], ref: null },
+    durationMs: 11_000,
+    failureReason: "The command timed out before returning a Git response.",
+    outcome: "timedOut",
+    receipt: null,
+  }));
+  assert.match(html, /Timed out planning/u);
+  assert.match(html, /strengthen test quality guidance/u);
+  assert.match(html, /data-thread-git-arc-path-tone="danger"/u);
+  assert.doesNotMatch(html, /data-thread-git-arc-failure=/u);
 });
 
 test("in-progress checkpoint commit commands render an immediate standalone card", () => {
@@ -543,6 +686,30 @@ test("nested plan cards label planned changes without claiming them", () => {
   assert.doesNotMatch(removeHtml, />Claimed</u);
 });
 
+test("nested adoption plan cards render parent scope as a folder and adopted children as files", () => {
+  const parentPath = "webapp/components/workbench/thread-view";
+  const adoptedPath = `${parentPath}/ThreadGitArcItem.tsx`;
+  const html = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: {
+      action: "plan",
+      adoptPaths: [adoptedPath],
+      intentName: "Nested adoption",
+      paths: [parentPath],
+      ref: null,
+    },
+    durationMs: 10,
+    outcome: "completed",
+    projectFilePaths: [adoptedPath, `${parentPath}/ThreadClaimedFileList.tsx`],
+    projectId: "project",
+    receipt: null,
+  }));
+
+  assert.equal(html.match(/data-project-folder-path="true"/gu)?.length, 1);
+  assert.match(html, /thread-view\//u);
+  assert.match(html, /ThreadGitArcItem\.tsx/u);
+  assert.match(html, /data-project-file-relative-path="webapp\/components\/workbench\/thread-view\/ThreadGitArcItem\.tsx"/u);
+});
+
 test("arc move cards distinguish previewed mappings from applied mappings", () => {
   const ref = "c".repeat(40);
   const move = {
@@ -679,7 +846,8 @@ test("arc cards omit empty filler and describe failed claims precisely", () => {
     outcome: "failed",
     receipt: null,
   }));
-  assert.match(failedAddHtml, /Attempted to claim/u);
+  assert.match(failedAddHtml, /Failed to claim/u);
+  assert.match(failedAddHtml, /data-thread-git-arc-failure="operationRejected"/u);
   assert.match(failedAddHtml, /The selected path is dirty\./u);
 });
 

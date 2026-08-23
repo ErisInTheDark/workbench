@@ -648,6 +648,13 @@ test("current-plan and proposal-lifecycle commands expose route-only matcher cla
   assert.deepEqual(parseGitArcCommand("wb git arc plan start -m Continue -- src/a.ts"), {
     action: "planStart", intentName: "Continue", paths: ["src/a.ts"], ref: null,
   });
+  assert.deepEqual(parseGitArcCommand("wb git arc plan -m Continue --adopt src/dirty-a.ts --adopt src/dirty-b.ts -- src/a.ts"), {
+    action: "plan",
+    adoptPaths: ["src/dirty-a.ts", "src/dirty-b.ts"],
+    intentName: "Continue",
+    paths: ["src/a.ts"],
+    ref: null,
+  });
   assert.deepEqual(parseGitArcCommand("wb git arc rescind --proposal proposal-one"), {
     action: "rescind", intentName: null, paths: [], proposalId: "proposal-one", ref: null,
   });

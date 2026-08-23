@@ -7,6 +7,13 @@
 import { useEffect, useState } from "react";
 
 import { GitCheckpointCompareResultSchema } from "../../../lib/workbench/git/checkpoint-contracts";
+import {
+  createGitArcOperationRejected,
+  GitArcFailureException,
+  parseGitArcFailureEnvelope,
+  type GitArcFailure,
+  type GitArcFailureAction,
+} from "../../../lib/workbench/git/git-arc-failures";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import reportClientSchemaError from "../../../lib/workbench/report-client-schema-error";
 import type { GitArcProposalStatus } from "../../../lib/workbench/git/git-arc-storage";
@@ -16,6 +23,7 @@ import GitArcIcon from "./GitArcIcon";
 import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 
 type ReleaseAction = "restore" | "unclaim";
@@ -25,6 +33,15 @@ type LifecyclePresentation = Omit<WorkbenchGitArcLifecycleState, "phase" | "prop
   proposalIds?: string[];
   proposals: Array<{ proposalId: string; status: GitArcProposalStatus }>;
 };
+
+async function requireGitArcResponse(response: Response, action: GitArcFailureAction, fallback: string) {
+  if (response.ok) return response;
+  const text = await response.text();
+  const envelope = parseGitArcFailureEnvelope(text, (error) => {
+    reportClientSchemaError("Rejected Git arc lifecycle failure response", error);
+  });
+  throw new GitArcFailureException(envelope?.gitArcFailure ?? createGitArcOperationRejected(action, envelope?.error || text.trim() || fallback));
+}
 
 export default function ThreadGitArcLifecycleCard({
   claim,
@@ -51,7 +68,7 @@ export default function ThreadGitArcLifecycleCard({
   const visibleProposals = claim.proposals.filter(({ status }) => status === "proposed" || status === "committed");
   const [activeAction, setActiveAction] = useState<ReleaseAction | null>(null);
   const [changeState, setChangeState] = useState<ClaimChangeState>("loading");
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<GitArcFailure | null>(null);
 
   useEffect(() => {
     if (phase === "resolved" || !claim.claimedPaths.length) {
@@ -68,7 +85,7 @@ export default function ThreadGitArcLifecycleCard({
           method: "POST",
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error("Unable to inspect the active Git arc claim.");
+        await requireGitArcResponse(response, "compare", "Unable to inspect the active Git arc claim.");
         const parsed = GitCheckpointCompareResultSchema.safeParse(await response.json());
         if (!parsed.success) {
           reportClientSchemaError("Rejected Git arc comparison response", parsed.error);
@@ -78,7 +95,9 @@ export default function ThreadGitArcLifecycleCard({
       } catch (compareError) {
         if (controller.signal.aborted) return;
         setChangeState("error");
-        setError(compareError instanceof Error ? compareError.message : "Unable to inspect the active Git arc claim.");
+        setFailure(compareError instanceof GitArcFailureException
+          ? compareError.failure
+          : createGitArcOperationRejected("compare", compareError instanceof Error ? compareError.message : "Unable to inspect the active Git arc claim."));
       }
     })();
     return () => controller.abort();
@@ -87,7 +106,7 @@ export default function ThreadGitArcLifecycleCard({
   const release = async (action: ReleaseAction) => {
     if (activeAction) return;
     setActiveAction(action);
-    setError(null);
+    setFailure(null);
     try {
       const response = await fetch("/api/git-checkpoint", {
         body: JSON.stringify(action === "restore" ? {
@@ -108,20 +127,15 @@ export default function ThreadGitArcLifecycleCard({
         headers: { "Content-Type": "application/json" },
         method: "POST",
       });
-      if (!response.ok) {
-        const text = await response.text();
-        let message = text.trim();
-        try {
-          const payload = JSON.parse(text) as { error?: string };
-          message = payload.error?.trim() || message;
-        } catch {
-          // The plain response text is already the bounded error fallback.
-        }
-        throw new Error(message || "Unable to release the Git arc claim.");
-      }
+      await requireGitArcResponse(response, action === "restore" ? "restore" : "arcRemove", "Unable to release the Git arc claim.");
       await onReleased();
     } catch (releaseError) {
-      setError(releaseError instanceof Error ? releaseError.message : "Unable to release the Git arc claim.");
+      setFailure(releaseError instanceof GitArcFailureException
+        ? releaseError.failure
+        : createGitArcOperationRejected(
+          action === "restore" ? "restore" : "arcRemove",
+          releaseError instanceof Error ? releaseError.message : "Unable to release the Git arc claim.",
+        ));
     } finally {
       setActiveAction(null);
     }
@@ -204,7 +218,15 @@ export default function ThreadGitArcLifecycleCard({
                 workspaceRoots={workspaceRoots}
               />
             </ThreadDisclosure>
-            {error ? <p className="m-0 mt-1 text-[0.74em] leading-[1.45] text-[color:var(--danger)]">{error}</p> : null}
+            {failure ? (
+              <ThreadGitArcFailure
+                failure={failure}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                workspaceRoots={workspaceRoots}
+              />
+            ) : null}
           </div>
         ) : null}
       </section>

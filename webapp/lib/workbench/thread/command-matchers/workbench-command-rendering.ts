@@ -67,6 +67,7 @@ export type WorkbenchCommandPresentationName = typeof WORKBENCH_COMMAND_PRESENTA
 
 export type WorkbenchGitArcOperation = {
   action: "add" | "adopt" | "compare" | "continue" | "diff" | "mv" | "plan" | "planAdd" | "planAdopt" | "planRemove" | "planStart" | "propose" | "remove" | "rescind" | "restore" | "start";
+  adoptPaths?: string[];
   intentName: string | null;
   move?: GitArcMoveArguments;
   paths: string[];
@@ -360,10 +361,12 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
         : undefined;
   const messages = [readString(args.title), readString(args.description)].filter((value): value is string => value !== null);
   const paths = readStringArray(args.paths);
+  const adoptPaths = readStringArray(args.adoptPaths);
   const intentName = readString(args.intentName);
   const proposalId = readString(args.proposalId) ?? readString(args.amendProposalId) ?? readString(args.replaceProposalId);
   const operation: WorkbenchGitArcOperation = {
     action,
+    ...(adoptPaths.length ? { adoptPaths } : {}),
     intentName,
     ...(parsedMove ? { move: parsedMove } : {}),
     paths,

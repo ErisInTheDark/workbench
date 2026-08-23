@@ -7,14 +7,13 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 import type { WorkbenchThreadSidebarStore } from "../../../lib/types";
-import { createThreadHref } from "../../../lib/workbench/navigation/workbench-route";
 import {
   createWorkbenchThreadPlanConflictSelector,
   type WorkbenchHarnessId,
   type WorkbenchThreadTarget,
 } from "../../../lib/workbench/thread/thread-state";
-import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
 import { GitArcConflictIcon } from "./GitArcIcon";
+import ThreadGitArcConflictList from "./ThreadGitArcConflictList";
 
 const EMPTY_UNSUBSCRIBE = () => undefined;
 
@@ -43,20 +42,7 @@ export default function ThreadPlanConflictCard({
         <GitArcConflictIcon className="size-4 shrink-0" />
         <span className="min-w-0 flex-1 truncate font-medium text-text">Planned changes overlap active threads</span>
       </h2>
-      <ul className="m-0 flex flex-col gap-1 p-2">
-        {conflicts.map((entry) => (
-          <WorkbenchThreadListItem
-            className="pb-px"
-            compact
-            entry={entry}
-            href={createThreadHref(projectId, { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId })}
-            key={`${entry.identity.harness}:${entry.identity.threadId}`}
-            onActivate={onOpenThread}
-            projectId={projectId}
-            showTooltip={false}
-          />
-        ))}
-      </ul>
+      <ThreadGitArcConflictList entries={conflicts} onOpenThread={onOpenThread} projectId={projectId} />
     </section>
   );
 }

@@ -9,7 +9,8 @@
 import { createContext } from "react";
 
 import type { GitCheckpointCommitCommandIntent } from "../../../lib/workbench/thread/thread-command-matchers";
-import type { WorkbenchHarness } from "../../../lib/types";
+import type { WorkbenchHarness, WorkbenchThreadSidebarStore } from "../../../lib/types";
+import type { WorkbenchThreadTarget } from "../../../lib/workbench/thread/thread-state";
 
 export interface ThreadGitArcPresentation {
   harness: WorkbenchHarness;
@@ -17,7 +18,10 @@ export interface ThreadGitArcPresentation {
   /** @deprecated Transitional input for pre-grouped tests and callers. */
   hoistedProposalId?: string | null;
   hoistedProposalIds?: ReadonlySet<string>;
+  onOpenThread?: (target: WorkbenchThreadTarget) => void;
+  projectId?: string | null;
   proposalIntents?: ReadonlyMap<string, GitCheckpointCommitCommandIntent>;
+  threadSidebarStore?: WorkbenchThreadSidebarStore | null;
 }
 
 type ReleaseAction = "restore" | "unclaim";

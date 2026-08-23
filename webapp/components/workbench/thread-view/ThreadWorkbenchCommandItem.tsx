@@ -113,6 +113,7 @@ export default function ThreadWorkbenchCommandItem({
         <ThreadCheckpointCommitItem
           commandOutcome={outcome}
           cwd={threadCwdPath}
+          failureReason={outcome === "failed" ? output : null}
           intent={intent.proposalIntent ?? null}
           projectFilePaths={projectFilePaths}
           projectId={projectId}

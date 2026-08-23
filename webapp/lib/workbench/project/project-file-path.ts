@@ -12,6 +12,7 @@
  * - projectFilePathLocationClassName: shared low-contrast classes for line and column suffixes. Keywords: project path, location, classes.
  * - createProjectFilePathDisambiguationIndexCooperatively: build project path disambiguation in browser-yielding slices. Keywords: project path, scheduler, index.
  * - getProjectFilePathDisplay: derive the visible filename, tooltip path, and location suffix for a project-relative path. Keywords: project path, display, tooltip.
+ * - isProjectDirectoryPath: identify tracked directory prefixes from the cached project file path index. Keywords: project path, directory, folder, cache.
  * - readCachedProjectFilePathDisambiguationIndex: return an already-built path disambiguation index without rebuilding. Keywords: project path, cache, index.
  * - writeProjectFilePathDisambiguationIndexCache: store a prepared path disambiguation index in shared caches. Keywords: project path, cache, index.
  */
@@ -191,6 +192,13 @@ function getDirectoryDisambiguationPaths(disambiguationPaths: readonly string[])
   const directoryPaths = Array.from(pathsByLookupKey.values());
   directoryDisambiguationPathsCache.set(disambiguationPaths, directoryPaths);
   return directoryPaths;
+}
+
+export function isProjectDirectoryPath(path: string, projectFilePaths: readonly string[]) {
+  const comparablePath = normalizeComparableProjectFilePath(path);
+  return getDirectoryDisambiguationPaths(projectFilePaths).some((directoryPath) => (
+    normalizeComparableProjectFilePath(directoryPath) === comparablePath
+  ));
 }
 
 function formatDirectoryDisplayLabel(label: string) {

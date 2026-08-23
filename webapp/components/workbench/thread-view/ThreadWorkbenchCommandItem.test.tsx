@@ -13,7 +13,7 @@ import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
-function makeItem(tool: string, argumentsValue: McpItem["arguments"], output: string): McpItem {
+function makeItem(tool: string, argumentsValue: McpItem["arguments"], output: string, status: McpItem["status"] = "completed"): McpItem {
   return {
     appContext: null,
     arguments: argumentsValue,
@@ -24,7 +24,7 @@ function makeItem(tool: string, argumentsValue: McpItem["arguments"], output: st
     readOnlyHint: false,
     result: { _meta: null, content: [{ type: "text", text: output }], structuredContent: null },
     server: "wb",
-    status: "completed",
+    status,
     tool,
     type: "mcpToolCall",
   };
@@ -49,6 +49,29 @@ test("Git MCP operations use the existing Git arc card instead of a simple label
   const html = renderSpecialized(makeItem("git_arc_plan_add", { paths: ["src/a.ts"] }, ""));
 
   assert.match(html, /data-thread-git-arc-card="planAdd"/u);
+});
+
+test("historical overlap failures keep exact duplicate paths in adoption-only presentation", () => {
+  const failure = {
+    action: "plan",
+    code: "adoptedPathOverlap",
+    overlaps: [{ adoptedPath: "src/controller.ts", ordinaryPath: "src/controller.ts" }],
+    version: 1,
+  } as const;
+  const html = renderSpecialized(makeItem("git_arc_plan", {
+    adoptPaths: ["src/controller.ts"],
+    intentDescription: "",
+    intentName: "Restore titles",
+    paths: ["src/controller.ts"],
+  }, `Adopted paths already join the plan scope.\nWorkbench arc failure: ${JSON.stringify(failure)}\n`, "failed"));
+
+  assert.match(html, /data-thread-git-arc-card="plan"/u);
+  assert.match(html, /Failed to adopt changes/u);
+  assert.doesNotMatch(html, />Failed to plan</u);
+  assert.match(html, />Failed to adopt</u);
+  assert.match(html, /data-thread-git-arc-failure="adoptedPathOverlap"/u);
+  assert.match(html, /Ordinary and adopted plan scopes overlap/u);
+  assert.doesNotMatch(html, /Adopted paths already join|Workbench arc failure:/u);
 });
 
 test("title and subagent MCP operations use their dedicated renderers", () => {

@@ -1622,7 +1622,10 @@ export default memo(function ThreadView ({
         harness: activeThread?.harness ?? thread.harness,
         hasActiveGitArc: activeGitArcSelection?.gitArc?.phase === "active",
         hoistedProposalIds: new Set(terminalGitArc?.proposals.map(({ proposalId }) => proposalId) ?? []),
+        onOpenThread,
+        projectId,
         proposalIntents: visibleGitArcProposalIntents,
+        threadSidebarStore,
       }}>
       <div
         ref={threadViewRef}
