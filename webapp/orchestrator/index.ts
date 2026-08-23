@@ -21,7 +21,6 @@ import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import { createInitializeCapabilities, createInitializeRequest } from "../lib/codex/protocol";
 import { getCurrentTurn } from "../lib/codex/thread-state";
 import type {
-    OrchestratorReloadRequest,
     OrchestratorReloadResponse,
     OrchestratorReloadScope,
     WorkbenchBrowseResultEntry,
@@ -58,6 +57,7 @@ import { createOrchestratorFeatureModuleLoader } from "./orchestrator-feature-lo
 import type { OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification } from "./orchestrator-feature-registry";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
+import type { WorkbenchHarnessReloadPlan, WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
@@ -244,9 +244,7 @@ function sendJsonToClient(client: BridgeClient, message: unknown) {
 }
 
 function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification) {
-  if (harness === "codex" || harness === "opencode") {
-    turnRecoveryController.observeNotification(harness, message);
-  }
+  featureHost.get("harnesses").observeNotification(harness, message);
   void featureHost.observeProviderNotification({ harness, notification: message }).catch((error) => {
     logError("thread-state", `failed to observe provider notification: ${error instanceof Error ? error.message : String(error)}`);
   });
@@ -261,11 +259,6 @@ function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification) 
 function publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot) {
   const client = bridgeClientsByConnectionId.get(connectionId);
   if (client) sendJsonToClient(client, { method: "workbench/thread-state/updated", params: snapshot });
-}
-
-function readHarness(message: JsonRpcRequest): HarnessKind {
-  const harness = message[WORKBENCH_HARNESS_FIELD];
-  return harness === "copilot" || harness === "opencode" ? harness : "codex";
 }
 
 function stripHarnessField(message: JsonRpcRequest) {
@@ -431,6 +424,7 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
     executeBrowseRequest: async (body, signal) => await runAfterBrowseControllerReload(() => getBrowseController().executeBrowseRequest(body, signal)),
     executeBrowseSessionRequest: async (request, signal) => await runAfterBrowseControllerReload(() => getBrowseController().executeSessionRequest(request, signal)),
     getCodexReadiness: () => codexReadyPromise,
+    harnessPorts: createHarnessPorts(),
     legacyMigrationProjectRoot: PROJECT_ROOT,
     localOrchestratorOrigin: LOCAL_ORCHESTRATOR_ORIGIN,
     localWorkbenchOrigin: LOCAL_WORKBENCH_ORIGIN,
@@ -450,9 +444,7 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
       for (const listener of threadStateLifecycleListeners) listener(projectId, entry);
     },
     publishThreadState,
-    requestHarness: requestLiveHarness,
     requestSubagent: (request) => requestLiveHarness("codex", request),
-    requestThreadResume,
     subagentStore,
     threadTransitions: threadTransitionCoordinator,
   };
@@ -463,15 +455,13 @@ async function reloadOrchestratorLogic() {
 }
 
 async function readThreadActiveForBrowseCleanup(threadId: string) {
-  for (const harness of ["codex", "copilot", "opencode"] as const satisfies readonly HarnessKind[]) {
+  const harnesses = featureHost.get("harnesses");
+  for (const harness of harnesses.listHarnesses()) {
     try {
-      const response = await requestLiveHarness(harness, {
+      const response = await harnesses.request(harness, {
         id: 0,
         method: "thread/read",
-        params: {
-          includeTurns: false,
-          threadId,
-        },
+        params: { includeTurns: false, threadId },
       });
       if (response.error) throw new Error(response.error.message);
       const result = response.result as { thread?: { status?: string } };
@@ -497,44 +487,16 @@ function loadBrowseResultControllerModule() {
   return require("./WorkbenchBrowseResultController") as typeof import("./WorkbenchBrowseResultController");
 }
 
-async function requestBrowseHarness<TValue>(
-  harness: Exclude<WorkbenchHarness, "codex">,
-  message: JsonRpcRequest,
-): Promise<TValue> {
-  const response = harness === "copilot"
-    ? await copilotBridge.handleRequest(message)
-    : await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(message));
-  if (response.error) throw new Error(response.error.message);
-  return response.result as TValue;
-}
-
 function createBrowseResultController() {
   const { default: Controller } = loadBrowseResultControllerModule();
   return new Controller({
+    listHarnesses: () => featureHost.get("harnesses").listHarnesses(),
     logError: (message) => logError("browse-results", message),
-    readThread: async (harness, threadId) => {
-      if (harness === "codex") return await runAfterCodexBridgeReload(() => codexBridge.readThreadForBrowse(threadId));
-      return await requestBrowseHarness<ThreadReadResponse>(harness, {
-        id: 0,
-        method: "thread/read",
-        params: { includeTurns: true, threadId },
-      });
-    },
+    readThread: async (harness, threadId) => await featureHost.get("harnesses").readThread(harness, threadId),
     recordResult: async (entry: WorkbenchBrowseResultEntry) => {
       await runAfterCodexBridgeReload(() => codexBridge.recordBrowseResultForBrowse(entry));
     },
-    steerTurn: async (harness, threadId, expectedTurnId, input: UserInput[]) => {
-      if (harness === "codex") {
-        return await runAfterCodexBridgeReload(() => codexBridge.steerTurnForBrowse(threadId, expectedTurnId, input));
-      }
-      const result = await requestBrowseHarness<{ turnId?: string } | { ok?: boolean }>(harness, {
-        id: 0,
-        method: "turn/steer",
-        params: { expectedTurnId, input, threadId },
-      });
-      const resultRecord = asRecord(result);
-      return typeof resultRecord?.turnId === "string" ? resultRecord.turnId : null;
-    },
+    steerTurn: async (harness, threadId, expectedTurnId, input: UserInput[]) => await featureHost.get("harnesses").steerTurn(harness, threadId, expectedTurnId, input),
   });
 }
 
@@ -606,16 +568,106 @@ function resolveProjectFromCurrentCatalog(
 }
 
 async function requestLiveHarness(harness: HarnessKind, request: JsonRpcRequest): Promise<JsonRpcResponse> {
+  return await featureHost.run("harnesses", (controller) => controller.request(harness, request));
+}
+
+function requireHarnessAdmission() {
   if (controlledRestartPending) throw new Error("The orchestrator is restarting; new harness work is temporarily unavailable.");
-  if (harness === "codex" || harness === "opencode") turnRecoveryController.observeRequest(harness, request);
-  if (harness === "copilot") return await copilotBridge.handleRequest(request);
-  if (harness === "opencode") {
-    return await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(request));
-  }
-  return await runAfterCodexBridgeReload(async () => {
-    await ensureCodexReady();
-    return await codexBridge.handleServerRequest(request);
+}
+
+function readGenericBrowseThread(harness: "copilot" | "opencode", threadId: string) {
+  return requestGenericBrowseHarness<ThreadReadResponse>(harness, {
+    id: 0,
+    method: "thread/read",
+    params: { includeTurns: true, threadId },
   });
+}
+
+async function requestGenericBrowseHarness<TValue>(harness: "copilot" | "opencode", message: JsonRpcRequest): Promise<TValue> {
+  requireHarnessAdmission();
+  const response = harness === "copilot"
+    ? await copilotBridge.handleRequest(message)
+    : await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(message));
+  if (response.error) throw new Error(response.error.message);
+  return response.result as TValue;
+}
+
+async function steerGenericBrowseTurn(harness: "copilot" | "opencode", threadId: string, expectedTurnId: string, input: UserInput[]) {
+  const result = await requestGenericBrowseHarness<{ turnId?: string } | { ok?: boolean }>(harness, {
+    id: 0,
+    method: "turn/steer",
+    params: { expectedTurnId, input, threadId },
+  });
+  const resultRecord = asRecord(result);
+  return typeof resultRecord?.turnId === "string" ? resultRecord.turnId : null;
+}
+
+function createHarnessPorts(): Record<WorkbenchHarness, WorkbenchHarnessRuntimePort> {
+  return {
+    codex: {
+      executeReload: async () => await reloadCodexBridge(),
+      handleBrowserMessage: async (message, client) => {
+        if ("id" in message) {
+          try {
+            const bridgeResponse = await runAfterCodexBridgeReload(() => codexBridge.handleBridgeRequest(message));
+            if (bridgeResponse) {
+              sendJsonToClient(client, bridgeResponse);
+              return;
+            }
+            await runAfterCodexBridgeReload(() => codexBridge.forwardRequest(message, client, message.id as number | string));
+          } catch (error) {
+            sendJsonToClient(client, { id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : "Codex bridge request failed." } });
+          }
+          return;
+        }
+        await runAfterCodexBridgeReload(() => codexBridge.forwardNotification(message)).catch((error) => {
+          logError("codex-bridge", error instanceof Error ? error.message : String(error));
+        });
+      },
+      observeRecoveryNotification: (notification) => turnRecoveryController.observeNotification("codex", notification),
+      observeRecoveryRequest: (request) => turnRecoveryController.observeRequest("codex", request),
+      readThread: async (threadId) => await runAfterCodexBridgeReload(() => codexBridge.readThreadForBrowse(threadId)),
+      request: async (request) => {
+        requireHarnessAdmission();
+        return await runAfterCodexBridgeReload(async () => {
+          await ensureCodexReady();
+          return await codexBridge.handleServerRequest(request);
+        });
+      },
+      resumeThread: async (threadId) => await requestThreadResume("codex", threadId),
+      steerTurn: async (threadId, expectedTurnId, input) => await runAfterCodexBridgeReload(() => codexBridge.steerTurnForBrowse(threadId, expectedTurnId, input)),
+    },
+    copilot: {
+      handleBrowserMessage: async (message, client) => {
+        if (!("id" in message)) return;
+        requireHarnessAdmission();
+        sendJsonToClient(client, await copilotBridge.handleRequest(message));
+      },
+      readThread: async (threadId) => await readGenericBrowseThread("copilot", threadId),
+      request: async (request) => {
+        requireHarnessAdmission();
+        return await copilotBridge.handleRequest(request);
+      },
+      steerTurn: async (threadId, expectedTurnId, input) => await steerGenericBrowseTurn("copilot", threadId, expectedTurnId, input),
+    },
+    opencode: {
+      executeReload: async (scopes) => await reloadOpenCodeBridge({ restartManagedServer: scopes.includes("opencode-server") }),
+      handleBrowserMessage: async (message, client) => {
+        if (!("id" in message)) return;
+        requireHarnessAdmission();
+        sendJsonToClient(client, await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(message)));
+      },
+      observeRecoveryNotification: (notification) => turnRecoveryController.observeNotification("opencode", notification),
+      observeRecoveryRequest: (request) => turnRecoveryController.observeRequest("opencode", request),
+      readThread: async (threadId) => await readGenericBrowseThread("opencode", threadId),
+      request: async (request) => {
+        requireHarnessAdmission();
+        return await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(request));
+      },
+      resumeThread: async (threadId) => await requestThreadResume("opencode", threadId),
+      steerTurn: async (threadId, expectedTurnId, input) => await steerGenericBrowseTurn("opencode", threadId, expectedTurnId, input),
+    },
+  };
 }
 
 async function prepareCodexTurnStart(request: JsonRpcRequest) {
@@ -1067,30 +1119,23 @@ async function reloadOpenCodeBridge({ restartManagedServer = false }: { restartM
   }
 }
 
-function queueReload(scopes: OrchestratorReloadScope[]) {
+function queueReload(scopes: OrchestratorReloadScope[], harnessPlan: WorkbenchHarnessReloadPlan) {
   const startedAt = lastReloadResponse.startedAt;
   setImmediate(() => {
     void (async () => {
       try {
-        const shouldRestartOpenCodeServer = scopes.includes("opencode-server");
-        if (scopes.includes("orchestrator-logic") || scopes.includes("mcp") || shouldRestartOpenCodeServer) {
+        if (scopes.includes("orchestrator-logic") || scopes.includes("mcp") || harnessPlan.reloadOrchestratorLogic) {
           await reloadOrchestratorLogic();
         }
 
-        if (scopes.includes("orchestrator-logic") || scopes.includes("browse-controller") || scopes.includes("codex-bridge") || scopes.includes("mcp") || scopes.includes("opencode-bridge") || shouldRestartOpenCodeServer) {
+        if (scopes.includes("orchestrator-logic") || scopes.includes("browse-controller") || scopes.includes("mcp") || harnessPlan.refreshWorkbenchPromptFiles) {
           await ensureWorkbenchPromptFiles();
         }
 
-        if (scopes.includes("codex-bridge")) {
-          await reloadCodexBridge();
-        }
+        await featureHost.get("harnesses").executeReloadPlan(harnessPlan);
 
         if (scopes.includes("browse-controller")) {
           await reloadBrowseController();
-        }
-
-        if (scopes.includes("opencode-bridge") || shouldRestartOpenCodeServer) {
-          await reloadOpenCodeBridge({ restartManagedServer: shouldRestartOpenCodeServer });
         }
 
         if (scopes.includes("next-dev")) {
@@ -1176,14 +1221,12 @@ async function handleControlledOrchestratorRestart(response: http.ServerResponse
 }
 
 async function handleReloadHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
-  let payload: OrchestratorReloadRequest | null = null;
+  let requestedScopes: string[] = [];
   try {
     const rawBody = await readRequestBody(request);
     const parsedBody = rawBody.trim() ? JSON.parse(rawBody) as unknown : {};
     const record = asRecord(parsedBody);
-    payload = {
-      scopes: normalizeOrchestratorReloadScopes(record?.scopes),
-    };
+    requestedScopes = normalizeOrchestratorReloadScopes(record?.scopes);
   } catch (error) {
     sendHttpJson(response, 400, {
       error: error instanceof Error ? error.message : "Invalid reload request body.",
@@ -1191,26 +1234,35 @@ async function handleReloadHttpRequest(request: http.IncomingMessage, response: 
     return;
   }
 
-  if (!payload.scopes.length) {
+  if (!requestedScopes.length) {
     sendHttpJson(response, 400, {
       error: "At least one supported reload scope is required.",
     });
     return;
   }
 
-  const combinationError = validateOrchestratorReloadScopeCombination(payload.scopes);
+  const combinationError = validateOrchestratorReloadScopeCombination(requestedScopes);
   if (combinationError) {
     sendHttpJson(response, 400, { error: combinationError });
     return;
   }
-  if (payload.scopes[0] === "orchestrator-server") {
+  if (requestedScopes[0] === "orchestrator-server") {
     await handleControlledOrchestratorRestart(response);
     return;
   }
 
-  lastReloadResponse = createReloadResponse(payload.scopes);
+  const coreScopes = new Set(["orchestrator-logic", "browse-controller", "mcp", "next-dev", "orchestrator-server"]);
+  let harnessPlan: WorkbenchHarnessReloadPlan;
+  try {
+    harnessPlan = featureHost.get("harnesses").planReload(requestedScopes.filter((scope) => !coreScopes.has(scope)));
+  } catch (error) {
+    sendHttpJson(response, 400, { error: error instanceof Error ? error.message : "Invalid harness reload scope." });
+    return;
+  }
+  const scopes = requestedScopes as OrchestratorReloadScope[];
+  lastReloadResponse = createReloadResponse(scopes);
   sendHttpJson(response, 202, lastReloadResponse);
-  queueReload(payload.scopes);
+  queueReload(scopes, harnessPlan);
 }
 
 function scheduleRestart(spec: ProcessSpec) {
@@ -1300,11 +1352,11 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
     if (message.method === "workbench/thread-state/accepted") {
       const params = asRecord(message.params) ?? {};
       try {
-        const harness = params.harness === "codex" || params.harness === "copilot" || params.harness === "opencode" ? params.harness : null;
+        const harness = featureHost.get("harnesses").resolveHarness(params.harness);
         const projectId = typeof params.projectId === "string" ? params.projectId.trim() : "";
         const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
         const turnId = typeof params.turnId === "string" ? params.turnId.trim() : "";
-        if (!harness || !projectId || !threadId || !turnId) throw new Error("Invalid accepted-intent lifecycle evidence.");
+        if (!projectId || !threadId || !turnId) throw new Error("Invalid accepted-intent lifecycle evidence.");
         const result = await featureHost.run("threadState", (feature) => feature.controller.acceptIntent(connectionId, { harness, projectId, threadId, turnId }));
         sendJsonToClient(client, { id: message.id, result });
       } catch (error) {
@@ -1342,55 +1394,10 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
     return;
   }
 
-  const harness = readHarness(message);
   const strippedMessage = stripHarnessField(message);
-  if ((harness === "codex" || harness === "opencode") && "id" in strippedMessage) {
-    turnRecoveryController.observeRequest(harness, strippedMessage);
-  }
-
-  if (harness === "copilot") {
-    if (!("id" in message)) {
-      return;
-    }
-
-    const response = await copilotBridge.handleRequest(stripHarnessField(message));
-    sendJsonToClient(client, response);
-    return;
-  }
-
-  if (harness === "opencode") {
-    if (!("id" in message)) {
-      return;
-    }
-
-    const response = await runAfterOpenCodeBridgeReload(() => opencodeBridge.handleRequest(strippedMessage));
-    sendJsonToClient(client, response);
-    return;
-  }
-
-  if ("id" in message) {
-    try {
-      const bridgeResponse = await runAfterCodexBridgeReload(() => codexBridge.handleBridgeRequest(strippedMessage));
-      if (bridgeResponse) {
-        sendJsonToClient(client, bridgeResponse);
-        return;
-      }
-
-      await runAfterCodexBridgeReload(() => codexBridge.forwardRequest(strippedMessage, client, message.id as number | string));
-    } catch (error) {
-      sendJsonToClient(client, {
-        id: message.id,
-        error: {
-          code: -32000,
-          message: error instanceof Error ? error.message : "Codex bridge request failed.",
-        },
-      });
-    }
-    return;
-  }
-
-  await runAfterCodexBridgeReload(() => codexBridge.forwardNotification(stripHarnessField(message))).catch((error) => {
-    logError("codex-bridge", error instanceof Error ? error.message : String(error));
+  await featureHost.run("harnesses", (controller) => controller.handleBrowserMessage(message[WORKBENCH_HARNESS_FIELD], strippedMessage, client)).catch((error) => {
+    if ("id" in message) sendJsonToClient(client, { id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : "Harness bridge request failed." } });
+    else logError("harness-bridge", error instanceof Error ? error.message : String(error));
   });
 }
 

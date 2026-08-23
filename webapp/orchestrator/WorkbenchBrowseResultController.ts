@@ -13,7 +13,6 @@ import type { WorkbenchBrowseResultEntry, WorkbenchHarness } from "../lib/types"
 import type { WorkbenchBrowseResultEvent, WorkbenchBrowseResultSink } from "../lib/workbench/browse/browse-result-events";
 import { createAgentScreenshotSteerText } from "../lib/workbench/thread/thread-steer-markers";
 
-const VALID_HARNESSES: readonly WorkbenchHarness[] = ["codex", "copilot", "opencode"];
 const IDLE_TAIL = Promise.resolve();
 
 export interface WorkbenchBrowseActiveThread {
@@ -24,6 +23,7 @@ export interface WorkbenchBrowseActiveThread {
 
 export interface WorkbenchBrowseResultCallbacks {
   logError: (message: string) => void;
+  listHarnesses: () => readonly WorkbenchHarness[];
   readThread: (harness: WorkbenchHarness, threadId: string) => Promise<ThreadReadResponse>;
   recordResult: (entry: WorkbenchBrowseResultEntry) => Promise<void>;
   steerTurn: (harness: WorkbenchHarness, threadId: string, expectedTurnId: string, input: UserInput[]) => Promise<string | null>;
@@ -95,7 +95,7 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
   private async readActiveThread(threadId: string, requireInProgress: boolean): Promise<WorkbenchBrowseActiveThread | null> {
     let lastError: Error | null = null;
     let readSucceeded = false;
-    for (const harness of VALID_HARNESSES) {
+    for (const harness of this.callbacks.listHarnesses()) {
       try {
         const response = await this.callbacks.readThread(harness, threadId);
         readSucceeded = true;

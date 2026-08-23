@@ -8,8 +8,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import WorkbenchThreadStateFeature, { mapProviderActivityNotification, mapProviderLifecycleNotification, normalizeProviderSidebarEntry, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
+import type { WorkbenchHarness } from "../lib/types";
 import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import WorkbenchThreadStateFeature, { mapProviderActivityNotification, mapProviderLifecycleNotification, normalizeProviderSidebarEntry, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, message: string) {
   const deadline = Date.now() + 1_000;
@@ -23,6 +25,17 @@ function deferred<TValue>() {
   let resolve!: (value: TValue) => void;
   const promise = new Promise<TValue>((nextResolve) => { resolve = nextResolve; });
   return { promise, resolve };
+}
+
+function createHarnesses(
+  request: (harness: WorkbenchHarness, value: JsonRpcRequest) => Promise<JsonRpcResponse>,
+  resumeThread: (harness: WorkbenchHarness, threadId: string) => Promise<void> = async () => undefined,
+) {
+  return {
+    listHarnesses: () => ["codex", "copilot", "opencode"] satisfies WorkbenchHarness[],
+    request,
+    resumeThread,
+  };
 }
 
 test("provider sidebar normalization converts seconds at the reloadable feature boundary", () => {
@@ -172,8 +185,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
       observe: () => () => undefined,
     },
     publish: (_connectionId, snapshot) => { publications.push(snapshot); },
-    requestThreadResume: async () => undefined,
-    requestHarness: async (harness, request) => {
+    harnesses: createHarnesses(async (harness, request) => {
       const params = request.params as { cursor?: string | null };
       if (!starts.includes(harness)) starts.push(harness);
       if (harness === "codex") {
@@ -190,7 +202,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
         return { id: request.id ?? null, result: { data: [{ id: "copilot-thread", name: "Copilot", status: { type: "idle" }, updatedAt: 4 }], nextCursor: null } };
       }
       return { error: { code: -32000, message: "OpenCode unavailable" }, id: request.id ?? null };
-    },
+    }),
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
     storageRoot,
@@ -291,8 +303,7 @@ test("deep provider pages serialize across projects while both newest pages star
       observe: () => () => undefined,
     },
     publish: () => undefined,
-    requestThreadResume: async () => undefined,
-    requestHarness: async (harness, request) => {
+    harnesses: createHarnesses(async (harness, request) => {
       const params = request.params as { cursor?: string | null; cwd: string };
       if (harness !== "codex") return { id: request.id ?? null, result: { data: [], nextCursor: null } };
       if (!params.cursor) {
@@ -305,7 +316,7 @@ test("deep provider pages serialize across projects while both newest pages star
       await (deepPages.length === 1 ? firstDeepGate.promise : secondDeepGate.promise);
       activeDeepPages -= 1;
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
-    },
+    }),
     resolveProjectById: async (projectId) => ({ id: projectId, rootPath: projectRoots.get(projectId) ?? storageRoot }),
     resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
     storageRoot,
@@ -337,8 +348,7 @@ test("managed title reads use the validated provider thread without mirrored tit
       observe: () => () => undefined,
     },
     publish: () => undefined,
-    requestThreadResume: async () => undefined,
-    requestHarness: async (harness, request) => {
+    harnesses: createHarnesses(async (harness, request) => {
       requests.push({ harness, method: request.method, params: request.params });
       if (harness !== "codex") return { id: request.id ?? null, error: { code: -32000, message: "Not found" } };
       return {
@@ -352,7 +362,7 @@ test("managed title reads use the validated provider thread without mirrored tit
           },
         },
       };
-    },
+    }),
     resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
     storageRoot,
@@ -402,8 +412,7 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
       observe: () => () => undefined,
     },
     publish: () => undefined,
-    requestHarness: async () => { throw new Error("Provider reconciliation must not start after the initial Git snapshot fails."); },
-    requestThreadResume: async () => undefined,
+    harnesses: createHarnesses(async () => { throw new Error("Provider reconciliation must not start after the initial Git snapshot fails."); }),
     resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
     storageRoot,
@@ -463,8 +472,7 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
       observe: () => () => undefined,
     },
     publish: () => undefined,
-    requestThreadResume: async () => undefined,
-    requestHarness: async (harness, request) => {
+    harnesses: createHarnesses(async (harness, request) => {
       if (harness !== "codex") return { error: { code: -32000, message: `${harness} unavailable` }, id: request.id ?? null };
       const cursor = (request.params as { cursor?: string | null }).cursor;
       if (cursor) {
@@ -476,7 +484,7 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
         id: request.id ?? null,
         result: { data: [{ id: "thread-one", name: "Thread one", status: { type: "idle" }, updatedAt: 1 }], nextCursor: "next" },
       };
-    },
+    }),
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
     storageRoot,
@@ -547,8 +555,7 @@ test("managed resume validates the provider thread before requesting lifecycle-o
       observe: () => () => undefined,
     },
     publish: () => undefined,
-    requestThreadResume: async (harness, threadId) => { resumes.push({ harness, threadId }); },
-    requestHarness: async (harness, request) => {
+    harnesses: createHarnesses(async (harness, request) => {
       if (request.method === "thread/read" && harness === "codex") {
         return {
           id: request.id ?? null,
@@ -566,7 +573,7 @@ test("managed resume validates the provider thread before requesting lifecycle-o
         };
       }
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
-    },
+    }, async (harness, threadId) => { resumes.push({ harness, threadId }); }),
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
     storageRoot,
@@ -603,8 +610,7 @@ test("observed title mutations update the provider and published sidebar togethe
       observe: () => () => undefined,
     },
     publish: (_connectionId, snapshot) => { publications.push(snapshot); },
-    requestThreadResume: async () => undefined,
-    requestHarness: async (harness, request) => {
+    harnesses: createHarnesses(async (harness, request) => {
       if (request.method === "thread/name/set") {
         titleRequests.push({ harness, params: request.params });
         return rejectTitle
@@ -620,7 +626,7 @@ test("observed title mutations update the provider and published sidebar togethe
           nextCursor: null,
         },
       };
-    },
+    }),
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
     storageRoot,

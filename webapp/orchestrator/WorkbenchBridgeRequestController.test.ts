@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import { test } from "node:test";
 
-import type { WorkbenchHarness } from "../lib/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
 
@@ -29,13 +28,13 @@ async function captureResponse(
 }
 
 function createController(
-  requestHarness: (harness: WorkbenchHarness, request: JsonRpcRequest) => Promise<JsonRpcResponse>,
+  requestServer: (harness: unknown, request: JsonRpcRequest) => Promise<JsonRpcResponse>,
 ) {
-  return new WorkbenchBridgeRequestController({ requestHarness });
+  return new WorkbenchBridgeRequestController({ harnesses: { requestServer } });
 }
 
 test("routes an allowlisted method to its live harness dispatcher", async () => {
-  const calls: Array<{ harness: WorkbenchHarness; request: JsonRpcRequest }> = [];
+  const calls: Array<{ harness: unknown; request: JsonRpcRequest }> = [];
   const controller = createController(async (harness, request) => {
     calls.push({ harness, request });
     return { id: request.id ?? null, result: { ok: true } };
@@ -53,7 +52,9 @@ test("routes an allowlisted method to its live harness dispatcher", async () => 
 });
 
 test("rejects a valid method on a disallowed harness", async () => {
-  const controller = createController(async () => ({ id: 0, result: {} }));
+  const controller = createController(async (harness) => {
+    throw new Error(`Workbench bridge method workbench/subagent/list is not allowed for ${String(harness)}.`);
+  });
   const response = await captureResponse(controller, {
     harness: "copilot",
     request: { method: "workbench/subagent/list", params: {} },
@@ -64,7 +65,10 @@ test("rejects a valid method on a disallowed harness", async () => {
 
 test("rejects malformed and unlisted requests before dispatch", async () => {
   let calls = 0;
-  const controller = createController(async () => {
+  const controller = createController(async (_harness, request) => {
+    if (request.method === "account/read") {
+      throw new Error("Workbench bridge method account/read is not allowed for codex.");
+    }
     calls += 1;
     return { id: 0, result: {} };
   });

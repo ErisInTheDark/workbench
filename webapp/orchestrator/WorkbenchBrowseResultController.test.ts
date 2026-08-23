@@ -81,6 +81,7 @@ test("records one thread's deferred results in emission order", async () => {
   const readGate = deferred<ThreadReadResponse>();
   const recorded: WorkbenchBrowseResultEntry[] = [];
   const controller = new WorkbenchBrowseResultController({
+    listHarnesses: () => ["codex", "copilot", "opencode"],
     logError: () => undefined,
     readThread: async () => await readGate.promise,
     recordResult: async (entry) => { recorded.push(entry); },
@@ -114,6 +115,7 @@ test("attaches Browse sidecars to the active wb MCP Browse item", async () => {
     type: "mcpToolCall",
   }]);
   const controller = new WorkbenchBrowseResultController({
+    listHarnesses: () => ["codex", "copilot", "opencode"],
     logError: () => undefined,
     readThread: async () => response,
     recordResult: async (entry) => { recorded.push(entry); },
@@ -129,6 +131,7 @@ test("attaches Browse sidecars to the active wb MCP Browse item", async () => {
 test("logs background metadata failures without rejecting Browse execution", async () => {
   const errors: string[] = [];
   const controller = new WorkbenchBrowseResultController({
+    listHarnesses: () => ["codex", "copilot", "opencode"],
     logError: (message) => { errors.push(message); },
     readThread: async () => { throw new Error("thread unavailable"); },
     recordResult: async () => undefined,
@@ -143,6 +146,7 @@ test("logs background metadata failures without rejecting Browse execution", asy
 test("resolves explicit screenshot steering behind the thread-owned boundary", async () => {
   const steers: string[] = [];
   const controller = new WorkbenchBrowseResultController({
+    listHarnesses: () => ["codex", "copilot", "opencode"],
     logError: () => undefined,
     readThread: async () => createThreadResponse("thread-1", "turn-1"),
     recordResult: async () => undefined,

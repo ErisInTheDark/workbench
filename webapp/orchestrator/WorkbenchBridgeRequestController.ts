@@ -1,45 +1,21 @@
 /*
  * Exports:
- * - WorkbenchBridgeRequestControllerOptions: injected harness request dispatcher for deterministic HTTP boundary tests. Keywords: bridge, http, orchestrator, test.
+ * - WorkbenchBridgeRequestControllerOptions: injected harness controller port for deterministic HTTP boundary tests. Keywords: bridge, http, orchestrator, test.
  * - default WorkbenchBridgeRequestController: validate allowlisted server RPC methods and adapt buffered HTTP requests to live harness bridges. Keywords: bridge, http, allowlist, orchestrator, rpc.
  */
 import type http from "node:http";
 
-import type { WorkbenchHarness } from "../lib/types";
-import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type { JsonRpcRequest } from "./bridge-types";
+import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
-interface BridgeMethodRule {
-  harnesses: readonly WorkbenchHarness[];
-  method: string;
-}
-
-const BRIDGE_METHOD_RULES: readonly BridgeMethodRule[] = [
-  { harnesses: ["codex"], method: "workbench/composerProfiles/read" },
-  { harnesses: ["codex"], method: "workbench/composerProfiles/importLegacy" },
-  { harnesses: ["codex"], method: "workbench/composerProfiles/mutate" },
-  { harnesses: ["codex"], method: "thread/context/read" },
-  { harnesses: ["codex", "copilot", "opencode"], method: "thread/name/set" },
-  { harnesses: ["codex"], method: "workbench/notification/broadcast" },
-];
-
-type HarnessRequestDispatcher = (harness: WorkbenchHarness, request: JsonRpcRequest) => Promise<JsonRpcResponse>;
-
 export interface WorkbenchBridgeRequestControllerOptions {
-  requestHarness: HarnessRequestDispatcher;
+  harnesses: Pick<WorkbenchHarnessController, "requestServer">;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeHarness(value: unknown): WorkbenchHarness | null {
-  return value === "codex" || value === "copilot" || value === "opencode" ? value : null;
-}
-
-function isAllowedMethod(harness: WorkbenchHarness, method: string) {
-  return BRIDGE_METHOD_RULES.some((rule) => rule.method === method && rule.harnesses.includes(harness));
 }
 
 async function readRequestBody(request: http.IncomingMessage) {
@@ -66,14 +42,11 @@ function sendJson(response: http.ServerResponse, statusCode: number, payload: ob
 
 function normalizeRequestBody(value: unknown) {
   const body = isRecord(value) ? value : null;
-  const harness = normalizeHarness(body?.harness);
+  const harness = body?.harness;
   const request = isRecord(body?.request) ? body.request : null;
   const method = typeof request?.method === "string" ? request.method.trim() : "";
-  if (!harness || !request || !method) {
+  if (typeof harness !== "string" || !harness || !request || !method) {
     throw new Error("Workbench bridge requests require a valid harness and method.");
-  }
-  if (!isAllowedMethod(harness, method)) {
-    throw new Error(`Workbench bridge method ${method} is not allowed for ${harness}.`);
   }
   return {
     harness,
@@ -86,16 +59,16 @@ function normalizeRequestBody(value: unknown) {
 }
 
 export default class WorkbenchBridgeRequestController {
-  private readonly requestHarness: HarnessRequestDispatcher;
+  private readonly harnesses: Pick<WorkbenchHarnessController, "requestServer">;
 
-  constructor({ requestHarness }: WorkbenchBridgeRequestControllerOptions) {
-    this.requestHarness = requestHarness;
+  constructor({ harnesses }: WorkbenchBridgeRequestControllerOptions) {
+    this.harnesses = harnesses;
   }
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
     try {
       const normalized = normalizeRequestBody(JSON.parse(await readRequestBody(request)) as unknown);
-      const bridgeResponse = await this.requestHarness(normalized.harness, normalized.request);
+      const bridgeResponse = await this.harnesses.requestServer(normalized.harness, normalized.request);
       if (bridgeResponse.error) {
         sendJson(response, 400, {
           error: bridgeResponse.error.message,

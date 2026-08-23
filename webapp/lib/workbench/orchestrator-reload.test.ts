@@ -18,13 +18,15 @@ test("--all excludes both server-replacement scopes", () => {
   assert.equal(allScopes.includes("mcp"), true);
 });
 
-test("normalization deduplicates known internal scopes", () => {
+test("normalization bounds and deduplicates scope-shaped input for owner validation", () => {
   assert.deepEqual(normalizeOrchestratorReloadScopes([
     "codex-bridge",
     "orchestrator-server",
     "codex-bridge",
     "unknown",
-  ]), ["codex-bridge", "orchestrator-server"]);
+    "NOT-A-SCOPE",
+    "x".repeat(65),
+  ]), ["codex-bridge", "orchestrator-server", "unknown"]);
 });
 
 test("full orchestrator restart is exclusive", () => {
