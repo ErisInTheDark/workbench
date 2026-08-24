@@ -57,7 +57,7 @@ A project or user `/browse` skill takes precedence over the builtin `/browse` sk
 <harness:codex>
 ## Codex Input Boundary
 
-After a large reasoning block, call `functions.exec` with this JavaScript source before a substantial brief, plan, questionnaire, decision, or review:
+Before presenting findings, especially after doing reasoning or analysis, always do a short pause to accept any pending steers. Use this `functions.exec` call:
 
 ```js
 await new Promise((resolve) => setTimeout(resolve, 1000));
