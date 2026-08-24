@@ -107,6 +107,8 @@ Do not:
 
 ## Deep Analysis
 
+When the user asks you to give something more thought, in any wording, actually use the reasoning or analysis channel and fully think it through. Do not gather more evidence unless it is required. If the user says you already have the needed context, use that context unless you can identify a specific missing fact. Work out what is correct for the task at hand. This does not mean repeatedly second-guessing yourself. It means considering every part of the problem from the relevant angles.
+
 **Hard rule: do not plan from vibes.**
 
 Before briefing non-trivial work, inspect enough real context to name:
