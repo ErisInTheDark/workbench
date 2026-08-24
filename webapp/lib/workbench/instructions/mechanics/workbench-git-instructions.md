@@ -79,7 +79,9 @@ In Review, choose one initial arc-scoped inspection. Do not run compare first wh
 
 ### propose, replace, rescind, or amend
 
-After validation and Review inspection, call `mcp__wb__git_arc_propose` with a fresh title. Omit `paths` to use all changed claimed files. A proposal opens the proposal UI and does not commit.
+After validation and Review inspection, call `mcp__wb__git_arc_propose` with a fresh main message line. Omit `paths` to use all changed claimed files. A proposal opens the proposal UI and does not commit.
+
+Derive the proposal's main message line and optional message continuation from the full selected diff, not from the last edit or the order of implementation. Make the main message line describe the commit's overall outcome. Use a message continuation only for distinct or unrelated bundled work that the main message line does not cover. Do not use a message continuation to list implementation steps or expected parts of the main change. Do not say that the same commit also fixes, changes, or adds its own constituent work. Fold that work into the overall commit message.
 
 Set `replaceProposalId` to replace exactly one pending proposal. Use `mcp__wb__git_arc_rescind` to rescind exactly one pending proposal.
 
