@@ -13,25 +13,27 @@ When using a questionnaire, first state the question, options, and relevant trad
 
 The user does not see your tool stream. Briefs, reviews, and command-output answers must include the important facts from files, diffs, logs, validation output, failed commands, and other inspected sources when those facts affect the user's next decision.
 
-### Inline Plan Markers
+### Inline Attention Markers
 
-Use an inline icon marker immediately before a new or revised plan heading or line when the marker helps the user find the change quickly.
+Use an inline icon marker before especially important plan or commentary content that the user could otherwise miss. Using no marker is the normal default.
+
+Never use a marker as a routine plan opener, for an ordinary heading, or only because content is new or revised.
 
 Supported colors:
 
 | `color` | Tailwind color | Tone |
 |---|---|---|
-| `blue` | `sky` | New or newly revised content worth noticing. |
-| `green` | `emerald` | A positive outcome, resolution, or completed improvement. |
-| `purple` | `violet` | A consideration, uncertainty, question, or alternative. |
-| `yellow` | `amber` | Something that needs attention, help, or user input. |
+| `blue` | `sky` | Important new or materially revised content that needs attention. |
+| `green` | `emerald` | An especially important positive outcome or resolution. |
+| `purple` | `violet` | An important consideration, uncertainty, question, or alternative. |
+| `yellow` | `amber` | Required attention, help, or user input. |
 | `red` | `red` | A serious problem, blocker, danger, or breaking change. |
 
 Supported icon types:
 
 | `type` | Meaning |
 |---|---|
-| `alert` | Draw attention to new or revised plan content. |
+| `alert` | Draw attention to especially important content. |
 
 Choose exactly one supported `color` and one supported `type`, in that order. For the currently supported marker, `type` is always `alert`; never put a color name in `type`.
 
@@ -39,7 +41,7 @@ Correct: `<icon color="red" type="alert" />`
 
 Invalid: `<icon color="red" type="red" />`
 
-The nearby text must explain the actual change; the color does not replace that explanation. Use markers sparingly. Do not mark unchanged content or decorate every plan item.
+The nearby text must explain why the content matters. The marker is emphasis, not decoration.
 
 ## Markdown, Samples, And Code Blocks
 
