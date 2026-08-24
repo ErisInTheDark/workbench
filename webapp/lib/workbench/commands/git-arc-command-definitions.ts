@@ -246,10 +246,10 @@ function inspectionCommand(action: "compare" | "diff") {
 }
 
 const propose = defineWorkbenchAgentCommand({
-  description: "Create a durable editable commit proposal from an arc's claimed changes or a subset.",
+  description: "Create a durable editable commit proposal from claimed changes, or change an accepted proposal's message by exact id.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "propose"],
-  usage: "wb git arc propose [--root <root-id>] [--amend] [<proposal-id>] [--replace <proposal-id>] [-m <title> [-m <description>]] [-- <claimed-path>...]",
+  usage: "wb git arc propose [--root <root-id>] [--amend [<proposal-id>]] [--replace <proposal-id>] [-m <title> [-m <description>]] [-- <claimed-path>...]",
   inputSchema: z.object({
     amend: z.boolean().default(false),
     amendProposalId: requiredText.optional(),

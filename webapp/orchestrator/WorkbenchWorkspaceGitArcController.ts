@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceGitArcController: aggregate repo-local Git arc members into one workspace lifecycle and route root-scoped operations. Keywords: git, arc, workspace, multi-root, lifecycle.
+ * - default WorkbenchWorkspaceGitArcController: aggregate repo-local Git arc members, route proposal-owned amendments, and prune thread history across one workspace lifecycle. Keywords: git, arc, workspace, multi-root, proposal, retention.
  * - WorkspaceGitArcLifecycleState/WorkspaceGitArcPlanState: expose deterministic logical projections with repo-local member truth. Keywords: git, arc, member, projection.
  */
 import path from "node:path";
@@ -11,6 +11,7 @@ import type { GitCheckpointRequest, GitArcMemberRef, GitArcRootPaths } from "../
 import WorkbenchGitCheckpointController, {
   type GitArcLifecycleState,
   type GitArcPlanState,
+  type GitArcRetentionResult,
 } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
@@ -129,6 +130,24 @@ export default class WorkbenchWorkspaceGitArcController {
     const selected = members.filter((member) => lifecycle?.members.some(({ repoRoot }) => repoRoot === member.repoRoot));
     if (!selected.length) return;
     await this.runMembers(selected, async (member) => await this.local.releaseActiveClaim({ cwd: member.repoRoot, harness, threadId }));
+  }
+
+  async pruneThreadHistories(
+    project: AgentEndpointProjectResolution,
+    identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }>,
+  ): Promise<GitArcRetentionResult> {
+    const members = await this.resolveRepoMembers(project);
+    const values = await this.runMembers(members, async (member) => {
+      const results = [];
+      for (const identity of identities) {
+        results.push(await this.local.pruneThreadHistory({ cwd: member.repoRoot, ...identity }));
+      }
+      return results;
+    });
+    return values.flatMap(({ result }) => result).reduce((total, result) => ({
+      prunedRefCount: total.prunedRefCount + result.prunedRefCount,
+      registryEntryRemoved: total.registryEntryRemoved || result.registryEntryRemoved,
+    }), { prunedRefCount: 0, registryEntryRemoved: false });
   }
 
   async execute(project: AgentEndpointProjectResolution, request: GitCheckpointRequest) {
@@ -439,19 +458,25 @@ export default class WorkbenchWorkspaceGitArcController {
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "proposalCreate" }>,
   ) {
-    if (project.project.roots.length > 1 && !request.rootId) throw new Error("A multi-root Git arc proposal requires rootId so one proposal cannot cross projects.");
-    const root = this.findRoot(project, request.rootId ?? project.root.id);
-    const member = this.memberForRoot(members, root);
+    const messageOnlyAmend = Boolean(request.amendProposalId && !request.paths?.length);
+    const inferredMember = messageOnlyAmend && !request.rootId
+      ? await this.findProposalMember(members, { harness: request.harness, proposalId: request.amendProposalId, threadId: request.threadId })
+      : null;
+    if (project.project.roots.length > 1 && !request.rootId && !inferredMember) {
+      throw new Error("A multi-root Git arc proposal requires rootId so one proposal cannot cross projects.");
+    }
+    const root = inferredMember?.roots[0] ?? this.findRoot(project, request.rootId ?? project.root.id);
+    const member = inferredMember ?? this.memberForRoot(members, root);
     const requestedPaths = request.paths?.map((value) => this.parseRootPath(project, value, root.id));
     if (requestedPaths?.some((candidate) => candidate.root.id !== root.id)) {
       throw new Error(`A Git arc proposal for ${root.id} cannot include paths from another workspace root.`);
     }
     let selectedPaths = requestedPaths?.map(({ absolute }) => absolute);
-    if (!selectedPaths?.length && project.project.roots.length > 1) {
+    if (!messageOnlyAmend && !selectedPaths?.length && project.project.roots.length > 1) {
       const state = await this.local.findLifecycleState({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId });
       selectedPaths = state?.claimedPaths.filter((candidate) => this.rootForRepoPath(member, candidate).id === root.id) ?? [];
     }
-    if (project.project.roots.length > 1 && !request.amend && !selectedPaths?.length) {
+    if (!messageOnlyAmend && project.project.roots.length > 1 && !request.amend && !selectedPaths?.length) {
       throw new Error(`Workspace root ${root.id} has no claimed paths to propose.`);
     }
     const proposal = await this.transitions.runMany([member.repoRoot], async () => await this.local.createProposal({

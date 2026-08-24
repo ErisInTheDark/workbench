@@ -25,6 +25,7 @@ interface EditableElementProps {
   ariaLabel?: string;
   children?: ReactNode;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  readOnly?: boolean;
 }
 
 function findEditableProps(node: ReactNode): EditableElementProps[] {
@@ -1355,6 +1356,41 @@ test("checkpoint proposal editables commit on Ctrl+Enter only while available", 
   findEditableProps(renderCard("unavailable"))[0]?.onKeyDown?.(createShortcutEvent(true));
   assert.equal(commits, 2);
   assert.equal(prevented, 2);
+});
+
+test("committed proposal cards expose Amend only for changed messages on backend-approved targets", () => {
+  const committedProposal = {
+    ...proposedCheckpointState().proposal,
+    amendability: { status: "available" as const },
+    committedSha: "c".repeat(40),
+    status: "committed" as const,
+  };
+  const renderCard = (
+    title: string,
+    amendability: { status: "available" } | { reason: string; status: "unavailable" } = committedProposal.amendability,
+  ) => ThreadCheckpointCommitCard({
+    committing: false,
+    description: committedProposal.description,
+    includeNewer: false,
+    onCommit: () => undefined,
+    onDescriptionChange: () => undefined,
+    onIncludeNewerChange: () => undefined,
+    onRetry: () => undefined,
+    onTitleChange: () => undefined,
+    paths: committedProposal.paths,
+    sourceItemId: "committed-proposal",
+    state: { proposal: { ...committedProposal, amendability }, status: "loaded" },
+    title,
+  });
+
+  const unchanged = renderCard(committedProposal.title);
+  assert.equal(findEditableProps(unchanged).every(({ readOnly }) => readOnly === false), true);
+  assert.doesNotMatch(renderToStaticMarkup(unchanged), />Amend</u);
+  assert.match(renderToStaticMarkup(renderCard("Replacement title")), />Amend</u);
+
+  const unavailable = renderCard("Replacement title", { reason: "Commit is already present on remote refs: origin/main", status: "unavailable" });
+  assert.equal(findEditableProps(unavailable).every(({ readOnly }) => readOnly === true), true);
+  assert.doesNotMatch(renderToStaticMarkup(unavailable), />Amend</u);
 });
 
 test("loaded checkpoint proposal cards keep actions in the summary and clean expanded diffs", () => {

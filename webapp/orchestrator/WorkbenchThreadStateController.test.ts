@@ -481,7 +481,7 @@ test("headless provider refresh preserves Git lifecycle and MCP generation witho
   await fs.rm(root, { force: true, recursive: true });
 });
 
-test("v2 thread metadata decodes without a write and lazily persists on a real provider change", async () => {
+test("legacy settled thread metadata receives a fresh persisted retention grace window", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-v2-mcp-"));
   const statePath = path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`);
   await fs.mkdir(path.dirname(statePath), { recursive: true });
@@ -501,6 +501,7 @@ test("v2 thread metadata decodes without a write and lazily persists on a real p
   }), "utf8");
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
+    now: () => 1_234,
     projectState: projectState(),
     publish: () => undefined,
     reconcileProject: async () => [],
@@ -510,9 +511,9 @@ test("v2 thread metadata decodes without a write and lazily persists on a real p
 
   assert.equal(await controller.getMcpGeneration("project", "codex", "legacy-thread"), "legacy:4");
   assert.equal((await controller.getSnapshot("project")).entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "legacy-thread"), false);
-  const untouched = JSON.parse(await fs.readFile(statePath, "utf8")) as { threads: Array<{ mcpGeneration?: string | null }>; version?: number };
-  assert.equal(untouched.version, 2);
-  assert.equal(untouched.threads[0]?.mcpGeneration, "legacy:4");
+  const migrated = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ gitHistoryCleanedAt?: number | null; mcpGeneration?: string | null; settledAt?: number | null }>; version?: number };
+  assert.equal(migrated.version, 3);
+  assert.deepEqual(migrated.records.map(({ gitHistoryCleanedAt, mcpGeneration, settledAt }) => ({ gitHistoryCleanedAt, mcpGeneration, settledAt })), [{ gitHistoryCleanedAt: null, mcpGeneration: "legacy:4", settledAt: 1_234 }]);
   await controller.ensureProviderEntry("project", {
     activityAt: 1,
     entryKind: "thread",
@@ -521,9 +522,109 @@ test("v2 thread metadata decodes without a write and lazily persists on a real p
     metadata: { archived: false, pinned: false, snoozed: false },
     title: "Legacy thread",
   });
-  const stored = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ mcpGeneration?: string | null; providerObserved?: boolean }>; version?: number };
+  const stored = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ gitHistoryCleanedAt?: number | null; mcpGeneration?: string | null; providerObserved?: boolean; settledAt?: number | null }>; version?: number };
   assert.equal(stored.version, 3);
-  assert.deepEqual(stored.records.map(({ mcpGeneration, providerObserved }) => ({ mcpGeneration, providerObserved })), [{ mcpGeneration: "legacy:4", providerObserved: true }]);
+  assert.deepEqual(stored.records.map(({ gitHistoryCleanedAt, mcpGeneration, providerObserved, settledAt }) => ({ gitHistoryCleanedAt, mcpGeneration, providerObserved, settledAt })), [{ gitHistoryCleanedAt: null, mcpGeneration: "legacy:4", providerObserved: true, settledAt: 1_234 }]);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("continuous settlement prunes once per durable epoch, retries failures, and resets on restore", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-git-retention-"));
+  const statePath = threadStatePath(root, "project");
+  let now = 1_000;
+  const pruned: Array<Array<{ harness: "codex" | "copilot" | "opencode"; threadId: string }>> = [];
+  let rejectNextPrune = false;
+  const providerEntry: WorkbenchThreadSidebarEntry = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "retained" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Retained thread",
+  };
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    now: () => now,
+    projectState: projectState(),
+    pruneExpiredGitState: async (_projectId, identities) => {
+      if (rejectNextPrune) {
+        rejectNextPrune = false;
+        throw new Error("Retention cleanup failed.");
+      }
+      pruned.push(identities);
+    },
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", [providerEntry], { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  await controller.open("observer", "project");
+  await waitFor(async () => (await controller.getSnapshot("project")).freshness === "fresh", "Initial reconciliation did not finish.");
+  await controller.handleRequest("observer", {
+    identity: providerEntry.identity, method: "workbench/thread-state/settle", projectId: "project",
+  });
+  let stored = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ gitHistoryCleanedAt?: number | null; settledAt?: number | null }> };
+  assert.equal(stored.records[0]?.settledAt, 1_000);
+  assert.equal(stored.records[0]?.gitHistoryCleanedAt, null);
+
+  now += 13 * 24 * 60 * 60 * 1_000;
+  await controller.refresh("project");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(pruned.length, 0);
+  await controller.handleRequest("observer", {
+    identity: providerEntry.identity, method: "workbench/thread-state/restore", projectId: "project",
+  });
+  stored = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ settledAt?: number | null }> };
+  assert.equal(stored.records[0]?.settledAt, null);
+
+  now += 20 * 24 * 60 * 60 * 1_000;
+  await controller.refresh("project");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(pruned.length, 0);
+  await controller.handleRequest("observer", {
+    identity: providerEntry.identity, method: "workbench/thread-state/settle", projectId: "project",
+  });
+  now += 14 * 24 * 60 * 60 * 1_000 + 1;
+  await controller.refresh("project");
+  await waitFor(() => pruned.length === 1, "Expired settlement did not trigger Git retention cleanup.");
+  assert.deepEqual(pruned[0], [providerEntry.identity]);
+  await waitFor(async () => {
+    const persisted = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ gitHistoryCleanedAt?: number | null }> };
+    return persisted.records[0]?.gitHistoryCleanedAt === now;
+  }, "Successful retention cleanup was not persisted.");
+  stored = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ gitHistoryCleanedAt?: number | null; settledAt?: number | null }> };
+  assert.equal(stored.records[0]?.gitHistoryCleanedAt, now);
+  await controller.refresh("project");
+  await waitFor(async () => (await controller.getSnapshot("project")).freshness === "fresh", "Repeated reconciliation did not finish.");
+  assert.equal(pruned.length, 1);
+
+  await controller.handleRequest("observer", {
+    identity: providerEntry.identity, method: "workbench/thread-state/restore", projectId: "project",
+  });
+  stored = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ gitHistoryCleanedAt?: number | null; settledAt?: number | null }> };
+  assert.deepEqual(stored.records.map(({ gitHistoryCleanedAt, settledAt }) => ({ gitHistoryCleanedAt, settledAt })), [{ gitHistoryCleanedAt: null, settledAt: null }]);
+  await controller.handleRequest("observer", {
+    identity: providerEntry.identity, method: "workbench/thread-state/settle", projectId: "project",
+  });
+  now += 14 * 24 * 60 * 60 * 1_000 + 1;
+  rejectNextPrune = true;
+  await controller.refresh("project");
+  await waitFor(async () => (await controller.getSnapshot("project")).error?.includes("git-retention: Retention cleanup failed.") === true, "Failed retention cleanup did not surface.");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  stored = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ gitHistoryCleanedAt?: number | null }> };
+  assert.equal(stored.records[0]?.gitHistoryCleanedAt, null);
+  await controller.refresh("project");
+  await waitFor(() => pruned.length === 2, "Failed retention cleanup was not retried.");
+  await waitFor(async () => {
+    const persisted = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ gitHistoryCleanedAt?: number | null }> };
+    return persisted.records[0]?.gitHistoryCleanedAt === now;
+  }, "Retried retention cleanup was not persisted.");
+  stored = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ gitHistoryCleanedAt?: number | null }> };
+  assert.equal(stored.records[0]?.gitHistoryCleanedAt, now);
   await controller.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });

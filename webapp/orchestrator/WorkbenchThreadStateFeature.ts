@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchThreadStateFeatureContext: stable ports required by the reloadable sidebar, lifecycle, and shared project-observation owner. Keywords: dependency injection, thread state, project.
+ * - WorkbenchThreadStateFeatureContext: stable ports required by the reloadable sidebar, lifecycle, Git retention, and shared project-observation owner. Keywords: dependency injection, thread state, retention, project.
  * - normalizeProviderSidebarEntry/normalizeSubagentProviderLifecycle/mapProviderLifecycleNotification/mapProviderActivityNotification: normalize provider rows, subagent defaults, lifecycle, and activity notifications. Keywords: timestamp, lifecycle, harness.
  * - default WorkbenchThreadStateFeature: own reconciliation, project observation, provider-backed title and status commands, notification observation, and the current controller. Keywords: sidebar, project, lifecycle, title, reloadable feature.
  */
@@ -57,6 +57,7 @@ export interface WorkbenchThreadStateFeatureContext {
     listActiveClaims(cwd: string): Promise<GitArcActiveClaim[]>;
     listLifecycleStates?(cwd: string): Promise<Array<GitArcLifecycleState | RepoGitArcLifecycleState>>;
     listPlanStates?(cwd: string): Promise<Array<GitArcPlanState | RepoGitArcPlanState>>;
+    pruneThreadHistories?(cwd: string, identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }>): Promise<unknown>;
   };
   getProjectCatalog(): WorkbenchProjectsPayload;
   harnesses: Pick<WorkbenchHarnessController, "listHarnesses" | "request" | "resumeThread">;
@@ -203,6 +204,12 @@ export default class WorkbenchThreadStateFeature {
       getProjectCatalog: context.getProjectCatalog,
       projectState: context.projectState,
       publish: context.publish,
+      ...(context.gitArcs.pruneThreadHistories ? {
+        pruneExpiredGitState: async (projectId, identities) => {
+          const project = await context.resolveProjectById(projectId);
+          await context.gitArcs.pruneThreadHistories!(project.rootPath, identities);
+        },
+      } : {}),
       reconcileProject: (projectId, signal, acceptProviderSnapshot, acceptGitArcSnapshot) => this.reconcileProject(projectId, signal, acceptProviderSnapshot, acceptGitArcSnapshot),
       renameThread: async (projectId, harness, threadId, candidateTitle) => {
         const title = normalizeThreadTitle(candidateTitle);

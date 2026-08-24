@@ -32,6 +32,7 @@ export interface ProposalMetadata {
   description: string;
   liveBaseCommit: string;
   livePaths: string[];
+  messageOnly?: true;
   mode: "amend" | "commit";
   paths: string[];
   proposalId: string;

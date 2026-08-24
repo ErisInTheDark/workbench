@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect provider normalization, progressive reconciliation, Git projection ordering, managed resume, and controller-owned title mutation. Keywords: provider, sidebar, title, resume, reconciliation, git, test.
+ * - No production exports; tests protect provider normalization, progressive reconciliation, Git projection and retention routing, managed resume, and controller-owned title mutation. Keywords: provider, sidebar, title, resume, reconciliation, git, retention, test.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -11,6 +11,7 @@ import test from "node:test";
 import type { WorkbenchHarness } from "../lib/types";
 import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import WorkbenchThreadStateFeature, { mapProviderActivityNotification, mapProviderLifecycleNotification, normalizeProviderSidebarEntry, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, message: string) {
@@ -430,6 +431,55 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
   await waitFor(() => logs.length === 1, "Git snapshot reconciliation failure was not logged.");
   assert.match(logs[0] ?? "", /reconciliation failed project=project error=Git snapshot exploded\./u);
   assert.equal((await feature.controller.getSnapshot("project")).error, "Git snapshot exploded.");
+  await feature.dispose();
+  await fs.rm(storageRoot, { force: true, recursive: true });
+});
+
+test("expired settled threads reach repository retention through the feature boundary", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-retention-feature-"));
+  const statePath = path.join(storageRoot, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`);
+  const identity = { harness: "codex" as const, threadId: "expired-thread" };
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  await fs.writeFile(statePath, JSON.stringify({
+    drafts: [],
+    records: [{
+      activityAt: 1,
+      entryKind: "thread",
+      identity,
+      lifecycle: { kind: "completed", reason: "userCompleted", settled: true },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      providerObserved: true,
+      settledAt: Date.now() - (15 * 24 * 60 * 60 * 1_000),
+      title: "Expired thread",
+    }],
+    version: 3,
+  }), "utf8");
+  const pruned: Array<{ cwd: string; identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }> }> = [];
+  const feature = new WorkbenchThreadStateFeature({
+    getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
+    gitArcs: {
+      findActiveClaim: async () => null,
+      listActiveClaims: async () => [],
+      listLifecycleStates: async () => [],
+      pruneThreadHistories: async (cwd, identities) => { pruned.push({ cwd, identities }); },
+    },
+    harnesses: createHarnesses(async (_harness, request) => ({ id: request.id ?? null, result: { data: [], nextCursor: null } })),
+    listSubagents: async () => ({ subagents: [] }),
+    projectState: {
+      getCurrentUpdate: () => null,
+      handleRequest: async () => ({ accepted: true }),
+      observe: () => () => undefined,
+    },
+    publish: () => undefined,
+    resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
+    storageRoot,
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+
+  await feature.controller.open("observer", "project");
+  await waitFor(() => pruned.length === 1, "Expired thread did not reach Git retention through the feature.");
+  assert.deepEqual(pruned, [{ cwd: "C:/workspace", identities: [identity] }]);
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
 });

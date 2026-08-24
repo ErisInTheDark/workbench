@@ -159,6 +159,12 @@ export default class WorkbenchGitArcFeature {
     }));
   }
 
+  async pruneThreadHistories(cwd: string, identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }>) {
+    if (!identities.length) return { prunedRefCount: 0, registryEntryRemoved: false };
+    const project = await this.resolveProject(cwd);
+    return await this.workspaceController.pruneThreadHistories(project, identities);
+  }
+
   async findLifecycleState(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchGitArcLifecycleState | null> {
     const project = await this.resolveProject(cwd);
     const state = await this.workspaceController.findLifecycleState(project, harness, threadId);

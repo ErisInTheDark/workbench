@@ -679,14 +679,21 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
   });
   assert.equal(stillUnavailable.status, "unavailable");
 
-  await assert.rejects(commitGitCheckpointProposal({
+  const worktreeBeforeAmend = await git(repoRoot, ["diff", "--binary"]);
+  const indexBeforeAmend = await git(repoRoot, ["diff", "--cached", "--binary"]);
+  const amended = await commitGitCheckpointProposal({
     cwd: repoRoot,
     description: "Frozen proposal",
     includeNewer: false,
     proposalId: proposal.proposalId,
     threadId: frozenThreadId,
     title: "Commit selected again",
-  }), /not available to commit/u);
+  });
+  assert.equal(amended.status, "committed");
+  assert.notEqual(amended.committedSha, committed.committedSha);
+  assert.equal((await git(repoRoot, ["show", "-s", "--format=%s", amended.committedSha!])).trim(), "Commit selected again");
+  assert.equal(await git(repoRoot, ["diff", "--binary"]), worktreeBeforeAmend);
+  assert.equal(await git(repoRoot, ["diff", "--cached", "--binary"]), indexBeforeAmend);
 });
 
 checkpointTest("proposals rebase across compatible commits and reject selected or incompatible history", 7, async (context) => {

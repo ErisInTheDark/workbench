@@ -19,9 +19,11 @@ const entry = {
   title: "Thread",
 };
 
-test("internal MCP freshness never leaks into the sidebar projection", () => {
-  const record = parseWorkbenchThreadStateEntry({ ...entry, mcpGeneration: "epoch:2", providerObserved: true });
+test("internal MCP freshness and Git retention timing never leak into the sidebar projection", () => {
+  const record = parseWorkbenchThreadStateEntry({ ...entry, gitHistoryCleanedAt: 456, mcpGeneration: "epoch:2", providerObserved: true, settledAt: 123 });
+  assert.equal(record.entryKind === "thread" ? record.gitHistoryCleanedAt : null, 456);
   assert.equal(record.entryKind === "thread" ? record.mcpGeneration : null, "epoch:2");
+  assert.equal(record.entryKind === "thread" ? record.settledAt : null, 123);
   assert.deepEqual(projectWorkbenchThreadStateEntry(record), entry);
 });
 

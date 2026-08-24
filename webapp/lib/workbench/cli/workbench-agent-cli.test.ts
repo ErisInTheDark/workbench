@@ -408,6 +408,21 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   });
   assert.equal(proposal.request.responseKind, "git-arc-propose");
 
+  const messageAmendment = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "propose", "--amend", "proposal-one", "-m", "Replacement title", "-m", "Replacement description",
+  ], gitOptions);
+  assert.equal(messageAmendment.kind, "request");
+  assert.deepEqual(messageAmendment.request.body, {
+    action: "proposalCreate",
+    amend: true,
+    amendProposalId: "proposal-one",
+    cwd: "C:/workspace",
+    description: "Replacement description",
+    harness: "codex",
+    threadId: "thread-1",
+    title: "Replacement title",
+  });
+
   const bulletDescription = "- move thread Git out of Next\n- keep claims until index normalization succeeds\n- prevent optional explorer index writes";
   const bulletProposal = await parseWorkbenchAgentCliCommand([
     "git", "arc", "propose", "-m", "Two-state Git acceptance", "-m", bulletDescription,
@@ -1048,7 +1063,11 @@ test("parses explicit plan-ref diff and targeted amend", async () => {
   const diff = await parseWorkbenchAgentCliCommand(["git", "arc", "diff", "--ref", "abcdef1", "--", "src/a.ts"], gitArcOptions);
   assert.equal(diff.kind, "request");
   assert.equal(diff.request.body?.checkpointCommit, "abcdef1");
-  const amend = await parseWorkbenchAgentCliCommand(["git", "arc", "propose", "--amend", "proposal-one"], gitArcOptions);
+  const amend = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "propose", "--amend", "proposal-one", "-m", "Replacement title", "-m", "Replacement description",
+  ], gitArcOptions);
   assert.equal(amend.kind, "request");
   assert.equal(amend.request.body?.amendProposalId, "proposal-one");
+  assert.equal(amend.request.body?.title, "Replacement title");
+  assert.equal(amend.request.body?.description, "Replacement description");
 });

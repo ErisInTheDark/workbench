@@ -3,7 +3,7 @@
  * - default WorkbenchGitCheckpointController: route plan and proposal owners while owning active claim mutation, compare, diff, and restore orchestration. Keywords: git, checkpoint, arc, claims, restore.
  * - GitArcActiveClaim/GitArcPlanState/GitArcProposalStatus: expose active-claim, inactive-plan, and proposal lifecycle for thread-state projection. Keywords: git, arc, claim, plan, proposal, status.
  * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: identify paths rejected before an arc operation. Keywords: git, checkpoint, dirty paths, ignored paths.
- * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult: typed controller operation results. Keywords: git, checkpoint, arc, move, proposal, result.
+ * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult/GitArcRetentionResult: typed controller operation results. Keywords: git, checkpoint, arc, move, proposal, retention, result.
  */
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -29,6 +29,7 @@ import GitArcProposalController, {
   type GitArcLifecycleState,
   type GitCheckpointProposalReceipt,
 } from "./GitArcProposalController";
+import GitArcRetentionController, { type GitArcRetentionResult } from "./GitArcRetentionController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import {
@@ -50,6 +51,7 @@ export type { GitArcProposalStatus } from "./git-arc-storage";
 export { GitCheckpointDirtyPathsError, GitCheckpointIgnoredPathsError } from "./GitArcPlanController";
 export type { GitArcPlanState } from "./GitArcPlanController";
 export type { GitArcLifecycleState, GitCheckpointProposalReceipt } from "./GitArcProposalController";
+export type { GitArcRetentionResult } from "./GitArcRetentionController";
 
 const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -527,6 +529,14 @@ export default class WorkbenchGitCheckpointController {
       { expectedCheckpointCommit: active.checkpointCommit },
     );
     if (mutation) await repository.updateRefs([mutation.update]);
+  }
+
+  async pruneThreadHistory({ cwd, harness: rawHarness, threadId }: ControllerInput): Promise<GitArcRetentionResult> {
+    return await new GitArcRetentionController().pruneThread({
+      cwd,
+      harness: normalizeHarness(rawHarness),
+      threadId,
+    });
   }
 
   async createPlan({

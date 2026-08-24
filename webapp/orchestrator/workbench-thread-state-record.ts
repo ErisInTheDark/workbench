@@ -18,8 +18,10 @@ import {
 type WorkbenchProviderThreadEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
 
 export type WorkbenchThreadStateRecord = WorkbenchProviderThreadEntry & {
+  gitHistoryCleanedAt: number | null;
   mcpGeneration: string | null;
   providerObserved: boolean;
+  settledAt: number | null;
 };
 
 export type WorkbenchThreadStateEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> | WorkbenchThreadStateRecord;
@@ -115,14 +117,20 @@ function storedRecordDefaults(
 
 function internalFields(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { mcpGeneration: null, providerObserved: true };
+    return { gitHistoryCleanedAt: null, mcpGeneration: null, providerObserved: true, settledAt: null };
   }
   const record = value as Record<string, unknown>;
   return {
+    gitHistoryCleanedAt: typeof record.gitHistoryCleanedAt === "number" && Number.isFinite(record.gitHistoryCleanedAt) && record.gitHistoryCleanedAt >= 0
+      ? Math.trunc(record.gitHistoryCleanedAt)
+      : null,
     mcpGeneration: typeof record.mcpGeneration === "string" && record.mcpGeneration.trim()
       ? record.mcpGeneration.trim()
       : null,
     providerObserved: record.providerObserved !== false,
+    settledAt: typeof record.settledAt === "number" && Number.isFinite(record.settledAt) && record.settledAt >= 0
+      ? Math.trunc(record.settledAt)
+      : null,
   };
 }
 
@@ -130,7 +138,7 @@ export function safeParseWorkbenchThreadStateEntry(value: unknown):
   | { data: WorkbenchThreadStateEntry; success: true }
   | { error: unknown; success: false } {
   const publicCandidate = value && typeof value === "object" && !Array.isArray(value)
-    ? (({ mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, ...candidate }) => candidate)(value as Record<string, unknown>)
+    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, settledAt: _settledAt, ...candidate }) => candidate)(value as Record<string, unknown>)
     : value;
   const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(publicCandidate);
   if (!parsed.success) return { error: parsed.error, success: false };
@@ -149,7 +157,7 @@ export function conformStoredWorkbenchThreadStateRecord(
   projectId: string,
 ): StoredWorkbenchThreadStateRecordConformance {
   const publicCandidate = value && typeof value === "object" && !Array.isArray(value)
-    ? (({ mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, ...candidate }) => candidate)(value as Record<string, unknown>)
+    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, settledAt: _settledAt, ...candidate }) => candidate)(value as Record<string, unknown>)
     : value;
   const locator = StoredRecordLocatorSchema.safeParse(publicCandidate);
   if (!locator.success) return { error: locator.error, success: false };
@@ -172,6 +180,6 @@ export function conformStoredWorkbenchThreadStateRecord(
 export function projectWorkbenchThreadStateEntry(entry: WorkbenchThreadStateEntry): WorkbenchThreadSidebarEntry | null {
   if (entry.entryKind === "draft") return entry;
   if (!entry.providerObserved) return null;
-  const { mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, ...projected } = entry;
+  const { gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, settledAt: _settledAt, ...projected } = entry;
   return WorkbenchThreadSidebarEntrySchema.parse(projected);
 }

@@ -2,6 +2,7 @@
  * Exports:
  * - default WorkbenchGitHistoryRewriter: amend one unpushed commit in a linear local stack without touching worktree files. Keywords: git, amend, history, plumbing.
  * - WorkbenchGitHistoryRewriteResult: report target/tip replacements, committed paths, and bounded warnings. Keywords: git, commit, sha, result.
+ * - WorkbenchGitCommitAmendability: explain whether one exact commit can use the Workbench history rewriter. Keywords: amend, safety, reason.
  */
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import GitArcPublishState from "./GitArcPublishState";
@@ -15,6 +16,10 @@ export interface WorkbenchGitHistoryRewriteResult {
   rewrittenCommitCount: number;
   warnings: string[];
 }
+
+export type WorkbenchGitCommitAmendability =
+  | { resolvedTarget: string; status: "available" }
+  | { reason: string; status: "unavailable" };
 
 export interface WorkbenchGitHistoryMutationContext {
   amendedCommit: string;
@@ -34,33 +39,17 @@ export interface WorkbenchGitHistoryAdditionalMutation {
 export default class WorkbenchGitHistoryRewriter {
   constructor(private readonly repository: WorkbenchGitRepository) {}
 
-  async amend({
-    excludeArcRefs,
-    expectedHead,
-    message,
-    mutatePlan,
-    paths,
-    target,
-    targetTree: suppliedTargetTree,
-  }: {
-    excludeArcRefs?: Iterable<string>;
-    expectedHead?: string;
-    message: string;
-    mutatePlan?: (context: WorkbenchGitHistoryMutationContext) => Promise<WorkbenchGitHistoryAdditionalMutation>;
-    paths: string[];
-    target: string;
-    targetTree?: string;
-  }): Promise<WorkbenchGitHistoryRewriteResult> {
+  private async readAmendRange(target: string) {
     const headRef = await this.repository.symbolicHead();
     if (!headRef) throw new Error("Detached HEAD is unsafe for an amend.");
     const head = await this.repository.currentHead();
-    if (expectedHead && head !== this.repository.normalizeCommit(expectedHead)) {
-      throw new Error("Repository HEAD changed after this amend proposal was created.");
-    }
     const arcRewriter = new GitArcHistoryRewriter(this.repository);
     let resolvedTarget = await this.repository.resolveCommit(target);
     if (!await this.repository.isAncestor(resolvedTarget, head)) {
       resolvedTarget = await this.repository.resolveCommit(await arcRewriter.resolveAlias(resolvedTarget));
+    }
+    if (!await this.repository.isAncestor(resolvedTarget, head)) {
+      throw new Error("The amend target is not on the current branch history.");
     }
     const range = await this.repository.firstParentRange(resolvedTarget, head);
     const commitBatch = await this.repository.readCommits(range);
@@ -75,14 +64,57 @@ export default class WorkbenchGitHistoryRewriter {
     if (commits.some(({ metadata }) => metadata.signed)) {
       throw new Error("Amend ranges containing signed commits are not supported.");
     }
+    return { arcRewriter, commits, head, headRef, resolvedTarget };
+  }
+
+  async classifyAmendability(target: string, options: { refresh?: boolean } = {}): Promise<WorkbenchGitCommitAmendability> {
+    try {
+      const { resolvedTarget } = await this.readAmendRange(target);
+      const publishState = await new GitArcPublishState(this.repository).classifyCommit(resolvedTarget, options);
+      if (publishState.kind === "unpushed") return { resolvedTarget, status: "available" };
+      if (publishState.kind === "pushed") {
+        return { reason: `Commit is already present on remote refs: ${publishState.refs.join(", ")}`, status: "unavailable" };
+      }
+      if (publishState.kind === "detached") return { reason: "Detached HEAD is unsafe for an amend.", status: "unavailable" };
+      return { reason: publishState.reason, status: "unavailable" };
+    } catch (error) {
+      return { reason: error instanceof Error ? error.message : String(error), status: "unavailable" };
+    }
+  }
+
+  async amend({
+    excludeArcRefs,
+    expectedHead,
+    message,
+    mutatePlan,
+    messageOnly = false,
+    paths,
+    target,
+    targetTree: suppliedTargetTree,
+  }: {
+    excludeArcRefs?: Iterable<string>;
+    expectedHead?: string;
+    message: string;
+    messageOnly?: boolean;
+    mutatePlan?: (context: WorkbenchGitHistoryMutationContext) => Promise<WorkbenchGitHistoryAdditionalMutation>;
+    paths: string[];
+    target: string;
+    targetTree?: string;
+  }): Promise<WorkbenchGitHistoryRewriteResult> {
+    const { arcRewriter, commits, head, headRef, resolvedTarget } = await this.readAmendRange(target);
+    if (expectedHead && head !== this.repository.normalizeCommit(expectedHead)) {
+      throw new Error("Repository HEAD changed after this amend proposal was created.");
+    }
     await new GitArcPublishState(this.repository).requireAmendableCommit(resolvedTarget);
 
-    const liveTree = await this.repository.writeScopedWorktreeTree(paths, head);
-    const livePaths = await this.repository.listChangedPaths(head, liveTree, paths);
-    if (!livePaths.length) throw new Error("The selected files do not contain any current worktree changes to amend.");
-    const targetTree = suppliedTargetTree ?? await this.repository.writeScopedWorktreeTree(paths, resolvedTarget);
-    const committedPaths = await this.repository.listChangedPaths(resolvedTarget, targetTree, paths);
-    if (!committedPaths.length) throw new Error("The selected files do not change the amend target.");
+    const livePaths = messageOnly
+      ? []
+      : await this.repository.listChangedPaths(head, await this.repository.writeScopedWorktreeTree(paths, head), paths);
+    if (!messageOnly && !livePaths.length) throw new Error("The selected files do not contain any current worktree changes to amend.");
+    const targetTree = suppliedTargetTree
+      ?? (messageOnly ? commits[0]!.metadata.tree : await this.repository.writeScopedWorktreeTree(paths, resolvedTarget));
+    const committedPaths = messageOnly ? [] : await this.repository.listChangedPaths(resolvedTarget, targetTree, paths);
+    if (!messageOnly && !committedPaths.length) throw new Error("The selected files do not change the amend target.");
 
     const generation = await this.repository.readRef(GIT_STATE_GENERATION_REF);
     const branchCommits = new Map<string, string>();
@@ -134,13 +166,17 @@ export default class WorkbenchGitHistoryRewriter {
     const updateRefs = new Set(updatesByRef.keys());
     const duplicateDelete = plannedDeletes.find(({ ref }) => updateRefs.has(ref));
     if (duplicateDelete) throw new Error(`Commit rewrite prepared both deletion and update for ${duplicateDelete.ref}.`);
-    await this.repository.publishRefsAfterIndexNormalization({
-      deletes: plannedDeletes,
-      expectedStateGeneration: generation,
-      indexCommit: newParent,
-      paths: livePaths,
-      updates: [...updatesByRef.values()],
-    });
+    if (messageOnly) {
+      await this.repository.updateRefs([...updatesByRef.values()], plannedDeletes, { expectedStateGeneration: generation });
+    } else {
+      await this.repository.publishRefsAfterIndexNormalization({
+        deletes: plannedDeletes,
+        expectedStateGeneration: generation,
+        indexCommit: newParent,
+        paths: livePaths,
+        updates: [...updatesByRef.values()],
+      });
+    }
     return {
       amendedCommit,
       commit: newParent,

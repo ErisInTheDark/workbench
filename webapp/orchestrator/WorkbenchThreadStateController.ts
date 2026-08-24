@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadGitArcSnapshot/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state and title ports, Git projection, claim context, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification, title, git.
- * - default WorkbenchThreadStateController: own UI-independent thread records, fallback storage reads, durable display order, provider observation, and sidebar projection. Keywords: drafts, project, lifecycle, headless.
+ * - default WorkbenchThreadStateController: own UI-independent thread records, settlement retention timing, fallback storage reads, durable display order, provider observation, and sidebar projection. Keywords: drafts, project, lifecycle, retention, headless.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -111,6 +111,7 @@ export interface WorkbenchThreadStateControllerOptions {
     observe: (projectId: string, publish: (update: WorkbenchProjectStateUpdate) => void) => () => void;
   };
   publish: (connectionId: string, snapshot: WorkbenchThreadStateSnapshot) => void;
+  pruneExpiredGitState?: (projectId: string, identities: Array<{ harness: WorkbenchHarnessId; threadId: string }>) => Promise<void>;
   renameThread?: (projectId: string, harness: WorkbenchHarnessId, threadId: string, title: string) => Promise<string>;
   reconcileProject: (
     projectId: string,
@@ -235,6 +236,7 @@ function describeInvalidRequest(input: object, issue: { code: string; message: s
 }
 
 export default class WorkbenchThreadStateController {
+  private static readonly SETTLED_GIT_RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
   private active = true;
   private readonly connectionProjects = new Map<string, string>();
   private readonly json = new AtomicJsonStore();
@@ -353,6 +355,35 @@ export default class WorkbenchThreadStateController {
     const state = this.projects.get(projectId);
     if (!state) return;
     state.observers.delete(connectionId);
+  }
+
+  private synchronizeSettlementTimestamps(state: ProjectState) {
+    const now = this.now();
+    let changed = false;
+    for (const [key, entry] of state.entries) {
+      if (entry.entryKind === "draft") continue;
+      const settledAt = entry.lifecycle.settled ? entry.settledAt ?? now : null;
+      const gitHistoryCleanedAt = entry.lifecycle.settled && entry.settledAt !== null
+        ? entry.gitHistoryCleanedAt
+        : null;
+      if (entry.settledAt === settledAt && entry.gitHistoryCleanedAt === gitHistoryCleanedAt) continue;
+      state.entries.set(key, { ...entry, gitHistoryCleanedAt, settledAt });
+      changed = true;
+    }
+    return changed;
+  }
+
+  private expiredSettledRecords(state: ProjectState) {
+    const cutoff = this.now() - WorkbenchThreadStateController.SETTLED_GIT_RETENTION_MS;
+    return [...state.entries.entries()].flatMap(([key, entry]) => (
+      entry.entryKind !== "draft"
+      && entry.lifecycle.settled
+      && entry.settledAt !== null
+      && entry.settledAt <= cutoff
+      && (entry.gitHistoryCleanedAt === null || entry.gitHistoryCleanedAt < entry.settledAt)
+        ? [{ identity: entry.identity, key, settledAt: entry.settledAt }]
+        : []
+    ));
   }
 
   async disconnect(connectionId: string) { await this.close(connectionId); }
@@ -691,8 +722,10 @@ export default class WorkbenchThreadStateController {
         entries.set(entryKey(record), record);
       }
       const state: ProjectState = { abort: null, displayOrder: stored.displayOrder ?? {}, drafts, entries, error: null, freshness: "loading", generation: 0, observers: new Set(), reconcilePromise: null, revision: 0, stopProjectObservation: null };
+      const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state);
       state.stopProjectObservation = this.options.projectState.observe(projectId, (update) => this.publishUpdate(state, update));
       this.projects.set(projectId, state);
+      if (repairedSettlementTimestamps) await this.persist(projectId, state);
       setTimeout(() => {
         if (this.active) void this.reconcile(projectId, state);
       }, 0);
@@ -808,6 +841,30 @@ export default class WorkbenchThreadStateController {
     const dirtyHarnesses = new Set<WorkbenchHarnessId>();
     const reconcilePromise = (async () => {
       try {
+        let retentionFailure: string | null = null;
+        const expiredRecords = this.expiredSettledRecords(state);
+        if (expiredRecords.length && this.options.pruneExpiredGitState) {
+          try {
+            await this.options.pruneExpiredGitState(projectId, expiredRecords.map(({ identity }) => identity));
+            const gitHistoryCleanedAt = this.now();
+            let cleaned = false;
+            for (const expired of expiredRecords) {
+              const current = state.entries.get(expired.key);
+              if (
+                !current
+                || current.entryKind === "draft"
+                || !current.lifecycle.settled
+                || current.settledAt !== expired.settledAt
+              ) continue;
+              state.entries.set(expired.key, { ...current, gitHistoryCleanedAt });
+              cleaned = true;
+            }
+            if (cleaned) await this.persist(projectId, state);
+          } catch (error) {
+            retentionFailure = `git-retention: ${sanitizeError(error)}`;
+            this.options.log?.(`Git retention failed project=${sanitizeLogValue(projectId)} error=${sanitizeError(error)}`);
+          }
+        }
         const failures = await this.options.reconcileProject(projectId, abort.signal, (harness, entries, options) => {
           if (!this.active || generation !== state.generation) return;
           if (this.installProviderSnapshot(state, harness, entries, options)) dirtyHarnesses.add(harness);
@@ -829,10 +886,14 @@ export default class WorkbenchThreadStateController {
           this.publish(projectId, state);
         });
         if (!this.active || generation !== state.generation) return;
-        state.error = failures.length
-          ? failures.map((failure) => `${failure.harness}: ${sanitizeError(failure.message)}`).join("; ").slice(0, 500)
+        const failureMessages = [
+          ...(retentionFailure ? [retentionFailure] : []),
+          ...failures.map((failure) => `${failure.harness}: ${sanitizeError(failure.message)}`),
+        ];
+        state.error = failureMessages.length
+          ? failureMessages.join("; ").slice(0, 500)
           : null;
-        state.freshness = failures.length ? "partial" : "fresh";
+        state.freshness = failureMessages.length ? "partial" : "fresh";
         this.publish(projectId, state);
       } catch (error) {
         if (generation !== state.generation || abort.signal.aborted) return;
@@ -884,11 +945,13 @@ export default class WorkbenchThreadStateController {
         const lifecycle = reconcileProviderLifecycle(providerEntry, existing);
         install(key, parseWorkbenchThreadStateEntry(existing ? {
           ...providerEntry,
+          gitHistoryCleanedAt: existing.gitHistoryCleanedAt,
           lifecycle: gitArcPreventsThreadSettlement(providerEntry.gitArc) && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
           mcpGeneration: existing.mcpGeneration,
           ...(existing.pendingQuestionnaire ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
           pinned: existing.entryKind === "subagent" ? existing.pinned : existing.metadata.pinned,
           providerObserved: true,
+          settledAt: existing.settledAt,
           ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
         } : { ...providerEntry, mcpGeneration: null, providerObserved: true }));
         continue;
@@ -899,6 +962,7 @@ export default class WorkbenchThreadStateController {
       const lifecycle = reconcileProviderLifecycle(providerEntry, existing);
       install(key, parseWorkbenchThreadStateEntry(existing ? {
         ...providerEntry,
+        gitHistoryCleanedAt: existing.gitHistoryCleanedAt,
         lifecycle: gitArcPreventsThreadSettlement(providerEntry.gitArc) && lifecycle.settled
           ? { ...lifecycle, settled: false as const }
           : lifecycle,
@@ -907,6 +971,7 @@ export default class WorkbenchThreadStateController {
         ...(existing.entryKind === "thread" && existing.orderAt !== undefined ? { orderAt: existing.orderAt } : {}),
         ...(existing.pendingQuestionnaire ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
         providerObserved: true,
+        settledAt: existing.settledAt,
         ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
         title: providerEntry.title === "New thread" ? existing.title : providerEntry.title,
       } : { ...providerEntry, mcpGeneration: null, providerObserved: true }));
@@ -1105,6 +1170,7 @@ export default class WorkbenchThreadStateController {
   }
 
   private persist(projectId: string, state: ProjectState) {
+    this.synchronizeSettlementTimestamps(state);
     state.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), state.displayOrder);
     return this.enqueue(`${projectId}:storage:write`, async () => {
       const drafts = [...state.drafts.values()].map((draft): StoredThreadDraft => {

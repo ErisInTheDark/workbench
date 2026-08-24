@@ -1,4 +1,4 @@
-/* No production exports. Real-Git tests protect workspace arc membership, root-qualified projection, repo deduplication, and per-root proposals. */
+/* No production exports. Tests protect workspace arc membership, root-qualified projection, repo deduplication, per-root proposals, and proposal-owned amendment routing. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
@@ -12,7 +12,7 @@ import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcContro
 class FakeLocalGitArcController {
   private nextProposal = 0;
   private readonly plans = new Map<string, { checkpointCommit: string; harness: string; intentDescription: string; intentName: string; scopePaths: string[]; threadId: string; updatedAt: string }>();
-  private readonly proposals = new Map<string, { paths: string[]; proposalId: string }>();
+  private readonly proposals = new Map<string, { cwd: string; paths: string[]; proposalId: string }>();
   private readonly states = new Map<string, {
     checkpointCommit: string; claimedPaths: string[]; harness: string; intentDescription: string; intentName: string;
     phase: "active"; proposals: Array<{ proposalId: string; status: "proposed" }>; threadId: string; updatedAt: string;
@@ -60,18 +60,26 @@ class FakeLocalGitArcController {
   async findPlanState(input: { cwd: string }) { return this.plans.get(input.cwd) ?? null; }
   async listPlanStates(input: { cwd: string }) { return this.plans.has(input.cwd) ? [this.plans.get(input.cwd)!] : []; }
 
-  async createProposal(input: { cwd: string; paths?: string[] }) {
-    const state = this.states.get(input.cwd)!;
+  async createProposal(input: { amendProposalId?: string; cwd: string; paths?: string[] }) {
+    const state = this.states.get(input.cwd);
     const proposalId = `proposal-${++this.nextProposal}`;
-    const paths = (input.paths ?? state.claimedPaths).map((filePath) => path.isAbsolute(filePath)
+    const amendmentPaths = input.amendProposalId ? this.proposals.get(input.amendProposalId)?.paths : undefined;
+    const paths = (input.paths ?? amendmentPaths ?? state?.claimedPaths ?? []).map((filePath) => path.isAbsolute(filePath)
       ? path.relative(input.cwd, filePath).replace(/\\/gu, "/")
       : filePath);
-    this.proposals.set(proposalId, { paths, proposalId });
-    state.proposals.push({ proposalId, status: "proposed" });
-    return { baseCommit: "f".repeat(40), description: "", includeNewer: false, paths, proposalId, status: "proposed", title: proposalId };
+    this.proposals.set(proposalId, { cwd: input.cwd, paths, proposalId });
+    state?.proposals.push({ proposalId, status: "proposed" });
+    return {
+      baseCommit: "f".repeat(40), description: "", includeNewer: false, paths, proposalId,
+      receivedPaths: input.paths, status: "proposed", title: proposalId,
+    };
   }
 
-  async getProposal(input: { proposalId: string }) { return this.proposals.get(input.proposalId)!; }
+  async getProposal(input: { cwd: string; proposalId: string }) {
+    const proposal = this.proposals.get(input.proposalId);
+    if (!proposal || proposal.cwd !== input.cwd) throw new Error(`Git arc proposal not found: ${input.proposalId}`);
+    return proposal;
+  }
 }
 
 function createWorkspace(primary: string, secondary: string): AgentEndpointProjectResolution {
@@ -135,6 +143,19 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
   }) as { proposalId: string; rootId: string };
   assert.equal(apiProposal.rootId, "api");
   assert.equal(webProposal.rootId, "web");
+  const messageAmendment = await controller.execute(project, {
+    action: "proposalCreate", amend: false, amendProposalId: webProposal.proposalId,
+    description: "Replacement description", title: "Replacement title", ...identity,
+  }) as { paths: string[]; proposalId: string; receivedPaths?: string[]; rootId: string };
+  assert.deepEqual({
+    paths: messageAmendment.paths,
+    receivedPaths: messageAmendment.receivedPaths,
+    rootId: messageAmendment.rootId,
+  }, {
+    paths: ["two.txt"],
+    receivedPaths: undefined,
+    rootId: "web",
+  });
 
   const lifecycle = await controller.findLifecycleState(project, "codex", identity.threadId);
   assert.ok(lifecycle);
@@ -144,6 +165,7 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
   assert.deepEqual(lifecycle?.proposals.map(({ proposalId, rootId }) => ({ proposalId, rootId })), [
     { proposalId: apiProposal.proposalId, rootId: "api" },
     { proposalId: webProposal.proposalId, rootId: "web" },
+    { proposalId: messageAmendment.proposalId, rootId: "web" },
   ]);
 });
 

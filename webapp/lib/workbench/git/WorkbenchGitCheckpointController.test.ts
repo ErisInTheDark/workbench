@@ -792,6 +792,69 @@ isolatedControllerTest("accepted proposals narrow claims, continue through succe
   });
 });
 
+isolatedControllerTest("targeted message amendments need no active arc and preserve unrelated worktree and index state", async (context) => {
+  const { repository, source, state } = await copyRepository(context, CONTROLLER_REPLACEMENT_READY_FIXTURE);
+  const controller = new WorkbenchGitCheckpointController();
+  const registry = new GitArcRegistry(repository);
+  await registry.release({ harness: "codex", threadId: "partial-thread" });
+  assert.equal(await registry.find({ harness: "codex", threadId: "partial-thread" }), null);
+  const original = await controller.getProposal({
+    cwd: source, harness: "codex", includeNewer: false,
+    proposalId: state.commitTargetProposalId, threadId: "partial-thread",
+  });
+  await fs.writeFile(path.join(source, "one.txt"), "unrelated unstaged\n");
+  await fs.writeFile(path.join(source, "two.txt"), "unrelated staged\n");
+  await git(source, ["add", "two.txt"]);
+  const worktreeBefore = await git(source, ["diff", "--binary"]);
+  const indexBefore = await git(source, ["diff", "--cached", "--binary"]);
+
+  const amendment = await controller.createProposal({
+    amendProposalId: original.proposalId,
+    cwd: source,
+    description: "Replacement description",
+    harness: "codex",
+    threadId: "partial-thread",
+    title: "Replacement title",
+  });
+  assert.notEqual(amendment.proposalId, original.proposalId);
+  const pending = await controller.getProposal({
+    cwd: source, harness: "codex", includeNewer: false, proposalId: amendment.proposalId, threadId: "partial-thread",
+  });
+  assert.deepEqual({ mode: pending.mode, status: pending.status, title: pending.title }, {
+    mode: "amend", status: "proposed", title: "Replacement title",
+  });
+  const accepted = await controller.commitProposal({
+    cwd: source,
+    description: amendment.description,
+    harness: "codex",
+    includeNewer: false,
+    proposalId: amendment.proposalId,
+    threadId: "partial-thread",
+    title: amendment.title,
+  });
+  assert.equal(accepted.status, "committed");
+  assert.equal((await controller.getProposal({
+    cwd: source, harness: "codex", includeNewer: false, proposalId: original.proposalId, threadId: "partial-thread",
+  })).status, "superseded");
+  assert.equal((await git(source, ["show", "-s", "--format=%s", accepted.committedSha!])).trim(), "Replacement title");
+  assert.equal(await git(source, ["diff", "--binary"]), worktreeBefore);
+  assert.equal(await git(source, ["diff", "--cached", "--binary"]), indexBefore);
+
+  const directlyAmended = await controller.commitProposal({
+    cwd: source,
+    description: "Edited from the committed card",
+    harness: "codex",
+    includeNewer: false,
+    proposalId: amendment.proposalId,
+    threadId: "partial-thread",
+    title: "Card-edited title",
+  });
+  assert.notEqual(directlyAmended.committedSha, accepted.committedSha);
+  assert.equal((await git(source, ["show", "-s", "--format=%s", directlyAmended.committedSha!])).trim(), "Card-edited title");
+  assert.equal(await git(source, ["diff", "--binary"]), worktreeBefore);
+  assert.equal(await git(source, ["diff", "--cached", "--binary"]), indexBefore);
+});
+
 isolatedControllerTest("replacement plans target prior pending and committed proposals through the thread namespace", async (context) => {
   const { source, state } = await copyRepository(context, CONTROLLER_REPLACEMENT_READY_FIXTURE);
   const controller = new WorkbenchGitCheckpointController();

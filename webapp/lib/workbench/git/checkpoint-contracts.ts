@@ -224,6 +224,10 @@ export const GitCheckpointCompareResultSchema = z.object({
 export type GitCheckpointCompareResult = z.infer<typeof GitCheckpointCompareResultSchema>;
 
 export const GitCheckpointProposalSchema = z.object({
+  amendability: z.discriminatedUnion("status", [
+    z.object({ status: z.literal("available") }).strict(),
+    z.object({ reason: nonEmptyString, status: z.literal("unavailable") }).strict(),
+  ]).nullable().optional(),
   amendTargetSha: checkpointSha.nullable(),
   baseCommit: checkpointSha,
   changes: z.array(GitCheckpointFileChangeSchema),

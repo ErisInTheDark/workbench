@@ -74,6 +74,28 @@ historyTest("amends an older linear commit without changing worktree files or un
   assert.equal((await git(root, ["diff", "--cached", "--name-only"])).trim(), "later.txt");
 });
 
+historyTest("rewrites only an older commit message without normalizing the worktree or index", async (context) => {
+  const { root, target } = await repository(context);
+  const repositoryOwner = await WorkbenchGitRepository.open(root);
+  await write(root, "selected.txt", "unstaged and unrelated\n");
+  await write(root, "later.txt", "staged and unrelated\n");
+  await git(root, ["add", "later.txt"]);
+  const worktreeBefore = await git(root, ["diff", "--binary"]);
+  const indexBefore = await git(root, ["diff", "--cached", "--binary"]);
+
+  const result = await new WorkbenchGitHistoryRewriter(repositoryOwner).amend({
+    message: "replacement message",
+    messageOnly: true,
+    paths: [],
+    target,
+  });
+
+  assert.equal((await git(root, ["show", "-s", "--format=%s", result.amendedCommit])).trim(), "replacement message");
+  assert.equal((await git(root, ["show", "-s", "--format=%s", "HEAD"])).trim(), "descendant");
+  assert.equal(await git(root, ["diff", "--binary"]), worktreeBefore);
+  assert.equal(await git(root, ["diff", "--cached", "--binary"]), indexBefore);
+});
+
 historyTest("a descendant conflict leaves branch, worktree, index, refs, and selection unchanged", async (context) => {
   const { dispose, root, state, storageRootPath: storage } = await fixtureCache.copy(HISTORY_CONFLICT_READY_FIXTURE);
   context.after(dispose);

@@ -196,7 +196,7 @@ test("proposal and plan diagnostics encode explicit lifecycle targets", () => {
   }).success, true);
 });
 
-test("proposal contracts keep paths mandatory and terminal metadata explicit", () => {
+test("proposal contracts keep paths explicit and terminal metadata complete", () => {
   assert.equal(GitCheckpointProposalSchema.safeParse({
     amendTargetSha: null,
     baseCommit: "abcdef1",
@@ -247,6 +247,32 @@ test("proposal contracts keep paths mandatory and terminal metadata explicit", (
     title: "Update A",
     unavailableReason: null,
   }).success, false);
+});
+
+test("proposal contracts accept only complete backend amendability results", () => {
+  const proposal = {
+    amendTargetSha: null,
+    baseCommit: "abcdef1",
+    changes: [],
+    committedSha: "abcdef2",
+    description: "",
+    includeNewerAvailable: false,
+    mode: "commit",
+    paths: ["src/a.ts"],
+    proposalId: "proposal-one",
+    status: "committed",
+    supersededByProposalId: null,
+    supersededBySha: null,
+    title: "Update A",
+    unavailableReason: null,
+  };
+  assert.equal(GitCheckpointProposalSchema.safeParse({ ...proposal, amendability: { status: "available" } }).success, true);
+  assert.equal(GitCheckpointProposalSchema.safeParse({
+    ...proposal,
+    amendability: { reason: "Commit is already present on remote refs: origin/main", status: "unavailable" },
+  }).success, true);
+  assert.equal(GitCheckpointProposalSchema.safeParse({ ...proposal, amendability: { status: "unavailable" } }).success, false);
+  assert.equal(GitCheckpointProposalSchema.safeParse({ ...proposal, amendability: { reason: "", status: "unavailable" } }).success, false);
 });
 
 test("accepted proposal receipt ledgers remap both target and resulting HEAD commits", () => {

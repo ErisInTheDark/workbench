@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CheckpointCommitCardState: describe pending enrichment, error, and loaded proposal card states. Keywords: checkpoint, commit, card, state.
- * - default ThreadCheckpointCommitCard: render one always-visible checkpoint commit proposal card. Keywords: checkpoint, commit, proposal, changeset, actions.
+ * - default ThreadCheckpointCommitCard: render one checkpoint proposal card with safe committed-message amendment controls. Keywords: checkpoint, commit, amend, proposal, changeset, actions.
  */
 "use client";
 
@@ -65,14 +65,20 @@ export default function ThreadCheckpointCommitCard({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const proposal = state.status === "loaded" ? state.proposal : null;
-  const terminal = proposal ? proposal.status !== "proposed" : false;
+  const committedAmendable = proposal?.status === "committed" && proposal.amendability?.status === "available";
+  const editable = !proposal || proposal.status === "proposed" || committedAmendable;
+  const messageChanged = proposal?.status === "committed"
+    && (title.trim() !== proposal.title.trim() || description.trim() !== proposal.description.trim());
   const additions = proposal?.changes.reduce((total, change) => total + change.additions, 0) ?? 0;
   const deletions = proposal?.changes.reduce((total, change) => total + change.deletions, 0) ?? 0;
   const fileCount = proposal?.changes.length ?? paths.length;
   const changeSummary = proposal || paths.length
     ? `${fileCount} changed ${fileCount === 1 ? "file" : "files"}`
     : "Arc changes";
-  const canCommit = proposal?.status === "proposed" && !committing && Boolean(title.trim());
+  const canCommit = !committing && Boolean(title.trim()) && Boolean(
+    proposal?.status === "proposed" || (committedAmendable && messageChanged),
+  );
+  const commitLabel = proposal?.mode === "amend" || proposal?.status === "committed" ? "Amend" : "Commit";
   const failure = state.status === "error"
     ? state.failure ?? createGitArcOperationRejected("proposalCreate", state.error)
     : null;
@@ -113,17 +119,17 @@ export default function ThreadCheckpointCommitCard({
             onChange={onTitleChange}
             onKeyDown={commitFromEditable}
             placeholder="Commit title"
-            readOnly={terminal}
+            readOnly={!editable}
             value={title}
           />
-          {!terminal || description.trim() ? (
+          {editable || description.trim() ? (
             <PlaintextEditable
               ariaLabel="Commit description"
               className="min-h-7 w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-[0.8em] leading-5 text-muted outline-none data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_32%,transparent)] data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text"
               onChange={onDescriptionChange}
               onKeyDown={commitFromEditable}
               placeholder="Optional description"
-              readOnly={terminal}
+              readOnly={!editable}
               value={description}
             />
           ) : null}
@@ -164,7 +170,11 @@ export default function ThreadCheckpointCommitCard({
                     onChange={onIncludeNewerChange}
                   />
                 ) : null}
-                {proposal?.status === "committed" ? (
+                {proposal?.status === "committed" && canCommit ? (
+                  <PrimaryButton className="!px-3 !py-1.5 !text-[0.78rem]" disabled={!canCommit} onClick={onCommit} pendingHalo={committing}>
+                    {committing ? "Amending..." : "Amend"}
+                  </PrimaryButton>
+                ) : proposal?.status === "committed" ? (
                   <span className="inline-flex items-center gap-2 text-[0.78em] text-muted">
                     <CheckIcon className="size-4 text-[color:var(--success)]" />
                     <span>Committed</span>
@@ -184,7 +194,7 @@ export default function ThreadCheckpointCommitCard({
                   ) : <span className="text-[0.78em] text-[color:var(--danger)]">Unavailable</span>
                 ) : (
                   <PrimaryButton className="!px-3 !py-1.5 !text-[0.78rem]" disabled={!canCommit} onClick={onCommit} pendingHalo={committing}>
-                    {committing ? "Committing..." : "Commit"}
+                    {committing ? (commitLabel === "Amend" ? "Amending..." : "Committing...") : commitLabel}
                   </PrimaryButton>
                 )}
               </span>
