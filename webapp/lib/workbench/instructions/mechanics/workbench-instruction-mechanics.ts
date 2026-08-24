@@ -26,6 +26,7 @@ export function listWorkbenchInstructionMechanics(context: WorkbenchPromptContex
     available.add("orchestrator-reload");
     available.add("subagents");
   }
+  if ((context.roots?.length ?? 0) > 1) available.add("multi-root");
   if (isManagedPromptThread(context)) {
     available.add("thread-git");
     available.add("thread-recall");

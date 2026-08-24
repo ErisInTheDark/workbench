@@ -5,7 +5,7 @@
  */
 import type http from "node:http";
 
-import WorkbenchGitCheckpointController, { type GitArcActiveClaim, type GitArcLifecycleState, type GitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import WorkbenchGitCheckpointController, { type GitArcActiveClaim } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import { GitArcAcceptedProposalsError } from "../lib/workbench/git/GitArcProposalController";
 import {
   createGitArcOperationRejected,
@@ -23,8 +23,10 @@ import type { WorkbenchHarness } from "../lib/types";
 import { GitCheckpointRequestSchema, type GitCheckpointRequest } from "../lib/workbench/git/checkpoint-contracts";
 import { normalizeOrchestratorReloadScopes } from "../lib/workbench/orchestrator-reload";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
+import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchReloadScopeClaim } from "./WorkbenchOrchestratorReloadController";
 import type { WorkbenchThreadClaimContext } from "./WorkbenchThreadStateController";
+import WorkbenchWorkspaceGitArcController, { type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
 import { getWorkbenchProjectCapabilities } from "./workbench-project-capabilities";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
@@ -34,8 +36,8 @@ export interface WorkbenchGitArcFeatureOptions {
   onReloadEligibilityChanged?: () => void;
   refreshThreadGitArcState(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
   reloadScopeProjectRoot?: string;
-  resolveProjectFromCwd(cwd: string): Promise<{ cwd: string; project: { id: string } }>;
-  transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">;
+  resolveProjectFromCwd(cwd: string): Promise<AgentEndpointProjectResolution | { cwd: string; project: { id: string } }>;
+  transitions: Pick<WorkbenchThreadTransitionCoordinator, "run"> & Partial<Pick<WorkbenchThreadTransitionCoordinator, "runMany">>;
 }
 
 const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
@@ -65,6 +67,13 @@ function mutatesGitArcState(request: GitCheckpointRequest) {
     && !(request.action === "arcMove" && request.move.kind === "regex" && !request.move.confirm);
 }
 
+function usesWorkspaceController(project: AgentEndpointProjectResolution, request: GitCheckpointRequest) {
+  if (project.project.roots.length > 1) return true;
+  if ("roots" in request && request.roots.length) return true;
+  if ("refs" in request && request.refs.length) return true;
+  return "rootId" in request && Boolean(request.rootId);
+}
+
 async function readBody(request: http.IncomingMessage) {
   const chunks: Buffer[] = [];
   let length = 0;
@@ -86,9 +95,27 @@ async function sendResponse(response: http.ServerResponse, upstream: Response) {
 
 export default class WorkbenchGitArcFeature {
   private readonly controller = new WorkbenchGitCheckpointController();
+  private readonly workspaceController: WorkbenchWorkspaceGitArcController;
   private readonly pendingCardReads = new Map<string, Promise<Response>>();
 
-  constructor(private readonly options: WorkbenchGitArcFeatureOptions) {}
+  constructor(private readonly options: WorkbenchGitArcFeatureOptions) {
+    this.workspaceController = new WorkbenchWorkspaceGitArcController(this.controller, {
+      runMany: async (paths, operation) => options.transitions.runMany
+        ? await options.transitions.runMany(paths, operation)
+        : await options.transitions.run(paths[0] ?? "git-arc", operation),
+    });
+  }
+
+  private async resolveProject(cwd: string): Promise<AgentEndpointProjectResolution> {
+    const resolved = await this.options.resolveProjectFromCwd(cwd);
+    if ("root" in resolved && "roots" in resolved.project) return resolved;
+    const root = { id: resolved.project.id, name: resolved.project.id, root: resolved.cwd, rootPath: resolved.cwd };
+    return {
+      cwd: resolved.cwd,
+      project: { id: resolved.project.id, kind: "git", root: resolved.cwd, rootPath: resolved.cwd, roots: [root] },
+      root,
+    };
+  }
 
   async findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcActiveClaim | null> {
     return await this.controller.findActiveClaim({ cwd, harness, threadId });
@@ -99,8 +126,8 @@ export default class WorkbenchGitArcFeature {
   }
 
   async listReloadScopeClaims(cwd: string): Promise<WorkbenchReloadScopeClaim[]> {
-    const project = await this.options.resolveProjectFromCwd(cwd);
-    const claims = await this.controller.listReloadScopeClaims({ cwd: project.cwd });
+    const project = await this.resolveProject(cwd);
+    const claims = await this.workspaceController.listReloadScopeClaims(project);
     return await Promise.all(claims.map(async (claim) => {
       const harness = claim.harness as WorkbenchHarness;
       const context = await this.options.getThreadClaimContext(project.project.id, harness, claim.threadId);
@@ -113,20 +140,20 @@ export default class WorkbenchGitArcFeature {
     }));
   }
 
-  async findLifecycleState(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcLifecycleState | null> {
-    return await this.controller.findLifecycleState({ cwd, harness, threadId });
+  async findLifecycleState(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<WorkspaceGitArcLifecycleState | null> {
+    return await this.workspaceController.findLifecycleState(await this.resolveProject(cwd), harness, threadId);
   }
 
-  async listLifecycleStates(cwd: string): Promise<GitArcLifecycleState[]> {
-    return await this.controller.listLifecycleStates({ cwd });
+  async listLifecycleStates(cwd: string): Promise<WorkspaceGitArcLifecycleState[]> {
+    return await this.workspaceController.listLifecycleStates(await this.resolveProject(cwd));
   }
 
-  async findPlanState(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcPlanState | null> {
-    return await this.controller.findPlanState({ cwd, harness, threadId });
+  async findPlanState(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<WorkspaceGitArcPlanState | null> {
+    return await this.workspaceController.findPlanState(await this.resolveProject(cwd), harness, threadId);
   }
 
-  async listPlanStates(cwd: string): Promise<GitArcPlanState[]> {
-    return await this.controller.listPlanStates({ cwd });
+  async listPlanStates(cwd: string): Promise<WorkspaceGitArcPlanState[]> {
+    return await this.workspaceController.listPlanStates(await this.resolveProject(cwd));
   }
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
@@ -144,7 +171,7 @@ export default class WorkbenchGitArcFeature {
     const parsed = GitCheckpointRequestSchema.safeParse(input);
     if (!parsed.success) return failureResponse(createGitArcOperationRejected("unknown", "Invalid checkpoint request."));
     try {
-      const project = await this.options.resolveProjectFromCwd(parsed.data.cwd);
+      const project = await this.resolveProject(parsed.data.cwd);
       const request = { ...parsed.data, cwd: project.cwd };
       if ((request.action === "plan" || request.action === "planStart")
         && request.reloadScopes.length
@@ -153,7 +180,7 @@ export default class WorkbenchGitArcFeature {
         throw new Error("Reload scopes are available only when the managed thread cwd is the running Workbench project root.");
       }
       if (mutatesGitArcState(request)) this.fencePendingCardReads(project.cwd);
-      const execute = async () => await this.options.transitions.run(project.cwd, async () => {
+      const execute = async () => {
         try {
           if (CLAIM_START_ACTIONS.has(request.action)) {
             const before = await this.options.getThreadClaimContext(project.project.id, request.harness, request.threadId);
@@ -162,14 +189,18 @@ export default class WorkbenchGitArcFeature {
           }
           let response: Response;
           try {
-            response = await this.dispatch(request);
+            response = request.action === "readDiffArtifact"
+              ? await this.dispatch(request)
+              : usesWorkspaceController(project, request)
+                ? Response.json(await this.workspaceController.execute(project, request))
+                : await this.options.transitions.run(project.cwd, async () => await this.dispatch(request));
           } catch (error) {
             throw new GitArcFailureException(await this.createFailure(project.project.id, request, error));
           }
           if (response.ok && CLAIM_START_ACTIONS.has(request.action)) {
             const after = await this.options.getThreadClaimContext(project.project.id, request.harness, request.threadId);
             if (after?.lifecycle.settled) {
-              await this.controller.releaseActiveClaim({ cwd: project.cwd, harness: request.harness, threadId: request.threadId });
+              await this.workspaceController.releaseActiveClaim(project, request.harness, request.threadId);
               throw new Error("The thread settled while its Git arc claim was starting. The new claim was released.");
             }
           }
@@ -179,7 +210,7 @@ export default class WorkbenchGitArcFeature {
             await this.refreshThreadGitArcState(project.project.id, request.harness, request.threadId);
           }
         }
-      });
+      };
       if (!COALESCED_CARD_READ_ACTIONS.has(request.action)) return await execute();
       return await this.coalesceCardRead(project.cwd, request, execute);
     } catch (error) {

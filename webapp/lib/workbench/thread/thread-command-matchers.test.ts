@@ -619,6 +619,15 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
     paths: [],
     title: "Title",
   });
+  assert.deepEqual(parseGitCheckpointCommitCommand(
+    "wb git arc propose --root web -m Title -- src/client.ts",
+  ), {
+    amend: false,
+    description: "",
+    paths: ["src/client.ts"],
+    rootId: "web",
+    title: "Title",
+  });
   assert.equal(parseGitCheckpointCommitCommand("wb git arc propose -- src/one.ts"), null);
   assert.equal(parseGitCheckpointCommitCommand("wb git checkpoint commit --sha abc --m Title -- src/one.ts"), null);
 });

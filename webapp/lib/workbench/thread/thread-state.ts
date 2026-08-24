@@ -118,16 +118,36 @@ export const WorkbenchThreadLifecycleSchema = z.union([
   : lifecycle);
 export type WorkbenchThreadLifecycle = z.infer<typeof WorkbenchThreadLifecycleSchema>;
 
+const WorkbenchGitArcProposalStateSchema = z.object({
+  proposalId: z.string().min(1),
+  rootId: z.string().min(1).optional(),
+  status: z.enum(["committed", "proposed"]),
+}).strict();
+
+const WorkbenchGitArcMemberStateSchema = z.object({
+  checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
+  claimedPaths: z.array(z.string().min(1)),
+  harness: z.string().min(1),
+  intentDescription: z.string(),
+  intentName: z.string().min(1),
+  phase: z.enum(["active", "resolved"]),
+  proposals: z.array(WorkbenchGitArcProposalStateSchema),
+  reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
+  repoRoot: z.string().min(1),
+  rootId: z.string().min(1),
+  rootIds: z.array(z.string().min(1)).min(1),
+  threadId: z.string().min(1),
+  updatedAt: z.string().min(1),
+}).strict();
+
 export const WorkbenchGitArcLifecycleStateSchema = z.object({
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
   claimedPaths: z.array(z.string().min(1)),
   intentDescription: z.string(),
   intentName: z.string().min(1),
+  members: z.array(WorkbenchGitArcMemberStateSchema).min(1).optional(),
   phase: z.enum(["active", "resolved"]),
-  proposals: z.array(z.object({
-    proposalId: z.string().min(1),
-    status: z.enum(["committed", "proposed"]),
-  }).strict()),
+  proposals: z.array(WorkbenchGitArcProposalStateSchema),
   reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
   updatedAt: z.string().min(1),
 }).strict().superRefine((value, context) => {
@@ -148,6 +168,19 @@ export const WorkbenchGitArcPlanStateSchema = z.object({
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
   intentDescription: z.string(),
   intentName: z.string().min(1),
+  members: z.array(z.object({
+    checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
+    harness: z.string().min(1),
+    intentDescription: z.string(),
+    intentName: z.string().min(1),
+    reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
+    repoRoot: z.string().min(1),
+    rootId: z.string().min(1),
+    rootIds: z.array(z.string().min(1)).min(1),
+    scopePaths: z.array(z.string().min(1)),
+    threadId: z.string().min(1),
+    updatedAt: z.string().min(1),
+  }).strict()).min(1).optional(),
   reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
   scopePaths: z.array(z.string().min(1)),
   updatedAt: z.string().min(1),

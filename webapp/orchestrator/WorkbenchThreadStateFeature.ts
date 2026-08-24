@@ -9,25 +9,26 @@ import { getCurrentTurn } from "../lib/codex/thread-state";
 import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchHarness, WorkbenchProjectsPayload } from "../lib/types";
 import { normalizeOrchestratorReloadScopes } from "../lib/workbench/orchestrator-reload";
-import type { GitArcActiveClaim, GitArcLifecycleState, GitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import type { GitArcActiveClaim, GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchThreadGitArcSnapshot, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
+import type { WorkspaceGitArcLifecycleState as GitArcLifecycleState, WorkspaceGitArcPlanState as GitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
 
 interface ProjectRecord { id: string; rootPath: string }
 interface ProjectResolution { cwd: string; project: ProjectRecord }
 interface SubagentRelationshipList { subagents: Array<{ createdAt: number; cwd: string; directSubagentIndex: number; harness: WorkbenchHarness; name: string; parentThreadId: string; profileId: string; profileName: string; projectId: string; threadId: string; title: string; updatedAt: number }> }
 
-function projectGitArc(state: GitArcLifecycleState | undefined) {
+function projectGitArc(state: GitArcLifecycleState | RepoGitArcLifecycleState | undefined) {
   if (!state) return null;
   const { harness: _harness, threadId: _threadId, ...gitArc } = state;
   return { ...gitArc, reloadScopes: normalizeOrchestratorReloadScopes(state.reloadScopes) };
 }
 
-function legacyGitArc(claim: GitArcActiveClaim): GitArcLifecycleState {
+function legacyGitArc(claim: GitArcActiveClaim): RepoGitArcLifecycleState {
   return {
     checkpointCommit: claim.checkpointCommit,
     claimedPaths: claim.claimedPaths,
@@ -47,11 +48,11 @@ function legacyGitArc(claim: GitArcActiveClaim): GitArcLifecycleState {
 export interface WorkbenchThreadStateFeatureContext {
   gitArcs: {
     findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcActiveClaim | null>;
-    findLifecycleState?(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcLifecycleState | null>;
-    findPlanState?(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcPlanState | null>;
+    findLifecycleState?(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcLifecycleState | RepoGitArcLifecycleState | null>;
+    findPlanState?(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcPlanState | RepoGitArcPlanState | null>;
     listActiveClaims(cwd: string): Promise<GitArcActiveClaim[]>;
-    listLifecycleStates?(cwd: string): Promise<GitArcLifecycleState[]>;
-    listPlanStates?(cwd: string): Promise<GitArcPlanState[]>;
+    listLifecycleStates?(cwd: string): Promise<Array<GitArcLifecycleState | RepoGitArcLifecycleState>>;
+    listPlanStates?(cwd: string): Promise<Array<GitArcPlanState | RepoGitArcPlanState>>;
   };
   getProjectCatalog(): WorkbenchProjectsPayload;
   harnesses: Pick<WorkbenchHarnessController, "listHarnesses" | "request" | "resumeThread">;
@@ -73,7 +74,7 @@ function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-function projectGitArcPlan(state: GitArcPlanState | undefined) {
+function projectGitArcPlan(state: GitArcPlanState | RepoGitArcPlanState | undefined) {
   if (!state) return null;
   const { harness: _harness, threadId: _threadId, ...gitArcPlan } = state;
   return { ...gitArcPlan, reloadScopes: normalizeOrchestratorReloadScopes(state.reloadScopes) };

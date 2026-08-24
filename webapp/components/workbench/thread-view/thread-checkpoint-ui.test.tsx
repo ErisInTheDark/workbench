@@ -147,6 +147,7 @@ test("terminal proposals and claim resolution share one lifecycle card", () => {
     onReleased: async () => undefined,
     projectRootPath: "C:/workspace",
     threadId: "thread-one",
+    threadLifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
   }));
 
   assert.equal((html.match(/data-thread-git-arc-lifecycle-card="true"/gu) ?? []).length, 1);
@@ -160,6 +161,22 @@ test("terminal proposals and claim resolution share one lifecycle card", () => {
   assert.match(html, /data-thread-reload-scope="orchestrator-logic"[\s\S]*data-thread-reload-scope="mcp"/u);
   assert.match(html, /Checking claimed files/u);
   assert.doesNotMatch(html, /Harden arc lifecycle/u);
+});
+
+test("completed lifecycle cards hide reload scopes without hiding proposals or claim resolution", () => {
+  const html = renderToStaticMarkup(createElement(ThreadGitArcLifecycleCard, {
+    claim: {
+      checkpointCommit: "a".repeat(40), claimedPaths: ["src/one.ts"], intentDescription: "", intentName: "Completed arc",
+      phase: "active", proposals: [{ proposalId: "proposal-one", status: "proposed" }], reloadScopes: ["mcp"],
+      updatedAt: "2026-08-24T00:00:00.000Z",
+    },
+    cwd: "C:/workspace", harness: "codex", onReleased: async () => undefined, projectRootPath: "C:/workspace",
+    threadId: "thread-one", threadLifecycle: { kind: "completed", reason: "userCompleted", settled: false },
+  }));
+  assert.match(html, /data-thread-checkpoint-card="true"/u);
+  assert.match(html, /data-thread-git-arc-resolution="true"/u);
+  assert.match(html, /1 claimed file/u);
+  assert.doesNotMatch(html, /data-thread-reload-scopes/u);
 });
 
 test("resolved arc cards keep committed proposals hoisted without live claim controls", () => {
@@ -176,6 +193,7 @@ test("resolved arc cards keep committed proposals hoisted without live claim con
       updatedAt: "2026-08-20T00:00:00.000Z",
     } as never,
     cwd: "C:/workspace", harness: "codex", onReleased: async () => undefined, projectRootPath: "C:/workspace", threadId: "thread-one",
+    threadLifecycle: { kind: "completed", reason: "userCompleted", settled: false },
   }));
   assert.equal((html.match(/data-thread-checkpoint-card="true"/gu) ?? []).length, 1);
   assert.match(html, /committed-one/u);
@@ -184,6 +202,34 @@ test("resolved arc cards keep committed proposals hoisted without live claim con
   assert.doesNotMatch(html, /data-thread-git-arc-resolution/u);
   assert.doesNotMatch(html, />Resolved</u);
   assert.doesNotMatch(html, /Restore &amp; unclaim|Unclaim files/u);
+});
+
+test("claims-only lifecycle cards do not masquerade as start receipts", () => {
+  const html = renderToStaticMarkup(createElement(ThreadGitArcLifecycleCard, {
+    claim: {
+      checkpointCommit: "a".repeat(40), claimedPaths: ["api:src/contract.ts"], intentDescription: "", intentName: "Workspace arc",
+      phase: "active", proposalIds: [], proposals: [], updatedAt: "2026-08-24T00:00:00.000Z",
+    } as never,
+    cwd: "C:/workspace/api", harness: "codex", onReleased: async () => undefined,
+    projectRootPath: "C:/workspace/api", threadId: "thread-one",
+    threadLifecycle: { kind: "completed", reason: "userCompleted", settled: false },
+  }));
+  assert.match(html, /1 claimed file/u);
+  assert.match(html, /data-thread-git-arc-resolution="true"/u);
+  assert.doesNotMatch(html, /data-thread-git-arc-card="start"|Workspace arc|>Started</u);
+});
+
+test("resolved lifecycle state without proposals or claims renders no terminal card", () => {
+  const html = renderToStaticMarkup(createElement(ThreadGitArcLifecycleCard, {
+    claim: {
+      checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "Finished arc",
+      phase: "resolved", proposalIds: [], proposals: [], updatedAt: "2026-08-24T00:00:00.000Z",
+    } as never,
+    cwd: "C:/workspace", harness: "codex", onReleased: async () => undefined,
+    projectRootPath: "C:/workspace", threadId: "thread-one",
+    threadLifecycle: { kind: "completed", reason: "userCompleted", settled: false },
+  }));
+  assert.equal(html, "");
 });
 
 test("ThreadView keeps lifecycle cards terminal while showing plan conflicts during active turns", async () => {

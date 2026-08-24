@@ -52,6 +52,7 @@ export interface GitCheckpointCommitCommandIntent {
   amend: boolean;
   description: string;
   paths: string[];
+  rootId?: string;
   title: string;
 }
 
@@ -302,6 +303,7 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
 
   let amend = false;
   let replacementProposalId: string | null = null;
+  let rootId: string | null = null;
   const messages: string[] = [];
   for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
     const flag = tokens[cursor];
@@ -314,6 +316,12 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
     if (flag === "--replace") {
       if (replacementProposalId || !value) return null;
       replacementProposalId = value;
+      cursor += 1;
+      continue;
+    }
+    if (flag === "--root") {
+      if (rootId || !value) return null;
+      rootId = value;
       cursor += 1;
       continue;
     }
@@ -331,6 +339,7 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
     amend,
     description: messages[1] ?? "",
     paths,
+    ...(rootId ? { rootId } : {}),
     title: messages[0],
   };
 }

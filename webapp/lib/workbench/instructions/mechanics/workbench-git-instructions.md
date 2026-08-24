@@ -13,6 +13,20 @@ Selections are isolated by managed thread and worktree. Selection does not snaps
 
 Workbench stores workflow baselines as local Git objects under hidden per-worktree refs. The registry keeps one current lifecycle entry in `plan`, `active`, or `resolved` phase.
 
+<available:multi-root>
+### multi-root workspace arcs
+
+A multi-root workspace still gives one managed thread one logical Git arc. The logical arc contains one repo-local member for each participating Git repository. Each member keeps its own ref because unrelated Git object databases cannot share one checkpoint SHA.
+
+Create the full plan in one `mcp__wb__git_arc_plan` call. Put each project edit set in `roots` as `{ rootId, paths, adoptPaths? }`. Use the root ids from Workbench Workspace Roots. Do not create unrelated per-project arcs.
+
+Read and preserve the complete `members` or root/ref set returned by start, continuation, compare, and diff. Pass `refs` back for exact multi-root continuation, inspection, and restore. A successful member can remain visible when another repository fails. Re-run the same logical operation to complete unfinished members. Do not roll back a successful repository automatically.
+
+In Review, inspect the whole logical arc. Then call `mcp__wb__git_arc_propose` once per workspace root and pass that proposal's `rootId`. A proposal cannot cross root boundaries. Omit `paths` to select that root's changed claims, or pass a narrower subset from that root. Never combine files from different roots into one proposed commit.
+
+The terminal lifecycle card aggregates every project proposal and every live claim. If the user chooses restore or unclaim instead of committing, use the aggregate card so all remaining repo members stay visible and recoverable.
+</available:multi-root>
+
 Plan and arc refs are convenience state, not a security boundary. Never store secrets there unless the repository state already permits them.
 
 When an arc tool is the required workflow step, call it directly. Do not preflight it with raw `git status`, raw `git diff`, or an equivalent command. The arc operation owns safety checks and its rejection is the stop signal.

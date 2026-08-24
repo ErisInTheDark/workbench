@@ -51,6 +51,19 @@ test("Git MCP operations use the existing Git arc card instead of a simple label
   assert.match(html, /data-thread-git-arc-card="planAdd"/u);
 });
 
+test("multi-root Git MCP plans render root-qualified project paths", () => {
+  const html = renderSpecialized(makeItem("git_arc_plan", {
+    intentName: "workspace change",
+    roots: [
+      { adoptPaths: ["src/client.ts"], paths: [], rootId: "web" },
+      { adoptPaths: [], paths: ["src/contract.ts"], rootId: "api" },
+    ],
+  }, ""));
+
+  assert.match(html, /api:src\/contract\.ts/u);
+  assert.match(html, /web:src\/client\.ts/u);
+});
+
 test("historical overlap failures keep exact duplicate paths in adoption-only presentation", () => {
   const failure = {
     action: "plan",

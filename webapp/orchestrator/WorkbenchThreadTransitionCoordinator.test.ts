@@ -51,3 +51,29 @@ test("continues a transition queue after a failed operation", async () => {
   }), /failed transition/u);
   assert.equal(await coordinator.run("thread", async () => "recovered"), "recovered");
 });
+
+test("runMany deduplicates and acquires transition keys in stable order", async () => {
+  const coordinator = new WorkbenchThreadTransitionCoordinator();
+  const events: string[] = [];
+  let releaseA = () => undefined;
+  const gateA = new Promise<void>((resolve) => { releaseA = resolve; });
+  const heldA = coordinator.run("a", async () => {
+    events.push("a:held");
+    await gateA;
+  });
+  await Promise.resolve();
+
+  const combined = coordinator.runMany(["z", "a", "z"], async () => {
+    events.push("combined");
+  });
+  const probeZ = coordinator.run("z", async () => {
+    events.push("z:free");
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(events, ["a:held", "z:free"]);
+
+  releaseA();
+  await Promise.all([heldA, combined, probeZ]);
+  assert.deepEqual(events, ["a:held", "z:free", "combined"]);
+});

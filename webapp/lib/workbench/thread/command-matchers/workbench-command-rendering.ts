@@ -76,6 +76,7 @@ export type WorkbenchGitArcOperation = {
     amend: boolean;
     description: string;
     paths: string[];
+    rootId?: string;
     title: string;
   } | null;
   ref: string | null;
@@ -129,6 +130,16 @@ function readStringArray(value: JsonValue | undefined) {
   return Array.isArray(value) && value.every((entry): entry is string => typeof entry === "string")
     ? value
     : [];
+}
+
+function readRootPaths(value: JsonValue | undefined, field: "adoptPaths" | "paths") {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    const entry = asRecord(candidate);
+    const rootId = readString(entry?.rootId);
+    if (!rootId) return [];
+    return readStringArray(entry?.[field]).map((filePath) => `${rootId}:${filePath}`);
+  });
 }
 
 function rendering({
@@ -360,8 +371,8 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
         }
         : undefined;
   const messages = [readString(args.title), readString(args.description)].filter((value): value is string => value !== null);
-  const paths = readStringArray(args.paths);
-  const adoptPaths = readStringArray(args.adoptPaths);
+  const paths = [...readStringArray(args.paths), ...readRootPaths(args.roots, "paths")];
+  const adoptPaths = [...readStringArray(args.adoptPaths), ...readRootPaths(args.roots, "adoptPaths")];
   const intentName = readString(args.intentName);
   const proposalId = readString(args.proposalId) ?? readString(args.amendProposalId) ?? readString(args.replaceProposalId);
   const operation: WorkbenchGitArcOperation = {
@@ -377,6 +388,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
           amend: readBoolean(args.amend),
           description: messages[1] ?? readString(args.description) ?? "",
           paths,
+          ...(readString(args.rootId) ? { rootId: readString(args.rootId)! } : {}),
           title: messages[0] ?? "",
         },
       }

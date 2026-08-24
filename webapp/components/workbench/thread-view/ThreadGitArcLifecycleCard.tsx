@@ -17,9 +17,8 @@ import {
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import reportClientSchemaError from "../../../lib/workbench/report-client-schema-error";
 import type { GitArcProposalStatus } from "../../../lib/workbench/git/git-arc-storage";
-import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId } from "../../../lib/workbench/thread/thread-state";
+import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId, WorkbenchThreadLifecycle } from "../../../lib/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
-import GitArcIcon from "./GitArcIcon";
 import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
@@ -53,6 +52,7 @@ export default function ThreadGitArcLifecycleCard({
   projectId,
   projectRootPath,
   threadId,
+  threadLifecycle,
   workspaceRoots,
 }: {
   claim: LifecyclePresentation;
@@ -63,6 +63,7 @@ export default function ThreadGitArcLifecycleCard({
   projectId?: string | null;
   projectRootPath?: string;
   threadId: string;
+  threadLifecycle: WorkbenchThreadLifecycle;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const phase = claim.phase ?? (claim.claimedPaths.length ? "active" : "resolved");
@@ -70,6 +71,7 @@ export default function ThreadGitArcLifecycleCard({
   const [activeAction, setActiveAction] = useState<ReleaseAction | null>(null);
   const [changeState, setChangeState] = useState<ClaimChangeState>("loading");
   const [failure, setFailure] = useState<GitArcFailure | null>(null);
+  const memberRefs = claim.members?.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })) ?? [];
 
   useEffect(() => {
     if (phase === "resolved" || !claim.claimedPaths.length) {
@@ -110,7 +112,14 @@ export default function ThreadGitArcLifecycleCard({
     setFailure(null);
     try {
       const response = await fetch("/api/git-checkpoint", {
-        body: JSON.stringify(action === "restore" ? {
+        body: JSON.stringify(action === "restore" ? memberRefs.length ? {
+          action: "restore",
+          confirmRestore: true,
+          cwd,
+          harness,
+          refs: memberRefs,
+          threadId,
+        } : {
           action: "restore",
           checkpointCommit: claim.checkpointCommit,
           confirmRestore: true,
@@ -142,6 +151,8 @@ export default function ThreadGitArcLifecycleCard({
     }
   };
 
+  if (phase === "resolved" && !visibleProposals.length) return null;
+
   return (
     <div className="my-2 w-full" data-thread-git-arc-lifecycle="true">
       <section className="w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)]" data-thread-git-arc-lifecycle-card="true">
@@ -169,23 +180,14 @@ export default function ThreadGitArcLifecycleCard({
               />
             </div>
           ))
-        ) : (
-          <div className="px-3 py-2.5">
-            <div className="flex min-w-0 items-center gap-2 text-[0.82em] leading-[1.45]">
-              <GitArcIcon action="start" />
-              <span className="min-w-0 flex-1 truncate font-medium text-text">{claim.intentName}</span>
-              <span className="font-mono text-[0.86em] text-muted">{claim.checkpointCommit.slice(0, 8)}</span>
-            </div>
-            {claim.intentDescription ? <p className="m-0 mt-1 pl-6 text-[0.76em] leading-[1.45] text-muted">{claim.intentDescription}</p> : null}
-          </div>
-        )}
+        ) : null}
         {phase !== "resolved" ? (
           <div
             className={`${visibleProposals.length ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] " : ""}px-3 py-2`}
             data-thread-git-arc-resolution="true"
             data-thread-git-arc-resolution-separator={visibleProposals.length ? "true" : undefined}
           >
-            <ThreadReloadScopeList scopes={claim.reloadScopes ?? []} />
+            {threadLifecycle.kind !== "completed" ? <ThreadReloadScopeList scopes={claim.reloadScopes ?? []} /> : null}
             <ThreadDisclosure
               contentClassName="mt-1 pl-1"
               summary={(

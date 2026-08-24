@@ -51,7 +51,7 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "9. Relinquish exact clean claims: wb git arc remove -- <claimed-path> [<claimed-path>...]",
   "10. Record successors returned by add, adopt, mv, remove, or continue for later continuation. Final clean removal releases the arc without an active successor.",
   "11. Summarize or inspect the active arc: wb git arc compare [-- <path> [<path>...]] / wb git arc diff [-- <path> [<path>...]]",
-  "12. Propose a normal commit: wb git arc propose -m <fresh-title> [-m <optional-description>] [-- <claimed-path> [<claimed-path>...]]",
+  "12. Propose a normal commit: wb git arc propose [--root <root-id>] -m <fresh-title> [-m <optional-description>] [-- <claimed-path> [<claimed-path>...]]",
   "13. Amend exact current unpushed HEAD: wb git arc propose --amend [-m <replacement-title> [-m <replacement-description>]]",
   "14. Use the same arc continue command after a proposal is committed and before follow-up work.",
   "15. Restore selected paths: wb git arc restore --ref <ref> -- <path> [<path>...]",
@@ -63,6 +63,7 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "A partial commit advances the baseline and keeps the full active set claimed. Use arc remove to release clean paths intentionally. Arc continue returns that successor instead of creating another baseline.",
   "If Workbench rejects a claim or continuation, stop and inspect the reported owner or drift. Do not clean or restore paths automatically.",
   "Omit explicit compare, diff, or proposal paths to use the arc's claimed set. Proposal subsets must stay inside that set.",
+  "In a multi-root workspace, qualify CLI paths as <root-id>:<path>. Create one logical arc across roots and propose each root as a separate commit. Typed MCP callers should use roots and refs instead.",
   "",
 ].join("\n");
 

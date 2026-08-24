@@ -148,6 +148,29 @@ test("current-plan requests encode adoption, revision, atomic start, and ref-fre
     checkpointCommit: "abcdef1",
     ...common,
   }).success, true);
+  const workspacePlan = GitCheckpointRequestSchema.safeParse({
+    action: "plan",
+    intentName: "Workspace change",
+    paths: [],
+    roots: [
+      { paths: ["src/api.ts"], rootId: "api" },
+      { adoptPaths: ["src/client.ts"], rootId: "web" },
+    ],
+    ...common,
+  });
+  assert.equal(workspacePlan.success, true);
+  const workspaceStart = GitCheckpointRequestSchema.safeParse({
+    action: "arcStart",
+    refs: [
+      { ref: "a".repeat(40), rootId: "api" },
+      { ref: "b".repeat(40), rootId: "web" },
+    ],
+    ...common,
+  });
+  assert.equal(workspaceStart.success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcAdd", paths: [], roots: [{ paths: ["src/new.ts"], rootId: "web" }], ...common,
+  }).success, true);
 });
 
 test("proposal and plan diagnostics encode explicit lifecycle targets", () => {

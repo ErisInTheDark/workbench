@@ -81,11 +81,11 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(inventory.tools.some(({ name }) => name === "browse_raw"), false);
     const plan = inventory.tools.find(({ name }) => name === "git_arc_plan");
     assert.ok(plan);
-    assert.deepEqual(Object.keys(plan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths"]);
+    assert.deepEqual(Object.keys(plan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths", "roots"]);
     assert.equal("args" in (plan.inputSchema.properties ?? {}), false);
     const capablePlan = (await capableClient.listTools()).tools.find(({ name }) => name === "git_arc_plan");
     assert.ok(capablePlan);
-    assert.deepEqual(Object.keys(capablePlan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths", "reloadScopes"]);
+    assert.deepEqual(Object.keys(capablePlan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths", "reloadScopes", "roots"]);
     const planProperties = plan.inputSchema.properties as Record<string, { description?: string }>;
     assert.match(plan.description ?? "", /sibling-claimed files in paths/u);
     assert.match(planProperties.paths?.description ?? "", /sibling-claimed files.*does not claim/u);

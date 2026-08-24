@@ -54,6 +54,31 @@ test("Git reload-scope instructions appear only for the exact-root capability", 
   assert.match(capable, /Do not retry it or bypass the queue/u);
 });
 
+test("Git instructions explain one logical arc and separate proposals only for multi-root workspaces", () => {
+  const base = { harness: "codex" as const, threadId: "thread-1", workbenchOrigin: "http://localhost" };
+  const singleContext = {
+    ...base,
+    roots: [{ id: "api", isPrimary: true, name: "API", relativePath: "api", rootPath: "C:/workspace/api" }],
+  };
+  const multiContext = {
+    ...base,
+    roots: [
+      { id: "api", isPrimary: true, name: "API", relativePath: "api", rootPath: "C:/workspace/api" },
+      { id: "web", isPrimary: false, name: "Web", relativePath: "web", rootPath: "C:/workspace/web" },
+    ],
+  };
+  const source = buildWorkbenchGitInstructions(singleContext) ?? "";
+  const render = (context: typeof singleContext | typeof multiContext) => filterWorkbenchInstructionContent(source, {
+    available: listWorkbenchInstructionMechanics(context), field: "test.git", harness: "codex", onWarning: () => undefined, shell: "pwsh",
+  }) ?? "";
+  const singleRoot = render(singleContext);
+  const multiRoot = render(multiContext);
+  assert.doesNotMatch(singleRoot, /one managed thread one logical Git arc/u);
+  assert.match(multiRoot, /one managed thread one logical Git arc/u);
+  assert.match(multiRoot, /once per workspace root/u);
+  assert.doesNotMatch(multiRoot, /<\/?available:multi-root>/u);
+});
+
 test("default workflow filtering retains required thread behavior during materialization", () => {
   const available = listWorkbenchInstructionMechanics({ harness: "codex", threadId: "draft:123", workbenchOrigin: "http://localhost" });
   const warnings: string[] = [];

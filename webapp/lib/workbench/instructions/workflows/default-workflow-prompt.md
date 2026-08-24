@@ -146,6 +146,10 @@ In Brief mode:
 
 Before presenting a plan that edits files:
 
+<available:multi-root>
+- For a multi-root workspace, the exact edit set must name each root and file. Create one logical plan containing every root scope. Keep the complete member-ref set after start and continuation. In Review, propose one commit per workspace root rather than one cross-project commit.
+</available:multi-root>
+
 - Name the exact files you intend to edit.
 - Create the named plan ref before asking for approval. If plan/arc instructions are unavailable, stop and report degraded arc safety instead of silently substituting ad hoc file checks.
 - Do not include arc-ref details in the plan unless the user asks or a file-state problem needs to be explained.

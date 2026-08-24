@@ -23,3 +23,9 @@ test("unknown and malformed controls preserve body and warn", () => {
   assert.equal(result.output, "body");
   assert.equal(result.warnings.length, 2);
 });
+
+test("multi-root availability keeps workspace-only instructions out of single-root prompts", () => {
+  const value = "before\n<available:multi-root>\nworkspace arc\n</available:multi-root>\nafter";
+  assert.equal(filter(value).output, "before\nafter");
+  assert.equal(filter(value, "codex", "pwsh", new Set(["thread-recall", "multi-root"])).output, "before\nworkspace arc\nafter");
+});

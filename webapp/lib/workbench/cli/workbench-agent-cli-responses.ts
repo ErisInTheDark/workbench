@@ -27,6 +27,11 @@ function createArcReceipt(
     ? readStringArray(payload, "paths")
     : readStringArray(request.body ?? null, "paths");
   const reloadScopes = normalizeOrchestratorReloadScopes(readStringArray(payload, "reloadScopes"));
+  const memberRefs = Array.isArray(payload?.members) ? payload.members.filter(isRecord).flatMap((member) => {
+    const memberRef = readString(member, action === "propose" ? "sourceCheckpoint" : "checkpointCommit");
+    const rootId = readString(member, "rootId");
+    return memberRef && rootId ? [{ ref: memberRef, rootId }] : [];
+  }) : [];
   return formatGitArcReceipt({
     action,
     ...(action === "mv" ? {
@@ -38,9 +43,11 @@ function createArcReceipt(
     } : {}),
     claimedPaths: readStringArray(payload, "scopePaths"),
     intentName: readString(payload, "intentName") || null,
+    ...(memberRefs.length ? { memberRefs } : {}),
     ...(action === "propose" && readString(payload, "proposalId")
       ? { proposalId: readString(payload, "proposalId") }
       : {}),
+    ...(readString(payload, "rootId") ? { rootId: readString(payload, "rootId") } : {}),
     ref,
     ...(reloadScopes.length ? { reloadScopes } : {}),
     ...(selectedPaths.length ? { selectedPaths } : {}),
@@ -50,6 +57,18 @@ function createArcReceipt(
 
 function appendArcReceipt(lines: string[], receipt: string | null) {
   return receipt ? [...lines, receipt] : lines;
+}
+
+function memberRefLines(payload: Record<string, unknown> | null) {
+  if (!Array.isArray(payload?.members) || payload.members.length < 2) return [];
+  return [
+    "Workspace arc members:",
+    ...payload.members.filter(isRecord).flatMap((member) => {
+      const ref = readString(member, "checkpointCommit");
+      const rootId = readString(member, "rootId");
+      return ref && rootId ? [`- ${rootId}: ${ref}`] : [];
+    }),
+  ];
 }
 
 function preservedPlanDriftLines(payload: Record<string, unknown> | null) {
@@ -137,6 +156,7 @@ export function adaptWorkbenchAgentCliResponse({
         : action === "continue" ? "Continued Git arc" : "Created successor arc ref";
       return succeeded(appendArcReceipt([
         `${label} ${readString(payload, "checkpointCommit") || "(unknown commit)"}`,
+        ...memberRefLines(payload),
         ...preservedPlanDriftLines(payload),
       ], createArcReceipt(action, payload, request)).join("\n"));
     }
@@ -148,6 +168,7 @@ export function adaptWorkbenchAgentCliResponse({
       const acquiredClaims = readStringArray(payload, "acquiredClaims");
       return succeeded(appendArcReceipt([
         "Workbench arc comparison",
+        ...memberRefLines(payload),
         ...(action === "start" ? [
           `Released claims: ${releasedClaims.length ? releasedClaims.join(", ") : "none"}`,
           `Acquired claims: ${acquiredClaims.length ? acquiredClaims.join(", ") : "none"}`,

@@ -14,6 +14,25 @@ const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
 const checkpointPaths = z.array(nonEmptyString).min(1);
 const optionalCheckpointPaths = z.array(nonEmptyString);
 const reloadScopes = z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).default([]);
+const rootId = nonEmptyString;
+
+export const GitArcRootPathsSchema = z.object({
+  paths: optionalCheckpointPaths.default([]),
+  rootId,
+}).strict();
+
+export const GitArcPlanRootSchema = GitArcRootPathsSchema.extend({
+  adoptPaths: optionalCheckpointPaths.default([]),
+}).strict();
+
+export const GitArcMemberRefSchema = z.object({
+  ref: checkpointSha,
+  rootId,
+}).strict();
+
+export type GitArcRootPaths = z.infer<typeof GitArcRootPathsSchema>;
+export type GitArcPlanRoot = z.infer<typeof GitArcPlanRootSchema>;
+export type GitArcMemberRef = z.infer<typeof GitArcMemberRefSchema>;
 
 export const GitArcMoveMappingSchema = z.object({
   destination: nonEmptyString,
@@ -49,11 +68,12 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     intentName: nonEmptyString,
     paths: optionalCheckpointPaths,
     reloadScopes,
+    roots: z.array(GitArcPlanRootSchema).default([]),
     ...checkpointBaseRequest,
   }),
-  z.object({ action: z.literal("planAdd"), paths: checkpointPaths, ...checkpointBaseRequest }),
-  z.object({ action: z.literal("planAdopt"), paths: checkpointPaths, ...checkpointBaseRequest }),
-  z.object({ action: z.literal("planRemove"), paths: checkpointPaths, ...checkpointBaseRequest }),
+  z.object({ action: z.literal("planAdd"), paths: optionalCheckpointPaths, roots: z.array(GitArcRootPathsSchema).default([]), ...checkpointBaseRequest }),
+  z.object({ action: z.literal("planAdopt"), paths: optionalCheckpointPaths, roots: z.array(GitArcRootPathsSchema).default([]), ...checkpointBaseRequest }),
+  z.object({ action: z.literal("planRemove"), paths: optionalCheckpointPaths, roots: z.array(GitArcRootPathsSchema).default([]), ...checkpointBaseRequest }),
   z.object({
     action: z.literal("planStart"),
     adoptPaths: optionalCheckpointPaths.default([]),
@@ -61,48 +81,59 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     intentName: nonEmptyString,
     paths: optionalCheckpointPaths,
     reloadScopes,
+    roots: z.array(GitArcPlanRootSchema).default([]),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("arcContinue"),
-    checkpointCommit: checkpointSha,
+    checkpointCommit: checkpointSha.optional(),
+    refs: z.array(GitArcMemberRefSchema).default([]),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("arcStart"),
     checkpointCommit: checkpointSha.optional(),
+    refs: z.array(GitArcMemberRefSchema).default([]),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("arcAdd"),
-    paths: checkpointPaths,
+    paths: optionalCheckpointPaths,
+    roots: z.array(GitArcRootPathsSchema).default([]),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("arcAdopt"),
-    paths: checkpointPaths,
+    paths: optionalCheckpointPaths,
+    roots: z.array(GitArcRootPathsSchema).default([]),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("arcRemove"),
-    paths: checkpointPaths,
+    paths: optionalCheckpointPaths,
+    roots: z.array(GitArcRootPathsSchema).default([]),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("arcMove"),
     move: GitArcMoveRequestSchema,
+    rootId: rootId.optional(),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("compare"),
     checkpointCommit: checkpointSha.optional(),
     paths: checkpointPaths.optional(),
+    refs: z.array(GitArcMemberRefSchema).default([]),
+    roots: z.array(GitArcRootPathsSchema).default([]),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("diff"),
     checkpointCommit: checkpointSha.optional(),
     paths: checkpointPaths.optional(),
+    refs: z.array(GitArcMemberRefSchema).default([]),
+    roots: z.array(GitArcRootPathsSchema).default([]),
     ...checkpointBaseRequest,
   }),
   z.object({
@@ -112,6 +143,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     description: z.string(),
     paths: checkpointPaths.optional(),
     replaceProposalId: nonEmptyString.optional(),
+    rootId: rootId.optional(),
     title: z.string(),
     ...checkpointBaseRequest,
   }),
@@ -141,12 +173,23 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   }),
   z.object({
     action: z.literal("restore"),
-    checkpointCommit: checkpointSha,
+    checkpointCommit: checkpointSha.optional(),
     confirmRestore: z.boolean().optional(),
     paths: z.array(nonEmptyString).optional(),
+    refs: z.array(GitArcMemberRefSchema).default([]),
+    roots: z.array(GitArcRootPathsSchema).default([]),
     ...checkpointBaseRequest,
   }),
-]);
+]).superRefine((input, context) => {
+  if (
+    (input.action === "planAdd" || input.action === "planAdopt" || input.action === "planRemove"
+      || input.action === "arcAdd" || input.action === "arcAdopt" || input.action === "arcRemove")
+    && !input.paths.length
+    && !input.roots.length
+  ) {
+    context.addIssue({ code: "custom", message: "At least one path or root scope is required." });
+  }
+});
 
 export type GitCheckpointRequest = z.infer<typeof GitCheckpointRequestSchema>;
 
@@ -164,11 +207,22 @@ export const GitCheckpointFileChangeSchema = z.object({
 
 export type GitCheckpointFileChange = z.infer<typeof GitCheckpointFileChangeSchema>;
 
+const GitCheckpointCompareMemberSchema = z.object({
+  changes: z.array(GitCheckpointFileChangeSchema),
+  checkpointCommit: checkpointSha,
+  checkpointRef: nonEmptyString,
+  intentName: z.string().nullable(),
+  repoRoot: nonEmptyString,
+  rootId,
+  scopePaths: checkpointPaths,
+});
+
 export const GitCheckpointCompareResultSchema = z.object({
   changes: z.array(GitCheckpointFileChangeSchema),
   checkpointCommit: checkpointSha,
   checkpointRef: nonEmptyString,
   intentName: z.string().nullable(),
+  members: z.array(GitCheckpointCompareMemberSchema).optional(),
   repoRoot: nonEmptyString,
   scopePaths: checkpointPaths,
 });
@@ -184,6 +238,7 @@ export const GitCheckpointProposalSchema = z.object({
   mode: z.enum(["amend", "commit"]),
   paths: checkpointPaths,
   proposalId: nonEmptyString,
+  rootId: rootId.optional(),
   status: z.enum(["proposed", "committed", "rescinded", "superseded", "unavailable"]),
   supersededByProposalId: nonEmptyString.nullable(),
   supersededBySha: checkpointSha.nullable(),

@@ -144,6 +144,7 @@ export default function ThreadGitArcItem({
   );
   const planName = receipt?.intentName ?? commandIntent.intentName ?? "git arc";
   const ref = receipt?.ref ?? commandIntent.ref;
+  const memberRefs = receipt?.memberRefs ?? [];
   const claimedPaths = receipt?.claimedPaths ?? [];
   const selectedPaths = receipt?.selectedPaths ?? commandIntent.paths;
   const ordinarySelectedPaths = selectedPaths.filter((candidate) => !adoptPathSet.has(candidate));
@@ -239,6 +240,7 @@ export default function ThreadGitArcItem({
               <span className="font-mono text-[0.86em] text-muted">{commandIntent.proposalId.slice(0, 8)}</span>
             ) : null}
             {ref ? <span className="font-mono text-[0.86em] text-muted">{ref.slice(0, 8)}</span> : null}
+            {memberRefs.length > 1 ? <span className="text-[0.86em] text-muted">{memberRefs.length} roots</span> : null}
             {durationMs !== null ? <ThreadDurationText durationMs={durationMs} /> : null}
           </span>
         )}
@@ -253,6 +255,16 @@ export default function ThreadGitArcItem({
           />
         ) : null}
         {operationDetails ? <div>{operationDetails}</div> : null}
+        {memberRefs.length > 1 ? (
+          <div className="space-y-0.5 py-1 pl-6 text-[0.78em] text-muted" data-thread-git-arc-members="true">
+            {memberRefs.map((member) => (
+              <div className="flex min-w-0 items-baseline gap-2" key={`${member.rootId}:${member.ref}`}>
+                <span className="min-w-0 flex-1 truncate">{member.rootId}</span>
+                <span className="font-mono">{member.ref.slice(0, 8)}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {primaryPaths.length ? (
           <ThreadClaimedFileList
             label={primaryPathLabel}
