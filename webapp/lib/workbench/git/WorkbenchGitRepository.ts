@@ -141,8 +141,13 @@ export default class WorkbenchGitRepository {
     return await WorkbenchGitRepository.runAt(this.root, args, env);
   }
 
-  async runWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env) {
-    return await new Promise<string>((resolve, reject) => {
+  private async runWithInputResult(
+    args: string[],
+    input: string,
+    env: NodeJS.ProcessEnv,
+    acceptedExitCodes: readonly number[],
+  ) {
+    return await new Promise<{ exitCode: number; stdout: string }>((resolve, reject) => {
       const child = spawn("git", args, {
         cwd: this.root,
         env,
@@ -157,11 +162,15 @@ export default class WorkbenchGitRepository {
       child.stderr.on("data", (chunk: string) => { stderr += chunk; });
       child.once("error", reject);
       child.once("close", (code) => {
-        if (code === 0) resolve(stdout);
+        if (code !== null && acceptedExitCodes.includes(code)) resolve({ exitCode: code, stdout });
         else reject(new Error(stderr.trim() || `git ${args[0] ?? "command"} failed with exit code ${code}.`));
       });
       child.stdin.end(input);
     });
+  }
+
+  async runWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env) {
+    return (await this.runWithInputResult(args, input, env, [0])).stdout;
   }
 
   async runBufferWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env) {
@@ -215,6 +224,18 @@ export default class WorkbenchGitRepository {
       return relative;
     });
     return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));
+  }
+
+  async listIgnoredPaths(paths: string[]) {
+    if (!paths.length) return [];
+    const normalized = this.normalizePaths(paths);
+    const result = await this.runWithInputResult(
+      ["check-ignore", "-z", "--stdin"],
+      `${normalized.join("\0")}\0`,
+      process.env,
+      [0, 1],
+    );
+    return result.exitCode === 1 ? [] : parseNullPaths(result.stdout);
   }
 
   literalPathspec(relativePath: string) {

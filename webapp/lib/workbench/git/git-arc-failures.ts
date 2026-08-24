@@ -61,6 +61,10 @@ export const GitArcFailureSchema = z.discriminatedUnion("code", [
     paths: z.array(boundedPath).min(1).max(20),
   }).strict(),
   GitArcFailureBaseSchema.extend({
+    code: z.literal("ignoredPaths"),
+    paths: z.array(boundedPath).min(1).max(20),
+  }).strict(),
+  GitArcFailureBaseSchema.extend({
     code: z.literal("planDrift"),
     commits: z.array(z.object({
       commit: checkpointSha,
@@ -153,6 +157,10 @@ function isAdoptionAction(action: GitArcFailureAction) {
   return action === "plan" || action === "planAdopt" || action === "planStart" || action === "arcAdopt";
 }
 
+function isPlanningAction(action: GitArcFailureAction) {
+  return action === "plan" || action === "planAdd" || action === "planAdopt" || action === "planStart";
+}
+
 export function describeGitArcFailure(failure: GitArcFailure) {
   switch (failure.code) {
     case "adoptedPathOverlap":
@@ -181,6 +189,14 @@ export function describeGitArcFailure(failure: GitArcFailure) {
           : "Cannot claim unclaimed workspace dirt.",
         userHint: "Adopt only intentional changes that this thread should own.",
       };
+    case "ignoredPaths": {
+      const multiple = failure.paths.length !== 1;
+      return {
+        agentRecovery: "Remove the ignore rule or choose a path Git tracks before retrying.",
+        message: `Git ignores the selected ${multiple ? "files" : "file"}.`,
+        userHint: `Remove the ignore ${multiple ? "rules" : "rule"} or choose ${multiple ? "files" : "a file"} Git tracks.`,
+      };
+    }
     case "planDrift":
       return {
         agentRecovery: `Call mcp__wb__git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. If the approved plan is unchanged, follow the planned-path drift workflow with mcp__wb__git_arc_plan_start.`,
@@ -243,6 +259,8 @@ export function formatGitArcFailureText(failure: GitArcFailure) {
     appendConflictLines(lines, failure);
   } else if (failure.code === "dirtyPaths") {
     failure.paths.forEach((path) => lines.push(`- ${path}`));
+  } else if (failure.code === "ignoredPaths") {
+    failure.paths.forEach((path) => lines.push(`- ${isPlanningAction(failure.action) ? "failed to plan ignored file" : "failed to claim ignored file"} ${path}`));
   } else if (failure.code === "planDrift") {
     if (failure.commits.length) {
       lines.push("", "New commits affecting the plan:");

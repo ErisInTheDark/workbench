@@ -87,7 +87,9 @@ function attemptedMoveMappings(commandIntent: GitArcCommandIntent) {
 }
 
 function failureClaimPaths(failure: ReturnType<typeof parseGitArcFailureReceipt>) {
-  if (!failure || (failure.code !== "siblingClaimCollision" && failure.code !== "planDrift")) return [];
+  if (!failure) return [];
+  if (failure.code === "ignoredPaths") return failure.paths;
+  if (failure.code !== "siblingClaimCollision" && failure.code !== "planDrift") return [];
   const paths = failure.conflicts.flatMap(({ overlaps }) => overlaps.map(({ requestedPath }) => requestedPath));
   if (failure.code === "planDrift") paths.push(...failure.snapshotPaths);
   return [...new Set(paths)];
@@ -164,7 +166,10 @@ export default function ThreadGitArcItem({
   const failure = receiptFailure ?? (state === "failed"
     ? createGitArcOperationRejected(failureAction(commandIntent.action), failureReason?.trim() || "This Git arc action did not complete.")
     : null);
-  const primaryPaths = commandIntent.action === "plan" || commandIntent.action === "planStart"
+  const ignoredFailure = failure?.code === "ignoredPaths" ? failure : null;
+  const primaryPaths = ignoredFailure
+    ? ignoredFailure.paths
+    : commandIntent.action === "plan" || commandIntent.action === "planStart"
     ? adoptPaths.length ? ordinarySelectedPaths : claimedPaths.length ? claimedPaths : selectedPaths
     : commandIntent.action === "add" || commandIntent.action === "adopt" || commandIntent.action === "remove" || commandIntent.action === "restore"
       || commandIntent.action === "planAdd" || commandIntent.action === "planAdopt" || commandIntent.action === "planRemove"
@@ -178,7 +183,12 @@ export default function ThreadGitArcItem({
         : commandIntent.action === "planStart" || commandIntent.action === "start" || commandIntent.action === "continue" || commandIntent.action === "add" ? "Timed out claiming"
           : commandIntent.action === "restore" ? "Timed out restoring" : "Timed out changing"
     : state === "failed"
-    ? failure?.code === "dirtyPaths" && commandIntent.action === "plan"
+    ? ignoredFailure
+      ? commandIntent.action === "plan" || commandIntent.action === "planAdd"
+        || commandIntent.action === "planAdopt" || commandIntent.action === "planStart"
+        ? "Failed to plan ignored file"
+        : "Failed to claim ignored file"
+      : failure?.code === "dirtyPaths" && commandIntent.action === "plan"
       ? "Failed to plan changed file"
       : failure?.code === "planDrift"
         ? "Failed to claim drifted file"
@@ -246,7 +256,7 @@ export default function ThreadGitArcItem({
         )}
         summaryClassName="text-[0.82em] leading-[1.45] text-muted"
       >
-        {commandIntent.action === "mv" ? (
+        {commandIntent.action === "mv" && !ignoredFailure ? (
           <ThreadGitArcMoveList
             mappings={moveMappings}
             projectId={projectId}
@@ -254,7 +264,7 @@ export default function ThreadGitArcItem({
             workspaceRoots={workspaceRoots}
           />
         ) : null}
-        {operationDetails ? <div>{operationDetails}</div> : null}
+        {operationDetails && !ignoredFailure ? <div>{operationDetails}</div> : null}
         {memberRefs.length > 1 ? (
           <div className="space-y-0.5 py-1 pl-6 text-[0.78em] text-muted" data-thread-git-arc-members="true">
             {memberRefs.map((member) => (
@@ -277,7 +287,7 @@ export default function ThreadGitArcItem({
             workspaceRoots={workspaceRoots}
           />
         ) : null}
-        {adoptPaths.length ? (
+        {adoptPaths.length && !ignoredFailure ? (
           <ThreadClaimedFileList
             label={state === "failed" ? "Failed to adopt" : state === "timedOut" ? "Timed out adopting" : state === "inProgress" ? "Adopting" : commandIntent.action === "planStart" ? "Adopted and claimed" : "Adopted into plan"}
             marker={commandIntent.action === "plan" ? "planned" : "claimed"}

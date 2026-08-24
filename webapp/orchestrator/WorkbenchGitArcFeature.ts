@@ -15,7 +15,7 @@ import {
   GitArcProposalAlreadyCommittedError,
   type GitArcFailure,
 } from "../lib/workbench/git/git-arc-failures";
-import { GitCheckpointDirtyPathsError } from "../lib/workbench/git/GitArcPlanController";
+import { GitCheckpointDirtyPathsError, GitCheckpointIgnoredPathsError } from "../lib/workbench/git/GitArcPlanController";
 import { GitArcStartDiagnosticError } from "../lib/workbench/git/git-arc-start-diagnostics";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
@@ -49,6 +49,17 @@ const CLAIM_START_ACTIONS = new Set<GitCheckpointRequest["action"]>(["arcContinu
 
 function sanitizeError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500);
+}
+
+function findIgnoredPathsError(error: unknown) {
+  const seen = new Set<Error>();
+  let current = error;
+  while (current instanceof Error && !seen.has(current)) {
+    if (current instanceof GitCheckpointIgnoredPathsError) return current;
+    seen.add(current);
+    current = current.cause;
+  }
+  return null;
 }
 
 function failureResponse(failure: GitArcFailure) {
@@ -282,6 +293,15 @@ export default class WorkbenchGitArcFeature {
         action: request.action,
         code: "dirtyPaths",
         paths: error.dirtyPaths.slice(0, 20),
+        version: 1,
+      };
+    }
+    const ignoredPathsError = findIgnoredPathsError(error);
+    if (ignoredPathsError) {
+      return {
+        action: request.action,
+        code: "ignoredPaths",
+        paths: ignoredPathsError.ignoredPaths.slice(0, 20),
         version: 1,
       };
     }

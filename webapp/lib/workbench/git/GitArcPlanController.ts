@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default GitArcPlanController: own inactive plan creation, revision, adoption, current-plan resolution, and atomic activation. Keywords: git, arc, plan, start, retained claims.
- * - GitCheckpointDirtyPathsError: identify unexplained dirty paths rejected by plan and claim operations. Keywords: git, plan, dirty paths, adoption.
+ * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: identify dirty or ignored paths rejected by plan and claim operations. Keywords: git, plan, dirty paths, ignored paths, adoption.
+ * - rejectIgnoredGitArcPaths: reject paths that Git excludes before plan or claim mutation. Keywords: git, arc, ignored paths, validation.
  * - GitArcPlanResult/GitArcPlanState/GitArcStartResult: typed immutable plan, current-plan projection, and visible claim-transition receipts. Keywords: git, plan, start, claims.
  */
 import type { GitCheckpointFileChange } from "./checkpoint-contracts";
@@ -77,6 +78,21 @@ export class GitCheckpointDirtyPathsError extends Error {
     this.name = "GitCheckpointDirtyPathsError";
     this.dirtyPaths = dirtyPaths;
   }
+}
+
+export class GitCheckpointIgnoredPathsError extends Error {
+  readonly ignoredPaths: string[];
+
+  constructor(ignoredPaths: string[]) {
+    super(`Git arc paths must not be ignored: ${ignoredPaths.join(", ")}`);
+    this.name = "GitCheckpointIgnoredPathsError";
+    this.ignoredPaths = ignoredPaths;
+  }
+}
+
+export async function rejectIgnoredGitArcPaths(repository: WorkbenchGitRepository, paths: string[]) {
+  const ignoredPaths = await repository.listIgnoredPaths(paths);
+  if (ignoredPaths.length) throw new GitCheckpointIgnoredPathsError(ignoredPaths);
 }
 
 function normalizeHarness(harness: string | undefined): GitArcHarness {
@@ -276,6 +292,7 @@ export default class GitArcPlanController {
       const metadata = plan.metadata;
       if (!metadata.scopePaths.length) throw new Error("An empty Git arc plan cannot start. Add at least one path first.");
       const paths = repository.normalizePaths(metadata.scopePaths);
+      await rejectIgnoredGitArcPaths(repository, paths);
       const currentTree = await repository.writeScopedWorktreeTree(paths);
       const changes = await repository.buildFileChanges(plan.checkpointCommit, currentTree, paths);
       if (metadata.version >= 3 && changes.length && current?.checkpointCommit !== plan.checkpointCommit) {
@@ -321,6 +338,7 @@ export default class GitArcPlanController {
     const metadata = requirePlanMetadata(plan.metadata);
     if (!metadata.scopePaths.length) throw new Error("An empty Git arc plan cannot start. Add at least one path first.");
     const paths = repository.normalizePaths(metadata.scopePaths);
+    await rejectIgnoredGitArcPaths(repository, paths);
     const adoptedPaths = metadata.adoptedPaths?.length ? repository.normalizePaths(metadata.adoptedPaths) : [];
     const currentTree = await repository.writeScopedWorktreeTree(paths);
     const snapshotDrift = await repository.listChangedPaths(plan.checkpointCommit, currentTree, paths);
@@ -449,6 +467,7 @@ export default class GitArcPlanController {
       retainedArc: current.retainedArc ?? null,
     }, current.checkpointCommit, {
       baselinePlan: plan,
+      ignoredValidationPaths: operation === "remove" ? [] : paths,
       refreshPaths: operation === "add" ? paths : [],
     });
   }
@@ -460,7 +479,7 @@ export default class GitArcPlanController {
     threadId: string,
     input: { adoptPaths: string[]; intentDescription: string; intentName: string; paths: string[]; reloadScopes: OrchestratorReloadScope[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null },
     expectedCheckpointCommit?: string,
-    options: { baselinePlan?: StoredCheckpoint | null; refreshPaths?: string[] } = {},
+    options: { baselinePlan?: StoredCheckpoint | null; ignoredValidationPaths?: string[]; refreshPaths?: string[] } = {},
   ): Promise<GitArcPlanResult> {
     const plan = await this.preparePlan(repository, registry, harness, threadId, input, expectedCheckpointCommit, options);
     const retainedArc = await this.prepareRetainedArc(repository, harness, threadId, input.retainedArc, plan.paths);
@@ -498,10 +517,12 @@ export default class GitArcPlanController {
     threadId: string,
     input: { adoptPaths: string[]; intentDescription: string; intentName: string; paths: string[]; reloadScopes: OrchestratorReloadScope[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null },
     amendedFrom?: string,
-    options: { baselinePlan?: StoredCheckpoint | null; refreshPaths?: string[] } = {},
+    options: { baselinePlan?: StoredCheckpoint | null; ignoredValidationPaths?: string[]; refreshPaths?: string[] } = {},
   ) {
     const requestedPaths = input.paths.length ? repository.normalizePaths(input.paths) : [];
     const adoptPaths = input.adoptPaths.length ? repository.normalizePaths(input.adoptPaths) : [];
+    const ignoredValidationPaths = options.ignoredValidationPaths ?? [...requestedPaths, ...adoptPaths];
+    await rejectIgnoredGitArcPaths(repository, ignoredValidationPaths);
     const exactAdoptedPaths = new Set(adoptPaths);
     const paths = requestedPaths.filter((candidate) => !exactAdoptedPaths.has(candidate));
     const scopePaths = collapseScopePaths([...paths, ...adoptPaths]);

@@ -14,7 +14,7 @@ import GitArcProposalCache from "./GitArcProposalCache";
 import { GitArcProposalAlreadyCommittedError } from "./git-arc-failures";
 import { GitArcAcceptedProposalsError } from "./GitArcProposalController";
 import createGitArcStartDiagnosticError, { GitArcStartDiagnosticError } from "./git-arc-start-diagnostics";
-import { GitCheckpointDirtyPathsError } from "./GitArcPlanController";
+import { GitCheckpointDirtyPathsError, GitCheckpointIgnoredPathsError } from "./GitArcPlanController";
 import GitArcRegistry, { GitArcCollisionError } from "./GitArcRegistry";
 import GitCheckpointStore, { GitCheckpointMissingObjectError } from "./GitCheckpointStore";
 import GitTestFixtureCache, { type GitTestFixtureSpec } from "./GitTestFixtureCache";
@@ -45,6 +45,14 @@ function isolatedControllerTest(name: string, run: (context: TestContext) => Pro
 
 function sharedControllerTest(name: string, run: (context: TestContext) => Promise<void>) {
   sharedControllerCases.push({ name, run });
+}
+
+function rejectsIgnoredPaths(expectedPaths: string[]) {
+  return (error: unknown) => {
+    assert(error instanceof GitCheckpointIgnoredPathsError);
+    assert.deepEqual(error.ignoredPaths, expectedPaths);
+    return true;
+  };
 }
 
 async function git(cwd: string, args: string[]) {
@@ -252,6 +260,21 @@ isolatedControllerTest("empty inactive plans remain visible through plan-state r
     harness: "codex",
     threadId: "empty-plan-thread",
   }), /An empty Git arc plan cannot start/u);
+  await fs.writeFile(path.join(source, ".gitignore"), "ignored/\n", "utf8");
+  await assert.rejects(controller.createPlan({
+    cwd: source,
+    harness: "codex",
+    intentName: "reject ignored plan",
+    paths: ["ignored/generated.ts"],
+    threadId: "ignored-plan-thread",
+  }), rejectsIgnoredPaths(["ignored/generated.ts"]));
+  await assert.rejects(controller.createAndStartPlan({
+    cwd: source,
+    harness: "codex",
+    intentName: "reject ignored plan start",
+    paths: ["ignored/generated.ts"],
+    threadId: "ignored-plan-start-thread",
+  }), rejectsIgnoredPaths(["ignored/generated.ts"]));
 });
 
 sharedControllerTest("proposal cache reuses derived changes beneath the canonical harness transcript", async (context) => {
@@ -604,8 +627,16 @@ isolatedControllerTest("arc adopt claims dirty workspace paths from HEAD without
   await fs.rm(path.join(source, "deleted.txt"));
   await fs.writeFile(path.join(source, "untracked.txt"), "new work\n");
   await fs.writeFile(path.join(source, "staged.txt"), "staged work\n");
+  await fs.writeFile(path.join(source, ".gitignore"), "ignored/\n", "utf8");
   await git(source, ["add", "staged.txt"]);
   const stagedBefore = await git(source, ["diff", "--cached", "--binary"]);
+
+  await assert.rejects(controller.adoptIntoArc({
+    cwd: source,
+    harness: "codex",
+    paths: ["ignored/generated.ts"],
+    threadId: "adopt-thread",
+  }), rejectsIgnoredPaths(["ignored/generated.ts"]));
 
   const adopted = await controller.adoptIntoArc({
     cwd: source,
@@ -786,6 +817,14 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
     cwd: source, harness: "codex", includeNewer: false, proposalId: replacement.proposalId, threadId: "partial-thread",
   })).status, "proposed");
 
+  await fs.writeFile(path.join(source, ".gitignore"), "ignored/\n", "utf8");
+  await assert.rejects(controller.addToArc({
+    cwd: source,
+    harness: "codex",
+    paths: ["ignored/generated.ts"],
+    threadId: "partial-thread",
+  }), rejectsIgnoredPaths(["ignored/generated.ts"]));
+
   const successor = await controller.addToArc({
     cwd: source,
     harness: "codex",
@@ -880,6 +919,10 @@ isolatedControllerTest("active plan add publishes an inactive successor without 
   await assert.rejects(controller.adoptIntoPlan({
     cwd: source, harness: "codex", paths: ["planned.txt"], threadId: "partial-thread",
   }), /Only arc plan add can create an inactive plan from an active Git arc/u);
+  await fs.writeFile(path.join(source, ".gitignore"), "ignored/\n", "utf8");
+  await assert.rejects(controller.addToPlan({
+    cwd: source, harness: "codex", paths: ["ignored/generated.ts"], threadId: "partial-thread",
+  }), rejectsIgnoredPaths(["ignored/generated.ts"]));
 
   const extended = await controller.addToPlan({
     cwd: source, harness: "codex", paths: ["planned.txt"], threadId: "partial-thread",
@@ -898,6 +941,9 @@ isolatedControllerTest("active plan add publishes an inactive successor without 
     threadId: "partial-thread",
     updatedAt: registryEntry?.updatedAt,
   });
+  await assert.rejects(controller.adoptIntoPlan({
+    cwd: source, harness: "codex", paths: ["ignored/generated.ts"], threadId: "partial-thread",
+  }), rejectsIgnoredPaths(["ignored/generated.ts"]));
   assert.equal((await controller.listPlanStates({ cwd: source })).length, 1);
 
   await controller.startArc({

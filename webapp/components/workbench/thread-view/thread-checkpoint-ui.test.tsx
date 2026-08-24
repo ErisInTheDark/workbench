@@ -395,6 +395,61 @@ test("dirty plan failures put changed-file meaning on danger path rows", () => {
   assert.doesNotMatch(html, /Selected paths contain workspace changes/u);
 });
 
+test("ignored path failures mirror dirty rows with only a simple message and hint", () => {
+  const ignoredPath = "generated/output.ts";
+  const planFailure = { action: "plan", code: "ignoredPaths", paths: [ignoredPath], version: 1 } as const;
+  const planHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: {
+      action: "plan",
+      adoptPaths: [ignoredPath],
+      intentName: "Reject ignored plan",
+      paths: ["src/ordinary.ts", ignoredPath],
+      ref: null,
+    },
+    durationMs: 10,
+    failureReason: `Workbench arc failure: ${JSON.stringify(planFailure)}`,
+    outcome: "failed",
+    receipt: null,
+  }));
+  assert.match(planHtml, /Failed to plan ignored file/u);
+  assert.match(planHtml, /generated\/output\.ts/u);
+  assert.match(planHtml, /data-thread-git-arc-path-tone="danger"/u);
+  assert.match(planHtml, /Git ignores the selected file\./u);
+  assert.match(planHtml, /Remove the ignore rule or choose a file Git tracks\./u);
+  assert.doesNotMatch(planHtml, /src\/ordinary\.ts|Failed to adopt|data-thread-git-arc-failure-facts/u);
+
+  const claimFailure = { action: "arcAdd", code: "ignoredPaths", paths: [ignoredPath], version: 1 } as const;
+  const claimHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { action: "add", intentName: null, paths: [ignoredPath], ref: null },
+    durationMs: 10,
+    failureReason: `Workbench arc failure: ${JSON.stringify(claimFailure)}`,
+    outcome: "failed",
+    receipt: null,
+  }));
+  assert.match(claimHtml, /Failed to claim ignored file/u);
+  assert.match(claimHtml, /generated\/output\.ts/u);
+  assert.match(claimHtml, /data-thread-git-arc-path-tone="danger"/u);
+  assert.doesNotMatch(claimHtml, /data-thread-git-arc-failure-facts/u);
+
+  const moveFailure = { ...claimFailure, action: "arcMove" } as const;
+  const moveHtml = renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: {
+      action: "mv",
+      intentName: null,
+      move: { kind: "operands", operands: ["src/input.ts", ignoredPath] },
+      paths: ["src/input.ts", ignoredPath],
+      ref: null,
+    },
+    durationMs: 10,
+    failureReason: `Workbench arc failure: ${JSON.stringify(moveFailure)}`,
+    outcome: "failed",
+    receipt: null,
+  }));
+  assert.match(moveHtml, /Failed to claim ignored file/u);
+  assert.match(moveHtml, /generated\/output\.ts/u);
+  assert.doesNotMatch(moveHtml, /src\/input\.ts|data-thread-git-arc-move/u);
+});
+
 test("plan drift failures put drift meaning on claim rows and keep commands out of the user hint", () => {
   const failure = {
     action: "arcStart",

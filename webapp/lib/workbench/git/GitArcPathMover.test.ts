@@ -5,6 +5,7 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 
 import GitArcPathMover, { MAX_GIT_ARC_MOVE_MAPPINGS } from "./GitArcPathMover.ts";
+import { GitCheckpointIgnoredPathsError } from "./GitArcPlanController.ts";
 import GitArcRegistry from "./GitArcRegistry.ts";
 import GitTestFixtureCache from "./GitTestFixtureCache.ts";
 import WorkbenchGitRepository from "./WorkbenchGitRepository.ts";
@@ -128,6 +129,20 @@ pathMoverTest("arc move previews read-only, rejects sibling overlap, and applies
   assert.deepEqual(preview.scopePaths, ["src"]);
   assert.deepEqual(await registry.find({ harness: "codex", threadId: "move-thread" }), activeBefore);
   assert.equal(await fs.readFile(path.join(root, "src", "one.test.ts"), "utf8"), "one\n");
+
+  await fs.writeFile(path.join(root, ".gitignore"), "ignored-destination/\n", "utf8");
+  await assert.rejects(controller.moveInArc({
+    cwd: root,
+    harness: "codex",
+    move: { kind: "operands", operands: ["src/one.test.ts", "ignored-destination/one.test.ts"] },
+    threadId: "move-thread",
+  }), (error: unknown) => {
+    assert(error instanceof GitCheckpointIgnoredPathsError);
+    assert.deepEqual(error.ignoredPaths, ["ignored-destination/one.test.ts"]);
+    return true;
+  });
+  assert.equal(await fs.readFile(path.join(root, "src", "one.test.ts"), "utf8"), "one\n");
+  assert.deepEqual(await registry.find({ harness: "codex", threadId: "move-thread" }), activeBefore);
 
   await registry.claim({
     checkpointCommit: await repository.currentHead(),

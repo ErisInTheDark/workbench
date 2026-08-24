@@ -11,6 +11,7 @@ import {
   GitArcProposalAlreadyCommittedError,
 } from "../lib/workbench/git/git-arc-failures";
 import { GitArcAcceptedProposalsError } from "../lib/workbench/git/GitArcProposalController";
+import { GitCheckpointIgnoredPathsError } from "../lib/workbench/git/GitArcPlanController";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
@@ -291,6 +292,41 @@ test("missing arc refs return one typed message without unrelated recovery", asy
     version: 1,
   });
   assert.equal(result.error, "There is no git arc by the `deadbeef` ref.");
+});
+
+test("ignored path failures remain typed through workspace member wrappers", async () => {
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async () => null,
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  Object.defineProperty(feature, "dispatch", {
+    value: async () => {
+      throw new Error("Workspace Git arc member failed", {
+        cause: new GitCheckpointIgnoredPathsError(["ignored/output.ts"]),
+      });
+    },
+  });
+
+  const response = await feature.executeRequest({
+    action: "planAdd",
+    cwd: "C:/Git/Project",
+    harness: "codex",
+    paths: ["ignored/output.ts"],
+    threadId: "thread-one",
+  });
+  const result = await response.json() as GitArcFailureEnvelope;
+  assert.equal(response.status, 400);
+  assert.deepEqual(result.gitArcFailure, {
+    action: "planAdd",
+    code: "ignoredPaths",
+    paths: ["ignored/output.ts"],
+    version: 1,
+  });
+  assert.match(result.error, /Git ignores the selected file\./u);
+  assert.match(result.error, /failed to plan ignored file ignored\/output\.ts/u);
+  assert.doesNotMatch(result.error, /Workspace Git arc member failed|operation rejected/u);
 });
 
 test("accepted proposal receipts remain structured when a resolved arc cannot continue", async () => {
