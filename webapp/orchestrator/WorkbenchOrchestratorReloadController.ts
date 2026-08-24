@@ -3,6 +3,7 @@
  * - WorkbenchReloadScopeClaim/WorkbenchReloadRequest: active arc claim and managed reload admission contracts. Keywords: reload, arc, claim, lifecycle.
  * - WorkbenchOrchestratorReloadControllerState: transferable waiter and active-batch state for coordinator self-reload. Keywords: reload, queue, handoff.
  * - WorkbenchOrchestratorReloadControllerOptions: claim read and low-level scope execution ports. Keywords: reload, ports, ownership.
+ * - WorkbenchHardReloadNotification/WorkbenchHardReloadOptions: operator-only impending-restart notification and force-exit ports. Keywords: hard reload, notification, deadline, exit.
  * - default WorkbenchOrchestratorReloadController: own reload admission, useful batching, cancellation, and waiter completion. Keywords: reload, queue, batch, cancellation.
  */
 import { randomUUID } from "node:crypto";
@@ -41,17 +42,53 @@ interface ReloadBatch {
 export interface WorkbenchOrchestratorReloadControllerState {
   activeBatch: ReloadBatch | null;
   eligibilityChanged: boolean;
+  hardReloadPhase: "admitted" | "idle" | "stopping";
   waiters: Map<string, ReloadWaiter>;
+}
+
+interface HardReloadDeadline {
+  cancel(): void;
+  expired: Promise<void>;
+}
+
+export interface WorkbenchHardReloadNotification {
+  name: string;
+  notify(): Promise<void> | void;
+}
+
+export interface WorkbenchHardReloadOptions {
+  createDeadline?: (timeoutMs: number) => HardReloadDeadline;
+  exitProcess(): void;
+  logError?: (message: string) => void;
+  notifications(): readonly WorkbenchHardReloadNotification[];
+  timeoutMs?: number;
 }
 
 export interface WorkbenchOrchestratorReloadControllerOptions {
   executeBatch(scopes: OrchestratorReloadScope[]): Promise<void>;
+  hardReload?: WorkbenchHardReloadOptions;
   initialState?: WorkbenchOrchestratorReloadControllerState;
   listClaims(cwd: string): Promise<WorkbenchReloadScopeClaim[]>;
   now?: () => number;
 }
 
 const SUPPORTED_SCOPES = new Set<OrchestratorReloadScope>(ORCHESTRATOR_RELOAD_SCOPES);
+const DEFAULT_HARD_RELOAD_TIMEOUT_MS = 5_000;
+
+function createDeadline(timeoutMs: number): HardReloadDeadline {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const expired = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
+  });
+  return {
+    cancel: () => {
+      if (timer === null) return;
+      clearTimeout(timer);
+      timer = null;
+    },
+    expired,
+  };
+}
 
 function identityKey(harness: WorkbenchHarness, threadId: string) {
   return `${harness}\0${threadId}`;
@@ -67,17 +104,21 @@ function isTerminalLifecycle(kind: WorkbenchReloadScopeClaim["lifecycleKind"]) {
 
 export default class WorkbenchOrchestratorReloadController {
   private attached = true;
+  private hardReloadExitRequested = false;
   private readonly now: () => number;
   private selecting = false;
   private readonly state: WorkbenchOrchestratorReloadControllerState;
 
   constructor(private readonly options: WorkbenchOrchestratorReloadControllerOptions) {
     this.now = options.now ?? Date.now;
-    this.state = options.initialState ?? { activeBatch: null, eligibilityChanged: false, waiters: new Map() };
+    this.state = options.initialState ?? { activeBatch: null, eligibilityChanged: false, hardReloadPhase: "idle", waiters: new Map() };
+    // A controller loaded before hard reload existed transfers this same state object during self-reload.
+    this.state.hardReloadPhase ??= "idle";
   }
 
   async request(input: WorkbenchReloadRequest, signal: AbortSignal): Promise<OrchestratorReloadResponse> {
     if (!this.attached) throw new Error("The reload coordinator generation was replaced before admission completed.");
+    if (this.isHardReloadPending()) throw new Error("The orchestrator is hard reloading; new reload work is unavailable.");
     if (signal.aborted) throw signal.reason;
     const requestedScopes = Array.from(new Set(input.scopes));
     if (!requestedScopes.length || requestedScopes.some((scope) => !SUPPORTED_SCOPES.has(scope))) {
@@ -121,7 +162,7 @@ export default class WorkbenchOrchestratorReloadController {
   }
 
   notifyEligibilityChanged() {
-    if (!this.attached) return;
+    if (!this.attached || this.isHardReloadPending()) return;
     this.state.eligibilityChanged = true;
     this.schedule();
   }
@@ -150,8 +191,65 @@ export default class WorkbenchOrchestratorReloadController {
     this.state.activeBatch = null;
   }
 
+  admitHardReload(): OrchestratorReloadResponse {
+    if (!this.options.hardReload) throw new Error("Hard reload is not configured.");
+    if (this.state.hardReloadPhase !== "idle") throw new Error("A hard reload is already pending.");
+    const startedAt = this.now();
+    this.state.hardReloadPhase = "admitted";
+    return {
+      appliedScopes: [],
+      completedAt: startedAt,
+      error: null,
+      ok: true,
+      queuedScopes: ["orchestrator-server"],
+      requestedScopes: ["orchestrator-server"],
+      startedAt,
+      state: "succeeded",
+    };
+  }
+
+  cancelHardReloadAdmission() {
+    if (this.state.hardReloadPhase === "admitted") this.state.hardReloadPhase = "idle";
+  }
+
+  isHardReloadPending() {
+    return this.state.hardReloadPhase !== "idle";
+  }
+
+  async beginHardReload() {
+    const options = this.options.hardReload;
+    if (!options) throw new Error("Hard reload is not configured.");
+    if (this.state.hardReloadPhase === "stopping") return;
+    if (this.state.hardReloadPhase !== "admitted") throw new Error("Hard reload was not admitted before shutdown began.");
+    this.state.hardReloadPhase = "stopping";
+    this.attached = false;
+    this.failAll(new Error("The orchestrator is hard reloading."));
+
+    const logError = options.logError ?? (() => undefined);
+    const deadline = (options.createDeadline ?? createDeadline)(options.timeoutMs ?? DEFAULT_HARD_RELOAD_TIMEOUT_MS);
+    const settlements = options.notifications().map(({ name, notify }) => {
+      try {
+        return Promise.resolve(notify()).catch((error: unknown) => {
+          logError(`${name} hard-reload notification failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      } catch (error) {
+        logError(`${name} hard-reload notification failed: ${error instanceof Error ? error.message : String(error)}`);
+        return Promise.resolve();
+      }
+    });
+    const settled = Promise.all(settlements).then(() => undefined);
+    const outcome = await Promise.race([
+      settled.then(() => "settled" as const),
+      deadline.expired.then(() => "deadline" as const),
+    ]);
+    if (outcome === "settled") deadline.cancel();
+    if (this.hardReloadExitRequested) return;
+    this.hardReloadExitRequested = true;
+    options.exitProcess();
+  }
+
   private schedule() {
-    if (!this.attached || this.selecting || this.state.activeBatch || !this.state.waiters.size) return;
+    if (!this.attached || this.isHardReloadPending() || this.selecting || this.state.activeBatch || !this.state.waiters.size) return;
     this.selecting = true;
     this.state.eligibilityChanged = false;
     void this.selectBatch().then((batch) => {

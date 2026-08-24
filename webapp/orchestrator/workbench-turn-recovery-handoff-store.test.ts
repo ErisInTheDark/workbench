@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect bounded, fresh, unique, atomic recovery handoffs. Keywords: recovery, handoff, test.
+ * No production exports. Node tests protect bounded, fresh, unique, atomic manual-resume handoffs. Keywords: recovery, handoff, test.
  */
 
 import assert from "node:assert/strict";
@@ -26,7 +26,8 @@ function handoff(count: number, createdAt = Date.now()): WorkbenchTurnRecoveryHa
     createdAt,
     generation: createWorkbenchThreadRecoveryId("generation"),
     id: createWorkbenchThreadRecoveryId("handoff"),
-    schemaVersion: 1,
+    kind: "manual-resume",
+    schemaVersion: 2,
   };
 }
 
@@ -49,7 +50,7 @@ test("handoff store rejects oversized and expired data", async () => {
   assert.equal(await store.load(), null);
 });
 
-test("handoff store fails closed for duplicate, malformed, and missing-generation state", async () => {
+test("handoff store fails closed for duplicate, malformed, and legacy automatic-restart state", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-handoff-corrupt-"));
   const store = new WorkbenchTurnRecoveryHandoffStore(root);
   const duplicate = handoff(2);
@@ -61,5 +62,9 @@ test("handoff store fails closed for duplicate, malformed, and missing-generatio
   const malformed = handoff(1) as WorkbenchTurnRecoveryHandoff & { generation?: string };
   delete malformed.generation;
   await fs.writeFile(store.filePath, JSON.stringify(malformed), "utf8");
+  assert.equal(await store.load(), null);
+
+  const legacy = { ...handoff(1), kind: undefined, schemaVersion: 1 };
+  await fs.writeFile(store.filePath, JSON.stringify(legacy), "utf8");
   assert.equal(await store.load(), null);
 });

@@ -10,10 +10,15 @@ import WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReload
 
 test("coordinator self-reload executes other scopes first and completes through fresh code", async () => {
   const executed: OrchestratorReloadScope[][] = [];
+  const hardReloadEffects: string[] = [];
   let reloads = 0;
   class FreshController extends WorkbenchOrchestratorReloadController {}
   const boundary = new ReloadableWorkbenchOrchestratorReloadController({
     executeScopes: async (scopes) => { executed.push(scopes); },
+    hardReload: {
+      exitProcess: () => { hardReloadEffects.push("exit"); },
+      notifications: () => [{ name: "runtime", notify: () => { hardReloadEffects.push("notify"); } }],
+    },
     listClaims: async () => [{
       harness: "codex",
       lifecycleKind: "working",
@@ -35,6 +40,9 @@ test("coordinator self-reload executes other scopes first and completes through 
   assert.equal(response.state, "succeeded");
   assert.equal(reloads, 1);
   assert.deepEqual(executed, [["orchestrator-logic"]]);
+  boundary.admitHardReload();
+  await boundary.beginHardReload();
+  assert.deepEqual(hardReloadEffects, ["notify", "exit"]);
 });
 
 test("failed coordinator replacement restores the previous generation and rejects its waiter", async () => {

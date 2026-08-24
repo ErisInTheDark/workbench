@@ -99,9 +99,11 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
   private current: ActiveGeneration<TFeatures, TNotification>;
   private currentToken: symbol | null = null;
   private readonly createDeadline: NonNullable<OrchestratorFeatureHostOptions["createRuntimeDrainDeadline"]>;
+  private hardShutdownPromise: Promise<void> | null = null;
   private readonly logError: NonNullable<OrchestratorFeatureHostOptions["logError"]>;
   private readonly now: NonNullable<OrchestratorFeatureHostOptions["now"]>;
   private readonly onSwap: NonNullable<OrchestratorFeatureHostOptions["onSwap"]>;
+  private readonly reloadPrevious = new Set<ActiveGeneration<TFeatures, TNotification>>();
   private reloadTail = Promise.resolve();
   private readonly retirements = new Set<Retirement<TFeatures, TNotification>>();
   private readonly runtimeDrainTimeoutMs: number;
@@ -153,6 +155,7 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
       if (blocked) throw new Error(this.describeTimedOutRetirement(blocked, "A previous feature generation still has timed-out runtime retirement"));
 
       const previous = this.current;
+      this.reloadPrevious.add(previous);
       const candidate = this.createActiveGeneration(this.loader.reload());
       this.current = candidate;
       this.currentToken = candidate.token;
@@ -161,12 +164,14 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
       } catch (error) {
         this.current = previous;
         this.currentToken = previous.token;
+        this.reloadPrevious.delete(previous);
         await candidate.generation.dispose();
         throw error;
       }
       await this.onSwap();
 
       const retirement = this.createRetirement(previous);
+      this.reloadPrevious.delete(previous);
       const deadline = this.createDeadline(this.runtimeDrainTimeoutMs);
       const outcome = await Promise.race([
         retirement.promise.then(
@@ -214,6 +219,30 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
     await active.generation.dispose();
   }
 
+  beginHardShutdown() {
+    if (this.hardShutdownPromise) return this.hardShutdownPromise;
+    const active = this.current;
+    this.currentToken = null;
+    for (const previous of this.reloadPrevious) {
+      this.beginDrain(previous);
+      previous.generation.expireRuntimeDrain?.();
+    }
+    this.beginDrain(active);
+    active.generation.expireRuntimeDrain?.();
+    const currentDisposal = (async () => {
+      await this.waitForDrain(active);
+      active.disposalPhase = "feature generation disposal";
+      await active.generation.dispose((phase) => { active.disposalPhase = boundedLabel(phase); });
+      active.disposalPhase = null;
+    })();
+    this.hardShutdownPromise = Promise.all([
+      ...Array.from(this.retirements, (retirement) => retirement.promise),
+      this.reloadTail,
+      currentDisposal,
+    ]).then(() => undefined);
+    return this.hardShutdownPromise;
+  }
+
   private createActiveGeneration(module: OrchestratorFeatureModule<TContext, TFeatures, TNotification>): ActiveGeneration<TFeatures, TNotification> {
     const token = Symbol("orchestrator-feature-generation");
     return {
@@ -229,8 +258,7 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
   }
 
   private createRetirement(active: ActiveGeneration<TFeatures, TNotification>): Retirement<TFeatures, TNotification> {
-    active.runtimeDrainStartedAt = this.now();
-    active.generation.beginRuntimeDrain?.();
+    this.beginDrain(active);
     const retirement = {
       active,
       promise: Promise.resolve(),
@@ -275,6 +303,12 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
   private resolveDrain(active: ActiveGeneration<TFeatures, TNotification>) {
     if (active.activeOperations.size !== 0) return;
     for (const resolve of active.drainWaiters.splice(0)) resolve();
+  }
+
+  private beginDrain(active: ActiveGeneration<TFeatures, TNotification>) {
+    if (active.runtimeDrainStartedAt !== null) return;
+    active.runtimeDrainStartedAt = this.now();
+    active.generation.beginRuntimeDrain?.();
   }
 
   private async waitForDrain(active: ActiveGeneration<TFeatures, TNotification>) {

@@ -5,7 +5,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { OrchestratorReloadScope } from "../lib/types";
-import WorkbenchOrchestratorReloadController, { type WorkbenchReloadScopeClaim } from "./WorkbenchOrchestratorReloadController";
+import WorkbenchOrchestratorReloadController, {
+  type WorkbenchOrchestratorReloadControllerState,
+  type WorkbenchReloadScopeClaim,
+} from "./WorkbenchOrchestratorReloadController";
 
 function deferred<TValue>() {
   let reject!: (error: unknown) => void;
@@ -17,6 +20,14 @@ function deferred<TValue>() {
   return { promise, reject, resolve };
 }
 
+function deadlineHarness() {
+  const expired = deferred<void>();
+  return {
+    create: () => ({ cancel: () => undefined, expired: expired.promise }),
+    expire: () => expired.resolve(),
+  };
+}
+
 function claim(threadId: string, reloadScopes: OrchestratorReloadScope[], lifecycleKind: WorkbenchReloadScopeClaim["lifecycleKind"] = "working"): WorkbenchReloadScopeClaim {
   return { harness: "codex", lifecycleKind, reloadScopes, threadId };
 }
@@ -24,6 +35,22 @@ function claim(threadId: string, reloadScopes: OrchestratorReloadScope[], lifecy
 function request(controller: WorkbenchOrchestratorReloadController, threadId: string, scopes: OrchestratorReloadScope[], signal = new AbortController().signal) {
   return controller.request({ cwd: "C:/workbench", harness: "codex", scopes, threadId }, signal);
 }
+
+test("a state handoff from the previous controller generation starts with no hard reload pending", () => {
+  const legacyState = {
+    activeBatch: null,
+    eligibilityChanged: false,
+    waiters: new Map(),
+  } as unknown as WorkbenchOrchestratorReloadControllerState;
+  const controller = new WorkbenchOrchestratorReloadController({
+    executeBatch: async () => undefined,
+    initialState: legacyState,
+    listClaims: async () => [],
+  });
+
+  assert.equal(controller.isHardReloadPending(), false);
+  assert.equal(legacyState.hardReloadPhase, "idle");
+});
 
 test("a useful partial batch satisfies all matching waiters and preserves the remaining request", async () => {
   let claims = [
@@ -118,4 +145,57 @@ test("admission rejects scopes outside the caller active claim", async () => {
   });
   await assert.rejects(request(controller, "caller", ["next-dev"]), /does not claim/u);
   await assert.rejects(request(controller, "missing", ["mcp"]), /must own an active Git arc/u);
+});
+
+test("hard reload notifies every owner together and exits when they settle", async () => {
+  const release = deferred<void>();
+  const effects: string[] = [];
+  let exits = 0;
+  const controller = new WorkbenchOrchestratorReloadController({
+    executeBatch: async () => undefined,
+    hardReload: {
+      exitProcess: () => { exits += 1; },
+      notifications: () => [
+        { name: "first", notify: () => { effects.push("first"); } },
+        { name: "second", notify: async () => { effects.push("second"); await release.promise; } },
+      ],
+    },
+    listClaims: async () => [],
+  });
+
+  controller.admitHardReload();
+  const stopping = controller.beginHardReload();
+  assert.deepEqual(effects, ["first", "second"]);
+  assert.equal(exits, 0);
+  release.resolve();
+  await stopping;
+  assert.equal(exits, 1);
+});
+
+test("hard reload deadline bypasses a stuck partial reload and forces exit", async () => {
+  const executing = deferred<void>();
+  const release = deferred<void>();
+  const never = deferred<void>();
+  const deadline = deadlineHarness();
+  let exits = 0;
+  const controller = new WorkbenchOrchestratorReloadController({
+    executeBatch: async () => { executing.resolve(); await release.promise; },
+    hardReload: {
+      createDeadline: deadline.create,
+      exitProcess: () => { exits += 1; },
+      notifications: () => [{ name: "stuck", notify: async () => await never.promise }],
+      timeoutMs: 5_000,
+    },
+    listClaims: async () => [claim("caller", ["mcp"])],
+  });
+  const partialReload = request(controller, "caller", ["mcp"]);
+  await executing.promise;
+
+  controller.admitHardReload();
+  const stopping = controller.beginHardReload();
+  await assert.rejects(partialReload, /hard reloading/u);
+  deadline.expire();
+  await stopping;
+  assert.equal(exits, 1);
+  release.resolve();
 });

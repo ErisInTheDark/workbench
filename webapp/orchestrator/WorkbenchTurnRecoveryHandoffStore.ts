@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchTurnRecoveryHandoffCandidate/WorkbenchTurnRecoveryHandoff: versioned provider-neutral controlled-restart state. Keywords: recovery, handoff, persistence.
+ * - WorkbenchTurnRecoveryHandoffCandidate/WorkbenchTurnRecoveryHandoff: versioned provider-neutral manual-resume state. Keywords: recovery, handoff, persistence.
  * - WorkbenchRecoveryHarness: supported automatic recovery provider set. Keywords: recovery, harness, provider.
  * - default WorkbenchTurnRecoveryHandoffStore: atomically validate, update, and remove bounded recovery handoffs. Keywords: recovery, atomic, runtime.
  */
@@ -29,7 +29,8 @@ export interface WorkbenchTurnRecoveryHandoff {
   createdAt: number;
   generation: string;
   id: string;
-  schemaVersion: 1;
+  kind: "manual-resume";
+  schemaVersion: 2;
 }
 
 const MAX_HANDOFF_AGE_MS = 10 * 60 * 1000;
@@ -85,7 +86,8 @@ export default class WorkbenchTurnRecoveryHandoffStore {
     }
     if (
       !isRecord(parsed)
-      || parsed.schemaVersion !== 1
+      || parsed.schemaVersion !== 2
+      || parsed.kind !== "manual-resume"
       || typeof parsed.createdAt !== "number"
       || !Number.isFinite(parsed.createdAt)
       || typeof parsed.generation !== "string"
@@ -111,7 +113,7 @@ export default class WorkbenchTurnRecoveryHandoffStore {
       await this.remove();
       return null;
     }
-    return { candidates: typedCandidates, createdAt: parsed.createdAt, generation: parsed.generation, id: parsed.id, schemaVersion: 1 };
+    return { candidates: typedCandidates, createdAt: parsed.createdAt, generation: parsed.generation, id: parsed.id, kind: "manual-resume", schemaVersion: 2 };
   }
 
   async write(handoff: WorkbenchTurnRecoveryHandoff) {

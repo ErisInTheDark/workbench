@@ -66,6 +66,22 @@ export default class ReloadableWorkbenchOrchestratorReloadController {
     this.current.notifyEligibilityChanged();
   }
 
+  admitHardReload() {
+    return this.current.admitHardReload();
+  }
+
+  cancelHardReloadAdmission() {
+    this.current.cancelHardReloadAdmission();
+  }
+
+  isHardReloadPending() {
+    return this.current.isHardReloadPending();
+  }
+
+  async beginHardReload() {
+    await this.current.beginHardReload();
+  }
+
   async executeUnmanaged(scopes: OrchestratorReloadScope[]) {
     await this.runExclusive(async () => await this.performBatch(scopes));
   }
@@ -77,6 +93,7 @@ export default class ReloadableWorkbenchOrchestratorReloadController {
   private createController(Controller: ControllerConstructor, initialState?: WorkbenchOrchestratorReloadControllerState) {
     return new Controller({
       executeBatch: async (scopes) => await this.executeBatch(scopes),
+      hardReload: this.options.hardReload,
       initialState,
       listClaims: this.options.listClaims,
       now: this.options.now,

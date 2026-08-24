@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect Codex launch policy and intentional child replacement from stale callbacks. Keywords: codex, app-server, args, generation, test.
+ * No production exports. Node tests protect Codex launch policy, asynchronous shutdown, and intentional child replacement from stale callbacks. Keywords: codex, app-server, args, generation, test.
  */
 
 import assert from "node:assert/strict";
@@ -24,6 +24,12 @@ function fakeChild(pid: number) {
   child.stdin = new PassThrough();
   child.stdout = new PassThrough();
   return child as unknown as ChildProcess;
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((nextResolve) => { resolve = nextResolve; });
+  return { promise, resolve };
 }
 
 test("managed Codex disables native subagents without process-scoped MCP config", () => {
@@ -77,4 +83,31 @@ test("intentional replacement ignores stale child output and exit", () => {
     "[codex-stdio] exited (code=0, signal=null)",
     "[codex-stdio] exited (code=1, signal=null)",
   ]);
+});
+
+test("asynchronous stop detaches ownership before process-tree termination settles", async () => {
+  const first = fakeChild(201);
+  const second = fakeChild(202);
+  const children = [first, second];
+  const releaseTermination = deferred();
+  const terminated: ChildProcess[] = [];
+  const server = new CodexAppServer({
+    createChild: () => children.shift() ?? second,
+    log: () => undefined,
+    logError: () => undefined,
+    onFatalExit: () => undefined,
+    onMessage: () => undefined,
+    projectRoot: "C:/workspace",
+    terminateChildAsync: async (child) => {
+      terminated.push(child);
+      await releaseTermination.promise;
+    },
+  });
+
+  server.send({ method: "first" });
+  const stopping = server.stopAsync();
+  server.send({ method: "second" });
+  assert.deepEqual(terminated, [first]);
+  releaseTermination.resolve();
+  await stopping;
 });

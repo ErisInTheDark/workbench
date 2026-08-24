@@ -54,24 +54,22 @@ test("late completion for an older turn cannot retire a newer candidate", async 
   assert.equal(controller.capture(["codex"])[0]?.turnId, "new-turn");
 });
 
-test("handoff recovery failures publish once and retire the failed candidate", async () => {
+test("recovery failures publish once and retire the failed live candidate", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-progress-"));
   const store = new WorkbenchTurnRecoveryHandoffStore(root);
   const controller = new WorkbenchTurnRecoveryController(store, () => undefined);
   controller.observeRequest("codex", { id: 1, method: "turn/start", params: { input: [], threadId: "first" } }, 2);
   controller.observeRequest("codex", { id: 2, method: "turn/start", params: { input: [], threadId: "second" } }, 1);
-  const handoff = await controller.persistControlledRestart();
+  const candidates = controller.capture(["codex"]);
   let calls = 0;
   const failures: string[] = [];
   const reportingController = new WorkbenchTurnRecoveryController(store, () => undefined, async (candidate) => { failures.push(candidate.threadId); });
-  reportingController.loadCandidates(handoff.candidates);
-  await reportingController.recover(handoff.candidates, async () => {
+  reportingController.loadCandidates(candidates);
+  await reportingController.recover(candidates, async () => {
     calls += 1;
     if (calls === 2) throw new Error("recovery failed");
     return "recovered";
-  }, handoff);
-  const persisted = await store.load();
-  assert.equal(persisted, null);
+  });
   assert.deepEqual(failures, ["second"]);
 });
 

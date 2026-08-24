@@ -1,4 +1,4 @@
-/* No production exports. Tests protect atomic reload, rollback, generation drain policy, deadline diagnostics, disposal, and fencing. */
+/* No production exports. Tests protect atomic reload, rollback, generation drain policy, hard shutdown, deadline diagnostics, disposal, and fencing. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -156,6 +156,25 @@ test("runtime-drain deadline reports the exact disposal phase", async () => {
   deadline.expire();
   await assert.rejects(reloading, /thread-state disposal/u);
   releaseDisposal.resolve();
+});
+
+test("hard shutdown cancels the current generation without waiting for a stuck reload", async () => {
+  const context: Context = { effects: [] };
+  const modules = [moduleFor("old"), moduleFor("new")];
+  const host = new OrchestratorFeatureHost(context, { load: () => modules[0]!, reload: () => modules[1]! });
+  await host.start();
+  const releaseOld = deferred();
+  const held = host.run("value", async () => await releaseOld.promise, "held old-generation request");
+  const reloading = host.reload();
+  while (!context.effects.includes("begin-drain:old")) await Promise.resolve();
+
+  const hardShutdown = host.beginHardShutdown();
+  assert.ok(context.effects.includes("begin-drain:new"));
+  assert.ok(context.effects.includes("expire-drain:new"));
+
+  releaseOld.resolve();
+  await Promise.all([held, reloading, hardShutdown]);
+  assert.ok(context.effects.includes("dispose:new"));
 });
 
 test("feature loader invalidates the registry root as one project-local subtree", () => {

@@ -46,6 +46,7 @@ import {
     createSpawnOptions,
     getSpawnDescriptor,
     killProcessTree,
+    killProcessTreeAsync,
     log,
     logError,
     pipeChildStream,
@@ -57,6 +58,7 @@ import { createOrchestratorFeatureModuleLoader } from "./orchestrator-feature-lo
 import type { OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification } from "./orchestrator-feature-registry";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
+import type { WorkbenchHardReloadNotification } from "./WorkbenchOrchestratorReloadController";
 import ReloadableWorkbenchOrchestratorReloadController from "./ReloadableWorkbenchOrchestratorReloadController";
 import type { WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
@@ -153,7 +155,6 @@ let opencodeBridgeReloadPromise: Promise<void> | null = null;
 let browseControllerReloadPromise: Promise<void> | null = null;
 let codexAcceptsUpstreamMessages = true;
 let codexRecoverySupervisor: CodexRecoverySupervisor;
-let controlledRestartPending = false;
 const codexBridgeTransitionController = new CodexBridgeTransitionController();
 const turnRecoveryHandoffStore = new WorkbenchTurnRecoveryHandoffStore(PROJECT_ROOT);
 const codexMcpGenerationController = new WorkbenchCodexMcpGenerationController();
@@ -175,6 +176,12 @@ const subagentStore = new WorkbenchSubagentStore(PROJECT_ROOT);
 const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
 const orchestratorReloadController = new ReloadableWorkbenchOrchestratorReloadController({
   executeScopes: executeReloadScopes,
+  hardReload: {
+    exitProcess: () => process.exit(0),
+    logError: (message) => logError("hard-reload", message),
+    notifications: () => createHardReloadNotifications(),
+    timeoutMs: 5_000,
+  },
   listClaims: async (cwd) => await featureHost.run("gitArc", (feature) => feature.listReloadScopeClaims(cwd), "git arc: reload-scope claim read"),
 });
 const featureHost = new OrchestratorFeatureHost<OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification>(
@@ -387,6 +394,58 @@ async function stopAllChildren() {
   }
 }
 
+function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
+  const activeBrowseController = browseController;
+  const activeChildPids = Array.from(processes.values(), ({ child }) => child && !child.killed ? child.pid : undefined)
+    .filter((pid): pid is number => typeof pid === "number");
+  return [
+    {
+      name: "process lifecycle",
+      notify: () => {
+        shuttingDown = true;
+        codexRecoverySupervisor.dispose();
+      },
+    },
+    {
+      name: "bridge ingress",
+      notify: () => {
+        codexAcceptsUpstreamMessages = false;
+        closeBridgeClients(1012, "The orchestrator is hard reloading; reconnect shortly.");
+        bridgeWebSocketServer?.close();
+        bridgeWebSocketServer = null;
+        bridgeServer?.close();
+        bridgeServer = null;
+      },
+    },
+    { name: "feature graph", notify: () => featureHost.beginHardShutdown() },
+    {
+      name: "Browse controller",
+      notify: async () => {
+        if (!activeBrowseController) return;
+        activeBrowseController.beginDrain();
+        await activeBrowseController.waitForIdle();
+      },
+    },
+    {
+      name: "Codex bridge",
+      notify: () => {
+        codexBridge.beginStopping();
+        return codexBridge.disposeImmediately();
+      },
+    },
+    { name: "Codex app-server", notify: async () => await codexAppServer.stopAsync() },
+    { name: "OpenCode bridge", notify: async () => await opencodeBridge.stop() },
+    { name: "Copilot bridge", notify: async () => await copilotBridge.stop() },
+    {
+      name: "managed child processes",
+      notify: async () => {
+        await Promise.all(activeChildPids.map(async (pid) => await killProcessTreeAsync(pid)));
+      },
+    },
+    { name: "subagent relationship store", notify: async () => await subagentStore.waitForIdle() },
+  ];
+}
+
 function findProcessSpec(name: string) {
   return specs.find((spec) => spec.name === name) ?? null;
 }
@@ -421,7 +480,7 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
     codexHealthOptions: {
       failureThreshold: CODEX_HEALTH_FAILURE_THRESHOLD,
       intervalMs: CODEX_HEALTH_INTERVAL_MS,
-      isProbeAllowed: () => codexAcceptsUpstreamMessages && !controlledRestartPending && !codexBridgeTransitionController.isTransitioning,
+      isProbeAllowed: () => codexAcceptsUpstreamMessages && !orchestratorReloadController.isHardReloadPending() && !codexBridgeTransitionController.isTransitioning,
       isShuttingDown: () => shuttingDown,
       log: (message) => log("codex-health", message),
       logError: (message) => logError("codex-health", message),
@@ -605,7 +664,7 @@ async function requestLiveHarness(harness: HarnessKind, request: JsonRpcRequest)
 }
 
 function requireHarnessAdmission() {
-  if (controlledRestartPending) throw new Error("The orchestrator is restarting; new harness work is temporarily unavailable.");
+  if (orchestratorReloadController.isHardReloadPending()) throw new Error("The orchestrator is hard reloading; new harness work is temporarily unavailable.");
 }
 
 function readGenericBrowseThread(harness: "copilot" | "opencode", threadId: string) {
@@ -720,7 +779,7 @@ async function prepareCodexTurnStart(request: JsonRpcRequest) {
 }
 
 async function requestLiveCodexWithDeadline(request: JsonRpcRequest, timeoutMs = CODEX_HEALTH_REQUEST_TIMEOUT_MS) {
-  if (controlledRestartPending) throw new Error("The orchestrator is restarting; new harness work is temporarily unavailable.");
+  if (orchestratorReloadController.isHardReloadPending()) throw new Error("The orchestrator is hard reloading; new harness work is temporarily unavailable.");
   turnRecoveryController.observeRequest("codex", request);
   return await runAfterCodexBridgeReload(async () => {
     await ensureCodexReady();
@@ -1032,7 +1091,7 @@ async function recoverCodexBridge(reason: string) {
     throw error;
   }
   await turnRecoveryController.recover(candidates, recoverTurnCandidate);
-  await recoverPersistedHandoff();
+  await recoverPersistedManualResume();
   log("codex-bridge", `restored bridge and app-server readiness after: ${reason}`);
 }
 
@@ -1155,7 +1214,7 @@ async function reloadOpenCodeBridge({ restartManagedServer = false }: { restartM
 async function executeReloadScopes(scopes: OrchestratorReloadScope[]) {
   const coreScopes = new Set<OrchestratorReloadScope>(["orchestrator-logic", "browse-controller", "mcp", "next-dev", "orchestrator-server", "reload-coordinator"]);
   const harnessPlan = featureHost.get("harnesses").planReload(scopes.filter((scope) => !coreScopes.has(scope)));
-  if (scopes.includes("orchestrator-server")) throw new Error("Full orchestrator restart requires the controlled restart boundary.");
+  if (scopes.includes("orchestrator-server")) throw new Error("Full orchestrator restart requires the operator hard-reload boundary.");
   if (scopes.includes("orchestrator-logic") || scopes.includes("mcp") || harnessPlan.reloadOrchestratorLogic) {
     await reloadOrchestratorLogic();
   }
@@ -1200,53 +1259,40 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
   });
 }
 
-async function recoverPersistedHandoff() {
+async function recoverPersistedManualResume() {
   const handoff = await turnRecoveryHandoffStore.load();
   if (!handoff) return;
   turnRecoveryController.loadCandidates(handoff.candidates);
   await turnRecoveryController.recover(handoff.candidates, recoverTurnCandidate, handoff);
-  log("turn-recovery", `settled controlled-restart handoff ${handoff.id}`);
+  log("turn-recovery", `settled manual-resume handoff ${handoff.id}`);
 }
 
-async function handleControlledOrchestratorRestart(response: http.ServerResponse) {
+function handleHardOrchestratorReload(response: http.ServerResponse) {
   if (process.env.WORKBENCH_ORCHESTRATOR_LOOP !== "1") {
     sendHttpJson(response, 409, { error: "Full orchestrator restart requires run-orchestrator-loop.sh to own relaunch." });
     return;
   }
 
-  controlledRestartPending = true;
-  closeBridgeClients(1012, "The orchestrator is restarting; reconnect shortly.");
+  let admission: OrchestratorReloadResponse;
   try {
-    await turnRecoveryController.persistControlledRestart();
+    admission = orchestratorReloadController.admitHardReload();
   } catch (error) {
-    controlledRestartPending = false;
-    sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Unable to persist restart recovery state." });
+    sendHttpJson(response, 409, { error: error instanceof Error ? error.message : "Unable to admit hard reload." });
     return;
   }
-
-  const startedAt = Date.now();
-  lastReloadResponse = {
-    appliedScopes: [],
-    completedAt: startedAt,
-    error: null,
-    ok: true,
-    queuedScopes: ["orchestrator-server"],
-    requestedScopes: ["orchestrator-server"],
-    startedAt,
-    state: "succeeded",
-  };
+  lastReloadResponse = admission;
 
   let acknowledged = false;
   response.once("finish", () => {
     acknowledged = true;
-    setImmediate(() => shutdownAndExit(0));
+    void orchestratorReloadController.beginHardReload().catch((error) => {
+      logError("hard-reload", error instanceof Error ? error.stack ?? error.message : String(error));
+      process.exit(1);
+    });
   });
   response.once("close", () => {
     if (acknowledged || response.writableFinished) return;
-    controlledRestartPending = false;
-    void turnRecoveryHandoffStore.remove().catch((error) => {
-      logError("turn-recovery", `failed to cancel unacknowledged restart handoff: ${error instanceof Error ? error.message : String(error)}`);
-    });
+    orchestratorReloadController.cancelHardReloadAdmission();
   });
   sendHttpJson(response, 202, lastReloadResponse);
 }
@@ -1278,7 +1324,7 @@ async function handleReloadHttpRequest(request: http.IncomingMessage, response: 
     return;
   }
   if (requestedScopes[0] === "orchestrator-server") {
-    await handleControlledOrchestratorRestart(response);
+    handleHardOrchestratorReload(response);
     return;
   }
 
@@ -1366,11 +1412,11 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
     return;
   }
 
-  if (controlledRestartPending) {
+  if (orchestratorReloadController.isHardReloadPending()) {
     if ("id" in message) {
       sendJsonToClient(client, {
         id: message.id,
-        error: { code: -32000, message: "The orchestrator is restarting; reconnect shortly." },
+        error: { code: -32000, message: "The orchestrator is hard reloading; reconnect shortly." },
       });
     }
     return;
@@ -1561,8 +1607,8 @@ async function startOrchestrator() {
   const codexReadiness = ensureCodexReady();
   void codexReadiness
     .then(() => {
-      void recoverPersistedHandoff().catch((error) => {
-        logError("turn-recovery", `startup handoff recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+      void recoverPersistedManualResume().catch((error) => {
+        logError("turn-recovery", `startup manual-resume recovery failed: ${error instanceof Error ? error.message : String(error)}`);
       });
     })
     .catch((error) => {

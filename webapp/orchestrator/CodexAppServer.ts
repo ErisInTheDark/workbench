@@ -10,6 +10,7 @@ import {
     createSpawnOptions,
     getSpawnDescriptor,
     killProcessTree,
+    killProcessTreeAsync,
     log,
     logError,
     pipeChildStream,
@@ -23,6 +24,7 @@ export type CodexAppServerOptions = {
   onMessage: (message: unknown) => void;
   projectRoot: string;
   terminateChild?: (child: ChildProcess) => void;
+  terminateChildAsync?: (child: ChildProcess) => Promise<void>;
 };
 
 export function getCodexAppServerArgs() {
@@ -45,8 +47,9 @@ export default class CodexAppServer {
   private readonly onMessage: CodexAppServerOptions["onMessage"];
   private readonly projectRoot: string;
   private readonly terminateChild: (child: ChildProcess) => void;
+  private readonly terminateChildAsync: (child: ChildProcess) => Promise<void>;
 
-  constructor({ createChild, log: lifecycleLog, logError: lifecycleLogError, onFatalExit, onMessage, projectRoot, terminateChild }: CodexAppServerOptions) {
+  constructor({ createChild, log: lifecycleLog, logError: lifecycleLogError, onFatalExit, onMessage, projectRoot, terminateChild, terminateChildAsync }: CodexAppServerOptions) {
     this.createChild = createChild ?? (() => this.createStdioChild());
     this.log = lifecycleLog ?? log;
     this.logError = lifecycleLogError ?? logError;
@@ -54,6 +57,7 @@ export default class CodexAppServer {
     this.onMessage = onMessage;
     this.projectRoot = projectRoot;
     this.terminateChild = terminateChild ?? ((child) => killProcessTree(child.pid));
+    this.terminateChildAsync = terminateChildAsync ?? (async (child) => await killProcessTreeAsync(child.pid));
   }
 
   send(message: unknown) {
@@ -66,14 +70,21 @@ export default class CodexAppServer {
   }
 
   stop() {
+    const retiringProcess = this.detachProcess();
+    if (retiringProcess && !retiringProcess.killed) this.terminateChild(retiringProcess);
+  }
+
+  async stopAsync() {
+    const retiringProcess = this.detachProcess();
+    if (retiringProcess && !retiringProcess.killed) await this.terminateChildAsync(retiringProcess);
+  }
+
+  private detachProcess() {
     const retiringProcess = this.codexProcess;
-    if (retiringProcess) {
-      this.codexProcess = null;
-      this.generation += 1;
-      if (!retiringProcess.killed) {
-        this.terminateChild(retiringProcess);
-      }
-    }
+    if (!retiringProcess) return null;
+    this.codexProcess = null;
+    this.generation += 1;
+    return retiringProcess;
   }
 
   private createStdioChild() {

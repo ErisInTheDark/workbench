@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchTurnRecoveryPort/WorkbenchTurnRecoveryResult: provider recovery boundary and terminal outcomes. Keywords: recovery, provider, turn.
  * - MAX_AUTOMATIC_RECOVERY_THREADS: cross-harness automatic recovery catastrophe fuse. Keywords: recovery, cap, safety.
- * - default WorkbenchTurnRecoveryController: own live-only multi-harness candidates, automatic and explicit handoffs, goal exclusion, recency caps, and recovery progress. Keywords: recovery, registry, codex, opencode.
+ * - default WorkbenchTurnRecoveryController: own live multi-harness candidates, explicit resume handoffs, goal exclusion, recency caps, and recovery progress. Keywords: recovery, registry, codex, opencode.
  */
 
 import { createWorkbenchThreadRecoveryId } from "../lib/workbench/thread/thread-recovery-message";
@@ -97,18 +97,6 @@ export default class WorkbenchTurnRecoveryController {
     return eligible.slice(0, MAX_AUTOMATIC_RECOVERY_THREADS).map((candidate) => structuredClone(candidate));
   }
 
-  async persistControlledRestart() {
-    const handoff: WorkbenchTurnRecoveryHandoff = {
-      candidates: this.capture(["codex", "opencode"]),
-      createdAt: Date.now(),
-      generation: this.generationId,
-      id: createWorkbenchThreadRecoveryId(`handoff:${process.pid}:${Date.now()}`),
-      schemaVersion: 1,
-    };
-    await this.store.write(handoff);
-    return handoff;
-  }
-
   async persistManualResume(harness: WorkbenchRecoveryHarness, threadId: string) {
     const candidate = this.candidates.get(`${harness}:${threadId}`);
     if (!candidate) throw new Error("The current managed turn has no captured start request to resume.");
@@ -119,7 +107,8 @@ export default class WorkbenchTurnRecoveryController {
       createdAt: Date.now(),
       generation: this.generationId,
       id: createWorkbenchThreadRecoveryId(`manual:${harness}:${threadId}:${Date.now()}`),
-      schemaVersion: 1,
+      kind: "manual-resume",
+      schemaVersion: 2,
     };
     await this.store.write(handoff);
     return { candidate: captured, handoff };
