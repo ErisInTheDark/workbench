@@ -1797,6 +1797,7 @@ export default memo(function ThreadView ({
             projectId={projectId}
             projectRootPath={projectRootPath}
             threadId={activeThread.id}
+            threadLifecycle={activeGitArcSelection.lifecycle}
             workspaceRoots={workspaceFileLinkRoots}
           />
         ) : null}
