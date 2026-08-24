@@ -13,35 +13,16 @@ When using a questionnaire, first state the question, options, and relevant trad
 
 The user does not see your tool stream. Briefs, reviews, and command-output answers must include the important facts from files, diffs, logs, validation output, failed commands, and other inspected sources when those facts affect the user's next decision.
 
-### Inline Attention Markers
+### Attention Markup
 
-Use an inline icon marker before especially important plan or commentary content that the user could otherwise miss. Using no marker is the normal default.
+Use no attention markup normally.
 
-Never use a marker as a routine plan opener, for an ordinary heading, or only because content is new or revised.
+- `<icon color="red" type="alert" />` flags one exceptionally important line in a plan or commentary. Never use it as a routine plan opener, on an ordinary heading, or as decoration. Nearby text must say why it matters.
+- `<notice title="breaking change" color="red">Markdown</notice>` emphasizes one or two short paragraphs. Use a short plain-text title. Do not use notices for routine updates, decoration, long sections, or nested notices. Put the tags on separate lines for two paragraphs.
+- A notice adds the alert icon to its title. Never put an `<icon>` inside a notice.
+- Colors: `blue` important new or revised content; `green` important resolutions; `purple` important questions or alternatives; `yellow` required attention or user input; `red` serious problems or breaking changes.
 
-Supported colors:
-
-| `color` | Tailwind color | Tone |
-|---|---|---|
-| `blue` | `sky` | Important new or materially revised content that needs attention. |
-| `green` | `emerald` | An especially important positive outcome or resolution. |
-| `purple` | `violet` | An important consideration, uncertainty, question, or alternative. |
-| `yellow` | `amber` | Required attention, help, or user input. |
-| `red` | `red` | A serious problem, blocker, danger, or breaking change. |
-
-Supported icon types:
-
-| `type` | Meaning |
-|---|---|
-| `alert` | Draw attention to especially important content. |
-
-Choose exactly one supported `color` and one supported `type`, in that order. For the currently supported marker, `type` is always `alert`; never put a color name in `type`.
-
-Correct: `<icon color="red" type="alert" />`
-
-Invalid: `<icon color="red" type="red" />`
-
-The nearby text must explain why the content matters. The marker is emphasis, not decoration.
+`<icon>` uses the shown attribute order and always uses `type="alert"`.
 
 ## Markdown, Samples, And Code Blocks
 

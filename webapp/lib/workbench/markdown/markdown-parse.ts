@@ -49,6 +49,7 @@ export type ParsedBlock =
   | { type: "heading"; level: number; text: string }
   | { type: "blockquote"; text: string }
   | { type: "plan"; text: string }
+  | { type: "notice"; color: string; source: string; text: string; title: string }
   | { type: "ul"; items: ParsedListItem[] }
   | { type: "ol"; items: ParsedListItem[] }
   | { type: "list-break"; count: number }
@@ -1137,6 +1138,86 @@ function isThreadStrayPlanCloseLine(line: string, options: MarkdownParseOptions)
     && isThreadPlanCloseLine(line);
 }
 
+const THREAD_NOTICE_COMPACT_LINE_PATTERN = /^<notice title="([^"\r\n]*)" color="([a-z][a-z0-9-]*)">(.*?)<\/notice>\s*$/u;
+const THREAD_NOTICE_OPEN_LINE_PATTERN = /^<notice title="([^"\r\n]*)" color="([a-z][a-z0-9-]*)">\s*$/u;
+const THREAD_NOTICE_CLOSE_LINE_PATTERN = /^<\/notice>\s*$/u;
+
+function isThreadNoticeOpenLine(line: string, options: MarkdownParseOptions) {
+  if ((options.profile ?? "editor") !== "thread") {
+    return false;
+  }
+
+  const source = line.trim();
+  return THREAD_NOTICE_COMPACT_LINE_PATTERN.test(source) || THREAD_NOTICE_OPEN_LINE_PATTERN.test(source);
+}
+
+function parseThreadNoticeBlock(lines: string[], startIndex: number, options: MarkdownParseOptions) {
+  if ((options.profile ?? "editor") !== "thread") {
+    return null;
+  }
+
+  const openingLine = lines[startIndex];
+  const compactMatch = THREAD_NOTICE_COMPACT_LINE_PATTERN.exec(openingLine.trim());
+  if (compactMatch) {
+    return {
+      block: {
+        color: compactMatch[2],
+        source: openingLine,
+        text: compactMatch[3].trim(),
+        title: compactMatch[1].trim(),
+        type: "notice" as const,
+      },
+      nextIndex: startIndex + 1,
+    };
+  }
+
+  const openingMatch = THREAD_NOTICE_OPEN_LINE_PATTERN.exec(openingLine.trim());
+  if (!openingMatch) {
+    return null;
+  }
+
+  const noticeLines: string[] = [];
+  let codeFenceOpener: ParsedCodeFenceOpenLine | null = null;
+  let index = startIndex + 1;
+
+  while (index < lines.length) {
+    const line = lines[index];
+
+    if (codeFenceOpener) {
+      if (isCodeFenceCloseLine(line, codeFenceOpener)) {
+        codeFenceOpener = null;
+      }
+
+      noticeLines.push(line);
+      index += 1;
+      continue;
+    }
+
+    if (THREAD_NOTICE_CLOSE_LINE_PATTERN.test(line.trim())) {
+      return {
+        block: {
+          color: openingMatch[2],
+          source: lines.slice(startIndex, index + 1).join("\n"),
+          text: noticeLines.join("\n").trim(),
+          title: openingMatch[1].trim(),
+          type: "notice" as const,
+        },
+        nextIndex: index + 1,
+      };
+    }
+
+    const fenceOpener = parseCodeFenceOpenLine(line);
+    if (fenceOpener) {
+      codeFenceOpener = fenceOpener;
+    }
+
+    noticeLines.push(line);
+    index += 1;
+  }
+
+  return null;
+}
+
 function isThreadStateChangeLine(line: string, options: MarkdownParseOptions) {
   return parseThreadStateChangeMode(line, options) !== null;
 }
@@ -1311,6 +1392,16 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
       continue;
     }
 
+    const noticeBlock = parseThreadNoticeBlock(lines, index, options);
+    if (noticeBlock) {
+      maybePushCommentBreak(blocks, blankLineCount, "notice");
+      maybePushStandardBreak(blocks, blankLineCount, "notice");
+      blankLineCount = 0;
+      blocks.push(noticeBlock.block);
+      index = noticeBlock.nextIndex;
+      continue;
+    }
+
     if (isBlockCommentLine(line)) {
       maybePushCommentBreak(blocks, blankLineCount, "comment");
       blankLineCount = 0;
@@ -1406,6 +1497,7 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
       && !isThreadStateChangeLine(lines[index], options)
       && !isThreadPlanOpenLine(lines[index], options)
       && !isThreadPlanCloseLine(lines[index])
+      && !isThreadNoticeOpenLine(lines[index], options)
       && !parseCodeFenceOpenLine(lines[index])
       && !/^(#{1,6})\s+/.test(lines[index])
       && !/^>\s?/.test(lines[index])

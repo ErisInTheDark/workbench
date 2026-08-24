@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect agent-authored inline marker rendering and literal fallback. Keywords: thread, markdown, icon, alert, color.
+ * No production exports. Regression wards protect agent-authored inline markers, notice blocks, Markdown bodies, and literal fallback. Keywords: thread, markdown, icon, notice, color.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -53,4 +53,67 @@ test("unsupported and code-span markers remain literal text", () => {
   assert.match(html, /&lt;icon color=&quot;orange&quot; type=&quot;alert&quot; \/&gt; unsupported color/u);
   assert.match(html, /<code[^>]*>&lt;icon color=&quot;blue&quot; type=&quot;alert&quot; \/&gt;<\/code> code span/u);
   assert.doesNotMatch(html, /data-thread-inline-icon=/u);
+});
+
+test("thread notices render compact and two-paragraph Markdown bodies", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    '<notice title="Breaking change" color="red">Update **every caller** before merging.</notice>',
+    "",
+    '<notice title="Decision needed" color="purple">',
+    "The current owner cannot enforce this rule.",
+    "",
+    "Choose the [new owner](https://example.com/owner) before implementation.",
+    "</notice>",
+  ].join("\n"))));
+
+  assert.equal(Array.from(html.matchAll(/data-thread-notice="true"/gu)).length, 2);
+  assert.equal(Array.from(html.matchAll(/data-thread-notice-icon="alert"/gu)).length, 2);
+  assert.match(html, /aria-label="Breaking change"/u);
+  assert.match(html, /data-thread-notice-color="red"/u);
+  assert.match(html, /Update <strong>every caller<\/strong> before merging\./u);
+  assert.match(html, /aria-label="Decision needed"/u);
+  assert.match(html, /data-thread-notice-color="purple"/u);
+  assert.match(html, /The current owner cannot enforce this rule\.<\/p><p[^>]*>Choose the /u);
+  assert.match(html, /href="https:\/\/example\.com\/owner"/u);
+});
+
+test("thread notices render inside plans without closing on fenced source", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    "<plan>",
+    '<notice title="Parser safety" color="yellow">',
+    "```md",
+    "</notice>",
+    "```",
+    "Still inside the notice.",
+    "</notice>",
+    "</plan>",
+  ].join("\n"))));
+
+  assert.equal(Array.from(html.matchAll(/data-thread-notice="true"/gu)).length, 1);
+  assert.match(html, /data-thread-notice-color="yellow"/u);
+  assert.match(html, /data-thread-codeblock="true"/u);
+  assert.match(html, /&lt;\/notice&gt;/u);
+  assert.match(html, /Still inside the notice\./u);
+});
+
+test("unsupported, empty, unclosed, and fenced notices remain literal text", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    '<notice title="Unsupported" color="orange">body</notice>',
+    "",
+    '<notice title="" color="red">body</notice>',
+    "",
+    '<notice title="Unclosed" color="blue">',
+    "body",
+    "",
+    "```md",
+    '<notice title="Source" color="green">body</notice>',
+    "```",
+  ].join("\n"))));
+
+  assert.doesNotMatch(html, /data-thread-notice=/u);
+  assert.doesNotMatch(html, /data-thread-notice-icon=/u);
+  assert.match(html, /&lt;notice title=&quot;Unsupported&quot; color=&quot;orange&quot;&gt;body&lt;\/notice&gt;/u);
+  assert.match(html, /&lt;notice title=&quot;&quot; color=&quot;red&quot;&gt;body&lt;\/notice&gt;/u);
+  assert.match(html, /&lt;notice title=&quot;Unclosed&quot; color=&quot;blue&quot;&gt;/u);
+  assert.match(html, /&lt;notice title=&quot;Source&quot; color=&quot;green&quot;&gt;body&lt;\/notice&gt;/u);
 });

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - renderThreadMarkdown: render shared markdown parse nodes into React thread display elements. Keywords: thread, markdown, React, renderer.
- * - Local helpers: render inline/block nodes, code-block controls, SVG previews, and diff code-block rows. Keywords: markdown, code, diff, SVG.
+ * - Local helpers: render inline/block nodes, notices, code-block controls, SVG previews, and diff code-block rows. Keywords: markdown, notice, code, diff, SVG.
  */
 
 import { Fragment, type ReactNode } from "react";
@@ -33,6 +33,7 @@ import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-ico
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadInlineIcon from "./ThreadInlineIcon";
+import ThreadNotice from "./ThreadNotice";
 import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 
@@ -422,6 +423,20 @@ function renderThreadTableBlock (
   );
 }
 
+function renderThreadNoticeBlock (block: Extract<ParsedBlock, { type: "notice" }>, options: MarkdownParseOptions, keyPrefix: string) {
+  return (
+    <ThreadNotice
+      bodyMarkdown={block.text}
+      color={block.color}
+      key={keyPrefix}
+      source={block.source}
+      title={block.title}
+    >
+      {renderThreadMarkdownBlocks(block.text, options, `${keyPrefix}-content`)}
+    </ThreadNotice>
+  );
+}
+
 function getCodeBlockLanguageToken(language: string) {
   return language.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
 }
@@ -509,6 +524,8 @@ function renderThreadBlock (block: ParsedBlock, options: MarkdownParseOptions, k
       );
     case "plan":
       return renderThreadPlanBlock(block, options, keyPrefix);
+    case "notice":
+      return renderThreadNoticeBlock(block, options, keyPrefix);
     case "comment":
       return (
         <p

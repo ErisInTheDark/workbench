@@ -5,21 +5,14 @@
 
 import type { ComponentType } from "react";
 
-import { getWorkbenchThreadStatusClassName, type WorkbenchThreadStatusTone } from "../workbench-thread-status-colors";
+import { getWorkbenchThreadStatusClassName } from "../workbench-thread-status-colors";
 import { CircleAlertIcon } from "../workbench-icons";
+import { getThreadMarkdownEmphasisTone } from "./thread-markdown-emphasis-colors";
 
 type InlineIconComponent = ComponentType<{ className?: string }>;
 
 const THREAD_INLINE_ICON_REGISTRY = new Map<string, InlineIconComponent>([
   ["alert", CircleAlertIcon],
-]);
-
-const THREAD_INLINE_ICON_COLOR_TONES = new Map<string, WorkbenchThreadStatusTone>([
-  ["blue", "working"],
-  ["green", "completed"],
-  ["purple", "needs-attention"],
-  ["red", "stopped"],
-  ["yellow", "needs-attention-active"],
 ]);
 
 export default function ThreadInlineIcon ({ color, iconType, source }: {
@@ -28,7 +21,7 @@ export default function ThreadInlineIcon ({ color, iconType, source }: {
   source: string;
 }) {
   const Icon = THREAD_INLINE_ICON_REGISTRY.get(iconType);
-  const tone = THREAD_INLINE_ICON_COLOR_TONES.get(color);
+  const tone = getThreadMarkdownEmphasisTone(color);
   if (!Icon || !tone) {
     return source;
   }
