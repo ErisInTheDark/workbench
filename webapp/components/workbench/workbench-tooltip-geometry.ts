@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - isWorkbenchTooltipPointerSupported: identify pointer input that can intentionally activate a hover tooltip. Keywords: tooltip, pointer, mouse, touch.
  * - getWorkbenchTooltipPosition: center a right-side tooltip and clamp it inside vertical viewport gutters. Keywords: tooltip, portal, position, viewport.
  * - isPointWithinWorkbenchTooltipArea: test trigger and optional interactive-surface pointer proximity. Keywords: tooltip, hover, proximity, interaction.
  */
@@ -8,6 +9,10 @@ const TOOLTIP_ANCHOR_GAP_PX = 8;
 const TOOLTIP_VIEWPORT_GUTTER_PX = 12;
 
 type TooltipRect = Pick<DOMRect, "bottom" | "height" | "left" | "right" | "top" | "width">;
+
+export function isWorkbenchTooltipPointerSupported(pointerType: string) {
+  return pointerType === "mouse";
+}
 
 function pointWithinExpandedRect(x: number, y: number, rect: TooltipRect, distance: number) {
   return x >= rect.left - distance

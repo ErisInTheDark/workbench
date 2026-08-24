@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with direct navigation and explicit context-menu access. Keywords: thread, sidebar, navigation, context menu, claim.
+ * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with direct navigation, tooltip detail, and explicit context-menu access. Keywords: thread, sidebar, navigation, tooltip, context menu, claim.
  */
 "use client";
 
-import type { DragEventHandler, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent, Ref } from "react";
+import type { ComponentType, DragEventHandler, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent, Ref } from "react";
 
 import {
   getThreadSidebarGroup,
@@ -15,6 +15,7 @@ import {
   type WorkbenchThreadTarget,
 } from "../../lib/workbench/thread/thread-state";
 import ContextMenuCapability from "./ContextMenuCapability";
+import ProjectFilePath from "./ProjectFilePath";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import {
@@ -39,13 +40,68 @@ import {
   WorkingThreadIcon,
 } from "./workbench-icons";
 import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
+import WorkbenchTooltip from "./WorkbenchTooltip";
 
 type ThreadAction = "complete" | "discard" | "restore" | "settle" | "wake";
+type ThreadStatusIcon = ComponentType<{ className?: string }>;
 
 function targetForEntry(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadTarget {
   return entry.entryKind === "draft"
     ? { draftId: entry.draft.draftId, kind: "draft" }
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
+}
+
+function ThreadTooltipContent({
+  claimedPaths,
+  dateTime,
+  exactTime,
+  Icon,
+  pinned,
+  projectId,
+  relativeTime,
+  snoozed,
+  status,
+  statusClassName,
+  title,
+}: {
+  claimedPaths: readonly string[];
+  dateTime: string;
+  exactTime: string;
+  Icon: ThreadStatusIcon;
+  pinned: boolean;
+  projectId: string;
+  relativeTime: string;
+  snoozed: boolean;
+  status: string;
+  statusClassName: string;
+  title: string;
+}) {
+  return (
+    <div data-thread-project-file-link-boundary="true" className="flex max-h-full min-w-0 max-w-[min(28rem,calc(100vw-2rem))] flex-col gap-2">
+      <p className="m-0 break-words text-[0.9rem] font-medium leading-[1.45] text-text">{title}</p>
+      <div className="flex min-w-0 items-center gap-1.5 text-[0.76rem] text-muted">
+        <Icon className={`size-3.5 shrink-0 ${statusClassName}`} />
+        <span className={`min-w-0 truncate ${statusClassName}`}>{status}</span>
+        <span className="ml-auto" />
+        {snoozed || pinned ? (
+          <span className="inline-flex size-4 shrink-0 items-center justify-center" aria-label={snoozed ? "Snoozed" : "Pinned"}>
+            {snoozed ? <SnoozedThreadIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}
+          </span>
+        ) : null}
+        <time className="shrink-0" dateTime={dateTime} title={exactTime}>{relativeTime}</time>
+      </div>
+      {claimedPaths.length ? (
+        <div className="explorer-scrollbar flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-2">
+          <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted" aria-hidden="true">
+            <FlagIcon className="size-3.5" />
+          </span>
+          {claimedPaths.map((filePath) => (
+            <ProjectFilePath className="max-w-full shrink" disambiguationPaths={claimedPaths} key={filePath} path={filePath} projectId={projectId} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export default function WorkbenchThreadListItem({
@@ -65,9 +121,11 @@ export default function WorkbenchThreadListItem({
   onDragStart,
   onKeyDown,
   onPointerDown,
+  projectId,
   role,
   selected = false,
   showActions = false,
+  showTooltip = true,
   tabIndex,
 }: {
   anchorRef?: Ref<HTMLAnchorElement>;
@@ -86,7 +144,7 @@ export default function WorkbenchThreadListItem({
   onDragStart?: DragEventHandler<HTMLAnchorElement>;
   onKeyDown?: (event: ReactKeyboardEvent<HTMLAnchorElement>) => void;
   onPointerDown?: (event: PointerEvent<HTMLAnchorElement>) => void;
-  projectId?: string;
+  projectId: string;
   role?: "tab";
   selected?: boolean;
   showActions?: boolean;
@@ -158,35 +216,40 @@ export default function WorkbenchThreadListItem({
       <MoreVerticalIcon className="size-5" />
     </button>
   ) : null;
-  const anchor = (
-    <a
-      ref={anchorRef}
-      draggable={draggable}
-      href={href}
-      role={role}
-      tabIndex={tabIndex}
-      aria-selected={role === "tab" ? selected : undefined}
-      aria-label={rowName}
-      className="absolute inset-0 z-10 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-      onClick={onActivate ? (event: MouseEvent<HTMLAnchorElement>) => {
-        if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-        event.preventDefault();
-        onActivate(target);
-      } : undefined}
-      onKeyDown={onActivate ? (event) => {
-        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onActivate(target); return; }
-        onKeyDown?.(event);
-      } : onKeyDown}
-      onDragStart={onDragStart}
-      onPointerDown={onPointerDown}
-    />
-  );
   return (
     <li className={`group/thread-row relative isolate m-0 min-h-11 list-none md:min-h-0${dimmed ? ` opacity-50${isDragActive ? "" : " hover:opacity-100 focus-within:opacity-100"}` : ""}${className ? ` ${className}` : ""}`} data-thread-status-tone={entry.entryKind === "draft" ? "draft" : statusTone}>
       <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out ${statusClassName} ${selected ? "opacity-100" : `opacity-0${isDragActive ? "" : " group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100"}`}`}>
         <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="12.8" fill="color-mix(in srgb, var(--text) 4%, transparent)" stroke="currentColor" strokeWidth="1" strokeOpacity={strokeOpacity} strokeDasharray={hasDashedBorder ? "6 4" : undefined} vectorEffect="non-scaling-stroke" />
       </svg>
-      <ContextMenuCapability menu={contextMenu}>{anchor}</ContextMenuCapability>
+      <ContextMenuCapability menu={contextMenu}>
+        <WorkbenchTooltip
+          content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} Icon={Icon} pinned={pinned} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={status} statusClassName={statusClassName} title={entry.title} />}
+          enabled={showTooltip && !isDragActive}
+          interactive
+        >
+          <a
+            ref={anchorRef}
+            draggable={draggable}
+            href={href}
+            role={role}
+            tabIndex={tabIndex}
+            aria-selected={role === "tab" ? selected : undefined}
+            aria-label={rowName}
+            className="absolute inset-0 z-10 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+            onClick={onActivate ? (event: MouseEvent<HTMLAnchorElement>) => {
+              if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+              event.preventDefault();
+              onActivate(target);
+            } : undefined}
+            onKeyDown={onActivate ? (event) => {
+              if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onActivate(target); return; }
+              onKeyDown?.(event);
+            } : onKeyDown}
+            onDragStart={onDragStart}
+            onPointerDown={onPointerDown}
+          />
+        </WorkbenchTooltip>
+      </ContextMenuCapability>
       {contextMenuButton}
       {compact ? (
         <div

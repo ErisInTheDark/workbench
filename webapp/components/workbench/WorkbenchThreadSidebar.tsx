@@ -274,6 +274,7 @@ export default memo(function WorkbenchThreadSidebar({
               sourceKey,
             });
           }}
+          projectId={projectId}
         />
       </nav>
       {error ? <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">{error}</p> : null}

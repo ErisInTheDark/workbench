@@ -13,15 +13,16 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type MouseEvent,
   type ReactElement,
   type ReactNode,
   type Ref,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
 
 import {
   getWorkbenchTooltipPosition,
+  isWorkbenchTooltipPointerSupported,
   isPointWithinWorkbenchTooltipArea,
 } from "./workbench-tooltip-geometry";
 
@@ -43,8 +44,8 @@ interface TooltipPosition {
 
 interface WorkbenchTooltipTriggerProps {
   "aria-describedby"?: string;
-  onMouseEnter?: (event: MouseEvent<HTMLElement>) => void;
-  onMouseLeave?: (event: MouseEvent<HTMLElement>) => void;
+  onPointerEnter?: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerLeave?: (event: ReactPointerEvent<HTMLElement>) => void;
   ref?: Ref<HTMLElement>;
 }
 
@@ -69,12 +70,14 @@ export default function WorkbenchTooltip({
   children,
   content,
   delayMs = DEFAULT_DELAY_MS,
+  enabled = true,
   hoverDistancePx = DEFAULT_HOVER_DISTANCE_PX,
   interactive = false,
 }: {
   children: ReactElement<WorkbenchTooltipTriggerProps>;
   content: ReactNode;
   delayMs?: number;
+  enabled?: boolean;
   hoverDistancePx?: number;
   interactive?: boolean;
 }) {
@@ -103,6 +106,7 @@ export default function WorkbenchTooltip({
   }, [clearShowTimer]);
 
   const show = useCallback(() => {
+    if (!enabled) return;
     const trigger = triggerRef.current;
     if (!trigger) return;
     clearShowTimer();
@@ -116,13 +120,14 @@ export default function WorkbenchTooltip({
     });
     setTrackingPointer(true);
     setVisible(true);
-  }, [clearShowTimer, hide]);
+  }, [clearShowTimer, enabled, hide]);
 
   const beginShowing = useCallback(() => {
+    if (!enabled) return;
     setTrackingPointer(true);
     if (visible || showTimerRef.current !== null) return;
     showTimerRef.current = window.setTimeout(show, Math.max(0, delayMs));
-  }, [delayMs, show, visible]);
+  }, [delayMs, enabled, show, visible]);
 
   const pointerIsSafe = useCallback((x: number, y: number) => {
     const trigger = triggerRef.current;
@@ -148,6 +153,10 @@ export default function WorkbenchTooltip({
       releaseActiveTooltip(ownerRef.current);
     };
   }, [clearShowTimer]);
+
+  useEffect(() => {
+    if (!enabled) hide();
+  }, [enabled, hide]);
 
   useEffect(() => {
     if (!trackingPointer) return;
@@ -201,16 +210,16 @@ export default function WorkbenchTooltip({
     triggerRef.current = node;
     assignRef(childRef, node);
   }, [childRef]);
-  const describedBy = [childProps["aria-describedby"], visible ? tooltipId : null].filter(Boolean).join(" ") || undefined;
+  const describedBy = [childProps["aria-describedby"], enabled && visible ? tooltipId : null].filter(Boolean).join(" ") || undefined;
   const trigger = cloneElement(children, {
     "aria-describedby": describedBy,
-    onMouseEnter: (event: MouseEvent<HTMLElement>) => {
-      childProps.onMouseEnter?.(event);
-      beginShowing();
+    onPointerEnter: (event: ReactPointerEvent<HTMLElement>) => {
+      childProps.onPointerEnter?.(event);
+      if (isWorkbenchTooltipPointerSupported(event.pointerType)) beginShowing();
     },
-    onMouseLeave: (event: MouseEvent<HTMLElement>) => {
-      childProps.onMouseLeave?.(event);
-      reconcilePointer(event.clientX, event.clientY);
+    onPointerLeave: (event: ReactPointerEvent<HTMLElement>) => {
+      childProps.onPointerLeave?.(event);
+      if (isWorkbenchTooltipPointerSupported(event.pointerType)) reconcilePointer(event.clientX, event.clientY);
     },
     ref: setTriggerRef,
   });
@@ -222,7 +231,7 @@ export default function WorkbenchTooltip({
     top: position.top,
     visibility: position.ready ? "visible" : "hidden",
   } : undefined;
-  const tooltip = visible && portalHost && position ? createPortal(
+  const tooltip = enabled && visible && portalHost && position ? createPortal(
     <div
       id={tooltipId}
       ref={tooltipRef}

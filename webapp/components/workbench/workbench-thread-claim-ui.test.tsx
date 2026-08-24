@@ -58,6 +58,7 @@ function renderThreads(entries: ThreadEntry[]) {
       nowMs: 1_723_456_790_000,
       onCreateThread: () => undefined,
       onOpenThread: () => undefined,
+      projectId: "project",
     }),
   ));
 }
@@ -70,6 +71,7 @@ function renderThreadItem(entry: ThreadEntry, contextMenu: WorkbenchContextMenuD
       contextMenu,
       entry,
       href: "/agent/thread/thread-one",
+      projectId: "project",
       showActions: true,
     }),
   ));
@@ -228,7 +230,7 @@ test("needs-attention thread rows use amber only during an active Git arc", () =
   assert.match(activeHtml, /data-thread-status-tone="needs-attention-active"/u);
 });
 
-test("thread rows expose explicit context-menu access without a tooltip interception layer", async () => {
+test("thread rows expose explicit context-menu access alongside interactive tooltips", async () => {
   const entry = createThreadEntry({ threadId: "menu", title: "Menu work" });
   const html = renderThreadItem(entry, {
     id: "thread:menu",
@@ -237,5 +239,7 @@ test("thread rows expose explicit context-menu access without a tooltip intercep
   });
   const source = await readFile(new URL("./WorkbenchThreadListItem.tsx", import.meta.url), "utf8");
   assert.match(html, /aria-label="More actions for Menu work"/u);
-  assert.doesNotMatch(source, /WorkbenchTooltip|ThreadTooltipContent/u);
+  assert.match(source, /<WorkbenchTooltip[\s\S]*?enabled=\{showTooltip && !isDragActive\}[\s\S]*?interactive[\s\S]*?<a/u);
+  assert.match(source, /data-thread-project-file-link-boundary="true"/u);
+  assert.match(source, /claimedPaths\.map\(\(filePath\)[\s\S]*?<ProjectFilePath/u);
 });

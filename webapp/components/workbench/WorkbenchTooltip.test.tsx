@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   getWorkbenchTooltipPosition,
+  isWorkbenchTooltipPointerSupported,
   isPointWithinWorkbenchTooltipArea,
 } from "./workbench-tooltip-geometry";
 import WorkbenchTooltip from "./WorkbenchTooltip";
@@ -28,6 +29,12 @@ test("tooltip clones its trigger without adding wrapper markup", () => {
     </WorkbenchTooltip>,
   );
   assert.equal(html, "<button type=\"button\">Open</button>");
+});
+
+test("hover tooltips activate only for mouse pointers", () => {
+  assert.equal(isWorkbenchTooltipPointerSupported("mouse"), true);
+  assert.equal(isWorkbenchTooltipPointerSupported("touch"), false);
+  assert.equal(isWorkbenchTooltipPointerSupported("pen"), false);
 });
 
 test("tooltip position centers beside its trigger and clamps to viewport gutters", () => {
