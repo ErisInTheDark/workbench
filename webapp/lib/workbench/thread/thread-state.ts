@@ -124,6 +124,8 @@ const WorkbenchGitArcProposalStateSchema = z.object({
   status: z.enum(["committed", "proposed"]),
 }).strict();
 
+const WorkbenchReloadScopeProjectionSchema = z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES));
+
 const WorkbenchGitArcMemberStateSchema = z.object({
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
   claimedPaths: z.array(z.string().min(1)),
@@ -132,7 +134,7 @@ const WorkbenchGitArcMemberStateSchema = z.object({
   intentName: z.string().min(1),
   phase: z.enum(["active", "resolved"]),
   proposals: z.array(WorkbenchGitArcProposalStateSchema),
-  reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
+  reloadScopes: WorkbenchReloadScopeProjectionSchema.optional(),
   repoRoot: z.string().min(1),
   rootId: z.string().min(1),
   rootIds: z.array(z.string().min(1)).min(1),
@@ -148,7 +150,7 @@ export const WorkbenchGitArcLifecycleStateSchema = z.object({
   members: z.array(WorkbenchGitArcMemberStateSchema).min(1).optional(),
   phase: z.enum(["active", "resolved"]),
   proposals: z.array(WorkbenchGitArcProposalStateSchema),
-  reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
+  reloadScopes: WorkbenchReloadScopeProjectionSchema.optional(),
   updatedAt: z.string().min(1),
 }).strict().superRefine((value, context) => {
   if (value.phase === "active" && !value.claimedPaths.length) {
@@ -173,7 +175,7 @@ export const WorkbenchGitArcPlanStateSchema = z.object({
     harness: z.string().min(1),
     intentDescription: z.string(),
     intentName: z.string().min(1),
-    reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
+    reloadScopes: WorkbenchReloadScopeProjectionSchema.optional(),
     repoRoot: z.string().min(1),
     rootId: z.string().min(1),
     rootIds: z.array(z.string().min(1)).min(1),
@@ -181,7 +183,7 @@ export const WorkbenchGitArcPlanStateSchema = z.object({
     threadId: z.string().min(1),
     updatedAt: z.string().min(1),
   }).strict()).min(1).optional(),
-  reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
+  reloadScopes: WorkbenchReloadScopeProjectionSchema.optional(),
   scopePaths: z.array(z.string().min(1)),
   updatedAt: z.string().min(1),
 }).strict();

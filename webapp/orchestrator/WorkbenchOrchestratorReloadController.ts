@@ -201,8 +201,8 @@ export default class WorkbenchOrchestratorReloadController {
       completedAt: startedAt,
       error: null,
       ok: true,
-      queuedScopes: ["orchestrator-server"],
-      requestedScopes: ["orchestrator-server"],
+      queuedScopes: ["server:process"],
+      requestedScopes: ["server:process"],
       startedAt,
       state: "succeeded",
     };
@@ -313,11 +313,11 @@ export default class WorkbenchOrchestratorReloadController {
       if (remainingScopes(waiter).length) continue;
       this.state.waiters.delete(waiterId);
       waiter.resolve({
-        appliedScopes: waiter.requestedScopes.filter((scope) => scope !== "next-dev" && scope !== "orchestrator-server"),
+        appliedScopes: waiter.requestedScopes.filter((scope) => scope !== "client:all" && scope !== "server:process"),
         completedAt: this.now(),
         error: null,
         ok: true,
-        queuedScopes: waiter.requestedScopes.filter((scope) => scope === "next-dev" || scope === "orchestrator-server"),
+        queuedScopes: waiter.requestedScopes.filter((scope) => scope === "client:all" || scope === "server:process"),
         requestedScopes: waiter.requestedScopes,
         startedAt: waiter.startedAt,
         state: "succeeded",

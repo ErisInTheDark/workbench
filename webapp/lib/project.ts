@@ -20,6 +20,7 @@ import path from "node:path";
 
 import { getGitChanges } from "./git";
 import type { ProjectSnapshot, TreeNode, WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "./types";
+import { createGitignoreMatcher } from "./workbench/gitignore-matcher";
 import {
   ensureWorkbenchLibrary,
   listWorkbenchLibraryAgents,
@@ -36,11 +37,6 @@ const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_m
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
 const README_FILE_NAME = "README.md";
 const WORKSPACE_FILE_EXTENSION = ".code-workspace";
-
-interface GitignoreMatcherGroup {
-  ignored: boolean;
-  pattern: RegExp;
-}
 
 function normalizeProjectId(projectId: string) {
   return normalizeRelativePath(projectId).replace(/^\/+|\/+$/g, "");
@@ -109,69 +105,7 @@ export function normalizeRelativePath(filePath: string) {
   return String(filePath ?? "").replace(/\\/g, "/");
 }
 
-function escapeRegExp(value: string) {
-  return value.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
-}
-
-function globPatternToRegExpSource(pattern: string) {
-  let source = "";
-  for (let index = 0; index < pattern.length; index += 1) {
-    const character = pattern[index];
-    const nextCharacter = pattern[index + 1];
-    if (character === "*" && nextCharacter === "*") {
-      source += ".*";
-      index += 1;
-      continue;
-    }
-    if (character === "*") {
-      source += "[^/]*";
-      continue;
-    }
-    if (character === "?") {
-      source += "[^/]";
-      continue;
-    }
-    source += escapeRegExp(character);
-  }
-  return source;
-}
-
-function compileGitignorePattern(rawPattern: string) {
-  const trimmedPattern = rawPattern.trim();
-  if (!trimmedPattern || trimmedPattern.startsWith("#")) {
-    return null;
-  }
-
-  const ignored = !trimmedPattern.startsWith("!");
-  const patternWithoutPolarity = ignored ? trimmedPattern : trimmedPattern.slice(1).trim();
-  if (!patternWithoutPolarity) {
-    return null;
-  }
-
-  const directoryPattern = patternWithoutPolarity.endsWith("/");
-  const anchoredPattern = patternWithoutPolarity.startsWith("/");
-  const normalizedPattern = normalizeRelativePath(patternWithoutPolarity)
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
-  if (!normalizedPattern) {
-    return null;
-  }
-
-  const hasPathSeparator = normalizedPattern.includes("/");
-  const body = globPatternToRegExpSource(normalizedPattern);
-  const source = anchoredPattern
-    ? directoryPattern ? `^${body}(?:/|$)` : `^${body}$`
-    : hasPathSeparator
-      ? directoryPattern ? `(^|/)${body}(?:/|$)` : `(^|/)${body}$`
-      : `(^|/)${body}(?:/|$)`;
-
-  return {
-    ignored,
-    source,
-  };
-}
-
-async function createGitignoreMatcher(rootDir: string) {
+async function createProjectGitignoreMatcher(rootDir: string) {
   let contents = "";
   try {
     contents = await fs.readFile(path.join(rootDir, ".gitignore"), "utf8");
@@ -179,48 +113,7 @@ async function createGitignoreMatcher(rootDir: string) {
     return () => false;
   }
 
-  const groups: GitignoreMatcherGroup[] = [];
-  let currentGroup: { ignored: boolean; sources: string[] } | null = null;
-  for (const line of contents.split(/\r?\n/)) {
-    const compiledPattern = compileGitignorePattern(line);
-    if (!compiledPattern) {
-      continue;
-    }
-
-    if (!currentGroup || currentGroup.ignored !== compiledPattern.ignored) {
-      if (currentGroup?.sources.length) {
-        groups.push({
-          ignored: currentGroup.ignored,
-          pattern: new RegExp(currentGroup.sources.join("|"), "i"),
-        });
-      }
-      currentGroup = {
-        ignored: compiledPattern.ignored,
-        sources: [compiledPattern.source],
-      };
-      continue;
-    }
-
-    currentGroup.sources.push(compiledPattern.source);
-  }
-
-  if (currentGroup?.sources.length) {
-    groups.push({
-      ignored: currentGroup.ignored,
-      pattern: new RegExp(currentGroup.sources.join("|"), "i"),
-    });
-  }
-
-  return (relativePath: string) => {
-    const normalizedPath = normalizeRelativePath(relativePath).replace(/^\/+/, "");
-    let ignored = false;
-    for (const group of groups) {
-      if (group.pattern.test(normalizedPath)) {
-        ignored = group.ignored;
-      }
-    }
-    return ignored;
-  };
+  return createGitignoreMatcher(contents).matches;
 }
 
 export function safeResolveProjectPath(rootDir: string, requestPath: string) {
@@ -936,7 +829,7 @@ export async function buildTree(
   currentDir = projectRoot,
   gitignoreMatcher?: (relativePath: string) => boolean,
 ): Promise<TreeNode[]> {
-  const shouldIgnorePath = gitignoreMatcher ?? (await createGitignoreMatcher(projectRoot));
+  const shouldIgnorePath = gitignoreMatcher ?? (await createProjectGitignoreMatcher(projectRoot));
   const entries = await fs.readdir(currentDir, { withFileTypes: true });
   const visibleEntries = entries
     .filter((entry) => !ignoredNames.has(entry.name))
@@ -987,7 +880,7 @@ export async function buildProjectTree(
   currentDir = rootDir,
   gitignoreMatcher?: (relativePath: string) => boolean,
 ): Promise<TreeNode[]> {
-  const shouldIgnorePath = gitignoreMatcher ?? (await createGitignoreMatcher(rootDir));
+  const shouldIgnorePath = gitignoreMatcher ?? (await createProjectGitignoreMatcher(rootDir));
   const entries = await fs.readdir(currentDir, { withFileTypes: true });
   const visibleEntries = entries
     .filter((entry) => !ignoredNames.has(entry.name))

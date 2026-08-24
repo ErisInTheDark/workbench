@@ -9,6 +9,7 @@ import path from "node:path";
 import type { WorkbenchProjectsPayload } from "../lib/types";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
+import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
 import {
   getWorkbenchThreadDisplayKey,
   isWorkbenchThreadDisplayOrderEmpty,
@@ -20,10 +21,7 @@ import {
 } from "../lib/workbench/thread/thread-display-order";
 import {
   areAllUnsnoozedThreadEntriesSettlementReady,
-  WorkbenchDurableQuestionnaireSchema,
-  WorkbenchQuestionnaireHistoryEntrySchema,
   WorkbenchThreadDraftSchema,
-  WorkbenchThreadLifecycleSchema,
   WorkbenchThreadSidebarEntrySchema,
   WorkbenchThreadStateRequestSchema,
   gitArcPreventsThreadSettlement,
@@ -52,6 +50,7 @@ import {
 import AtomicJsonStore from "./AtomicJsonStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import {
+  conformStoredWorkbenchThreadStateRecord,
   parseWorkbenchThreadStateEntry,
   projectWorkbenchThreadStateEntry,
   safeParseWorkbenchThreadStateEntry,
@@ -165,13 +164,41 @@ function entryKey(entry: WorkbenchThreadStateEntry | WorkbenchThreadSidebarEntry
   return `${entry.identity.harness}:${entry.identity.threadId}`;
 }
 
-function parseStoredDraft(candidate: unknown) {
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+const StoredDraftIdentitySchema = WorkbenchThreadDraftSchema.pick({ draftId: true, harness: true }).strip();
+
+function parseStoredDraft(candidate: unknown, projectId: string) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return { error: new Error("Stored draft identity is missing."), success: false as const };
+  }
   const { pinned, snoozed, ...draftCandidate } = candidate as Record<string, unknown>;
-  const draft = WorkbenchThreadDraftSchema.safeParse(draftCandidate);
-  return draft.success
-    ? { draft: draft.data, metadata: { archived: false as const, pinned: pinned === true, snoozed: snoozed === true } }
-    : null;
+  const identity = StoredDraftIdentitySchema.safeParse(draftCandidate);
+  if (!identity.success) return { error: identity.error, success: false as const };
+  const conformed = conformToZodSchema(WorkbenchThreadDraftSchema, { ...draftCandidate, projectId }, {
+    agent: null,
+    attachments: [],
+    clientUpdatedAt: 0,
+    composerSettings: {},
+    createdAt: 0,
+    draftId: identity.data.draftId,
+    harness: identity.data.harness,
+    model: null,
+    profileId: null,
+    projectId,
+    prompt: "",
+    reasoningEffort: null,
+    serviceTier: null,
+    updatedAt: 0,
+  });
+  const repairedPaths = [...conformed.repairedPaths];
+  if (draftCandidate.projectId !== projectId) repairedPaths.push(["projectId"]);
+  if (pinned !== undefined && typeof pinned !== "boolean") repairedPaths.push(["pinned"]);
+  if (snoozed !== undefined && typeof snoozed !== "boolean") repairedPaths.push(["snoozed"]);
+  return {
+    draft: conformed.data,
+    metadata: { archived: false as const, pinned: pinned === true, snoozed: snoozed === true },
+    repairedPaths,
+    success: true as const,
+  };
 }
 
 function sanitizeError(error: unknown) {
@@ -655,16 +682,13 @@ export default class WorkbenchThreadStateController {
       const stored = await this.loadProjectStorage(projectId);
       const drafts = new Map<string, WorkbenchThreadDraft>();
       const entries = new Map<string, WorkbenchThreadStateEntry>();
-      for (const candidate of Array.isArray(stored.drafts) ? stored.drafts : []) {
-        const parsed = parseStoredDraft(candidate);
-        if (!parsed || parsed.draft.projectId !== projectId) continue;
-        drafts.set(parsed.draft.draftId, parsed.draft);
-        entries.set(`draft:${parsed.draft.draftId}`, this.draftEntry(parsed.draft, parsed.metadata));
+      for (const storedDraft of stored.drafts) {
+        const { pinned, snoozed, ...draft } = storedDraft;
+        drafts.set(draft.draftId, draft);
+        entries.set(`draft:${draft.draftId}`, this.draftEntry(draft, { archived: false, pinned: pinned === true, snoozed: snoozed === true }));
       }
-      for (const candidate of Array.isArray(stored.records) ? stored.records : []) {
-        const parsed = safeParseWorkbenchThreadStateEntry(candidate);
-        if (!parsed.success || parsed.data.entryKind === "draft") continue;
-        entries.set(entryKey(parsed.data), parsed.data);
+      for (const record of stored.records) {
+        entries.set(entryKey(record), record);
       }
       const state: ProjectState = { abort: null, displayOrder: stored.displayOrder ?? {}, drafts, entries, error: null, freshness: "loading", generation: 0, observers: new Set(), reconcilePromise: null, revision: 0, stopProjectObservation: null };
       state.stopProjectObservation = this.options.projectState.observe(projectId, (update) => this.publishUpdate(state, update));
@@ -684,34 +708,46 @@ export default class WorkbenchThreadStateController {
       const canonicalExists = await this.fileExists(canonicalPath);
       if (canonicalExists) {
         const stored = await this.json.read<StoredProjectState | StoredProjectStateV2 | StoredProjectStateV1>(canonicalPath, { drafts: [], records: [], version: 3 });
-        return this.decodeStoredProjectState(stored);
+        return this.decodeStoredProjectState(stored, projectId);
       }
 
       const projectRoot = await this.options.resolveProjectRoot(projectId);
       const legacyPath = this.legacyFilePath(projectRoot, projectId);
       if (!await this.fileExists(legacyPath)) return { drafts: [], records: [], version: 3 };
       const legacy = await this.json.read<StoredProjectStateV1>(legacyPath, { drafts: [], threads: [], version: 1 });
-      return this.decodeStoredProjectState(legacy);
+      return this.decodeStoredProjectState(legacy, projectId);
     });
   }
 
-  private decodeStoredProjectState(stored: Partial<StoredProjectState | StoredProjectStateV2 | StoredProjectStateV1>): StoredProjectState {
+  private decodeStoredProjectState(stored: Partial<StoredProjectState | StoredProjectStateV2 | StoredProjectStateV1>, projectId: string): StoredProjectState {
     const records = stored.version === 3 && Array.isArray(stored.records)
-      ? stored.records.flatMap((entry) => {
-        const parsed = safeParseWorkbenchThreadStateEntry(entry);
-        return parsed.success && parsed.data.entryKind !== "draft" ? [parsed.data] : [];
+      ? stored.records.map((entry) => {
+        const parsed = conformStoredWorkbenchThreadStateRecord(entry, projectId);
+        if (!parsed.success) throw new Error("Stored thread state contains a provider record without a recoverable identity.");
+        this.logStorageRepairs(projectId, entryKey(parsed.data), parsed.repairedPaths);
+        return parsed.data;
       })
       : "threads" in stored && Array.isArray(stored.threads)
-        ? stored.threads.flatMap((entry) => {
-          const record = recordFromStoredMetadata(entry);
-          return record ? [record] : [];
+        ? stored.threads.map((entry) => {
+          const parsed = recordFromStoredMetadata(entry, projectId);
+          if (!parsed.success) throw new Error("Legacy thread state contains a provider record without a recoverable identity.");
+          this.logStorageRepairs(projectId, entryKey(parsed.data), parsed.repairedPaths);
+          return parsed.data;
         })
         : [];
+    const drafts = Array.isArray(stored.drafts)
+      ? stored.drafts.map((entry) => {
+        const parsed = parseStoredDraft(entry, projectId);
+        if (!parsed.success) throw new Error("Stored thread state contains a draft without a recoverable identity.");
+        this.logStorageRepairs(projectId, `draft:${parsed.draft.draftId}`, parsed.repairedPaths);
+        return { ...parsed.draft, pinned: parsed.metadata.pinned, snoozed: parsed.metadata.snoozed };
+      })
+      : [];
     return {
       ...("displayOrder" in stored && !isWorkbenchThreadDisplayOrderEmpty(stored.displayOrder)
         ? { displayOrder: normalizeWorkbenchThreadDisplayOrder(stored.displayOrder) }
         : {}),
-      drafts: Array.isArray(stored.drafts) ? stored.drafts : [],
+      drafts,
       records,
       version: 3,
     };
@@ -735,6 +771,15 @@ export default class WorkbenchThreadStateController {
       return projected ? [projected] : [];
     });
     return sortThreadSidebarEntries(projectWorkbenchThreadSidebarEntries(entries)).filter((entry) => getThreadSidebarGroup(entry) !== "hidden");
+  }
+
+  private logStorageRepairs(projectId: string, entryId: string, repairedPaths: PropertyKey[][]) {
+    if (!repairedPaths.length) return;
+    const paths = repairedPaths
+      .slice(0, 20)
+      .map((repairPath) => repairPath.length ? repairPath.map(sanitizeLogValue).join(".") : "root")
+      .join(",");
+    this.options.log?.(`Conformed stored thread state: project=${sanitizeLogValue(projectId)} entry=${sanitizeLogValue(entryId)} repairedPaths=${paths || "none"}`);
   }
   private snapshot(projectId: string, state: ProjectState): WorkbenchThreadSidebarSnapshot {
     const naturallyOrdered = this.naturallyOrderedEntries(state);
@@ -1081,34 +1126,18 @@ export default class WorkbenchThreadStateController {
   }
 }
 
-function recordFromStoredMetadata(candidate: StoredThreadMetadata): WorkbenchThreadStateRecord | null {
-  const lifecycle = WorkbenchThreadLifecycleSchema.safeParse(candidate?.lifecycle);
-  if (!lifecycle.success || !candidate?.threadId) return null;
-  if (candidate.harness !== "codex" && candidate.harness !== "copilot" && candidate.harness !== "opencode") return null;
-  const pendingQuestionnaire = WorkbenchDurableQuestionnaireSchema.safeParse(candidate.pendingQuestionnaire);
-  const questionnaireHistory = Array.isArray(candidate.questionnaireHistory)
-    ? candidate.questionnaireHistory.flatMap((entry) => {
-      const parsed = WorkbenchQuestionnaireHistoryEntrySchema.safeParse(entry);
-      return parsed.success ? [parsed.data] : [];
-    })
-    : [];
-  const orderAt = typeof candidate.orderAt === "number" && Number.isInteger(candidate.orderAt) && candidate.orderAt >= 0
-    ? candidate.orderAt
-    : undefined;
-  const parsed = safeParseWorkbenchThreadStateEntry({
-    activityAt: orderAt ?? 0,
+function recordFromStoredMetadata(candidate: StoredThreadMetadata, projectId: string) {
+  return conformStoredWorkbenchThreadStateRecord({
+    activityAt: candidate?.orderAt,
     entryKind: "thread",
-    identity: { harness: candidate.harness, threadId: String(candidate.threadId) },
-    lifecycle: lifecycle.data,
+    identity: { harness: candidate?.harness, threadId: candidate?.threadId },
+    lifecycle: candidate?.lifecycle,
     mcpGeneration: typeof candidate.mcpGeneration === "string" ? candidate.mcpGeneration : null,
-    metadata: candidate.archived
-      ? { archived: true, pinned: false, snoozed: false }
-      : { archived: false, pinned: Boolean(candidate.pinned), snoozed: Boolean(candidate.snoozed) },
-    ...(orderAt === undefined ? {} : { orderAt }),
-    ...(pendingQuestionnaire.success ? { pendingQuestionnaire: pendingQuestionnaire.data } : {}),
+    metadata: { archived: candidate?.archived, pinned: candidate?.pinned, snoozed: candidate?.snoozed },
+    orderAt: candidate?.orderAt,
+    pendingQuestionnaire: candidate?.pendingQuestionnaire,
     providerObserved: false,
-    ...(questionnaireHistory.length ? { questionnaireHistory } : {}),
-    title: candidate.titleFallback?.trim() || String(candidate.threadId),
-  });
-  return parsed.success && parsed.data.entryKind !== "draft" ? parsed.data : null;
+    questionnaireHistory: candidate?.questionnaireHistory,
+    title: candidate?.titleFallback,
+  }, projectId);
 }

@@ -194,7 +194,7 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/api/orchestrator/reload" && request.body) {
       const scopes = Array.isArray(request.body.scopes) ? request.body.scopes : [];
       const managed = typeof request.body.callerThreadId === "string" && request.body.callerThreadId.trim();
-      if (managed && !(scopes.length === 1 && scopes[0] === "orchestrator-server")) {
+      if (managed && !(scopes.length === 1 && scopes[0] === "server:process")) {
         if (!this.direct.requestOrchestratorReload) throw new Error("Direct orchestrator reload dispatch is not configured.");
         return await this.direct.requestOrchestratorReload(request.body, signal);
       }

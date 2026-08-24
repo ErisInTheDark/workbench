@@ -6,14 +6,13 @@
 import path from "node:path";
 
 import type { ResolvedProjectRoot } from "../lib/project";
-import type { OrchestratorReloadScope, WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness } from "../lib/types";
 import type { GitCheckpointRequest, GitArcMemberRef, GitArcRootPaths } from "../lib/workbench/git/checkpoint-contracts";
 import WorkbenchGitCheckpointController, {
   type GitArcLifecycleState,
   type GitArcPlanState,
 } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
-import { normalizeOrchestratorReloadScopes } from "../lib/workbench/orchestrator-reload";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 
 interface GitTransitions {
@@ -122,13 +121,6 @@ export default class WorkbenchWorkspaceGitArcController {
   async listActiveClaims(project: AgentEndpointProjectResolution) {
     const states = await this.listLifecycleStates(project);
     return states.filter((state) => state.phase === "active");
-  }
-
-  async listReloadScopeClaims(project: AgentEndpointProjectResolution) {
-    return (await this.listLifecycleStates(project)).flatMap((state) => {
-      const reloadScopes = normalizeOrchestratorReloadScopes(state.reloadScopes);
-      return reloadScopes.length ? [{ harness: state.harness, reloadScopes, threadId: state.threadId }] : [];
-    });
   }
 
   async releaseActiveClaim(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {
@@ -338,13 +330,10 @@ export default class WorkbenchWorkspaceGitArcController {
     const groups = this.groupRootPaths(project, members, request.paths, request.roots, request.adoptPaths, true);
     const values = await this.runMembers(groups.map(({ member }) => member), async (member) => {
       const group = groups.find((candidate) => candidate.member.repoRoot === member.repoRoot)!;
-      const reloadScopes = isInside(member.repoRoot, project.root.root) || isInside(project.root.root, member.repoRoot)
-        ? request.reloadScopes
-        : [];
       const input = {
         adoptPaths: group.adoptPaths, cwd: member.repoRoot, harness: request.harness,
         intentDescription: request.intentDescription, intentName: request.intentName, paths: group.paths,
-        reloadScopes, threadId: request.threadId,
+        threadId: request.threadId,
       };
       return request.action === "plan"
         ? await this.local.createPlan(input)
@@ -557,7 +546,6 @@ export default class WorkbenchWorkspaceGitArcController {
       members,
       phase: members.some(({ phase }) => phase === "active") ? "active" : "resolved",
       proposals: members.flatMap(({ proposals }) => proposals),
-      reloadScopes: normalizeOrchestratorReloadScopes(members.flatMap(({ reloadScopes }) => reloadScopes ?? [])) as OrchestratorReloadScope[],
       threadId: first.threadId,
       updatedAt: members.map(({ updatedAt }) => updatedAt).sort().at(-1) ?? first.updatedAt,
     };
@@ -581,7 +569,6 @@ export default class WorkbenchWorkspaceGitArcController {
       intentDescription: first.intentDescription,
       intentName: first.intentName,
       members,
-      reloadScopes: normalizeOrchestratorReloadScopes(members.flatMap(({ reloadScopes }) => reloadScopes ?? [])) as OrchestratorReloadScope[],
       scopePaths: members.flatMap(({ scopePaths }) => scopePaths),
       threadId: first.threadId,
       updatedAt: members.map(({ updatedAt }) => updatedAt).sort().at(-1) ?? first.updatedAt,

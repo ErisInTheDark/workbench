@@ -227,7 +227,7 @@ export default function ThreadGitArcItem({
     ? "planned"
     : "claimed";
   const showNestedClaims = commandIntent.action !== "plan" && commandIntent.action !== "planStart" && claimedPaths.length > 0;
-  const reloadScopes = state === "completed" ? receipt?.reloadScopes ?? commandIntent.reloadScopes ?? [] : [];
+  const reloadScopes = state === "completed" ? receipt?.reloadScopes ?? [] : [];
 
   return (
     <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-2.5 py-1.5" data-thread-git-arc-card={commandIntent.action}>

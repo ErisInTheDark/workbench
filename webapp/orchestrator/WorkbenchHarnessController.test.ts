@@ -41,8 +41,8 @@ function createAdapter(id: WorkbenchHarness, calls: string[] = []): WorkbenchHar
       execute: async (scopes) => { calls.push(`reload:${id}:${scopes.join(",")}`); },
       kind: "scoped",
       scopes: [
-        { refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: false, scope: `${id}-bridge` },
-        ...(id === "opencode" ? [{ refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: true, scope: "opencode-server" }] : []),
+        { refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: false, scope: `server:${id}` },
+        { refreshWorkbenchPromptFiles: id === "opencode", reloadOrchestratorLogic: id === "opencode", scope: `harness:${id}` },
       ],
     },
     serverMethods: id === "codex" ? ["thread/read", "codex/only"] : ["thread/read"],
@@ -107,11 +107,11 @@ test("dispatches internal, server, Browse, and recovery work through the registe
 test("plans reloads without effects, rejects unknown scopes, and executes against the current registration", async () => {
   const calls: string[] = [];
   const controller = createController(calls);
-  const plan = controller.planReload(["opencode-bridge", "codex-bridge"]);
+  const plan = controller.planReload(["server:opencode", "server:codex"]);
   assert.deepEqual(plan, {
     actions: [
-      { harness: "codex", scopes: ["codex-bridge"] },
-      { harness: "opencode", scopes: ["opencode-bridge"] },
+      { harness: "codex", scopes: ["server:codex"] },
+      { harness: "opencode", scopes: ["server:opencode"] },
     ],
     refreshWorkbenchPromptFiles: true,
     reloadOrchestratorLogic: false,
@@ -119,18 +119,18 @@ test("plans reloads without effects, rejects unknown scopes, and executes agains
   assert.deepEqual(calls, []);
   assert.throws(() => controller.planReload(["unknown-bridge"]), /Unknown Workbench provider reload scope/u);
   await controller.executeReloadPlan(plan);
-  assert.deepEqual(calls, ["reload:codex:codex-bridge", "reload:opencode:opencode-bridge"]);
+  assert.deepEqual(calls, ["reload:codex:server:codex", "reload:opencode:server:opencode"]);
 });
 
 test("coalesces one harness's bridge and server scopes into one reload execution", async () => {
   const calls: string[] = [];
   const controller = createController(calls);
-  const plan = controller.planReload(["opencode-bridge", "opencode-server"]);
+  const plan = controller.planReload(["server:opencode", "harness:opencode"]);
   assert.deepEqual(plan, {
-    actions: [{ harness: "opencode", scopes: ["opencode-bridge", "opencode-server"] }],
+    actions: [{ harness: "opencode", scopes: ["server:opencode", "harness:opencode"] }],
     refreshWorkbenchPromptFiles: true,
     reloadOrchestratorLogic: true,
   });
   await controller.executeReloadPlan(plan);
-  assert.deepEqual(calls, ["reload:opencode:opencode-bridge,opencode-server"]);
+  assert.deepEqual(calls, ["reload:opencode:server:opencode,harness:opencode"]);
 });

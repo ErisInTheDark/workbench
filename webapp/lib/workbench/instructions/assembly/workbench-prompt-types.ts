@@ -12,7 +12,6 @@ export interface WorkbenchPromptContext {
   readonly instructionScope?: "full" | "threadUtilities";
   readonly instructionInjections?: Readonly<Record<string, string>>;
   readonly projectId?: string | null;
-  readonly reloadScopesAvailable?: boolean;
   readonly roots?: readonly WorkbenchProjectRoot[];
   readonly subagentName?: string | null;
   readonly threadId?: string | null;

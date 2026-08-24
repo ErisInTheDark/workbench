@@ -47,9 +47,9 @@ test("derives secure loopback MCP transport and rejects non-WebSocket bridge URL
   assert.throws(() => withWorkbenchCodexMcpConfig({}, "http://127.0.0.1:4500"), /must use ws/u);
 });
 
-test("gives each configured client a unique scope and selects capability inventory", () => {
+test("gives each configured client a unique scope without capability negotiation", () => {
   const ordinary = withWorkbenchCodexMcpConfig({}, "ws://0.0.0.0:4500");
-  const capable = withWorkbenchCodexMcpConfig({}, "ws://0.0.0.0:4500", { reloadScopes: true });
+  const capable = withWorkbenchCodexMcpConfig({}, "ws://0.0.0.0:4500");
   const readUrl = (value: object) => new URL((value as { config: { mcp_servers: { wb: { url: string } } } }).config.mcp_servers.wb.url);
   const ordinaryUrl = readUrl(ordinary);
   const capableUrl = readUrl(capable);
@@ -57,5 +57,5 @@ test("gives each configured client a unique scope and selects capability invento
   assert.match(capableUrl.searchParams.get("client") ?? "", /^[0-9a-f-]{36}$/u);
   assert.notEqual(ordinaryUrl.searchParams.get("client"), capableUrl.searchParams.get("client"));
   assert.equal(ordinaryUrl.searchParams.get("capabilities"), null);
-  assert.equal(capableUrl.searchParams.get("capabilities"), "reload-scopes");
+  assert.equal(capableUrl.searchParams.get("capabilities"), null);
 });

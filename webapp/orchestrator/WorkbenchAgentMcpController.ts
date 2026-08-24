@@ -24,7 +24,6 @@ import {
 } from "./workbench-agent-mcp-request-registry";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
-const RELOAD_SCOPES_CAPABILITY = "reload-scopes";
 const LEGACY_MCP_CLIENT_SCOPE = "legacy";
 const MCP_CLIENT_SCOPE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 type WorkbenchAgentMcpRequestId = number | string;
@@ -159,16 +158,15 @@ export default class WorkbenchAgentMcpController {
       sendJsonRpcError(response, 400, sanitizeError(error) || "Workbench MCP client scope is invalid.");
       return;
     }
-    const capabilities = url.searchParams.get("capabilities")?.split(",") ?? [];
-    void this.completeRequest(request, response, clientScope, { reloadScopes: capabilities.includes(RELOAD_SCOPES_CAPABILITY) });
+    void this.completeRequest(request, response, clientScope);
   }
 
-  private async completeRequest(request: http.IncomingMessage, response: http.ServerResponse, clientScope: string, schemaContext: { reloadScopes: boolean }) {
+  private async completeRequest(request: http.IncomingMessage, response: http.ServerResponse, clientScope: string) {
     const requestAbort = new AbortController();
     const abortDisconnectedRequest = () => {
       if (!requestAbort.signal.aborted) requestAbort.abort(new Error("Workbench MCP caller disconnected."));
     };
-    const server = this.createServer(requestAbort.signal, clientScope, schemaContext);
+    const server = this.createServer(requestAbort.signal, clientScope);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     let closed = false;
     const close = () => {
@@ -195,7 +193,7 @@ export default class WorkbenchAgentMcpController {
     }
   }
 
-  private createServer(requestSignal: AbortSignal, clientScope: string, schemaContext: { reloadScopes: boolean }) {
+  private createServer(requestSignal: AbortSignal, clientScope: string) {
     const server = new McpServer({ name: "wb", version: "1.0.0" });
     server.server.setNotificationHandler(CancelledNotificationSchema, (notification) => {
       this.requestRegistry.cancel(clientScope, notification.params.requestId, notification.params.reason);
@@ -214,7 +212,7 @@ export default class WorkbenchAgentMcpController {
           readOnlyHint: definition.effects.readOnly ?? false,
         },
         description: `${definition.description}\n\nCLI equivalent: ${definition.usage}`,
-        inputSchema: definition.mcpInputSchema?.(schemaContext) ?? definition.inputSchema,
+        inputSchema: definition.inputSchema,
       }, async (input, extra) => await this.callTool(
         definition,
         input as object,

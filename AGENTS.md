@@ -50,7 +50,7 @@
 - Treat Next.js routes as stateless serverless handlers. Do not rely on route-module memory, timers, or warm-process caches for correctness; store durable state on disk/git or delegate long-lived state and lifecycle to the orchestrator.
 - Keep Next-to-orchestrator one-shot RPC on the allowlisted buffered HTTP boundary. Reserve bridge WebSockets for persistent browser clients and notification streams, and do not create one-shot app-server sockets inside Next routes.
 - Make changes to long-lived orchestrator behavior reload-capable in the same changeset, or explicitly tell the user that a full orchestrator restart is required.
-- Keep reloads non-destructive and narrowly scoped. `orchestrator-logic` reloads only declared reloadable modules; `codex-bridge` must preserve the Codex app-server process, pending bridge state, and browser WebSocket clients; `browse-controller` must drain and replace controller code without restarting browser sessions.
+- Keep reloads non-destructive and narrowly scoped. `server:core` reloads only declared reloadable modules; `server:codex` must preserve the Codex app-server process, pending bridge state, and browser WebSocket clients; `server:browse` must drain and replace controller code without restarting browser sessions.
 - Keep Browse command execution warm and orchestrator-owned, including direct daemon communication, per-session FIFO queues, deadlines, cancellation, and timed-out session retirement. Do not reintroduce an upstream Browse CLI child process per typed action; only the explicitly gated raw fallback may spawn it.
 - Keep Browse result resolution and ordered sidecars out of the command transport, and keep thread-activity reads isolated to session-cleanup polling rather than the command path.
 - Keep project discovery coalesced and `cwd`-validated with watcher invalidation and a bounded soft refresh. Do not reintroduce per-request project walks, and keep explorer tree snapshot caching separate from project discovery.
@@ -82,7 +82,7 @@ pnpm typecheck
 - Agents have permission to run `wb orchestrator reload` without additional user approval after making changes that require a reload. Use the narrowest applicable scope:
 
 ```text
-wb orchestrator reload [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--opencode-bridge] [--opencode-server] [--next-dev]
+wb orchestrator reload --<scope> [--<scope> ...]
 ```
 
 - IMPORTANT: Reload the affected backend scope when required to activate a change. Next.js can hot-reload frontend code that expects matching backend behavior before that backend code is active, leaving the user's app broken until the backend reloads.

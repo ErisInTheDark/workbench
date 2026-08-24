@@ -6,6 +6,7 @@
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, status, subagent, and reload commands. Keywords: workbench, cli, title, status, subagent, reload.
  */
 import type { CommandAction } from "../../../codex/generated/app-server/v2/CommandAction";
+import { expandOrchestratorReloadScopes, ORCHESTRATOR_ALL_RELOAD_SCOPES } from "../../orchestrator-reload";
 
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
@@ -276,8 +277,18 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (!/^wb(?:\.cmd)?\s+orchestrator\s+reload(?:\s|$)/iu.test(normalized)) {
         return null;
       }
-      const scopes = ["orchestrator-logic", "browse-controller", "codex-bridge", "mcp", "opencode-bridge", "opencode-server", "next-dev"]
-        .filter((scope) => new RegExp(`(?:^|\\s)--${scope}(?:\\s|$)`, "u").test(normalized));
+      const selections = [...normalized.matchAll(/(?:^|\s)--([a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\+[a-z][a-z0-9-]*)*)(?=\s|$)/gu)]
+        .map((match) => match[1]);
+      const scopes = (() => {
+        try {
+          return expandOrchestratorReloadScopes([
+            ...(/(?:^|\s)--all(?:\s|$)/u.test(normalized) ? ORCHESTRATOR_ALL_RELOAD_SCOPES : []),
+            ...selections,
+          ]);
+        } catch {
+          return [];
+        }
+      })();
       return getWorkbenchCommandRendering("orchestrator_reload", {
         all: /(?:^|\s)--all(?:\s|$)/u.test(normalized),
         hard: /(?:^|\s)--hard(?:\s|$)/u.test(normalized),

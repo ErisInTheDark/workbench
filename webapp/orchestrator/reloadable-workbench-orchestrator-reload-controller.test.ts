@@ -22,7 +22,7 @@ test("coordinator self-reload executes other scopes first and completes through 
     listClaims: async () => [{
       harness: "codex",
       lifecycleKind: "working",
-      reloadScopes: ["orchestrator-logic", "reload-coordinator"],
+      reloadScopes: ["server:core", "server:reloader"],
       threadId: "caller",
     }],
     loader: {
@@ -34,12 +34,12 @@ test("coordinator self-reload executes other scopes first and completes through 
   const response = await boundary.request({
     cwd: "C:/workbench",
     harness: "codex",
-    scopes: ["orchestrator-logic", "reload-coordinator"],
+    scopes: ["server:core", "server:reloader"],
     threadId: "caller",
   }, new AbortController().signal);
   assert.equal(response.state, "succeeded");
   assert.equal(reloads, 1);
-  assert.deepEqual(executed, [["orchestrator-logic"]]);
+  assert.deepEqual(executed, [["server:core"]]);
   boundary.admitHardReload();
   await boundary.beginHardReload();
   assert.deepEqual(hardReloadEffects, ["notify", "exit"]);
@@ -52,7 +52,7 @@ test("failed coordinator replacement restores the previous generation and reject
     listClaims: async () => [{
       harness: "codex",
       lifecycleKind: "working",
-      reloadScopes: ["reload-coordinator"],
+      reloadScopes: ["server:reloader"],
       threadId: "caller",
     }],
     loader: {
@@ -64,8 +64,9 @@ test("failed coordinator replacement restores the previous generation and reject
   await assert.rejects(boundary.request({
     cwd: "C:/workbench",
     harness: "codex",
-    scopes: ["reload-coordinator"],
+    scopes: ["server:reloader"],
     threadId: "caller",
   }, new AbortController().signal), /fresh module failed/u);
   assert.equal(reloads, 1);
 });
+

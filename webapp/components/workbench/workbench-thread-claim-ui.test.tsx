@@ -153,7 +153,7 @@ test("sidebar derives proposed status and live claim count from gitArc", () => {
   const entry = createThreadEntry({ threadId: "git-arc-sidebar", title: "Git arc sidebar" });
   const html = renderThreads([{ ...entry, gitArc: {
     checkpointCommit: "a".repeat(40), claimedPaths: ["src/one.ts", "src/two.ts"], intentDescription: "", intentName: "active",
-    phase: "active", proposals: [{ proposalId: "proposal-one", status: "proposed" }], reloadScopes: ["mcp"], updatedAt: "2026-08-20T00:00:00.000Z",
+    phase: "active", proposals: [{ proposalId: "proposal-one", status: "proposed" }], reloadScopes: ["server:mcp"], updatedAt: "2026-08-20T00:00:00.000Z",
   } } as never]);
   assert.match(html, /aria-label="Git arc sidebar, Proposed commit, 2 claimed files,/u);
   assert.doesNotMatch(html, /3 claimed|runtime reload/u);

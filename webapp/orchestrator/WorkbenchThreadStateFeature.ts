@@ -7,7 +7,7 @@
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import { getCurrentTurn } from "../lib/codex/thread-state";
 import { normalizeThreadTitle } from "../lib/thread-bootstrap";
-import type { WorkbenchHarness, WorkbenchProjectsPayload } from "../lib/types";
+import type { OrchestratorReloadScope, WorkbenchHarness, WorkbenchProjectsPayload } from "../lib/types";
 import { normalizeOrchestratorReloadScopes } from "../lib/workbench/orchestrator-reload";
 import type { GitArcActiveClaim, GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
@@ -16,7 +16,7 @@ import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse 
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchThreadGitArcSnapshot, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
-import type { WorkspaceGitArcLifecycleState as GitArcLifecycleState, WorkspaceGitArcPlanState as GitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
+import type { WorkbenchGitArcLifecycleState as GitArcLifecycleState, WorkbenchGitArcPlanState as GitArcPlanState } from "./WorkbenchGitArcFeature";
 
 interface ProjectRecord { id: string; rootPath: string }
 interface ProjectResolution { cwd: string; project: ProjectRecord }
@@ -25,10 +25,14 @@ interface SubagentRelationshipList { subagents: Array<{ createdAt: number; cwd: 
 function projectGitArc(state: GitArcLifecycleState | RepoGitArcLifecycleState | undefined) {
   if (!state) return null;
   const { harness: _harness, threadId: _threadId, ...gitArc } = state;
-  return { ...gitArc, reloadScopes: normalizeOrchestratorReloadScopes(state.reloadScopes) };
+  return { ...gitArc, reloadScopes: reloadScopesFromState(state) };
 }
 
-function legacyGitArc(claim: GitArcActiveClaim): RepoGitArcLifecycleState {
+function reloadScopesFromState(state: object) {
+  return normalizeOrchestratorReloadScopes("reloadScopes" in state ? state.reloadScopes : []);
+}
+
+function legacyGitArc(claim: GitArcActiveClaim): RepoGitArcLifecycleState & { reloadScopes: OrchestratorReloadScope[] } {
   return {
     checkpointCommit: claim.checkpointCommit,
     claimedPaths: claim.claimedPaths,
@@ -39,7 +43,7 @@ function legacyGitArc(claim: GitArcActiveClaim): RepoGitArcLifecycleState {
     proposals: claim.proposalId && (claim.proposalStatus === "proposed" || claim.proposalStatus === "committed")
       ? [{ proposalId: claim.proposalId, status: claim.proposalStatus }]
       : [],
-    reloadScopes: normalizeOrchestratorReloadScopes(claim.reloadScopes),
+    reloadScopes: [] as OrchestratorReloadScope[],
     threadId: claim.threadId,
     updatedAt: claim.updatedAt,
   };
@@ -77,7 +81,7 @@ function asRecord(value: unknown) {
 function projectGitArcPlan(state: GitArcPlanState | RepoGitArcPlanState | undefined) {
   if (!state) return null;
   const { harness: _harness, threadId: _threadId, ...gitArcPlan } = state;
-  return { ...gitArcPlan, reloadScopes: normalizeOrchestratorReloadScopes(state.reloadScopes) };
+  return { ...gitArcPlan, reloadScopes: reloadScopesFromState(state) };
 }
 
 function normalizeOptionalTimestamp(value: unknown) {

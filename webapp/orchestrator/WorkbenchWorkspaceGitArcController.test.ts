@@ -103,7 +103,6 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
     intentDescription: "Change both projects.",
     intentName: "multi-project change",
     paths: [],
-    reloadScopes: [],
     roots: [
       { adoptPaths: [], paths: ["one.txt"], rootId: "api" },
       { adoptPaths: [], paths: ["two.txt"], rootId: "web" },
@@ -165,7 +164,6 @@ test("workspace roots in one repository share one member while keeping qualified
     intentDescription: "",
     intentName: "shared repository roots",
     paths: [],
-    reloadScopes: [],
     roots: [
       { adoptPaths: [], paths: ["ordinary.txt"], rootId: "api" },
       { adoptPaths: [], paths: ["one.txt"], rootId: "web" },

@@ -5,7 +5,6 @@
 import { z } from "zod";
 
 import { parseGitArcMoveArguments, type GitArcMoveArguments } from "../git/git-arc-move-arguments";
-import { normalizeOrchestratorReloadScopes, ORCHESTRATOR_RELOAD_SCOPES } from "../orchestrator-reload";
 import { preservePowerShellTrailingPaths, WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import {
   defineWorkbenchAgentCommand,
@@ -45,13 +44,9 @@ const ordinaryPlanSchema = z.object({
   paths: paths.default([]).describe("Ordinary inactive plan scope. Use for clean files and sibling-claimed files; planning these paths does not claim them."),
   roots: z.array(planRootSchema).default([]).describe("Workspace-root plan scopes for a multi-root workspace."),
 }).strict();
-const planSchema = ordinaryPlanSchema.extend({
-  reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).default([]).describe("Shared runtime reload barriers required by this Workbench-project arc."),
-}).strict();
-
 function parsePlanArgs(args: string[], commandName: "Arc plan" | "Arc plan start") {
-  const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values: ["-m", "--adopt", "--reload-scope"] }), {
-    repeatable: ["-m", "--adopt", "--reload-scope"], trailing: true,
+  const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values: ["-m", "--adopt"] }), {
+    repeatable: ["-m", "--adopt"], trailing: true,
   });
   const messages = flags.repeated("-m").map((message) => message.trim());
   if (messages.length > 2) throw new Error(`${commandName} accepts at most two -m values.`);
@@ -61,7 +56,6 @@ function parsePlanArgs(args: string[], commandName: "Arc plan" | "Arc plan start
     intentDescription: messages[1] ?? "",
     intentName: messages[0],
     paths: flags.trailing,
-    reloadScopes: normalizeOrchestratorReloadScopes(flags.repeated("--reload-scope")),
     roots: [],
   };
 }
@@ -70,9 +64,8 @@ const plan = defineWorkbenchAgentCommand({
   description: "Create or replace this thread's inactive Git plan without claiming ordinary paths. Put clean and sibling-claimed files in paths; use adoptPaths only for intentional dirty unclaimed work, including nested work within ordinary scope.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "plan"],
-  usage: "wb git arc plan -m <short-intent> [-m <optional-description>] [--reload-scope <scope>]... [--adopt <dirty-path>]... [-- <path>...]",
-  inputSchema: planSchema,
-  mcpInputSchema: ({ reloadScopes }) => reloadScopes ? planSchema : ordinaryPlanSchema,
+  usage: "wb git arc plan -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
+  inputSchema: ordinaryPlanSchema,
   parseCliArgs: (args) => parsePlanArgs(args, "Arc plan"),
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
@@ -83,7 +76,6 @@ const plan = defineWorkbenchAgentCommand({
       intentName: input.intentName,
       paths: input.paths,
       ...(input.roots.length ? { roots: input.roots } : {}),
-      ...(input.reloadScopes.length ? { reloadScopes: input.reloadScopes } : {}),
     }, "git-arc-plan");
   },
 });
@@ -114,9 +106,8 @@ const planStart = defineWorkbenchAgentCommand({
   description: "Create and activate a plan atomically. Put clean files in paths; use adoptPaths only for intentional dirty unclaimed work, including nested work within ordinary scope, that this thread may claim now.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "plan", "start"],
-  usage: "wb git arc plan start -m <short-intent> [-m <optional-description>] [--reload-scope <scope>]... [--adopt <dirty-path>]... [-- <path>...]",
-  inputSchema: planSchema,
-  mcpInputSchema: ({ reloadScopes }) => reloadScopes ? planSchema : ordinaryPlanSchema,
+  usage: "wb git arc plan start -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
+  inputSchema: ordinaryPlanSchema,
   parseCliArgs: (args) => parsePlanArgs(args, "Arc plan start"),
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
@@ -124,7 +115,6 @@ const planStart = defineWorkbenchAgentCommand({
       ...baseBody(callerHarness, callerThreadId, cwd),
       intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
       ...(input.roots.length ? { roots: input.roots } : {}),
-      ...(input.reloadScopes.length ? { reloadScopes: input.reloadScopes } : {}),
     }, "git-arc-start");
   },
 });

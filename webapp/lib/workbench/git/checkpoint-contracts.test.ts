@@ -9,7 +9,7 @@ import {
   GitCheckpointProposalSchema,
   GitCheckpointRequestSchema,
 } from "./checkpoint-contracts.ts";
-import GitArcRegistry, { getGitArcLiveReloadScopes, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import { remapArcOutcome } from "./git-arc-storage";
 
@@ -22,16 +22,15 @@ function registryFromState(entries: object[]) {
 }
 
 test("plan and arc requests encode claimed-path defaults and successor refs", () => {
-  const reloadPlan = GitCheckpointRequestSchema.safeParse({
+  const obsoleteReloadPlan = GitCheckpointRequestSchema.safeParse({
     action: "plan",
     cwd: "C:/repo",
     intentName: "Update A",
     paths: ["src/a.ts"],
-    reloadScopes: ["mcp", "reload-coordinator"],
+    reloadScopes: ["server:mcp"],
     threadId: "thread-one",
   });
-  assert.equal(reloadPlan.success, true);
-  if (reloadPlan.success && reloadPlan.data.action === "plan") assert.deepEqual(reloadPlan.data.reloadScopes, ["mcp", "reload-coordinator"]);
+  assert.equal(obsoleteReloadPlan.success, false);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "plan",
     cwd: "C:/repo",
@@ -267,7 +266,7 @@ test("registry reads normalize legacy phase and scalar proposal identity without
   assert.deepEqual({ phase: legacy?.phase, proposalIds: legacy?.proposalIds }, { phase: "active", proposalIds: ["proposal-one"] });
 });
 
-test("registry updates preserve reload scope claims beside file claims", async () => {
+test("registry reads and writes drop obsolete reload scope snapshots", async () => {
   const original: GitArcRegistryEntry = {
     checkpointCommit: "a".repeat(40),
     claimedPaths: ["src/a.ts"],
@@ -277,7 +276,7 @@ test("registry updates preserve reload scope claims beside file claims", async (
     phase: "active" as const,
     proposalId: null,
     proposalIds: [],
-    reloadScopes: ["mcp", "orchestrator-logic"],
+    reloadScopes: ["server:mcp"],
     retainedArc: null,
     threadId: "reload-aware",
     updatedAt: "2026-08-20T00:00:00.000Z",
@@ -288,40 +287,7 @@ test("registry updates preserve reload scope claims beside file claims", async (
     proposalId: "proposal-one",
     proposalIds: ["proposal-one"],
   }, original.checkpointCommit);
-  assert.deepEqual(nextState.entries[0]?.reloadScopes, ["mcp", "orchestrator-logic"]);
-});
-
-test("live reload scope claims follow active and retained arc ownership", () => {
-  const common: GitArcRegistryEntry = {
-    checkpointCommit: "a".repeat(40),
-    claimedPaths: [],
-    harness: "codex",
-    intentDescription: "",
-    intentName: "reload-aware arc",
-    phase: "active",
-    proposalIds: [],
-    reloadScopes: ["mcp"],
-    retainedArc: null,
-    threadId: "reload-aware",
-    updatedAt: "2026-08-20T00:00:00.000Z",
-  };
-  assert.deepEqual(getGitArcLiveReloadScopes(common), ["mcp"]);
-  assert.deepEqual(getGitArcLiveReloadScopes({
-    ...common,
-    phase: "plan",
-    reloadScopes: ["next-dev"],
-    retainedArc: {
-      checkpointCommit: "b".repeat(40),
-      claimedPaths: ["src/a.ts"],
-      intentDescription: "",
-      intentName: "retained arc",
-      phase: "active",
-      proposalIds: [],
-      reloadScopes: ["orchestrator-logic"],
-    },
-  }), ["orchestrator-logic"]);
-  assert.deepEqual(getGitArcLiveReloadScopes({ ...common, phase: "plan", reloadScopes: ["next-dev"] }), []);
-  assert.deepEqual(getGitArcLiveReloadScopes({ ...common, phase: "resolved" }), []);
+  assert.equal("reloadScopes" in (nextState.entries[0] ?? {}), false);
 });
 
 test("registry collisions use only active and retained-plan claims", async () => {

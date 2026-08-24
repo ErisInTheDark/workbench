@@ -125,7 +125,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
     intentName: "parent claim",
     proposalId: "proposal-one",
     proposalStatus: "proposed" as const,
-    reloadScopes: ["mcp" as const],
+    reloadScopes: ["server:mcp" as const],
     threadId: "parent",
     updatedAt: "2026-08-19T00:00:00.000Z",
   };
@@ -140,7 +140,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
       { proposalId: "proposal-one", status: "proposed" as const },
       { proposalId: "proposal-two", status: "committed" as const },
     ],
-    reloadScopes: ["mcp" as const],
+    reloadScopes: ["server:mcp" as const],
     threadId: "parent",
     updatedAt: "2026-08-19T00:00:00.000Z",
   };
@@ -150,7 +150,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
     intentDescription: "Plan around the active owner.",
     intentName: "planned overlap",
     scopePaths: ["one.txt", "two.txt"],
-    reloadScopes: ["orchestrator-logic" as const],
+    reloadScopes: ["server:core" as const],
     threadId: "parent",
     updatedAt: "2026-08-20T00:00:00.000Z",
   };
@@ -250,7 +250,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
       intentName: lifecycleState.intentName,
       phase: "active",
       proposals: lifecycleState.proposals,
-      reloadScopes: ["mcp"],
+      reloadScopes: ["server:mcp"],
       updatedAt: lifecycleState.updatedAt,
     },
     gitArcPlan: {
@@ -258,7 +258,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
       intentDescription: planState.intentDescription,
       intentName: planState.intentName,
       scopePaths: planState.scopePaths,
-      reloadScopes: ["orchestrator-logic"],
+      reloadScopes: ["server:core"],
       updatedAt: planState.updatedAt,
     },
     lifecycleListCalls: 2,
@@ -272,7 +272,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
     intentName: lifecycleState.intentName,
     phase: "active",
     proposals: lifecycleState.proposals,
-    reloadScopes: ["mcp"],
+    reloadScopes: ["server:mcp"],
     updatedAt: lifecycleState.updatedAt,
   });
   assert.deepEqual(refreshedParent?.entryKind === "thread" ? refreshedParent.gitArcPlan : null, {
@@ -280,7 +280,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
     intentDescription: planState.intentDescription,
     intentName: planState.intentName,
     scopePaths: planState.scopePaths,
-    reloadScopes: ["orchestrator-logic"],
+    reloadScopes: ["server:core"],
     updatedAt: planState.updatedAt,
   });
   await feature.dispose();

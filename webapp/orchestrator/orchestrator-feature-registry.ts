@@ -118,11 +118,10 @@ function createHarnessAdapters(ports: Record<WorkbenchHarness, WorkbenchHarnessR
       id: "codex",
       internal: ports.codex,
       recovery: requireTurnRecovery(ports.codex, "codex"),
-      reload: requireScopedReload(ports.codex, "codex", [{
-        refreshWorkbenchPromptFiles: true,
-        reloadOrchestratorLogic: false,
-        scope: "codex-bridge",
-      }]),
+      reload: requireScopedReload(ports.codex, "codex", [
+        { refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: false, scope: "server:codex" },
+        { refreshWorkbenchPromptFiles: false, reloadOrchestratorLogic: false, scope: "harness:codex" },
+      ]),
       serverMethods: [
         "workbench/composerProfiles/read",
         "workbench/composerProfiles/importLegacy",
@@ -148,8 +147,8 @@ function createHarnessAdapters(ports: Record<WorkbenchHarness, WorkbenchHarnessR
       internal: ports.opencode,
       recovery: requireTurnRecovery(ports.opencode, "opencode"),
       reload: requireScopedReload(ports.opencode, "opencode", [
-        { refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: false, scope: "opencode-bridge" },
-        { refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: true, scope: "opencode-server" },
+        { refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: false, scope: "server:opencode" },
+        { refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: true, scope: "harness:opencode" },
       ]),
       serverMethods: ["thread/name/set"],
     },

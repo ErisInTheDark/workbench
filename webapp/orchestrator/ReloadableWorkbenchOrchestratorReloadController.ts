@@ -105,11 +105,11 @@ export default class ReloadableWorkbenchOrchestratorReloadController {
   }
 
   private async performBatch(scopes: OrchestratorReloadScope[]) {
-    if (!scopes.includes("reload-coordinator")) {
+    if (!scopes.includes("server:reloader")) {
       await this.options.executeScopes(scopes);
       return;
     }
-    const ordinaryScopes = scopes.filter((scope) => scope !== "reload-coordinator");
+    const ordinaryScopes = scopes.filter((scope) => scope !== "server:reloader");
     if (ordinaryScopes.length) await this.options.executeScopes(ordinaryScopes);
     const previous = this.current;
     const state = previous.detachForReload();

@@ -7,8 +7,6 @@
  */
 import { randomUUID } from "node:crypto";
 
-import type { OrchestratorReloadScope } from "../../types";
-import { normalizeOrchestratorReloadScopes } from "../orchestrator-reload";
 import type { GitCheckpointProposal } from "./checkpoint-contracts";
 import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "./git-arc-failures";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
@@ -54,7 +52,6 @@ export interface GitArcLifecycleState {
   intentName: string;
   phase: "active" | "resolved";
   proposals: Array<{ proposalId: string; status: "committed" | "proposed" }>;
-  reloadScopes?: OrchestratorReloadScope[];
   threadId: string;
   updatedAt: string;
 }
@@ -74,7 +71,6 @@ function lifecycleEntry(entry: GitArcRegistryEntry) {
       intentName: entry.retainedArc.intentName,
       phase: entry.retainedArc.phase,
       proposalIds: entry.retainedArc.proposalIds,
-      reloadScopes: normalizeOrchestratorReloadScopes(entry.retainedArc.reloadScopes),
     } : null;
   }
   return {
@@ -84,7 +80,6 @@ function lifecycleEntry(entry: GitArcRegistryEntry) {
     intentName: entry.intentName,
     phase: entry.phase === "resolved" ? "resolved" as const : "active" as const,
     proposalIds: entry.proposalIds ?? [],
-    reloadScopes: normalizeOrchestratorReloadScopes(entry.reloadScopes),
   };
 }
 
@@ -201,7 +196,6 @@ async function prepareAcceptedClaimTransition({
       kind: "arc",
       priorProposalId: proposalId,
       registryLifecycle: true,
-      reloadScopes: normalizeOrchestratorReloadScopes(active.reloadScopes),
       scopePaths: claimedPaths,
       version: 3,
     };
@@ -224,7 +218,6 @@ async function prepareAcceptedClaimTransition({
     phase: claimedPaths.length ? "active" : "resolved",
     proposalId: active.proposalId ?? null,
     proposalIds: active.proposalIds ?? (active.proposalId ? [active.proposalId] : []),
-    reloadScopes: claimedPaths.length ? normalizeOrchestratorReloadScopes(active.reloadScopes) : [],
     retainedArc: null,
     threadId,
   }, { commitRemaps, expectedCheckpointCommit: active.checkpointCommit });
@@ -388,7 +381,6 @@ export default class GitArcProposalController {
       proposals: (summaries[index] ?? []).flatMap(({ proposalId, status }) => (
         status === "proposed" || status === "committed" ? [{ proposalId, status }] : []
       )),
-      reloadScopes: lifecycle!.reloadScopes,
       threadId: entry.threadId,
       updatedAt: entry.updatedAt,
     }));

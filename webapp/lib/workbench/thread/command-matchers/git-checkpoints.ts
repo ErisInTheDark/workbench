@@ -10,13 +10,11 @@
  * - parseGitCheckpointDiffArtifactId/parseGitCheckpointDiffOutput: preserve legacy and inline unified diff rendering. Keywords: checkpoint, diff, artifact.
  */
 import type { FileUpdateChange } from "../../../codex/generated/app-server/v2/FileUpdateChange";
-import type { OrchestratorReloadScope } from "../../../types";
 import {
   parseGitArcReceipt,
   type GitArcAction,
 } from "../../git/git-arc-receipts";
 import { parseGitArcMoveArguments, type GitArcMoveArguments } from "../../git/git-arc-move-arguments";
-import { ORCHESTRATOR_RELOAD_SCOPES } from "../../orchestrator-reload";
 import { parseUnifiedDiffFileChanges } from "../thread-file-diff";
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
@@ -64,7 +62,6 @@ export interface GitArcCommandIntent {
   paths: string[];
   proposalId?: string | null;
   ref: string | null;
-  reloadScopes?: OrchestratorReloadScope[];
 }
 
 function createMatcher({
@@ -231,11 +228,10 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   let proposalId: string | null = null;
   let ref: string | null = null;
   const adoptPaths: string[] = [];
-  const reloadScopes: OrchestratorReloadScope[] = [];
   for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
     const flag = tokens[cursor];
     const value = tokens[cursor + 1];
-    if (!value || (flag !== "--adopt" && flag !== "--proposal" && flag !== "--ref" && flag !== "--reload-scope" && flag !== "-m")) return null;
+    if (!value || (flag !== "--adopt" && flag !== "--proposal" && flag !== "--ref" && flag !== "-m")) return null;
     if (flag === "--ref") {
       if (ref) return null;
       ref = value;
@@ -245,9 +241,6 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
     } else if (flag === "--proposal") {
       if (proposalId) return null;
       proposalId = value;
-    } else if (flag === "--reload-scope") {
-      if ((action !== "plan" && action !== "planStart") || !ORCHESTRATOR_RELOAD_SCOPES.includes(value as OrchestratorReloadScope)) return null;
-      reloadScopes.push(value as OrchestratorReloadScope);
     } else if ((action === "plan" || action === "planStart") && intentName === null) {
       intentName = value;
     }
@@ -261,7 +254,6 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
       intentName,
       paths,
       ref: null,
-      ...(reloadScopes.length ? { reloadScopes: [...new Set(reloadScopes)] } : {}),
     } : null;
   }
   if (action === "rescind") {

@@ -67,6 +67,10 @@ function projectOption(id: string, rootPath: string) {
   };
 }
 
+function threadStatePath(root: string, projectId: string) {
+  return path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`);
+}
+
 async function waitFor(predicate: () => boolean | Promise<boolean>, message: string) {
   const deadline = Date.now() + 1_000;
   while (!await predicate()) {
@@ -289,6 +293,141 @@ test("project-local and old central thread state stay read-only until a real mut
   assert.deepEqual(JSON.parse(await fs.readFile(statePath(legacyRoot, "migrated"), "utf8")), { drafts: [migratedDraft], threads: [], version: 1 });
   await controller.dispose();
   await Promise.all([storageRoot, legacyRoot, centralWinsRoot].map((root) => fs.rm(root, { force: true, recursive: true })));
+});
+
+test("stored state repairs invalid leaves without erasing thread or draft siblings", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-conformance-"));
+  const stateFile = threadStatePath(root, "project");
+  const record = {
+    activityAt: 10,
+    entryKind: "thread",
+    gitArc: {
+      checkpointCommit: "invalid",
+      claimedPaths: ["webapp"],
+      intentDescription: "",
+      intentName: "work",
+      phase: "active",
+      proposals: [],
+      updatedAt: "now",
+    },
+    identity: { harness: "codex", threadId: "kept-thread" },
+    lifecycle: { agent: { agentStatus: "working" }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: true, snoozed: false },
+    providerObserved: true,
+    title: "Kept title",
+  };
+  const draft = {
+    agent: null,
+    attachments: [{ kind: "kept" }, undefined, { kind: "also-kept" }],
+    clientUpdatedAt: 2,
+    composerSettings: {},
+    createdAt: 1,
+    draftId: "00000000-0000-4000-8000-000000000099",
+    harness: "codex",
+    model: null,
+    pinned: true,
+    profileId: null,
+    projectId: "old-project",
+    prompt: "Kept draft",
+    reasoningEffort: null,
+    serviceTier: null,
+    snoozed: false,
+    updatedAt: 2,
+  };
+  await fs.mkdir(path.dirname(stateFile), { recursive: true });
+  await fs.writeFile(stateFile, JSON.stringify({ drafts: [draft], records: [record], version: 3 }), "utf8");
+
+  let reconciliations = 0;
+  const logs: string[] = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    log: (message) => logs.push(message),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      reconciliations += 1;
+      acceptProviderSnapshot("codex", [{
+        activityAt: 11,
+        entryKind: "thread",
+        identity: { harness: "codex", threadId: "kept-thread" },
+        lifecycle: { agent: { agentStatus: "working" }, kind: "working", reason: "acceptedIntent", settled: false },
+        metadata: { archived: false, pinned: false, snoozed: false },
+        title: "Provider title",
+      }], { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+
+  const opened = await controller.open("observer", "project");
+  const openedThread = opened.sidebar.entries.find((entry) => entry.entryKind === "thread");
+  const openedDraft = opened.sidebar.entries.find((entry) => entry.entryKind === "draft");
+  assert.deepEqual(openedThread?.entryKind === "thread" ? {
+    gitArc: openedThread.gitArc,
+    lifecycle: openedThread.lifecycle,
+    metadata: openedThread.metadata,
+    title: openedThread.title,
+  } : null, {
+    gitArc: undefined,
+    lifecycle: record.lifecycle,
+    metadata: record.metadata,
+    title: "Kept title",
+  });
+  assert.deepEqual(openedDraft?.entryKind === "draft" ? {
+    attachments: openedDraft.draft.attachments,
+    metadata: openedDraft.metadata,
+    projectId: openedDraft.draft.projectId,
+    prompt: openedDraft.draft.prompt,
+  } : null, {
+    attachments: [{ kind: "kept" }, null, { kind: "also-kept" }],
+    metadata: { archived: false, pinned: true, snoozed: false },
+    projectId: "project",
+    prompt: "Kept draft",
+  });
+  await waitFor(() => reconciliations === 1, "Reconciliation did not start after conformant state installation.");
+  const reconciled = await controller.getSnapshot("project");
+  const reconciledThread = reconciled.entries.find((entry) => entry.entryKind === "thread");
+  assert.equal(reconciledThread?.entryKind === "thread" ? reconciledThread.lifecycle.kind : null, "working");
+  assert.equal(logs.some((message) => message.includes("repairedPaths=gitArc")), true);
+  assert.equal(logs.some((message) => message.includes("projectId")), true);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("an unidentified stored record cannot reconcile or overwrite its source file", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-unidentified-"));
+  const stateFile = threadStatePath(root, "project");
+  const source = JSON.stringify({
+    drafts: [],
+    records: [{
+      activityAt: 1,
+      entryKind: "thread",
+      identity: { harness: "codex" },
+      lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      title: "Unidentified",
+    }],
+    version: 3,
+  });
+  await fs.mkdir(path.dirname(stateFile), { recursive: true });
+  await fs.writeFile(stateFile, source, "utf8");
+  let reconciliations = 0;
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => { reconciliations += 1; return []; },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+
+  await assert.rejects(controller.open("observer", "project"), /without a recoverable identity/u);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(reconciliations, 0);
+  assert.equal(await fs.readFile(stateFile, "utf8"), source);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
 });
 
 test("headless provider refresh preserves Git lifecycle and MCP generation without leaking internal fields", async () => {

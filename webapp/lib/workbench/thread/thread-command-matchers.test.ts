@@ -69,7 +69,7 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "browse_run": return { commands: ["snapshot --compact"], session: "rendering" };
     case "browse_stop": return { force: true, session: "rendering" };
     case "browse_forget": return { force: false, session: "rendering" };
-    case "orchestrator_reload": return { scopes: ["mcp"] };
+    case "orchestrator_reload": return { scopes: ["server:mcp"] };
     default: return {};
   }
 }
@@ -96,7 +96,7 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
 test("simple typed wb MCP calls share argument-sensitive CLI presentations", () => {
   const cases = [
     ["wb thread resume", "thread_resume", {}],
-    ["wb orchestrator reload --mcp", "orchestrator_reload", { scopes: ["mcp"] }],
+    ["wb orchestrator reload --server:mcp", "orchestrator_reload", { scopes: ["server:mcp"] }],
     ["wb git add -- src/a.ts", "git_add", { paths: ["src/a.ts"] }],
     ["wb thread title get", "thread_title_get", {}],
     ["wb subagent list", "subagent_list", {}],
@@ -122,7 +122,7 @@ test("every valid simple typed wb MCP route emphasizes its important target", ()
     ["git_add", { paths: ["src/a.ts"] }, ["plain", "primary"]],
     ["git_unstage", { paths: ["src/a.ts"] }, ["plain", "primary"]],
     ["git_commit", { message: "Commit" }, ["plain", "primary"]],
-    ["orchestrator_reload", { scopes: ["orchestrator-logic", "mcp"] }, ["plain", "primary"]],
+    ["orchestrator_reload", { scopes: ["server:core", "server:mcp"] }, ["plain", "primary"]],
     ["subagent_list", {}, ["plain", "primary"]],
     ["subagent_profiles", {}, ["plain", "primary"]],
     ["browse_run", { commands: ["snapshot --compact"] }, ["plain", "primary"]],
@@ -657,9 +657,7 @@ test("current-plan and proposal-lifecycle commands expose route-only matcher cla
   assert.deepEqual(parseGitArcCommand("wb git arc plan start -m Continue -- src/a.ts"), {
     action: "planStart", intentName: "Continue", paths: ["src/a.ts"], ref: null,
   });
-  assert.deepEqual(parseGitArcCommand("wb git arc plan start -m Continue --reload-scope mcp --reload-scope reload-coordinator -- src/a.ts"), {
-    action: "planStart", intentName: "Continue", paths: ["src/a.ts"], ref: null, reloadScopes: ["mcp", "reload-coordinator"],
-  });
+  assert.equal(parseGitArcCommand("wb git arc plan start -m Continue --reload-scope server:mcp -- src/a.ts"), null);
   assert.deepEqual(parseGitArcCommand("wb git arc plan -m Continue --adopt src/dirty-a.ts --adopt src/dirty-b.ts -- src/a.ts"), {
     action: "plan",
     adoptPaths: ["src/dirty-a.ts", "src/dirty-b.ts"],

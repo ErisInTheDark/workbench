@@ -85,7 +85,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal("args" in (plan.inputSchema.properties ?? {}), false);
     const capablePlan = (await capableClient.listTools()).tools.find(({ name }) => name === "git_arc_plan");
     assert.ok(capablePlan);
-    assert.deepEqual(Object.keys(capablePlan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths", "reloadScopes", "roots"]);
+    assert.deepEqual(Object.keys(capablePlan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths", "roots"]);
     const planProperties = plan.inputSchema.properties as Record<string, { description?: string }>;
     assert.match(plan.description ?? "", /sibling-claimed files in paths/u);
     assert.match(planProperties.paths?.description ?? "", /sibling-claimed files.*does not claim/u);
@@ -94,8 +94,8 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const reload = inventory.tools.find(({ name }) => name === "orchestrator_reload");
     assert.ok(reload);
     const reloadScopes = reload.inputSchema.properties?.scopes as { items?: { enum?: string[] } } | undefined;
-    assert.equal(reloadScopes?.items?.enum?.includes("orchestrator-server"), false);
-    assert.equal(reloadScopes?.items?.enum?.includes("mcp"), true);
+    assert.equal(reloadScopes?.items?.enum?.includes("server:process"), false);
+    assert.equal(reloadScopes?.items?.enum?.includes("server:mcp"), true);
     const resume = inventory.tools.find(({ name }) => name === "thread_resume");
     assert.ok(resume);
     assert.deepEqual(resume.inputSchema.properties, {});

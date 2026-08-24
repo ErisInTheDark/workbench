@@ -46,12 +46,9 @@ test("managed top-level threads expose current-thread mechanics before and after
   assert.equal(buildThreadTitleInstructions(subagentContext), null);
 });
 
-test("Git reload-scope instructions appear only for the exact-root capability", () => {
+test("Git instructions do not ask agents to declare runtime reload scopes", () => {
   const base = { harness: "codex" as const, threadId: "thread-1", workbenchOrigin: "http://localhost" };
-  assert.doesNotMatch(buildWorkbenchGitInstructions(base) ?? "", /shared barriers/u);
-  const capable = buildWorkbenchGitInstructions({ ...base, reloadScopesAvailable: true }) ?? "";
-  assert.match(capable, /reloadScopes/u);
-  assert.match(capable, /Do not retry it or bypass the queue/u);
+  assert.doesNotMatch(buildWorkbenchGitInstructions(base) ?? "", /reloadScopes|reload-scope|shared runtime reload barriers/u);
 });
 
 test("Git instructions explain one logical arc and separate proposals only for multi-root workspaces", () => {

@@ -4,31 +4,12 @@
  */
 import { z } from "zod";
 
-import { ORCHESTRATOR_ALL_RELOAD_SCOPES } from "../orchestrator-reload";
-import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
+import {
+  expandOrchestratorReloadScopes,
+  ORCHESTRATOR_ALL_RELOAD_SCOPES,
+  ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES,
+} from "../orchestrator-reload";
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
-
-const RELOAD_SWITCHES = [
-  "--orchestrator-logic",
-  "--browse-controller",
-  "--codex-bridge",
-  "--mcp",
-  "--opencode-bridge",
-  "--opencode-server",
-  "--next-dev",
-  "--reload-coordinator",
-] as const;
-
-const reloadScope = z.enum([
-  "orchestrator-logic",
-  "browse-controller",
-  "codex-bridge",
-  "mcp",
-  "opencode-bridge",
-  "opencode-server",
-  "next-dev",
-  "reload-coordinator",
-]);
 
 function buildReloadRequest(scopes: readonly string[], context: { callerHarness: string; callerThreadId: string | null; cwd: string }) {
   return {
@@ -44,23 +25,40 @@ function buildReloadRequest(scopes: readonly string[], context: { callerHarness:
   } as const;
 }
 
+function parseReloadCliSelections(args: string[]) {
+  if (!args.length) return { hard: false, scopes: [] as string[] };
+  const selections: string[] = [];
+  let hard = false;
+  for (const argument of args) {
+    if (!argument.startsWith("--") || argument === "--") throw new Error(`Unexpected argument: ${argument}`);
+    if (argument === "--hard") {
+      hard = true;
+    } else if (argument === "--all") {
+      selections.push(...ORCHESTRATOR_ALL_RELOAD_SCOPES);
+    } else if (argument === "--server:process") {
+      throw new Error("server:process is only available through --hard.");
+    } else {
+      selections.push(argument.slice(2));
+    }
+  }
+  return { hard, scopes: selections };
+}
+
+const requestableReloadScopes = z.array(z.enum(ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES)).min(1);
+const reloadInput = z.object({
+  scopes: requestableReloadScopes,
+}).strict();
+
 const documentedReload = defineWorkbenchAgentCommand({
   description: "Reload selected Workbench runtime subsystems and wait for terminal reload status.",
   helpGroups: ["orchestrator"],
   words: ["orchestrator", "reload"],
-  usage: "wb orchestrator reload [--all] [--orchestrator-logic] [--browse-controller] [--codex-bridge] [--mcp] [--opencode-bridge] [--opencode-server] [--next-dev] [--reload-coordinator]",
-  inputSchema: z.object({ scopes: z.array(reloadScope).min(1) }).strict().superRefine(({ scopes }, context) => {
-    if (new Set(scopes).size !== scopes.length) context.addIssue({ code: "custom", message: "Reload scopes must be unique." });
-  }),
+  usage: "wb orchestrator reload --<scope> [--<scope> ...]",
+  inputSchema: reloadInput,
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { boolean: [...RELOAD_SWITCHES, "--all"] });
-    const selectedOrdinaryFlags = RELOAD_SWITCHES.filter((flag) => flags.has(flag));
-    return {
-      scopes: Array.from(new Set([
-        ...(flags.has("--all") ? ORCHESTRATOR_ALL_RELOAD_SCOPES : []),
-        ...selectedOrdinaryFlags.map((flag) => flag.slice(2) as z.output<typeof reloadScope>),
-      ])),
-    };
+    const parsed = parseReloadCliSelections(args);
+    if (parsed.hard) throw new Error("--hard must be requested by itself.");
+    return { scopes: requestableReloadScopes.parse(expandOrchestratorReloadScopes(parsed.scopes)) };
   },
   buildRequest(input, context) {
     return buildReloadRequest(input.scopes, context);
@@ -70,11 +68,10 @@ const documentedReload = defineWorkbenchAgentCommand({
 const reload = {
   ...documentedReload,
   async buildRequestFromCli(args, context) {
-    const flags = new WorkbenchAgentCommandFlags(args, { boolean: [...RELOAD_SWITCHES, "--all", "--hard"] });
-    const selectedOrdinaryFlags = RELOAD_SWITCHES.filter((flag) => flags.has(flag));
-    if (!flags.has("--hard")) return await documentedReload.buildRequestFromCli(args, context);
-    if (flags.has("--all") || selectedOrdinaryFlags.length) throw new Error("--hard must be requested by itself.");
-    return buildReloadRequest(["orchestrator-server"], context);
+    const parsed = parseReloadCliSelections(args);
+    if (!parsed.hard) return await documentedReload.buildRequestFromCli(args, context);
+    if (args.length !== 1) throw new Error("--hard must be requested by itself.");
+    return buildReloadRequest(["server:process"], context);
   },
 };
 

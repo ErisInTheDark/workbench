@@ -54,9 +54,9 @@ test("a state handoff from the previous controller generation starts with no har
 
 test("a useful partial batch satisfies all matching waiters and preserves the remaining request", async () => {
   let claims = [
-    claim("one", ["next-dev", "orchestrator-logic"]),
-    claim("two", ["next-dev"]),
-    claim("logic-worker", ["orchestrator-logic"]),
+    claim("one", ["client:all", "server:core"]),
+    claim("two", ["client:all"]),
+    claim("logic-worker", ["server:core"]),
   ];
   const batches: OrchestratorReloadScope[][] = [];
   const controller = new WorkbenchOrchestratorReloadController({
@@ -65,31 +65,31 @@ test("a useful partial batch satisfies all matching waiters and preserves the re
   });
 
   let firstSettled = false;
-  const first = request(controller, "one", ["next-dev", "orchestrator-logic"]).finally(() => { firstSettled = true; });
+  const first = request(controller, "one", ["client:all", "server:core"]).finally(() => { firstSettled = true; });
   await Promise.resolve();
   assert.deepEqual(batches, []);
 
-  const second = request(controller, "two", ["next-dev"]);
-  assert.deepEqual((await second).requestedScopes, ["next-dev"]);
-  assert.deepEqual(batches, [["next-dev"]]);
+  const second = request(controller, "two", ["client:all"]);
+  assert.deepEqual((await second).requestedScopes, ["client:all"]);
+  assert.deepEqual(batches, [["client:all"]]);
   assert.equal(firstSettled, false);
 
   claims = claims.map((entry) => entry.threadId === "logic-worker" ? { ...entry, lifecycleKind: "completed" } : entry);
   controller.notifyEligibilityChanged();
-  assert.deepEqual((await first).requestedScopes, ["next-dev", "orchestrator-logic"]);
-  assert.deepEqual(batches, [["next-dev"], ["orchestrator-logic"]]);
+  assert.deepEqual((await first).requestedScopes, ["client:all", "server:core"]);
+  assert.deepEqual(batches, [["client:all"], ["server:core"]]);
 });
 
 test("needs-attention holders block while completed and stopped holders are safe", async () => {
   for (const lifecycleKind of ["needsAttention", "working"] as const) {
-    let claims = [claim("caller", ["mcp"]), claim("holder", ["mcp"], lifecycleKind)];
+    let claims = [claim("caller", ["server:mcp"]), claim("holder", ["server:mcp"], lifecycleKind)];
     const executed = deferred<void>();
     const controller = new WorkbenchOrchestratorReloadController({
       executeBatch: async () => executed.resolve(),
       listClaims: async () => claims,
     });
     let settled = false;
-    const pending = request(controller, "caller", ["mcp"]).finally(() => { settled = true; });
+    const pending = request(controller, "caller", ["server:mcp"]).finally(() => { settled = true; });
     await Promise.resolve();
     assert.equal(settled, false);
     claims = claims.map((entry) => entry.threadId === "holder" ? { ...entry, lifecycleKind: "stopped" } : entry);
@@ -105,9 +105,9 @@ test("cancellation removes a waiter without cancelling an executing batch", asyn
   const abort = new AbortController();
   const controller = new WorkbenchOrchestratorReloadController({
     executeBatch: async () => { executing.resolve(); await release.promise; },
-    listClaims: async () => [claim("caller", ["codex-bridge"])],
+    listClaims: async () => [claim("caller", ["server:codex"])],
   });
-  const pending = request(controller, "caller", ["codex-bridge"], abort.signal);
+  const pending = request(controller, "caller", ["server:codex"], abort.signal);
   await executing.promise;
   abort.abort(new Error("caller left"));
   await assert.rejects(pending, /caller left/u);
@@ -116,35 +116,35 @@ test("cancellation removes a waiter without cancelling an executing batch", asyn
 
 test("a failed batch rejects dependent waiters but leaves disjoint work eligible", async () => {
   let claims = [
-    claim("logic", ["orchestrator-logic"]),
-    claim("next", ["next-dev"]),
-    claim("next-worker", ["next-dev"]),
+    claim("logic", ["server:core"]),
+    claim("next", ["client:all"]),
+    claim("next-worker", ["client:all"]),
   ];
   const batches: OrchestratorReloadScope[][] = [];
   const controller = new WorkbenchOrchestratorReloadController({
     executeBatch: async (scopes) => {
       batches.push(scopes);
-      if (scopes.includes("orchestrator-logic")) throw new Error("logic reload failed");
+      if (scopes.includes("server:core")) throw new Error("logic reload failed");
     },
     listClaims: async () => claims,
   });
-  const failed = request(controller, "logic", ["orchestrator-logic"]);
-  const disjoint = request(controller, "next", ["next-dev"]);
+  const failed = request(controller, "logic", ["server:core"]);
+  const disjoint = request(controller, "next", ["client:all"]);
   await assert.rejects(failed, /logic reload failed/u);
 
   claims = claims.map((entry) => entry.threadId === "next-worker" ? { ...entry, lifecycleKind: "completed" } : entry);
   controller.notifyEligibilityChanged();
   assert.equal((await disjoint).state, "succeeded");
-  assert.deepEqual(batches, [["orchestrator-logic"], ["next-dev"]]);
+  assert.deepEqual(batches, [["server:core"], ["client:all"]]);
 });
 
 test("admission rejects scopes outside the caller active claim", async () => {
   const controller = new WorkbenchOrchestratorReloadController({
     executeBatch: async () => undefined,
-    listClaims: async () => [claim("caller", ["mcp"])],
+    listClaims: async () => [claim("caller", ["server:mcp"])],
   });
-  await assert.rejects(request(controller, "caller", ["next-dev"]), /does not claim/u);
-  await assert.rejects(request(controller, "missing", ["mcp"]), /must own an active Git arc/u);
+  await assert.rejects(request(controller, "caller", ["client:all"]), /does not claim/u);
+  await assert.rejects(request(controller, "missing", ["server:mcp"]), /must own an active Git arc/u);
 });
 
 test("hard reload notifies every owner together and exits when they settle", async () => {
@@ -186,9 +186,9 @@ test("hard reload deadline bypasses a stuck partial reload and forces exit", asy
       notifications: () => [{ name: "stuck", notify: async () => await never.promise }],
       timeoutMs: 5_000,
     },
-    listClaims: async () => [claim("caller", ["mcp"])],
+    listClaims: async () => [claim("caller", ["server:mcp"])],
   });
-  const partialReload = request(controller, "caller", ["mcp"]);
+  const partialReload = request(controller, "caller", ["server:mcp"]);
   await executing.promise;
 
   controller.admitHardReload();
@@ -199,3 +199,4 @@ test("hard reload deadline bypasses a stuck partial reload and forces exit", asy
   assert.equal(exits, 1);
   release.resolve();
 });
+

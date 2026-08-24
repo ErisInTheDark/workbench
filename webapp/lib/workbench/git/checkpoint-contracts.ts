@@ -7,13 +7,10 @@
  */
 import { z } from "zod";
 
-import { ORCHESTRATOR_RELOAD_SCOPES } from "../orchestrator-reload";
-
 const nonEmptyString = z.string().trim().min(1);
 const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
 const checkpointPaths = z.array(nonEmptyString).min(1);
 const optionalCheckpointPaths = z.array(nonEmptyString);
-const reloadScopes = z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).default([]);
 const rootId = nonEmptyString;
 
 export const GitArcRootPathsSchema = z.object({
@@ -67,10 +64,9 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     intentDescription: z.string().default(""),
     intentName: nonEmptyString,
     paths: optionalCheckpointPaths,
-    reloadScopes,
     roots: z.array(GitArcPlanRootSchema).default([]),
     ...checkpointBaseRequest,
-  }),
+  }).strict(),
   z.object({ action: z.literal("planAdd"), paths: optionalCheckpointPaths, roots: z.array(GitArcRootPathsSchema).default([]), ...checkpointBaseRequest }),
   z.object({ action: z.literal("planAdopt"), paths: optionalCheckpointPaths, roots: z.array(GitArcRootPathsSchema).default([]), ...checkpointBaseRequest }),
   z.object({ action: z.literal("planRemove"), paths: optionalCheckpointPaths, roots: z.array(GitArcRootPathsSchema).default([]), ...checkpointBaseRequest }),
@@ -80,10 +76,9 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     intentDescription: z.string().default(""),
     intentName: nonEmptyString,
     paths: optionalCheckpointPaths,
-    reloadScopes,
     roots: z.array(GitArcPlanRootSchema).default([]),
     ...checkpointBaseRequest,
-  }),
+  }).strict(),
   z.object({
     action: z.literal("arcContinue"),
     checkpointCommit: checkpointSha.optional(),

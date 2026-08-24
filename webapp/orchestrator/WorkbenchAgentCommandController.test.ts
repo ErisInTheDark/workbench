@@ -302,7 +302,7 @@ test("reload admission releases the handler before terminal polling completes", 
     if (init?.method === "POST") {
       return Response.json({
         appliedScopes: [], completedAt: null, error: null, ok: true,
-        queuedScopes: [], requestedScopes: ["orchestrator-logic"], startedAt: 1, state: "running",
+        queuedScopes: [], requestedScopes: ["server:core"], startedAt: 1, state: "running",
       });
     }
     pollStarted.resolve();
@@ -318,7 +318,7 @@ test("reload admission releases the handler before terminal polling completes", 
   try {
     let clientSettled = false;
     const client = fetch(`${server.origin}/orchestrator/agent-command`, {
-      body: agentCommandBody(["orchestrator", "reload", "--orchestrator-logic"]),
+      body: agentCommandBody(["orchestrator", "reload", "--server:core"]),
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       method: "POST",
     }).then((response) => {
@@ -330,13 +330,13 @@ test("reload admission releases the handler before terminal polling completes", 
     assert.equal(clientSettled, false);
     await pollStarted.promise;
     terminal.resolve(Response.json({
-      appliedScopes: ["orchestrator-logic"], completedAt: 2, error: null, ok: true,
-      queuedScopes: [], requestedScopes: ["orchestrator-logic"], startedAt: 1, state: "succeeded",
+      appliedScopes: ["server:core"], completedAt: 2, error: null, ok: true,
+      queuedScopes: [], requestedScopes: ["server:core"], startedAt: 1, state: "succeeded",
     }));
 
     const response = await client;
     assert.equal(response.status, 200);
-    assert.equal(await response.text(), "Reload succeeded.\nApplied: orchestrator-logic\nQueued: none\n");
+    assert.equal(await response.text(), "Reload succeeded.\nApplied: server:core\nQueued: none\n");
   } finally {
     await server.close();
   }
@@ -360,7 +360,7 @@ test("managed reloads wait on the direct coordinator without an internal fetch",
   );
   const server = await startController(controller, () => handled.resolve());
   try {
-    const body = new URLSearchParams(agentCommandBody(["orchestrator", "reload", "--mcp", "--reload-coordinator"]));
+    const body = new URLSearchParams(agentCommandBody(["orchestrator", "reload", "--server:mcp", "--server:reloader"]));
     body.set("callerHarness", "codex");
     body.set("callerThreadId", "thread-one");
     const client = fetch(`${server.origin}/orchestrator/agent-command`, {
@@ -374,15 +374,69 @@ test("managed reloads wait on the direct coordinator without an internal fetch",
       callerHarness: "codex",
       callerThreadId: "thread-one",
       cwd: process.cwd(),
-      scopes: ["mcp", "reload-coordinator"],
+      scopes: ["server:mcp", "server:reloader"],
     });
     terminal.resolve(Response.json({
-      appliedScopes: ["mcp", "reload-coordinator"], completedAt: 2, error: null, ok: true,
-      queuedScopes: [], requestedScopes: ["mcp", "reload-coordinator"], startedAt: 1, state: "succeeded",
+      appliedScopes: ["server:mcp", "server:reloader"], completedAt: 2, error: null, ok: true,
+      queuedScopes: [], requestedScopes: ["server:mcp", "server:reloader"], startedAt: 1, state: "succeeded",
     }));
     const response = await client;
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /Applied: mcp, reload-coordinator/u);
+    assert.match(await response.text(), /Applied: server:mcp, server:reloader/u);
+  } finally {
+    await server.close();
+  }
+});
+
+test("managed hard reloads bypass the direct coordinator", async () => {
+  const requests: Array<{ body: Record<string, unknown>; method: string }> = [];
+  const fetchRequest: typeof fetch = async (_input, init) => {
+    const method = init?.method ?? "GET";
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+    requests.push({ body, method });
+    if (method === "POST") {
+      return Response.json({
+        appliedScopes: [], completedAt: null, error: null, ok: true,
+        queuedScopes: [], requestedScopes: ["server:process"], startedAt: 1, state: "running",
+      });
+    }
+    return Response.json({
+      appliedScopes: ["server:process"], completedAt: 2, error: null, ok: true,
+      queuedScopes: [], requestedScopes: ["server:process"], startedAt: 1, state: "succeeded",
+    });
+  };
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      requestOrchestratorReload: async () => { throw new Error("unexpected direct reload dispatch"); },
+    },
+    fetchRequest,
+  );
+  const server = await startController(controller);
+  try {
+    const body = new URLSearchParams(agentCommandBody(["orchestrator", "reload", "--hard"]));
+    body.set("callerThreadId", "thread-one");
+    const response = await fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: body.toString(),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /Applied: server:process/u);
+    assert.deepEqual(requests, [
+      {
+        body: {
+          callerHarness: "codex",
+          callerThreadId: "thread-one",
+          cwd: process.cwd(),
+          scopes: ["server:process"],
+        },
+        method: "POST",
+      },
+      { body: {}, method: "GET" },
+    ]);
   } finally {
     await server.close();
   }
@@ -396,7 +450,7 @@ test("disconnecting after reload admission aborts terminal polling", async () =>
     if (init?.method === "POST") {
       return Response.json({
         appliedScopes: [], completedAt: null, error: null, ok: true,
-        queuedScopes: [], requestedScopes: ["orchestrator-logic"], startedAt: 1, state: "running",
+        queuedScopes: [], requestedScopes: ["server:core"], startedAt: 1, state: "running",
       });
     }
     const signal = init?.signal;
@@ -418,7 +472,7 @@ test("disconnecting after reload admission aborts terminal polling", async () =>
   );
   const server = await startController(controller, () => handled.resolve());
   try {
-    const body = agentCommandBody(["orchestrator", "reload", "--orchestrator-logic"]);
+    const body = agentCommandBody(["orchestrator", "reload", "--server:core"]);
     const request = http.request(`${server.origin}/orchestrator/agent-command`, {
       headers: {
         "Content-Length": Buffer.byteLength(body),

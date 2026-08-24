@@ -511,7 +511,6 @@ test("plan creation and applied arc moves refresh Git arc state while move previ
 });
 
 test("reload-scope plans require the exact running Workbench project root", async () => {
-  let dispatchedScopes: string[] = [];
   const createFeature = (cwd: string) => {
     const feature = new WorkbenchGitArcFeature({
       getThreadClaimContext: async () => null,
@@ -521,10 +520,7 @@ test("reload-scope plans require the exact running Workbench project root", asyn
       transitions: { run: async (_key, operation) => await operation() },
     });
     Object.defineProperty(feature, "dispatch", {
-      value: async (request: { reloadScopes: string[] }) => {
-        dispatchedScopes = request.reloadScopes;
-        return Response.json({ ok: true });
-      },
+      value: async (request: { paths: string[] }) => Response.json({ scopePaths: request.paths }),
     });
     return feature;
   };
@@ -533,15 +529,21 @@ test("reload-scope plans require the exact running Workbench project root", asyn
     cwd: "ignored",
     harness: "codex" as const,
     intentName: "reload",
-    paths: ["src/a.ts"],
-    reloadScopes: ["mcp"] as const,
+    paths: ["webapp/orchestrator/WorkbenchAgentMcpController.ts"],
     threadId: "thread-one",
   };
-  assert.equal((await createFeature("C:/Git/Project").executeRequest(request)).status, 200);
-  assert.deepEqual(dispatchedScopes, ["mcp"]);
-  const rejected = await createFeature("C:/Git/Project/webapp").executeRequest(request);
-  assert.equal(rejected.status, 400);
-  assert.match(JSON.stringify(await rejected.json()), /running Workbench project root/u);
+  const workbench = await createFeature("C:/Git/Project").executeRequest(request);
+  assert.equal(workbench.status, 200);
+  assert.deepEqual(await workbench.json(), {
+    reloadScopes: ["server:mcp"],
+    scopePaths: ["webapp/orchestrator/WorkbenchAgentMcpController.ts"],
+  });
+  const nestedProject = await createFeature("C:/Git/Project/webapp").executeRequest(request);
+  assert.equal(nestedProject.status, 200);
+  assert.deepEqual(await nestedProject.json(), {
+    reloadScopes: [],
+    scopePaths: ["webapp/orchestrator/WorkbenchAgentMcpController.ts"],
+  });
 });
 
 test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actions", async () => {

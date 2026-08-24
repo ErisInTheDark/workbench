@@ -132,7 +132,7 @@ test("terminal proposals and claim resolution share one lifecycle card", () => {
       intentDescription: "Keep the lifecycle visible.",
       intentName: "Harden arc lifecycle",
       proposalIds: ["proposal-one", "proposal-two"],
-      reloadScopes: ["orchestrator-logic", "mcp"],
+      reloadScopes: ["server:core", "server:mcp"],
       proposals: [
         { proposalId: "proposal-one", status: "proposed" },
         { proposalId: "proposal-two", status: "committed" },
@@ -158,7 +158,7 @@ test("terminal proposals and claim resolution share one lifecycle card", () => {
   assert.match(html, /data-thread-git-arc-resolution-separator="true"/u);
   assert.match(html, /2 claimed files/u);
   assert.match(html, /data-thread-reload-scopes="true"/u);
-  assert.match(html, /data-thread-reload-scope="orchestrator-logic"[\s\S]*data-thread-reload-scope="mcp"/u);
+  assert.match(html, /data-thread-reload-scope="server:core"[\s\S]*data-thread-reload-scope="server:mcp"/u);
   assert.match(html, /Checking claimed files/u);
   assert.doesNotMatch(html, /Harden arc lifecycle/u);
 });
@@ -167,7 +167,7 @@ test("completed lifecycle cards hide reload scopes without hiding proposals or c
   const html = renderToStaticMarkup(createElement(ThreadGitArcLifecycleCard, {
     claim: {
       checkpointCommit: "a".repeat(40), claimedPaths: ["src/one.ts"], intentDescription: "", intentName: "Completed arc",
-      phase: "active", proposals: [{ proposalId: "proposal-one", status: "proposed" }], reloadScopes: ["mcp"],
+      phase: "active", proposals: [{ proposalId: "proposal-one", status: "proposed" }], reloadScopes: ["server:mcp"],
       updatedAt: "2026-08-24T00:00:00.000Z",
     },
     cwd: "C:/workspace", harness: "codex", onReleased: async () => undefined, projectRootPath: "C:/workspace",
@@ -860,23 +860,28 @@ test("nested plan cards label planned changes without claiming them", () => {
   assert.doesNotMatch(removeHtml, />Claimed</u);
 });
 
-test("completed plan cards render reload scopes separately from file paths", () => {
+test("completed plan cards render derived receipt scopes separately from file paths", () => {
   const html = renderToStaticMarkup(createElement(ThreadGitArcItem, {
     commandIntent: {
       action: "plan",
       intentName: "Reload safely",
       paths: ["src/one.ts"],
       ref: null,
-      reloadScopes: ["orchestrator-logic", "mcp"],
     },
     durationMs: 10,
     outcome: "completed",
-    receipt: null,
+    receipt: {
+      action: "plan",
+      claimedPaths: ["src/one.ts"],
+      ref: "a".repeat(40),
+      reloadScopes: ["server:core", "server:mcp"],
+      version: 1,
+    },
   }));
   assert.match(html, /data-thread-reload-scopes="true"/u);
   assert.match(html, /Runtime reload scopes/u);
-  assert.match(html, /data-thread-reload-scope="orchestrator-logic"/u);
-  assert.match(html, /data-thread-reload-scope="mcp"/u);
+  assert.match(html, /data-thread-reload-scope="server:core"/u);
+  assert.match(html, /data-thread-reload-scope="server:mcp"/u);
   assert.equal((html.match(/src\/one\.ts/gu) ?? []).length, 1);
 });
 

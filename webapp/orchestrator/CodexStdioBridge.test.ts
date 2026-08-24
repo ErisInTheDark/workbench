@@ -393,7 +393,7 @@ test("managed thread starts, resumes, and forks receive wb MCP config without re
       assert.equal(mcpUrl.origin, "http://127.0.0.1:4500");
       assert.equal(mcpUrl.pathname, "/orchestrator/mcp");
       assert.match(clientScope, /^[0-9a-f-]{36}$/u);
-      assert.equal(mcpUrl.searchParams.get("capabilities"), capable ? "reload-scopes" : null);
+      assert.equal(mcpUrl.searchParams.get("capabilities"), null);
       clientScopes.add(clientScope);
       const { url: _url, ...wbWithoutUrl } = wb;
       assert.deepEqual(wbWithoutUrl, {
