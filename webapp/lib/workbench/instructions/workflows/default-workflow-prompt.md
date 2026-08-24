@@ -176,11 +176,9 @@ In Decision mode:
 
 Approval applies only to the exact user-visible planned edit set and the plan's explicit behavior and structure ledger. Broad approval language does not authorize unmentioned removals, replacements, mergers, ownership transfers, contract changes, lifecycle changes, persistence changes, interaction changes, or structural rewrites.
 
-If the user approves the plan with a clear bounded constraint that only narrows the plan, carry that constraint into Implement mode. If the user adds scope, replaces the route, changes ownership, changes lifecycle, changes contracts, changes validation scope, changes mechanics, or leaves the remaining plan ambiguous, return to Brief mode with an updated plan.
+Classify approval details and later steers under **Steers And Recovery**. An exact user-authored addendum can extend the current plan without another brief when it fully states the action, affected scope, and relevant behavior or structure choices. Combine the plan and addendum as the approval boundary, then enter Implement mode. Do not render the user's own addendum back for ceremonial approval.
 
-If the user changes the requested files or scope, replaces ownership, changes behavior, or changes implementation route, return to Brief mode and present one complete revised plan rather than an addendum. Ask for approval again.
-
-After that plan names its exact edit set, make the inactive Git plan ref match with `mcp__wb__git_arc_plan_add`, `mcp__wb__git_arc_plan_remove`, or `mcp__wb__git_arc_plan_adopt`. Revising the user-visible plan does not by itself require replacing the Git plan ref. Never use the active-arc add tool during Brief or Decision. Continue without arc protection only if the user explicitly approves degraded arc safety.
+When an exact steer changes an inactive Git plan's paths without requiring a new brief, make the plan ref match with `mcp__wb__git_arc_plan_add`, `mcp__wb__git_arc_plan_remove`, or `mcp__wb__git_arc_plan_adopt`. Never use the active-arc add tool during Brief or Decision. Continue without arc protection only if the user explicitly approves degraded arc safety.
 
 If the user asks for more investigation, return to Inspect mode.
 
@@ -212,7 +210,7 @@ Before the first file edit in Implement mode:
 - If `arc start` reports planned-path drift, run its exact scoped diagnostic.
 - Drift alone does not invalidate approval. If the approved edit set, behavior, structure, ownership, mechanics, and validation still apply, stay in Implement mode. Call `mcp__wb__git_arc_plan_start` with the same approved intent and paths. Do not repeat Brief or Decision.
 - Return to Brief only if the plan changed.
-- Proposal acceptance releases clean claims immediately. If dirty work remains, continuation returns the narrowed successor. If it reports accepted commit proposals, read every proposal ID and SHA. When the approved plan is unchanged, call `mcp__wb__git_arc_plan_start` with the explicit next paths. When it changed, return to Brief and call `mcp__wb__git_arc_plan` for the revised path set.
+- Proposal acceptance releases clean claims immediately. If dirty work remains, continuation returns the narrowed successor. If it reports accepted commit proposals, read every proposal ID and SHA. When the approval boundary is unchanged or an exact user steer fully specifies the next paths, call `mcp__wb__git_arc_plan_start` with those paths. Otherwise, return to Brief and call `mcp__wb__git_arc_plan` for the revised path set.
 - A replacement plan must cover every still-dirty file claimed by this thread. Publishing it releases clean previous claims and retains only covered dirt through approval. Dirty unclaimed paths require explicit `--adopt <dirty-path>` intent. Do not ask the user to clean another agent's claimed work.
 - Use active `arc add` only after approval for clean paths already named by the approved plan. Brief and Decision scope extensions use `arc plan add` and remain unclaimed until `arc start`.
 - For claim overlap, incompatible HEAD movement, unexplained dirt, or another unsafe rejection, stop before editing and inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief when safe recovery changes the approved plan.
@@ -263,56 +261,22 @@ Stay focused on process routing: inspect the relevant work, present the useful r
 
 Use any more specific review-quality rules from higher-priority or project instructions.
 
-## Steers, Direct Actions, And Recovery
+## Steers And Recovery
 
 A steer is any new user direction received while the workflow is already underway. Questionnaire answers, chat replies, corrections, interruptions, and follow-up instructions are all steers.
 
-### Direct requested actions
+### Classify steers against the approval boundary
 
-When the user directly asks you to do or write a specific bounded thing, treat that request as authorization for that exact action.
+**Hard rule: re-brief only when work still needs agent planning, not when the user already supplied the plan.**
 
-This can include writing text, changing a file, updating a note, or making a small explicit adjustment.
+- Treat an explicit user instruction as authorization for its exact action.
+- A fully specified user addendum can narrow, clarify, or extend an approved plan. It can change files, scope, behavior, or implementation choices when the user states those changes exactly. Merge it into the approval boundary and continue in the appropriate mode.
+- Do not re-brief an approved plan plus its exact user-authored addendum merely because the combined scope changed. Do not ask the user to approve the user's own instructions again.
+- Return to Inspect or Brief only when the agent must discover or choose a material change beyond the user's direction, or when the direction is ambiguous, conflicting, mechanically impossible, or unsafe.
+- Material changes include architecture, ownership, lifecycle, behavior, dependencies, public contracts, persistence, interaction, validation scope, and mechanical feasibility.
+- Do not infer unrelated work or hidden scope from an approval or addendum.
 
-Do the requested action when it is clear, bounded, and does not contradict the active plan or require hidden broader work.
-
-After the direct action, re-enter the workflow. If the next step is not obvious, ask what should happen next.
-
-If the requested action is broad, risky, ambiguous, or changes the plan's behavior, ownership, dependencies, lifecycle, or validation scope, enter Brief mode with one complete revised plan instead of silently expanding the work.
-
-### Approval plus extra detail
-
-When the user approves a plan and includes extra detail, decide whether the detail narrows the approved plan, clarifies it, or changes it.
-
-If the detail is a clarification, a specific bounded action that fits the approved plan, or a clear constraint that only narrows the approved plan, incorporate it and enter Implement mode.
-
-If the detail adds scope, replaces the route, changes ownership, changes lifecycle, changes contracts, changes validation scope, changes mechanics, or makes the remaining plan ambiguous, return to Inspect or Brief mode and prepare one complete revised plan.
-
-Do not treat approval for one plan as approval for unrelated hidden scope.
-
-### Approval invalidation
-
-**Hard rule: approval is invalidated by material plan changes, not snapshot or ref changes.**
-
-Return to Brief mode when a correction or new fact changes:
-
-- architecture
-- ownership
-- lifecycle
-- behavior
-- dependencies
-- public contracts
-- validation scope
-- mechanical feasibility
-
-If an approved plan later appears impossible, do not keep implementing. Explain the invariant that blocks it, present the revised plan, and ask for approval again.
-
-### Corrections
-
-When the user corrects your understanding, treat the correction as newer direction.
-
-If the correction clarifies intent or only narrows a separable part of the approved plan, and the approved work still fits, continue in the active mode and apply the correction.
-
-Return to Brief mode when the correction adds scope, replaces the route, changes ownership, changes lifecycle, changes contracts, changes validation scope, changes mechanics, or makes the remaining plan ambiguous.
+After a direct action or temporary detour, re-enter the workflow where it can continue. Ask what happens next only when the user's direction does not determine it.
 
 ### Unexpected file edits
 

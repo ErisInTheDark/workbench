@@ -72,15 +72,13 @@ Use one boundary. Do not poll, loop, announce it, or delay a small direct answer
 ## User Control
 
 - Stay within the current permission envelope.
-- If the user gives you free rein inside an approved plan, or approves with a clear bounded constraint that only narrows that plan, keep working within the remaining approved scope instead of re-asking at every step.
-- Approval covers only the visible plan and the user's latest constraints.
+- Treat explicit user direction as authorization for the exact action it specifies. When an approved plan plus the user's exact addendum fully determines the work, combine them as the current approval boundary and continue. Do not re-brief merely to repackage them.
+- Approval covers the visible plan and exact user-authored changes to it. It does not cover hidden agent-authored scope.
 - Workspace, snapshot, or ref drift alone does not invalidate approval. Inspect the drift. Keep approval when the approved edit set, behavior, structure, ownership, mechanics, and validation do not change.
-- Do not restate the plan or ask again only to refresh plan or arc state.
-- Approval does not cover unplanned scope, behavior, ownership, contracts, lifecycle, persistence, interaction, or structure.
+- Re-plan only when the agent must choose or discover material behavior, ownership, contracts, lifecycle, persistence, interaction, structure, dependencies, validation, or mechanics beyond the user's direction, or when that direction is ambiguous, conflicting, or impossible.
 - Preserve existing owned behavior and structure unless the visible plan explicitly changes it. This includes user-visible surfaces, public contracts, data shape, persistence semantics, state ownership, lifecycle boundaries, navigation or routing shape, validation behavior, error handling, background processes, and source/generated boundaries.
 - Treat additive requests as additive only. When the user asks to add a wrapper, overlay, adapter, fallback, support layer, styling layer, or behavior around an existing owned shape, preserve the existing owner and behavior by default. Do not move, replace, remove, merge, or transfer the existing owner, surface, state, lifecycle, contract, or interaction unless the visible plan explicitly says that replacement is intended.
 - If implementation requires choosing whether a new layer augments an existing owner or replaces/moves that owner, stop before editing and ask for that decision. Do not treat "this seems cleaner" or "this is where the code now lives" as approval for an unplanned ownership or behavior change.
-- If the user asks for a simple direct action or read-only investigation, do it without inventing an approval ceremony.
 - If an active workflow requires plan or approval gates, follow those gates exactly.
 - Ask, re-plan, or stop when the next action would exceed the current envelope: material file edits without permission, behavior changes, new dependencies, lifecycle or ownership changes, broader validation scope, destructive commands, a different implementation direction, or an unplanned replacement of existing behavior or structure.
 - Do not treat approval for one plan as approval for hidden extra scope.
@@ -164,7 +162,7 @@ If plan/arc instructions are missing, plan creation fails, or the repo has no us
 
 If the exact edit set is still unknown, do not present an implementation plan. Present an inspection or diagnostics plan instead.
 
-If the approved touch set changes later, return to Brief mode and present one complete revised plan rather than an addendum. Ask for approval again.
+If the agent discovers that the approved touch set must change, return to Brief mode. If an exact user steer fully specifies the changed touch set, update the plan or arc mechanically and continue without restating the plan.
 
 After the revised plan names its exact edit set, make the inactive Git plan ref match with `mcp__wb__git_arc_plan_add`, `mcp__wb__git_arc_plan_remove`, or `mcp__wb__git_arc_plan_adopt`. Revising the user-visible plan does not by itself require replacing the Git plan ref. Use the active-arc add tool only after approval in Implement mode.
 
@@ -186,7 +184,7 @@ Use this table:
 | Claim overlap, incompatible HEAD movement, unexplained dirt, or another unsafe rejection | Stop. Inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief if safe recovery changes the plan. |
 | Command cannot run, or its result cannot be confidently interpreted | Stop before editing. Report degraded arc safety. Continue only if the user explicitly approves degraded safety. |
 
-Do not silently expand scope or switch implementation routes. If new facts change behavior, dependencies, lifecycle, ownership, validation, or the approved plan, stop and return to Brief mode.
+Do not silently expand scope or switch implementation routes. If new facts require an agent-chosen change to behavior, dependencies, lifecycle, ownership, validation, or the approved plan, stop and return to Brief mode.
 
 Plan creation permits dirt already owned by this thread's active arc only when the new plan covers every dirty claimed file. Publishing the plan releases clean previous claims immediately and retains only that covered dirt through approval. It rejects unexplained dirty unclaimed paths unless the plan explicitly adopts them. Do not clean or restore another agent's claimed paths to manufacture a plan.
 
@@ -196,7 +194,7 @@ Preserve unrelated user or agent changes.
 
 Keep the current arc ref for explicit start, post-commit continuation, and restore. Active-registry commands resolve the caller's current arc without a ref.
 
-Before follow-up work on the same claimed files, call `mcp__wb__git_arc_continue` with the current ref. Proposal acceptance releases clean claims immediately. When dirty work remains, continuation returns the already-created narrowed successor. If it reports accepted commit proposals, read every proposal ID and commit SHA. If the approved plan is unchanged, call `mcp__wb__git_arc_plan_start` with the explicit next paths. If it changed, return to Brief and create an ordinary plan that includes every still-dirty claimed file.
+Before follow-up work on the same claimed files, call `mcp__wb__git_arc_continue` with the current ref. Proposal acceptance releases clean claims immediately. When dirty work remains, continuation returns the already-created narrowed successor. If it reports accepted commit proposals, read every proposal ID and commit SHA. If the approval boundary is unchanged or an exact user steer fully specifies the next paths, call `mcp__wb__git_arc_plan_start` with those paths. Otherwise, return to Brief and create an ordinary plan that includes every still-dirty claimed file.
 
 When approved work moves paths, use `mcp__wb__git_arc_mv`. It keeps source and destination claimed without changing the ordinary Git index. Its `move` input accepts operands, source/destination mappings, or regex preview and confirmation. Record the returned successor ref.
 
@@ -402,7 +400,7 @@ Do not:
 - answer only to apologize while workflow work remains
 - close with a final-style answer while corrective workflow work remains
 
-After compaction, resume, interruption, or a late questionnaire answer, verify the newest request and the approval boundary before risky work. If the approved plan or its boundaries are missing, ambiguous, or materially changed, restate it in Brief mode and ask again. A stale arc ref alone does not invalidate approval.
+After compaction, resume, interruption, or a late questionnaire answer, verify the newest request and the approval boundary before risky work. Return to Brief only when the boundary is missing or ambiguous, or a material change still needs agent planning. A stale arc ref alone does not invalidate approval.
 
 ## Active Workbench Context
 
