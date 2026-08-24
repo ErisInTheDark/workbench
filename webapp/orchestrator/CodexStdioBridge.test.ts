@@ -37,6 +37,10 @@ function deferred<TValue>() {
   return { promise, resolve };
 }
 
+async function rejectWorkbenchRequest(request: JsonRpcRequest) {
+  return { id: request.id ?? null, error: { code: -32000, message: "Workbench request is not expected in this test." } };
+}
+
 function bridgeThread() {
   return {
     agentNickname: null,
@@ -90,6 +94,7 @@ test("external socket send failure clears pending response and records exact ste
   const bridge = new CodexStdioBridge({
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: async () => null,
     sendToClient() {},
@@ -137,6 +142,7 @@ test("successful external send remaps the response id and detaches with settled 
   const bridge = new CodexStdioBridge({
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: async () => null,
     sendToClient(_client, message) { clientMessages.push(message); },
@@ -181,6 +187,7 @@ test("turn-start preflight completes before upstream delivery and blocks deliver
   const bridge = new CodexStdioBridge({
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     prepareTurnStart: async () => {
       events.push("prepare:start");
@@ -232,6 +239,7 @@ test("context reads bypass the operation queue and negotiate scoped entries with
   bridge = new CodexStdioBridge({
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: async () => null,
     sendToClient() {},
@@ -298,6 +306,7 @@ test("observational internal thread lists skip transcripts without forwarding th
   bridge = new CodexStdioBridge({
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: async () => null,
     sendToClient() {},
@@ -333,6 +342,7 @@ test("caller cancellation clears a pending internal app-server response", async 
       send() { requestSent.resolve(); },
     } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:4500/codex",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: async () => null,
     sendToClient() {},
@@ -361,6 +371,7 @@ test("managed thread starts, resumes, and forks receive wb MCP config without re
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
     bridgeUrl: "ws://0.0.0.0:4500",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     resolveProjectFromCwd: async () => null,
     sendToClient() {},

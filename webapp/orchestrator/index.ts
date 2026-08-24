@@ -26,7 +26,7 @@ import type {
     WorkbenchBrowseResultEntry,
     WorkbenchHarness,
 } from "../lib/types";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest, WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import {
     expandOrchestratorReloadScopes,
     normalizeOrchestratorReloadScopes,
@@ -62,7 +62,6 @@ import WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGeneration
 import type { WorkbenchHardReloadNotification } from "./WorkbenchOrchestratorReloadController";
 import ReloadableWorkbenchOrchestratorReloadController from "./ReloadableWorkbenchOrchestratorReloadController";
 import type { WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
-import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import WorkbenchTurnRecoveryHandoffStore, { type WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
@@ -149,7 +148,6 @@ let codexBridge: CodexStdioBridge;
 let opencodeBridge: OpenCodeBridge;
 let browseController: import("./WorkbenchBrowseController").default | null = null;
 let browseRuntime: import("../lib/workbench/browse/WorkbenchBrowseRuntime").default | null = null;
-const threadStateLifecycleListeners = new Set<(projectId: string, entry: WorkbenchThreadSidebarEntry) => void>();
 let nextBridgeConnectionId = 0;
 const bridgeClientsByConnectionId = new Map<string, BridgeClient>();
 let opencodeBridgeReloadPromise: Promise<void> | null = null;
@@ -173,7 +171,6 @@ const turnRecoveryController = new WorkbenchTurnRecoveryController(
     await featureHost.run("threadState", (feature) => feature.controller.reportRecoveryFailed(project.project.id, candidate.harness, candidate.threadId), "thread state: report recovery failure");
   },
 );
-const subagentStore = new WorkbenchSubagentStore(PROJECT_ROOT);
 const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
 const orchestratorReloadController = new ReloadableWorkbenchOrchestratorReloadController({
   executeScopes: executeReloadScopes,
@@ -443,7 +440,6 @@ function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
         await Promise.all(activeChildPids.map(async (pid) => await killProcessTreeAsync(pid)));
       },
     },
-    { name: "subagent relationship store", notify: async () => await subagentStore.waitForIdle() },
   ];
 }
 
@@ -491,9 +487,15 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
       },
       requestRecovery: (reason) => codexRecoverySupervisor.requestRecovery(reason),
     },
+    codexBridgeUrl: CODEX_BRIDGE_URL,
     executeBrowseRequest: async (body, signal) => await runAfterBrowseControllerReload(() => getBrowseController().executeBrowseRequest(body, signal)),
     executeBrowseSessionRequest: async (request, signal) => await runAfterBrowseControllerReload(() => getBrowseController().executeSessionRequest(request, signal)),
     getCodexReadiness: () => codexReadyPromise,
+    installSubagentRelationship: async (record) => await featureHost.run(
+      "threadState",
+      (feature) => feature.installSubagentRelationship(record),
+      `thread state: install subagent ${record.harness}:${record.threadId}`,
+    ),
     harnessPorts: createHarnessPorts(),
     legacyMigrationProjectRoot: PROJECT_ROOT,
     localOrchestratorOrigin: LOCAL_ORCHESTRATOR_ORIGIN,
@@ -510,8 +512,7 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
       restartNextDev: restartNextDevFromWatchdog,
       serverErrorThreshold: NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD,
     },
-    notifyThreadLifecycle: (projectId, entry) => {
-      for (const listener of threadStateLifecycleListeners) listener(projectId, entry);
+    notifyThreadLifecycle: () => {
       orchestratorReloadController.notifyEligibilityChanged();
     },
     notifyReloadEligibilityChanged: () => orchestratorReloadController.notifyEligibilityChanged(),
@@ -540,8 +541,6 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
         threadId: threadId.trim(),
       }, signal));
     },
-    requestSubagent: (request) => requestLiveHarness("codex", request),
-    subagentStore,
     threadTransitions: threadTransitionCoordinator,
   };
 }
@@ -628,23 +627,6 @@ function createCodexRecoverySupervisor() {
     maxRetryDelayMs: CODEX_RECOVERY_MAX_RETRY_DELAY_MS,
     recover: recoverCodexBridge,
   });
-}
-
-function createSubagentThreadStatePort() {
-  return {
-    getEntry: async (projectId: string, harness: WorkbenchHarness, threadId: string) => {
-      const snapshot = await featureHost.run("threadState", (feature) => feature.controller.getSnapshot(projectId), "thread state: subagent entry read");
-      return snapshot.entries.find((entry) => entry.entryKind === "subagent" && entry.identity.harness === harness && entry.identity.threadId === threadId) ?? null;
-    },
-    mutate: async (request: WorkbenchThreadStateRequest) => {
-      const response = await featureHost.run("threadState", (feature) => feature.controller.handleRequest("subagent-controller", request), `thread state: subagent ${request.method}`);
-      if ("error" in response) throw new Error(response.error.message);
-    },
-    subscribe: (listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void) => {
-      threadStateLifecycleListeners.add(listener);
-      return () => threadStateLifecycleListeners.delete(listener);
-    },
-  };
 }
 
 async function requestThreadResume(harness: "codex" | "opencode", threadId: string) {
@@ -962,6 +944,7 @@ function createCodexBridge() {
   return new CodexStdioBridge({
     appServer: codexAppServer,
     bridgeUrl: CODEX_BRIDGE_URL,
+    handleWorkbenchRequest: (request) => featureHost.run("subagents", (feature) => feature.handleRequest(request), `subagents: ${request.method}`),
     onNotification: (notification) => {
       broadcastToClients("codex", notification);
     },
@@ -971,8 +954,6 @@ function createCodexBridge() {
       sendJsonToClient(client, message);
     },
     storageRoot: PROJECT_ROOT,
-    subagentStore,
-    threadState: createSubagentThreadStatePort(),
   });
 }
 
@@ -1018,6 +999,7 @@ async function reloadCodexBridge() {
       codexBridge = new ReloadedCodexStdioBridge({
         appServer: codexAppServer,
         bridgeUrl: CODEX_BRIDGE_URL,
+        handleWorkbenchRequest: (request) => featureHost.run("subagents", (feature) => feature.handleRequest(request), `subagents: ${request.method}`),
         initialState: state,
         onNotification: (notification) => {
           broadcastToClients("codex", notification);
@@ -1027,8 +1009,6 @@ async function reloadCodexBridge() {
           sendJsonToClient(client, message);
         },
         storageRoot: PROJECT_ROOT,
-        subagentStore,
-        threadState: createSubagentThreadStatePort(),
       });
       log("codex-bridge", "reloaded bridge code without restarting app-server");
     }, { drain: false });
@@ -1073,6 +1053,7 @@ async function recoverCodexBridge(reason: string) {
     codexBridge = new ReloadedCodexStdioBridge({
       appServer: codexAppServer,
       bridgeUrl: CODEX_BRIDGE_URL,
+      handleWorkbenchRequest: (request) => featureHost.run("subagents", (feature) => feature.handleRequest(request), `subagents: ${request.method}`),
       onNotification: (notification) => {
         broadcastToClients("codex", notification);
       },
@@ -1081,8 +1062,6 @@ async function recoverCodexBridge(reason: string) {
         sendJsonToClient(client, message);
       },
       storageRoot: PROJECT_ROOT,
-      subagentStore,
-      threadState: createSubagentThreadStatePort(),
     });
     codexReadyPromise = null;
   }, { drain: false, invalidateGeneration: true });
@@ -1591,7 +1570,7 @@ function shutdownAndExit(exitCode: number, error?: unknown) {
     logError("orchestrator", error instanceof Error ? error.stack ?? error.message : String(error));
   }
 
-  void stopAllChildren().finally(() => copilotBridge.stop()).finally(() => opencodeBridge.stop()).finally(() => subagentStore.waitForIdle()).finally(() => {
+  void stopAllChildren().finally(() => copilotBridge.stop()).finally(() => opencodeBridge.stop()).finally(() => {
     process.exit(exitCode);
   });
 }
@@ -1608,7 +1587,6 @@ process.on("exit", () => {
 
 async function startOrchestrator() {
   log("orchestrator", `starting bridge at ${CODEX_BRIDGE_URL} and Next.js on port ${NEXT_PORT}`);
-  await subagentStore.initialize();
   await getBrowseRuntime().initialize();
   await workbenchAgentCliEnvironment.install();
   await ensureWorkbenchPromptFiles();

@@ -7,8 +7,8 @@
  */
 import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
-import type { WorkbenchHarness } from "../lib/types";
-import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "../lib/types";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest, WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
 import BrowseSessionCleanupSupervisor, { type BrowseSessionCleanupSupervisorOptions } from "./BrowseSessionCleanupSupervisor";
@@ -24,10 +24,11 @@ import WorkbenchLegacyMigrationSourceController, { readLegacyMigrationSourceConf
 import WorkbenchOrchestratorHttpRouter from "./WorkbenchOrchestratorHttpRouter";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
+import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
-import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type { HarnessKind, JsonRpcNotification, JsonRpcRequest } from "./bridge-types";
 import * as copilotThreadState from "./copilot-thread-state";
 import * as opencodeLiveThreadState from "./opencode-live-thread-state";
 import * as opencodeThreadState from "./opencode-thread-state";
@@ -50,10 +51,12 @@ export interface OrchestratorProviderNotification { harness: HarnessKind; notifi
 export interface OrchestratorFeatureContext {
   browseCleanupOptions: BrowseSessionCleanupSupervisorOptions;
   codexHealthOptions: CodexHealthMonitorOptions;
+  codexBridgeUrl: string;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeBrowseSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   getCodexReadiness(): Promise<void> | null;
   harnessPorts: Record<WorkbenchHarness, WorkbenchHarnessRuntimePort>;
+  installSubagentRelationship(record: WorkbenchSubagentRelationship): Promise<void>;
   legacyMigrationProjectRoot: string;
   localOrchestratorOrigin: string;
   localWorkbenchOrigin: string;
@@ -62,8 +65,6 @@ export interface OrchestratorFeatureContext {
   notifyThreadLifecycle(projectId: string, entry: import("../lib/workbench/thread/thread-state").WorkbenchThreadSidebarEntry): void;
   publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   requestOrchestratorReload(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
-  requestSubagent(request: JsonRpcRequest): Promise<JsonRpcResponse>;
-  subagentStore: { list(options: { projectId: string }): Promise<{ subagents: Array<{ createdAt: number; cwd: string; directSubagentIndex: number; harness: WorkbenchHarness; name: string; parentThreadId: string; profileId: string; profileName: string; projectId: string; threadId: string; title: string; updatedAt: number }> }> };
   threadTransitions: WorkbenchThreadTransitionCoordinator;
 }
 
@@ -81,6 +82,7 @@ export interface OrchestratorFeatures {
   orchestratorHttp: WorkbenchOrchestratorHttpRouter;
   projectCatalog: WorkbenchProjectCatalogController;
   projectSnapshot: WorkbenchProjectSnapshotController;
+  subagents: WorkbenchSubagentFeature;
   threadGit: WorkbenchThreadGitFeature;
   threadState: WorkbenchThreadStateFeature;
 }
@@ -187,6 +189,10 @@ export function createOrchestratorFeatureGeneration(
   const projectSnapshot = new WorkbenchProjectSnapshotController();
   const worktreeGitTransitions = createWorktreeGitTransitions(context.threadTransitions);
   let threadState: WorkbenchThreadStateFeature | null = null;
+  const requireThreadState = () => {
+    if (!threadState) throw new Error("Thread state is not ready for subagent lifecycle projection.");
+    return threadState;
+  };
   const gitArc = new WorkbenchGitArcFeature({
     getThreadClaimContext: async (projectId, harness, threadId) => {
       if (!threadState) throw new Error("Thread state is not ready for Git arc ownership.");
@@ -205,10 +211,27 @@ export function createOrchestratorFeatureGeneration(
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" }),
     transitions: worktreeGitTransitions,
   });
+  const subagents = new WorkbenchSubagentFeature({
+    bridgeUrl: context.codexBridgeUrl,
+    onRelationshipCommitted: context.installSubagentRelationship,
+    resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
+    storageRoot: context.legacyMigrationProjectRoot,
+    threadState: {
+      getEntry: async (projectId, harness, threadId) => {
+        const snapshot = await requireThreadState().controller.getSnapshot(projectId);
+        return snapshot.entries.find((entry) => entry.entryKind === "subagent" && entry.identity.harness === harness && entry.identity.threadId === threadId) ?? null;
+      },
+      mutate: async (request: WorkbenchThreadStateRequest) => {
+        const response = await requireThreadState().controller.handleRequest("subagent-controller", request);
+        if ("error" in response) throw new Error(response.error.message);
+      },
+      subscribe: (listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void) => requireThreadState().controller.subscribe(listener),
+    },
+  });
   threadState = new WorkbenchThreadStateFeature({
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
     gitArcs: gitArc,
-    listSubagents: (projectId) => context.subagentStore.list({ projectId }),
+    listSubagents: (projectId) => subagents.listRelationships(projectId),
     log: (message) => log("thread-state-ws", message),
     projectState: projectSnapshot,
     publish: (connectionId, snapshot) => { if (lease.isCurrent()) context.publishThreadState(connectionId, snapshot); },
@@ -232,12 +255,12 @@ export function createOrchestratorFeatureGeneration(
     requestOrchestratorReload: context.requestOrchestratorReload,
     requestSubagent: async (request) => request.method?.startsWith("workbench/thread/")
       ? await threadState.handleManagedThreadRequest(request)
-      : await context.requestSubagent(request),
+      : await subagents.handleRequest(request),
   });
   const mcp = new WorkbenchAgentMcpController({
     executeCommand: async (request, signal) => await agentCommand.executeStructuredRequest(request, signal),
     orchestratorOrigin: context.localOrchestratorOrigin,
-    requestCodex: context.requestSubagent,
+    requestCodex: async (request) => await harnesses.request("codex", request),
   });
   const orchestratorHttp = new WorkbenchOrchestratorHttpRouter({
     agentCommand,
@@ -270,9 +293,9 @@ export function createOrchestratorFeatureGeneration(
     isShuttingDown: () => !lease.isCurrent() || context.codexHealthOptions.isShuttingDown(),
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
-  const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, gitArc, harnesses, legacyMigrationSource, mcp, modules, nextDevHealth, orchestratorHttp, projectCatalog, projectSnapshot, threadGit, threadState };
+  const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, gitArc, harnesses, legacyMigrationSource, mcp, modules, nextDevHealth, orchestratorHttp, projectCatalog, projectSnapshot, subagents, threadGit, threadState };
   return {
-    beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); },
+    beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
       reportPhase("codex health disposal");
       codexHealth.dispose();
@@ -280,6 +303,8 @@ export function createOrchestratorFeatureGeneration(
       nextDevHealth.dispose();
       reportPhase("browse session cleanup disposal");
       browseSessionCleanup.dispose();
+      reportPhase("subagent disposal");
+      subagents.dispose();
       reportPhase("thread-state disposal");
       await threadState.dispose();
       reportPhase("project snapshot disposal");
@@ -300,6 +325,7 @@ export function createOrchestratorFeatureGeneration(
     },
     start: async () => {
       await projectCatalog.ensureLoaded();
+      await subagents.start();
       browseSessionCleanup.start();
       nextDevHealth.start();
       const readiness = context.getCodexReadiness();

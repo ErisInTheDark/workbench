@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover per-parent migration, relationship-only durability, bounded cursor pages, and parent isolation. Keywords: subagent, store, migration, relationship, pagination, test.
+ * - No production exports; Node tests cover per-parent migration, relationship-only durability, cross-generation writes, bounded cursor pages, and parent isolation. Keywords: subagent, store, migration, relationship, reload, pagination, test.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -11,6 +11,7 @@ import { test } from "node:test";
 import type { WorkbenchSubagentRelationship } from "../lib/types";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
+import { createWorkbenchSubagentStoreState } from "./workbench-subagent-store-state";
 
 function summary(
   parentThreadId: string,
@@ -58,7 +59,7 @@ test("migrates the global store into parent files and removes legacy lifecycle f
   assert.equal("activityStatus" in (migrated ?? {}), false);
   assert.equal("lastActivityAt" in (migrated ?? {}), false);
   assert.equal("pinned" in (migrated ?? {}), false);
-  const restarted = new WorkbenchSubagentStore(root);
+  const restarted = new WorkbenchSubagentStore(root, { state: createWorkbenchSubagentStoreState() });
   await restarted.initialize();
   assert.equal((await restarted.list({ parentThreadId: "parent-a", projectId: "project" })).subagents[0]?.threadId, "child-a");
 });
@@ -86,7 +87,7 @@ test("repeats a partial migration without replacing a newer parent record", asyn
   const [record] = (await store.list({ parentThreadId: "parent", projectId: "project" })).subagents;
   assert.equal(record?.title, "Newer parent record");
   await assert.rejects(fs.access(path.join(runtimePath, "subagents.json")));
-  const restarted = new WorkbenchSubagentStore(root);
+  const restarted = new WorkbenchSubagentStore(root, { state: createWorkbenchSubagentStoreState() });
   assert.equal((await restarted.list({ parentThreadId: "parent", projectId: "project" })).subagents[0]?.title, "Newer parent record");
 });
 
@@ -135,4 +136,24 @@ test("relationship updates do not acquire lifecycle or Lock fields", async (cont
   assert.equal(record?.title, "Updated");
   assert.equal("lifecycle" in (record ?? {}), false);
   assert.equal("pinned" in (record ?? {}), false);
+});
+
+test("fresh wrappers serialize one parent and persist unique direct-child indexes", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-reload-"));
+  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
+  const state = createWorkbenchSubagentStoreState();
+  const first = new WorkbenchSubagentStore(root, { state });
+  const second = new WorkbenchSubagentStore(root, { state });
+
+  await Promise.all([
+    first.reserve(summary("parent", "child-a", { name: "A" })),
+    second.reserve(summary("parent", "child-b", { name: "B" })),
+  ]);
+
+  const memoryRecords = (await first.list({ parentThreadId: "parent", projectId: "project" })).subagents;
+  assert.deepEqual(memoryRecords.map(({ directSubagentIndex }) => directSubagentIndex).sort((left, right) => left - right), [0, 1]);
+  const restarted = new WorkbenchSubagentStore(root, { state: createWorkbenchSubagentStoreState() });
+  const diskRecords = (await restarted.list({ parentThreadId: "parent", projectId: "project" })).subagents;
+  assert.deepEqual(new Set(diskRecords.map(({ threadId }) => threadId)), new Set(["child-a", "child-b"]));
+  assert.deepEqual(diskRecords.map(({ directSubagentIndex }) => directSubagentIndex).sort((left, right) => left - right), [0, 1]);
 });

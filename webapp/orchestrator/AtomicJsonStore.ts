@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - AtomicJsonStoreState/createAtomicJsonStoreState: plain reload-stable queue state shared by fresh store wrappers. Keywords: orchestrator, reload, queue, state.
  * - AtomicJsonStore: queue atomic JSON file mutations through temp-file rename writes and bounded journal compaction. Keywords: orchestrator, disk, json, atomic writes.
  */
 import fs from "node:fs/promises";
@@ -15,6 +16,25 @@ export type AtomicJsonUpdateResult = {
   changed: boolean;
   written: boolean;
 };
+
+export interface AtomicJsonStoreState {
+  queues: Map<string, Promise<void>>;
+}
+
+const PROCESS_STATE_KEY = Symbol.for("workbench.atomicJsonStore.v1");
+
+export function createAtomicJsonStoreState(): AtomicJsonStoreState {
+  return { queues: new Map() };
+}
+
+function getProcessAtomicJsonStoreState() {
+  let state = Reflect.get(globalThis, PROCESS_STATE_KEY) as AtomicJsonStoreState | undefined;
+  if (!state) {
+    state = createAtomicJsonStoreState();
+    Reflect.set(globalThis, PROCESS_STATE_KEY, state);
+  }
+  return state;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -57,9 +77,15 @@ function createRenameRetryDelay(attempt: number) {
 }
 
 export default class AtomicJsonStore {
-  private readonly queues = new Map<string, Promise<void>>();
+  constructor(private readonly state = getProcessAtomicJsonStoreState()) {}
 
   async read<TValue>(filePath: string, fallback: TValue) {
+    const pendingMutation = this.state.queues.get(filePath);
+    if (pendingMutation) await pendingMutation.catch(() => undefined);
+    return await this.readImmediately(filePath, fallback);
+  }
+
+  private async readImmediately<TValue>(filePath: string, fallback: TValue) {
     try {
       return JSON.parse(await fs.readFile(filePath, "utf8")) as TValue;
     } catch (error) {
@@ -89,7 +115,7 @@ export default class AtomicJsonStore {
       written: false,
     };
     await this.enqueue(filePath, async () => {
-      const current = await this.read(filePath, fallback);
+      const current = await this.readImmediately(filePath, fallback);
       const next = await updater(current);
       result = {
         changed: stableJsonStringify(current) !== stableJsonStringify(next),
@@ -99,7 +125,7 @@ export default class AtomicJsonStore {
         return;
       }
 
-      await this.write(filePath, next);
+      await this.writeImmediately(filePath, next);
       result = {
         changed: true,
         written: true,
@@ -109,6 +135,12 @@ export default class AtomicJsonStore {
   }
 
   async write(filePath: string, value: unknown) {
+    await this.enqueue(filePath, async () => {
+      await this.writeImmediately(filePath, value);
+    });
+  }
+
+  private async writeImmediately(filePath: string, value: unknown) {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const tempPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
     try {
@@ -140,10 +172,10 @@ export default class AtomicJsonStore {
         return;
       }
 
-      const events = await this.readJsonLines<TValue>(filePath);
+      const events = await this.readJsonLinesImmediately<TValue>(filePath);
       if (!events.length) {
         const recoveringFilePath = this.recoveringJsonLinesPath(filePath);
-        const recoveringEvents = await this.readJsonLines<TValue>(recoveringFilePath);
+        const recoveringEvents = await this.readJsonLinesImmediately<TValue>(recoveringFilePath);
         if (!recoveringEvents.length) {
           return;
         }
@@ -196,6 +228,12 @@ export default class AtomicJsonStore {
   }
 
   async readJsonLines<TValue>(filePath: string) {
+    const pendingMutation = this.state.queues.get(filePath);
+    if (pendingMutation) await pendingMutation.catch(() => undefined);
+    return await this.readJsonLinesImmediately<TValue>(filePath);
+  }
+
+  private async readJsonLinesImmediately<TValue>(filePath: string) {
     try {
       const raw = await fs.readFile(filePath, "utf8");
       return raw
@@ -220,20 +258,20 @@ export default class AtomicJsonStore {
   }
 
   private async enqueue(filePath: string, task: () => Promise<void>) {
-    const previous = this.queues.get(filePath) ?? Promise.resolve();
+    const previous = this.state.queues.get(filePath) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(task);
-    this.queues.set(filePath, next);
+    this.state.queues.set(filePath, next);
 
     try {
       await next;
     } finally {
-      if (this.queues.get(filePath) === next) {
-        this.queues.delete(filePath);
+      if (this.state.queues.get(filePath) === next) {
+        this.state.queues.delete(filePath);
       }
     }
   }
 
   async waitForIdle() {
-    await Promise.allSettled(Array.from(this.queues.values()));
+    await Promise.allSettled(Array.from(this.state.queues.values()));
   }
 }

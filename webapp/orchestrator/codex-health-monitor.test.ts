@@ -50,6 +50,7 @@ test("health requests use their deadline without waiting behind another internal
   const bridge = new CodexStdioBridge({
     appServer: { send: (message: unknown) => sentRequests.push(message as JsonRpcRequest) } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:4500",
+    handleWorkbenchRequest: async (request) => ({ id: request.id ?? null, error: { code: -32000, message: "Unexpected Workbench request." } }),
     onNotification: () => undefined,
     resolveProjectFromCwd: async () => { throw new Error("Project resolution is not expected in this test."); },
     sendToClient: () => undefined,

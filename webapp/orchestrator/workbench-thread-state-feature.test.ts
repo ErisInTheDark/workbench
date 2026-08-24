@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect provider normalization, progressive reconciliation, Git projection and retention routing, managed resume, and controller-owned title mutation. Keywords: provider, sidebar, title, resume, reconciliation, git, retention, test.
+ * - No production exports; tests protect provider normalization, relationship projection, progressive reconciliation, Git projection and retention routing, managed resume, and controller-owned title mutation. Keywords: provider, sidebar, subagent, title, resume, reconciliation, git, retention, test.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import type { WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "../lib/types";
 import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
@@ -106,6 +106,64 @@ test("provider activity mapping observes meaningful cross-provider work without 
     kind: "activity", threadId: "thread",
   });
   assert.equal(mapProviderActivityNotification({ method: "item/agentMessage/delta", params: { threadId: "thread", turnId: "turn" } }), null);
+});
+
+test("a relationship committed during provider pagination remains a subagent after final reconciliation", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-subagent-race-"));
+  const secondPageStarted = deferred<void>();
+  const releaseSecondPage = deferred<void>();
+  let relationships: WorkbenchSubagentRelationship[] = [];
+  const relationship: WorkbenchSubagentRelationship = {
+    createdAt: 1,
+    cwd: storageRoot,
+    directSubagentIndex: 0,
+    harness: "codex",
+    name: "Mimi",
+    parentThreadId: "parent",
+    profileId: "profile",
+    profileName: "Lily",
+    projectId: "project",
+    threadId: "child",
+    title: "Inspect code",
+    updatedAt: 2,
+  };
+  const feature = new WorkbenchThreadStateFeature({
+    getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    harnesses: createHarnesses(async (harness, request) => {
+      if (request.method === "thread/read") {
+        return { id: request.id ?? null, result: { thread: { cwd: storageRoot, id: "child", name: "Child", status: { type: "idle" }, turns: [], updatedAt: 2 } } };
+      }
+      const cursor = (request.params as { cursor?: string | null }).cursor ?? null;
+      if (harness !== "codex") return { id: request.id ?? null, result: { data: [], nextCursor: null } };
+      if (!cursor) return { id: request.id ?? null, result: { data: [{ id: "child", name: "Child", status: { type: "idle" }, updatedAt: 2 }], nextCursor: "next" } };
+      secondPageStarted.resolve();
+      await releaseSecondPage.promise;
+      return { id: request.id ?? null, result: { data: [], nextCursor: null } };
+    }),
+    listSubagents: async () => ({ subagents: relationships }),
+    projectState: {
+      getCurrentUpdate: () => null,
+      handleRequest: async () => ({ accepted: true }),
+      observe: () => () => undefined,
+    },
+    publish: () => undefined,
+    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
+    storageRoot,
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+
+  await feature.controller.open("observer", "project");
+  await secondPageStarted.promise;
+  relationships = [relationship];
+  await feature.installSubagentRelationship(relationship);
+  releaseSecondPage.resolve();
+  await waitFor(async () => (await feature.controller.getSnapshot("project")).freshness === "fresh", "Final provider reconciliation did not finish.");
+  const child = (await feature.controller.getSnapshot("project")).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "child");
+  assert.equal(child?.entryKind, "subagent");
+  await feature.dispose();
+  await fs.rm(storageRoot, { force: true, recursive: true });
 });
 
 test("provider reconciliation starts concurrently and publishes each successful harness without waiting for failures", async () => {

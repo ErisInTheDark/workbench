@@ -64,8 +64,6 @@ export const WORKBENCH_RELOAD_SCOPE_PATHS = {
 /webapp/orchestrator/CodexStdioBridge.ts
 /webapp/orchestrator/CodexTranscriptStore.ts
 /webapp/orchestrator/codex-transcript-*
-/webapp/orchestrator/ReloadableWorkbenchSubagentController.ts
-/webapp/orchestrator/WorkbenchSubagentController.ts
 /webapp/orchestrator/workbench-codex-mcp-config.ts
 /webapp/orchestrator/workbench-prompt-context.ts
 `,
@@ -107,7 +105,6 @@ export const WORKBENCH_RELOAD_SCOPE_PATHS = {
 /webapp/orchestrator/ReloadableWorkbenchOrchestratorReloadController.ts
 /webapp/orchestrator/WorkbenchAgentCliEnvironment.ts
 /webapp/orchestrator/WorkbenchCodexMcpGenerationController.ts
-/webapp/orchestrator/WorkbenchSubagentStore.ts
 /webapp/orchestrator/WorkbenchThreadTransitionCoordinator.ts
 /webapp/orchestrator/WorkbenchTurnRecoveryController.ts
 /webapp/orchestrator/WorkbenchTurnRecoveryHandoffStore.ts

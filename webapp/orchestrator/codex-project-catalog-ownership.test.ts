@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect explicit current-generation project-catalog ownership across a stable Codex bridge. Keywords: codex, project, catalog, reload, ownership, test.
+ * No production exports. Node tests protect current feature and project-catalog ownership across a stable Codex bridge. Keywords: codex, feature, project, catalog, reload, ownership, test.
  */
 
 import assert from "node:assert/strict";
@@ -80,6 +80,7 @@ async function createThreadReadHarness(
   bridge = new CodexStdioBridge({
     appServer,
     bridgeUrl: "ws://127.0.0.1:4500",
+    handleWorkbenchRequest: async (request) => ({ id: request.id ?? null, error: { code: -32000, message: "Unexpected Workbench request." } }),
     onNotification: () => undefined,
     resolveProjectFromCwd,
     sendToClient: () => undefined,
@@ -88,31 +89,29 @@ async function createThreadReadHarness(
   return { bridge, sentRequests, storageRoot };
 }
 
-test("stable Codex bridge resolves subagent projects through the current catalog owner", async () => {
+test("stable Codex bridge delegates subagent requests through the current feature owner", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-project-catalog-"));
-  const resolvedBy: string[] = [];
-  const createOwner = (projectId: string) => ({
-    resolveAgentEndpointProjectFromCwd: async (cwd: string | null | undefined) => {
-      assert.ok(cwd);
-      resolvedBy.push(projectId);
-      return createResolution(projectId, cwd);
-    },
-  });
-  let currentOwner = createOwner("alpha");
+  const delegatedTo: string[] = [];
+  let currentOwner = "alpha";
   const bridge = new CodexStdioBridge({
     appServer: { send: () => undefined } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:4500",
+    handleWorkbenchRequest: async (request) => {
+      delegatedTo.push(currentOwner);
+      return { id: request.id ?? null, result: { owner: currentOwner } };
+    },
     onNotification: () => undefined,
-    resolveProjectFromCwd: async (cwd) => await currentOwner.resolveAgentEndpointProjectFromCwd(cwd),
+    resolveProjectFromCwd: async (cwd) => createResolution(currentOwner, cwd ?? "C:/projects/alpha"),
     sendToClient: () => undefined,
     storageRoot,
   });
 
-  await bridge.handleBridgeRequest({ id: "before-reload", method: "workbench/subagent/list", params: { cwd: "C:/projects/alpha" } });
-  currentOwner = createOwner("beta");
-  await bridge.handleBridgeRequest({ id: "after-reload", method: "workbench/subagent/list", params: { cwd: "C:/projects/beta" } });
+  const first = await bridge.handleBridgeRequest({ id: "before-reload", method: "workbench/subagent/list", params: { cwd: "C:/projects/alpha" } });
+  currentOwner = "beta";
+  const second = await bridge.handleBridgeRequest({ id: "after-reload", method: "workbench/subagent/list", params: { cwd: "C:/projects/beta" } });
 
-  assert.deepEqual(resolvedBy, ["alpha", "beta"]);
+  assert.deepEqual(delegatedTo, ["alpha", "beta"]);
+  assert.deepEqual([first?.result, second?.result], [{ owner: "alpha" }, { owner: "beta" }]);
   await bridge.disposeImmediately();
 });
 

@@ -40,6 +40,13 @@ test("source and directory touch paths derive additive reload scopes", () => {
     "server:core", "server:browse", "server:codex", "server:mcp", "server:opencode", "server:reloader", "server:process",
   ]);
   assert.deepEqual(getReloadScopesForPaths(["webapp/lib/workbench/orchestrator-reload.test.ts"]), []);
+  assert.deepEqual(getReloadScopesForPaths([
+    "webapp/orchestrator/WorkbenchSubagentFeature.ts",
+    "webapp/orchestrator/WorkbenchSubagentController.ts",
+    "webapp/orchestrator/WorkbenchSubagentStore.ts",
+  ]), ["server:core"]);
+  assert.deepEqual(getReloadScopesForPaths(["webapp/orchestrator/CodexStdioBridge.ts"]), ["server:codex"]);
+  assert.deepEqual(getReloadScopesForPaths(["webapp/orchestrator/index.ts"]), ["server:process"]);
 });
 
 test("full orchestrator process restart is exclusive", () => {

@@ -7,7 +7,7 @@
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import { getCurrentTurn } from "../lib/codex/thread-state";
 import { normalizeThreadTitle } from "../lib/thread-bootstrap";
-import type { OrchestratorReloadScope, WorkbenchHarness, WorkbenchProjectsPayload } from "../lib/types";
+import type { OrchestratorReloadScope, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship } from "../lib/types";
 import { normalizeOrchestratorReloadScopes } from "../lib/workbench/orchestrator-reload";
 import type { GitArcActiveClaim, GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
@@ -20,7 +20,7 @@ import type { WorkbenchGitArcLifecycleState as GitArcLifecycleState, WorkbenchGi
 
 interface ProjectRecord { id: string; rootPath: string }
 interface ProjectResolution { cwd: string; project: ProjectRecord }
-interface SubagentRelationshipList { subagents: Array<{ createdAt: number; cwd: string; directSubagentIndex: number; harness: WorkbenchHarness; name: string; parentThreadId: string; profileId: string; profileName: string; projectId: string; threadId: string; title: string; updatedAt: number }> }
+interface SubagentRelationshipList { subagents: WorkbenchSubagentRelationship[] }
 
 function projectGitArc(state: GitArcLifecycleState | RepoGitArcLifecycleState | undefined) {
   if (!state) return null;
@@ -339,6 +339,31 @@ export default class WorkbenchThreadStateFeature {
     await this.controller.setMcpGeneration(projectId, "codex", threadId, generation);
   }
 
+  async installSubagentRelationship(relationship: WorkbenchSubagentRelationship) {
+    const project = await this.context.resolveProjectById(relationship.projectId);
+    const response = await this.context.harnesses.request(relationship.harness, {
+      id: `thread-state:subagent:${relationship.threadId}`,
+      method: "thread/read",
+      params: { cwd: relationship.cwd, includeTurns: false, threadId: relationship.threadId },
+      ...(relationship.harness === "codex" ? { workbenchRequestSource: "autoRefresh" } : {}),
+    });
+    if (response.error) throw new Error(response.error.message);
+    const thread = (response.result as ThreadReadResponse | undefined)?.thread;
+    if (!thread || thread.id !== relationship.threadId) throw new Error("The committed subagent thread could not be read for lifecycle projection.");
+    const providerEntry = normalizeProviderSidebarEntry(relationship.harness, thread);
+    if (!providerEntry || providerEntry.entryKind === "draft") throw new Error("The committed subagent thread could not be normalized for lifecycle projection.");
+    const projected = this.projectProviderEntries(
+      relationship.projectId,
+      relationship.harness,
+      [providerEntry],
+      { subagents: [relationship] },
+    ).find((entry) => entry.entryKind === "subagent" && entry.identity.threadId === relationship.threadId);
+    if (!projected || projected.entryKind !== "subagent") throw new Error("The committed subagent relationship could not be projected into thread state.");
+    await this.context.transitions.run(project.rootPath, async () => {
+      await this.controller.ensureProviderEntry(relationship.projectId, projected);
+    });
+  }
+
   private async reconcileProject(
     projectId: string,
     signal: AbortSignal,
@@ -346,7 +371,6 @@ export default class WorkbenchThreadStateFeature {
     acceptGitArcSnapshot: (snapshot: WorkbenchThreadGitArcSnapshot) => Promise<void>,
   ) {
     const project = await this.context.resolveProjectById(projectId);
-    const relationships = await this.context.listSubagents(projectId);
     const readGitArcSnapshot = async (): Promise<WorkbenchThreadGitArcSnapshot> => {
       const [gitArcs, gitArcPlans] = await Promise.all([
         this.context.gitArcs.listLifecycleStates
@@ -367,7 +391,8 @@ export default class WorkbenchThreadStateFeature {
       | { failure: WorkbenchThreadReconciliationFailure }
     > => {
       try {
-        const providerEntries = await this.listProviderEntries(harness, project.rootPath, signal, (entries) => {
+        const providerEntries = await this.listProviderEntries(harness, project.rootPath, signal, async (entries) => {
+          const relationships = await this.context.listSubagents(projectId);
           acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships), { complete: false });
         });
         return { entries: providerEntries, harness };
@@ -378,6 +403,7 @@ export default class WorkbenchThreadStateFeature {
     }));
     const completed = results.filter((result): result is Extract<typeof result, { entries: WorkbenchThreadSidebarEntry[] }> => "entries" in result);
     await this.context.transitions.run(project.rootPath, async () => {
+      const relationships = await this.context.listSubagents(projectId);
       completed.forEach(({ entries, harness }) => {
         acceptProviderSnapshot(harness, this.projectProviderEntries(projectId, harness, entries, relationships), { complete: true });
       });
@@ -390,7 +416,7 @@ export default class WorkbenchThreadStateFeature {
     harness: WorkbenchHarness,
     rootPath: string,
     signal: AbortSignal,
-    acceptFirstPage: (entries: WorkbenchThreadSidebarEntry[]) => void,
+    acceptFirstPage: (entries: WorkbenchThreadSidebarEntry[]) => Promise<void>,
   ) {
     const entries: WorkbenchThreadSidebarEntry[] = [];
     let cursor: string | null = null;
@@ -419,7 +445,7 @@ export default class WorkbenchThreadStateFeature {
         if (entry) entries.push(entry);
       }
       cursor = typeof result?.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
-      if (page === 0 && cursor) acceptFirstPage(entries);
+      if (page === 0 && cursor) await acceptFirstPage(entries);
       page += 1;
     } while (cursor);
     return entries;

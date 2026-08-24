@@ -11,7 +11,7 @@ import { test } from "node:test";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type { CodexJsonRpcResponse } from "../lib/codex/protocol";
-import type { WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchUserInputRequest } from "../lib/types";
+import type { WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "../lib/types";
 import { readWorkbenchSubagentMessageInput } from "../lib/workbench/thread/thread-subagent-message";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
@@ -150,6 +150,7 @@ test("creates with one client and delivers a steer before empty questionnaire re
   context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
+  const committed: WorkbenchSubagentRelationship[] = [];
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
     createHarnessClient: () => {
@@ -157,8 +158,13 @@ test("creates with one client and delivers a steer before empty questionnaire re
       clients.push(client);
       return client;
     },
+    onRelationshipCommitted: async (record) => {
+      assert.equal(clients[0]?.calls.some(({ method }) => method === "turn/start"), false);
+      committed.push(record);
+    },
     resolveProjectFromCwd: createProjectResolver(cwd),
     storageRoot,
+    subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
   await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
@@ -170,6 +176,7 @@ test("creates with one client and delivers a steer before empty questionnaire re
     params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
   });
   assert.deepEqual(created, { id: 3, result: { threadId: childThreadId } });
+  assert.deepEqual(committed.map(({ threadId }) => threadId), [childThreadId]);
   assert.equal(clients.length, 1);
   assert.equal(clients[0].connectCount, 1);
   assert.equal(clients[0].closeCount, 1);
@@ -246,6 +253,7 @@ test("starts an idle direct parent through the pre-reload store surface", async 
       clients.push(client);
       return client;
     },
+    onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     storageRoot,
     subagentStore: createPreReloadStoreSurface(subagentStore),
@@ -289,8 +297,10 @@ test("steers an active direct parent and rejects callers without a relationship"
       clients.push(client);
       return client;
     },
+    onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     storageRoot,
+    subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
   await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
@@ -329,8 +339,10 @@ test("keeps relationship storage independent from lifecycle through create, mess
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
     createHarnessClient: () => new FakeHarnessClient(cwd),
+    onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     storageRoot,
+    subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
   await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
@@ -372,8 +384,10 @@ test("keeps a created child durable when its first turn fails to start", async (
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
     createHarnessClient: () => new FakeHarnessClient(cwd, true),
+    onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
     storageRoot,
+    subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
   await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });

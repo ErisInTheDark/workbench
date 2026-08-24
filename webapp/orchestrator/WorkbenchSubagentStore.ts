@@ -11,6 +11,10 @@ import type {
 } from "../lib/types";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
+import {
+  getProcessWorkbenchSubagentStoreState,
+  type WorkbenchSubagentStoreState,
+} from "./workbench-subagent-store-state";
 
 interface StoredParentSubagents {
   nextDirectSubagentIndex: number;
@@ -143,24 +147,25 @@ async function mapWithConcurrency<T>(values: readonly T[], concurrency: number, 
 }
 
 export default class WorkbenchSubagentStore {
-  private readonly childParents = new Map<string, string>();
   private readonly directoryPath: string;
-  private initializationPromise: Promise<void> | null = null;
   private readonly jsonStore: AtomicJsonStore;
   private readonly legacyPath: string;
-  private readonly nextDirectSubagentIndexes = new Map<string, number>();
-  private readonly parents = new Map<string, Map<string, WorkbenchSubagentRelationship>>();
+  private readonly state: WorkbenchSubagentStoreState;
 
-  constructor(storageRoot: string, jsonStore = new AtomicJsonStore()) {
+  constructor(
+    storageRoot: string,
+    options: { jsonStore?: AtomicJsonStore; state?: WorkbenchSubagentStoreState } = {},
+  ) {
     const runtimePath = path.join(storageRoot, ".workbench", "runtime");
     this.directoryPath = path.join(runtimePath, "subagents");
     this.legacyPath = path.join(runtimePath, "subagents.json");
-    this.jsonStore = jsonStore;
+    this.jsonStore = options.jsonStore ?? new AtomicJsonStore();
+    this.state = options.state ?? getProcessWorkbenchSubagentStoreState(storageRoot);
   }
 
   initialize() {
-    this.initializationPromise ??= this.initializeStore();
-    return this.initializationPromise;
+    this.state.initializationPromise ??= this.initializeStore();
+    return this.state.initializationPromise;
   }
 
   async list({
@@ -178,7 +183,7 @@ export default class WorkbenchSubagentStore {
     const normalizedParentThreadId = parentThreadId?.trim() ?? "";
     if (!normalizedParentThreadId) {
       if (cursor || limit !== null && limit !== undefined) throw new Error("Subagent pagination requires parentThreadId.");
-      const subagents = Array.from(this.parents.values())
+      const subagents = Array.from(this.state.parents.values())
         .flatMap((records) => Array.from(records.values()))
         .filter((record) => record.projectId === projectId && !record.threadId.startsWith("pending:"))
         .sort((left, right) => left.createdAt - right.createdAt || left.threadId.localeCompare(right.threadId));
@@ -189,7 +194,7 @@ export default class WorkbenchSubagentStore {
     if (!Number.isSafeInteger(pageLimit) || pageLimit < 1 || pageLimit > MAX_PAGE_LIMIT) {
       throw new Error(`Subagent list limit must be between 1 and ${MAX_PAGE_LIMIT}.`);
     }
-    const records = Array.from(this.parents.get(normalizedParentThreadId)?.values() ?? [])
+    const records = Array.from(this.state.parents.get(normalizedParentThreadId)?.values() ?? [])
       .filter((record) => record.projectId === projectId && !record.threadId.startsWith("pending:"))
       .sort(compareSubagents);
     const decodedCursor = cursor?.trim() ? decodeCursor(cursor.trim(), normalizedParentThreadId, projectId) : null;
@@ -209,41 +214,43 @@ export default class WorkbenchSubagentStore {
 
   async reserve(record: WorkbenchSubagentReservation) {
     await this.initialize();
-    const records = this.parentRecords(record.parentThreadId);
-    if (Array.from(records.values()).some((entry) => entry.name.toLocaleLowerCase() === record.name.toLocaleLowerCase())) {
-      throw new Error(`Subagent name is already in use by this parent: ${record.name}`);
-    }
-    const indexedRecord: WorkbenchSubagentRelationship = {
-      ...record,
-      directSubagentIndex: this.nextDirectSubagentIndex(record.parentThreadId),
-    };
-    records.set(record.threadId, indexedRecord);
-    this.childParents.set(record.threadId, record.parentThreadId);
-    await this.persistParent(record.parentThreadId);
-    return indexedRecord;
+    return await this.enqueueParent(record.parentThreadId, async () => {
+      const records = this.parentRecords(record.parentThreadId);
+      if (Array.from(records.values()).some((entry) => entry.name.toLocaleLowerCase() === record.name.toLocaleLowerCase())) {
+        throw new Error(`Subagent name is already in use by this parent: ${record.name}`);
+      }
+      const indexedRecord: WorkbenchSubagentRelationship = {
+        ...record,
+        directSubagentIndex: this.nextDirectSubagentIndex(record.parentThreadId),
+      };
+      records.set(record.threadId, indexedRecord);
+      await this.persistParent(record.parentThreadId);
+      return indexedRecord;
+    });
   }
 
   async replace(parentThreadId: string, previousThreadId: string, record: WorkbenchSubagentRelationship) {
     await this.initialize();
-    const records = this.parentRecords(parentThreadId);
-    records.delete(previousThreadId);
-    this.childParents.delete(previousThreadId);
-    records.set(record.threadId, record);
-    this.childParents.set(record.threadId, parentThreadId);
-    await this.persistParent(parentThreadId);
+    await this.enqueueParent(parentThreadId, async () => {
+      const records = this.parentRecords(parentThreadId);
+      records.delete(previousThreadId);
+      records.set(record.threadId, record);
+      await this.persistParent(parentThreadId);
+    });
   }
 
   async remove(parentThreadId: string, threadId: string) {
     await this.initialize();
-    const records = this.parents.get(parentThreadId);
-    if (!records?.delete(threadId)) return;
-    this.childParents.delete(threadId);
-    await this.persistParent(parentThreadId);
+    await this.enqueueParent(parentThreadId, async () => {
+      const records = this.state.parents.get(parentThreadId);
+      if (!records?.delete(threadId)) return;
+      await this.persistParent(parentThreadId);
+    });
   }
 
   async getOwned(parentThreadId: string, projectId: string, threadId: string) {
     await this.initialize();
-    const record = this.parents.get(parentThreadId)?.get(threadId) ?? null;
+    const record = this.state.parents.get(parentThreadId)?.get(threadId) ?? null;
     return record?.projectId === projectId ? record : null;
   }
 
@@ -252,7 +259,9 @@ export default class WorkbenchSubagentStore {
     return records.every((record): record is WorkbenchSubagentRelationship => Boolean(record)) ? records : null;
   }
 
-  waitForIdle() {
+  async waitForIdle() {
+    await this.initialize();
+    await Promise.allSettled(Array.from(this.state.operations.values()));
     return this.jsonStore.waitForIdle();
   }
 
@@ -289,7 +298,7 @@ export default class WorkbenchSubagentStore {
       }
       const stabilized = stabilizeDirectSubagentIndexes(Array.from(existing.values()));
       this.installParent(parentThreadId, stabilized.records, Math.max(
-        this.nextDirectSubagentIndexes.get(parentThreadId) ?? 0,
+        this.state.nextDirectSubagentIndexes.get(parentThreadId) ?? 0,
         stabilized.nextDirectSubagentIndex,
       ));
       await this.persistParent(parentThreadId);
@@ -316,27 +325,38 @@ export default class WorkbenchSubagentStore {
 
   private installParent(parentThreadId: string, summaries: readonly WorkbenchSubagentRelationship[], nextDirectSubagentIndex?: number) {
     const records = new Map(summaries.map((record) => [record.threadId, record]));
-    this.parents.set(parentThreadId, records);
-    this.nextDirectSubagentIndexes.set(parentThreadId, Math.max(
+    this.state.parents.set(parentThreadId, records);
+    this.state.nextDirectSubagentIndexes.set(parentThreadId, Math.max(
       nextDirectSubagentIndex ?? 0,
       ...summaries.map(({ directSubagentIndex }) => directSubagentIndex + 1),
     ));
-    for (const record of records.values()) this.childParents.set(record.threadId, parentThreadId);
   }
 
   private nextDirectSubagentIndex(parentThreadId: string) {
-    const index = this.nextDirectSubagentIndexes.get(parentThreadId) ?? 0;
-    this.nextDirectSubagentIndexes.set(parentThreadId, index + 1);
+    const index = this.state.nextDirectSubagentIndexes.get(parentThreadId) ?? 0;
+    this.state.nextDirectSubagentIndexes.set(parentThreadId, index + 1);
     return index;
   }
 
   private parentRecords(parentThreadId: string) {
-    let records = this.parents.get(parentThreadId);
+    let records = this.state.parents.get(parentThreadId);
     if (!records) {
       records = new Map();
-      this.parents.set(parentThreadId, records);
+      this.state.parents.set(parentThreadId, records);
     }
     return records;
+  }
+
+  private async enqueueParent<TValue>(parentThreadId: string, operation: () => Promise<TValue>) {
+    const previous = this.state.operations.get(parentThreadId) ?? Promise.resolve();
+    const result = previous.catch(() => undefined).then(operation);
+    const completion = result.then(() => undefined, () => undefined);
+    this.state.operations.set(parentThreadId, completion);
+    try {
+      return await result;
+    } finally {
+      if (this.state.operations.get(parentThreadId) === completion) this.state.operations.delete(parentThreadId);
+    }
   }
 
   private parentPath(parentThreadId: string) {
@@ -346,7 +366,7 @@ export default class WorkbenchSubagentStore {
   private async persistParent(parentThreadId: string) {
     const records = this.parentRecords(parentThreadId);
     const stored: StoredParentSubagents = {
-      nextDirectSubagentIndex: this.nextDirectSubagentIndexes.get(parentThreadId) ?? 0,
+      nextDirectSubagentIndex: this.state.nextDirectSubagentIndexes.get(parentThreadId) ?? 0,
       parentThreadId,
       schemaVersion: 4,
       subagents: Object.fromEntries(records),

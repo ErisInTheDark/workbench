@@ -1,7 +1,6 @@
 /*
  * Exports:
  * - WorkbenchSubagentControllerOptions: injected bridge, durable store, harness client, and validated project resolver dependencies. Keywords: orchestrator, subagent, project, test.
- * - WorkbenchSubagentControllerReloadState: active-wait state preserved across Codex bridge reloads. Keywords: subagent, reload, waiter, lifecycle.
  * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, and wait cancellation. Keywords: orchestrator, subagent, controller, ownership, wait.
  */
 import { randomUUID } from "node:crypto";
@@ -51,10 +50,6 @@ interface ResolvedSubagentCaller {
   project: AgentEndpointProjectResolution["project"];
 }
 
-export interface WorkbenchSubagentControllerReloadState {
-  controller: WorkbenchSubagentController;
-}
-
 const POLL_INTERVAL_MS = 1_000;
 const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
 
@@ -67,9 +62,10 @@ type WorkbenchSubagentControllerStore = Pick<
 export interface WorkbenchSubagentControllerOptions {
   bridgeUrl: string;
   createHarnessClient?: () => WorkbenchSubagentHarnessClient;
+  onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
   resolveProjectFromCwd?: typeof resolveAgentEndpointProjectFromCwd;
   storageRoot: string;
-  subagentStore?: WorkbenchSubagentControllerStore;
+  subagentStore: WorkbenchSubagentControllerStore;
   threadState?: {
     getEntry(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadSidebarEntry | null>;
     mutate(request: WorkbenchThreadStateRequest): Promise<void>;
@@ -126,6 +122,7 @@ export default class WorkbenchSubagentController {
   private readonly bridgeUrl: string;
   private createQueue: Promise<void> = Promise.resolve();
   private readonly createHarnessClient: () => WorkbenchSubagentHarnessClient;
+  private readonly onRelationshipCommitted: WorkbenchSubagentControllerOptions["onRelationshipCommitted"];
   private readonly profileStore: WorkbenchComposerProfileStore;
   private readonly resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
   private readonly subagentStore: WorkbenchSubagentControllerStore;
@@ -135,21 +132,27 @@ export default class WorkbenchSubagentController {
   constructor({
     bridgeUrl,
     createHarnessClient = () => new CodexAppServerClient(),
+    onRelationshipCommitted,
     resolveProjectFromCwd = resolveAgentEndpointProjectFromCwd,
     storageRoot,
-    subagentStore = new WorkbenchSubagentStore(storageRoot),
+    subagentStore,
     threadState,
   }: WorkbenchSubagentControllerOptions) {
     this.bridgeUrl = bridgeUrl;
     this.createHarnessClient = createHarnessClient;
+    this.onRelationshipCommitted = onRelationshipCommitted;
     this.profileStore = new WorkbenchComposerProfileStore(storageRoot);
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.subagentStore = subagentStore;
     this.threadState = threadState;
   }
 
-  hasActiveWaiters() { return this.waiters.size > 0; }
-  dispose() { for (const waiter of this.waiters.values()) waiter.abort(new Error("Subagent controller stopped.")); this.waiters.clear(); }
+  beginRuntimeDrain() {
+    for (const waiter of this.waiters.values()) waiter.abort(new Error("Subagent wait cancelled for runtime reload."));
+    this.waiters.clear();
+  }
+
+  dispose() { this.beginRuntimeDrain(); }
 
   async handleRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
     const id = message.id ?? null;
@@ -351,6 +354,7 @@ export default class WorkbenchSubagentController {
         const startedAt = Date.now();
         const record = { ...reservation, threadId: childId, updatedAt: startedAt };
         await this.subagentStore.replace(caller.callerThreadId, reservationId, record);
+        await this.onRelationshipCommitted(record);
         await this.requestHarness(client, profile.harness, { method: "thread/name/set", params: { cwd: caller.cwd, name: title, threadId: childId } });
         const turnContext = this.buildPromptContext(caller, profile, childId, name, workbenchOrigin, profile.harness === "codex" ? "threadUtilities" : undefined);
         await this.requestHarness(client, profile.harness, {

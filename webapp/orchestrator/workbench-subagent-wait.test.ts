@@ -13,6 +13,7 @@ import type { CodexJsonRpcResponse } from "../lib/codex/protocol";
 import type { WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "../lib/types";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
+import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 
 const callerThreadId = "parent-thread";
 const inactiveThreadId = "inactive-child";
@@ -117,8 +118,10 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
     createHarnessClient: () => client,
+    onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd, project: { id: projectId }, root: {} }) as AgentEndpointProjectResolution,
     storageRoot,
+    subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
   const params = { callerThreadId, cwd, threadIds: [inactiveThreadId, questionnaireThreadId] };
 
