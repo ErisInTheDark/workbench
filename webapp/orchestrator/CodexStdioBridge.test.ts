@@ -369,6 +369,7 @@ test("managed thread starts, resumes, and forks receive wb MCP config without re
   const owner = bridge as unknown as {
     withWorkbenchPromptInstructions(message: JsonRpcRequest, method: string): Promise<JsonRpcRequest>;
   };
+  const clientScopes = new Set<string>();
   try {
     for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
       const capable = method === "thread/start";
@@ -386,15 +387,22 @@ test("managed thread starts, resumes, and forks receive wb MCP config without re
       const config = (result.params as { config: Record<string, unknown> }).config;
       assert.equal(config.existing_setting, "preserved");
       assert.deepEqual((config.mcp_servers as Record<string, unknown>).docs, { url: "https://example.com/mcp" });
-      assert.deepEqual((config.mcp_servers as Record<string, unknown>).wb, {
+      const wb = (config.mcp_servers as { wb: Record<string, unknown> }).wb;
+      const mcpUrl = new URL(String(wb.url));
+      const clientScope = mcpUrl.searchParams.get("client") ?? "";
+      assert.equal(mcpUrl.origin, "http://127.0.0.1:4500");
+      assert.equal(mcpUrl.pathname, "/orchestrator/mcp");
+      assert.match(clientScope, /^[0-9a-f-]{36}$/u);
+      assert.equal(mcpUrl.searchParams.get("capabilities"), capable ? "reload-scopes" : null);
+      clientScopes.add(clientScope);
+      const { url: _url, ...wbWithoutUrl } = wb;
+      assert.deepEqual(wbWithoutUrl, {
         default_tools_approval_mode: "approve",
         required: true,
         tool_timeout_sec: 1800,
-        url: capable
-          ? "http://127.0.0.1:4500/orchestrator/mcp?capabilities=reload-scopes"
-          : "http://127.0.0.1:4500/orchestrator/mcp",
       });
     }
+    assert.equal(clientScopes.size, 3);
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });

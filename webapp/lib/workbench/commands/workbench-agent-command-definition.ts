@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - JsonValue/WorkbenchAgentCommandRequest/WorkbenchAgentCommandResponseKind: structured command transport contracts shared by CLI and MCP adapters. Keywords: workbench, command, request, response.
+ * - JsonValue/WorkbenchAgentCommandRequest/WorkbenchAgentCommandResponseKind/WorkbenchAgentMcpRuntimeDrainPolicy: structured command transport and MCP lifecycle contracts. Keywords: workbench, command, request, response, drain.
  * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: trusted invocation context and erased registry definition. Keywords: workbench, command, context, registry.
  * - defineWorkbenchAgentCommand: preserve command-specific Zod inference while exposing one uniform registry boundary. Keywords: workbench, command, zod, schema.
  * - getWorkbenchAgentCommandToolName: derive the canonical typed MCP name from a command definition. Keywords: workbench, command, MCP, name.
@@ -62,6 +62,8 @@ export interface WorkbenchAgentMcpSchemaContext {
   reloadScopes: boolean;
 }
 
+export type WorkbenchAgentMcpRuntimeDrainPolicy = "abort-at-deadline" | "abort-immediately";
+
 export interface WorkbenchAgentCommandDefinition {
   aliases?: readonly (readonly string[])[];
   buildRequestFromCli(args: string[], context: WorkbenchAgentCommandContext): Promise<WorkbenchAgentCommandRequest>;
@@ -71,6 +73,7 @@ export interface WorkbenchAgentCommandDefinition {
   hideFromMcp?: boolean;
   helpGroups: readonly string[];
   inputSchema: z.ZodType;
+  mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpInputSchema?: (context: WorkbenchAgentMcpSchemaContext) => z.ZodType;
   usage: string;
   words: readonly string[];
@@ -84,6 +87,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   hideFromMcp?: boolean;
   helpGroups: readonly string[];
   inputSchema: TSchema;
+  mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpInputSchema?: (context: WorkbenchAgentMcpSchemaContext) => z.ZodType;
   parseCliArgs(args: string[]): z.input<TSchema>;
   usage: string;
@@ -105,6 +109,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     hideFromMcp: definition.hideFromMcp,
     helpGroups: definition.helpGroups,
     inputSchema: definition.inputSchema,
+    mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,
     mcpInputSchema: definition.mcpInputSchema,
     usage: definition.usage,
     words: definition.words,

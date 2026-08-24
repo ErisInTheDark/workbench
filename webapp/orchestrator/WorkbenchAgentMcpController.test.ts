@@ -184,6 +184,65 @@ test("fails closed without trusted identity and sanitizes boundary failures", as
   }
 });
 
+test("isolates duplicate protocol IDs and cancellation by configured MCP client", { timeout: 5_000 }, async () => {
+  const executions = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
+  const bothStarted = deferred<void>();
+  const firstAborted = deferred<unknown>();
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const controller = new WorkbenchAgentMcpController({
+    executeCommand: async (request, signal) => await new Promise<Response>((resolve, reject) => {
+      const callerThreadId = String(request.body?.callerThreadId ?? "");
+      executions.set(callerThreadId, { resolve, signal });
+      if (executions.size === 2) bothStarted.resolve();
+      signal.addEventListener("abort", () => {
+        if (callerThreadId === "thread-1") firstAborted.resolve(signal.reason);
+        reject(signal.reason);
+      }, { once: true });
+    }),
+    orchestratorOrigin: "http://127.0.0.1:4500",
+    requestCodex: async (request) => ({ id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } }),
+    requestRegistry,
+  });
+  const server = await startController(controller);
+  const firstUrl = new URL(server.url);
+  firstUrl.searchParams.set("client", "11111111-1111-4111-8111-111111111111");
+  const secondUrl = new URL(server.url);
+  secondUrl.searchParams.set("client", "22222222-2222-4222-8222-222222222222");
+  const firstClient = await connectClient(firstUrl);
+  const secondClient = await connectClient(secondUrl);
+  const firstAbort = new AbortController();
+  try {
+    const firstCall = firstClient.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: {},
+      name: "thread_title_get",
+    }, undefined, { signal: firstAbort.signal });
+    const secondCall = secondClient.callTool({
+      _meta: { threadId: "thread-2" },
+      arguments: {},
+      name: "thread_title_get",
+    });
+    await bothStarted.promise;
+    assert.equal(executions.get("thread-1")?.signal.aborted, false);
+    assert.equal(executions.get("thread-2")?.signal.aborted, false);
+
+    firstAbort.abort(new Error("first caller stopped"));
+    await assert.rejects(firstCall, /first caller stopped|aborted/u);
+    assert.ok(await firstAborted.promise);
+    assert.equal(executions.get("thread-2")?.signal.aborted, false);
+
+    executions.get("thread-2")?.resolve(Response.json({ title: "second completed" }));
+    const secondResult = await secondCall;
+    assert.equal(secondResult.isError, false);
+    assert.match(responseText(secondResult), /second completed/u);
+  } finally {
+    requestRegistry.dispose();
+    await firstClient.close();
+    await secondClient.close();
+    await server.close();
+  }
+});
+
 test("releases HTTP admission and propagates caller cancellation across controller generations", { timeout: 5_000 }, async () => {
   const executionStarted = deferred<AbortSignal>();
   const executionAborted = deferred<unknown>();
@@ -225,6 +284,70 @@ test("releases HTTP admission and propagates caller cancellation across controll
   } finally {
     requestRegistry.dispose();
     await client.close();
+    await server.close();
+  }
+});
+
+test("runtime drain aborts declared waits only in the retiring controller generation", { timeout: 5_000 }, async () => {
+  const executions = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
+  const bothStarted = deferred<void>();
+  const oldStarted = deferred<void>();
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const createController = () => new WorkbenchAgentMcpController({
+    executeCommand: async (request, signal) => await new Promise<Response>((resolve, reject) => {
+      const callerThreadId = String(request.body?.callerThreadId ?? "");
+      executions.set(callerThreadId, { resolve, signal });
+      if (callerThreadId === "old-thread") oldStarted.resolve();
+      if (executions.size === 2) bothStarted.resolve();
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }),
+    lifecycleLogError: () => undefined,
+    orchestratorOrigin: "http://127.0.0.1:4500",
+    requestCodex: async (request) => ({ id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } }),
+    requestRegistry,
+  });
+  const retiringController = createController();
+  let currentController = retiringController;
+  const server = await startController(() => currentController);
+  const oldUrl = new URL(server.url);
+  oldUrl.searchParams.set("client", "11111111-1111-4111-8111-111111111111");
+  const oldClient = await connectClient(oldUrl);
+  try {
+    const oldCall = oldClient.callTool({
+      _meta: { threadId: "old-thread" },
+      arguments: { names: ["momo"] },
+      name: "subagent_wait",
+    });
+    await oldStarted.promise;
+
+    currentController = createController();
+    const newUrl = new URL(server.url);
+    newUrl.searchParams.set("client", "22222222-2222-4222-8222-222222222222");
+    const newClient = await connectClient(newUrl);
+    try {
+      const newCall = newClient.callTool({
+        _meta: { threadId: "new-thread" },
+        arguments: { names: ["lumi"] },
+        name: "subagent_wait",
+      });
+      await bothStarted.promise;
+
+      assert.equal(retiringController.beginRuntimeDrain(), 1);
+      const oldResult = await oldCall;
+      assert.equal(oldResult.isError, true);
+      assert.match(responseText(oldResult), /runtime generation is reloading/u);
+      assert.equal(executions.get("new-thread")?.signal.aborted, false);
+
+      executions.get("new-thread")?.resolve(new Response("new generation completed"));
+      const newResult = await newCall;
+      assert.equal(newResult.isError, false);
+      assert.match(responseText(newResult), /new generation completed/u);
+    } finally {
+      await newClient.close();
+    }
+  } finally {
+    requestRegistry.dispose();
+    await oldClient.close();
     await server.close();
   }
 });

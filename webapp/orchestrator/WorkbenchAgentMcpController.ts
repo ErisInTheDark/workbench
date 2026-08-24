@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAgentMcpControllerOptions: inject trusted Codex identity resolution, cancellation, and structured command execution ports. Keywords: workbench, MCP, options, identity.
- * - default WorkbenchAgentMcpController: serve the typed wb suite over stateless loopback Streamable HTTP with request-owned lifecycle. Keywords: workbench, MCP, HTTP, tools, lifecycle.
+ * - default WorkbenchAgentMcpController: serve typed wb tools with client identity, request cancellation, and generation-scoped drain policy. Keywords: workbench, MCP, HTTP, tools, lifecycle, drain.
  */
 import type http from "node:http";
 
@@ -25,6 +25,8 @@ import {
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_SCOPES_CAPABILITY = "reload-scopes";
+const LEGACY_MCP_CLIENT_SCOPE = "legacy";
+const MCP_CLIENT_SCOPE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 type WorkbenchAgentMcpRequestId = number | string;
 
 export interface WorkbenchAgentMcpControllerOptions {
@@ -76,6 +78,13 @@ function sendJsonRpcError(response: http.ServerResponse, status: number, message
   response.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message }, id: null }));
 }
 
+function readClientScope(url: URL) {
+  const value = url.searchParams.get("client")?.trim();
+  if (!value) return LEGACY_MCP_CLIENT_SCOPE;
+  if (!MCP_CLIENT_SCOPE_PATTERN.test(value)) throw new Error("Workbench MCP client scope is invalid.");
+  return value.toLowerCase();
+}
+
 function readThreadCwd(response: JsonRpcResponse) {
   if (response.error) throw new Error(response.error.message);
   const result = response.result && typeof response.result === "object" ? response.result as Record<string, object> : null;
@@ -97,6 +106,7 @@ export default class WorkbenchAgentMcpController {
   private readonly orchestratorOrigin: string;
   private readonly requestRegistry: WorkbenchAgentMcpRequestRegistry;
   private readonly requestCodex: WorkbenchAgentMcpControllerOptions["requestCodex"];
+  private readonly runtimeOwner = {};
 
   constructor({ executeCommand, lifecycleLogError = logError, orchestratorOrigin, requestCodex, requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry() }: WorkbenchAgentMcpControllerOptions) {
     this.executeCommand = executeCommand;
@@ -104,6 +114,30 @@ export default class WorkbenchAgentMcpController {
     this.orchestratorOrigin = orchestratorOrigin;
     this.requestRegistry = requestRegistry;
     this.requestCodex = requestCodex;
+  }
+
+  beginRuntimeDrain() {
+    return this.requestRegistry.beginRuntimeDrain(
+      this.runtimeOwner,
+      "immediate",
+      "Workbench MCP tool call was cancelled because its runtime generation is reloading.",
+    );
+  }
+
+  expireRuntimeDrain() {
+    return this.requestRegistry.beginRuntimeDrain(
+      this.runtimeOwner,
+      "deadline",
+      "Workbench MCP tool call exceeded the runtime-drain deadline.",
+    );
+  }
+
+  listRuntimeDrainPending() {
+    return this.requestRegistry.listRuntimeDrainPending(this.runtimeOwner);
+  }
+
+  releaseRuntimeOwner() {
+    this.requestRegistry.releaseRuntimeOwner(this.runtimeOwner);
   }
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
@@ -117,16 +151,24 @@ export default class WorkbenchAgentMcpController {
     }
 
     // The accepted HTTP request owns its response and transport after the reloadable feature lease returns.
-    const capabilities = new URL(request.url ?? "/", "http://localhost").searchParams.get("capabilities")?.split(",") ?? [];
-    void this.completeRequest(request, response, { reloadScopes: capabilities.includes(RELOAD_SCOPES_CAPABILITY) });
+    const url = new URL(request.url ?? "/", "http://localhost");
+    let clientScope: string;
+    try {
+      clientScope = readClientScope(url);
+    } catch (error) {
+      sendJsonRpcError(response, 400, sanitizeError(error) || "Workbench MCP client scope is invalid.");
+      return;
+    }
+    const capabilities = url.searchParams.get("capabilities")?.split(",") ?? [];
+    void this.completeRequest(request, response, clientScope, { reloadScopes: capabilities.includes(RELOAD_SCOPES_CAPABILITY) });
   }
 
-  private async completeRequest(request: http.IncomingMessage, response: http.ServerResponse, schemaContext: { reloadScopes: boolean }) {
+  private async completeRequest(request: http.IncomingMessage, response: http.ServerResponse, clientScope: string, schemaContext: { reloadScopes: boolean }) {
     const requestAbort = new AbortController();
     const abortDisconnectedRequest = () => {
       if (!requestAbort.signal.aborted) requestAbort.abort(new Error("Workbench MCP caller disconnected."));
     };
-    const server = this.createServer(requestAbort.signal, schemaContext);
+    const server = this.createServer(requestAbort.signal, clientScope, schemaContext);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     let closed = false;
     const close = () => {
@@ -153,10 +195,10 @@ export default class WorkbenchAgentMcpController {
     }
   }
 
-  private createServer(requestSignal: AbortSignal, schemaContext: { reloadScopes: boolean }) {
+  private createServer(requestSignal: AbortSignal, clientScope: string, schemaContext: { reloadScopes: boolean }) {
     const server = new McpServer({ name: "wb", version: "1.0.0" });
     server.server.setNotificationHandler(CancelledNotificationSchema, (notification) => {
-      this.requestRegistry.cancel(notification.params.requestId, notification.params.reason);
+      this.requestRegistry.cancel(clientScope, notification.params.requestId, notification.params.reason);
     });
     const names = new Set<string>();
     for (const definition of listWorkbenchAgentCommands()) {
@@ -177,6 +219,7 @@ export default class WorkbenchAgentMcpController {
         definition,
         input as object,
         extra._meta,
+        clientScope,
         extra.requestId,
         AbortSignal.any([requestSignal, extra.signal]),
       ));
@@ -188,12 +231,18 @@ export default class WorkbenchAgentMcpController {
     definition: WorkbenchAgentCommandDefinition,
     input: object,
     meta: Record<string, unknown> | undefined,
+    clientScope: string,
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
   ) {
     let unregister: (() => void) | null = null;
     try {
-      const registration = this.requestRegistry.register(requestId);
+      const toolName = getWorkbenchAgentCommandToolName(definition);
+      const registration = this.requestRegistry.register(clientScope, requestId, {
+        owner: this.runtimeOwner,
+        policy: definition.mcpRuntimeDrainPolicy,
+        toolName,
+      });
       unregister = registration.unregister;
       signal = AbortSignal.any([signal, registration.signal]);
       const callerThreadId = readThreadId(meta);
@@ -210,6 +259,7 @@ export default class WorkbenchAgentMcpController {
         cwd,
         workbenchOrigin: this.orchestratorOrigin,
       });
+      if (request.waitForReload) registration.markDrainIndependent();
       const upstream = await this.executeCommand(request, signal);
       const text = await upstream.text();
       const adapted = adaptWorkbenchAgentCliResponse({ httpOk: upstream.ok, request, text });

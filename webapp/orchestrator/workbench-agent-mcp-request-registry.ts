@@ -1,34 +1,70 @@
 /*
  * Exports:
- * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation handles with duplicate-ID and disposal guards. Keywords: workbench, MCP, cancellation, registry.
+ * - WorkbenchAgentMcpPendingRequest: bounded active-request detail for runtime-drain diagnostics. Keywords: workbench, MCP, drain, diagnostics.
+ * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation handles, generation drain policy, and duplicate-ID guards. Keywords: workbench, MCP, cancellation, registry.
  * - getProcessWorkbenchAgentMcpRequestRegistry: wrap reload-stable process state without retaining stale module methods. Keywords: workbench, MCP, reload, process.
  */
+import type { WorkbenchAgentMcpRuntimeDrainPolicy } from "../lib/workbench/commands/workbench-agent-command-definition";
 
 type WorkbenchAgentMcpRequestId = number | string;
+type WorkbenchAgentMcpClientScope = string;
+type WorkbenchAgentMcpRuntimeOwner = object;
+type WorkbenchAgentMcpRuntimeDrainPhase = "deadline" | "immediate";
+
+interface WorkbenchAgentMcpRequestEntry {
+  controller: AbortController;
+  drainIndependent: boolean;
+  owner: WorkbenchAgentMcpRuntimeOwner;
+  policy: WorkbenchAgentMcpRuntimeDrainPolicy | null;
+  startedAt: number;
+  toolName: string;
+}
+
+interface WorkbenchAgentMcpRuntimeOwnerState {
+  phase: "active" | WorkbenchAgentMcpRuntimeDrainPhase;
+  released: boolean;
+}
 
 interface WorkbenchAgentMcpRequestRegistryState {
   disposed: boolean;
   exitHookInstalled: boolean;
-  requests: Map<WorkbenchAgentMcpRequestId, AbortController>;
+  ownerStates: WeakMap<WorkbenchAgentMcpRuntimeOwner, WorkbenchAgentMcpRuntimeOwnerState>;
+  requestsByClient: Map<WorkbenchAgentMcpClientScope, Map<WorkbenchAgentMcpRequestId, WorkbenchAgentMcpRequestEntry>>;
 }
 
-const PROCESS_REGISTRY_KEY = Symbol.for("workbench.agentMcpRequestRegistry.v1");
+interface WorkbenchAgentMcpRequestRegistrationOptions {
+  owner: WorkbenchAgentMcpRuntimeOwner;
+  policy?: WorkbenchAgentMcpRuntimeDrainPolicy;
+  toolName: string;
+}
+
+export interface WorkbenchAgentMcpPendingRequest {
+  ageMs: number;
+  policy: WorkbenchAgentMcpRuntimeDrainPolicy | null;
+  toolName: string;
+}
+
+const PROCESS_REGISTRY_KEY = Symbol.for("workbench.agentMcpRequestRegistry.v2");
 
 function createState(): WorkbenchAgentMcpRequestRegistryState {
   return {
     disposed: false,
     exitHookInstalled: false,
-    requests: new Map(),
+    ownerStates: new WeakMap(),
+    requestsByClient: new Map(),
   };
 }
 
 function disposeState(state: WorkbenchAgentMcpRequestRegistryState, reason: string) {
   if (state.disposed) return;
   state.disposed = true;
-  for (const controller of state.requests.values()) {
-    if (!controller.signal.aborted) controller.abort(new Error(reason));
+  for (const requests of state.requestsByClient.values()) {
+    for (const entry of requests.values()) {
+      if (!entry.controller.signal.aborted) entry.controller.abort(new Error(reason));
+    }
   }
-  state.requests.clear();
+  state.requestsByClient.clear();
+  state.ownerStates = new WeakMap();
 }
 
 function getProcessState() {
@@ -44,27 +80,96 @@ function getProcessState() {
   return state;
 }
 
-export class WorkbenchAgentMcpRequestRegistry {
-  constructor(private readonly state = createState()) {}
+function phaseCancels(policy: WorkbenchAgentMcpRuntimeDrainPolicy | null, phase: WorkbenchAgentMcpRuntimeDrainPhase) {
+  return policy === "abort-immediately" || (policy === "abort-at-deadline" && phase === "deadline");
+}
 
-  register(requestId: WorkbenchAgentMcpRequestId) {
+export class WorkbenchAgentMcpRequestRegistry {
+  constructor(
+    private readonly state = createState(),
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  register(
+    clientScope: WorkbenchAgentMcpClientScope,
+    requestId: WorkbenchAgentMcpRequestId,
+    options: WorkbenchAgentMcpRequestRegistrationOptions,
+  ) {
     if (this.state.disposed) throw new Error("Workbench MCP request registry is disposed.");
-    if (this.state.requests.has(requestId)) throw new Error(`Workbench MCP request ID is already active: ${requestId}`);
-    const controller = new AbortController();
-    this.state.requests.set(requestId, controller);
+    const ownerState = this.state.ownerStates.get(options.owner) ?? { phase: "active", released: false };
+    if (ownerState.released) throw new Error("Workbench MCP runtime owner is disposed.");
+    this.state.ownerStates.set(options.owner, ownerState);
+    const requests = this.state.requestsByClient.get(clientScope) ?? new Map<WorkbenchAgentMcpRequestId, WorkbenchAgentMcpRequestEntry>();
+    if (requests.has(requestId)) throw new Error(`Workbench MCP request ID is already active for client ${clientScope}: ${requestId}`);
+    const entry: WorkbenchAgentMcpRequestEntry = {
+      controller: new AbortController(),
+      drainIndependent: false,
+      owner: options.owner,
+      policy: options.policy ?? null,
+      startedAt: this.now(),
+      toolName: options.toolName,
+    };
+    requests.set(requestId, entry);
+    this.state.requestsByClient.set(clientScope, requests);
+    if (ownerState.phase !== "active" && phaseCancels(entry.policy, ownerState.phase)) {
+      entry.controller.abort(new Error("Workbench MCP tool call was cancelled for runtime reload."));
+    }
     return {
-      signal: controller.signal,
+      markDrainIndependent: () => { entry.drainIndependent = true; },
+      signal: entry.controller.signal,
       unregister: () => {
-        if (this.state.requests.get(requestId) === controller) this.state.requests.delete(requestId);
+        if (requests.get(requestId) !== entry) return;
+        requests.delete(requestId);
+        if (requests.size === 0 && this.state.requestsByClient.get(clientScope) === requests) {
+          this.state.requestsByClient.delete(clientScope);
+        }
       },
     };
   }
 
-  cancel(requestId: WorkbenchAgentMcpRequestId, reason?: string) {
-    const controller = this.state.requests.get(requestId);
+  beginRuntimeDrain(owner: WorkbenchAgentMcpRuntimeOwner, phase: WorkbenchAgentMcpRuntimeDrainPhase, reason: string) {
+    const ownerState = this.state.ownerStates.get(owner) ?? { phase: "active", released: false };
+    if (ownerState.phase === "deadline" || (ownerState.phase === "immediate" && phase === "immediate")) return 0;
+    ownerState.phase = phase;
+    this.state.ownerStates.set(owner, ownerState);
+    let cancelled = 0;
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (entry.owner !== owner || entry.controller.signal.aborted || !phaseCancels(entry.policy, phase)) continue;
+        entry.controller.abort(new Error(reason));
+        cancelled += 1;
+      }
+    }
+    return cancelled;
+  }
+
+  cancel(clientScope: WorkbenchAgentMcpClientScope, requestId: WorkbenchAgentMcpRequestId, reason?: string) {
+    const controller = this.state.requestsByClient.get(clientScope)?.get(requestId)?.controller;
     if (!controller || controller.signal.aborted) return false;
     controller.abort(new Error(reason?.trim() || "Workbench MCP tool call was cancelled."));
     return true;
+  }
+
+  listRuntimeDrainPending(owner: WorkbenchAgentMcpRuntimeOwner): WorkbenchAgentMcpPendingRequest[] {
+    const now = this.now();
+    const pending: WorkbenchAgentMcpPendingRequest[] = [];
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (entry.owner !== owner || entry.drainIndependent) continue;
+        pending.push({
+          ageMs: Math.max(0, now - entry.startedAt),
+          policy: entry.policy,
+          toolName: entry.toolName,
+        });
+      }
+    }
+    return pending.sort((left, right) => left.toolName.localeCompare(right.toolName));
+  }
+
+  releaseRuntimeOwner(owner: WorkbenchAgentMcpRuntimeOwner) {
+    const ownerState = this.state.ownerStates.get(owner) ?? { phase: "active", released: false };
+    ownerState.released = true;
+    this.state.ownerStates.set(owner, ownerState);
   }
 
   dispose(reason = "Workbench orchestrator is shutting down.") {

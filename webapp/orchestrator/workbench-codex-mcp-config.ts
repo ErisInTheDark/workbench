@@ -2,6 +2,9 @@
  * Exports:
  * - withWorkbenchCodexMcpConfig: add the capability-specific Workbench loopback MCP server to a managed Codex thread config. Keywords: workbench, Codex, MCP, thread config.
  */
+import { randomUUID } from "node:crypto";
+
+import type { WorkbenchProjectCapabilities } from "./workbench-project-capabilities";
 
 const WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS = 30 * 60;
 
@@ -11,8 +14,6 @@ function asRecord(value: unknown) {
     : {};
 }
 
-import type { WorkbenchProjectCapabilities } from "./workbench-project-capabilities";
-
 function getWorkbenchMcpUrl(bridgeUrl: string, capabilities: WorkbenchProjectCapabilities) {
   const url = new URL(bridgeUrl);
   if (url.protocol !== "ws:" && url.protocol !== "wss:") {
@@ -21,6 +22,7 @@ function getWorkbenchMcpUrl(bridgeUrl: string, capabilities: WorkbenchProjectCap
   const protocol = url.protocol === "wss:" ? "https:" : "http:";
   const port = url.port || (url.protocol === "wss:" ? "443" : "80");
   const mcpUrl = new URL(`/orchestrator/mcp`, `${protocol}//127.0.0.1:${port}`);
+  mcpUrl.searchParams.set("client", randomUUID());
   if (capabilities.reloadScopes) mcpUrl.searchParams.set("capabilities", "reload-scopes");
   return mcpUrl.toString();
 }

@@ -4,7 +4,7 @@
  *
  * Helpers:
  * - HTTP reload helpers: parse, proxy, queue, and report orchestrator reload scopes. Keywords: reload, next-dev, bridge.
- * - Reloadable HTTP handoff: delegate non-shell HTTP routing through one feature-host lease while stable reload, health, and Browse ingress stay process-owned. Keywords: orchestrator, http, router, reload, feature.
+ * - Reloadable feature handoff: label leased operations, enforce runtime-drain deadlines, and keep stable reload, health, and Browse ingress process-owned. Keywords: orchestrator, http, router, reload, feature, drain.
  * - Child process helpers: start, restart, and schedule managed process lifecycles. Keywords: process, restart, child.
  * - Bridge helpers: route websocket JSON-RPC messages across Codex, Copilot, and OpenCode harnesses. Keywords: websocket, harness, rpc.
  * - Health helpers: supervise the Next.js dev server and restart it after repeated 5xx health probes. Keywords: watchdog, turbopack, 500.
@@ -167,22 +167,26 @@ const turnRecoveryController = new WorkbenchTurnRecoveryController(
       logError("turn-recovery", `Recovery failure for ${candidate.harness}:${candidate.threadId} has no cwd for lifecycle publication.`);
       return;
     }
-    const project = await featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" }));
-    await featureHost.run("threadState", (feature) => feature.controller.reportRecoveryFailed(project.project.id, candidate.harness, candidate.threadId));
+    const project = await featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" }), "project catalog: turn recovery cwd");
+    await featureHost.run("threadState", (feature) => feature.controller.reportRecoveryFailed(project.project.id, candidate.harness, candidate.threadId), "thread state: report recovery failure");
   },
 );
 const subagentStore = new WorkbenchSubagentStore(PROJECT_ROOT);
 const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
 const orchestratorReloadController = new ReloadableWorkbenchOrchestratorReloadController({
   executeScopes: executeReloadScopes,
-  listClaims: async (cwd) => await featureHost.run("gitArc", (feature) => feature.listReloadScopeClaims(cwd)),
+  listClaims: async (cwd) => await featureHost.run("gitArc", (feature) => feature.listReloadScopeClaims(cwd), "git arc: reload-scope claim read"),
 });
 const featureHost = new OrchestratorFeatureHost<OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification>(
   createOrchestratorFeatureContext(),
   createOrchestratorFeatureModuleLoader(),
-  () => {
-    log("orchestrator", "reloaded orchestrator feature registry");
-    for (const client of bridgeConnections) sendJsonToClient(client, { method: "workbench/thread-state/reset", params: {} });
+  {
+    logError: (message) => logError("runtime-drain", message),
+    onSwap: () => {
+      log("orchestrator", "reloaded orchestrator feature registry");
+      for (const client of bridgeConnections) sendJsonToClient(client, { method: "workbench/thread-state/reset", params: {} });
+    },
+    runtimeDrainTimeoutMs: 30_000,
   },
 );
 
@@ -250,7 +254,7 @@ function sendJsonToClient(client: BridgeClient, message: unknown) {
 
 function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification) {
   featureHost.get("harnesses").observeNotification(harness, message);
-  void featureHost.observeProviderNotification({ harness, notification: message }).catch((error) => {
+  void featureHost.observeProviderNotification({ harness, notification: message }, `provider notification: ${harness} ${message.method}`).catch((error) => {
     logError("thread-state", `failed to observe provider notification: ${error instanceof Error ? error.message : String(error)}`);
   });
   for (const client of bridgeConnections) {
@@ -537,8 +541,8 @@ function createBrowseController() {
 function createBrowseRuntime() {
   const { default: Runtime } = loadBrowseRuntimeModule();
   return new Runtime({
-    resolveProjectById: (projectId) => featureHost.run("projectCatalog", (controller) => controller.resolveProjectById(projectId)),
-    resolveProjectFromCwd: (cwd, options) => featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, options)),
+    resolveProjectById: (projectId) => featureHost.run("projectCatalog", (controller) => controller.resolveProjectById(projectId), "project catalog: browse project id"),
+    resolveProjectFromCwd: (cwd, options) => featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, options), "project catalog: browse cwd"),
   });
 }
 
@@ -566,11 +570,11 @@ function createCodexRecoverySupervisor() {
 function createSubagentThreadStatePort() {
   return {
     getEntry: async (projectId: string, harness: WorkbenchHarness, threadId: string) => {
-      const snapshot = await featureHost.run("threadState", (feature) => feature.controller.getSnapshot(projectId));
+      const snapshot = await featureHost.run("threadState", (feature) => feature.controller.getSnapshot(projectId), "thread state: subagent entry read");
       return snapshot.entries.find((entry) => entry.entryKind === "subagent" && entry.identity.harness === harness && entry.identity.threadId === threadId) ?? null;
     },
     mutate: async (request: WorkbenchThreadStateRequest) => {
-      const response = await featureHost.run("threadState", (feature) => feature.controller.handleRequest("subagent-controller", request));
+      const response = await featureHost.run("threadState", (feature) => feature.controller.handleRequest("subagent-controller", request), `thread state: subagent ${request.method}`);
       if ("error" in response) throw new Error(response.error.message);
     },
     subscribe: (listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void) => {
@@ -593,11 +597,11 @@ function resolveProjectFromCurrentCatalog(
   cwd: string | null | undefined,
   options: { endpointName?: string } = {},
 ) {
-  return featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, options));
+  return featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, options), `project catalog: ${options.endpointName ?? "cwd resolution"}`);
 }
 
 async function requestLiveHarness(harness: HarnessKind, request: JsonRpcRequest): Promise<JsonRpcResponse> {
-  return await featureHost.run("harnesses", (controller) => controller.request(harness, request));
+  return await featureHost.run("harnesses", (controller) => controller.request(harness, request), `harnesses: ${harness} ${request.method}`);
 }
 
 function requireHarnessAdmission() {
@@ -703,7 +707,7 @@ async function prepareCodexTurnStart(request: JsonRpcRequest) {
   const params = asRecord(request.params);
   const threadId = typeof params?.threadId === "string" ? params.threadId.trim() : "";
   if (!threadId) throw new Error("Codex turn/start requires a thread id before MCP freshness can be checked.");
-  const state = await featureHost.run("threadState", (feature) => feature.getCodexMcpState(threadId));
+  const state = await featureHost.run("threadState", (feature) => feature.getCodexMcpState(threadId), "thread state: read Codex MCP generation");
   const generation = await codexMcpGenerationController.prepare(state.generation, async () => {
     const response = await requestLiveHarness("codex", {
       id: `workbench:mcp-refresh:${codexMcpGenerationController.generation}`,
@@ -712,7 +716,7 @@ async function prepareCodexTurnStart(request: JsonRpcRequest) {
     });
     if (response.error) throw new Error(response.error.message);
   });
-  await featureHost.run("threadState", (feature) => feature.setManagedCodexMcpGeneration(state.projectId, threadId, generation));
+  await featureHost.run("threadState", (feature) => feature.setManagedCodexMcpGeneration(state.projectId, threadId, generation), "thread state: write Codex MCP generation");
 }
 
 async function requestLiveCodexWithDeadline(request: JsonRpcRequest, timeoutMs = CODEX_HEALTH_REQUEST_TIMEOUT_MS) {
@@ -1383,14 +1387,14 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
         const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
         const turnId = typeof params.turnId === "string" ? params.turnId.trim() : "";
         if (!projectId || !threadId || !turnId) throw new Error("Invalid accepted-intent lifecycle evidence.");
-        const result = await featureHost.run("threadState", (feature) => feature.controller.acceptIntent(connectionId, { harness, projectId, threadId, turnId }));
+        const result = await featureHost.run("threadState", (feature) => feature.controller.acceptIntent(connectionId, { harness, projectId, threadId, turnId }), "thread state: accept intent");
         sendJsonToClient(client, { id: message.id, result });
       } catch (error) {
         sendJsonToClient(client, { id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : "Accepted-intent publication failed." } });
       }
       return;
     }
-    const result = await featureHost.run("threadState", (feature) => feature.controller.handleRequest(connectionId, { method: message.method, ...(asRecord(message.params) ?? {}) }));
+    const result = await featureHost.run("threadState", (feature) => feature.controller.handleRequest(connectionId, { method: message.method, ...(asRecord(message.params) ?? {}) }), `thread state: ${message.method}`);
     sendJsonToClient(client, { id: message.id, ...result });
     return;
   }
@@ -1421,7 +1425,7 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
   }
 
   const strippedMessage = stripHarnessField(message);
-  await featureHost.run("harnesses", (controller) => controller.handleBrowserMessage(message[WORKBENCH_HARNESS_FIELD], strippedMessage, client)).catch((error) => {
+  await featureHost.run("harnesses", (controller) => controller.handleBrowserMessage(message[WORKBENCH_HARNESS_FIELD], strippedMessage, client), `harness browser message: ${message[WORKBENCH_HARNESS_FIELD]} ${message.method}`).catch((error) => {
     if ("id" in message) sendJsonToClient(client, { id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : "Harness bridge request failed." } });
     else logError("harness-bridge", error instanceof Error ? error.message : String(error));
   });
@@ -1469,7 +1473,7 @@ function startBridgeServer() {
       return;
     }
 
-    void featureHost.run("orchestratorHttp", (router) => router.handleHttpRequest(request, response)).catch((error) => {
+    void featureHost.run("orchestratorHttp", (router) => router.handleHttpRequest(request, response), `orchestrator HTTP: ${request.method ?? "UNKNOWN"} ${new URL(request.url ?? "/", "http://localhost").pathname}`).catch((error) => {
       if (!response.headersSent) {
         sendHttpJson(response, 500, { error: error instanceof Error ? error.message : "Orchestrator feature request failed." });
       } else if (!response.writableEnded) {
@@ -1499,7 +1503,7 @@ function startBridgeServer() {
 
     bridgeClient.once("close", () => {
       bridgeClientsByConnectionId.delete(connectionId);
-      void featureHost.run("threadState", (feature) => feature.controller.disconnect(connectionId));
+      void featureHost.run("threadState", (feature) => feature.controller.disconnect(connectionId), "thread state: bridge disconnect");
       bridgeConnections.delete(bridgeClient);
       log("codex-bridge", `client disconnected (${bridgeConnections.size} active)`);
     });

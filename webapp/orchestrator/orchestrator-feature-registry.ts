@@ -273,15 +273,29 @@ export function createOrchestratorFeatureGeneration(
   });
   const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, gitArc, harnesses, legacyMigrationSource, mcp, modules, nextDevHealth, orchestratorHttp, projectCatalog, projectSnapshot, threadGit, threadState };
   return {
-    dispose: async () => {
+    beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); },
+    dispose: async (reportPhase = () => undefined) => {
+      reportPhase("codex health disposal");
       codexHealth.dispose();
+      reportPhase("next-dev health disposal");
       nextDevHealth.dispose();
+      reportPhase("browse session cleanup disposal");
       browseSessionCleanup.dispose();
+      reportPhase("thread-state disposal");
       await threadState.dispose();
+      reportPhase("project snapshot disposal");
       projectSnapshot.dispose();
+      reportPhase("project catalog disposal");
       projectCatalog.dispose();
+      reportPhase("MCP runtime owner release");
+      mcp.releaseRuntimeOwner();
     },
+    expireRuntimeDrain: () => { mcp.expireRuntimeDrain(); },
     get: (key) => features[key],
+    listRuntimeDrainPending: () => mcp.listRuntimeDrainPending().map(({ ageMs, policy, toolName }) => ({
+      ageMs,
+      label: `mcp ${toolName}${policy ? ` [${policy}]` : ""}`,
+    })),
     observeProviderNotification: async ({ harness, notification }) => {
       if (lease.isCurrent()) await threadState.observeProviderNotification(harness, notification);
     },
