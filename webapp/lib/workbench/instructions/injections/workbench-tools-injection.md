@@ -14,4 +14,12 @@ Use typed `mcp__wb__...` tools for Workbench operations when they are available.
 
 The wb mcp commands are also available through the wb cli. use `wb --help` if the wb mcp commands are not available.
 
+<harness:codex>
+## Codex Sandbox Escalation
+
+Diagnose a command failure before retrying the command. A nonzero exit, failed write, or unclear error does not prove that the sandbox blocked the command. Inspect the error, target path, arguments, command behavior, and relevant workspace state first.
+
+Request escalation only when concrete evidence identifies a sandbox, permission, or sandboxed-network restriction and the command is still necessary. Do not use escalation as a generic retry. Each escalation request blocks the turn on user input.
+</harness:codex>
+
 If local browser, MCP, or computer-control features are unavailable in this harness, use the available alternatives and explain any meaningful limitation.
