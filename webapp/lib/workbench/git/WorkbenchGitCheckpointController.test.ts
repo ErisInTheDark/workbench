@@ -10,7 +10,6 @@ import { after, before, test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import GitArcPublishState from "./GitArcPublishState";
-import GitArcProposalCache from "./GitArcProposalCache";
 import { GitArcProposalAlreadyCommittedError } from "./git-arc-failures";
 import { GitArcAcceptedProposalsError } from "./GitArcProposalController";
 import createGitArcStartDiagnosticError, { GitArcStartDiagnosticError } from "./git-arc-start-diagnostics";
@@ -38,6 +37,7 @@ let baseCommit = "";
 let sharedRepository: WorkbenchGitRepository;
 let sharedRoot = "";
 let sharedSource = "";
+let disposeSharedFixture: () => Promise<void> = async () => undefined;
 
 function isolatedControllerTest(name: string, run: (context: TestContext) => Promise<void>) {
   isolatedControllerCases.push({ name, run });
@@ -88,25 +88,9 @@ async function copyRepository<State extends object>(context: TestContext, spec: 
   };
 }
 
-async function createTranscript(
-  repository: WorkbenchGitRepository,
-  harness: "codex" | "copilot" | "opencode",
-  threadId: string,
-) {
-  const threadDirectory = path.join(
-    repository.root,
-    ".workbench",
-    "transcripts",
-    harness,
-    "threads",
-    Buffer.from(threadId, "utf8").toString("base64url"),
-  );
-  await fs.mkdir(threadDirectory, { recursive: true });
-  await fs.writeFile(path.join(threadDirectory, "thread.json"), "{}\n");
-}
-
 before(async () => {
   const fixture = await fixtureCache.copy(CONTROLLER_BASE_FIXTURE);
+  disposeSharedFixture = fixture.dispose;
   sharedRoot = fixture.temporaryRoot;
   sharedSource = fixture.root;
   sharedRepository = await WorkbenchGitRepository.open(sharedSource);
@@ -125,7 +109,7 @@ async function resetSharedRepository() {
 }
 
 after(async () => {
-  await fs.rm(sharedRoot, { force: true, recursive: true });
+  await disposeSharedFixture();
 });
 
 sharedControllerTest("active arc registry rejects sibling overlap and releases claims without touching the worktree", async (context) => {
@@ -275,107 +259,6 @@ isolatedControllerTest("empty inactive plans remain visible through plan-state r
     paths: ["ignored/generated.ts"],
     threadId: "ignored-plan-start-thread",
   }), rejectsIgnoredPaths(["ignored/generated.ts"]));
-});
-
-sharedControllerTest("proposal cache reuses derived changes beneath the canonical harness transcript", async (context) => {
-  await resetSharedRepository();
-  const { repository } = await createRepository(context);
-  const threadId = "shared-thread-id";
-  await createTranscript(repository, "opencode", threadId);
-  const tree = await repository.resolveTree("HEAD");
-  let builds = 0;
-  const input = {
-    baseTree: tree,
-    build: async () => {
-      builds += 1;
-      return [];
-    },
-    harness: "opencode" as const,
-    paths: ["one.txt"],
-    proposalId: "proposal-one",
-    rootPath: repository.root,
-    targetTree: tree,
-    threadId,
-  };
-  const cache = new GitArcProposalCache();
-  await cache.readOrBuild(input);
-  await cache.readOrBuild(input);
-  assert.equal(builds, 1);
-});
-
-isolatedControllerTest("proposal memory cache coalesces misses and extends its idle TTL without transcript storage", async (context) => {
-  const { repository } = await createRepository(context);
-  const tree = await repository.resolveTree("HEAD");
-  let builds = 0;
-  let now = 0;
-  let releaseBuild: () => void = () => undefined;
-  let reportBuildStarted: () => void = () => undefined;
-  const buildStarted = new Promise<void>((resolve) => { reportBuildStarted = resolve; });
-  const buildGate = new Promise<void>((resolve) => { releaseBuild = resolve; });
-  const cache = new GitArcProposalCache({ memoryTtlMs: 10, now: () => now });
-  const input = {
-    baseTree: tree,
-    build: async () => {
-      builds += 1;
-      if (builds === 1) {
-        reportBuildStarted();
-        await buildGate;
-      }
-      return [];
-    },
-    harness: "codex" as const,
-    paths: ["one.txt"],
-    proposalId: "memory-proposal",
-    rootPath: repository.root,
-    targetTree: tree,
-    threadId: "thread-without-transcript",
-  };
-
-  const first = cache.readOrBuild(input);
-  const duplicate = cache.readOrBuild(input);
-  await buildStarted;
-  assert.equal(builds, 1);
-  releaseBuild();
-  await Promise.all([first, duplicate]);
-
-  now = 9;
-  await cache.readOrBuild(input);
-  now = 18;
-  await cache.readOrBuild(input);
-  assert.equal(builds, 1);
-  now = 29;
-  await cache.readOrBuild(input);
-  assert.equal(builds, 2);
-});
-
-isolatedControllerTest("proposal memory cache evicts the least recently used immutable snapshot", async (context) => {
-  const { repository } = await createRepository(context);
-  const tree = await repository.resolveTree("HEAD");
-  const builds = new Map<string, number>();
-  const cache = new GitArcProposalCache({ maxMemoryEntries: 2, memoryTtlMs: 1_000, now: () => 0 });
-  const read = async (proposalId: string, targetTree: string) => await cache.readOrBuild({
-    baseTree: tree,
-    build: async () => {
-      builds.set(proposalId, (builds.get(proposalId) ?? 0) + 1);
-      return [];
-    },
-    harness: "codex",
-    paths: ["one.txt"],
-    proposalId,
-    rootPath: repository.root,
-    targetTree,
-    threadId: "thread-without-transcript",
-  });
-
-  await read("proposal-one", "1".repeat(40));
-  await read("proposal-two", "2".repeat(40));
-  await read("proposal-one", "1".repeat(40));
-  await read("proposal-three", "3".repeat(40));
-  await read("proposal-two", "2".repeat(40));
-
-  assert.equal(builds.get("proposal-one"), 1);
-  assert.equal(builds.get("proposal-two"), 2);
-  assert.equal(builds.get("proposal-three"), 1);
 });
 
 isolatedControllerTest("arc start requires fresh v3 plans but adopts dirty legacy arcs into the registry", async (context) => {

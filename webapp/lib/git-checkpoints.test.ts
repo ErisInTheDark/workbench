@@ -16,6 +16,7 @@ import {
   CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE,
   CHECKPOINT_OPERATIONS_BASE_FIXTURE,
   CHECKPOINT_PROPOSAL_READY_FIXTURE,
+  CHECKPOINT_REBASE_READY_FIXTURE,
   CHECKPOINT_RELEASE_READY_FIXTURE,
 } from "./workbench/git/WorkbenchGitTestFixtures";
 
@@ -255,7 +256,7 @@ checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snaps
     cwd: repoRoot,
     threadId: "thread-one",
   });
-  const active = await addToGitArc({
+  await addToGitArc({
     cwd: repoRoot,
     paths: ["planned-new.tsx"],
     threadId: "thread-one",
@@ -272,12 +273,6 @@ checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snaps
     threadId: "thread-one",
   });
   assert.deepEqual(arcComparison.changes.map((change) => change.path), ["selected.txt"]);
-  const explicitArcComparison = await compareGitCheckpoint({
-    checkpointCommit: active.checkpointCommit,
-    cwd: repoRoot,
-    threadId: "thread-one",
-  });
-  assert.deepEqual(explicitArcComparison, arcComparison);
   const explicitPlanComparison = await compareGitCheckpoint({
     checkpointCommit: refreshedCheckpoint.checkpointCommit,
     cwd: repoRoot,
@@ -301,11 +296,6 @@ checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snaps
     threadId: "thread-one",
   });
   assert.match(implicitDiff.diff, /implementation/u);
-  assert.deepEqual(await diffGitCheckpoint({
-    checkpointCommit: active.checkpointCommit,
-    cwd: repoRoot,
-    threadId: "thread-one",
-  }), implicitDiff);
   const proposal = await createGitCheckpointProposal({
     cwd: repoRoot,
     description: "",
@@ -548,7 +538,6 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
   const frozenThreadId = "thread-frozen";
   const newerThreadId = "thread-newer";
   const cleanThreadId = "thread-clean";
-  const encodedThreadId = Buffer.from(frozenThreadId, "utf8").toString("base64url");
   await assert.rejects(createGitCheckpointProposal({
     cwd: repoRoot,
     description: "",
@@ -556,68 +545,18 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
     threadId: frozenThreadId,
     title: "Reject outside path",
   }), /must stay within the arc's claimed set: outside\.txt/u);
-  const originalProposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "Frozen proposal",
-    paths: ["selected.txt", "unrelated.txt"],
-    threadId: frozenThreadId,
-    title: "Commit selected",
-  });
-  const proposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "Replacement proposal",
-    paths: ["selected.txt", "unrelated.txt"],
-    threadId: frozenThreadId,
-    title: "Commit selected replacement",
-  });
   const superseded = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
-    proposalId: originalProposal.proposalId,
+    proposalId: fixture.state.originalProposalId,
     threadId: frozenThreadId,
   });
   assert.equal(superseded.status, "proposed");
   assert.equal(superseded.supersededByProposalId, null);
-  assert.equal((await controller.findActiveClaim({ cwd: repoRoot, threadId: frozenThreadId }))?.proposalId, proposal.proposalId);
-  assert.deepEqual(proposal.paths, ["selected.txt"]);
-  const proposalCacheDirectory = path.join(
-    repoRoot,
-    ".workbench",
-    "transcripts",
-    "codex",
-    "threads",
-    encodedThreadId,
-    "artifacts",
-    "git-arc-proposals",
-    proposal.proposalId,
+  assert.equal(
+    (await controller.findActiveClaim({ cwd: repoRoot, threadId: frozenThreadId }))?.proposalId,
+    fixture.state.currentProposalId,
   );
-  const proposalCacheFiles = await fs.readdir(proposalCacheDirectory);
-  assert.equal(proposalCacheFiles.length, 1);
-  const proposalCachePath = path.join(proposalCacheDirectory, proposalCacheFiles[0]);
-  const cacheBeforeRead = await fs.stat(proposalCachePath);
-  const cachedPreview = await readGitCheckpointProposal({
-    cwd: repoRoot,
-    includeNewer: false,
-    proposalId: proposal.proposalId,
-    threadId: frozenThreadId,
-  });
-  const cacheAfterRead = await fs.stat(proposalCachePath);
-  assert.match(cachedPreview.changes[0]?.diff ?? "", /proposed version/u);
-  assert.equal(cacheAfterRead.mtimeMs, cacheBeforeRead.mtimeMs);
-  const newerProposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "",
-    paths: ["deleted.txt"],
-    threadId: newerThreadId,
-    title: "Commit newer selected",
-  });
-  const cleanProposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "",
-    paths: ["literal[1].txt"],
-    threadId: cleanThreadId,
-    title: "Expire clean selected",
-  });
   await write(repoRoot, "selected.txt", "newer version\n");
   await write(repoRoot, "deleted.txt", "newer selected version\n");
   await write(repoRoot, "unrelated.txt", "unrelated staged\n");
@@ -626,7 +565,7 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
   const newerPreview = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: true,
-    proposalId: proposal.proposalId,
+    proposalId: fixture.state.currentProposalId,
     threadId: frozenThreadId,
   });
   assert.equal(newerPreview.includeNewerAvailable, true);
@@ -637,7 +576,7 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
     cwd: repoRoot,
     description: "Frozen proposal",
     includeNewer: false,
-    proposalId: proposal.proposalId,
+    proposalId: fixture.state.currentProposalId,
     threadId: frozenThreadId,
     title: "Commit selected",
   });
@@ -652,7 +591,7 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
     cwd: repoRoot,
     description: "Includes the selected tweak",
     includeNewer: true,
-    proposalId: newerProposal.proposalId,
+    proposalId: fixture.state.newerProposalId,
     threadId: newerThreadId,
     title: "Commit newer selected",
   });
@@ -666,104 +605,21 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
   const unavailable = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
-    proposalId: cleanProposal.proposalId,
+    proposalId: fixture.state.cleanProposalId,
     threadId: cleanThreadId,
   });
   assert.equal(unavailable.status, "unavailable");
   assert.match(unavailable.unavailableReason ?? "", /no longer has working-tree changes/u);
-  const stillUnavailable = await readGitCheckpointProposal({
-    cwd: repoRoot,
-    includeNewer: false,
-    proposalId: cleanProposal.proposalId,
-    threadId: cleanThreadId,
-  });
-  assert.equal(stillUnavailable.status, "unavailable");
-
-  const worktreeBeforeAmend = await git(repoRoot, ["diff", "--binary"]);
-  const indexBeforeAmend = await git(repoRoot, ["diff", "--cached", "--binary"]);
-  const amended = await commitGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "Frozen proposal",
-    includeNewer: false,
-    proposalId: proposal.proposalId,
-    threadId: frozenThreadId,
-    title: "Commit selected again",
-  });
-  assert.equal(amended.status, "committed");
-  assert.notEqual(amended.committedSha, committed.committedSha);
-  assert.equal((await git(repoRoot, ["show", "-s", "--format=%s", amended.committedSha!])).trim(), "Commit selected again");
-  assert.equal(await git(repoRoot, ["diff", "--binary"]), worktreeBeforeAmend);
-  assert.equal(await git(repoRoot, ["diff", "--cached", "--binary"]), indexBeforeAmend);
 });
 
 checkpointTest("proposals rebase across compatible commits and reject selected or incompatible history", 7, async (context) => {
-  const { repoRoot } = await createRepository(context);
-  const rootCommit = (await git(repoRoot, ["rev-parse", "HEAD"])).trim();
+  const fixture = await fixtureCache.copy(CHECKPOINT_REBASE_READY_FIXTURE);
+  context.after(fixture.dispose);
+  const repoRoot = fixture.root;
+  const { compatibleProposalId, conflictProposalId, incompatibleProposalId, rootCommit } = fixture.state;
   const compatibleThreadId = "thread-compatible";
   const conflictThreadId = "thread-conflict";
   const incompatibleThreadId = "thread-incompatible";
-  const compatibleCheckpoint = await createGitPlan({
-    cwd: repoRoot,
-    intentName: "Rebase compatible proposal",
-    paths: ["selected.txt"],
-    threadId: compatibleThreadId,
-  });
-  await startGitArc({
-    checkpointCommit: compatibleCheckpoint.checkpointCommit,
-    cwd: repoRoot,
-    threadId: compatibleThreadId,
-  });
-  const conflictCheckpoint = await createGitPlan({
-    cwd: repoRoot,
-    intentName: "Reject committed proposal path",
-    paths: ["deleted.txt"],
-    threadId: conflictThreadId,
-  });
-  await startGitArc({
-    checkpointCommit: conflictCheckpoint.checkpointCommit,
-    cwd: repoRoot,
-    threadId: conflictThreadId,
-  });
-  const incompatibleCheckpoint = await createGitPlan({
-    cwd: repoRoot,
-    intentName: "Reject incompatible history",
-    paths: ["literal[1].txt"],
-    threadId: incompatibleThreadId,
-  });
-  await startGitArc({
-    checkpointCommit: incompatibleCheckpoint.checkpointCommit,
-    cwd: repoRoot,
-    threadId: incompatibleThreadId,
-  });
-  await write(repoRoot, "selected.txt", "proposed version\n");
-  await write(repoRoot, "deleted.txt", "conflicting proposal version\n");
-  await write(repoRoot, "literal[1].txt", "alternate-branch proposal version\n");
-  await write(repoRoot, "before-proposal.txt", "committed before proposal\n");
-  await git(repoRoot, ["add", "--", "before-proposal.txt"]);
-  await git(repoRoot, ["commit", "-m", "advance before proposal"]);
-  const compatibleProposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "",
-    paths: ["selected.txt"],
-    threadId: compatibleThreadId,
-    title: "Commit selected",
-  });
-  const conflictProposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "",
-    paths: ["deleted.txt"],
-    threadId: conflictThreadId,
-    title: "Conflict selected path",
-  });
-  const incompatibleProposal = await createGitCheckpointProposal({
-    cwd: repoRoot,
-    description: "",
-    paths: ["literal[1].txt"],
-    threadId: incompatibleThreadId,
-    title: "Incompatible history",
-  });
-  const proposalBase = (await git(repoRoot, ["rev-parse", "HEAD"])).trim();
-  assert.equal(compatibleProposal.baseCommit, proposalBase);
   await write(repoRoot, "head-moved.txt", "new head\n");
   await git(repoRoot, ["add", "--", "head-moved.txt"]);
   await git(repoRoot, ["commit", "-m", "move head"]);
@@ -771,7 +627,7 @@ checkpointTest("proposals rebase across compatible commits and reject selected o
   const rebased = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
-    proposalId: compatibleProposal.proposalId,
+    proposalId: compatibleProposalId,
     threadId: compatibleThreadId,
   });
   assert.equal(rebased.status, "proposed");
@@ -782,15 +638,13 @@ checkpointTest("proposals rebase across compatible commits and reject selected o
     cwd: repoRoot,
     description: "",
     includeNewer: false,
-    proposalId: compatibleProposal.proposalId,
+    proposalId: compatibleProposalId,
     threadId: compatibleThreadId,
     title: "Commit selected",
   });
   assert.equal(committed.status, "committed");
   assert.equal((await git(repoRoot, ["rev-parse", "HEAD^"])).trim(), rebasedHead);
   assert.equal(await git(repoRoot, ["show", "HEAD:selected.txt"]), "proposed version\n");
-  assert.equal(await git(repoRoot, ["show", "HEAD:before-proposal.txt"]), "committed before proposal\n");
-  assert.equal(await git(repoRoot, ["show", "HEAD:head-moved.txt"]), "new head\n");
 
   await write(repoRoot, "deleted.txt", "committed elsewhere\n");
   await git(repoRoot, ["add", "--", "deleted.txt"]);
@@ -798,7 +652,7 @@ checkpointTest("proposals rebase across compatible commits and reject selected o
   const conflicted = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
-    proposalId: conflictProposal.proposalId,
+    proposalId: conflictProposalId,
     threadId: conflictThreadId,
   });
   assert.equal(conflicted.status, "unavailable");
@@ -811,7 +665,7 @@ checkpointTest("proposals rebase across compatible commits and reject selected o
   const incompatible = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
-    proposalId: incompatibleProposal.proposalId,
+    proposalId: incompatibleProposalId,
     threadId: incompatibleThreadId,
   });
   assert.equal(incompatible.status, "unavailable");

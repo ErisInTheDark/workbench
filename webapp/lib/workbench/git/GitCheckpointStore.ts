@@ -128,10 +128,9 @@ export default class GitCheckpointStore {
     }));
   }
 
-  async checkpointRefName(harness: GitArcHarness, threadId: string, commit: string) {
+  checkpointRefName(harness: GitArcHarness, threadId: string, commit: string) {
     const timestamp = new Date().toISOString().replace(/[-:.]/g, "");
-    const shortCommit = await this.repository.shortCommit(commit);
-    return `${checkpointNamespace(harness, threadId)}/${timestamp}-${shortCommit}`;
+    return `${checkpointNamespace(harness, threadId)}/${timestamp}-${normalizeCommit(commit)}`;
   }
 
   async createCheckpoint(harness: GitArcHarness, threadId: string, tree: string, parent: string, metadata: CheckpointMetadata) {
@@ -142,7 +141,7 @@ export default class GitCheckpointStore {
 
   async prepareCheckpoint(harness: GitArcHarness, threadId: string, tree: string, parent: string, metadata: CheckpointMetadata) {
     const checkpointCommit = await this.repository.createCommitFromTree(tree, parent, checkpointMessage(metadata));
-    const checkpointRef = await this.checkpointRefName(harness, threadId, checkpointCommit);
+    const checkpointRef = this.checkpointRefName(harness, threadId, checkpointCommit);
     return {
       checkpointCommit,
       checkpointRef,

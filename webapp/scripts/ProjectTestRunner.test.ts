@@ -1,4 +1,4 @@
-/* No production exports. Regression wards cover deterministic test discovery, exclusions, fixture prewarming, and bounded Node runner arguments. Keywords: tests, discovery, fixtures, concurrency, ordering. */
+/* No production exports. Regression wards cover deterministic discovery, runner-owned fixture lifecycle, pool settlement, and bounded Node arguments. Keywords: tests, fixtures, concurrency, cleanup. */
 import assert from "node:assert/strict";
 import { type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -9,6 +9,8 @@ import test from "node:test";
 
 import { partitionWorkbenchGitTestFiles } from "../lib/workbench/git/WorkbenchGitTestFixtures";
 import ProjectTestRunner, { parseProjectTestRunnerArguments } from "./ProjectTestRunner";
+
+const noPreparedFixtures = async () => ({ dispose: async () => undefined, environment: {} });
 
 function readNumericArgument(args: readonly string[], name: string) {
   const prefix = `${name}=`;
@@ -61,27 +63,36 @@ test("fails clearly when no TypeScript tests match", async (context) => {
   await assert.rejects(() => new ProjectTestRunner(root).run(), /No \.test\.ts or \.test\.tsx files found under: \./u);
 });
 
-test("prewarms selected fixtures before starting the Node test process", async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-prewarm-order-"));
+test("prepares selected fixtures before Node starts and disposes them after it exits", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-fixture-lifecycle-"));
   context.after(() => rm(root, { force: true, recursive: true }));
   const testFile = path.join(root, "prepared.test.ts");
   await writeFile(testFile, "");
   const events: string[] = [];
 
   class RecordingRunner extends ProjectTestRunner {
-    protected override async runTestFiles(files: readonly string[]) {
+    protected override async runTestFiles(
+      files: readonly string[],
+      _concurrency?: number,
+      fixtureEnvironment?: Record<string, string>,
+    ) {
+      assert.deepEqual(fixtureEnvironment, { WORKBENCH_FIXTURE_TEST: "prepared" });
       events.push(`run:${files.map((file) => path.basename(file)).join(",")}`);
       return { exitCode: 0, signal: null };
     }
   }
 
   const runner = new RecordingRunner(root, {
-    prewarmTestFixtures: async (files) => {
-      events.push(`prewarm:${files.map((file) => path.basename(file)).join(",")}`);
+    prepareTestFixtures: async (files) => {
+      events.push(`prepare:${files.map((file) => path.basename(file)).join(",")}`);
+      return {
+        dispose: async () => { events.push("dispose"); },
+        environment: { WORKBENCH_FIXTURE_TEST: "prepared" },
+      };
     },
   });
   assert.deepEqual(await runner.run(), { exitCode: 0, signal: null });
-  assert.deepEqual(events, ["prewarm:prepared.test.ts", "run:prepared.test.ts"]);
+  assert.deepEqual(events, ["prepare:prepared.test.ts", "run:prepared.test.ts", "dispose"]);
 });
 
 test("starts Node with explicit bounded file concurrency and the project timeout", async (context) => {
@@ -91,7 +102,7 @@ test("starts Node with explicit bounded file concurrency and the project timeout
   const invocations: Array<{ args: readonly string[]; command: string }> = [];
 
   const runner = new ProjectTestRunner(root, {
-    prewarmTestFixtures: async () => undefined,
+    prepareTestFixtures: noPreparedFixtures,
     spawnProcess: (command, args) => {
       invocations.push({ args, command });
       const child = new EventEmitter() as ChildProcess;
@@ -116,7 +127,7 @@ test("caps ordinary test-file concurrency", async (context) => {
   await writeFile(path.join(root, "alpha.test.ts"), "");
   const invocations: Array<{ args: readonly string[]; command: string }> = [];
   const runner = new ProjectTestRunner(root, {
-    prewarmTestFixtures: async () => undefined,
+    prepareTestFixtures: noPreparedFixtures,
     spawnProcess: (command, args) => {
       invocations.push({ args, command });
       const child = new EventEmitter() as ChildProcess;
@@ -134,11 +145,15 @@ test("caps ordinary test-file concurrency", async (context) => {
 test("partitions Git-heavy suites without disturbing stable group order", () => {
   assert.deepEqual(partitionWorkbenchGitTestFiles([
     "components/zeta.test.ts",
+    "lib/workbench/git/GitArcRetentionController.test.ts",
     "lib/workbench/git/WorkbenchThreadGit.test.ts",
     "lib/alpha.test.ts",
     "lib/git-checkpoints.test.ts",
   ]), {
-    gitFiles: ["lib/workbench/git/WorkbenchThreadGit.test.ts"],
+    gitFiles: [
+      "lib/workbench/git/GitArcRetentionController.test.ts",
+      "lib/workbench/git/WorkbenchThreadGit.test.ts",
+    ],
     nestedGitFiles: ["lib/git-checkpoints.test.ts"],
     ordinaryFiles: ["components/zeta.test.ts", "lib/alpha.test.ts"],
   });
@@ -153,12 +168,22 @@ test("runs Git-heavy and ordinary files in concurrent bounded pools", async (con
     writeFile(path.join(root, "ordinary.test.ts"), ""),
   ]);
   const invocations: Array<{ args: readonly string[]; command: string }> = [];
+  const events: string[] = [];
   const runner = new ProjectTestRunner(root, {
-    prewarmTestFixtures: async () => undefined,
-    spawnProcess: (command, args) => {
+    prepareTestFixtures: async () => ({
+      dispose: async () => { events.push("dispose"); },
+      environment: { WORKBENCH_FIXTURE_TEST: "pooled" },
+    }),
+    spawnProcess: (command, args, options) => {
       invocations.push({ args, command });
+      assert.equal(options.env.WORKBENCH_FIXTURE_TEST, "pooled");
+      const file = args.at(-1) ?? "unknown";
+      events.push(`start:${file}`);
       const child = new EventEmitter() as ChildProcess;
-      queueMicrotask(() => child.emit("exit", 0, null));
+      queueMicrotask(() => {
+        events.push(`exit:${file}`);
+        child.emit("exit", 0, null);
+      });
       return child;
     },
     testConcurrency: 8,
@@ -177,6 +202,48 @@ test("runs Git-heavy and ordinary files in concurrent bounded pools", async (con
   assert(gitConcurrency >= nestedGitConcurrency);
   assert(gitConcurrency < ordinaryConcurrency);
   assert.equal(ordinaryConcurrency, 8);
+  assert.equal(events.at(-1), "dispose");
+  assert.equal(events.filter((event) => event.startsWith("exit:")).length, 3);
+});
+
+test("waits for every started pool before cleaning fixtures after a pool failure", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-test-pool-failure-"));
+  context.after(() => rm(root, { force: true, recursive: true }));
+  await Promise.all([
+    writeFile(path.join(root, "WorkbenchThreadGit.test.ts"), ""),
+    writeFile(path.join(root, "ordinary.test.ts"), ""),
+  ]);
+  const events: string[] = [];
+  let lingeringChild: ChildProcess | undefined;
+  let reportFailure: (() => void) | undefined;
+  const failureReported = new Promise<void>((resolve) => { reportFailure = resolve; });
+  const runner = new ProjectTestRunner(root, {
+    prepareTestFixtures: async () => ({
+      dispose: async () => { events.push("dispose"); },
+      environment: {},
+    }),
+    spawnProcess: (_command, args) => {
+      const child = new EventEmitter() as ChildProcess;
+      if (args.includes("WorkbenchThreadGit.test.ts")) {
+        lingeringChild = child;
+      } else {
+        queueMicrotask(() => {
+          events.push("failure");
+          child.emit("error", new Error("pool spawn failed"));
+          reportFailure?.();
+        });
+      }
+      return child;
+    },
+    testConcurrency: 8,
+  });
+
+  const running = runner.run();
+  await failureReported;
+  assert.deepEqual(events, ["failure"]);
+  lingeringChild?.emit("exit", 0, null);
+  await assert.rejects(running, /pool spawn failed/u);
+  assert.deepEqual(events, ["failure", "dispose"]);
 });
 
 test("good-citizen mode runs the selected suite with one test file at a time", async (context) => {
@@ -188,7 +255,7 @@ test("good-citizen mode runs the selected suite with one test file at a time", a
   if (parsed.testConcurrency === undefined) assert.fail("Good-citizen mode must select cooperative concurrency.");
   if (parsed.testTimeoutMs === undefined) assert.fail("Good-citizen mode must select a cooperative timeout.");
   const runner = new ProjectTestRunner(root, {
-    prewarmTestFixtures: async () => undefined,
+    prepareTestFixtures: noPreparedFixtures,
     spawnProcess: (command, args) => {
       invocations.push({ args, command });
       const child = new EventEmitter() as ChildProcess;

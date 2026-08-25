@@ -1,7 +1,7 @@
 /*
  * Default export:
  * - ProjectTestRunner: deterministically discovers TypeScript tests and owns the Node test-runner child lifecycle. Keywords: tests, discovery, TypeScript, lifecycle, Windows.
- * - ProjectTestRunnerOptions: inject fixture prewarming, process spawning, bounded file concurrency, and timeout for regression wards. Keywords: tests, fixtures, process, concurrency, timeout.
+ * - ProjectTestRunnerOptions/PreparedTestFixtures: inject runner-owned fixture setup and cleanup, process spawning, bounded file concurrency, and timeout. Keywords: tests, fixtures, process, concurrency, timeout.
  * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse the cooperative full-suite flag and discovery inputs. Keywords: tests, CLI, good citizen, concurrency.
  */
 import { spawn, type ChildProcess } from "node:child_process";
@@ -12,12 +12,13 @@ import { pathToFileURL } from "node:url";
 
 import {
   partitionWorkbenchGitTestFiles,
-  prewarmWorkbenchGitTestFixtures,
+  prepareWorkbenchGitTestFixtures,
+  type WorkbenchPreparedTestFixtures,
 } from "../lib/workbench/git/WorkbenchGitTestFixtures";
 
 const EXCLUDED_DIRECTORY_NAMES = new Set([".next", "build", "coverage", "dist", "generated", "node_modules"]);
-const GIT_TEST_CONCURRENCY = 3;
-const NESTED_GIT_TEST_CONCURRENCY = 2;
+const GIT_TEST_CONCURRENCY = 1;
+const NESTED_GIT_TEST_CONCURRENCY = 1;
 const ORDINARY_TEST_CONCURRENCY = 8;
 const GOOD_CITIZEN_TEST_TIMEOUT_MS = 120_000;
 const TEST_FILE_PATTERN = /\.test\.tsx?$/u;
@@ -30,11 +31,17 @@ type TestProcessResult = {
 };
 
 export interface ProjectTestRunnerOptions {
-  prewarmTestFixtures?: (files: readonly string[]) => Promise<void>;
-  spawnProcess?: (command: string, args: readonly string[], options: { cwd: string; stdio: "inherit" }) => ChildProcess;
+  prepareTestFixtures?: (files: readonly string[]) => Promise<PreparedTestFixtures>;
+  spawnProcess?: (
+    command: string,
+    args: readonly string[],
+    options: { cwd: string; env: NodeJS.ProcessEnv; stdio: "inherit" },
+  ) => ChildProcess;
   testConcurrency?: number;
   testTimeoutMs?: number;
 }
+
+export type PreparedTestFixtures = WorkbenchPreparedTestFixtures;
 
 export interface ProjectTestRunnerArguments {
   inputs: string[];
@@ -65,7 +72,7 @@ function comparePaths(left: string, right: string) {
 }
 
 export default class ProjectTestRunner {
-  private readonly prewarmTestFixtures: (files: readonly string[]) => Promise<void>;
+  private readonly prepareTestFixtures: (files: readonly string[]) => Promise<PreparedTestFixtures>;
   private readonly spawnProcess: NonNullable<ProjectTestRunnerOptions["spawnProcess"]>;
   private readonly testConcurrency: number;
   private readonly testTimeoutMs: number;
@@ -74,7 +81,7 @@ export default class ProjectTestRunner {
     private readonly projectRoot = process.cwd(),
     options: ProjectTestRunnerOptions = {},
   ) {
-    this.prewarmTestFixtures = options.prewarmTestFixtures ?? prewarmWorkbenchGitTestFixtures;
+    this.prepareTestFixtures = options.prepareTestFixtures ?? prepareWorkbenchGitTestFixtures;
     this.spawnProcess = options.spawnProcess ?? spawn;
     const requestedConcurrency = options.testConcurrency ?? TEST_CONCURRENCY;
     if (!Number.isSafeInteger(requestedConcurrency) || requestedConcurrency < 1) {
@@ -98,24 +105,35 @@ export default class ProjectTestRunner {
     const files = await this.discoverTestFiles(inputs);
     if (files.length === 0) throw new Error(`No .test.ts or .test.tsx files found under: ${inputs.join(", ")}`);
 
-    await this.prewarmTestFixtures(files);
-    if (this.testConcurrency === 1) return await this.runTestFiles(files);
-    const { gitFiles, nestedGitFiles, ordinaryFiles } = partitionWorkbenchGitTestFiles(files);
-    const groups = [
-      ...(nestedGitFiles.length ? [{ concurrency: Math.min(NESTED_GIT_TEST_CONCURRENCY, this.testConcurrency), files: nestedGitFiles }] : []),
-      ...(gitFiles.length ? [{ concurrency: Math.min(GIT_TEST_CONCURRENCY, this.testConcurrency), files: gitFiles }] : []),
-      ...(ordinaryFiles.length ? [{ concurrency: Math.min(ORDINARY_TEST_CONCURRENCY, this.testConcurrency), files: ordinaryFiles }] : []),
-    ];
-    const results = await Promise.all(groups.map(async ({ concurrency, files: groupFiles }) => (
-      await this.runTestFiles(groupFiles, concurrency)
-    )));
-    const signaled = results.find((result) => result.signal !== null);
-    if (signaled) return signaled;
-    const failed = results.find((result) => result.exitCode !== 0);
-    return failed ?? { exitCode: 0, signal: null };
+    const prepared = await this.prepareTestFixtures(files);
+    try {
+      if (this.testConcurrency === 1) return await this.runTestFiles(files, this.testConcurrency, prepared.environment);
+      const { gitFiles, nestedGitFiles, ordinaryFiles } = partitionWorkbenchGitTestFiles(files);
+      const groups = [
+        ...(nestedGitFiles.length ? [{ concurrency: Math.min(NESTED_GIT_TEST_CONCURRENCY, this.testConcurrency), files: nestedGitFiles }] : []),
+        ...(gitFiles.length ? [{ concurrency: Math.min(GIT_TEST_CONCURRENCY, this.testConcurrency), files: gitFiles }] : []),
+        ...(ordinaryFiles.length ? [{ concurrency: Math.min(ORDINARY_TEST_CONCURRENCY, this.testConcurrency), files: ordinaryFiles }] : []),
+      ];
+      const settled = await Promise.allSettled(groups.map(async ({ concurrency, files: groupFiles }) => (
+        await this.runTestFiles(groupFiles, concurrency, prepared.environment)
+      )));
+      const rejected = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (rejected) throw rejected.reason;
+      const results = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+      const signaled = results.find((result) => result.signal !== null);
+      if (signaled) return signaled;
+      const failed = results.find((result) => result.exitCode !== 0);
+      return failed ?? { exitCode: 0, signal: null };
+    } finally {
+      await prepared.dispose();
+    }
   }
 
-  protected async runTestFiles(files: readonly string[], concurrency = this.testConcurrency) {
+  protected async runTestFiles(
+    files: readonly string[],
+    concurrency = this.testConcurrency,
+    fixtureEnvironment: Record<string, string> = {},
+  ) {
     const reporter = pathToFileURL(path.join(this.projectRoot, "scripts", "concise-test-reporter.mjs")).href;
     const testArguments = files.map((file) => path.relative(this.projectRoot, file).replaceAll("\\", "/"));
     return await new Promise<TestProcessResult>((resolve, reject) => {
@@ -130,6 +148,7 @@ export default class ProjectTestRunner {
         ...testArguments,
       ], {
         cwd: this.projectRoot,
+        env: { ...process.env, ...fixtureEnvironment },
         stdio: "inherit",
       });
       child.once("error", reject);

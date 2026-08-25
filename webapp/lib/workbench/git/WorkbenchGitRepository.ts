@@ -473,26 +473,19 @@ export default class WorkbenchGitRepository {
     message: string,
     identity?: Omit<GitCommitIdentity, "message" | "parents" | "signed" | "tree">,
   ) {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-git-message-"));
-    const messagePath = path.join(directory, "message.txt");
-    try {
-      await fs.writeFile(messagePath, message, "utf8");
-      const parents = Array.isArray(parent) ? parent : [parent];
-      const env = identity ? {
-        ...process.env,
-        GIT_AUTHOR_DATE: identity.authorDate,
-        GIT_AUTHOR_EMAIL: identity.authorEmail,
-        GIT_AUTHOR_NAME: identity.authorName,
-        GIT_COMMITTER_DATE: identity.committerDate,
-        GIT_COMMITTER_EMAIL: identity.committerEmail,
-        GIT_COMMITTER_NAME: identity.committerName,
-      } : process.env;
-      return (await this.run([
-        "commit-tree", tree, "--no-gpg-sign", ...parents.flatMap((candidate) => ["-p", candidate]), "-F", messagePath,
-      ], env)).trim();
-    } finally {
-      await fs.rm(directory, { force: true, recursive: true });
-    }
+    const parents = Array.isArray(parent) ? parent : [parent];
+    const env = identity ? {
+      ...process.env,
+      GIT_AUTHOR_DATE: identity.authorDate,
+      GIT_AUTHOR_EMAIL: identity.authorEmail,
+      GIT_AUTHOR_NAME: identity.authorName,
+      GIT_COMMITTER_DATE: identity.committerDate,
+      GIT_COMMITTER_EMAIL: identity.committerEmail,
+      GIT_COMMITTER_NAME: identity.committerName,
+    } : process.env;
+    return (await this.runWithInput([
+      "commit-tree", tree, "--no-gpg-sign", ...parents.flatMap((candidate) => ["-p", candidate]), "-F", "-",
+    ], message, env)).trim();
   }
 
   async mergeTree(base: string, left: string, right: string) {
@@ -530,10 +523,6 @@ export default class WorkbenchGitRepository {
       if (match) types.set(match[1]!, match[2]!);
     }
     return refs.map(({ ref, value }) => ({ objectType: types.get(value) ?? "missing", ref, value }));
-  }
-
-  async shortCommit(commit: string) {
-    return (await this.run(["rev-parse", "--short", commit])).trim();
   }
 
   async listChangedPaths(from: string, to: string, paths: string[]) {

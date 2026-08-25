@@ -302,7 +302,7 @@ threadGitTest("older amendment preserves selected/index state and remaps every W
     threadId: "arc-thread",
   });
   assert.notEqual(started.checkpointCommit, state.checkpointPlanCheckpoint);
-  assert.match(started.checkpointRef, new RegExp(started.checkpointCommit.slice(0, 8), "u"));
+  assert.equal(await repository.readRef(started.checkpointRef), started.checkpointCommit);
   assert.equal((await git(repoRoot, ["rev-parse", `${started.checkpointCommit}^`])).trim(), (await git(repoRoot, ["rev-parse", "HEAD"])).trim());
 });
 

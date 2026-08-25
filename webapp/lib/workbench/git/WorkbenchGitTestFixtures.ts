@@ -2,13 +2,19 @@
  * Exports:
  * - Workbench Git fixture specs: immutable real-Git base graphs and prepared lifecycle scenarios used by amendment/controller tests. Keywords: git, fixture, amend, arc, proposal, remote.
  * - partitionWorkbenchGitTestFiles: separate nested Git, ordinary Git, and non-Git suites while preserving stable group order. Keywords: test runner, scheduling, git, fixture.
- * - prewarmWorkbenchGitTestFixtures: prepare only the cached scenarios required by selected test files before Node starts their timers. Keywords: test runner, cache, prewarm.
+ * - prepareWorkbenchGitTestFixtures/WorkbenchPreparedTestFixtures: create every selected disposable repository before tests and clean them after all pools finish. Keywords: test runner, setup, cleanup, manifest.
  */
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import GitArcRegistry from "./GitArcRegistry";
-import GitTestFixtureCache, { type GitTestFixturePrepareContext, type GitTestFixtureSpec } from "./GitTestFixtureCache";
+import GitTestFixtureCache, {
+  GIT_TEST_FIXTURE_MANIFEST_ENV,
+  gitTestFixtureKey,
+  type GitTestFixturePrepareContext,
+  type GitTestFixtureSpec,
+} from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import {
@@ -213,9 +219,105 @@ export const CHECKPOINT_PROPOSAL_READY_FIXTURE = {
     await write(repositoryRoot, "selected.txt", "proposed version\n");
     await write(repositoryRoot, "deleted.txt", "proposed newer-path version\n");
     await write(repositoryRoot, "literal[1].txt", "proposed clean-path version\n");
-    return {};
+    const original = await controller.createProposal({
+      cwd: repositoryRoot,
+      description: "Frozen proposal",
+      paths: ["selected.txt", "unrelated.txt"],
+      threadId: "thread-frozen",
+      title: "Commit selected",
+    });
+    const current = await controller.createProposal({
+      cwd: repositoryRoot,
+      description: "Replacement proposal",
+      paths: ["selected.txt", "unrelated.txt"],
+      threadId: "thread-frozen",
+      title: "Commit selected replacement",
+    });
+    const newer = await controller.createProposal({
+      cwd: repositoryRoot,
+      description: "",
+      paths: ["deleted.txt"],
+      threadId: "thread-newer",
+      title: "Commit newer selected",
+    });
+    const clean = await controller.createProposal({
+      cwd: repositoryRoot,
+      description: "",
+      paths: ["literal[1].txt"],
+      threadId: "thread-clean",
+      title: "Expire clean selected",
+    });
+    return {
+      cleanProposalId: clean.proposalId,
+      currentProposalId: current.proposalId,
+      newerProposalId: newer.proposalId,
+      originalProposalId: original.proposalId,
+    };
   },
-} satisfies GitTestFixtureSpec;
+  revision: 2,
+} satisfies GitTestFixtureSpec<{
+  cleanProposalId: string;
+  currentProposalId: string;
+  newerProposalId: string;
+  originalProposalId: string;
+}>;
+
+export const CHECKPOINT_REBASE_READY_FIXTURE = {
+  commits: CHECKPOINT_OPERATIONS_BASE_FIXTURE.commits,
+  name: "checkpoint-rebase-ready",
+  prepare: async ({ repositoryRoot, runGit }) => {
+    const controller = new WorkbenchGitCheckpointController();
+    const rootCommit = (await runGit(["rev-parse", "HEAD"])).trim();
+    const plans = [
+      { intentName: "Rebase compatible proposal", paths: ["selected.txt"], threadId: "thread-compatible" },
+      { intentName: "Reject committed proposal path", paths: ["deleted.txt"], threadId: "thread-conflict" },
+      { intentName: "Reject incompatible history", paths: ["literal[1].txt"], threadId: "thread-incompatible" },
+    ];
+    for (const { intentName, paths, threadId } of plans) {
+      const plan = await controller.createPlan({ cwd: repositoryRoot, intentName, paths, threadId });
+      await controller.startArc({ checkpointCommit: plan.checkpointCommit, cwd: repositoryRoot, threadId });
+    }
+    await write(repositoryRoot, "selected.txt", "proposed version\n");
+    await write(repositoryRoot, "deleted.txt", "conflicting proposal version\n");
+    await write(repositoryRoot, "literal[1].txt", "alternate-branch proposal version\n");
+    await write(repositoryRoot, "before-proposal.txt", "committed before proposal\n");
+    await runGit(["add", "--", "before-proposal.txt"]);
+    await runGit(["commit", "-m", "advance before proposal"]);
+    const compatible = await controller.createProposal({
+      cwd: repositoryRoot,
+      description: "",
+      paths: ["selected.txt"],
+      threadId: "thread-compatible",
+      title: "Commit selected",
+    });
+    const conflict = await controller.createProposal({
+      cwd: repositoryRoot,
+      description: "",
+      paths: ["deleted.txt"],
+      threadId: "thread-conflict",
+      title: "Conflict selected path",
+    });
+    const incompatible = await controller.createProposal({
+      cwd: repositoryRoot,
+      description: "",
+      paths: ["literal[1].txt"],
+      threadId: "thread-incompatible",
+      title: "Incompatible history",
+    });
+    return {
+      compatibleProposalId: compatible.proposalId,
+      conflictProposalId: conflict.proposalId,
+      incompatibleProposalId: incompatible.proposalId,
+      rootCommit,
+    };
+  },
+  revision: 1,
+} satisfies GitTestFixtureSpec<{
+  compatibleProposalId: string;
+  conflictProposalId: string;
+  incompatibleProposalId: string;
+  rootCommit: string;
+}>;
 
 export const PATH_MOVER_BASE_FIXTURE = {
   commits: [{ files: { "src/one.test.ts": "one\n" }, message: "initial" }],
@@ -713,48 +815,66 @@ export const CONTROLLER_PUSHED_AMEND_READY_FIXTURE = {
   revision: 1,
 } satisfies GitTestFixtureSpec<{ planCheckpoint: string }>;
 
+interface GitFixtureDemand {
+  copies: number;
+  spec: GitTestFixtureSpec<object>;
+}
+
 type GitTestFileSpec = {
+  fixtures: GitFixtureDemand[];
   nested: boolean;
-  prewarmers: Array<(cache: GitTestFixtureCache) => Promise<string>>;
 };
 
+export interface WorkbenchPreparedTestFixtures {
+  dispose: () => Promise<void>;
+  environment: Record<string, string>;
+}
+
+function demand<State extends object>(spec: GitTestFixtureSpec<State>, copies: number): GitFixtureDemand {
+  return { copies, spec: spec as GitTestFixtureSpec<object> };
+}
+
 const specsByGitTestFile = new Map<string, GitTestFileSpec>([
-  ["GitArcPathMover.test.ts", { nested: false, prewarmers: [
-    (cache) => cache.template(PATH_MOVER_BASE_FIXTURE),
-    (cache) => cache.template(PATH_MOVER_ARC_READY_FIXTURE),
-  ] }],
-  ["git-checkpoints.test.ts", { nested: true, prewarmers: [
-    (cache) => cache.template(CHECKPOINT_OPERATIONS_BASE_FIXTURE),
-    (cache) => cache.template(CHECKPOINT_ADDITIONS_READY_FIXTURE),
-    (cache) => cache.template(CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE),
-    (cache) => cache.template(CHECKPOINT_PROPOSAL_READY_FIXTURE),
-    (cache) => cache.template(CHECKPOINT_RELEASE_READY_FIXTURE),
-  ] }],
-  ["WorkbenchGitRepository.test.ts", { nested: false, prewarmers: [
-    (cache) => cache.template(THREAD_GIT_BASE_FIXTURE),
-  ] }],
-  ["WorkbenchGitHistoryRewriter.test.ts", { nested: false, prewarmers: [
-    (cache) => cache.template(HISTORY_LINEAR_FIXTURE),
-    (cache) => cache.template(HISTORY_CONFLICT_READY_FIXTURE),
-    (cache) => cache.template(HISTORY_ARC_READY_FIXTURE),
-  ] }],
-  ["WorkbenchThreadGit.test.ts", { nested: false, prewarmers: [
-    (cache) => cache.template(THREAD_GIT_BASE_FIXTURE),
-    (cache) => cache.template(THREAD_GIT_LINEAR_FIXTURE),
-    (cache) => cache.template(HISTORY_GLOBAL_REMAP_READY_FIXTURE),
-    (cache) => cache.template(HISTORY_PUSHED_READY_FIXTURE),
-    (cache) => cache.template(HISTORY_MERGE_READY_FIXTURE),
-    (cache) => cache.template(HISTORY_SIGNED_READY_FIXTURE),
-  ] }],
-  ["WorkbenchGitCheckpointController.test.ts", { nested: true, prewarmers: [
-    (cache) => cache.template(CONTROLLER_BASE_FIXTURE),
-    (cache) => cache.template(CONTROLLER_START_READY_FIXTURE),
-    (cache) => cache.template(CONTROLLER_ADOPT_READY_FIXTURE),
-    (cache) => cache.template(CONTROLLER_FAILED_ADOPT_READY_FIXTURE),
-    (cache) => cache.template(CONTROLLER_PARTIAL_READY_FIXTURE),
-    (cache) => cache.template(CONTROLLER_REPLACEMENT_READY_FIXTURE),
-    (cache) => cache.template(CONTROLLER_PUSHED_AMEND_READY_FIXTURE),
-  ] }],
+  ["GitArcPathMover.test.ts", { fixtures: [
+    demand(PATH_MOVER_BASE_FIXTURE, 4),
+    demand(PATH_MOVER_ARC_READY_FIXTURE, 1),
+  ], nested: false }],
+  ["GitArcRetentionController.test.ts", { fixtures: [
+    demand(CONTROLLER_PARTIAL_READY_FIXTURE, 1),
+  ], nested: false }],
+  ["git-checkpoints.test.ts", { fixtures: [
+    demand(CHECKPOINT_OPERATIONS_BASE_FIXTURE, 3),
+    demand(CHECKPOINT_ADDITIONS_READY_FIXTURE, 1),
+    demand(CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE, 1),
+    demand(CHECKPOINT_PROPOSAL_READY_FIXTURE, 1),
+    demand(CHECKPOINT_REBASE_READY_FIXTURE, 1),
+    demand(CHECKPOINT_RELEASE_READY_FIXTURE, 1),
+  ], nested: true }],
+  ["WorkbenchGitRepository.test.ts", { fixtures: [
+    demand(THREAD_GIT_BASE_FIXTURE, 2),
+  ], nested: false }],
+  ["WorkbenchGitHistoryRewriter.test.ts", { fixtures: [
+    demand(HISTORY_LINEAR_FIXTURE, 3),
+    demand(HISTORY_CONFLICT_READY_FIXTURE, 1),
+    demand(HISTORY_ARC_READY_FIXTURE, 1),
+  ], nested: false }],
+  ["WorkbenchThreadGit.test.ts", { fixtures: [
+    demand(THREAD_GIT_BASE_FIXTURE, 8),
+    demand(THREAD_GIT_LINEAR_FIXTURE, 2),
+    demand(HISTORY_GLOBAL_REMAP_READY_FIXTURE, 1),
+    demand(HISTORY_PUSHED_READY_FIXTURE, 1),
+    demand(HISTORY_MERGE_READY_FIXTURE, 1),
+    demand(HISTORY_SIGNED_READY_FIXTURE, 1),
+  ], nested: false }],
+  ["WorkbenchGitCheckpointController.test.ts", { fixtures: [
+    demand(CONTROLLER_BASE_FIXTURE, 3),
+    demand(CONTROLLER_START_READY_FIXTURE, 1),
+    demand(CONTROLLER_ADOPT_READY_FIXTURE, 1),
+    demand(CONTROLLER_FAILED_ADOPT_READY_FIXTURE, 1),
+    demand(CONTROLLER_PARTIAL_READY_FIXTURE, 3),
+    demand(CONTROLLER_REPLACEMENT_READY_FIXTURE, 2),
+    demand(CONTROLLER_PUSHED_AMEND_READY_FIXTURE, 2),
+  ], nested: true }],
 ]);
 
 export function partitionWorkbenchGitTestFiles(testFiles: readonly string[]) {
@@ -768,15 +888,46 @@ export function partitionWorkbenchGitTestFiles(testFiles: readonly string[]) {
   return { gitFiles, nestedGitFiles, ordinaryFiles };
 }
 
-export async function prewarmWorkbenchGitTestFixtures(testFiles: readonly string[]) {
-  const cache = new GitTestFixtureCache();
-  const requested = new Set(testFiles.map((file) => path.basename(file)));
-  const prewarmers = [...requested].flatMap((file) => specsByGitTestFile.get(file)?.prewarmers ?? []);
-  const uniquePrewarmers = [...new Set(prewarmers)];
-  const workers = Array.from({ length: Math.min(2, uniquePrewarmers.length) }, async (_, workerIndex) => {
-    for (let index = workerIndex; index < uniquePrewarmers.length; index += 2) {
-      await uniquePrewarmers[index]!(cache);
-    }
+async function runBounded<T>(items: readonly T[], concurrency: number, run: (item: T) => Promise<void>) {
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async (_, workerIndex) => {
+    for (let index = workerIndex; index < items.length; index += concurrency) await run(items[index]!);
   });
   await Promise.all(workers);
+}
+
+export async function prepareWorkbenchGitTestFixtures(testFiles: readonly string[]): Promise<WorkbenchPreparedTestFixtures> {
+  const cache = new GitTestFixtureCache();
+  const requested = new Set(testFiles.map((file) => path.basename(file)));
+  const jobs = [...requested].flatMap((testFile) => (
+    specsByGitTestFile.get(testFile)?.fixtures.flatMap(({ copies, spec }) => (
+      Array.from({ length: copies }, () => ({ spec, testFile }))
+    )) ?? []
+  ));
+  if (!jobs.length) return { dispose: async () => undefined, environment: {} };
+
+  const manifestRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-git-fixture-manifest-"));
+  const prepared: Array<Awaited<ReturnType<GitTestFixtureCache["prepareCopy"]>> & { testFile: string }> = [];
+  let disposed = false;
+  const dispose = async () => {
+    if (disposed) return;
+    disposed = true;
+    await runBounded(prepared, 2, async ({ fixture }) => await fixture.dispose());
+    await fs.rm(manifestRoot, { force: true, recursive: true });
+  };
+  try {
+    await runBounded(jobs, 2, async ({ spec, testFile }) => {
+      prepared.push({ ...await cache.prepareCopy(spec), testFile });
+    });
+    const fixtures: Record<string, Record<string, object[]>> = {};
+    for (const { fixture, key, testFile } of prepared) {
+      const { dispose: _dispose, ...serialized } = fixture;
+      ((fixtures[testFile] ??= {})[key] ??= []).push(serialized);
+    }
+    const manifestPath = path.join(manifestRoot, "fixtures.json");
+    await fs.writeFile(manifestPath, `${JSON.stringify({ fixtures, version: 1 })}\n`, "utf8");
+    return { dispose, environment: { [GIT_TEST_FIXTURE_MANIFEST_ENV]: manifestPath } };
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
 }

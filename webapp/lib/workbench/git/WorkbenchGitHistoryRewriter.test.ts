@@ -186,7 +186,8 @@ historyTest("arc proposal amend remaps a sibling plan and every completed propos
     activeSibling.checkpointCommit,
     "refs/worktree/agents/codex/sibling-thread/checkpoints",
   );
-  assert.equal(remappedRefs.some((ref) => ref.endsWith(`-${activeSibling.checkpointCommit.slice(0, 8)}`)), true);
+  assert.equal(remappedRefs.length, 1);
+  assert.equal(await repository.readRef(remappedRefs[0]!), activeSibling.checkpointCommit);
 
   const startedSibling = await controller.continueArc({
     checkpointCommit: siblingPlanCheckpoint,
