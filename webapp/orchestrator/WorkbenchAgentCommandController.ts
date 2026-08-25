@@ -11,6 +11,10 @@ import {
 } from "../lib/workbench/cli/workbench-agent-cli-commands";
 import { adaptWorkbenchAgentCliResponse } from "../lib/workbench/cli/workbench-agent-cli-responses";
 import { allowCodexApplyPatch, denyCodexApplyPatch, parseCodexApplyPatchClaimHook, type CodexApplyPatchClaimHookDecision } from "../lib/workbench/codex-apply-patch-claim-hook";
+import {
+  createWorkbenchFileChangeFailureSystemMessage,
+  WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX,
+} from "../lib/workbench/thread/workbench-file-change";
 import type { WorkbenchHarness } from "../lib/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
@@ -142,7 +146,7 @@ export default class WorkbenchAgentCommandController {
         return;
       }
       if (argv.length === 2 && argv[0] === "__hook" && argv[1] === "apply-patch-claim") {
-        await this.handleApplyPatchClaimHook(form, callerHarness, callerThreadId, response);
+        await this.handleApplyPatchClaimHook(form, callerHarness, callerThreadId, response, signal);
         return;
       }
       const parsed = await parseWorkbenchAgentCliCommand(argv, {
@@ -179,6 +183,7 @@ export default class WorkbenchAgentCommandController {
     callerHarness: string,
     callerThreadId: string | null,
     response: http.ServerResponse,
+    signal: AbortSignal,
   ) {
     let decision: CodexApplyPatchClaimHookDecision;
     try {
@@ -187,9 +192,19 @@ export default class WorkbenchAgentCommandController {
       const hook = parseCodexApplyPatchClaimHook(form.get("hookInput") ?? "");
       if (callerThreadId && hook.sessionId !== callerThreadId) throw new Error("Codex hook session_id does not match the managed thread.");
       const result = await this.direct.checkApplyPatchClaims({ cwd: hook.cwd, harness: "codex", paths: hook.paths, threadId: hook.sessionId });
-      decision = result.allowed
-        ? allowCodexApplyPatch()
-        : denyCodexApplyPatch(`apply_patch denied. No active Git arc claim covers ${result.uncoveredPaths.join(", ")}. Claim every path before editing.`);
+      if (result.allowed) {
+        decision = allowCodexApplyPatch();
+      } else {
+        const uncoveredPaths = new Set(result.uncoveredPaths);
+        const uncoveredChanges = hook.changes.filter((change) => (
+          uncoveredPaths.has(change.path)
+          || (change.kind.type === "update" && !!change.kind.move_path && uncoveredPaths.has(change.kind.move_path))
+        ));
+        decision = denyCodexApplyPatch(
+          `${WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX}${result.uncoveredPaths.join(", ")}. Claim every path before editing.`,
+          createWorkbenchFileChangeFailureSystemMessage(uncoveredChanges) ?? undefined,
+        );
+      }
     } catch (error) {
       decision = denyCodexApplyPatch(`apply_patch claim check failed. ${error instanceof Error ? error.message : String(error)}`);
     }

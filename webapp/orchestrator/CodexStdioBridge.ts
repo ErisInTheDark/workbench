@@ -15,6 +15,7 @@ import type { GrantedPermissionProfile } from "../lib/codex/generated/app-server
 import type { PermissionsRequestApprovalParams } from "../lib/codex/generated/app-server/v2/PermissionsRequestApprovalParams";
 import type { RequestPermissionProfile } from "../lib/codex/generated/app-server/v2/RequestPermissionProfile";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
+import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { ToolRequestUserInputParams } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputParams";
 import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
@@ -33,6 +34,12 @@ import type {
 } from "../lib/types";
 import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { resolveAgentEndpointProjectFromCwd } from "../lib/workbench/project/agent-endpoint-project";
+import {
+  getWorkbenchFileChangeFailureKey,
+  readWorkbenchFileChangeFailureMarker,
+  withWorkbenchFileChangeFailure,
+  type WorkbenchFileChangeFailureMarker,
+} from "../lib/workbench/thread/workbench-file-change";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type CodexAppServer from "./CodexAppServer";
 import { log, logError } from "./process-helpers";
@@ -88,12 +95,21 @@ type RequestIdAllocator = {
 };
 
 export type CodexStdioBridgeReloadState = {
+  fileChangeFailureMarkers?: Map<string, WorkbenchFileChangeFailureMarker>;
+  fileChangeTurnCursors?: Map<string, string>;
   initializeResult: unknown;
   pendingResponses: Map<number, PendingResponse>;
   pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
   requestIdAllocator: RequestIdAllocator;
   upstreamInitialized: boolean;
 };
+
+const MAX_FILE_CHANGE_FAILURE_MARKERS = 2_048;
+const MAX_FILE_CHANGE_TURN_CURSORS = 2_048;
+
+function fileChangeTurnKey(threadId: string, turnId: string) {
+  return `${threadId}\0${turnId}`;
+}
 
 type CodexStdioBridgeReloadOptions = {
   idleTimeoutMs?: number;
@@ -947,6 +963,8 @@ function loadFreshWorkbenchPromptFiles() {
 export default class CodexStdioBridge {
   private readonly appServer: CodexAppServer;
   private readonly bridgeUrl: string;
+  private readonly fileChangeFailureMarkers: Map<string, WorkbenchFileChangeFailureMarker>;
+  private readonly fileChangeTurnCursors: Map<string, string>;
   private readonly onNotification: CodexStdioBridgeOptions["onNotification"];
   private readonly prepareTurnStart: NonNullable<CodexStdioBridgeOptions["prepareTurnStart"]>;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
@@ -992,6 +1010,8 @@ export default class CodexStdioBridge {
     this.handleWorkbenchRequest = handleWorkbenchRequest;
     this.sendToClient = sendToClient;
     this.storageRoot = storageRoot;
+    this.fileChangeFailureMarkers = initialState?.fileChangeFailureMarkers ?? new Map();
+    this.fileChangeTurnCursors = initialState?.fileChangeTurnCursors ?? new Map();
     this.initializeResult = initialState?.initializeResult ?? null;
     this.pendingResponses = initialState?.pendingResponses ?? new Map();
     this.pendingUserInputRequests = initialState?.pendingUserInputRequests ?? new Map();
@@ -1035,6 +1055,8 @@ export default class CodexStdioBridge {
       }
     }
     this.pendingResponses.clear();
+    this.fileChangeFailureMarkers.clear();
+    this.fileChangeTurnCursors.clear();
     this.upstreamInitialized = false;
     if (this.upstreamInitializePromise) {
       this.upstreamInitializePromise.catch(() => undefined);
@@ -1072,6 +1094,8 @@ export default class CodexStdioBridge {
       this.transcriptStore = null;
     }
     return {
+      fileChangeFailureMarkers: this.fileChangeFailureMarkers,
+      fileChangeTurnCursors: this.fileChangeTurnCursors,
       initializeResult: this.initializeResult,
       pendingResponses: this.pendingResponses,
       pendingUserInputRequests: this.pendingUserInputRequests,
@@ -1316,6 +1340,128 @@ export default class CodexStdioBridge {
     return requestId;
   }
 
+  private recordFileChangeFailure(marker: WorkbenchFileChangeFailureMarker) {
+    const key = getWorkbenchFileChangeFailureKey({
+      itemId: marker.item.id,
+      threadId: marker.threadId,
+      turnId: marker.turnId,
+    });
+    if (this.fileChangeFailureMarkers.has(key)) return false;
+    this.fileChangeFailureMarkers.set(key, {
+      ...marker,
+      insertAfterItemId: this.fileChangeTurnCursors.get(fileChangeTurnKey(marker.threadId, marker.turnId)) ?? null,
+    });
+    while (this.fileChangeFailureMarkers.size > MAX_FILE_CHANGE_FAILURE_MARKERS) {
+      const oldestKey = this.fileChangeFailureMarkers.keys().next().value as string | undefined;
+      if (oldestKey === undefined) break;
+      this.fileChangeFailureMarkers.delete(oldestKey);
+    }
+    return true;
+  }
+
+  private recordFileChangeTurnCursor(value: unknown) {
+    const params = asRecord(value);
+    const item = asRecord(params?.item);
+    const itemId = asString(item?.id);
+    const threadId = asString(params?.threadId);
+    const turnId = asString(params?.turnId);
+    if (!itemId || !threadId || !turnId) return;
+    const key = fileChangeTurnKey(threadId, turnId);
+    this.fileChangeTurnCursors.delete(key);
+    this.fileChangeTurnCursors.set(key, itemId);
+    while (this.fileChangeTurnCursors.size > MAX_FILE_CHANGE_TURN_CURSORS) {
+      const oldestKey = this.fileChangeTurnCursors.keys().next().value as string | undefined;
+      if (oldestKey === undefined) break;
+      this.fileChangeTurnCursors.delete(oldestKey);
+    }
+  }
+
+  private clearFileChangeTurnCursor(value: unknown) {
+    const params = asRecord(value);
+    const turn = asRecord(params?.turn);
+    const threadId = asString(params?.threadId);
+    const turnId = asString(turn?.id);
+    if (threadId && turnId) this.fileChangeTurnCursors.delete(fileChangeTurnKey(threadId, turnId));
+  }
+
+  private withFileChangeFailurePresentation<TMessage extends JsonRpcNotification | JsonRpcResponse>(message: TMessage): TMessage {
+    if ("method" in message && message.method === "item/completed") {
+      const params = asRecord(message.params);
+      const item = asRecord(params?.item);
+      if (item?.type !== "fileChange" || item.status !== "failed") return message;
+      const threadId = asString(params?.threadId);
+      const turnId = asString(params?.turnId);
+      const itemId = asString(item.id);
+      if (!threadId || !turnId || !itemId) return message;
+      const marker = this.fileChangeFailureMarkers.get(getWorkbenchFileChangeFailureKey({ itemId, threadId, turnId }));
+      if (!marker) return message;
+      return {
+        ...message,
+        params: {
+          ...params,
+          item: withWorkbenchFileChangeFailure(item as Extract<ThreadItem, { type: "fileChange" }>, "unclaimed"),
+        },
+      } as TMessage;
+    }
+
+    if (!("result" in message)) return message;
+    const result = asRecord(message.result);
+    const thread = asRecord(result?.thread) as Thread | null;
+    if (!thread?.id) return message;
+    const markersByTurnId = new Map<string, WorkbenchFileChangeFailureMarker[]>();
+    for (const marker of this.fileChangeFailureMarkers.values()) {
+      if (marker.threadId !== thread.id) continue;
+      const turnMarkers = markersByTurnId.get(marker.turnId) ?? [];
+      turnMarkers.push(marker);
+      markersByTurnId.set(marker.turnId, turnMarkers);
+    }
+    if (!markersByTurnId.size) return message;
+    let threadChanged = false;
+    const turns = thread.turns.map((turn) => {
+      const turnMarkers = markersByTurnId.get(turn.id);
+      if (!turnMarkers?.length) return turn;
+      const markerByItemId = new Map(turnMarkers.map((marker) => [marker.item.id, marker]));
+      let turnChanged = false;
+      const items = turn.items.map((item) => {
+        const marker = markerByItemId.get(item.id);
+        if (!marker || item.type !== "fileChange" || item.status !== "failed") return item;
+        turnChanged = true;
+        threadChanged = true;
+        return withWorkbenchFileChangeFailure(item, "unclaimed");
+      });
+      const existingItemIds = new Set(items.map((item) => item.id));
+      const missingMarkers = turnMarkers.filter((marker) => !existingItemIds.has(marker.item.id));
+      if (missingMarkers.length) {
+        const markersByAnchor = new Map<string | null, WorkbenchFileChangeFailureMarker[]>();
+        const orphanedMarkers: WorkbenchFileChangeFailureMarker[] = [];
+        for (const marker of missingMarkers) {
+          if (marker.insertAfterItemId !== null && !existingItemIds.has(marker.insertAfterItemId)) {
+            orphanedMarkers.push(marker);
+            continue;
+          }
+          const anchoredMarkers = markersByAnchor.get(marker.insertAfterItemId) ?? [];
+          anchoredMarkers.push(marker);
+          markersByAnchor.set(marker.insertAfterItemId, anchoredMarkers);
+        }
+        const orderedItems: ThreadItem[] = [
+          ...(markersByAnchor.get(null) ?? []).map((marker) => marker.item),
+        ];
+        for (const item of items) {
+          orderedItems.push(item);
+          orderedItems.push(...(markersByAnchor.get(item.id) ?? []).map((marker) => marker.item));
+        }
+        orderedItems.push(...orphanedMarkers.map((marker) => marker.item));
+        items.splice(0, items.length, ...orderedItems);
+        turnChanged = true;
+        threadChanged = true;
+      }
+      return turnChanged ? { ...turn, items } : turn;
+    });
+    return threadChanged
+      ? { ...message, result: { ...result, thread: { ...thread, turns } } } as TMessage
+      : message;
+  }
+
   private assertAcceptingWork() {
     if (!this.acceptingWork) {
       throw new Error("Codex bridge is reloading.");
@@ -1556,13 +1702,14 @@ export default class CodexStdioBridge {
     } else {
       this.recordSkippedAutoRefreshTranscript(`upstream-response:${pending.method ?? "unknown"}`);
     }
+    const presentedMessage = this.withFileChangeFailurePresentation(hydratedMessage);
     if (isPendingInternalResponse(pending)) {
-      pending.resolve(hydratedMessage);
+      pending.resolve(presentedMessage);
       return;
     }
 
     this.sendToClient(pending.client, {
-      ...hydratedMessage,
+      ...presentedMessage,
       id: pending.clientRequestId,
     });
   }
@@ -1594,10 +1741,32 @@ export default class CodexStdioBridge {
     }
 
     if (isJsonRpcNotification(message)) {
+      let syntheticFileChangeNotification: JsonRpcNotification | null = null;
+      if (message.method === "item/started" || message.method === "item/completed") {
+        this.recordFileChangeTurnCursor(message.params);
+      }
+      if (message.method === "turn/completed") {
+        this.clearFileChangeTurnCursor(message.params);
+      }
       if (message.method === "serverRequest/resolved") {
         this.handleServerRequestResolved(message.params);
       }
-      this.onNotification(message);
+      if (message.method === "hook/completed") {
+        const marker = readWorkbenchFileChangeFailureMarker(message.params);
+        if (marker && this.recordFileChangeFailure(marker)) {
+          syntheticFileChangeNotification = {
+            method: "item/completed",
+            params: {
+              completedAtMs: Date.now(),
+              item: marker.item,
+              threadId: marker.threadId,
+              turnId: marker.turnId,
+            },
+          };
+        }
+      }
+      this.onNotification(this.withFileChangeFailurePresentation(message));
+      if (syntheticFileChangeNotification) this.onNotification(syntheticFileChangeNotification);
       const coalescedNotification = getCoalescedTranscriptNotification(message);
       if (coalescedNotification) {
         await this.captureCoalescedTranscriptNotification(coalescedNotification);

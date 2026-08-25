@@ -48,8 +48,10 @@ function applyPatchHookBody(command: string, sessionId = "parent-thread", caller
   body.set("hookInput", JSON.stringify({
     cwd: process.cwd(),
     session_id: sessionId,
+    tool_use_id: "patch-one",
     tool_input: { command },
     tool_name: "apply_patch",
+    turn_id: "turn-one",
   }));
   return body.toString();
 }
@@ -77,6 +79,7 @@ test("answers the private apply_patch hook from the active claim owner", async (
           : { allowed: true, uncoveredPaths: [] };
       },
     },
+    async () => { throw new Error("claim denial must not wait on marker transport"); },
   );
   const server = await startController(controller);
   try {
@@ -87,19 +90,39 @@ test("answers the private apply_patch hook from the active claim owner", async (
     });
     const allowed = await request("claimed.ts");
     assert.equal(allowed.status, 200);
-    assert.deepEqual(JSON.parse(await allowed.text()), {
-      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
-    });
+    assert.deepEqual(JSON.parse(await allowed.text()), {});
     const denied = await request("unclaimed.ts");
     assert.equal(denied.status, 200);
-    assert.deepEqual(JSON.parse(await denied.text()), {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: `apply_patch denied. No active Git arc claim covers ${checkedPaths[1]![0]}. Claim every path before editing.`,
-      },
+    const deniedDecision = JSON.parse(await denied.text()) as {
+      additionalContext?: string;
+      hookSpecificOutput: { hookEventName: string; permissionDecision: string; permissionDecisionReason: string };
+      systemMessage: string;
+    };
+    assert.deepEqual(deniedDecision.hookSpecificOutput, {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: `apply_patch denied. No active Git arc claim covers ${checkedPaths[1]![0]}. Claim every path before editing.`,
     });
-    assert.deepEqual(checkedThreadIds, ["provider-thread", "provider-thread"]);
+    assert.equal(deniedDecision.additionalContext, undefined);
+    assert.match(deniedDecision.systemMessage, /^workbench:file-change-failure:v1:/u);
+    assert.deepEqual(JSON.parse(deniedDecision.systemMessage.replace(/^workbench:file-change-failure:v1:/u, "")), {
+      changes: [{
+        additions: 1,
+        deletions: 1,
+        kind: { move_path: null, type: "update" },
+        path: checkedPaths[1]![0],
+      }],
+    });
+
+    const mixed = await fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: applyPatchHookBody("*** Begin Patch\n*** Add File: claimed.ts\n+claimed\n*** Add File: unclaimed.ts\n+unclaimed\n*** End Patch", "provider-thread", null),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    const mixedDecision = await mixed.json() as { systemMessage: string };
+    const mixedPayload = JSON.parse(mixedDecision.systemMessage.replace(/^workbench:file-change-failure:v1:/u, "")) as { changes: Array<{ path: string }> };
+    assert.deepEqual(mixedPayload.changes.map((change) => change.path), [checkedPaths[2]![1]]);
+    assert.deepEqual(checkedThreadIds, ["provider-thread", "provider-thread", "provider-thread"]);
   } finally {
     await server.close();
   }

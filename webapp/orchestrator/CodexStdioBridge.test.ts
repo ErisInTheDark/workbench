@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover bridge pending cleanup, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, transcript, MCP, test.
+ * - No production exports; Node tests cover bridge pending cleanup, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, transcript, MCP, test.
  */
 
 import assert from "node:assert/strict";
@@ -10,6 +10,11 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 
 import type CodexAppServer from "./CodexAppServer";
+import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
+import {
+  createWorkbenchFileChangeFailureSystemMessage,
+  type WorkbenchFileChangeItem,
+} from "../lib/workbench/thread/workbench-file-change";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 
 const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
@@ -41,7 +46,7 @@ async function rejectWorkbenchRequest(request: JsonRpcRequest) {
   return { id: request.id ?? null, error: { code: -32000, message: "Workbench request is not expected in this test." } };
 }
 
-function bridgeThread() {
+function bridgeThread(items: ThreadItem[] = []) {
   return {
     agentNickname: null,
     agentRole: null,
@@ -67,7 +72,7 @@ function bridgeThread() {
       durationMs: null,
       error: null,
       id: "turn",
-      items: [],
+      items,
       itemsView: "full" as const,
       startedAt: 1,
       status: "inProgress" as const,
@@ -75,6 +80,151 @@ function bridgeThread() {
     updatedAt: 1,
   };
 }
+
+test("ordered claim-hook denials synthesize live failures and thread reads across bridge reload", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-file-change-test-"));
+  const anchorlessItemId = "exec-11111111-1111-4111-8111-111111111111";
+  const anchoredItemId = "exec-22222222-2222-4222-8222-222222222222";
+  const ordinaryItemId = "exec-33333333-3333-4333-8333-333333333333";
+  const precedingItem: ThreadItem = { id: "before", memoryCitation: null, phase: "commentary", text: "before", type: "agentMessage" };
+  const followingItem: ThreadItem = { id: "after", memoryCitation: null, phase: "commentary", text: "after", type: "agentMessage" };
+  const futureProviderItem: Extract<ThreadItem, { type: "fileChange" }> = {
+    changes: [{ diff: "@@ -1 +1 @@\n-old\n+new", kind: { move_path: null, type: "update" }, path: "src/a.ts" }],
+    id: anchorlessItemId,
+    status: "failed",
+    type: "fileChange",
+  };
+  const notifications: Array<{ method?: string; params?: { item?: ThreadItem } }> = [];
+  let providerItems: ThreadItem[] = [];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage({ id: message.id ?? null, result: { thread: bridgeThread(providerItems) } });
+      });
+    },
+  } as unknown as CodexAppServer;
+  const createBridge = (initialState?: import("./CodexStdioBridge").CodexStdioBridgeReloadState) => new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    initialState,
+    onNotification(notification) { notifications.push(notification as { params?: { item?: ThreadItem } }); },
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+
+  try {
+    bridge = createBridge();
+    const systemMessage = createWorkbenchFileChangeFailureSystemMessage([{
+      additions: 1,
+      deletions: 1,
+      kind: { move_path: null, type: "update" },
+      path: "C:\\repo\\src\\a.ts",
+    }]);
+    assert(systemMessage);
+    const unclaimedHookNotification = (itemId: string) => ({
+      method: "hook/completed",
+      params: {
+        run: {
+          entries: [
+            { kind: "warning", text: systemMessage },
+            { kind: "feedback", text: "apply_patch denied. No active Git arc claim covers C:\\repo\\src\\a.ts. Claim every path before editing." },
+          ],
+          eventName: "preToolUse",
+          id: `pre-tool-use:0:C:\\<session-flags>\\config.toml:${itemId}`,
+          status: "blocked",
+        },
+        threadId: "thread",
+        turnId: "turn",
+      },
+    });
+    await bridge.handleUpstreamMessage(unclaimedHookNotification(anchorlessItemId));
+    await bridge.handleUpstreamMessage(unclaimedHookNotification(anchorlessItemId));
+    await bridge.handleUpstreamMessage({
+      method: "hook/completed",
+      params: {
+        run: {
+          entries: [
+            { kind: "warning", text: systemMessage },
+            { kind: "feedback", text: "another hook blocked this patch" },
+          ],
+          eventName: "preToolUse",
+          id: `pre-tool-use:1:C:\\user\\config.toml:${ordinaryItemId}`,
+          status: "blocked",
+        },
+        threadId: "thread",
+        turnId: "turn",
+      },
+    });
+
+    let fileChangeNotifications = notifications.filter((notification) => notification.method === "item/completed" && notification.params?.item?.type === "fileChange");
+    assert.equal(fileChangeNotifications.length, 1);
+    assert.deepEqual(fileChangeNotifications[0]?.params?.item, {
+      changes: [{
+        diff: "",
+        kind: { move_path: null, type: "update" },
+        path: "C:\\repo\\src\\a.ts",
+        workbenchAdditions: 1,
+        workbenchDeletions: 1,
+      }],
+      id: anchorlessItemId,
+      status: "failed",
+      type: "fileChange",
+      workbenchFailureKind: "unclaimed",
+    });
+
+    const read = await bridge.handleBridgeRequest({ id: 1, method: "thread/context/read", params: { threadId: "thread" } });
+    const readItems = ((read?.result as { thread?: ReturnType<typeof bridgeThread> })?.thread?.turns[0]?.items ?? []) as WorkbenchFileChangeItem[];
+    assert.equal(readItems.length, 1);
+    assert.equal(readItems[0]?.workbenchFailureKind, "unclaimed");
+
+    await bridge.handleUpstreamMessage({ method: "item/completed", params: { item: precedingItem, threadId: "thread", turnId: "turn" } });
+    providerItems = [precedingItem];
+    const reloadState = await bridge.detachForReload();
+    bridge = createBridge(reloadState);
+    const reloadedRead = await bridge.handleBridgeRequest({ id: 2, method: "thread/context/read", params: { threadId: "thread" } });
+    const reloadedItems = ((reloadedRead?.result as { thread?: ReturnType<typeof bridgeThread> })?.thread?.turns[0]?.items ?? []) as WorkbenchFileChangeItem[];
+    assert.deepEqual(reloadedItems.map((item) => item.id), [anchorlessItemId, precedingItem.id]);
+    assert.equal(reloadedItems[0]?.workbenchFailureKind, "unclaimed");
+
+    await bridge.handleUpstreamMessage(unclaimedHookNotification(anchoredItemId));
+    await bridge.handleUpstreamMessage({ method: "item/completed", params: { item: followingItem, threadId: "thread", turnId: "turn" } });
+    await bridge.handleUpstreamMessage(unclaimedHookNotification(anchoredItemId));
+    providerItems = [precedingItem, followingItem];
+    const futureRead = await bridge.handleBridgeRequest({ id: 3, method: "thread/context/read", params: { threadId: "thread" } });
+    const futureItems = ((futureRead?.result as { thread?: ReturnType<typeof bridgeThread> })?.thread?.turns[0]?.items ?? []) as WorkbenchFileChangeItem[];
+    assert.deepEqual(futureItems.map((item) => item.id), [anchorlessItemId, precedingItem.id, anchoredItemId, followingItem.id]);
+    fileChangeNotifications = notifications.filter((notification) => notification.method === "item/completed" && notification.params?.item?.type === "fileChange");
+    assert.equal(fileChangeNotifications.length, 2);
+
+    providerItems = [precedingItem, followingItem, futureProviderItem];
+    const providerRead = await bridge.handleBridgeRequest({ id: 4, method: "thread/context/read", params: { threadId: "thread" } });
+    const providerReadItems = ((providerRead?.result as { thread?: ReturnType<typeof bridgeThread> })?.thread?.turns[0]?.items ?? []) as WorkbenchFileChangeItem[];
+    assert.deepEqual(providerReadItems.map((item) => item.id), [precedingItem.id, anchoredItemId, followingItem.id, anchorlessItemId]);
+    assert.equal(providerReadItems.at(-1)?.workbenchFailureKind, "unclaimed");
+    assert.equal(providerReadItems.at(-1)?.changes[0]?.diff, futureProviderItem.changes[0]?.diff);
+
+    await bridge.handleUpstreamMessage({
+      method: "turn/completed",
+      params: {
+        threadId: "thread",
+        turn: {
+          ...bridgeThread(providerItems).turns[0],
+          completedAt: 2,
+          durationMs: 1,
+          status: "completed",
+        },
+      },
+    });
+    const completedState = await bridge.detachForReload();
+    assert.equal(completedState.fileChangeTurnCursors?.size, 0);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
 
 test("external socket send failure clears pending response and records exact steer failure", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-test-"));

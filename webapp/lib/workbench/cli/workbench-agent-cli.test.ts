@@ -795,8 +795,10 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
   const hookInput = (filePath: string) => JSON.stringify({
     cwd: temporaryDirectoryPath,
     session_id: "hook-thread",
+    tool_use_id: "patch-one",
     tool_input: { command: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-old\n+new\n*** End Patch` },
     tool_name: "apply_patch",
+    turn_id: "turn-one",
   });
   const allowed = await execFileWithInput("bash", hookArgs, hookInput("claimed.ts"), {
     cwd: temporaryDirectoryPath,
@@ -804,7 +806,7 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
   });
   assert.equal(allowed.exitCode, 0);
   assert.equal(allowed.stderr, "");
-  assert.equal(JSON.parse(allowed.stdout).hookSpecificOutput.permissionDecision, "allow");
+  assert.deepEqual(JSON.parse(allowed.stdout), {});
 
   const denied = await execFileWithInput("bash", hookArgs, hookInput("unclaimed.ts"), {
     cwd: temporaryDirectoryPath,
@@ -812,7 +814,10 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
   });
   assert.equal(denied.exitCode, 0);
   assert.equal(denied.stderr, "");
-  assert.equal(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision, "deny");
+  const deniedDecision = JSON.parse(denied.stdout) as { additionalContext?: string; hookSpecificOutput: { permissionDecision: string }; systemMessage?: string };
+  assert.equal(deniedDecision.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(deniedDecision.systemMessage ?? "", /^workbench:file-change-failure:v1:/u);
+  assert.equal(deniedDecision.additionalContext, undefined);
 
   const unavailable = await execFileWithInput("bash", hookArgs, hookInput("unavailable.ts"), {
     cwd: temporaryDirectoryPath,
@@ -829,9 +834,7 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
   });
   assert.equal(disconnected.exitCode, 0);
   assert.match(disconnected.stderr, /curl:/u);
-  assert.deepEqual(JSON.parse(disconnected.stdout), {
-    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
-  });
+  assert.deepEqual(JSON.parse(disconnected.stdout), {});
 
   if (process.platform === "win32") {
     const shimDirectoryPath = path.join(temporaryDirectoryPath, "hook-shims");

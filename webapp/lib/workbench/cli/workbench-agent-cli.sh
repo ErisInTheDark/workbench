@@ -27,7 +27,7 @@ response_file="$(mktemp "${TMPDIR:-/tmp}/workbench-agent-response.XXXXXX")" || e
 cleanup() { rm -f -- "$response_file"; }
 trap cleanup EXIT
 allow_unavailable_claim_hook() {
-  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
+  printf '%s\n' '{}'
 }
 
 curl_args=(
@@ -54,7 +54,7 @@ for argument in "$@"; do
   curl_args+=(--data-urlencode "arg=$argument")
 done
 if (( hook_mode == 1 )); then
-  curl_args+=(--connect-timeout 2 --max-time 10)
+  curl_args+=(--connect-timeout 2)
   curl_args+=(--data-urlencode "hookInput@-")
 fi
 
