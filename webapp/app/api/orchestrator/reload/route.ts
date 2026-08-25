@@ -59,7 +59,8 @@ export async function POST(request: NextRequest) {
   try {
     const requestBody = await request.json() as Partial<OrchestratorReloadRequest>;
     const scopes = normalizeOrchestratorReloadScopes(requestBody?.scopes);
-    if (!scopes.length) {
+    const all = requestBody?.all === true;
+    if (!all && !scopes.length) {
       return NextResponse.json({ error: "At least one supported reload scope is required." }, { status: 400 });
     }
     const combinationError = validateOrchestratorReloadScopeCombination(scopes);
@@ -68,7 +69,7 @@ export async function POST(request: NextRequest) {
     }
 
     return await proxyReloadRequest(request, {
-      body: JSON.stringify({ scopes } satisfies OrchestratorReloadRequest),
+      body: JSON.stringify({ ...(all ? { all: true } : {}), ...(scopes.length ? { scopes } : {}) } satisfies OrchestratorReloadRequest),
       headers: {
         "Content-Type": "application/json",
       },

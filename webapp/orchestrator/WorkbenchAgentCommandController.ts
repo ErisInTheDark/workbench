@@ -16,6 +16,7 @@ import {
   WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX,
 } from "../lib/workbench/thread/workbench-file-change";
 import type { WorkbenchHarness } from "../lib/types";
+import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
@@ -25,6 +26,7 @@ interface WorkbenchAgentDirectPort {
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
+  getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
   requestOrchestratorReload?: (body: Record<string, unknown>, signal: AbortSignal) => Promise<Response>;
   requestSubagent?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
 }
@@ -153,6 +155,7 @@ export default class WorkbenchAgentCommandController {
         callerHarness,
         callerThreadId,
         cwd,
+        reloadCatalog: this.direct.getReloadScopeCatalog?.() ?? [],
         workbenchOrigin,
       });
       if (parsed.kind === "help") {

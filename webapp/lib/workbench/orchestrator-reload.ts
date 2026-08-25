@@ -1,170 +1,64 @@
 /*
  * Exports:
- * - ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES/ORCHESTRATOR_CLI_RELOAD_SCOPES/ORCHESTRATOR_RELOAD_SCOPES/ORCHESTRATOR_ALL_RELOAD_SCOPES: agent-facing, explicit CLI, complete, and safe-all atomic scope registries. Keywords: orchestrator, reload, scope, all.
- * - WORKBENCH_RELOAD_SCOPE_PATHS/getReloadScopesForPaths: derive additive runtime barriers from project touch paths. Keywords: path, gitignore, arc.
- * - normalizeOrchestratorReloadScopes/expandOrchestratorReloadScopes: normalize canonical atoms or validate grouped request input. Keywords: validation, CLI, MCP, group.
- * - validateOrchestratorReloadScopeCombination: reject full-process restart combined with another scope. Keywords: process, restart, exclusivity.
+ * - ORCHESTRATOR_RELOAD_SCOPE_PATTERN: canonical namespace:name scope syntax. Keywords: reload, scope, validation.
+ * - OrchestratorReloadScopeDescriptor: active node catalog projection shared by CLI, MCP, and reload admission. Keywords: catalog, access, all.
+ * - normalizeOrchestratorReloadScopes/expandOrchestratorReloadScopes: validate atomic or grouped scope strings without owning topology. Keywords: normalize, group.
+ * - resolveOrchestratorReloadSelections: resolve explicit scopes and safe all from one active catalog. Keywords: policy, dynamic, request.
+ * - validateOrchestratorReloadScopeCombination: keep hard process reload exclusive. Keywords: process, restart.
  */
 
 import type { OrchestratorReloadScope } from "../types";
-import { createGitignoreMatcher } from "./gitignore-matcher";
 
-export const ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES = [
-  "server:core",
-  "server:browse",
-  "server:codex",
-  "server:mcp",
-  "server:opencode",
-  "server:reloader",
-  "client:all",
-] as const satisfies readonly OrchestratorReloadScope[];
-
-export const ORCHESTRATOR_CLI_RELOAD_SCOPES = [
-  ...ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES,
-  "harness:codex",
-  "harness:opencode",
-] as const satisfies readonly OrchestratorReloadScope[];
-
-export const ORCHESTRATOR_RELOAD_SCOPES = [
-  ...ORCHESTRATOR_CLI_RELOAD_SCOPES,
-  "server:process",
-] as const satisfies readonly OrchestratorReloadScope[];
-
-export const ORCHESTRATOR_ALL_RELOAD_SCOPES = [
-  "server:core",
-  "server:browse",
-  "server:codex",
-  "server:mcp",
-  "server:opencode",
-  "client:all",
-] as const satisfies readonly OrchestratorReloadScope[];
-
-export const WORKBENCH_RELOAD_SCOPE_PATHS = {
-  "server:core": `
-/webapp/orchestrator/
-/webapp/lib/
-!**/*.test.*
-!/webapp/lib/workbench/browse/
-!/webapp/lib/workbench/commands/
-!/webapp/lib/workbench/cli/workbench-agent-cli.sh
-!/webapp/orchestrator/index.ts
-!/webapp/orchestrator/CodexAppServer.ts
-!/webapp/orchestrator/CodexStdioBridge.ts
-!/webapp/orchestrator/OpenCodeAppServer.ts
-!/webapp/orchestrator/opencode-bridge.ts
-!/webapp/orchestrator/OrchestratorFeatureHost.ts
-!/webapp/orchestrator/orchestrator-feature-loader.ts
-!/webapp/orchestrator/orchestrator-feature-registry.ts
-!/webapp/orchestrator/orchestrator-provider-feature-nodes.ts
-!/webapp/orchestrator/orchestrator-runtime-feature-nodes.ts
-!/webapp/orchestrator/ReloadableWorkbenchOrchestratorReloadController.ts
-!/webapp/orchestrator/WorkbenchAgentMcpController.ts
-!/webapp/orchestrator/WorkbenchBrowseController.ts
-!/webapp/orchestrator/WorkbenchBrowseResultController.ts
-!/webapp/orchestrator/WorkbenchOrchestratorReloadController.ts
-!/webapp/orchestrator/workbench-agent-mcp-request-registry.ts
-`,
-  "server:browse": `
-/webapp/orchestrator/WorkbenchBrowseController.ts
-/webapp/orchestrator/WorkbenchBrowseResultController.ts
-/webapp/lib/workbench/browse/
-`,
-  "server:codex": `
-/webapp/orchestrator/CodexStdioBridge.ts
-/webapp/orchestrator/CodexTranscriptStore.ts
-/webapp/orchestrator/codex-transcript-*
-/webapp/orchestrator/workbench-codex-mcp-config.ts
-/webapp/orchestrator/workbench-prompt-context.ts
-`,
-  "server:mcp": `
-/webapp/orchestrator/WorkbenchAgentMcpController.ts
-/webapp/orchestrator/workbench-agent-mcp-request-registry.ts
-/webapp/lib/workbench/commands/
-`,
-  "server:opencode": `
-/webapp/orchestrator/opencode-bridge.ts
-/webapp/orchestrator/opencode-live-thread-state.ts
-/webapp/orchestrator/opencode-thread-state.ts
-/webapp/orchestrator/opencode-workbench-instructions.ts
-/webapp/orchestrator/workbench-prompt-context.ts
-`,
-  "server:reloader": `
-/webapp/orchestrator/WorkbenchOrchestratorReloadController.ts
-`,
-  "client:all": `
-/webapp/app/
-/webapp/components/
-/webapp/hooks/
-/webapp/lib/
-/webapp/public/
-/webapp/next.config.ts
-!**/*.test.*
-!/webapp/lib/workbench/cli/workbench-agent-cli.sh
-`,
-  "harness:codex": `
-/webapp/orchestrator/CodexAppServer.ts
-`,
-  "harness:opencode": `
-/webapp/orchestrator/OpenCodeAppServer.ts
-`,
-  "server:process": `
-/webapp/orchestrator/index.ts
-/webapp/lib/workbench/cli/workbench-agent-cli.sh
-/webapp/orchestrator/CodexBridgeTransitionController.ts
-/webapp/orchestrator/CodexRecoverySupervisor.ts
-/webapp/orchestrator/copilot-bridge.ts
-/webapp/orchestrator/OrchestratorFeatureHost.ts
-/webapp/orchestrator/orchestrator-feature-loader.ts
-/webapp/orchestrator/orchestrator-feature-registry.ts
-/webapp/orchestrator/orchestrator-provider-feature-nodes.ts
-/webapp/orchestrator/orchestrator-runtime-feature-nodes.ts
-/webapp/orchestrator/process-helpers.ts
-/webapp/orchestrator/ReloadableWorkbenchOrchestratorReloadController.ts
-/webapp/orchestrator/WorkbenchAgentCliEnvironment.ts
-/webapp/orchestrator/WorkbenchCodexMcpGenerationController.ts
-/webapp/orchestrator/WorkbenchThreadTransitionCoordinator.ts
-/webapp/orchestrator/WorkbenchTurnRecoveryController.ts
-/webapp/orchestrator/WorkbenchTurnRecoveryHandoffStore.ts
-`,
-} satisfies Record<OrchestratorReloadScope, string>;
-
-const MAX_RELOAD_SCOPES = 32;
-const MAX_RELOAD_SCOPE_LENGTH = 64;
-const RELOAD_SCOPE_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$/u;
+export const ORCHESTRATOR_RELOAD_SCOPE_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$/u;
 const RELOAD_SCOPE_GROUP_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\+[a-z][a-z0-9-]*)*$/u;
-const RELOAD_SCOPE_SET = new Set<string>(ORCHESTRATOR_RELOAD_SCOPES);
-const RELOAD_SCOPE_MATCHERS = new Map(Object.entries(WORKBENCH_RELOAD_SCOPE_PATHS).map(([scope, patterns]) => (
-  [scope as OrchestratorReloadScope, createGitignoreMatcher(patterns)]
-)));
+const MAX_RELOAD_SCOPES = 64;
+const MAX_RELOAD_SCOPE_LENGTH = 64;
+
+export interface OrchestratorReloadScopeDescriptor {
+  access: "agent" | "cli" | "operator";
+  description: string;
+  safeAll: boolean;
+  scope: OrchestratorReloadScope;
+}
 
 export function normalizeOrchestratorReloadScopes(value: unknown): OrchestratorReloadScope[] {
   if (!Array.isArray(value)) return [];
-  return Array.from(new Set(value.flatMap((scope): OrchestratorReloadScope[] => {
-    if (typeof scope !== "string" || scope.length > MAX_RELOAD_SCOPE_LENGTH) return [];
-    return RELOAD_SCOPE_PATTERN.test(scope) && RELOAD_SCOPE_SET.has(scope)
+  return Array.from(new Set(value.flatMap((scope): OrchestratorReloadScope[] => (
+    typeof scope === "string"
+      && scope.length <= MAX_RELOAD_SCOPE_LENGTH
+      && ORCHESTRATOR_RELOAD_SCOPE_PATTERN.test(scope)
       ? [scope as OrchestratorReloadScope]
-      : [];
-  }))).slice(0, MAX_RELOAD_SCOPES);
+      : []
+  )))).slice(0, MAX_RELOAD_SCOPES);
 }
 
 export function expandOrchestratorReloadScopes(value: unknown): OrchestratorReloadScope[] {
   if (!Array.isArray(value) || !value.length || value.some((scope) => typeof scope !== "string" || !RELOAD_SCOPE_GROUP_PATTERN.test(scope))) {
     throw new Error("At least one valid reload scope or namespace group is required.");
   }
-  const scopes = value.flatMap((selection) => {
+  return [...new Set(value.flatMap((selection) => {
     const [namespace, members] = (selection as string).split(":", 2);
-    return members!.split("+").map((member) => `${namespace}:${member}`);
-  });
-  const unknown = scopes.filter((scope) => !RELOAD_SCOPE_SET.has(scope));
-  if (unknown.length) throw new Error(`Unknown reload scopes: ${[...new Set(unknown)].join(", ")}.`);
-  return [...new Set(scopes)] as OrchestratorReloadScope[];
+    return members!.split("+").map((member) => `${namespace}:${member}` as OrchestratorReloadScope);
+  }))].slice(0, MAX_RELOAD_SCOPES);
 }
 
-export function getReloadScopesForPaths(paths: readonly string[]) {
-  return ORCHESTRATOR_RELOAD_SCOPES.filter((scope) => {
-    const matcher = RELOAD_SCOPE_MATCHERS.get(scope)!;
-    return paths.some((path) => matcher.matchesPathOrDescendant(path));
-  });
+export function resolveOrchestratorReloadSelections(
+  input: { all?: boolean; scopes?: unknown },
+  catalog: readonly OrchestratorReloadScopeDescriptor[],
+  access: OrchestratorReloadScopeDescriptor["access"],
+) {
+  const explicit = input.scopes === undefined ? [] : expandOrchestratorReloadScopes(input.scopes);
+  const allowedAccess = access === "operator" ? new Set(["agent", "cli", "operator"]) : access === "cli" ? new Set(["agent", "cli"]) : new Set(["agent"]);
+  const available = new Map(catalog.filter((entry) => allowedAccess.has(entry.access)).map((entry) => [entry.scope, entry]));
+  const scopes = [
+    ...(input.all ? catalog.filter((entry) => entry.safeAll && entry.access === "agent").map((entry) => entry.scope) : []),
+    ...explicit,
+  ];
+  const unknown = scopes.filter((scope) => !available.has(scope));
+  if (unknown.length) throw new Error(`Unknown or unavailable reload scopes: ${[...new Set(unknown)].join(", ")}.`);
+  const resolved = [...new Set(scopes)];
+  if (!resolved.length) throw new Error("At least one supported reload scope is required.");
+  return resolved;
 }
 
 export function validateOrchestratorReloadScopeCombination(scopes: readonly string[]) {

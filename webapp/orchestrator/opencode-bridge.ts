@@ -38,7 +38,7 @@ import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bri
 import type { OpenCodeLiveThreadState } from "./opencode-live-thread-state";
 import type OpenCodeAppServer from "./OpenCodeAppServer";
 import { log, logError } from "./process-helpers";
-import type { OrchestratorReloadableModules } from "./orchestrator-feature-registry";
+import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
 import type { WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
 

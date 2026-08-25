@@ -5,7 +5,8 @@
  * - WORKBENCH_AGENT_CLI_HELP: complete agent-facing command reference. Keywords: workbench, cli, help, commands.
  * - parseWorkbenchAgentCliCommand: adapt allowlisted wb argv into the canonical typed command registry. Keywords: workbench, cli, allowlist, cwd.
  */
-import { WORKBENCH_AGENT_COMMANDS } from "../commands/workbench-agent-command-registry";
+import type { OrchestratorReloadScopeDescriptor } from "../orchestrator-reload";
+import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry";
 import type {
   WorkbenchAgentCommandDefinition,
   WorkbenchAgentCommandRequest,
@@ -70,15 +71,17 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
 ].join("\n");
 
 const COMMAND_DESCRIPTORS: readonly WorkbenchAgentCliCommandDescriptor[] = Object.freeze(
-  WORKBENCH_AGENT_COMMANDS.map(({ description, usage, words }) => Object.freeze({
+  listWorkbenchAgentCommands().map(({ description, usage, words }) => Object.freeze({
     description,
     usage,
     words: Object.freeze([...words]),
   })),
 );
 
-export function listWorkbenchAgentCliCommandDescriptors() {
-  return COMMAND_DESCRIPTORS;
+export function listWorkbenchAgentCliCommandDescriptors(catalog: readonly OrchestratorReloadScopeDescriptor[] = []) {
+  return catalog.length
+    ? listWorkbenchAgentCommands(catalog, "cli").map(({ description, usage, words }) => ({ description, usage, words }))
+    : COMMAND_DESCRIPTORS;
 }
 
 const ROOT_HELP_COMMAND_ORDER = [
@@ -139,23 +142,6 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
   },
   {
     key: "orchestrator",
-    options: [
-      "Options:",
-      "  --all                         Reload all non-destructive source scopes.",
-      "  --server:core                 Reload declared core server modules.",
-      "  --server:browse               Drain and replace Browse controller code without restarting browser sessions.",
-      "  --server:codex                Reload Codex bridge code without restarting the external Codex app-server.",
-      "  --server:mcp                  Reload the wb MCP implementation and advance its freshness generation.",
-      "  --server:opencode             Reload OpenCode bridge code.",
-      "  --server:reloader             Reload the lifecycle-owned reload coordinator.",
-      "  --client:all                  Restart the complete client development server.",
-    ].join("\n"),
-    unsafeOptions: [
-      "Destructive options:",
-      "  --harness:codex               Replace the managed Codex app-server and its dependant bridge.",
-      "  --harness:opencode            Replace the managed OpenCode server and its dependant bridge.",
-      "  --hard (server:process)       Restart the complete orchestrator process. Use by itself.",
-    ].join("\n"),
     footer: [
       "Group any same-namespace scopes with +.",
       "Example: wb orchestrator reload --server:core+browse+mcp",
@@ -172,9 +158,9 @@ function orderCommands(commands: readonly WorkbenchAgentCommandDefinition[], ord
   const indexes = new Map(order.map((key, index) => [key, index]));
   return [...commands].sort((left, right) => (indexes.get(commandKey(left)) ?? Number.MAX_SAFE_INTEGER) - (indexes.get(commandKey(right)) ?? Number.MAX_SAFE_INTEGER));
 }
-function renderRootHelp() {
-  const commands = orderCommands(WORKBENCH_AGENT_COMMANDS, ROOT_HELP_COMMAND_ORDER);
-  const helpGroups = HELP_GROUPS.filter((group) => WORKBENCH_AGENT_COMMANDS.some((command) => command.helpGroups.includes(group.key)));
+function renderRootHelp(commands = listWorkbenchAgentCommands()) {
+  commands = orderCommands(commands, ROOT_HELP_COMMAND_ORDER);
+  const helpGroups = HELP_GROUPS.filter((group) => commands.some((command) => command.helpGroups.includes(group.key)));
   return [
     "Usage:", "  wb --help", "  wb <command> [options]", "", "Commands:",
     ...commands.map((command) => `  ${command.usage}`), "", "Help commands:",
@@ -182,9 +168,26 @@ function renderRootHelp() {
     "Project ownership is derived from the current working directory.", "",
   ].join("\n");
 }
-function renderGroupHelp(group: HelpGroupDefinition, includeUnsafe = false) {
-  const commands = orderCommands(WORKBENCH_AGENT_COMMANDS.filter((command) => command.helpGroups.includes(group.key)), group.commandOrder ?? []);
-  const commandSection = group.options ?? [
+function renderReloadOptions(catalog: readonly OrchestratorReloadScopeDescriptor[], includeUnsafe: boolean) {
+  const regular = catalog.filter((entry) => entry.access === "agent");
+  const restricted = catalog.filter((entry) => entry.access !== "agent");
+  return [
+    "Options:",
+    "  --all                         Reload every active safe source scope.",
+    ...regular.map((entry) => `  --${entry.scope.padEnd(28)} ${entry.description}`),
+    ...(includeUnsafe && restricted.length ? ["", "Restricted options:", ...restricted.map((entry) => entry.scope === "server:process"
+      ? `  --hard (${entry.scope})${" ".repeat(Math.max(1, 18 - entry.scope.length))}${entry.description}`
+      : `  --${entry.scope.padEnd(28)} ${entry.description}`)] : []),
+  ].join("\n");
+}
+function renderGroupHelp(
+  group: HelpGroupDefinition,
+  includeUnsafe = false,
+  allCommands = listWorkbenchAgentCommands(),
+  reloadCatalog: readonly OrchestratorReloadScopeDescriptor[] = [],
+) {
+  const commands = orderCommands(allCommands.filter((command) => command.helpGroups.includes(group.key)), group.commandOrder ?? []);
+  const commandSection = group.key === "orchestrator" ? renderReloadOptions(reloadCatalog, includeUnsafe) : group.options ?? [
     "Commands:",
     ...commands.flatMap((command, index) => [...(index ? [""] : []), `  ${command.usage}`, `    ${command.description}`]),
   ].join("\n");
@@ -211,23 +214,26 @@ export async function parseWorkbenchAgentCliCommand(
     callerHarness = process.env.WORKBENCH_HARNESS?.trim() || "codex",
     callerThreadId = process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim() || null,
     workbenchOrigin = process.env.WORKBENCH_ORIGIN?.trim() || null,
+    reloadCatalog = [],
   }: {
     callerHarness?: string;
     callerThreadId?: string | null;
     cwd?: string;
     workbenchOrigin?: string | null;
+    reloadCatalog?: readonly OrchestratorReloadScopeDescriptor[];
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
+  const commands = listWorkbenchAgentCommands(reloadCatalog, "cli");
   const isLegacyCheckpointCommand = (argv[0] === "git" && argv[1] === "checkpoint") || argv[0] === "checkpoint" || (argv[0] === "git" && argv[1] === "plan");
   if (isLegacyCheckpointCommand) return { help: LEGACY_CHECKPOINT_MIGRATION_GUIDE, kind: "help" };
   if (!argv.length || argv.includes("--help") || argv[0] === "help") {
     const group = matchHelpGroup(helpPath(argv));
-    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe")) : renderRootHelp(), kind: "help" };
+    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), commands, reloadCatalog) : renderRootHelp(commands), kind: "help" };
   }
-  const matched = WORKBENCH_AGENT_COMMANDS.flatMap((definition) => (
+  const matched = commands.flatMap((definition) => (
     [definition.words, ...(definition.aliases ?? [])].map((words) => ({ definition, words }))
   )).filter((candidate) => matchesWords(argv, candidate.words)).sort((left, right) => right.words.length - left.words.length)[0];
-  if (!matched) return { error: `Unsupported wb command: ${argv.join(" ")}\n\n${WORKBENCH_AGENT_CLI_HELP}`, kind: "error" };
+  if (!matched) return { error: `Unsupported wb command: ${argv.join(" ")}\n\n${renderRootHelp(commands)}`, kind: "error" };
   try {
     return {
       kind: "request",

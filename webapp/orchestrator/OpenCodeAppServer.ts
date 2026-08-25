@@ -5,7 +5,7 @@
  */
 import type { createOpencodeServer as createOpenCodeServer } from "@opencode-ai/sdk/v2";
 
-import type { OrchestratorReloadableModules } from "./orchestrator-feature-registry";
+import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
 import { log, logError } from "./process-helpers";
 
 type OpenCodeServerHandle = {

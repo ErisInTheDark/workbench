@@ -10,6 +10,9 @@ import WorkbenchOrchestratorReloadController, {
   type WorkbenchReloadScopeClaim,
 } from "./WorkbenchOrchestratorReloadController";
 
+const TEST_RELOAD_SCOPES = ["client:all", "server:codex", "server:core", "server:mcp", "server:process"];
+const listScopes = () => TEST_RELOAD_SCOPES;
+
 function deferred<TValue>() {
   let reject!: (error: unknown) => void;
   let resolve!: (value: TValue) => void;
@@ -46,6 +49,7 @@ test("a state handoff from the previous controller generation starts with no har
     executeBatch: async () => undefined,
     initialState: legacyState,
     listClaims: async () => [],
+    listScopes,
   });
 
   assert.equal(controller.isHardReloadPending(), false);
@@ -62,6 +66,7 @@ test("a useful partial batch satisfies all matching waiters and preserves the re
   const controller = new WorkbenchOrchestratorReloadController({
     executeBatch: async (scopes) => { batches.push(scopes); },
     listClaims: async () => claims,
+    listScopes,
   });
 
   let firstSettled = false;
@@ -87,6 +92,7 @@ test("needs-attention holders block while completed and stopped holders are safe
     const controller = new WorkbenchOrchestratorReloadController({
       executeBatch: async () => executed.resolve(),
       listClaims: async () => claims,
+      listScopes,
     });
     let settled = false;
     const pending = request(controller, "caller", ["server:mcp"]).finally(() => { settled = true; });
@@ -106,6 +112,7 @@ test("cancellation removes a waiter without cancelling an executing batch", asyn
   const controller = new WorkbenchOrchestratorReloadController({
     executeBatch: async () => { executing.resolve(); await release.promise; },
     listClaims: async () => [claim("caller", ["server:codex"])],
+    listScopes,
   });
   const pending = request(controller, "caller", ["server:codex"], abort.signal);
   await executing.promise;
@@ -127,6 +134,7 @@ test("a failed batch rejects dependent waiters but leaves disjoint work eligible
       if (scopes.includes("server:core")) throw new Error("logic reload failed");
     },
     listClaims: async () => claims,
+    listScopes,
   });
   const failed = request(controller, "logic", ["server:core"]);
   const disjoint = request(controller, "next", ["client:all"]);
@@ -142,6 +150,7 @@ test("admission rejects scopes outside the caller active claim", async () => {
   const controller = new WorkbenchOrchestratorReloadController({
     executeBatch: async () => undefined,
     listClaims: async () => [claim("caller", ["server:mcp"])],
+    listScopes,
   });
   await assert.rejects(request(controller, "caller", ["client:all"]), /does not claim/u);
   await assert.rejects(request(controller, "missing", ["server:mcp"]), /must own an active Git arc/u);
@@ -161,6 +170,7 @@ test("hard reload notifies every owner together and exits when they settle", asy
       ],
     },
     listClaims: async () => [],
+    listScopes,
   });
 
   controller.admitHardReload();
@@ -187,6 +197,7 @@ test("hard reload deadline bypasses a stuck partial reload and forces exit", asy
       timeoutMs: 5_000,
     },
     listClaims: async () => [claim("caller", ["server:mcp"])],
+    listScopes,
   });
   const partialReload = request(controller, "caller", ["server:mcp"]);
   await executing.promise;
@@ -199,4 +210,3 @@ test("hard reload deadline bypasses a stuck partial reload and forces exit", asy
   assert.equal(exits, 1);
   release.resolve();
 });
-

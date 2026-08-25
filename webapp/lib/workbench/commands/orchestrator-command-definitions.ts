@@ -1,18 +1,20 @@
 /*
  * Exports:
- * - WORKBENCH_ORCHESTRATOR_COMMANDS: typed orchestrator lifecycle command definitions shared by CLI and MCP. Keywords: workbench, orchestrator, reload, commands.
+ * - createWorkbenchOrchestratorCommands: build reload CLI and MCP contracts from the active topology catalog. Keywords: orchestrator, reload, dynamic, catalog.
  */
 import { z } from "zod";
 
+import type { OrchestratorReloadScope } from "../../types";
 import {
   expandOrchestratorReloadScopes,
-  ORCHESTRATOR_ALL_RELOAD_SCOPES,
-  ORCHESTRATOR_CLI_RELOAD_SCOPES,
-  ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES,
+  type OrchestratorReloadScopeDescriptor,
+  resolveOrchestratorReloadSelections,
 } from "../orchestrator-reload";
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
-function buildReloadRequest(scopes: readonly string[], context: { callerHarness: string; callerThreadId: string | null; cwd: string }) {
+type ReloadAccess = OrchestratorReloadScopeDescriptor["access"];
+
+function buildReloadRequest(input: { all?: boolean; scopes?: readonly OrchestratorReloadScope[] }, context: { callerHarness: string; callerThreadId: string | null; cwd: string }) {
   return {
     ...postWorkbenchAgentCommand("/api/orchestrator/reload", {
       ...(context.callerThreadId ? {
@@ -20,63 +22,77 @@ function buildReloadRequest(scopes: readonly string[], context: { callerHarness:
         callerThreadId: context.callerThreadId,
         cwd: context.cwd,
       } : {}),
-      scopes: [...scopes],
+      ...(input.all ? { all: true } : {}),
+      ...(input.scopes?.length ? { scopes: [...input.scopes] } : {}),
     }, "orchestrator-reload"),
     waitForReload: true,
   } as const;
 }
 
 function parseReloadCliSelections(args: string[]) {
-  if (!args.length) return { hard: false, scopes: [] as string[] };
+  if (!args.length) return { all: false, hard: false, selections: [] as string[] };
   const selections: string[] = [];
+  let all = false;
   let hard = false;
   for (const argument of args) {
     if (!argument.startsWith("--") || argument === "--") throw new Error(`Unexpected argument: ${argument}`);
-    if (argument === "--hard") {
-      hard = true;
-    } else if (argument === "--all") {
-      selections.push(...ORCHESTRATOR_ALL_RELOAD_SCOPES);
-    } else if (argument === "--server:process") {
-      throw new Error("server:process is only available through --hard.");
-    } else {
-      selections.push(argument.slice(2));
-    }
+    if (argument === "--hard") hard = true;
+    else if (argument === "--all") all = true;
+    else if (argument === "--server:process") throw new Error("server:process is only available through --hard.");
+    else selections.push(argument.slice(2));
   }
-  return { hard, scopes: selections };
+  return { all, hard, selections };
 }
 
-const requestableReloadScopes = z.array(z.enum(ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES)).min(1);
-const cliReloadScopes = z.array(z.enum(ORCHESTRATOR_CLI_RELOAD_SCOPES)).min(1);
-const reloadInput = z.object({
-  scopes: requestableReloadScopes,
-}).strict();
+function canAccess(entry: OrchestratorReloadScopeDescriptor, access: ReloadAccess) {
+  return access === "operator" || entry.access === "agent" || (access === "cli" && entry.access === "cli");
+}
 
-const documentedReload = defineWorkbenchAgentCommand({
-  description: "Reload selected Workbench runtime subsystems and wait for terminal reload status.",
-  helpGroups: ["orchestrator"],
-  words: ["orchestrator", "reload"],
-  usage: "wb orchestrator reload --<scope> [--<scope> ...]",
-  inputSchema: reloadInput,
-  parseCliArgs(args) {
-    const parsed = parseReloadCliSelections(args);
-    if (parsed.hard) throw new Error("--hard must be requested by itself.");
-    return { scopes: requestableReloadScopes.parse(expandOrchestratorReloadScopes(parsed.scopes)) };
-  },
-  buildRequest(input, context) {
-    return buildReloadRequest(input.scopes, context);
-  },
-});
+export function createWorkbenchOrchestratorCommands(
+  catalog: readonly OrchestratorReloadScopeDescriptor[],
+  access: ReloadAccess,
+) {
+  const allowedScopeValues = catalog.filter((entry) => canAccess(entry, access)).map((entry) => entry.scope);
+  const scopeSchema = allowedScopeValues.length
+    ? z.enum(allowedScopeValues as [string, ...string[]])
+    : z.string().refine(() => false, "No reload scopes are available.");
+  const scopesSchema = z.array(scopeSchema).max(64);
+  const reloadInput = z.object({
+    all: z.boolean().optional(),
+    scopes: scopesSchema.optional(),
+  }).strict().refine((input) => input.all || input.scopes?.length, "At least one supported reload scope is required.");
 
-const reload = {
-  ...documentedReload,
-  async buildRequestFromCli(args, context) {
-    const parsed = parseReloadCliSelections(args);
-    if (parsed.hard) {
-      if (args.length !== 1) throw new Error("--hard must be requested by itself.");
-      return buildReloadRequest(["server:process"], context);
-    }
-    return buildReloadRequest(cliReloadScopes.parse(expandOrchestratorReloadScopes(parsed.scopes)), context);
-  },
-};
+  const documentedReload = defineWorkbenchAgentCommand({
+    description: "Reload selected Workbench runtime subsystems and wait for terminal reload status.",
+    helpGroups: ["orchestrator"],
+    words: ["orchestrator", "reload"],
+    usage: "wb orchestrator reload --<scope> [--<scope> ...]",
+    inputSchema: reloadInput,
+    parseCliArgs(args) {
+      const parsed = parseReloadCliSelections(args);
+      if (parsed.hard) throw new Error("--hard must be requested by itself.");
+      const scopes = parsed.selections.length ? scopesSchema.parse(expandOrchestratorReloadScopes(parsed.selections)) : undefined;
+      resolveOrchestratorReloadSelections({ all: parsed.all, scopes }, catalog, access);
+      return { ...(parsed.all ? { all: true } : {}), ...(scopes?.length ? { scopes } : {}) };
+    },
+    buildRequest(input, context) {
+      return buildReloadRequest(input, context);
+    },
+  });
 
-export const WORKBENCH_ORCHESTRATOR_COMMANDS = [reload] as const;
+  const reload = {
+    ...documentedReload,
+    async buildRequestFromCli(args: string[], context: Parameters<typeof buildReloadRequest>[1]) {
+      const parsed = parseReloadCliSelections(args);
+      if (parsed.hard) {
+        if (args.length !== 1 || access === "agent") throw new Error("--hard must be requested by itself.");
+        return buildReloadRequest({ scopes: ["server:process"] }, context);
+      }
+      const scopes = parsed.selections.length ? scopesSchema.parse(expandOrchestratorReloadScopes(parsed.selections)) : undefined;
+      resolveOrchestratorReloadSelections({ all: parsed.all, scopes }, catalog, access);
+      return buildReloadRequest({ ...(parsed.all ? { all: true } : {}), ...(scopes?.length ? { scopes } : {}) }, context);
+    },
+  };
+
+  return [reload] as const;
+}

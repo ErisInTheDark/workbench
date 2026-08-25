@@ -24,7 +24,6 @@ import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
 import type { OrchestratorReloadScope, WorkbenchHarness } from "../lib/types";
 import { GitCheckpointRequestSchema, type GitCheckpointRequest } from "../lib/workbench/git/checkpoint-contracts";
-import { getReloadScopesForPaths } from "../lib/workbench/orchestrator-reload";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchReloadScopeClaim } from "./WorkbenchOrchestratorReloadController";
@@ -39,6 +38,7 @@ function comparablePath(value: string) {
 }
 
 export interface WorkbenchGitArcFeatureOptions {
+  getReloadScopesForPaths?(paths: readonly string[]): OrchestratorReloadScope[];
   getThreadClaimContext(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadClaimContext | null>;
   onReloadEligibilityChanged?: () => void;
   refreshThreadGitArcState(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
@@ -201,7 +201,7 @@ export default class WorkbenchGitArcFeature {
   private withDerivedReloadScopes<TValue extends object>(project: AgentEndpointProjectResolution, value: TValue, paths: readonly string[]) {
     const reloadScopes = this.options.reloadScopeProjectRoot
       && comparablePath(project.cwd) === comparablePath(this.options.reloadScopeProjectRoot)
-      ? getReloadScopesForPaths(paths)
+      ? this.options.getReloadScopesForPaths?.(paths) ?? []
       : [];
     return { ...value, reloadScopes };
   }

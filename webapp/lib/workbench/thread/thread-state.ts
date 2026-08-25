@@ -16,9 +16,9 @@
 
 import { z } from "zod";
 
-import { gitArcPathsOverlap } from "../git/git-arc-paths";
-import { ORCHESTRATOR_RELOAD_SCOPES } from "../orchestrator-reload";
 import { areDeeplyEqual } from "../deep-equality";
+import { gitArcPathsOverlap } from "../git/git-arc-paths";
+import { ORCHESTRATOR_RELOAD_SCOPE_PATTERN } from "../orchestrator-reload";
 import { WorkbenchProjectsPayloadSchema, WorkbenchProjectStateUpdateSchema } from "../project/project-state";
 import { WorkbenchThreadDisplayOrderSchema } from "./thread-display-order";
 
@@ -124,7 +124,7 @@ const WorkbenchGitArcProposalStateSchema = z.object({
   status: z.enum(["committed", "proposed"]),
 }).strict();
 
-const WorkbenchReloadScopeProjectionSchema = z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES));
+const WorkbenchReloadScopeProjectionSchema = z.array(z.string().regex(ORCHESTRATOR_RELOAD_SCOPE_PATTERN));
 
 const WorkbenchGitArcMemberStateSchema = z.object({
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),

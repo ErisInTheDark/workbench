@@ -160,11 +160,12 @@ import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread
 import type { WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
-export type OrchestratorReloadScope = "client:all" | "harness:codex" | "harness:opencode" | "server:browse" | "server:codex" | "server:core" | "server:mcp" | "server:opencode" | "server:process" | "server:reloader";
+export type OrchestratorReloadScope = string;
 export type OrchestratorReloadState = "idle" | "running" | "succeeded" | "failed";
 
 export interface OrchestratorReloadRequest {
-  scopes: OrchestratorReloadScope[];
+  all?: boolean;
+  scopes?: OrchestratorReloadScope[];
 }
 
 export interface OrchestratorReloadResponse {

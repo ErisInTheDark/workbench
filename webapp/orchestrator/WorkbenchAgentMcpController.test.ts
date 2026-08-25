@@ -15,6 +15,13 @@ import type { WorkbenchAgentCommandRequest } from "../lib/workbench/commands/wor
 import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 
+const reloadCatalog = [
+  { access: "agent" as const, description: "MCP", safeAll: true, scope: "server:mcp" },
+  { access: "agent" as const, description: "Topology", safeAll: false, scope: "server:topology" },
+  { access: "cli" as const, description: "Codex app-server", safeAll: false, scope: "harness:codex" },
+  { access: "operator" as const, description: "Process", safeAll: false, scope: "server:process" },
+];
+
 function deferred<TValue>() {
   let resolve!: (value: TValue) => void;
   const promise = new Promise<TValue>((nextResolve) => { resolve = nextResolve; });
@@ -62,6 +69,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       executed.push(request);
       return Response.json({ title: "Typed Workbench" });
     },
+    getReloadScopeCatalog: () => reloadCatalog,
     orchestratorOrigin: "http://127.0.0.1:4500",
     requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
     requestCodex: async (request) => {
@@ -76,7 +84,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   const capableClient = await connectClient(capableUrl);
   try {
     const inventory = await client.listTools();
-    const eligible = listWorkbenchAgentCommands().filter(({ hideFromMcp }) => !hideFromMcp);
+    const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter(({ hideFromMcp }) => !hideFromMcp);
     assert.equal(inventory.tools.length, eligible.length);
     assert.equal(inventory.tools.some(({ name }) => name === "browse_raw"), false);
     const plan = inventory.tools.find(({ name }) => name === "git_arc_plan");

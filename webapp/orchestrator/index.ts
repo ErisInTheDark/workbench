@@ -28,11 +28,6 @@ import type {
 } from "../lib/types";
 import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import {
-    expandOrchestratorReloadScopes,
-    normalizeOrchestratorReloadScopes,
-    validateOrchestratorReloadScopeCombination,
-} from "../lib/workbench/orchestrator-reload";
-import {
     createWorkbenchThreadRecoveryInput,
     isWorkbenchThreadRecoveryUserMessage,
 } from "../lib/workbench/thread/thread-recovery-message";
@@ -52,13 +47,13 @@ import {
     type ProcessSpec,
     type RunningProcess,
 } from "./process-helpers";
-import OrchestratorFeatureHost from "./OrchestratorFeatureHost";
-import { createOrchestratorFeatureModuleLoader } from "./orchestrator-feature-loader";
-import type { OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification } from "./orchestrator-feature-registry";
+import { ORCHESTRATOR_PROCESS_REQUIRED_REGISTRATIONS, type OrchestratorProcessContext } from "./orchestrator-process-context";
+import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
+import { createReloadableNodeModuleLoader } from "./reloadable-node-loader";
+import ReloadableNodeHost from "./ReloadableNodeHost";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
 import type { WorkbenchHardReloadNotification } from "./WorkbenchOrchestratorReloadController";
-import ReloadableWorkbenchOrchestratorReloadController from "./ReloadableWorkbenchOrchestratorReloadController";
 import type { WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
@@ -162,27 +157,19 @@ const turnRecoveryController = new WorkbenchTurnRecoveryController(
   },
 );
 const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
-const orchestratorReloadController = new ReloadableWorkbenchOrchestratorReloadController({
-  executeScopes: executeReloadScopes,
-  hardReload: {
-    exitProcess: () => process.exit(0),
-    logError: (message) => logError("hard-reload", message),
-    notifications: () => createHardReloadNotifications(),
-    timeoutMs: 5_000,
-  },
-  listClaims: async (cwd) => await featureHost.run("gitArc", (feature) => feature.listReloadScopeClaims(cwd), "git arc: reload-scope claim read"),
-});
-const featureHost = new OrchestratorFeatureHost<OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification>(
+const featureHost = new ReloadableNodeHost<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>(
   createOrchestratorFeatureContext(),
-  createOrchestratorFeatureModuleLoader(),
+  createReloadableNodeModuleLoader(),
   {
     logError: (message) => logError("runtime-drain", message),
     onSwap: (nodeIds) => {
       log("orchestrator", `reloaded orchestrator feature nodes: ${nodeIds.join(", ")}`);
-      if (nodeIds.includes("workbench-core")) {
+      if (nodeIds.includes("server:core")) {
         for (const client of bridgeConnections) sendJsonToClient(client, { method: "workbench/thread-state/reset", params: {} });
       }
     },
+    requiredRegistrations: ORCHESTRATOR_PROCESS_REQUIRED_REGISTRATIONS,
+    requiredScopes: ["server:topology"],
     runtimeDrainTimeoutMs: 30_000,
   },
 );
@@ -304,7 +291,6 @@ function finalizeReloadResponse(
 
 async function stopAllChildren() {
   codexRecoverySupervisor.dispose();
-  orchestratorReloadController.dispose();
   await featureHost.dispose();
 
   for (const entry of processes.values()) {
@@ -381,7 +367,7 @@ function restartChild(spec: ProcessSpec) {
   return "started";
 }
 
-function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
+function createOrchestratorFeatureContext(): OrchestratorProcessContext {
   return {
     advanceMcpGeneration: () => {
       const generation = codexMcpGenerationController.bump();
@@ -412,7 +398,7 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
       intervalMs: CODEX_HEALTH_INTERVAL_MS,
       isProbeAllowed: () => {
         const runtime = featureHost.get("codexAppServer");
-        return runtime.isAvailable() && !runtime.isTransitioning() && !orchestratorReloadController.isHardReloadPending();
+        return runtime.isAvailable() && !runtime.isTransitioning() && !featureHost.get("reloadController").isHardReloadPending();
       },
       isShuttingDown: () => shuttingDown,
       log: (message) => log("codex-health", message),
@@ -441,6 +427,15 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
     },
     executeBrowseRequest: async (body, signal) => await featureHost.run("browseExecution", (execution) => execution.executeBrowseRequest(body, signal), "Browse command request"),
     executeBrowseSessionRequest: async (request, signal) => await featureHost.run("browseExecution", (execution) => execution.executeSessionRequest(request, signal), "Browse session request"),
+    executeReloadScopes,
+    getReloadScopeCatalog: () => featureHost.getReloadScopeCatalog(),
+    getReloadScopesForPaths: (paths) => featureHost.getReloadScopesForPaths(paths),
+    hardReload: {
+      exitProcess: () => process.exit(0),
+      logError: (message) => logError("hard-reload", message),
+      notifications: () => createHardReloadNotifications(),
+      timeoutMs: 5_000,
+    },
     installSubagentRelationship: async (record) => await featureHost.run(
       "threadState",
       (feature) => feature.installSubagentRelationship(record),
@@ -463,9 +458,9 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
       serverErrorThreshold: NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD,
     },
     notifyThreadLifecycle: () => {
-      orchestratorReloadController.notifyEligibilityChanged();
+      featureHost.get("reloadController").notifyEligibilityChanged();
     },
-    notifyReloadEligibilityChanged: () => orchestratorReloadController.notifyEligibilityChanged(),
+    notifyReloadEligibilityChanged: () => featureHost.get("reloadController").notifyEligibilityChanged(),
     onCodexFatalExit: (reason, bridge) => {
       if (shuttingDown) return;
       bridge?.beginStopping();
@@ -519,10 +514,11 @@ function createOrchestratorFeatureContext(): OrchestratorFeatureContext {
       if (harness !== "codex" && harness !== "copilot" && harness !== "opencode") {
         throw new Error("A supported managed harness is required.");
       }
-      const scopes = expandOrchestratorReloadScopes(record?.scopes);
-      const invalidCombination = validateOrchestratorReloadScopeCombination(scopes);
+      const reloadController = featureHost.get("reloadController");
+      const scopes = reloadController.resolveSelections({ all: record?.all === true, scopes: record?.scopes }, "agent");
+      const invalidCombination = reloadController.validateCombination(scopes);
       if (invalidCombination) throw new Error(invalidCombination);
-      return Response.json(await orchestratorReloadController.request({
+      return Response.json(await featureHost.get("reloadController").request({
         cwd: cwd.trim(),
         harness,
         scopes,
@@ -586,7 +582,7 @@ async function requestLiveHarness(harness: HarnessKind, request: JsonRpcRequest)
 }
 
 function requireHarnessAdmission() {
-  if (orchestratorReloadController.isHardReloadPending()) throw new Error("The orchestrator is hard reloading; new harness work is temporarily unavailable.");
+  if (featureHost.get("reloadController").isHardReloadPending()) throw new Error("The orchestrator is hard reloading; new harness work is temporarily unavailable.");
 }
 
 function readGenericBrowseThread(harness: "copilot" | "opencode", threadId: string) {
@@ -699,7 +695,7 @@ async function prepareCodexTurnStart(request: JsonRpcRequest) {
 }
 
 async function requestLiveCodexWithDeadline(request: JsonRpcRequest, timeoutMs = CODEX_HEALTH_REQUEST_TIMEOUT_MS) {
-  if (orchestratorReloadController.isHardReloadPending()) throw new Error("The orchestrator is hard reloading; new harness work is temporarily unavailable.");
+  if (featureHost.get("reloadController").isHardReloadPending()) throw new Error("The orchestrator is hard reloading; new harness work is temporarily unavailable.");
   turnRecoveryController.observeRequest("codex", request);
   return await runAfterCodexBridgeReload(async (bridge) => {
     await ensureCodexReady(bridge);
@@ -815,13 +811,22 @@ async function runAfterOpenCodeBridgeReload<TValue>(task: (bridge: OpenCodeBridg
 
 async function executeReloadScopes(scopes: OrchestratorReloadScope[]) {
   if (scopes.includes("server:process")) throw new Error("Full orchestrator restart requires the operator hard-reload boundary.");
-  await featureHost.reload(scopes);
+  const previousController = featureHost.get("reloadController");
+  try {
+    await featureHost.reload(scopes);
+    const currentController = featureHost.get("reloadController");
+    if (currentController !== previousController) currentController.completeTransferredBatchIfPresent();
+  } catch (error) {
+    const currentController = featureHost.get("reloadController");
+    if (currentController !== previousController) currentController.failTransferredBatch(error);
+    throw error;
+  }
 }
 
 function queueReload(scopes: OrchestratorReloadScope[]) {
   const startedAt = lastReloadResponse.startedAt;
   setImmediate(() => {
-    void orchestratorReloadController.executeUnmanaged(scopes).then(() => {
+    void featureHost.get("reloadController").executeUnmanaged(scopes).then(() => {
       finalizeReloadResponse(startedAt, {
         completedAt: Date.now(),
         error: null,
@@ -855,7 +860,7 @@ function handleHardOrchestratorReload(response: http.ServerResponse) {
 
   let admission: OrchestratorReloadResponse;
   try {
-    admission = orchestratorReloadController.admitHardReload();
+    admission = featureHost.get("reloadController").admitHardReload();
   } catch (error) {
     sendHttpJson(response, 409, { error: error instanceof Error ? error.message : "Unable to admit hard reload." });
     return;
@@ -865,25 +870,28 @@ function handleHardOrchestratorReload(response: http.ServerResponse) {
   let acknowledged = false;
   response.once("finish", () => {
     acknowledged = true;
-    void orchestratorReloadController.beginHardReload().catch((error) => {
+    void featureHost.get("reloadController").beginHardReload().catch((error) => {
       logError("hard-reload", error instanceof Error ? error.stack ?? error.message : String(error));
       process.exit(1);
     });
   });
   response.once("close", () => {
     if (acknowledged || response.writableFinished) return;
-    orchestratorReloadController.cancelHardReloadAdmission();
+    featureHost.get("reloadController").cancelHardReloadAdmission();
   });
   sendHttpJson(response, 202, lastReloadResponse);
 }
 
 async function handleReloadHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
-  let requestedScopes: string[] = [];
+  let requestedScopes: OrchestratorReloadScope[] = [];
   try {
     const rawBody = await readRequestBody(request);
     const parsedBody = rawBody.trim() ? JSON.parse(rawBody) as unknown : {};
     const record = asRecord(parsedBody);
-    requestedScopes = expandOrchestratorReloadScopes(record?.scopes);
+    requestedScopes = featureHost.get("reloadController").resolveSelections(
+      { all: record?.all === true, scopes: record?.scopes },
+      "operator",
+    );
   } catch (error) {
     sendHttpJson(response, 400, {
       error: error instanceof Error ? error.message : "Invalid reload request body.",
@@ -898,7 +906,7 @@ async function handleReloadHttpRequest(request: http.IncomingMessage, response: 
     return;
   }
 
-  const combinationError = validateOrchestratorReloadScopeCombination(requestedScopes);
+  const combinationError = featureHost.get("reloadController").validateCombination(requestedScopes);
   if (combinationError) {
     sendHttpJson(response, 400, { error: combinationError });
     return;
@@ -914,10 +922,9 @@ async function handleReloadHttpRequest(request: http.IncomingMessage, response: 
     sendHttpJson(response, 400, { error: error instanceof Error ? error.message : "Invalid harness reload scope." });
     return;
   }
-  const scopes = requestedScopes as OrchestratorReloadScope[];
-  lastReloadResponse = createReloadResponse(scopes);
+  lastReloadResponse = createReloadResponse(requestedScopes);
   sendHttpJson(response, 202, lastReloadResponse);
-  queueReload(scopes);
+  queueReload(requestedScopes);
 }
 
 function scheduleRestart(spec: ProcessSpec) {
@@ -991,7 +998,7 @@ async function handleClientMessage(client: BridgeClient, data: Buffer) {
     return;
   }
 
-  if (orchestratorReloadController.isHardReloadPending()) {
+  if (featureHost.get("reloadController").isHardReloadPending()) {
     if ("id" in message) {
       sendJsonToClient(client, {
         id: message.id,

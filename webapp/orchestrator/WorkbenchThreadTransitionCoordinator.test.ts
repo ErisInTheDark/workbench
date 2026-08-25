@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createWorktreeGitTransitions } from "./orchestrator-feature-registry";
+import { createWorktreeGitTransitions } from "./worktree-git-transitions";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 
 test("normalizes one canonical worktree Git transition key before persistent coordination", async () => {

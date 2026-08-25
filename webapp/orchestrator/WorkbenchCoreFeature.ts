@@ -1,11 +1,10 @@
 /*
  * Exports:
  * - WORKBENCH_CORE_FEATURE_KEYS: feature keys owned by the core lifecycle node. Keywords: core, ownership, graph.
- * - WORKBENCH_CORE_FEATURE_NODE_ID: stable graph id for the core lifecycle node. Keywords: core, node, id.
  * - default WorkbenchCoreFeature: core node value and lifecycle owner for state, Git, harness routing, and supervisors. Keywords: core, lifecycle, disposal.
  */
-import type { OrchestratorFeatureNodeInstance } from "./OrchestratorFeatureHost";
-import type { OrchestratorFeatures, OrchestratorProviderNotification } from "./orchestrator-feature-registry";
+import type { ReloadableNodeInstance } from "./ReloadableNode";
+import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 
 export const WORKBENCH_CORE_FEATURE_KEYS = [
   "agentCommand",
@@ -22,23 +21,21 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "subagents",
   "threadGit",
   "threadState",
-] as const satisfies readonly (keyof OrchestratorFeatures)[];
-
-export const WORKBENCH_CORE_FEATURE_NODE_ID = "workbench-core";
+] as const satisfies readonly (keyof OrchestratorRuntimeObjects)[];
 
 interface WorkbenchCoreFeatureOptions {
   beginRuntimeDrain(): void;
   dispose(reportPhase: (phase: string) => void): Promise<void> | void;
-  features: Pick<OrchestratorFeatures, typeof WORKBENCH_CORE_FEATURE_KEYS[number]>;
+  registrations: Pick<OrchestratorRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]>;
   observeProviderNotification(notification: OrchestratorProviderNotification): Promise<void> | void;
   start(): Promise<void> | void;
 }
 
-export default class WorkbenchCoreFeature implements OrchestratorFeatureNodeInstance<OrchestratorFeatures, OrchestratorProviderNotification> {
-  readonly features: Partial<OrchestratorFeatures>;
+export default class WorkbenchCoreFeature implements ReloadableNodeInstance<OrchestratorRuntimeObjects, OrchestratorProviderNotification> {
+  readonly registrations: Partial<OrchestratorRuntimeObjects>;
 
   constructor(private readonly options: WorkbenchCoreFeatureOptions) {
-    this.features = options.features;
+    this.registrations = options.registrations;
   }
 
   beginRuntimeDrain() {

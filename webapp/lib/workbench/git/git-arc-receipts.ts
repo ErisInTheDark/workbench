@@ -4,8 +4,7 @@
  * - formatGitArcReceipt/parseGitArcReceipt: encode and decode the stable transcript receipt line. Keywords: git, arc, receipt, cli, parser.
  */
 import { z } from "zod";
-
-import { ORCHESTRATOR_RELOAD_SCOPES } from "../orchestrator-reload";
+import { ORCHESTRATOR_RELOAD_SCOPE_PATTERN } from "../orchestrator-reload";
 
 const RECEIPT_PREFIX = "Workbench arc receipt: ";
 
@@ -17,7 +16,7 @@ const GitArcReceiptSchema = z.object({
   memberRefs: z.array(z.object({ ref: z.string().regex(/^[a-f0-9]{7,64}$/iu), rootId: z.string().min(1) }).strict()).optional(),
   proposalId: z.string().min(1).optional(),
   rootId: z.string().min(1).optional(),
-  reloadScopes: z.array(z.enum(ORCHESTRATOR_RELOAD_SCOPES)).optional(),
+  reloadScopes: z.array(z.string().regex(ORCHESTRATOR_RELOAD_SCOPE_PATTERN)).optional(),
   ref: z.string().regex(/^[a-f0-9]{7,64}$/iu),
   matchedPathCount: z.number().int().nonnegative().optional(),
   mappings: z.array(z.object({ destination: z.string().min(1), source: z.string().min(1) })).optional(),

@@ -10,6 +10,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { CancelledNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import { adaptWorkbenchAgentCliResponse } from "../lib/workbench/cli/workbench-agent-cli-responses";
+import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
 import { listWorkbenchAgentCommands } from "../lib/workbench/commands/workbench-agent-command-registry";
 import {
   getWorkbenchAgentCommandToolName,
@@ -30,6 +31,7 @@ type WorkbenchAgentMcpRequestId = number | string;
 
 export interface WorkbenchAgentMcpControllerOptions {
   executeCommand: (request: WorkbenchAgentCommandRequest, signal: AbortSignal) => Promise<Response>;
+  getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
   lifecycleLogError?: (name: string, message: string) => void;
   orchestratorOrigin: string;
   requestRegistry?: WorkbenchAgentMcpRequestRegistry;
@@ -101,14 +103,16 @@ function readThreadId(meta: Record<string, unknown> | undefined) {
 
 export default class WorkbenchAgentMcpController {
   private readonly executeCommand: WorkbenchAgentMcpControllerOptions["executeCommand"];
+  private readonly getReloadScopeCatalog: NonNullable<WorkbenchAgentMcpControllerOptions["getReloadScopeCatalog"]>;
   private readonly lifecycleLogError: NonNullable<WorkbenchAgentMcpControllerOptions["lifecycleLogError"]>;
   private readonly orchestratorOrigin: string;
   private readonly requestRegistry: WorkbenchAgentMcpRequestRegistry;
   private readonly requestCodex: WorkbenchAgentMcpControllerOptions["requestCodex"];
   private readonly runtimeOwner = {};
 
-  constructor({ executeCommand, lifecycleLogError = logError, orchestratorOrigin, requestCodex, requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry() }: WorkbenchAgentMcpControllerOptions) {
+  constructor({ executeCommand, getReloadScopeCatalog = () => [], lifecycleLogError = logError, orchestratorOrigin, requestCodex, requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry() }: WorkbenchAgentMcpControllerOptions) {
     this.executeCommand = executeCommand;
+    this.getReloadScopeCatalog = getReloadScopeCatalog;
     this.lifecycleLogError = lifecycleLogError;
     this.orchestratorOrigin = orchestratorOrigin;
     this.requestRegistry = requestRegistry;
@@ -199,7 +203,7 @@ export default class WorkbenchAgentMcpController {
       this.requestRegistry.cancel(clientScope, notification.params.requestId, notification.params.reason);
     });
     const names = new Set<string>();
-    for (const definition of listWorkbenchAgentCommands()) {
+    for (const definition of listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent")) {
       if (definition.hideFromMcp) continue;
       const name = getWorkbenchAgentCommandToolName(definition);
       if (names.has(name)) throw new Error(`Duplicate Workbench MCP tool name: ${name}`);

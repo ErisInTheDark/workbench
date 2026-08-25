@@ -1,62 +1,37 @@
 /*
  * Exports:
- * - OrchestratorFeatureLease: node token that fences late outward effects after replacement. Keywords: reload, node, generation, fence.
- * - OrchestratorFeatureRuntimeDrainPending: bounded node drain diagnostics. Keywords: reload, drain, diagnostics.
- * - OrchestratorFeatureNodeLifecycle: atomic or handoff replacement mode. Keywords: graph, lifecycle, mode.
- * - OrchestratorFeatureNodeInstance: one active node value and lifecycle surface. Keywords: graph, runtime, value.
- * - OrchestratorFeatureNodeBuild: dependency lookup, handoff state, replacement set, lease, and construction mode. Keywords: factory, dependency, rollback.
- * - OrchestratorFeatureNodeDefinition: node id, scope, parents, owned keys, lifecycle, and factory. Keywords: graph, scope, ownership.
- * - OrchestratorFeatureModule/OrchestratorFeatureModuleLoader: reloadable graph registry and fresh-module loader contracts. Keywords: registry, module, loader.
- * - OrchestratorFeatureHostOptions: deadline, clock, logging, and swap ports owned by the process host. Keywords: host, deadline, ports.
- * - default OrchestratorFeatureHost: validate topology, lease dependency chains, and replace scope-selected dependant closures. Keywords: graph, atomic, handoff, rollback.
+ * - ReloadableNodeModuleLoader: load fresh parent-owned graph definitions. Keywords: loader, cache, topology.
+ * - ReloadableNodeHostOptions: deadline, clock, logging, and swap ports owned by the process host. Keywords: host, deadline, ports.
+ * - default ReloadableNodeHost: validate topology, lease parent chains, and replace scope-selected child closures. Keywords: graph, registry, handoff, rollback.
  */
-export interface OrchestratorFeatureLease {
-  isCurrent(): boolean;
-}
+import { createGitignoreMatcher, type GitignoreMatcher } from "../lib/workbench/gitignore-matcher";
+import type { OrchestratorReloadScope } from "../lib/types";
+import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
+import type ReloadableNode from "./ReloadableNode";
+import type {
+  ReloadableNodeBuild,
+  ReloadableNodeGraph,
+  ReloadableNodeInstance,
+  ReloadableNodeLifecycle,
+} from "./ReloadableNode";
 
-export interface OrchestratorFeatureRuntimeDrainPending {
-  ageMs: number;
-  label: string;
-}
-
-export type OrchestratorFeatureNodeLifecycle = "atomic" | "handoff";
-
-export interface OrchestratorFeatureNodeInstance<TFeatures extends object, TNotification> {
-  activate?(): Promise<void> | void;
-  beginRuntimeDrain?(): void;
-  detachForReload?(replacement: { isReplacing(nodeId: string): boolean }): Promise<unknown> | unknown;
-  dispose(reportPhase?: (phase: string) => void): Promise<void> | void;
-  expireRuntimeDrain?(): void;
-  features: Partial<TFeatures>;
-  listRuntimeDrainPending?(): readonly OrchestratorFeatureRuntimeDrainPending[];
-  observeProviderNotification?(notification: TNotification): Promise<void> | void;
-  start(): Promise<void> | void;
-}
-
-export interface OrchestratorFeatureNodeBuild<TFeatures extends object> {
-  get<TKey extends keyof TFeatures>(key: TKey): TFeatures[TKey];
-  handoffState: unknown;
-  isReplacing(nodeId: string): boolean;
-  lease: OrchestratorFeatureLease;
-  mode: "initial" | "replacement" | "restore";
-}
-
-export interface OrchestratorFeatureNodeDefinition<TContext, TFeatures extends object, TNotification> {
-  create(context: TContext, build: OrchestratorFeatureNodeBuild<TFeatures>): OrchestratorFeatureNodeInstance<TFeatures, TNotification>;
+interface OrchestratorFeatureNodeDefinition<TContext, TFeatures extends object, TNotification> {
+  access: ReloadableNode<TContext, TFeatures, TNotification>["access"];
+  create(context: TContext, build: ReloadableNodeBuild<TFeatures>): ReloadableNodeInstance<TFeatures, TNotification>;
   dependencies: readonly string[];
+  description: string;
   featureKeys: readonly (keyof TFeatures)[];
   id: string;
-  lifecycle: OrchestratorFeatureNodeLifecycle;
-  scope: string;
+  lifecycle: ReloadableNodeLifecycle;
+  matcher: GitignoreMatcher;
+  requires: readonly (keyof TFeatures)[];
+  safeAll: boolean;
+  scope: OrchestratorReloadScope;
 }
 
-export interface OrchestratorFeatureModule<TContext, TFeatures extends object, TNotification> {
-  createOrchestratorFeatureNodes(context: TContext): readonly OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>[];
-}
-
-export interface OrchestratorFeatureModuleLoader<TContext, TFeatures extends object, TNotification> {
-  load(): OrchestratorFeatureModule<TContext, TFeatures, TNotification>;
-  reload(): OrchestratorFeatureModule<TContext, TFeatures, TNotification>;
+export interface ReloadableNodeModuleLoader<TContext, TFeatures extends object, TNotification> {
+  load(): ReloadableNodeGraph<TContext, TFeatures, TNotification>;
+  reload(): ReloadableNodeGraph<TContext, TFeatures, TNotification>;
 }
 
 interface RuntimeDrainDeadline {
@@ -64,11 +39,13 @@ interface RuntimeDrainDeadline {
   expired: Promise<void>;
 }
 
-export interface OrchestratorFeatureHostOptions {
+export interface ReloadableNodeHostOptions {
   createRuntimeDrainDeadline?: (timeoutMs: number) => RuntimeDrainDeadline;
   logError?: (message: string) => void;
   now?: () => number;
   onSwap?: (nodeIds: readonly string[]) => Promise<void> | void;
+  requiredRegistrations?: readonly PropertyKey[];
+  requiredScopes?: readonly OrchestratorReloadScope[];
   runtimeDrainTimeoutMs?: number;
 }
 
@@ -83,7 +60,7 @@ interface ActiveNode<TContext, TFeatures extends object, TNotification> {
   disposalPhase: string | null;
   drainWaiters: Array<() => void>;
   gate: Promise<void> | null;
-  instance: OrchestratorFeatureNodeInstance<TFeatures, TNotification>;
+  instance: ReloadableNodeInstance<TFeatures, TNotification>;
   releaseGate: (() => void) | null;
   runtimeDrainStartedAt: number | null;
   token: symbol;
@@ -97,6 +74,19 @@ interface Retirement<TContext, TFeatures extends object, TNotification> {
 }
 
 const DEFAULT_RUNTIME_DRAIN_TIMEOUT_MS = 30_000;
+const PROCESS_SCOPE: OrchestratorReloadScope = "server:process";
+const PROCESS_SCOPE_DESCRIPTOR: OrchestratorReloadScopeDescriptor = Object.freeze({
+  access: "operator",
+  description: "Restart the complete orchestrator process to replace the stable graph kernel.",
+  safeAll: false,
+  scope: PROCESS_SCOPE,
+});
+const PROCESS_SOURCE_MATCHER = createGitignoreMatcher([
+  "webapp/orchestrator/index.ts",
+  "webapp/orchestrator/ReloadableNodeHost.ts",
+  "webapp/orchestrator/reloadable-node-loader.ts",
+  "webapp/orchestrator/orchestrator-process-context.ts",
+].join("\n"));
 
 function boundedLabel(value: string) {
   const normalized = value.replace(/\s+/gu, " ").trim() || "unnamed operation";
@@ -124,33 +114,37 @@ function normalizeNodeId(value: string, label: string) {
   return normalized;
 }
 
-export default class OrchestratorFeatureHost<TContext, TFeatures extends object, TNotification> {
-  private readonly createDeadline: NonNullable<OrchestratorFeatureHostOptions["createRuntimeDrainDeadline"]>;
+export default class ReloadableNodeHost<TContext, TFeatures extends object, TNotification> {
+  private readonly createDeadline: NonNullable<ReloadableNodeHostOptions["createRuntimeDrainDeadline"]>;
   private definitions = new Map<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>();
   private featureOwners = new Map<keyof TFeatures, string>();
   private hardShutdownStarted = false;
   private hardShutdownPromise: Promise<void> | null = null;
-  private readonly logError: NonNullable<OrchestratorFeatureHostOptions["logError"]>;
-  private readonly now: NonNullable<OrchestratorFeatureHostOptions["now"]>;
-  private readonly onSwap: NonNullable<OrchestratorFeatureHostOptions["onSwap"]>;
+  private readonly logError: NonNullable<ReloadableNodeHostOptions["logError"]>;
+  private readonly now: NonNullable<ReloadableNodeHostOptions["now"]>;
+  private readonly onSwap: NonNullable<ReloadableNodeHostOptions["onSwap"]>;
+  private readonly requiredRegistrations: readonly PropertyKey[];
+  private readonly requiredScopes: readonly OrchestratorReloadScope[];
   private nodes = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
   private reloadTail = Promise.resolve();
   private readonly retirements = new Set<Retirement<TContext, TFeatures, TNotification>>();
   private readonly runtimeDrainTimeoutMs: number;
   private started = false;
-  private topology: readonly string[] = [];
+  private topology: readonly OrchestratorReloadScope[] = [];
 
   constructor(
     private readonly context: TContext,
-    private readonly loader: OrchestratorFeatureModuleLoader<TContext, TFeatures, TNotification>,
-    options: OrchestratorFeatureHostOptions = {},
+    private readonly loader: ReloadableNodeModuleLoader<TContext, TFeatures, TNotification>,
+    options: ReloadableNodeHostOptions = {},
   ) {
     this.createDeadline = options.createRuntimeDrainDeadline ?? createRuntimeDrainDeadline;
     this.logError = options.logError ?? (() => undefined);
     this.now = options.now ?? Date.now;
     this.onSwap = options.onSwap ?? (() => undefined);
+    this.requiredRegistrations = options.requiredRegistrations ?? [];
+    this.requiredScopes = options.requiredScopes ?? [];
     this.runtimeDrainTimeoutMs = options.runtimeDrainTimeoutMs ?? DEFAULT_RUNTIME_DRAIN_TIMEOUT_MS;
-    const graph = this.validateGraph(loader.load().createOrchestratorFeatureNodes(context));
+    const graph = this.validateGraph(this.flattenGraph(loader.load()));
     this.definitions = graph.definitions;
     this.topology = graph.topology;
     this.nodes = this.createNodes(graph.definitions, graph.topology, new Map(), new Map(), new Set(), "initial");
@@ -159,6 +153,27 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
 
   get<TKey extends keyof TFeatures>(key: TKey) {
     return this.requireFeature(this.nodes, this.featureOwners, key);
+  }
+
+  getReloadScopeCatalog(): readonly OrchestratorReloadScopeDescriptor[] {
+    return [...this.topology.map((scope) => {
+      const definition = this.definitions.get(scope)!;
+      return Object.freeze({
+        access: definition.access,
+        description: definition.description,
+        safeAll: definition.safeAll,
+        scope: definition.scope,
+      });
+    }), PROCESS_SCOPE_DESCRIPTOR];
+  }
+
+  getReloadScopesForPaths(paths: readonly string[]): OrchestratorReloadScope[] {
+    const scopes = this.topology.filter((scope) => {
+      const matcher = this.definitions.get(scope)!.matcher;
+      return paths.some((path) => matcher.matchesPathOrDescendant(path));
+    });
+    if (paths.some((path) => PROCESS_SOURCE_MATCHER.matchesPathOrDescendant(path))) scopes.push(PROCESS_SCOPE);
+    return scopes;
   }
 
   async run<TKey extends keyof TFeatures, TResult>(
@@ -176,7 +191,7 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
     for (const node of leased) node.activeOperations.set(token, activeOperation);
     try {
       const owner = this.requireNode(ownerId);
-      return await operation(owner.instance.features[key] as TFeatures[TKey]);
+      return await operation(owner.instance.registrations[key] as TFeatures[TKey]);
     } finally {
       for (const node of leased) {
         node.activeOperations.delete(token);
@@ -200,18 +215,24 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
     }
   }
 
-  validateReloadScopes(scopes: readonly string[]) {
+  validateReloadScopes(scopes: readonly OrchestratorReloadScope[]) {
     this.selectDependants(scopes, this.definitions);
   }
 
-  async reload(scopes: readonly string[]) {
+  async reload(scopes: readonly OrchestratorReloadScope[]) {
     this.assertAcceptingWork();
     const operation = this.reloadTail.then(async () => {
       this.assertAcceptingWork();
       const blocked = Array.from(this.retirements).find((retirement) => retirement.timedOut && !retirement.settled);
       if (blocked) throw new Error(this.describeTimedOutRetirement(blocked, "A previous feature node retirement still has timed-out runtime work"));
-      const fresh = this.validateGraph(this.loader.reload().createOrchestratorFeatureNodes(this.context));
-      this.assertStableTopology(fresh.definitions, fresh.topology);
+      const fresh = this.validateGraph(this.flattenGraph(this.loader.reload()));
+      if (this.hasTopologyChanged(fresh.definitions, fresh.topology)) {
+        if (!scopes.includes("server:topology")) {
+          throw new Error("Reloadable node topology changed outside a server:topology reload. The current runtime was not changed.");
+        }
+        await this.reloadChangedTopology(fresh.definitions, fresh.topology, scopes);
+        return;
+      }
       const selected = this.selectDependants(scopes, fresh.definitions);
       if (!selected.size) return;
       const ordered = fresh.topology.filter((nodeId) => selected.has(nodeId));
@@ -434,13 +455,85 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
     }
   }
 
+  private async reloadChangedTopology(
+    definitions: Map<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
+    topology: readonly OrchestratorReloadScope[],
+    scopes: readonly OrchestratorReloadScope[],
+  ) {
+    const previousDefinitions = this.definitions;
+    const previousTopology = this.topology;
+    const selected = this.changedTopologyClosure(definitions, scopes);
+    const previousIds = previousTopology.filter((scope) => selected.has(scope));
+    const candidateIds = topology.filter((scope) => selected.has(scope));
+    const previous = previousIds.map((scope) => this.requireNode(scope));
+    for (const node of previous) this.closeGate(node);
+    try {
+      await this.waitForNodesDrain(previous);
+      this.assertAcceptingWork();
+    } catch (error) {
+      for (const node of previous) this.openGate(node);
+      throw error;
+    }
+
+    const handoffStates = new Map<string, unknown>();
+    let candidates = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
+    try {
+      for (const scope of [...previousIds].reverse()) {
+        const node = this.requireNode(scope);
+        if (node.definition.lifecycle === "handoff") {
+          if (!node.instance.detachForReload) throw new Error(`Handoff reloadable node ${scope} does not implement detachForReload.`);
+          handoffStates.set(scope, await node.instance.detachForReload({ isReplacing: (candidate) => selected.has(candidate) }));
+        } else {
+          this.beginDrain(node);
+        }
+      }
+      await this.disposeNodes([...previous].reverse());
+      for (const scope of previousIds) this.nodes.delete(scope);
+      candidates = this.createNodes(definitions, candidateIds, this.nodes, handoffStates, selected, "replacement");
+      if (this.started) {
+        for (const scope of candidateIds) await candidates.get(scope)!.instance.start();
+      }
+      for (const [scope, node] of candidates) this.nodes.set(scope, node);
+      this.definitions = definitions;
+      this.topology = topology;
+      this.featureOwners = this.validateFeatureOwnership(this.nodes);
+      for (const node of previous) this.openGate(node);
+      for (const scope of candidateIds) await candidates.get(scope)!.instance.activate?.();
+      await this.onSwap(candidateIds);
+    } catch (error) {
+      const rollbackErrors: unknown[] = [];
+      try {
+        await this.disposeNodes([...candidates.values()].reverse());
+      } catch (disposeError) {
+        rollbackErrors.push(disposeError);
+      }
+      for (const scope of candidateIds) this.nodes.delete(scope);
+      this.definitions = previousDefinitions;
+      this.topology = previousTopology;
+      try {
+        const restored = this.createNodes(previousDefinitions, previousIds, this.nodes, handoffStates, selected, "restore");
+        if (this.started) for (const scope of previousIds) await restored.get(scope)!.instance.start();
+        for (const [scope, node] of restored) this.nodes.set(scope, node);
+        this.featureOwners = this.validateFeatureOwnership(this.nodes);
+        for (const scope of previousIds) await restored.get(scope)!.instance.activate?.();
+      } catch (restoreError) {
+        rollbackErrors.push(restoreError);
+      }
+      for (const node of previous) this.openGate(node);
+      if (rollbackErrors.length) {
+        throw new AggregateError([error, ...rollbackErrors], "Reloadable topology replacement and rollback both failed.");
+      }
+      throw error;
+    }
+  }
+
   private createNodes(
     definitions: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
     ordered: readonly string[],
     dependencies: ReadonlyMap<string, ActiveNode<TContext, TFeatures, TNotification>>,
     handoffStates: ReadonlyMap<string, unknown>,
     selected: ReadonlySet<string>,
-    mode: OrchestratorFeatureNodeBuild<TFeatures>["mode"],
+    mode: ReloadableNodeBuild<TFeatures>["mode"],
   ) {
     const created = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
     for (const nodeId of ordered) {
@@ -448,13 +541,16 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
       const token = Symbol(`orchestrator-feature-node:${nodeId}`);
       const visible = new Map([...dependencies, ...created]);
       const instance = definition.create(this.context, {
-        get: <TKey extends keyof TFeatures>(key: TKey) => this.requireFeature(visible, this.validateFeatureOwnership(visible), key),
+        get: <TKey extends keyof TFeatures>(key: TKey) => {
+          if (!definition.requires.includes(key)) throw new Error(`Reloadable node ${nodeId} read undeclared parent registration ${String(key)}.`);
+          return this.requireFeature(visible, this.validateFeatureOwnership(visible), key);
+        },
         handoffState: handoffStates.get(nodeId),
         isReplacing: (candidateId) => selected.has(candidateId),
         lease: { isCurrent: () => !this.hardShutdownStarted && this.nodes.get(nodeId)?.token === token },
         mode,
       });
-      const actualKeys = Object.keys(instance.features) as (keyof TFeatures)[];
+      const actualKeys = Object.keys(instance.registrations) as (keyof TFeatures)[];
       if (actualKeys.length !== definition.featureKeys.length || actualKeys.some((key) => !definition.featureKeys.includes(key))) {
         throw new Error(`Feature node ${nodeId} did not create exactly its declared feature keys.`);
       }
@@ -466,6 +562,41 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
     return created;
   }
 
+  private flattenGraph(graph: ReloadableNodeGraph<TContext, TFeatures, TNotification>) {
+    if (!graph.roots.length) throw new Error("At least one reloadable root node is required.");
+    const nodes = new Map<string, ReloadableNode<TContext, TFeatures, TNotification>>();
+    const parents = new Map<string, Set<string>>();
+    const visit = (node: ReloadableNode<TContext, TFeatures, TNotification>, parentScope: string | null) => {
+      const scope = normalizeNodeId(node.scope, "Reloadable node scope");
+      const existing = nodes.get(scope);
+      if (existing && existing !== node) {
+        throw new Error(`Reloadable scope ${scope} is represented by different child node objects.`);
+      }
+      nodes.set(scope, node);
+      if (parentScope) {
+        const nodeParents = parents.get(scope) ?? new Set<string>();
+        nodeParents.add(parentScope);
+        parents.set(scope, nodeParents);
+      }
+      if (existing) return;
+      for (const child of node.children) visit(child, scope);
+    };
+    for (const root of graph.roots) visit(root, null);
+    return [...nodes.values()].map((node): OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification> => ({
+      access: node.access,
+      create: node.create,
+      dependencies: [...(parents.get(node.scope) ?? [])],
+      description: node.description,
+      featureKeys: node.provides,
+      id: node.scope,
+      lifecycle: node.lifecycle,
+      matcher: createGitignoreMatcher(node.sources),
+      requires: node.requires,
+      safeAll: node.safeAll,
+      scope: node.scope,
+    }));
+  }
+
   private validateGraph(definitions: readonly OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>[]) {
     if (!definitions.length) throw new Error("At least one orchestrator feature node is required.");
     const byId = new Map<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>();
@@ -475,15 +606,35 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
       if (byId.has(id)) throw new Error(`Feature node ${id} is registered more than once.`);
       if (new Set(definition.dependencies).size !== definition.dependencies.length) throw new Error(`Feature node ${id} has duplicate dependencies.`);
       if (new Set(definition.featureKeys).size !== definition.featureKeys.length) throw new Error(`Feature node ${id} has duplicate feature keys.`);
+      if (new Set(definition.requires).size !== definition.requires.length) throw new Error(`Feature node ${id} has duplicate required registrations.`);
+      if (definition.safeAll && definition.access !== "agent") throw new Error(`Feature node ${id} cannot be included in safe all with ${definition.access} access.`);
       byId.set(id, definition);
+    }
+    for (const scope of this.requiredScopes) {
+      if (!byId.has(scope)) throw new Error(`Reloadable topology is missing process-required scope ${scope}.`);
+    }
+    const providedKeys = new Map<keyof TFeatures, string>();
+    for (const definition of byId.values()) {
+      for (const key of definition.featureKeys) {
+        const owner = providedKeys.get(key);
+        if (owner) throw new Error(`Reloadable registration ${String(key)} is declared by both ${owner} and ${definition.id}.`);
+        providedKeys.set(key, definition.id);
+      }
+    }
+    for (const key of this.requiredRegistrations) {
+      if (!providedKeys.has(key as keyof TFeatures)) throw new Error(`Reloadable topology is missing process-required registration ${String(key)}.`);
     }
     for (const definition of byId.values()) {
       for (const dependency of definition.dependencies) {
         if (!byId.has(dependency)) throw new Error(`Feature node ${definition.id} depends on unknown node ${dependency}.`);
         if (dependency === definition.id) throw new Error(`Feature node ${definition.id} cannot depend on itself.`);
       }
+      const parentKeys = new Set(definition.dependencies.flatMap((dependency) => byId.get(dependency)!.featureKeys));
+      for (const key of definition.requires) {
+        if (!parentKeys.has(key)) throw new Error(`Feature node ${definition.id} requires ${String(key)} without a direct parent provider.`);
+      }
     }
-    const topology: string[] = [];
+    const topology: OrchestratorReloadScope[] = [];
     const visiting = new Set<string>();
     const visited = new Set<string>();
     const visit = (nodeId: string, path: readonly string[]) => {
@@ -493,35 +644,65 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
       for (const dependency of byId.get(nodeId)!.dependencies) visit(dependency, [...path, nodeId]);
       visiting.delete(nodeId);
       visited.add(nodeId);
-      topology.push(nodeId);
+      topology.push(byId.get(nodeId)!.scope);
     };
     for (const nodeId of byId.keys()) visit(nodeId, []);
     return { definitions: byId, topology };
   }
 
-  private assertStableTopology(
+  private hasTopologyChanged(
     definitions: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
-    topology: readonly string[],
+    topology: readonly OrchestratorReloadScope[],
   ) {
-    if (topology.length !== this.topology.length || topology.some((nodeId) => !this.definitions.has(nodeId))) {
-      throw new Error("Feature graph topology changed during a live reload. Restart the orchestrator to adopt node additions or removals.");
+    if (topology.length !== this.topology.length || topology.some((scope) => !this.definitions.has(scope))) return true;
+    return topology.some((scope) => this.nodeTopologySignature(this.definitions.get(scope)!) !== this.nodeTopologySignature(definitions.get(scope)!));
+  }
+
+  private changedTopologyClosure(
+    definitions: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
+    scopes: readonly OrchestratorReloadScope[],
+  ) {
+    const selected = new Set<string>();
+    const requested = new Set(scopes);
+    for (const definition of [...this.definitions.values(), ...definitions.values()]) {
+      if (requested.has(definition.scope)) selected.add(definition.scope);
     }
-    for (const nodeId of topology) {
-      const previous = this.definitions.get(nodeId)!;
-      const next = definitions.get(nodeId)!;
-      if (
-        previous.scope !== next.scope
-        || previous.lifecycle !== next.lifecycle
-        || previous.dependencies.join("\0") !== next.dependencies.join("\0")
-        || previous.featureKeys.map(String).join("\0") !== next.featureKeys.map(String).join("\0")
-      ) {
-        throw new Error(`Feature node ${nodeId} changed scope, dependencies, owned keys, or lifecycle during a live reload. Restart the orchestrator to adopt topology changes.`);
+    for (const scope of new Set([...this.definitions.keys(), ...definitions.keys()])) {
+      const previous = this.definitions.get(scope);
+      const candidate = definitions.get(scope);
+      if (!previous || !candidate || this.nodeTopologySignature(previous) !== this.nodeTopologySignature(candidate)) selected.add(scope);
+    }
+    const expand = (source: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>) => {
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const definition of source.values()) {
+          if (!selected.has(definition.scope) && definition.dependencies.some((parent) => selected.has(parent))) {
+            selected.add(definition.scope);
+            changed = true;
+          }
+        }
       }
-    }
+    };
+    expand(this.definitions);
+    expand(definitions);
+    return selected;
+  }
+
+  private nodeTopologySignature(definition: OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>) {
+    return [
+      definition.scope,
+      definition.lifecycle,
+      definition.access,
+      String(definition.safeAll),
+      definition.dependencies.join("\0"),
+      definition.featureKeys.map(String).join("\0"),
+      definition.requires.map(String).join("\0"),
+    ].join("\x01");
   }
 
   private selectDependants(
-    scopes: readonly string[],
+    scopes: readonly OrchestratorReloadScope[],
     definitions: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
   ) {
     const requested = new Set(scopes);
@@ -594,7 +775,7 @@ export default class OrchestratorFeatureHost<TContext, TFeatures extends object,
     key: TKey,
   ) {
     const ownerId = owners.get(key);
-    const value = ownerId ? nodes.get(ownerId)?.instance.features[key] : undefined;
+    const value = ownerId ? nodes.get(ownerId)?.instance.registrations[key] : undefined;
     if (value === undefined) throw new Error(`Feature ${String(key)} is unavailable.`);
     return value as TFeatures[TKey];
   }

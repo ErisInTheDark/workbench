@@ -9,6 +9,13 @@ import { test } from "node:test";
 
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 
+const reloadCatalog = [
+  { access: "agent" as const, description: "Core", safeAll: true, scope: "server:core" },
+  { access: "agent" as const, description: "MCP", safeAll: true, scope: "server:mcp" },
+  { access: "agent" as const, description: "Topology", safeAll: false, scope: "server:topology" },
+  { access: "operator" as const, description: "Process", safeAll: false, scope: "server:process" },
+];
+
 function deferred<TValue>() {
   let resolve!: (value: TValue) => void;
   const promise = new Promise<TValue>((nextResolve) => {
@@ -60,6 +67,7 @@ function createBrowsePort(executeBrowseRequest: (body: Buffer, signal: AbortSign
   return {
     executeBrowseRequest,
     executeSessionRequest: async () => Response.json({ generatedAt: new Date(0).toISOString(), projectId: null, sessions: [] }),
+    getReloadScopeCatalog: () => reloadCatalog,
   };
 }
 
@@ -466,6 +474,7 @@ test("managed reloads wait on the direct coordinator without an internal fetch",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      getReloadScopeCatalog: () => reloadCatalog,
       requestOrchestratorReload: async (body, signal) => {
         started.resolve({ body, signal });
         return await terminal.promise;
@@ -475,7 +484,7 @@ test("managed reloads wait on the direct coordinator without an internal fetch",
   );
   const server = await startController(controller, () => handled.resolve());
   try {
-    const body = new URLSearchParams(agentCommandBody(["orchestrator", "reload", "--server:mcp", "--server:reloader"]));
+    const body = new URLSearchParams(agentCommandBody(["orchestrator", "reload", "--server:mcp", "--server:topology"]));
     body.set("callerHarness", "codex");
     body.set("callerThreadId", "thread-one");
     const client = fetch(`${server.origin}/orchestrator/agent-command`, {
@@ -489,15 +498,15 @@ test("managed reloads wait on the direct coordinator without an internal fetch",
       callerHarness: "codex",
       callerThreadId: "thread-one",
       cwd: process.cwd(),
-      scopes: ["server:mcp", "server:reloader"],
+      scopes: ["server:mcp", "server:topology"],
     });
     terminal.resolve(Response.json({
-      appliedScopes: ["server:mcp", "server:reloader"], completedAt: 2, error: null, ok: true,
-      queuedScopes: [], requestedScopes: ["server:mcp", "server:reloader"], startedAt: 1, state: "succeeded",
+      appliedScopes: ["server:mcp", "server:topology"], completedAt: 2, error: null, ok: true,
+      queuedScopes: [], requestedScopes: ["server:mcp", "server:topology"], startedAt: 1, state: "succeeded",
     }));
     const response = await client;
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /Applied: server:mcp, server:reloader/u);
+    assert.match(await response.text(), /Applied: server:mcp, server:topology/u);
   } finally {
     await server.close();
   }
@@ -525,6 +534,7 @@ test("managed hard reloads bypass the direct coordinator", async () => {
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      getReloadScopeCatalog: () => reloadCatalog,
       requestOrchestratorReload: async () => { throw new Error("unexpected direct reload dispatch"); },
     },
     fetchRequest,

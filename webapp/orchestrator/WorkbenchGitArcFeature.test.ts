@@ -513,6 +513,7 @@ test("plan creation and applied arc moves refresh Git arc state while move previ
 test("reload-scope plans require the exact running Workbench project root", async () => {
   const createFeature = (cwd: string) => {
     const feature = new WorkbenchGitArcFeature({
+      getReloadScopesForPaths: (paths) => paths.some((path) => path.includes("WorkbenchAgentMcpController")) ? ["server:mcp"] : [],
       getThreadClaimContext: async () => null,
       refreshThreadGitArcState: async () => undefined,
       reloadScopeProjectRoot: "C:/Git/Project",

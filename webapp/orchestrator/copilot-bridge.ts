@@ -27,7 +27,7 @@ import type {
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { CopilotThreadState } from "./copilot-thread-state";
 import { appendCopilotEventLog, log, logError } from "./process-helpers";
-import type { OrchestratorReloadableModules } from "./orchestrator-feature-registry";
+import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
 import type { WorkbenchPromptContext } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
 

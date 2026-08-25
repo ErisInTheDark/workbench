@@ -41,6 +41,18 @@ function execFileWithInput(command: string, args: string[], input: string, optio
   });
 }
 const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
+const reloadCatalog = [
+  { access: "agent" as const, description: "Core", safeAll: true, scope: "server:core" },
+  { access: "agent" as const, description: "Browse", safeAll: true, scope: "server:browse" },
+  { access: "agent" as const, description: "Codex bridge", safeAll: true, scope: "server:codex" },
+  { access: "agent" as const, description: "MCP", safeAll: true, scope: "server:mcp" },
+  { access: "agent" as const, description: "OpenCode bridge", safeAll: true, scope: "server:opencode" },
+  { access: "agent" as const, description: "Topology", safeAll: false, scope: "server:topology" },
+  { access: "agent" as const, description: "Client", safeAll: true, scope: "client:all" },
+  { access: "cli" as const, description: "Codex app-server", safeAll: false, scope: "harness:codex" },
+  { access: "cli" as const, description: "OpenCode app-server", safeAll: false, scope: "harness:opencode" },
+  { access: "operator" as const, description: "Process", safeAll: false, scope: "server:process" },
+];
 const shellSourcePath = fileURLToPath(new URL("./workbench-agent-cli.sh", import.meta.url));
 const requests: Array<{ body: string; method: string; url: string }> = [];
 let agentCommandController: WorkbenchAgentCommandController;
@@ -106,6 +118,7 @@ before(async () => {
     },
     executeBrowseRequest: async () => { throw new Error("unexpected direct Browse dispatch"); },
     executeSessionRequest: async () => { throw new Error("unexpected direct Browse session dispatch"); },
+    getReloadScopeCatalog: () => reloadCatalog,
   });
   temporaryDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-agent-cli-test-"));
 });
@@ -688,7 +701,7 @@ test("routes canonical, compatibility, and leaf help to the nearest owning group
 });
 
 test("maps composable reload switches to one deduplicated fixed request", async () => {
-  const unmanaged = { callerThreadId: null };
+  const unmanaged = { callerThreadId: null, reloadCatalog };
   const parsed = await parseWorkbenchAgentCliCommand([
     "orchestrator", "reload", "--client:all", "--server:codex", "--harness:opencode", "--client:all",
     "--server:core+browse", "--server:opencode",
@@ -707,29 +720,28 @@ test("maps composable reload switches to one deduplicated fixed request", async 
     "browse", "run", "--thread", "thread-1", "--command", "doctor", "--stream-progress",
   ])).kind, "error");
   const managed = await parseWorkbenchAgentCliCommand([
-    "orchestrator", "reload", "--server:reloader", "--server:mcp",
-  ], { callerHarness: "codex", callerThreadId: "thread-one", cwd: "C:/workspace" });
+    "orchestrator", "reload", "--server:topology", "--server:mcp",
+  ], { callerHarness: "codex", callerThreadId: "thread-one", cwd: "C:/workspace", reloadCatalog });
   assert.equal(managed.kind, "request");
   if (managed.kind === "request") assert.deepEqual(managed.request.body, {
     callerHarness: "codex",
     callerThreadId: "thread-one",
     cwd: "C:/workspace",
-    scopes: ["server:reloader", "server:mcp"],
+    scopes: ["server:topology", "server:mcp"],
   });
 });
 
-test("expands safe reload all without server replacement and keeps hard restart hidden", async () => {
-  const unmanaged = { callerThreadId: null };
+test("keeps safe all dynamic and hides hard restart", async () => {
+  const unmanaged = { callerThreadId: null, reloadCatalog };
   const parsed = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all"], unmanaged);
   assert.equal(parsed.kind, "request");
-  assert.deepEqual(parsed.request.body, {
-    scopes: ["server:core", "server:browse", "server:codex", "server:mcp", "server:opencode", "client:all"],
-  });
+  assert.deepEqual(parsed.request.body, { all: true });
   const explicitServer = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all", "--harness:opencode"], unmanaged);
   assert.equal(explicitServer.kind, "request");
   if (explicitServer.kind === "request") {
     assert.deepEqual(explicitServer.request.body, {
-      scopes: ["server:core", "server:browse", "server:codex", "server:mcp", "server:opencode", "client:all", "harness:opencode"],
+      all: true,
+      scopes: ["harness:opencode"],
     });
   }
   const hard = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard"], unmanaged);
@@ -739,16 +751,16 @@ test("expands safe reload all without server replacement and keeps hard restart 
   assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard", "--server:codex"], unmanaged)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--server:process"], unmanaged)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--unsafe"], unmanaged)).kind, "error");
-  const reloadDefinition = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "orchestrator reload");
+  const reloadDefinition = listWorkbenchAgentCommands(reloadCatalog, "agent").find(({ words }) => words.join(" ") === "orchestrator reload");
   assert.ok(reloadDefinition);
   assert.equal(reloadDefinition.inputSchema.safeParse({ scopes: ["server:mcp"] }).success, true);
   assert.equal(reloadDefinition.inputSchema.safeParse({ scopes: ["harness:codex"] }).success, false);
-  const help = await parseWorkbenchAgentCliCommand(["--help"]);
+  const help = await parseWorkbenchAgentCliCommand(["--help"], unmanaged);
   assert.equal(help.kind, "help");
   if (help.kind === "help") {
     assert.doesNotMatch(help.help, /--hard|--unsafe|server:process|harness:(?:codex|opencode)/u);
   }
-  const reloadHelp = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--help"]);
+  const reloadHelp = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--help"], unmanaged);
   assert.equal(reloadHelp.kind, "help");
   if (reloadHelp.kind === "help") {
     assert.match(reloadHelp.help, /--all/u);
@@ -756,7 +768,7 @@ test("expands safe reload all without server replacement and keeps hard restart 
     assert.match(reloadHelp.help, /--server:core\+browse\+mcp/u);
     assert.doesNotMatch(reloadHelp.help, /--hard|--unsafe|server:process|harness:(?:codex|opencode)|--orchestrator-logic|--codex-bridge|--next-dev/u);
   }
-  const unsafeHelp = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--help", "--unsafe"]);
+  const unsafeHelp = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--help", "--unsafe"], unmanaged);
   assert.equal(unsafeHelp.kind, "help");
   if (unsafeHelp.kind === "help") {
     assert.match(unsafeHelp.help, /--harness:codex/u);

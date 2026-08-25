@@ -6,12 +6,12 @@
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, status, subagent, and reload commands. Keywords: workbench, cli, title, status, subagent, reload.
  */
 import type { CommandAction } from "../../../codex/generated/app-server/v2/CommandAction";
-import { expandOrchestratorReloadScopes, ORCHESTRATOR_ALL_RELOAD_SCOPES } from "../../orchestrator-reload";
+import { expandOrchestratorReloadScopes } from "../../orchestrator-reload";
 
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
 import {
-  getWorkbenchCommandRendering,
+    getWorkbenchCommandRendering,
 } from "./workbench-command-rendering";
 
 export type WorkbenchSubagentCommandAction = "create" | "list" | "message" | "profiles" | "settle" | "stop" | "wait";
@@ -282,7 +282,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const scopes = (() => {
         try {
           return expandOrchestratorReloadScopes([
-            ...(/(?:^|\s)--all(?:\s|$)/u.test(normalized) ? ORCHESTRATOR_ALL_RELOAD_SCOPES : []),
+            ...(/(?:^|\s)--all(?:\s|$)/u.test(normalized) ? [] : []),
             ...selections,
           ]);
         } catch {
