@@ -14,3 +14,4 @@
 | steer delivery | The later point when an admitted steer is supplied to the running agent at an input boundary. Delivery makes the steer available to the agent's reasoning and can occur after a pending tool call completes |
 | transcripts | persisted transcript files under `.workbench/transcripts/`. For Codex threads, `thread.json`, `turns/*.json`, `turns/*.ndjson`, orphan-event files, and `assets/`, with `CodexTranscriptStore` as their owner |
 | logs | The persisted Workbench orchestrator runtime logs under `.workbench/logs/` |
+| layered sort | A sort where each layer orders only ties from earlier layers. A user override replaces later layers within its slot. |

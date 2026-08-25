@@ -1,50 +1,120 @@
 /*
- * Tests:
- * - partial display-order projection, relation snapshots, lifecycle-section exits, and malformed-cycle fallback.
+ * No production exports. Tests protect layered automatic sorting, complete user-order snapshots, partial-order arrival, section transitions, and malformed-state fallback. Keywords: thread, sort, user order, claims, lifecycle, test.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
   getWorkbenchThreadDisplayKey,
+  getWorkbenchThreadDisplaySection,
   moveWorkbenchThreadDisplayOrder,
-  projectWorkbenchThreadDisplayOrder,
   reconcileWorkbenchThreadDisplayOrder,
+  resolveWorkbenchThreadDisplayOrder,
   type WorkbenchThreadDisplayOrder,
 } from "./thread-display-order";
-import type { WorkbenchThreadSidebarEntry } from "./thread-state";
+import type { WorkbenchThreadLifecycle, WorkbenchThreadSidebarEntry } from "./thread-state";
 
-function thread(id: string, orderAt: number, options: { pinned?: boolean; settled?: boolean; snoozed?: boolean } = {}): WorkbenchThreadSidebarEntry {
+function thread(
+  id: string,
+  orderAt: number,
+  options: {
+    claimed?: boolean;
+    lifecycle?: WorkbenchThreadLifecycle;
+    pinned?: boolean;
+    settled?: boolean;
+    snoozed?: boolean;
+  } = {},
+): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> {
+  const lifecycle = options.lifecycle ?? { kind: "completed", reason: "providerInactive", settled: options.settled ?? false };
   return {
     activityAt: orderAt,
     entryKind: "thread",
+    ...(options.claimed ? {
+      gitArc: {
+        checkpointCommit: "a".repeat(40), claimedPaths: [`src/${id}.ts`], intentDescription: "", intentName: id,
+        phase: "active", proposals: [], updatedAt: "2026-08-25T00:00:00.000Z",
+      },
+    } : {}),
     identity: { harness: "codex", threadId: id },
-    lifecycle: { kind: "completed", reason: "providerInactive", settled: options.settled ?? false },
+    lifecycle,
     metadata: { archived: false, pinned: options.pinned ?? false, snoozed: options.snoozed ?? false },
     orderAt,
     title: id,
   };
 }
 
-function ids(entries: readonly WorkbenchThreadSidebarEntry[]) {
-  return entries.map((entry) => getWorkbenchThreadDisplayKey(entry));
+function draft(id: string, createdAt: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> {
+  return {
+    activityAt: createdAt,
+    draft: {
+      agent: null, attachments: [], clientUpdatedAt: createdAt, composerSettings: {}, createdAt,
+      draftId: id, harness: "codex", model: null, profileId: null, projectId: "project", prompt: id,
+      reasoningEffort: null, serviceTier: null, updatedAt: createdAt,
+    },
+    entryKind: "draft",
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: id,
+  };
 }
 
-test("a moved row stays projected while an ordinary arrival is inserted and snapshotted", () => {
-  const newest = thread("newest", 3, { snoozed: true });
-  const middle = thread("middle", 2, { snoozed: true });
-  const oldest = thread("oldest", 1, { snoozed: true });
-  const moved = moveWorkbenchThreadDisplayOrder([newest, middle, oldest], {}, "snoozed", "codex:oldest", "codex:newest");
-  assert.ok(moved);
-  assert.deepEqual(ids(projectWorkbenchThreadDisplayOrder([newest, middle, oldest], moved)), ["codex:oldest", "codex:newest", "codex:middle"]);
+function ids(entries: readonly WorkbenchThreadSidebarEntry[]) {
+  return entries.map(getWorkbenchThreadDisplayKey);
+}
 
-  const arrival = thread("arrival", 4, { snoozed: true });
-  const reconciled = reconcileWorkbenchThreadDisplayOrder([arrival, newest, middle, oldest], moved);
-  assert.deepEqual(ids(projectWorkbenchThreadDisplayOrder([arrival, newest, middle, oldest], reconciled)), ["codex:arrival", "codex:oldest", "codex:newest", "codex:middle"]);
-  assert.deepEqual(reconciled.snoozed?.["codex:oldest"], {
+const attention = (): WorkbenchThreadLifecycle => ({ kind: "needsAttention", reason: "noActiveTurn", settled: false });
+const working = (turnId: string): WorkbenchThreadLifecycle => ({ agent: { agentStatus: "working", turnId }, kind: "working", reason: "acceptedIntent", settled: false });
+
+test("automatic sidebar order applies settlement, priority, claims, lifecycle, and turn time as layers", () => {
+  const entries = [
+    thread("settled-pinned", 100, { pinned: true, settled: true }),
+    thread("snoozed-claim", 100, { claimed: true, pinned: true, snoozed: true }),
+    thread("normal-complete", 100),
+    thread("normal-stopped", 110, { lifecycle: { kind: "stopped", reason: "userMarkedStopped", settled: false } }),
+    thread("normal-working-older", 10, { lifecycle: working("working-older") }),
+    thread("normal-working-newer", 20, { lifecycle: working("working-newer") }),
+    thread("normal-attention", 1, { lifecycle: attention() }),
+    draft("00000000-0000-4000-8000-000000000001", 1),
+    thread("normal-claim-complete", 1, { claimed: true }),
+    thread("pinned-working", 1, { lifecycle: working("pinned"), pinned: true }),
+    thread("pinned-claim-complete", 1, { claimed: true, pinned: true }),
+    thread("settled-normal", 200, { settled: true }),
+  ];
+
+  assert.deepEqual(ids(resolveWorkbenchThreadDisplayOrder(entries, {}).entries), [
+    "codex:pinned-claim-complete",
+    "codex:pinned-working",
+    "codex:normal-claim-complete",
+    "draft:00000000-0000-4000-8000-000000000001",
+    "codex:normal-attention",
+    "codex:normal-working-newer",
+    "codex:normal-working-older",
+    "codex:normal-stopped",
+    "codex:normal-complete",
+    "codex:snoozed-claim",
+    "codex:settled-pinned",
+    "codex:settled-normal",
+  ]);
+});
+
+test("a complete user snapshot becomes a total comparator rank and refreshes around automatic arrivals", () => {
+  const claimed = thread("claimed", 3, { claimed: true, pinned: true });
+  const attentionEntry = thread("attention", 2, { lifecycle: attention(), pinned: true });
+  const moved = thread("moved", 1, { pinned: true });
+  const natural = resolveWorkbenchThreadDisplayOrder([claimed, attentionEntry, moved], {});
+  const order = moveWorkbenchThreadDisplayOrder(natural.entries, natural.displayOrder, "pinned", "codex:moved", "codex:claimed");
+  assert.ok(order);
+
+  const arrival = thread("arrival", 4, { claimed: true, lifecycle: attention(), pinned: true });
+  const resolved = resolveWorkbenchThreadDisplayOrder([arrival, claimed, attentionEntry, moved], order);
+  assert.deepEqual(ids(resolved.entries), ["codex:arrival", "codex:moved", "codex:claimed", "codex:attention"]);
+  assert.deepEqual(resolved.displayOrder.pinned?.["codex:moved"], {
     above: ["codex:arrival"],
-    below: ["codex:newest", "codex:middle"],
+    below: ["codex:claimed", "codex:attention"],
   });
+
+  const automaticallyMoved = { ...attentionEntry, lifecycle: working("changed"), orderAt: 10 };
+  const refreshed = resolveWorkbenchThreadDisplayOrder([arrival, claimed, automaticallyMoved, moved], resolved.displayOrder);
+  assert.deepEqual(ids(refreshed.entries), ["codex:arrival", "codex:moved", "codex:claimed", "codex:attention"]);
 });
 
 test("leaving a reorderable section clears the row and every touching relation", () => {
@@ -56,7 +126,12 @@ test("leaving a reorderable section clears the row and every touching relation",
   assert.deepEqual(reconciled, {});
 });
 
-test("cyclic persisted relations fall back to natural order", () => {
+test("settlement owns display section before snooze and snooze owns it before pin", () => {
+  assert.equal(getWorkbenchThreadDisplaySection(thread("snoozed", 1, { pinned: true, snoozed: true })), "snoozed");
+  assert.equal(getWorkbenchThreadDisplaySection(thread("settled", 1, { pinned: true, settled: true, snoozed: true })), "settledPinned");
+});
+
+test("cyclic persisted relations resolve to natural order and refresh consistently", () => {
   const first = thread("first", 2, { pinned: true });
   const second = thread("second", 1, { pinned: true });
   const cyclic: WorkbenchThreadDisplayOrder = {
@@ -65,11 +140,18 @@ test("cyclic persisted relations fall back to natural order", () => {
       "codex:second": { above: ["codex:first"], below: [] },
     },
   };
-  assert.deepEqual(ids(projectWorkbenchThreadDisplayOrder([first, second], cyclic)), ["codex:first", "codex:second"]);
+  const resolved = resolveWorkbenchThreadDisplayOrder([first, second], cyclic);
+  assert.deepEqual(ids(resolved.entries), ["codex:first", "codex:second"]);
+  assert.deepEqual(resolved.displayOrder.pinned, {
+    "codex:first": { above: [], below: ["codex:second"] },
+    "codex:second": { above: ["codex:first"], below: [] },
+  });
 });
 
 test("invalid stored ordering safely becomes empty ordering", () => {
   const first = thread("first", 2, { pinned: true });
   const second = thread("second", 1, { pinned: true });
-  assert.deepEqual(ids(projectWorkbenchThreadDisplayOrder([first, second], { pinned: "nope" })), ["codex:first", "codex:second"]);
+  const resolved = resolveWorkbenchThreadDisplayOrder([first, second], { pinned: "nope" });
+  assert.deepEqual(ids(resolved.entries), ["codex:first", "codex:second"]);
+  assert.deepEqual(resolved.displayOrder, {});
 });

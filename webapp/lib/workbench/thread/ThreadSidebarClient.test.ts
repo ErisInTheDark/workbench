@@ -116,6 +116,37 @@ test("activity updates project pinned rows through durable user ordering", async
   assert.deepEqual(client.getSnapshot()?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["older", "newer"]);
 });
 
+test("authoritative arrivals refresh complete user-order snapshots before later automatic movement", async () => {
+  const entry = (threadId: string, orderAt: number): WorkbenchThreadSidebarSnapshot["entries"][number] => ({
+    activityAt: orderAt,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: true, snoozed: false },
+    orderAt,
+    title: threadId,
+  });
+  const initial: WorkbenchThreadSidebarSnapshot = {
+    ...snapshot(1),
+    displayOrder: { pinned: { "codex:older": { above: [], below: ["codex:newer"] } } },
+    entries: [entry("arrival", 3), entry("newer", 2), entry("older", 1)],
+  };
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => initial, upsertDraft: async () => undefined },
+  });
+
+  await client.open("project");
+  assert.deepEqual(client.getSnapshot()?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["arrival", "older", "newer"]);
+  assert.deepEqual(client.getSnapshot()?.displayOrder?.pinned?.["codex:older"], {
+    above: ["codex:arrival"],
+    below: ["codex:newer"],
+  });
+
+  client.acceptActivity({ activityAt: 5, identity: { harness: "codex", threadId: "newer" }, orderAt: 5, projectId: "project", revision: 2, updateKind: "activity" });
+  assert.deepEqual(client.getSnapshot()?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["arrival", "older", "newer"]);
+});
+
 test("external-store subscribers receive each installed snapshot and can unsubscribe", async () => {
   const initial: WorkbenchThreadSidebarSnapshot = {
     ...snapshot(1),

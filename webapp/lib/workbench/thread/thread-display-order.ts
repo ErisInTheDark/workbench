@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadDisplayOrderSchema/WorkbenchThreadDisplayOrder: project-level partial ordering persisted separately from thread records. Keywords: thread, display, ordering, schema.
  * - getWorkbenchThreadDisplayKey/getWorkbenchThreadDisplaySection: stable row identity and reorderable-section ownership. Keywords: thread, draft, pinned, snoozed, settled.
- * - normalizeWorkbenchThreadDisplayOrder/projectWorkbenchThreadDisplayOrder: resilient decoding and stable topological projection over natural order. Keywords: fallback, relation, topology.
+ * - normalizeWorkbenchThreadDisplayOrder/sortThreadSidebarEntries/resolveWorkbenchThreadDisplayOrder: decode, naturally sort, and resolve complete layered sidebar order. Keywords: fallback, enum, claims, lifecycle, user order.
  * - reconcileWorkbenchThreadDisplayOrder/moveWorkbenchThreadDisplayOrder: prune, snapshot, and mutate durable user-positioned relations. Keywords: arrival, transition, drag, snapshot.
  */
 
@@ -12,6 +12,29 @@ import type { WorkbenchThreadSidebarEntry } from "./thread-state";
 
 export const WORKBENCH_THREAD_DISPLAY_SECTIONS = ["pinned", "snoozed", "settledPinned"] as const;
 export type WorkbenchThreadDisplaySection = typeof WORKBENCH_THREAD_DISPLAY_SECTIONS[number];
+
+enum ThreadSettleSort {
+  Unsettled,
+  Settled,
+}
+
+enum ThreadPrioritySort {
+  Pinned,
+  Normal,
+  Snoozed,
+}
+
+enum ThreadClaimSort {
+  HoldingClaims,
+  NoClaims,
+}
+
+enum ThreadLifecycleSort {
+  Draft,
+  NeedsAttention,
+  Working,
+  Complete,
+}
 
 const WorkbenchThreadDisplayPositionSchema = z.object({
   above: z.array(z.string().min(1)),
@@ -34,8 +57,8 @@ export function getWorkbenchThreadDisplayKey(entry: WorkbenchThreadSidebarEntry)
 export function getWorkbenchThreadDisplaySection(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadDisplaySection | null {
   if (entry.entryKind === "subagent") return null;
   if (entry.metadata.archived) return null;
-  if (entry.metadata.snoozed) return "snoozed";
   if (entry.entryKind !== "draft" && entry.lifecycle.settled) return entry.metadata.pinned ? "settledPinned" : null;
+  if (entry.metadata.snoozed) return "snoozed";
   return entry.metadata.pinned ? "pinned" : null;
 }
 
@@ -46,6 +69,59 @@ export function normalizeWorkbenchThreadDisplayOrder(candidate: unknown): Workbe
 
 function sectionEntries(entries: readonly WorkbenchThreadSidebarEntry[], section: WorkbenchThreadDisplaySection) {
   return entries.filter((entry) => getWorkbenchThreadDisplaySection(entry) === section);
+}
+
+function threadSettleSort(entry: WorkbenchThreadSidebarEntry) {
+  return entry.entryKind !== "draft" && entry.lifecycle.settled
+    ? ThreadSettleSort.Settled
+    : ThreadSettleSort.Unsettled;
+}
+
+function threadPrioritySort(entry: WorkbenchThreadSidebarEntry) {
+  const snoozed = entry.entryKind !== "subagent" && entry.metadata.snoozed;
+  if (snoozed) return ThreadPrioritySort.Snoozed;
+  const pinned = entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
+  return pinned ? ThreadPrioritySort.Pinned : ThreadPrioritySort.Normal;
+}
+
+function threadClaimSort(entry: WorkbenchThreadSidebarEntry) {
+  return entry.entryKind !== "draft" && Boolean(entry.gitArc?.claimedPaths.length)
+    ? ThreadClaimSort.HoldingClaims
+    : ThreadClaimSort.NoClaims;
+}
+
+function threadLifecycleSort(entry: WorkbenchThreadSidebarEntry) {
+  if (entry.entryKind === "draft") return ThreadLifecycleSort.Draft;
+  if (entry.lifecycle.kind === "needsAttention") return ThreadLifecycleSort.NeedsAttention;
+  if (entry.lifecycle.kind === "working") return ThreadLifecycleSort.Working;
+  return ThreadLifecycleSort.Complete;
+}
+
+function threadTurnStartSort(entry: WorkbenchThreadSidebarEntry) {
+  if (entry.entryKind === "draft") return entry.draft.createdAt;
+  if (entry.entryKind === "thread") return entry.orderAt ?? entry.activityAt;
+  return entry.createdAt;
+}
+
+function compareThreadIdentity(left: WorkbenchThreadSidebarEntry, right: WorkbenchThreadSidebarEntry) {
+  const leftHarness = left.entryKind === "draft" ? left.draft.harness : left.identity.harness;
+  const rightHarness = right.entryKind === "draft" ? right.draft.harness : right.identity.harness;
+  return leftHarness.localeCompare(rightHarness) || getWorkbenchThreadDisplayKey(left).localeCompare(getWorkbenchThreadDisplayKey(right));
+}
+
+function compareNaturalThreadOrder(left: WorkbenchThreadSidebarEntry, right: WorkbenchThreadSidebarEntry) {
+  return (
+    threadSettleSort(left) - threadSettleSort(right)
+    || threadPrioritySort(left) - threadPrioritySort(right)
+    || threadClaimSort(left) - threadClaimSort(right)
+    || threadLifecycleSort(left) - threadLifecycleSort(right)
+    || threadTurnStartSort(right) - threadTurnStartSort(left)
+    || compareThreadIdentity(left, right)
+  );
+}
+
+export function sortThreadSidebarEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {
+  return [...entries].sort(compareNaturalThreadOrder);
 }
 
 function projectSection(
@@ -87,25 +163,6 @@ function projectSection(
   return result.map((key) => byKey.get(key)!);
 }
 
-export function projectWorkbenchThreadDisplayOrder(
-  naturallyOrderedEntries: readonly WorkbenchThreadSidebarEntry[],
-  candidate: unknown,
-) {
-  const order = normalizeWorkbenchThreadDisplayOrder(candidate);
-  const projectedBySection = new Map(WORKBENCH_THREAD_DISPLAY_SECTIONS.map((section) => [
-    section,
-    projectSection(sectionEntries(naturallyOrderedEntries, section), order[section]),
-  ]));
-  const indexes = new Map(WORKBENCH_THREAD_DISPLAY_SECTIONS.map((section) => [section, 0]));
-  return naturallyOrderedEntries.map((entry) => {
-    const section = getWorkbenchThreadDisplaySection(entry);
-    if (!section) return entry;
-    const index = indexes.get(section) ?? 0;
-    indexes.set(section, index + 1);
-    return projectedBySection.get(section)?.[index] ?? entry;
-  });
-}
-
 function snapshotSection(
   projected: readonly WorkbenchThreadSidebarEntry[],
   positionedKeys: ReadonlySet<string>,
@@ -132,6 +189,48 @@ export function reconcileWorkbenchThreadDisplayOrder(
     if (Object.keys(snapshot).length) next[section] = snapshot;
   }
   return next;
+}
+
+function resolveUserSortIndexes(
+  naturallyOrderedEntries: readonly WorkbenchThreadSidebarEntry[],
+  order: WorkbenchThreadDisplayOrder,
+) {
+  return new Map(WORKBENCH_THREAD_DISPLAY_SECTIONS.flatMap((section) => {
+    if (!Object.keys(order[section] ?? {}).length) return [];
+    const projected = projectSection(sectionEntries(naturallyOrderedEntries, section), order[section]);
+    return [[section, new Map(projected.map((entry, index) => [getWorkbenchThreadDisplayKey(entry), index]))] as const];
+  }));
+}
+
+function compareThreadUserSort(
+  left: WorkbenchThreadSidebarEntry,
+  right: WorkbenchThreadSidebarEntry,
+  indexesBySection: ReturnType<typeof resolveUserSortIndexes>,
+) {
+  const leftSection = getWorkbenchThreadDisplaySection(left);
+  if (!leftSection || leftSection !== getWorkbenchThreadDisplaySection(right)) return 0;
+  const indexes = indexesBySection.get(leftSection);
+  if (!indexes) return 0;
+  return indexes.get(getWorkbenchThreadDisplayKey(left))! - indexes.get(getWorkbenchThreadDisplayKey(right))!;
+}
+
+export function resolveWorkbenchThreadDisplayOrder(
+  entries: readonly WorkbenchThreadSidebarEntry[],
+  candidate: unknown,
+) {
+  const naturallyOrderedEntries = sortThreadSidebarEntries(entries);
+  const displayOrder = reconcileWorkbenchThreadDisplayOrder(naturallyOrderedEntries, candidate);
+  const userSortIndexes = resolveUserSortIndexes(naturallyOrderedEntries, displayOrder);
+  const orderedEntries = [...naturallyOrderedEntries].sort((left, right) => (
+    threadSettleSort(left) - threadSettleSort(right)
+    || threadPrioritySort(left) - threadPrioritySort(right)
+    || compareThreadUserSort(left, right, userSortIndexes)
+    || threadClaimSort(left) - threadClaimSort(right)
+    || threadLifecycleSort(left) - threadLifecycleSort(right)
+    || threadTurnStartSort(right) - threadTurnStartSort(left)
+    || compareThreadIdentity(left, right)
+  ));
+  return { displayOrder, entries: orderedEntries };
 }
 
 export function moveWorkbenchThreadDisplayOrder(

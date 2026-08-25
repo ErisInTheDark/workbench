@@ -259,5 +259,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/lib/workbench-library.ts",
     "webapp/lib/workbench/instructions/**",
     "!webapp/lib/workbench/instructions/**/*.md",
+    "webapp/lib/workbench/thread/thread-display-order.ts",
+    "webapp/lib/workbench/thread/thread-state.ts",
   ].join("\n"),
 });

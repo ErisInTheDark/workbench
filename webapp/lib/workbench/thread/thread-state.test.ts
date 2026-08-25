@@ -1,7 +1,7 @@
 /* No production exports. Tests protect strict lifecycle, grouping, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchThreadPlanConflictSelector, getThreadSidebarGroup, getWorkbenchThreadPlanConflictEntries, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, sortThreadSidebarEntries, WorkbenchDurableQuestionnaireSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchThreadPlanConflictSelector, getThreadSidebarGroup, getWorkbenchThreadPlanConflictEntries, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
 test("live claims and proposed commit proposals prevent thread settlement", () => {
   const resolved = {
@@ -142,8 +142,7 @@ test("draft priority requests use draft identity and drive shared grouping and o
     title: "Pinned draft",
   };
   assert.equal(getThreadSidebarGroup(entry), "snoozed");
-  const snoozedOrder = sortThreadSidebarEntries([{ ...entry, metadata: { ...entry.metadata, pinned: false } }, entry]);
-  assert.deepEqual(snoozedOrder.map((candidate) => candidate.entryKind === "draft" ? candidate.metadata.pinned : null), [false, true]);
+  assert.equal(entry.metadata.pinned, true);
 });
 
 test("display-order moves require a reorderable section and explicit insertion key", () => {
@@ -194,52 +193,6 @@ test("durable questionnaire state accepts proper questions and rejects approvals
     method: "workbench/thread-state/questionnaire/dismiss",
     projectId: "project",
   }).success, false);
-});
-
-test("top-level threads sort by latest turn start while activity remains display-only", () => {
-  const entry = (threadId: string, activityAt: number, orderAt?: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
-    activityAt,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId },
-    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
-    metadata: { archived: false, pinned: false, snoozed: false },
-    ...(orderAt === undefined ? {} : { orderAt }),
-    title: threadId,
-  });
-  assert.deepEqual(
-    sortThreadSidebarEntries([entry("older-turn-busy", 100, 10), entry("newer-turn-quiet", 1, 20)]).map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""),
-    ["newer-turn-quiet", "older-turn-busy"],
-  );
-  assert.deepEqual(
-    sortThreadSidebarEntries([entry("fallback-older", 10), entry("fallback-newer", 20)]).map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""),
-    ["fallback-newer", "fallback-older"],
-  );
-});
-
-test("working and needs-attention threads sort above completed and stopped threads", () => {
-  const entry = (
-    threadId: string,
-    lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>["lifecycle"],
-    orderAt: number,
-  ): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
-    activityAt: orderAt,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId },
-    lifecycle,
-    metadata: { archived: false, pinned: false, snoozed: false },
-    orderAt,
-    title: threadId,
-  });
-  const entries = [
-    entry("stopped", { kind: "stopped", reason: "userMarkedStopped", settled: false }, 50),
-    entry("completed", { kind: "completed", reason: "userCompleted", settled: false }, 40),
-    entry("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }, 20),
-    entry("working", { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false }, 10),
-  ];
-  assert.deepEqual(
-    sortThreadSidebarEntries(entries).map((candidate) => candidate.title),
-    ["working", "attention", "stopped", "completed"],
-  );
 });
 
 test("planned conflicts share sidebar grouping, exclude subagents, and stabilize irrelevant snapshots", () => {

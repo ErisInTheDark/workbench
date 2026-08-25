@@ -15,8 +15,9 @@ import {
   isWorkbenchThreadDisplayOrderEmpty,
   moveWorkbenchThreadDisplayOrder,
   normalizeWorkbenchThreadDisplayOrder,
-  projectWorkbenchThreadDisplayOrder,
   reconcileWorkbenchThreadDisplayOrder,
+  resolveWorkbenchThreadDisplayOrder,
+  sortThreadSidebarEntries,
   type WorkbenchThreadDisplayOrder,
 } from "../lib/workbench/thread/thread-display-order";
 import {
@@ -31,7 +32,6 @@ import {
   projectWorkbenchThreadSidebarEntries,
   reduceWorkbenchThreadLifecycle,
   resolveWorkbenchThreadTitle,
-  sortThreadSidebarEntries,
   type WorkbenchLifecycleEvent,
   type WorkbenchDurableQuestionnaire,
   type WorkbenchQuestionnaireHistoryEntryState,
@@ -804,7 +804,8 @@ export default class WorkbenchThreadStateController {
   }
   private snapshot(projectId: string, state: ProjectState): WorkbenchThreadSidebarSnapshot {
     const naturallyOrdered = this.naturallyOrderedEntries(state);
-    return { displayOrder: state.displayOrder, entries: projectWorkbenchThreadDisplayOrder(naturallyOrdered, state.displayOrder), error: state.error, freshness: state.freshness, projectId, revision: state.revision };
+    const resolved = resolveWorkbenchThreadDisplayOrder(naturallyOrdered, state.displayOrder);
+    return { ...resolved, error: state.error, freshness: state.freshness, projectId, revision: state.revision };
   }
   private publish(projectId: string, state: ProjectState, changedEntry?: WorkbenchThreadStateEntry) {
     if (!this.active || !state.observers.size) return;

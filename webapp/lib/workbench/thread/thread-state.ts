@@ -6,7 +6,7 @@
  * - WorkbenchThreadStateOpenResultSchema/WorkbenchThreadStateOpenResult: atomic catalog, tree, and sidebar observation bootstrap. Keywords: open, bootstrap, snapshot.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, mutation, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
  * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness. Keywords: git, arc, settlement, proposal, wake.
- * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries/sortThreadSidebarEntries: exhaustive pinned, main, snoozed, and settled grouping with lifecycle-first natural order. Keywords: grouping, pin, sort.
+ * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition already-ordered entries into hidden, pinned, main, snoozed, and settled render sections. Keywords: grouping, pin, sidebar.
  * - getWorkbenchThreadPlanConflictEntries/createWorkbenchThreadPlanConflictSelector: derive and identity-stabilize visible sibling claim conflicts from one inactive plan and the live sidebar snapshot. Keywords: plan, claim, conflict, sidebar, selector.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback. Keywords: title, preview, uuid.
@@ -390,8 +390,8 @@ export function resolveWorkbenchThreadTitle({
 
 export function getThreadSidebarGroup(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadSidebarGroup {
   if (entry.entryKind !== "subagent" && entry.metadata.archived) return "hidden";
-  if (entry.entryKind !== "subagent" && entry.metadata.snoozed) return "snoozed";
   if (entry.entryKind !== "draft" && entry.lifecycle.settled) return "settled";
+  if (entry.entryKind !== "subagent" && entry.metadata.snoozed) return "snoozed";
   const pinned = entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
   return pinned ? "pinned" : "main";
 }
@@ -450,39 +450,6 @@ export function createWorkbenchThreadPlanConflictSelector(identity: { harness: W
     selected = next;
     return selected;
   };
-}
-
-export function sortThreadSidebarEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {
-  return [...entries].sort((left, right) => {
-    const groupRank: Record<WorkbenchThreadSidebarGroup, number> = { hidden: 4, main: 1, pinned: 0, settled: 3, snoozed: 2 };
-    const leftGroup = getThreadSidebarGroup(left);
-    const rightGroup = getThreadSidebarGroup(right);
-    const presentationOrder = groupRank[leftGroup] - groupRank[rightGroup];
-    if (presentationOrder) return presentationOrder;
-    const leftPinned = left.entryKind === "subagent" ? left.pinned : left.metadata.pinned;
-    const rightPinned = right.entryKind === "subagent" ? right.pinned : right.metadata.pinned;
-    if (leftGroup === "settled" && leftPinned !== rightPinned) return leftPinned ? -1 : 1;
-    const lifecycleRank = (entry: WorkbenchThreadSidebarEntry) => {
-      if (entry.entryKind === "draft") return 0;
-      if (entry.lifecycle.kind === "needsAttention" && entry.gitArc?.phase === "active") return 1;
-      if (entry.lifecycle.kind === "working") return 2;
-      if (entry.lifecycle.kind === "needsAttention") return 3;
-      if ((entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped") && !entry.lifecycle.settled) return 4;
-      return 5;
-    };
-    const groupOrder = lifecycleRank(left) - lifecycleRank(right);
-    if (groupOrder) return groupOrder;
-    const leftOrderAt = left.entryKind === "draft" ? left.draft.createdAt : left.entryKind === "thread" ? left.orderAt ?? left.activityAt : left.createdAt;
-    const rightOrderAt = right.entryKind === "draft" ? right.draft.createdAt : right.entryKind === "thread" ? right.orderAt ?? right.activityAt : right.createdAt;
-    if (leftOrderAt !== rightOrderAt) return rightOrderAt - leftOrderAt;
-    const leftHarness = left.entryKind === "draft" ? left.draft.harness : left.identity.harness;
-    const rightHarness = right.entryKind === "draft" ? right.draft.harness : right.identity.harness;
-    const harnessOrder = leftHarness.localeCompare(rightHarness);
-    if (harnessOrder) return harnessOrder;
-    const leftId = left.entryKind === "draft" ? left.draft.draftId : left.identity.threadId;
-    const rightId = right.entryKind === "draft" ? right.draft.draftId : right.identity.threadId;
-    return leftId.localeCompare(rightId);
-  });
 }
 
 export type WorkbenchLifecycleEvent =

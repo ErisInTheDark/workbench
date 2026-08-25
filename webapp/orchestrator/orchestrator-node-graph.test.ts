@@ -86,6 +86,12 @@ test("each production node matches a representative owned source path", () => {
     true,
     "server:codex must match its PascalCase transcript store owner",
   );
+  for (const sourcePath of [
+    "webapp/lib/workbench/thread/thread-display-order.ts",
+    "webapp/lib/workbench/thread/thread-state.ts",
+  ]) {
+    assert.equal(createGitignoreMatcher(nodes.get("server:core")!.sources).matches(sourcePath), true, `server:core must match ${sourcePath}`);
+  }
 });
 
 test("auto-fresh instruction Markdown has one acknowledgement-only scope", () => {
