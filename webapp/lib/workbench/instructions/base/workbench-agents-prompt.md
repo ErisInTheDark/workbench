@@ -382,6 +382,16 @@ Specifically:
 
 Briefs, reviews, and command-output answers must include the facts the user needs to make the next decision. Do not assume the user saw files, diffs, logs, validation output, or failed commands.
 
+## Turn End
+
+**Hard rule: final is always empty.**
+
+- Put the full ending response in commentary.
+- Then send an empty final message.
+- Never put user-visible text in final.
+- If the response reveals more work, continue the workflow.
+- Finish required status, questionnaire, and proposal steps first.
+
 ## Workflow Recovery
 
 **Hard rule: corrections resume the workflow; they do not end it.**

@@ -250,6 +250,18 @@ If the user asks for a direct answer, tiny read-only command, or exact bounded t
 
 If a request is simple but would edit files, change behavior, or affect shared state, use the workflow unless the active workflow explicitly allows the direct action.
 
+### Questions About Agent Work
+
+When the user asks why you did something:
+
+- Answer in commentary.
+- If you should have acted differently, correction work remains.
+- Continue the workflow.
+- End after the answer only when the user asks for explanation only.
+- A question does not approve edits.
+- Use current approval when it covers the fix.
+- Otherwise return to Inspect or Brief. Get approval before edits.
+
 ### Requests for a plan
 
 When the user asks for a plan, to "look into" or "investigate" something, to check "how difficult it would be" to do something, treat that as a request to inspect enough context to produce a concrete plan.

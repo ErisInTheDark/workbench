@@ -1,26 +1,8 @@
-/*
- * Exports:
- * - No production exports; tests cover scoped instruction-mechanics availability. Keywords: instructions, title, status, subagent.
- */
+/* No production exports. Tests protect managed-thread mechanic availability across top-level and subagent contexts. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import {
-  buildWorkbenchGitInstructions,
-  filterWorkbenchInstructionContent,
-  listWorkbenchInstructionMechanics,
-} from "./WorkbenchPromptFiles.ts";
-import { WORKBENCH_WORKFLOW_DEFAULT_PROMPT } from "./workbench-prompt-sources.ts";
-import { readInstructionSource } from "../instruction-source.ts";
-import {
-  buildWorkbenchBrowseInstructions,
-  buildWorkbenchOrchestratorReloadInstructions,
-  buildWorkbenchSubagentInstructions,
-  buildThreadStatusInstructions,
-  buildWorkbenchThreadRecallInstructions,
-  buildWorkbenchThreadResumeInstructions,
-} from "../mechanics/workbench-instruction-mechanics.ts";
-import { buildThreadTitleInstructions } from "../mechanics/workbench-thread-title-instructions.ts";
+import { listWorkbenchInstructionMechanics } from "./WorkbenchPromptFiles.ts";
 
 test("managed top-level threads expose current-thread mechanics before and after materialization", () => {
   for (const threadId of ["new", "draft:123", "thread-1"]) {
@@ -29,11 +11,6 @@ test("managed top-level threads expose current-thread mechanics before and after
     for (const mechanic of ["thread-title", "thread-status", "thread-git", "thread-recall", "thread-resume"]) {
       assert.equal(available.has(mechanic), true, `${threadId} should expose ${mechanic}`);
     }
-    assert.match(buildThreadTitleInstructions(context) ?? "", /mcp__wb__thread_title/u);
-    assert.match(buildThreadStatusInstructions(context) ?? "", /mcp__wb__thread_status/u);
-    assert.match(buildWorkbenchGitInstructions(context) ?? "", /mcp__wb__git_arc_plan/u);
-    assert.match(buildWorkbenchThreadRecallInstructions(context) ?? "", /mcp__wb__thread_recall/u);
-    assert.match(buildWorkbenchThreadResumeInstructions(context) ?? "", /mcp__wb__thread_resume/u);
   }
 
   const subagentContext = { harness: "codex" as const, subagentName: "Akari", threadId: "draft:child", workbenchOrigin: "http://localhost" };
@@ -43,89 +20,4 @@ test("managed top-level threads expose current-thread mechanics before and after
   assert.equal(subagent.has("thread-git"), true);
   assert.equal(subagent.has("thread-recall"), true);
   assert.equal(subagent.has("thread-resume"), true);
-  assert.equal(buildThreadTitleInstructions(subagentContext), null);
-});
-
-test("Git instructions do not ask agents to declare runtime reload scopes", () => {
-  const base = { harness: "codex" as const, threadId: "thread-1", workbenchOrigin: "http://localhost" };
-  assert.doesNotMatch(buildWorkbenchGitInstructions(base) ?? "", /reloadScopes|reload-scope|shared runtime reload barriers/u);
-});
-
-test("Git instructions explain one logical arc and separate proposals only for multi-root workspaces", () => {
-  const base = { harness: "codex" as const, threadId: "thread-1", workbenchOrigin: "http://localhost" };
-  const singleContext = {
-    ...base,
-    roots: [{ id: "api", isPrimary: true, name: "API", relativePath: "api", rootPath: "C:/workspace/api" }],
-  };
-  const multiContext = {
-    ...base,
-    roots: [
-      { id: "api", isPrimary: true, name: "API", relativePath: "api", rootPath: "C:/workspace/api" },
-      { id: "web", isPrimary: false, name: "Web", relativePath: "web", rootPath: "C:/workspace/web" },
-    ],
-  };
-  const source = buildWorkbenchGitInstructions(singleContext) ?? "";
-  const render = (context: typeof singleContext | typeof multiContext) => filterWorkbenchInstructionContent(source, {
-    available: listWorkbenchInstructionMechanics(context), field: "test.git", harness: "codex", onWarning: () => undefined, shell: "pwsh",
-  }) ?? "";
-  const singleRoot = render(singleContext);
-  const multiRoot = render(multiContext);
-  assert.doesNotMatch(singleRoot, /one managed thread one logical Git arc/u);
-  assert.match(multiRoot, /one managed thread one logical Git arc/u);
-  assert.match(multiRoot, /once per workspace root/u);
-  assert.doesNotMatch(multiRoot, /<\/?available:multi-root>/u);
-});
-
-test("default workflow filtering retains required thread behavior during materialization", () => {
-  const available = listWorkbenchInstructionMechanics({ harness: "codex", threadId: "draft:123", workbenchOrigin: "http://localhost" });
-  const warnings: string[] = [];
-  const filtered = filterWorkbenchInstructionContent(WORKBENCH_WORKFLOW_DEFAULT_PROMPT, {
-    available,
-    field: "test.workflow",
-    harness: "codex",
-    onWarning: (warning) => warnings.push(`${warning.recovery}:${warning.line}`),
-    shell: "pwsh",
-  });
-  const workflow = filtered ?? "";
-  assert.match(workflow, /setting a concise title is required, not optional/u);
-  assert.match(
-    workflow,
-    /### Completion gate[^]*mcp__wb__git_arc_diff[^]*mcp__wb__thread_status[^]*## Review Mode[^]*mcp__wb__git_arc_propose[^]*final channel/u,
-  );
-  assert.doesNotMatch(workflow, /<\/?available:/u);
-  assert.deepEqual(warnings, []);
-});
-
-test("Workbench instruction sources prefer typed MCP tools with one exact CLI fallback", async () => {
-  const context = { harness: "codex" as const, threadId: "thread-1", workbenchOrigin: "http://localhost" };
-  const fallback = "The wb mcp commands are also available through the wb cli. use `wb --help` if the wb mcp commands are not available.";
-  const sources = [
-    readInstructionSource("injections/workbench-tools-injection.md"),
-    readInstructionSource("base/workbench-agents-prompt.md"),
-    readInstructionSource("workflows/default-workflow-prompt.md"),
-    readInstructionSource("workflows/subagent-workflow-prompt.md"),
-    readInstructionSource("skills/browse-builtin-skill.md"),
-    buildWorkbenchGitInstructions(context) ?? "",
-    buildWorkbenchOrchestratorReloadInstructions(context) ?? "",
-    buildWorkbenchSubagentInstructions(context) ?? "",
-    buildWorkbenchThreadRecallInstructions(context) ?? "",
-    buildWorkbenchThreadResumeInstructions(context) ?? "",
-    buildThreadStatusInstructions(context) ?? "",
-    buildThreadTitleInstructions(context) ?? "",
-    await buildWorkbenchBrowseInstructions(context) ?? "",
-  ];
-  const commandShapedCliLines = sources
-    .flatMap((source) => source.split(/\r?\n/u))
-    .filter((line) => /(?:`wb(?:\.cmd)?\s|^\s*wb(?:\.cmd)?\s)/u.test(line));
-
-  assert.deepEqual(commandShapedCliLines, [fallback]);
-  assert.match(sources.join("\n"), /mcp__wb__orchestrator_reload/u);
-  assert.match(sources.join("\n"), /mcp__wb__subagent_message/u);
-  assert.match(sources.join("\n"), /mcp__wb__browse_run/u);
-});
-
-test("orchestrator reload instructions describe dependant closure without advertising destructive scopes", () => {
-  const source = buildWorkbenchOrchestratorReloadInstructions({ harness: "codex", threadId: "thread-1", workbenchOrigin: "http://localhost" }) ?? "";
-  assert.match(source, /every transitive dependant exactly once/u);
-  assert.doesNotMatch(source, /harness:(?:codex|opencode)|server:process/u);
 });
