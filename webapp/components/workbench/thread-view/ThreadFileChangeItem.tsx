@@ -308,7 +308,7 @@ function ThreadFileChangeRows ({
     ) : change.staticMarker ? (
       <ThreadDisclosureStaticRow
         key={key}
-        className="py-0.5"
+        className="!py-0.5"
         markerClassName={change.danger ? "text-danger" : undefined}
         summary={summary}
         summaryClassName={`text-[0.92em] leading-[1.6] ${change.danger ? "text-danger" : "text-muted"}`}
@@ -335,7 +335,7 @@ function ThreadFileChangeOutcome ({ item }: { item: FileChangeItem }) {
   return (
     <div data-thread-file-change-outcome={item.status}>
       <ThreadDisclosureStaticRow
-        className="py-0.5"
+        className="!py-0.5"
         markerClassName={danger ? "text-danger" : undefined}
         summary={<ThreadSummaryText text={label} />}
         summaryClassName={`text-[0.92em] leading-[1.6] ${danger ? "text-danger" : "text-muted"}`}

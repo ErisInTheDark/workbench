@@ -349,6 +349,45 @@ test("selected active Codex steers settle at admission and canonical notificatio
   }
 });
 
+test("cumulative file-change patches stay live beyond an early large diff", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread());
+  socket.notify("item/started", {
+    item: { changes: [], id: "live-file-change", status: "inProgress", type: "fileChange" },
+    threadId: "thread",
+    turnId: "turn",
+  });
+
+  const initialDiff = `@@ -0,0 +1,240 @@\n${Array.from({ length: 240 }, (_, index) => `+initial line ${index}`).join("\n")}`;
+  const initialChange = { diff: initialDiff, kind: { type: "add" as const }, path: "src/first.ts" };
+  socket.notify("item/fileChange/patchUpdated", {
+    changes: [initialChange],
+    itemId: "live-file-change",
+    threadId: "thread",
+    turnId: "turn",
+  });
+
+  const firstSnapshotItem = client.getSnapshot().currentThread?.turns[0]?.items.find((item) => item.id === "live-file-change");
+  assert.equal(firstSnapshotItem?.type, "fileChange");
+  assert.equal(firstSnapshotItem.changes[0]?.diff, initialDiff);
+
+  const grownDiff = `${initialDiff}\n+later streamed line`;
+  socket.notify("item/fileChange/patchUpdated", {
+    changes: [
+      { ...initialChange, diff: grownDiff },
+      { diff: "+second file", kind: { type: "add" }, path: "src/second.ts" },
+    ],
+    itemId: "live-file-change",
+    threadId: "thread",
+    turnId: "turn",
+  });
+
+  const grownSnapshotItem = client.getSnapshot().currentThread?.turns[0]?.items.find((item) => item.id === "live-file-change");
+  assert.equal(grownSnapshotItem?.type, "fileChange");
+  assert.equal(grownSnapshotItem.status, "inProgress");
+  assert.equal(grownSnapshotItem.changes[0]?.diff, grownDiff);
+  assert.equal(grownSnapshotItem.changes[1]?.path, "src/second.ts");
+}));
+
 test("differing acknowledgement runs the preserved tail once and tail failure stays admitted", async () => withClient(async (client, socket) => {
   const source = activeThread();
   client.selectThreadPayload(source);

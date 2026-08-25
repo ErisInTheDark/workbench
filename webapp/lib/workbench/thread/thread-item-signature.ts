@@ -6,6 +6,7 @@
  */
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../codex/generated/app-server/v2/Turn";
+import type { WorkbenchFileChangeItem } from "./workbench-file-change";
 
 const signatureCache = new WeakMap<object, string>();
 
@@ -45,6 +46,37 @@ function textArraySignature(values: string[]) {
   return values.map((value) => `${value.length}:${value.slice(0, 64)}`).join("|");
 }
 
+function textFingerprint(value: string) {
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    first = Math.imul(first ^ codeUnit, 0x01000193);
+    second = Math.imul(second ^ codeUnit, 0x85ebca6b);
+  }
+  return `${value.length}:${(first >>> 0).toString(36)}:${(second >>> 0).toString(36)}`;
+}
+
+function fileChangeSignature(item: Extract<ThreadItem, { type: "fileChange" }>) {
+  const workbenchItem = item as WorkbenchFileChangeItem;
+  const changes = workbenchItem.changes.map((change) => [
+    textFingerprint(change.path),
+    change.kind.type,
+    change.kind.type === "update" ? textFingerprint(change.kind.move_path ?? "") : "",
+    textFingerprint(change.diff),
+    change.workbenchAdditions ?? "",
+    change.workbenchDeletions ?? "",
+  ].join(":"));
+  return [
+    item.id,
+    item.type,
+    item.status,
+    workbenchItem.workbenchFailureKind ?? "",
+    changes.length,
+    ...changes,
+  ].join(":");
+}
+
 export function getThreadItemRenderSignature(item: ThreadItem) {
   return cachedSignature(item, () => {
     switch (item.type) {
@@ -72,7 +104,7 @@ export function getThreadItemRenderSignature(item: ThreadItem) {
           stableStringify(item.commandActions),
         ].join(":");
       case "fileChange":
-        return `${item.id}:${item.type}:${item.status}:${stableStringify(item.changes)}`;
+        return fileChangeSignature(item);
       case "mcpToolCall":
         return `${item.id}:${item.type}:${item.server}:${item.tool}:${item.status}:${stableStringify(item.arguments)}:${stableStringify(item.result)}:${stableStringify(item.error)}:${item.durationMs ?? ""}`;
       case "dynamicToolCall":
