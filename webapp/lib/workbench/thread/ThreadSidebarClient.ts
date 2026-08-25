@@ -4,14 +4,14 @@
  * - default ThreadSidebarClient: subscribable browser observation, revision, optimistic draft, and leave-safe queue owner. Keywords: sidebar, external store, debounce, flush.
  */
 import type { WorkbenchThreadSidebarStore } from "../../types";
-import { resolveWorkbenchThreadDisplayOrder } from "./thread-display-order";
+import { findWorkbenchThreadFolder, moveWorkbenchThreadDisplayItem, replaceWorkbenchThreadFolderMember, resolveWorkbenchThreadDisplayOrder, sortThreadSidebarEntries } from "./thread-display-order";
 import { createDraftTitle, type WorkbenchHarnessId, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
 
 export interface ThreadSidebarTransport {
   close(projectId: string): Promise<void>;
   deleteDraft(projectId: string, draftId: string, clientUpdatedAt: number): Promise<void>;
   open(projectId: string): Promise<WorkbenchThreadSidebarSnapshot>;
-  upsertDraft(projectId: string, draft: WorkbenchThreadDraft): Promise<void>;
+  upsertDraft(projectId: string, draft: WorkbenchThreadDraft, folderId?: string): Promise<void>;
 }
 export interface ThreadSidebarClientOptions {
   onChange: (snapshot: WorkbenchThreadSidebarSnapshot | null) => void;
@@ -27,6 +27,7 @@ export interface ThreadSidebarAcceptedIntent {
 
 interface DraftQueue {
   draft: WorkbenchThreadDraft | null;
+  folderId: string | null;
   inFlight: Promise<void> | null;
   retired: boolean;
   timer: ReturnType<typeof setTimeout> | null;
@@ -78,10 +79,11 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.snapshot = { ...this.snapshot, ...resolved, revision: update.revision };
     this.publish();
   }
-  edit(draft: WorkbenchThreadDraft) {
+  edit(draft: WorkbenchThreadDraft, options: { folderId?: string } = {}) {
     if (draft.projectId !== this.projectId) throw new Error("The draft does not belong to the observed project.");
-    const queue = this.queues.get(draft.draftId) ?? { draft: null, inFlight: null, retired: false, timer: null };
+    const queue = this.queues.get(draft.draftId) ?? { draft: null, folderId: null, inFlight: null, retired: false, timer: null };
     if (queue.retired) return;
+    if (options.folderId) queue.folderId = options.folderId;
     queue.draft = draft;
     if (queue.timer) clearTimeout(queue.timer);
     queue.timer = setTimeout(() => {
@@ -89,7 +91,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       void this.flushQueue(draft.draftId, queue).catch(() => undefined);
     }, 500);
     this.queues.set(draft.draftId, queue);
-    this.installOptimisticDraft(draft);
+    this.installOptimisticDraft(draft, queue.folderId);
   }
   acceptIntent(intent: ThreadSidebarAcceptedIntent) {
     const queue = intent.draftId ? this.queues.get(intent.draftId) : null;
@@ -126,6 +128,9 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
         orderAt: activityAt,
         title: existing?.entryKind === "thread" ? existing.title : intent.title,
       };
+      const displayOrder = intent.draftId
+        ? replaceWorkbenchThreadFolderMember(this.snapshot.displayOrder, `draft:${intent.draftId}`, `${intent.identity.harness}:${intent.identity.threadId}`)
+        : this.snapshot.displayOrder;
       const resolved = resolveWorkbenchThreadDisplayOrder([
           ...this.snapshot.entries.filter((candidate) => {
             if (candidate.entryKind === "draft") return candidate.draft.draftId !== intent.draftId;
@@ -133,7 +138,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
             return candidate.identity.harness !== intent.identity.harness || candidate.identity.threadId !== intent.identity.threadId;
           }),
           entry,
-        ], this.snapshot.displayOrder);
+        ], displayOrder);
       this.snapshot = { ...this.snapshot, ...resolved };
       this.publish();
     }
@@ -170,20 +175,28 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.snapshot = { ...snapshot, ...resolveWorkbenchThreadDisplayOrder(snapshot.entries, snapshot.displayOrder) };
     this.publish();
   }
-  private installOptimisticDraft(draft: WorkbenchThreadDraft) {
+  private installOptimisticDraft(draft: WorkbenchThreadDraft, folderId: string | null) {
     if (!this.snapshot) return;
     const existing = this.snapshot.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === draft.draftId);
+    const currentFolder = findWorkbenchThreadFolder(this.snapshot.displayOrder, `draft:${draft.draftId}`);
+    const targetFolder = folderId ? this.snapshot.displayOrder?.folders?.find((candidate) => candidate.folderId === folderId) : null;
     const entry = {
       activityAt: draft.updatedAt,
       draft,
       entryKind: "draft" as const,
-      metadata: existing?.entryKind === "draft" ? existing.metadata : { archived: false as const, pinned: false, snoozed: false },
+      metadata: existing?.entryKind === "draft"
+        ? existing.metadata
+        : { archived: false as const, pinned: targetFolder?.section === "pinned", snoozed: targetFolder?.section === "snoozed" },
       title: createDraftTitle(draft.prompt),
     };
-    const resolved = resolveWorkbenchThreadDisplayOrder([
+    const entries = [
         ...this.snapshot.entries.filter((candidate) => candidate.entryKind !== "draft" || candidate.draft.draftId !== draft.draftId),
         entry,
-      ], this.snapshot.displayOrder);
+      ];
+    const displayOrder = targetFolder && currentFolder?.folderId !== targetFolder.folderId
+      ? moveWorkbenchThreadDisplayItem(sortThreadSidebarEntries(entries), this.snapshot.displayOrder, targetFolder.section, `draft:${draft.draftId}`, targetFolder.folderId, targetFolder.threadKeys[0] ?? null) ?? this.snapshot.displayOrder
+      : this.snapshot.displayOrder;
+    const resolved = resolveWorkbenchThreadDisplayOrder(entries, displayOrder);
     this.snapshot = { ...this.snapshot, ...resolved };
     this.publish();
   }
@@ -194,7 +207,10 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     const draft = queue.draft; const projectId = this.projectId;
     if (!draft || !projectId) return;
     queue.draft = null;
-    queue.inFlight = this.options.transport.upsertDraft(projectId, draft).finally(() => { queue.inFlight = null; });
+    const folderId = queue.folderId ?? undefined;
+    queue.inFlight = this.options.transport.upsertDraft(projectId, draft, folderId).then(() => {
+      if (queue.folderId === folderId) queue.folderId = null;
+    }).finally(() => { queue.inFlight = null; });
     try {
       await queue.inFlight;
       if (this.snapshot?.error?.startsWith("Draft save failed:")) {

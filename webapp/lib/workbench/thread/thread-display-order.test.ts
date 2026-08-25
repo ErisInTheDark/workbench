@@ -1,14 +1,18 @@
 /*
- * No production exports. Tests protect layered automatic sorting, complete user-order snapshots, partial-order arrival, section transitions, and malformed-state fallback. Keywords: thread, sort, user order, claims, lifecycle, test.
+ * No production exports. Tests protect layered sorting, user-order snapshots, one-level folders, section transitions, and malformed-state fallback. Keywords: thread, folder, sort, user order, lifecycle, test.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createWorkbenchThreadFolder,
   getWorkbenchThreadDisplayKey,
   getWorkbenchThreadDisplaySection,
+  moveWorkbenchThreadDisplayItem,
   moveWorkbenchThreadDisplayOrder,
+  projectWorkbenchThreadDisplaySection,
   reconcileWorkbenchThreadDisplayOrder,
+  replaceWorkbenchThreadFolderMember,
   resolveWorkbenchThreadDisplayOrder,
   type WorkbenchThreadDisplayOrder,
 } from "./thread-display-order";
@@ -43,7 +47,7 @@ function thread(
   };
 }
 
-function draft(id: string, createdAt: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> {
+function draft(id: string, createdAt: number, options: { pinned?: boolean; snoozed?: boolean } = {}): Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> {
   return {
     activityAt: createdAt,
     draft: {
@@ -52,7 +56,7 @@ function draft(id: string, createdAt: number): Extract<WorkbenchThreadSidebarEnt
       reasoningEffort: null, serviceTier: null, updatedAt: createdAt,
     },
     entryKind: "draft",
-    metadata: { archived: false, pinned: false, snoozed: false },
+    metadata: { archived: false, pinned: options.pinned ?? false, snoozed: options.snoozed ?? false },
     title: id,
   };
 }
@@ -128,7 +132,58 @@ test("leaving a reorderable section clears the row and every touching relation",
 
 test("settlement owns display section before snooze and snooze owns it before pin", () => {
   assert.equal(getWorkbenchThreadDisplaySection(thread("snoozed", 1, { pinned: true, snoozed: true })), "snoozed");
-  assert.equal(getWorkbenchThreadDisplaySection(thread("settled", 1, { pinned: true, settled: true, snoozed: true })), "settledPinned");
+  assert.equal(getWorkbenchThreadDisplaySection(thread("settled", 1, { pinned: true, settled: true, snoozed: true })), "settled");
+});
+
+test("folders replace their source at the root and own total child order", () => {
+  const first = thread("first", 3, { pinned: true });
+  const second = thread("second", 2, { pinned: true });
+  const third = thread("third", 1, { pinned: true });
+  const folderId = "00000000-0000-4000-8000-000000000010";
+  const created = createWorkbenchThreadFolder([first, second, third], {}, folderId, "codex:second", "Work");
+  assert.ok(created);
+  const filled = moveWorkbenchThreadDisplayItem([first, second, third], created, "pinned", "codex:first", folderId, "codex:second");
+  assert.ok(filled);
+  const items = projectWorkbenchThreadDisplaySection([first, second, third], filled, "pinned");
+  assert.deepEqual(items.map((item) => item.itemKind === "folder" ? item.folder.title : item.entry.title), ["Work", "third"]);
+  assert.deepEqual(items[0]?.itemKind === "folder" ? items[0].entries.map((entry) => entry.title) : [], ["first", "second"]);
+});
+
+test("moving the last member out prunes its empty folder and positions the thread at the root", () => {
+  const first = thread("first", 2, { snoozed: true });
+  const second = thread("second", 1, { snoozed: true });
+  const folderId = "00000000-0000-4000-8000-000000000011";
+  const created = createWorkbenchThreadFolder([first, second], {}, folderId, "codex:first", "Later");
+  assert.ok(created);
+  const moved = moveWorkbenchThreadDisplayItem([first, second], created, "snoozed", "codex:first", null, "codex:second");
+  assert.ok(moved);
+  assert.equal(moved.folders, undefined);
+  assert.deepEqual(projectWorkbenchThreadDisplaySection([first, second], moved, "snoozed").map((item) => item.itemKind === "thread" ? item.entry.title : item.folder.title), ["first", "second"]);
+});
+
+test("reconciliation removes members that leave a folder section and prunes empty folders", () => {
+  const snoozed = thread("thread", 1, { snoozed: true });
+  const folderId = "00000000-0000-4000-8000-000000000012";
+  const created = createWorkbenchThreadFolder([snoozed], {}, folderId, "codex:thread", "Later");
+  assert.ok(created);
+  const reconciled = reconcileWorkbenchThreadDisplayOrder([thread("thread", 1, { pinned: true })], created);
+  assert.deepEqual(reconciled, {});
+});
+
+test("drafts can join matching unsettled folders and transfer membership to a pinned provider thread", () => {
+  const source = thread("source", 2, { pinned: true });
+  const pending = draft("00000000-0000-4000-8000-000000000013", 3, { pinned: true });
+  const folderId = "00000000-0000-4000-8000-000000000014";
+  const created = createWorkbenchThreadFolder([pending, source], {}, folderId, "codex:source", "Work");
+  assert.ok(created);
+  const filled = moveWorkbenchThreadDisplayItem([pending, source], created, "pinned", `draft:${pending.draft.draftId}`, folderId, null);
+  assert.ok(filled);
+  const projected = projectWorkbenchThreadDisplaySection([pending, source], filled, "pinned")[0];
+  assert.deepEqual(projected?.itemKind === "folder" ? projected.entries.map(getWorkbenchThreadDisplayKey) : [], ["codex:source", `draft:${pending.draft.draftId}`]);
+  const replacement = thread("materialized", 4, { pinned: true, lifecycle: working("turn") });
+  const transferred = replaceWorkbenchThreadFolderMember(filled, `draft:${pending.draft.draftId}`, "codex:materialized");
+  const reconciled = reconcileWorkbenchThreadDisplayOrder([replacement, source], transferred);
+  assert.deepEqual(reconciled.folders?.[0]?.threadKeys, ["codex:source", "codex:materialized"]);
 });
 
 test("cyclic persisted relations resolve to natural order and refresh consistently", () => {

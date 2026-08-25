@@ -1104,7 +1104,7 @@ export interface WorkbenchControls {
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   deleteThreadDraft: (draftId: string) => Promise<void>;
-  editThreadDraft: (draft: WorkbenchThreadDraft) => void;
+  editThreadDraft: (draft: WorkbenchThreadDraft, options?: { folderId?: string }) => void;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
 }
 

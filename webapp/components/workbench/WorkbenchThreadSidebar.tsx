@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchThreadSidebar: render the live thread list without subscribing the Workbench root. Keywords: sidebar, threads, activity, React.
+ * - Local helpers: select external-store state and bound folder mutation failures. Keywords: sidebar, store, folder, error.
  */
 "use client";
 
@@ -10,6 +11,7 @@ import type { ThreadSummary, WorkbenchControls, WorkbenchHarness, WorkbenchThrea
 import { writeTextToClipboard } from "../../lib/workbench/dom/clipboard";
 import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
 import { createThreadHref } from "../../lib/workbench/navigation/workbench-route";
+import { findWorkbenchThreadFolder, getWorkbenchThreadDisplayKey } from "../../lib/workbench/thread/thread-display-order";
 import { getThreadSidebarGroup, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
 import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import { getNeedsAttentionThreadStatusTone } from "./workbench-thread-status-colors";
@@ -17,6 +19,7 @@ import {
   ArchiveIcon,
   CompletedThreadIcon,
   CopyIcon,
+  FolderInputIcon,
   NeedsAttentionThreadIcon,
   OpenThreadIcon,
   PinIcon,
@@ -30,6 +33,10 @@ import WorkbenchThreadList from "./WorkbenchThreadList";
 
 const THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 const EMPTY_UNSUBSCRIBE = () => {};
+
+function boundedFolderMutationError(error: unknown) {
+  return (error instanceof Error ? error.message : "The thread folder mutation failed.").slice(0, 500);
+}
 
 function useThreadSidebarSelection<T>(
   store: WorkbenchThreadSidebarStore | null,
@@ -47,7 +54,7 @@ interface WorkbenchThreadSidebarProps {
   harness: WorkbenchHarness;
   isDragActive: boolean;
   onBeginPointerDrag: (event: PointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => void;
-  onCreateThread: () => void;
+  onCreateThread: (folderId?: string) => void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
   onThreadSettled: (target: WorkbenchThreadTarget) => void;
   projectId: string;
@@ -76,6 +83,7 @@ export default memo(function WorkbenchThreadSidebar({
   const entries = snapshot?.entries ?? [];
   const hasEntries = entries.length > 0;
   const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
+  const [autoFocusFolderId, setAutoFocusFolderId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!hasEntries) return;
@@ -156,6 +164,33 @@ export default memo(function WorkbenchThreadSidebar({
       onSelect: () => { void writeTextToClipboard(identifier); },
     });
 
+    const displayKey = getWorkbenchThreadDisplayKey(entry);
+    const folder = findWorkbenchThreadFolder(snapshot?.displayOrder, displayKey);
+    if (entry.entryKind === "thread" && (group === "pinned" || group === "snoozed" || group === "settled") && !folder) {
+      items.push({
+        icon: <FolderInputIcon className="size-4" />,
+        id: "add-to-folder",
+        label: "Add to folder",
+        onSelect: () => {
+          if (!controls) return;
+          const folderId = crypto.randomUUID();
+          setAutoFocusFolderId(folderId);
+          void controls.updateThreadStateWithAcceptance({
+            folderId,
+            method: "workbench/thread-state/display-order/folder/create",
+            projectId,
+            sourceKey: displayKey,
+            title: "New folder",
+          }).then((accepted) => {
+            if (!accepted) setAutoFocusFolderId((current) => current === folderId ? null : current);
+          }).catch((error: unknown) => {
+            setAutoFocusFolderId((current) => current === folderId ? null : current);
+            console.error("Unable to create the thread folder.", boundedFolderMutationError(error));
+          });
+        },
+      });
+    }
+
     const snoozed = group === "snoozed";
     items.push({ id: "priority-separator", kind: "separator" }, {
       controls: [{
@@ -230,7 +265,7 @@ export default memo(function WorkbenchThreadSidebar({
       });
     }
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}` };
-  }, [mutateEntry, onOpenThread, stopThread, threadSummariesById]);
+  }, [controls, mutateEntry, onOpenThread, projectId, snapshot?.displayOrder, stopThread, threadSummariesById]);
 
   const isMatchingSnapshot = snapshot?.projectId === projectId;
   if (!snapshot || !isMatchingSnapshot || (snapshot.freshness === "loading" && snapshot.entries.length === 0)) {
@@ -245,11 +280,13 @@ export default memo(function WorkbenchThreadSidebar({
           attentionLabelsByThreadId={attentionLabelsByThreadId}
           createThreadLabel="Create new thread"
           currentTarget={currentTarget}
+          displayOrder={snapshot.displayOrder}
           entries={entries}
           getThreadHref={(target) => createThreadHref(projectId, target)}
           getThreadContextMenu={getThreadContextMenu}
           isDragActive={isDragActive}
           nowMs={relativeTimeNowMs}
+          autoFocusFolderId={autoFocusFolderId}
           onAction={(entry, action) => {
             if (entry.entryKind === "draft") {
               if (action === "discard") void controls?.deleteThreadDraft(entry.draft.draftId);
@@ -261,13 +298,15 @@ export default memo(function WorkbenchThreadSidebar({
             if (action === "wake") mutateEntry(entry, "snooze/set", false);
           }}
           onCreateThread={onCreateThread}
+          onAutoFocusFolderComplete={() => setAutoFocusFolderId(null)}
           onCreateThreadPointerDragStart={showMosaicView ? (event) => {
             onBeginPointerDrag(event, { harness, type: "new-thread" });
           } : undefined}
           onOpenThread={onOpenThread}
-          onReorder={(sourceKey, section, beforeKey) => {
+          onMove={(sourceKey, section, destinationFolderId, beforeKey) => {
             void controls?.updateThreadStateWithAcceptance({
               beforeKey,
+              destinationFolderId,
               method: "workbench/thread-state/display-order/move",
               projectId,
               section,
@@ -275,6 +314,16 @@ export default memo(function WorkbenchThreadSidebar({
             });
           }}
           projectId={projectId}
+          onRenameFolder={async (folderId, title) => {
+            const accepted = await controls?.updateThreadStateWithAcceptance({
+              folderId,
+              method: "workbench/thread-state/display-order/folder/title/set",
+              projectId,
+              title,
+            });
+            if (!accepted) throw new Error("Unable to update the folder name.");
+            return title.trim();
+          }}
         />
       </nav>
       {error ? <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">{error}</p> : null}

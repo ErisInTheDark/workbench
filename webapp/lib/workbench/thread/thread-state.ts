@@ -45,7 +45,7 @@ const ThreadIdentitySchema = z.object({
 }).strict();
 
 export const WorkbenchThreadTargetSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("new") }).strict(),
+  z.object({ folderId: CanonicalUuidSchema.optional(), kind: z.literal("new") }).strict(),
   z.object({ draftId: CanonicalUuidSchema, kind: z.literal("draft") }).strict(),
   z.object({ harness: WorkbenchHarnessSchema.optional(), kind: z.literal("provider"), threadId: z.string().trim().min(1) }).strict(),
   z.object({ harness: WorkbenchHarnessSchema.optional(), kind: z.literal("subagent"), parentThreadId: z.string().trim().min(1), threadId: z.string().trim().min(1) }).strict(),
@@ -332,7 +332,7 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/refresh") }),
   ProjectRequestBase.extend({ draftId: CanonicalUuidSchema.optional(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/intent/accept"), title: z.string().trim().min(1), turnId: z.string().trim().min(1) }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/set"), title: z.string().trim().min(1) }),
-  ProjectRequestBase.extend({ draft: WorkbenchThreadDraftSchema, method: z.literal("workbench/thread-state/draft/upsert") }),
+  ProjectRequestBase.extend({ draft: WorkbenchThreadDraftSchema, folderId: CanonicalUuidSchema.optional(), method: z.literal("workbench/thread-state/draft/upsert") }),
   ProjectRequestBase.extend({ clientUpdatedAt: z.number().int().nonnegative(), draftId: CanonicalUuidSchema, method: z.literal("workbench/thread-state/draft/delete") }),
   ProjectRequestBase.extend({ draftId: CanonicalUuidSchema, method: z.literal("workbench/thread-state/draft/pin/set"), pinned: z.boolean() }),
   ProjectRequestBase.extend({ draftId: CanonicalUuidSchema, method: z.literal("workbench/thread-state/draft/snooze/set"), snoozed: z.boolean() }),
@@ -345,9 +345,21 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
   ProjectRequestBase.extend({ entry: WorkbenchQuestionnaireHistoryEntrySchema, identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/resolve") }),
   ProjectRequestBase.extend({ archived: z.boolean(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/archive/set") }),
   ProjectRequestBase.extend({
+    folderId: CanonicalUuidSchema,
+    method: z.literal("workbench/thread-state/display-order/folder/create"),
+    sourceKey: z.string().min(1),
+    title: z.string().trim().min(1).max(80),
+  }),
+  ProjectRequestBase.extend({
+    folderId: CanonicalUuidSchema,
+    method: z.literal("workbench/thread-state/display-order/folder/title/set"),
+    title: z.string().trim().min(1).max(80),
+  }),
+  ProjectRequestBase.extend({
     beforeKey: z.string().min(1).nullable(),
+    destinationFolderId: CanonicalUuidSchema.nullable(),
     method: z.literal("workbench/thread-state/display-order/move"),
-    section: z.enum(["pinned", "snoozed", "settledPinned"]),
+    section: z.enum(["pinned", "snoozed", "settled"]),
     sourceKey: z.string().min(1),
   }),
 ]);

@@ -16,7 +16,7 @@
  * - BrowserSessionIcon: render the Browse session sidebar icon. Keywords: workbench, icon, browse, session.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
  * - StopIcon/PauseIcon/PlayIcon/ClockIcon/WarningIcon/CircleAlertIcon: render shared thread turn, command-status, and alert icons. Keywords: workbench, icon, thread, stop, pause, play, progress, alert.
- * - PinIcon/LockIcon/UnlockIcon: render pinned and subagent ownership controls. Keywords: workbench, icon, thread, pin, lock.
+ * - PinIcon/FolderClosedIcon/FolderOpenIcon/FolderInputIcon/LockIcon/UnlockIcon: render pinned, folder, and subagent ownership controls. Keywords: workbench, icon, thread, pin, folder, lock.
  * - FlagIcon: render the Codex goal control icon. Keywords: workbench, icon, thread, goal, flag.
  * - OpenThreadIcon/ArchiveIcon: render thread navigation and archive context-menu icons. Keywords: workbench, icon, thread, open, archive.
  * - WrapTextIcon: render the thread codeblock line-wrap toggle icon. Keywords: workbench, icon, thread, code, wrap.
@@ -311,6 +311,18 @@ export function PinIcon ({ className = "size-4" }: IconProps) {
       <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
     </svg>
   );
+}
+
+export function FolderClosedIcon ({ className = "size-4" }: IconProps) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>;
+}
+
+export function FolderOpenIcon ({ className = "size-4" }: IconProps) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></svg>;
+}
+
+export function FolderInputIcon ({ className = "size-4" }: IconProps) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1" /><path d="M2 13h10" /><path d="m9 16 3-3-3-3" /></svg>;
 }
 
 export function LockIcon ({ className = "size-4" }: IconProps) {

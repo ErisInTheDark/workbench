@@ -1696,7 +1696,7 @@ export default function Workbench () {
       serviceTier: currentThread?.serviceTier ?? existing?.serviceTier ?? null,
       updatedAt: now,
     };
-    controls.editThreadDraft(threadDraft);
+    controls.editThreadDraft(threadDraft, target.kind === "new" && target.folderId ? { folderId: target.folderId } : undefined);
     if (target.kind === "new") {
       composerProfileController.materializeDraftSelection(profileSlot, draftId, harness, explorer.currentProjectId);
       navigateToRoute(createThreadRoute(explorer.currentProjectId, { draftId, kind: "draft" }), { replace: true });
@@ -1918,9 +1918,9 @@ export default function Workbench () {
   const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
   const showSettingsView = route.view === "settings";
   const showFullBleedMainView = showMosaicView;
-  const createThreadFromSidebar = useCallback(() => {
+  const createThreadFromSidebar = useCallback((folderId?: string) => {
     if (showMosaicView || !controls) return;
-    navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, { kind: "new" }));
+    navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, folderId ? { folderId, kind: "new" } : { kind: "new" }));
   }, [controls, explorer.currentProjectId, navigateToRoute, route.projectId, showMosaicView]);
   const handleThreadSettled = useCallback((settledTarget: WorkbenchThreadTarget) => {
     const currentRoute = currentRouteRef.current;
@@ -2366,7 +2366,7 @@ export default function Workbench () {
   }, [workbenchDragController]);
 
   const beginWorkbenchPointerDrag = useCallback((event: ReactPointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => {
-    if (isMobile || event.button !== 0) return;
+    if (isMobile || event.button !== 0 || payload.type === "thread-folder") return;
     if (
       payload.type === "sidebar-section"
       && event.target instanceof HTMLElement

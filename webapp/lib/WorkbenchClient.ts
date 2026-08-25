@@ -237,7 +237,14 @@ export async function WorkbenchClient(
         projectId,
         request: async (params) => await threadClient.requestWorkbench("workbench/thread-state/open", params),
       }),
-      upsertDraft: async (projectId, draft) => { await threadClient.requestWorkbench("workbench/thread-state/draft/upsert", { draft, projectId }); },
+      upsertDraft: async (projectId, draft, folderId) => {
+        const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(await threadClient.requestWorkbench("workbench/thread-state/draft/upsert", { draft, folderId, projectId }));
+        if (!parsed.success) {
+          reportClientSchemaError("Rejected Workbench draft mutation response", parsed.error);
+          throw new Error("The draft mutation response was invalid.");
+        }
+        if (!parsed.data.accepted) throw new Error("The thread folder no longer accepts this draft.");
+      },
     },
   });
   workbenchBindings.onThreadSidebarStoreReady?.(threadSidebarClient);
@@ -882,7 +889,7 @@ export async function WorkbenchClient(
     createEntry,
     deleteFile,
     deleteThreadDraft: (draftId) => threadSidebarClient.delete(draftId),
-    editThreadDraft: (draft) => threadSidebarClient.edit(draft),
+    editThreadDraft: (draft, options) => threadSidebarClient.edit(draft, options),
     listModels: threadClient.listModels,
     readThread,
     refreshRateLimits,

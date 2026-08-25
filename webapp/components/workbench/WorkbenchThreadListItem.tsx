@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with direct navigation, tooltip detail, and explicit context-menu access. Keywords: thread, sidebar, navigation, tooltip, context menu, claim.
+ * - Local helpers: derive row targets and render bounded thread tooltip details. Keywords: thread, target, tooltip, status.
  */
 "use client";
 
@@ -41,6 +42,7 @@ import {
 } from "./workbench-icons";
 import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchTooltip from "./WorkbenchTooltip";
+import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
 
 type ThreadAction = "complete" | "discard" | "restore" | "settle" | "wake";
 type ThreadStatusIcon = ComponentType<{ className?: string }>;
@@ -110,6 +112,7 @@ export default function WorkbenchThreadListItem({
   className = "",
   compact: compactOverride,
   contextMenu = null,
+  dimmedOverride,
   draggable,
   entry,
   href,
@@ -133,6 +136,7 @@ export default function WorkbenchThreadListItem({
   className?: string;
   compact?: boolean;
   contextMenu?: WorkbenchContextMenuDefinition | null;
+  dimmedOverride?: boolean;
   draggable?: boolean;
   entry: WorkbenchThreadSidebarEntry;
   href: string;
@@ -189,7 +193,7 @@ export default function WorkbenchThreadListItem({
   const ActionIcon = action === "discard" ? DiscardDraftIcon : action === "restore" ? RestoreThreadIcon : action === "wake" ? UnsnoozeThreadIcon : SettleThreadIcon;
   const actionLabel = action === "complete" ? "Completed" : action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Wake";
   const rowName = `${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} claimed ${claimedFileCount === 1 ? "file" : "files"}` : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
-  const dimmed = !selected && (group === "snoozed" || group === "settled");
+  const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled"));
   const hasDashedBorder = entry.entryKind === "draft" || lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped";
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
   const compact = compactOverride ?? group === "settled";
@@ -265,24 +269,20 @@ export default function WorkbenchThreadListItem({
           {actionButton}
         </div>
       ) : (
-        <div
-          className="pointer-events-none relative z-10 min-w-0 pr-[var(--thread-context-menu-row-padding-right,0.5rem)]"
-          data-thread-context-menu-content={contextMenu ? "true" : undefined}
-        >
-          <div className="pointer-events-none grid min-w-0 grid-cols-[minmax(0,1fr)_auto] pr-0 pl-2 pt-1.5">
-            <span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
-            {actionButton}
-          </div>
-          <div className="pointer-events-none mt-0.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-1.5 pr-0 pb-1.5 pl-2 text-[0.72rem] text-muted">
-            <Icon className={`size-3.5 ${statusClassName}`} />
-            <span className={`truncate ${statusClassName}`}>{status}</span>
+        <WorkbenchThreadListFullRowContent
+          action={actionButton}
+          contextMenu={Boolean(contextMenu)}
+          metadata={(
             <span className="grid grid-cols-[auto_auto] items-center gap-1.5">
               {claimedFileCount ? <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true"><FlagIcon className="size-3.5" /><span>{claimedFileCount}</span></span> : null}
               {group === "snoozed" || pinned ? <span data-role="thread-priority-icon" className="inline-flex size-4 items-center justify-center">{group === "snoozed" ? <SnoozedThreadIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}</span> : null}
             </span>
-            <time dateTime={dateTime} title={exactTime}>{relativeTime}</time>
-          </div>
-        </div>
+          )}
+          statusIcon={<Icon className={`size-3.5 ${statusClassName}`} />}
+          statusLabel={<span className={`truncate ${statusClassName}`}>{status}</span>}
+          timestamp={<time dateTime={dateTime} title={exactTime}>{relativeTime}</time>}
+          title={<span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>}
+        />
       )}
     </li>
   );

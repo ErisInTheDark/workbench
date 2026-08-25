@@ -109,7 +109,7 @@ export function isWorkbenchThreadTargetSelected(
   if (target.kind === "provider" && currentTarget.kind === "subagent") return target.threadId === currentTarget.parentThreadId
     && (!target.harness || !currentTarget.harness || target.harness === currentTarget.harness);
   if (currentTarget.kind !== target.kind) return false;
-  if (target.kind === "new") return true;
+  if (target.kind === "new" && currentTarget.kind === "new") return target.folderId === currentTarget.folderId;
   if (target.kind === "draft" && currentTarget.kind === "draft") return target.draftId === currentTarget.draftId;
   return target.kind === "provider" && currentTarget.kind === "provider" && target.threadId === currentTarget.threadId
     && (!target.harness || !currentTarget.harness || target.harness === currentTarget.harness);
@@ -266,6 +266,13 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
       }
       return valueSegments.value.length === 1 && value ? createThreadRoute(projectId, { kind: "provider", threadId: value }) : createInvalidWorkbenchRoute("Provider thread IDs must use one segment, or a subagent route must use parent/sub/child.", projectId);
     }
+    if (mode === "folder") {
+      if (valueSegments.value.length !== 3 || valueSegments.value[1] !== "thread" || valueSegments.value[2] !== "new") {
+        return createInvalidWorkbenchRoute("Folder routes must identify one blank thread composer.", projectId);
+      }
+      const target = WorkbenchThreadTargetSchema.safeParse({ folderId: valueSegments.value[0], kind: "new" });
+      return target.success ? createThreadRoute(projectId, target.data) : createInvalidWorkbenchRoute("Invalid thread folder route.", projectId);
+    }
     if (mode === "settings") {
       if (!valueSegments.value.length) {
         return createSettingsRoute(projectId);
@@ -341,7 +348,9 @@ export function createWorkbenchHref(route: WorkbenchRoute) {
   }
   if (route.view === "thread") {
     const target = route.threadTarget ?? (route.threadId === "new" ? { kind: "new" as const } : { kind: "provider" as const, threadId: route.threadId });
-    if (target.kind === "new") return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/new`;
+    if (target.kind === "new") return target.folderId
+      ? `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/folder/${target.folderId}/thread/new`
+      : `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/new`;
     if (target.kind === "draft") return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/new/${target.draftId}`;
     if (target.kind === "subagent") return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeRouteSegment(target.threadId)}`;

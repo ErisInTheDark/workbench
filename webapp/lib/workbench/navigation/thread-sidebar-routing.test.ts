@@ -6,12 +6,15 @@ import { parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpre
 
 test("thread routes discriminate blank drafts and provider ids", () => {
   const draftId = "123e4567-e89b-42d3-a456-426614174000";
+  const folderId = "00000000-0000-4000-8000-000000000010";
   assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/new").threadTarget, { kind: "new" });
+  assert.deepEqual(parseWorkbenchRouteFromPath(`/p/@/folder/${folderId}/thread/new`).threadTarget, { folderId, kind: "new" });
   assert.deepEqual(parseWorkbenchRouteFromPath(`/p/@/thread/new/${draftId}`).threadTarget, { draftId, kind: "draft" });
   assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/provider-id").threadTarget, { kind: "provider", threadId: "provider-id" });
   assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/parent/sub/child").threadTarget, { kind: "subagent", parentThreadId: "parent", threadId: "child" });
   assert.equal(createThreadHref("p", { kind: "subagent", parentThreadId: "parent", threadId: "child" }), "/p/@/thread/parent/sub/child");
   assert.equal(createThreadHref("p", { draftId, kind: "draft" }), `/p/@/thread/new/${draftId}`);
+  assert.equal(createThreadHref("p", { folderId, kind: "new" }), `/p/@/folder/${folderId}/thread/new`);
 });
 
 test("blank routes own their private future draft identity without owning unrelated drafts", () => {
@@ -43,6 +46,7 @@ test("thread target selection matches the visible root without crossing unrelate
   assert.equal(isWorkbenchThreadTargetSelected({ draftId: "draft-one", kind: "draft" }, { draftId: "draft-one", kind: "draft" }), true);
   assert.equal(isWorkbenchThreadTargetSelected({ draftId: "draft-one", kind: "draft" }, { draftId: "draft-two", kind: "draft" }), false);
   assert.equal(isWorkbenchThreadTargetSelected({ kind: "new" }, { kind: "new" }), true);
+  assert.equal(isWorkbenchThreadTargetSelected({ folderId: "one", kind: "new" }, { folderId: "two", kind: "new" }), false);
   assert.equal(isWorkbenchThreadTargetSelected({ kind: "new" }, null), false);
 });
 
@@ -50,6 +54,8 @@ test("missing or malformed draft routes never fall through to provider identity"
   assert.equal(parseWorkbenchRouteFromPath("/p/@/thread/new/not-a-uuid").view, "invalid");
   assert.equal(parseWorkbenchRouteFromPath("/p/@/thread/new/a/b").view, "invalid");
   assert.equal(parseWorkbenchRouteFromPath("/p/@/thread/parent/sub").view, "invalid");
+  assert.equal(parseWorkbenchRouteFromPath("/p/@/folder/not-a-uuid/thread/new").view, "invalid");
+  assert.equal(parseWorkbenchRouteFromPath("/p/@/folder/00000000-0000-4000-8000-000000000010/thread/provider").view, "invalid");
 });
 
 test("mosaic routes preserve parent-owned subagent identity", () => {

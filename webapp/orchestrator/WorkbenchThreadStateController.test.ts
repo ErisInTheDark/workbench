@@ -1,4 +1,4 @@
-/* No production exports. Tests protect headless ownership, MCP generation, observation replay, request telemetry, reconciliation, persistence mutations, and stale publication fences. */
+/* No production exports. Tests protect headless ownership, folder persistence, MCP generation, observation replay, reconciliation, mutations, and stale publication fences. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -1395,6 +1395,7 @@ test("wake waits for every unsnoozed row to become settlement-ready, then wakes 
   await new Promise((resolve) => setTimeout(resolve, 0));
   const reordered = await controller.handleRequest("observer", {
     beforeKey: "codex:a",
+    destinationFolderId: null,
     method: "workbench/thread-state/display-order/move",
     projectId: "project",
     section: "snoozed",
@@ -1424,6 +1425,73 @@ test("wake waits for every unsnoozed row to become settlement-ready, then wakes 
   assert.equal(reopenedSnoozeState.get("c"), false);
   assert.equal(reopenedSnoozeState.get("a"), true);
   assert.equal(reopenedSnoozeState.get("b"), true);
+  await reopened.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("thread folders persist across restart and reconcile members that leave their section", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-folders-"));
+  const pinned = (threadId: string, orderAt: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
+    activityAt: orderAt,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: true, snoozed: false },
+    orderAt,
+    title: threadId,
+  });
+  const providerEntries: WorkbenchThreadSidebarEntry[] = [pinned("a", 2), pinned("b", 1)];
+  const createController = () => new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", providerEntries, { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  const folderId = "00000000-0000-4000-8000-000000000030";
+  const controller = createController();
+  await controller.open("observer", "project");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const created = await controller.handleRequest("observer", { folderId, method: "workbench/thread-state/display-order/folder/create", projectId: "project", sourceKey: "codex:a", title: "New folder" });
+  assert.equal("result" in created && (created.result as { accepted?: boolean }).accepted, true);
+  const renamed = await controller.handleRequest("observer", { folderId, method: "workbench/thread-state/display-order/folder/title/set", projectId: "project", title: "Important" });
+  assert.equal("result" in renamed && (renamed.result as { accepted?: boolean }).accepted, true);
+  const filled = await controller.handleRequest("observer", { beforeKey: null, destinationFolderId: folderId, method: "workbench/thread-state/display-order/move", projectId: "project", section: "pinned", sourceKey: "codex:b" });
+  assert.equal("result" in filled && (filled.result as { accepted?: boolean }).accepted, true);
+  const draftId = "00000000-0000-4000-8000-000000000031";
+  const drafted = await controller.handleRequest("observer", {
+    draft: {
+      agent: null, attachments: [], clientUpdatedAt: 3, composerSettings: {}, createdAt: 3,
+      draftId, harness: "codex", model: null, profileId: null, projectId: "project", prompt: "folder draft",
+      reasoningEffort: null, serviceTier: null, updatedAt: 3,
+    },
+    folderId,
+    method: "workbench/thread-state/draft/upsert",
+    projectId: "project",
+  });
+  assert.equal("result" in drafted && (drafted.result as { accepted?: boolean }).accepted, true);
+  await controller.dispose();
+
+  const reopened = createController();
+  await reopened.open("reopened", "project");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const restoredFolder = (await reopened.getSnapshot("project")).displayOrder?.folders?.[0];
+  assert.equal(restoredFolder?.title, "Important");
+  assert.deepEqual(restoredFolder?.threadKeys, [`draft:${draftId}`, "codex:a", "codex:b"]);
+  const restoredDraft = (await reopened.getSnapshot("project")).entries.find((entry) => entry.entryKind === "draft");
+  assert.deepEqual(restoredDraft?.entryKind === "draft" ? restoredDraft.metadata : null, { archived: false, pinned: true, snoozed: false });
+  await reopened.acceptIntent("reopened", { draftId, harness: "codex", projectId: "project", threadId: "materialized", title: "Materialized", turnId: "turn" });
+  assert.deepEqual((await reopened.getSnapshot("project")).displayOrder?.folders?.[0]?.threadKeys, ["codex:materialized", "codex:a", "codex:b"]);
+  await reopened.handleRequest("reopened", { identity: { harness: "codex", threadId: "b" }, method: "workbench/thread-state/pin/set", pinned: false, projectId: "project" });
+  assert.deepEqual((await reopened.getSnapshot("project")).displayOrder?.folders?.[0]?.threadKeys, ["codex:materialized", "codex:a"]);
+  await reopened.handleRequest("reopened", { identity: { harness: "codex", threadId: "a" }, method: "workbench/thread-state/pin/set", pinned: false, projectId: "project" });
+  assert.deepEqual((await reopened.getSnapshot("project")).displayOrder?.folders?.[0]?.threadKeys, ["codex:materialized"]);
+  await reopened.handleRequest("reopened", { identity: { harness: "codex", threadId: "materialized" }, method: "workbench/thread-state/pin/set", pinned: false, projectId: "project" });
+  assert.deepEqual((await reopened.getSnapshot("project")).displayOrder, {});
   await reopened.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });

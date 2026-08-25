@@ -11,11 +11,14 @@ import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
 import {
+  createWorkbenchThreadFolder,
   getWorkbenchThreadDisplayKey,
   isWorkbenchThreadDisplayOrderEmpty,
-  moveWorkbenchThreadDisplayOrder,
+  moveWorkbenchThreadDisplayItem,
   normalizeWorkbenchThreadDisplayOrder,
   reconcileWorkbenchThreadDisplayOrder,
+  replaceWorkbenchThreadFolderMember,
+  renameWorkbenchThreadFolder,
   resolveWorkbenchThreadDisplayOrder,
   sortThreadSidebarEntries,
   type WorkbenchThreadDisplayOrder,
@@ -303,11 +306,13 @@ export default class WorkbenchThreadStateController {
           return { error: { code: "threadTitleMutationFailed", message: sanitizeError(error) } };
         }
       }
-      case "workbench/thread-state/draft/upsert": return { result: await this.upsertDraft(request.projectId, request.draft) };
+      case "workbench/thread-state/draft/upsert": return { result: await this.upsertDraft(request.projectId, request.draft, request.folderId) };
       case "workbench/thread-state/draft/delete": return { result: await this.deleteDraft(request.projectId, request.draftId, request.clientUpdatedAt) };
       case "workbench/thread-state/draft/pin/set":
       case "workbench/thread-state/draft/snooze/set": return { result: await this.mutateDraft(request) };
-      case "workbench/thread-state/display-order/move": return { result: await this.moveDisplayOrder(request) };
+      case "workbench/thread-state/display-order/folder/create":
+      case "workbench/thread-state/display-order/folder/title/set":
+      case "workbench/thread-state/display-order/move": return { result: await this.mutateDisplayOrder(request) };
       default: return { result: await this.mutateThread(request) };
     }
   }
@@ -381,10 +386,12 @@ export default class WorkbenchThreadStateController {
     let draftPinned = false;
     if (input.draftId) {
       const state = await this.getProject(input.projectId);
-      const draftEntry = state.entries.get(`draft:${input.draftId}`);
+      const draftKey = `draft:${input.draftId}`;
+      const draftEntry = state.entries.get(draftKey);
       draftPinned = draftEntry?.entryKind === "draft" ? draftEntry.metadata.pinned : false;
+      state.displayOrder = replaceWorkbenchThreadFolderMember(state.displayOrder, draftKey, `${input.harness}:${input.threadId}`);
       state.drafts.delete(input.draftId);
-      state.entries.delete(`draft:${input.draftId}`);
+      state.entries.delete(draftKey);
     }
     const acceptedAt = this.now();
     const providerEntry: WorkbenchThreadSidebarEntry = {
@@ -1006,21 +1013,37 @@ export default class WorkbenchThreadStateController {
     return next.finally(() => { if (this.operationQueues.get(key) === next) this.operationQueues.delete(key); });
   }
 
-  private async upsertDraft(projectId: string, draft: WorkbenchThreadDraft) {
+  private async upsertDraft(projectId: string, draft: WorkbenchThreadDraft, folderId?: string) {
     const state = await this.getProject(projectId);
-    await this.enqueue(`${projectId}:draft:${draft.draftId}`, async () => {
+    return await this.enqueue(folderId ? `${projectId}:display-order` : `${projectId}:draft:${draft.draftId}`, async () => {
       const current = state.drafts.get(draft.draftId);
-      if (current && current.clientUpdatedAt > draft.clientUpdatedAt) return;
+      if (current && current.clientUpdatedAt > draft.clientUpdatedAt) return { accepted: true, revision: state.revision };
+      const targetFolder = folderId ? state.displayOrder.folders?.find((folder) => folder.folderId === folderId) : null;
+      if (folderId && (!targetFolder || targetFolder.section === "settled")) return { accepted: false, revision: state.revision };
       const timestamp = this.now();
       const accepted = WorkbenchThreadDraftSchema.parse({ ...draft, createdAt: current?.createdAt ?? timestamp, projectId, updatedAt: timestamp });
       state.drafts.set(accepted.draftId, accepted);
       const existingEntry = state.entries.get(`draft:${accepted.draftId}`);
-      const entry = this.draftEntry(accepted, existingEntry?.entryKind === "draft" ? existingEntry.metadata : undefined);
+      const metadata = existingEntry?.entryKind === "draft"
+        ? existingEntry.metadata
+        : targetFolder
+          ? { archived: false as const, pinned: targetFolder.section === "pinned", snoozed: targetFolder.section === "snoozed" }
+          : undefined;
+      const entry = this.draftEntry(accepted, metadata);
       state.entries.set(entryKey(entry), entry);
+      if (targetFolder) {
+        const displayOrder = moveWorkbenchThreadDisplayItem(this.naturallyOrderedEntries(state), state.displayOrder, targetFolder.section, entryKey(entry), targetFolder.folderId, targetFolder.threadKeys[0] ?? null);
+        if (!displayOrder) {
+          if (current) state.drafts.set(current.draftId, current); else state.drafts.delete(accepted.draftId);
+          if (existingEntry) state.entries.set(entryKey(existingEntry), existingEntry); else state.entries.delete(entryKey(entry));
+          return { accepted: false, revision: state.revision };
+        }
+        state.displayOrder = displayOrder;
+      }
       await this.persist(projectId, state);
       this.publish(projectId, state, entry);
+      return { accepted: true, revision: state.revision };
     });
-    return { accepted: true, revision: state.revision };
   }
 
   private async deleteDraft(projectId: string, draftId: string, clientUpdatedAt: number) {
@@ -1055,16 +1078,15 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  private async moveDisplayOrder(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/display-order/move" }>) {
+  private async mutateDisplayOrder(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" }>) {
     const state = await this.getProject(request.projectId);
     return await this.enqueue(`${request.projectId}:display-order`, async () => {
-      const next = moveWorkbenchThreadDisplayOrder(
-        this.naturallyOrderedEntries(state),
-        state.displayOrder,
-        request.section,
-        request.sourceKey,
-        request.beforeKey,
-      );
+      const entries = this.naturallyOrderedEntries(state);
+      const next = request.method === "workbench/thread-state/display-order/folder/create"
+        ? createWorkbenchThreadFolder(entries, state.displayOrder, request.folderId, request.sourceKey, request.title)
+        : request.method === "workbench/thread-state/display-order/folder/title/set"
+          ? renameWorkbenchThreadFolder(entries, state.displayOrder, request.folderId, request.title)
+          : moveWorkbenchThreadDisplayItem(entries, state.displayOrder, request.section, request.sourceKey, request.destinationFolderId, request.beforeKey);
       if (!next) return { accepted: false, revision: state.revision };
       if (areDeeplyEqual(next, state.displayOrder)) return { accepted: true, revision: state.revision };
       state.displayOrder = next;
@@ -1074,7 +1096,7 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" | "workbench/thread-state/display-order/move" }>) {
+  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" | "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" }>) {
     const state = await this.getProject(request.projectId);
     const key = `${request.identity.harness}:${request.identity.threadId}`;
     const mutate = async () => await this.enqueue(`${request.projectId}:thread:${key}`, async () => {

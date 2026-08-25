@@ -21,7 +21,6 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(listSource, /event\.key === "Home"/u);
   assert.match(listSource, /event\.key === "End"/u);
   assert.match(listSource, /summary="Settled threads"/u);
-  assert.match(listSource, /renderReorderableSection\(displayedSettledEntries\.filter/u);
   assert.match(listSource, /WORKBENCH_THREAD_ORDER_DROP_TARGET_ID/u);
   assert.match(listSource, /THREAD_ORDER_DROP_RANGE = \{ x: 24, y: 100_000 \}/u);
   assert.match(listSource, /range=\{THREAD_ORDER_DROP_RANGE\}/u);

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_*_DROP_TARGET_ID: shared accepted-target identifiers for sidebar ordering, thread ordering, and main panels. Keywords: workbench, drag, target.
- * - WorkbenchDragPayload: pointer-drag payloads for sidebar sections, thread rows, and main panel targets. Keywords: workbench, drag, payload, move.
+ * - WorkbenchDragPayload: pointer-drag payloads for sidebar sections, thread rows, thread folders, and main panel targets. Keywords: workbench, drag, payload, move.
  */
 
 import type { WorkbenchSidebarSectionId } from "./workbench-layout-storage";
@@ -32,4 +32,9 @@ export type WorkbenchDragPayload =
     readonly sourceKey: string;
     readonly target: WorkbenchPanelTarget;
     readonly type: "thread-row";
+  }
+  | {
+    readonly section: WorkbenchThreadDisplaySection;
+    readonly sourceKey: string;
+    readonly type: "thread-folder";
   };

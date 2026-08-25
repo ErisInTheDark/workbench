@@ -1,4 +1,4 @@
-/* No production exports. Tests protect strict lifecycle, grouping, ordering, and draft rules. */
+/* No production exports. Tests protect strict lifecycle, grouping, folder mutation, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchThreadPlanConflictSelector, getThreadSidebarGroup, getWorkbenchThreadPlanConflictEntries, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
@@ -146,11 +146,29 @@ test("draft priority requests use draft identity and drive shared grouping and o
 });
 
 test("display-order moves require a reorderable section and explicit insertion key", () => {
-  const request = { beforeKey: null, method: "workbench/thread-state/display-order/move", projectId: "project", section: "snoozed", sourceKey: "codex:thread" };
+  const request = { beforeKey: null, destinationFolderId: null, method: "workbench/thread-state/display-order/move", projectId: "project", section: "snoozed", sourceKey: "codex:thread" };
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse(request).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, beforeKey: "codex:other" }).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, section: "main" }).success, false);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, sourceKey: "" }).success, false);
+});
+
+test("folder mutations require canonical ids, durable thread keys, and non-empty bounded names", () => {
+  const folderId = "00000000-0000-4000-8000-000000000020";
+  const folderDraft = {
+    agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: {}, createdAt: 2,
+    draftId: "00000000-0000-4000-8000-000000000021", harness: "codex", model: null,
+    profileId: null, projectId: "project", prompt: "folder draft", reasoningEffort: null, serviceTier: null, updatedAt: 2,
+  };
+  const create = { folderId, method: "workbench/thread-state/display-order/folder/create", projectId: "project", sourceKey: "codex:thread", title: "Work" };
+  const rename = { folderId, method: "workbench/thread-state/display-order/folder/title/set", projectId: "project", title: "Later" };
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse(create).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse(rename).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...create, folderId: "folder" }).success, false);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...create, sourceKey: "" }).success, false);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...rename, title: " " }).success, false);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draft: folderDraft, folderId, method: "workbench/thread-state/draft/upsert", projectId: "project" }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draft: folderDraft, folderId: "folder", method: "workbench/thread-state/draft/upsert", projectId: "project" }).success, false);
 });
 
 test("durable questionnaire state accepts proper questions and rejects approvals", () => {

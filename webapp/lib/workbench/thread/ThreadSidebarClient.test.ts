@@ -51,6 +51,45 @@ test("optimistic draft edits preserve pushed pin and snooze metadata", async () 
   assert.deepEqual(optimistic?.entryKind === "draft" ? optimistic.metadata : null, { archived: false, pinned: true, snoozed: true });
 });
 
+test("folder draft creation is optimistic, carries one placement write, and transfers pinned membership on materialization", async () => {
+  const folderId = "00000000-0000-4000-8000-000000000010";
+  const source = {
+    activityAt: 1,
+    entryKind: "thread" as const,
+    identity: { harness: "codex" as const, threadId: "source" },
+    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false },
+    metadata: { archived: false as const, pinned: true, snoozed: false },
+    orderAt: 1,
+    title: "source",
+  };
+  const initial: WorkbenchThreadSidebarSnapshot = {
+    ...snapshot(1),
+    displayOrder: { folders: [{ folderId, section: "pinned", threadKeys: ["codex:source"], title: "Work" }] },
+    entries: [source],
+  };
+  const placements: Array<string | undefined> = [];
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => initial,
+      upsertDraft: async (_projectId, _draft, placement) => { placements.push(placement); },
+    },
+  });
+  await client.open("project");
+  const pending = draft("folder draft", 2);
+  client.edit(pending, { folderId });
+  const optimistic = client.getSnapshot();
+  const optimisticDraft = optimistic?.entries.find((entry) => entry.entryKind === "draft");
+  assert.deepEqual(optimisticDraft?.entryKind === "draft" ? optimisticDraft.metadata : null, { archived: false, pinned: true, snoozed: false });
+  assert.deepEqual(optimistic?.displayOrder?.folders?.[0]?.threadKeys, [`draft:${pending.draftId}`, "codex:source"]);
+  await client.flush();
+  assert.deepEqual(placements, [folderId]);
+  await client.acceptIntent({ draftId: pending.draftId, identity: { harness: "codex", threadId: "materialized" }, title: "Materialized", turnId: "turn" });
+  assert.deepEqual(client.getSnapshot()?.displayOrder?.folders?.[0]?.threadKeys, ["codex:materialized", "codex:source"]);
+});
+
 test("newer pushed revisions win and foreign project revisions are ignored", async () => {
   const installed: Array<WorkbenchThreadSidebarSnapshot | null> = [];
   const client = new ThreadSidebarClient({
