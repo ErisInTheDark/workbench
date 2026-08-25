@@ -176,6 +176,10 @@ export function summarizeDisplayParts(parts: ThreadCommandDisplayPart[]) {
       return `/${part.name}`;
     }
 
+    if (part.type === "pattern") {
+      return part.pattern;
+    }
+
     return part.text;
   }).join("");
 }

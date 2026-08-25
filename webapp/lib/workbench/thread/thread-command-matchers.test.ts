@@ -49,7 +49,9 @@ function displayPartKinds(parts: readonly ThreadCommandDisplayPart[]) {
 }
 
 function codeOperands(parts: readonly ThreadCommandDisplayPart[]) {
-  return parts.flatMap((part) => part.type === "text" && part.variant === "code" ? [part.text] : []);
+  return parts.flatMap((part) => part.type === "pattern"
+    ? [part.pattern]
+    : part.type === "text" && part.variant === "code" ? [part.text] : []);
 }
 
 function pathOperands(parts: readonly ThreadCommandDisplayPart[]) {
@@ -58,6 +60,7 @@ function pathOperands(parts: readonly ThreadCommandDisplayPart[]) {
 
 function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
   switch (name) {
+    case "rg": return { args: ["-n", "needle", "webapp"] };
     case "thread_title": return { title: "Render typed wb tools" };
     case "thread_status": return { status: "completed" };
     case "subagent_wait":
@@ -117,6 +120,7 @@ test("simple typed wb MCP calls share argument-sensitive CLI presentations", () 
 
 test("every valid simple typed wb MCP route emphasizes its important target", () => {
   const cases = [
+    ["rg", { args: ["-n", "needle", "webapp"] }, ["plain", "pattern", "plain", "path"]],
     ["thread_title_get", {}, ["plain", "primary"]],
     ["thread_resume", {}, ["plain", "primary"]],
     ["git_add", { paths: ["src/a.ts"] }, ["plain", "primary"]],
@@ -190,7 +194,7 @@ test("PowerShell ripgrep summaries do not treat an uppercase context value as th
   });
 
   assert.equal(display.claimedBy, "powershell.search-rg,powershell.select-object-limit");
-  assert.deepEqual(codeOperands(display.summaryParts), ['"rotate|selectedHarness|onHarness|HarnessIcon|harness"']);
+  assert.deepEqual(codeOperands(display.summaryParts), ["rotate|selectedHarness|onHarness|HarnessIcon|harness"]);
   assert.deepEqual(pathOperands(display.summaryParts), ["webapp/components/workbench.tsx"]);
   assert.equal(display.summaryStats.searchedFiles, 1);
 });
@@ -204,8 +208,52 @@ test("PowerShell ripgrep summaries preserve lowercase count flags as non-consumi
   });
 
   assert.equal(display.claimedBy, "powershell.search-rg");
-  assert.deepEqual(codeOperands(display.summaryParts), ['"needle"']);
+  assert.deepEqual(codeOperands(display.summaryParts), ["needle"]);
   assert.deepEqual(pathOperands(display.summaryParts), ["webapp/components/workbench.tsx"]);
+});
+
+test("typed ripgrep summaries exactly match the shell ripgrep presentation", () => {
+  const cases = [
+    {
+      args: ["-n", "-C", "3", "needle|thread", "webapp/components/workbench.tsx"],
+      command: String.raw`pwsh -Command 'rg -n -C 3 "needle|thread" webapp/components/workbench.tsx'`,
+    },
+    {
+      args: ["-n", "-e", String.raw`needle\(thread`, "webapp/orchestrator"],
+      command: String.raw`pwsh -Command 'rg -n -e "needle\(thread" webapp/orchestrator'`,
+    },
+    {
+      args: ["-n", "-g", "*.ts", "needle", "webapp/lib"],
+      command: String.raw`pwsh -Command 'rg -n -g "*.ts" needle webapp/lib'`,
+    },
+    {
+      args: ["needle"],
+      command: String.raw`pwsh -Command 'rg needle'`,
+    },
+    {
+      args: ["-F", "needle|thread", "webapp"],
+      command: String.raw`pwsh -Command 'rg -F "needle|thread" webapp'`,
+    },
+  ];
+
+  for (const { args, command } of cases) {
+    const shell = getThreadCommandDisplay({
+      command,
+      commandActions: [],
+      cwd: PROJECT_ROOT,
+      projectRootPath: PROJECT_ROOT,
+    });
+    const mcp = getWorkbenchMcpCommandDisplay({
+      argumentsValue: { args },
+      context: { cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT },
+      server: "wb",
+      tool: "rg",
+    });
+    assert.ok(mcp, command);
+    assert.deepEqual(mcp.summaryParts, shell.summaryParts, command);
+    assert.deepEqual(mcp.ongoingSummaryParts, shell.ongoingSummaryParts, command);
+    assert.deepEqual(mcp.summaryStats, shell.summaryStats, command);
+  }
 });
 
 test("Workbench subagent commands share one semantic parser", () => {

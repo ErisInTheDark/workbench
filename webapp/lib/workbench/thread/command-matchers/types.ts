@@ -3,6 +3,9 @@
  * - CommandShell: shell launcher id recognized by thread command summaries. Keywords: thread, command, shell.
  * - CommandShellGroup: shell family used for stage consumption and matcher selection. Keywords: thread, command, shell, matcher.
  * - CommandPathDisplayPart: structured path part for rendering command summaries with file pills. Keywords: thread, command, summary, path.
+ * - CommandPatternDisplayPart: structured literal or regex pattern rendered as one syntax-aware code pill. Keywords: thread, command, summary, pattern, regex.
+ * - CommandTextDisplayPart: styled text part for plain, code, or primary command-summary text. Keywords: thread, command, summary, text.
+ * - CommandSkillDisplayPart: structured skill reference rendered inside command summaries. Keywords: thread, command, summary, skill.
  * - CommandSeparatorDisplayPart: structured stage-separator part for procedural command summaries. Keywords: thread, command, summary, separator.
  * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills. Keywords: thread, command, summary, path.
  * - ThreadCommandDetailResultKind: semantic detail result kinds for polished command substep rows. Keywords: thread, command, detail, result.
@@ -57,6 +60,12 @@ export interface CommandTextDisplayPart {
   variant?: "code" | "plain" | "primary";
 }
 
+export interface CommandPatternDisplayPart {
+  pattern: string;
+  syntax: "literal" | "regex";
+  type: "pattern";
+}
+
 export interface CommandSkillDisplayPart {
   name: string;
   path: string;
@@ -67,6 +76,7 @@ export type ThreadCommandDisplayPart =
   | CommandTextDisplayPart
   | CommandSkillDisplayPart
   | CommandPathDisplayPart
+  | CommandPatternDisplayPart
   | CommandSeparatorDisplayPart;
 
 export type ThreadCommandDetailResultKind = "duration" | "error" | "result" | "text";

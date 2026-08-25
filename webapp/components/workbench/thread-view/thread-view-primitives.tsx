@@ -22,6 +22,102 @@ rounded-[0.35rem] px-[0.34em] py-[0.08em]
 font-mono text-[0.94em]
 `;
 
+type RegexPatternTokenKind = "escape" | "group" | "literal" | "operator";
+
+interface RegexPatternToken {
+  kind: RegexPatternTokenKind;
+  text: string;
+}
+
+const REGEX_TOKEN_CLASS_NAMES: Record<RegexPatternTokenKind, string> = {
+  escape: "text-muted",
+  group: "text-[color:color-mix(in_srgb,var(--accent)_30%,var(--text)_70%)]",
+  literal: "text-text",
+  operator: "text-muted",
+};
+
+function tokenizeRegexPattern(pattern: string) {
+  const tokens: RegexPatternToken[] = [];
+  let inCharacterClass = false;
+  const append = (kind: RegexPatternTokenKind, text: string) => {
+    if (!text) return;
+    const previous = tokens.at(-1);
+    if (previous?.kind === kind) previous.text += text;
+    else tokens.push({ kind, text });
+  };
+
+  for (let index = 0; index < pattern.length;) {
+    const character = pattern[index];
+    if (character === "\\") {
+      append("escape", character);
+      if (index + 1 < pattern.length) append("literal", pattern[index + 1] ?? "");
+      index += Math.min(2, pattern.length - index);
+      continue;
+    }
+    if (inCharacterClass) {
+      if (character === "]") {
+        append("operator", character);
+        inCharacterClass = false;
+      } else if (character === "-" || character === "^") {
+        append("operator", character);
+      } else {
+        append("literal", character);
+      }
+      index += 1;
+      continue;
+    }
+    if (character === "[") {
+      append("operator", character);
+      inCharacterClass = true;
+      index += 1;
+      continue;
+    }
+    if (character === "(" || character === ")") {
+      append("group", character);
+      index += 1;
+      continue;
+    }
+    if (character === "{") {
+      const quantifier = /^\{\d+(?:,\d*)?\}/u.exec(pattern.slice(index))?.[0];
+      if (quantifier) {
+        append("operator", quantifier);
+        index += quantifier.length;
+        continue;
+      }
+    }
+    if ("|^$.*+?".includes(character)) {
+      append("operator", character);
+      index += 1;
+      continue;
+    }
+    append("literal", character);
+    index += 1;
+  }
+  return tokens;
+}
+
+function ThreadCommandPattern({ pattern, syntax }: { pattern: string; syntax: "literal" | "regex" }) {
+  const tokens = syntax === "regex" ? tokenizeRegexPattern(pattern) : [{ kind: "literal" as const, text: pattern }];
+  return (
+    <span className="contents" data-thread-command-pattern={syntax}>
+      <ThreadInlineCode
+        className="inline-block shrink-1 min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-bottom text-text [font-variant-ligatures:none]"
+        title={pattern}
+      >
+        {tokens.map((token, index) => (
+          <span
+            className={REGEX_TOKEN_CLASS_NAMES[token.kind]}
+            data-thread-pattern-token={token.kind}
+            key={`${token.kind}:${index}`}
+          >
+            {token.text}
+          </span>
+        ))}
+      </ThreadInlineCode>
+    </span>
+  );
+}
+
 export function ThreadTextBlock ({
   children,
   monospace = false,
@@ -100,6 +196,8 @@ function ThreadCommandStageParts ({
             path={part.path}
             projectId={projectId}
           />
+        ) : part.type === "pattern" ? (
+          <ThreadCommandPattern key={`pattern:${part.pattern}:${index}`} pattern={part.pattern} syntax={part.syntax} />
         ) : (
           <span key={`text:${index}`} className="contents">
             {part.variant === "code" ? (

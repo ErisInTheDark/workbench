@@ -10,6 +10,7 @@ import {
   getCommandPathKnownSkill,
 } from "./helpers";
 import { CommandMatcher } from "./core";
+import RipgrepCommand from "./ripgrep";
 import {
   consumeNextCommandStage,
   unwrapLeadingPowerShellLiteralHereStringAssignment,
@@ -384,35 +385,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (matchesRipgrepCommand(parsedStage) === false || hasPowerShellFlag(parsedStage, "--files")) {
         return null;
       }
-
-      const positionalArguments = getPowerShellPositionalArguments(parsedStage);
-      const query = readPowerShellNamedValue(parsedStage, ["-e", "--regexp"]) ?? positionalArguments[0];
-      if (!query) {
-        return null;
-      }
-
-      const summaryParts = [
-        CommandMatcher.Text("Search for "),
-        CommandMatcher.Code(`"${formatPatternForDisplay(query)}"`),
-      ];
-      const ongoingSummaryParts = [
-        CommandMatcher.Text("Searching for "),
-        CommandMatcher.Code(`"${formatPatternForDisplay(query)}"`),
-      ];
-      const path = getPowerShellRipgrepPathArgument(parsedStage, positionalArguments);
-      const pathPart = path
-        ? buildCommandPathPart(path, context)
-        : buildDisplayPathPart(context.cwdDisplay);
-      if (pathPart) {
-        summaryParts.push(CommandMatcher.Text(" in "), pathPart);
-        ongoingSummaryParts.push(CommandMatcher.Text(" in "), pathPart);
-      }
-
-      return CommandMatcher.Result({
-        ongoingSummaryParts,
-        summaryParts,
-        summaryStats: { searchedFiles: 1 },
-      });
+      return RipgrepCommand.searchResult(parsedStage.tokens.slice(1), context);
     },
   }),
   CommandMatcher({
@@ -2534,23 +2507,10 @@ function getPowerShellPositionalPathArgument(parsedStage: ParsedPowerShellStage)
   }
 
   if (matchesRipgrepCommand(parsedStage)) {
-    return getPowerShellRipgrepPathArgument(parsedStage, positionalArguments);
+    return RipgrepCommand(parsedStage.tokens.slice(1)).path;
   }
 
   return positionalArguments[0] ?? null;
-}
-
-function getPowerShellRipgrepPathArgument(
-  parsedStage: ParsedPowerShellStage,
-  positionalArguments = getPowerShellPositionalArguments(parsedStage),
-) {
-  if (hasPowerShellFlag(parsedStage, "--files")) {
-    return positionalArguments[0] ?? null;
-  }
-
-  return readPowerShellNamedValue(parsedStage, ["-e", "--regexp"])
-    ? positionalArguments[0] ?? null
-    : positionalArguments[1] ?? null;
 }
 
 function getPowerShellValueFlags(commandName: string | null) {
@@ -2586,41 +2546,6 @@ function getPowerShellValueFlags(commandName: string | null) {
         "-timeoutsec",
         "-uri",
         "-url",
-      ]);
-    case "rg":
-    case "rg.exe":
-      return new Set([
-        "-A",
-        "--after-context",
-        "-B",
-        "--before-context",
-        "-C",
-        "--context",
-        "-e",
-        "--regexp",
-        "-f",
-        "--file",
-        "-g",
-        "--glob",
-        "--iglob",
-        "-j",
-        "--threads",
-        "-M",
-        "--max-columns",
-        "-m",
-        "--max-count",
-        "--max-depth",
-        "--max-filesize",
-        "--path-separator",
-        "--pre",
-        "--pre-glob",
-        "--replace",
-        "--sort",
-        "--sortr",
-        "-t",
-        "--type",
-        "-T",
-        "--type-not",
       ]);
     default:
       return new Set<string>();

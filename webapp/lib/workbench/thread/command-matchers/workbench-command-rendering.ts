@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WorkbenchCommandPresentationName/WORKBENCH_COMMAND_PRESENTATION_NAMES: canonical wb tool inventory shared by CLI and MCP adapters. Keywords: workbench, command, inventory.
- * - WorkbenchCommandRoute/WorkbenchSpecializedOperation: route one wb operation to a dedicated renderer or a simple summary renderer. Keywords: workbench, command, route, renderer.
- * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay: resolve structured arguments into shared rendering metadata. Keywords: workbench, CLI, MCP, rendering.
+ * - WorkbenchCommandRoute/WorkbenchSpecializedOperation/WorkbenchCommandPresentationContext: route one wb operation with optional path context to a dedicated or simple renderer. Keywords: workbench, command, route, renderer.
+ * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay/getWorkbenchCommandRouteSummaryDisplay: resolve structured arguments and routes into shared rendering metadata. Keywords: workbench, CLI, MCP, rendering.
  */
 import type { JsonValue } from "../../../codex/generated/app-server/serde_json/JsonValue";
 
@@ -13,6 +13,7 @@ import {
   summarizeDisplayParts,
 } from "./helpers";
 import { tokenizeCommand } from "./helpers";
+import RipgrepCommand from "./ripgrep";
 import type {
   CommandMatcherResult,
   ThreadCommandDetailRow,
@@ -22,6 +23,7 @@ import type {
 } from "./types";
 
 export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
+  "rg",
   "subagent_list",
   "subagent_profiles",
   "subagent_create",
@@ -103,6 +105,8 @@ export interface WorkbenchCommandRendering {
   claimedBy: string;
   result: CommandMatcherResult;
 }
+
+export type WorkbenchCommandPresentationContext = RipgrepCommand.PresentationContext;
 
 export type WorkbenchCommandRoute =
   | { kind: "simple"; rendering: WorkbenchCommandRendering }
@@ -467,6 +471,7 @@ function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: st
 export function getWorkbenchCommandRoute(
   name: WorkbenchCommandPresentationName,
   argumentsValue: JsonValue,
+  context: WorkbenchCommandPresentationContext = {},
 ): WorkbenchCommandRoute | null {
   const args = asRecord(argumentsValue) ?? {};
   const gitArc = renderGitArc(name, args);
@@ -474,6 +479,19 @@ export function getWorkbenchCommandRoute(
   if (name.startsWith("subagent_")) return renderSubagent(name, args);
   if (name.startsWith("browse_")) return renderBrowse(name, args);
   switch (name) {
+    case "rg":
+      return {
+        kind: "simple",
+        rendering: {
+          claimedBy: "workbench-cli.ripgrep",
+          result: RipgrepCommand.searchResult(readStringArray(args.args), context)
+            ?? CommandMatcher.Result({
+              ongoingSummaryParts: actionTarget("Searching ", "project files"),
+              summaryParts: actionTarget("Searched ", "project files"),
+              summaryStats: { searchedFiles: 1 },
+            }),
+        },
+      };
     case "thread_title_get":
       return simple("workbench-cli.thread-title-get", actionTarget("Checking ", "thread title"), actionTarget("Checked ", "thread title"));
     case "thread_title": {
@@ -509,15 +527,22 @@ export function getWorkbenchCommandRoute(
 export function getWorkbenchCommandRendering(
   name: WorkbenchCommandPresentationName,
   argumentsValue: JsonValue,
+  context: WorkbenchCommandPresentationContext = {},
 ) {
-  return getWorkbenchCommandRoute(name, argumentsValue)?.rendering ?? null;
+  return getWorkbenchCommandRoute(name, argumentsValue, context)?.rendering ?? null;
 }
 
 export function getWorkbenchCommandSummaryDisplay(
   name: WorkbenchCommandPresentationName,
   argumentsValue: JsonValue,
+  context: WorkbenchCommandPresentationContext = {},
 ): ThreadCommandSummaryDisplay | null {
-  const route = getWorkbenchCommandRoute(name, argumentsValue);
+  return getWorkbenchCommandRouteSummaryDisplay(getWorkbenchCommandRoute(name, argumentsValue, context));
+}
+
+export function getWorkbenchCommandRouteSummaryDisplay(
+  route: WorkbenchCommandRoute | null,
+): ThreadCommandSummaryDisplay | null {
   if (!route || route.kind !== "simple") return null;
   const { rendering: renderingValue } = route;
   const { result } = renderingValue;

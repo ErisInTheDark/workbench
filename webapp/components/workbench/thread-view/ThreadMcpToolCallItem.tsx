@@ -10,8 +10,9 @@ import type { ReactNode } from "react";
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import {
   getThreadCommandOutcomeDisplay,
-  getWorkbenchMcpCommandDisplay,
+  getWorkbenchCommandRouteSummaryDisplay,
   type ThreadCommandExecutionOutcome,
+  type WorkbenchCommandRoute,
 } from "../../../lib/workbench/thread/thread-command-matchers";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadDisclosure from "./ThreadDisclosure";
@@ -43,16 +44,18 @@ function ThreadMetaLine ({
 export default function ThreadMcpToolCallItem ({
   details,
   item,
+  projectFilePaths,
+  projectId,
+  route,
 }: {
   details?: ReactNode;
   item: McpToolCallItem;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  route: WorkbenchCommandRoute | null;
 }) {
   const metaParts = [];
-  const commandDisplay = getWorkbenchMcpCommandDisplay({
-    argumentsValue: item.arguments,
-    server: item.server,
-    tool: item.tool,
-  });
+  const commandDisplay = getWorkbenchCommandRouteSummaryDisplay(route);
   const outcome: ThreadCommandExecutionOutcome = item.status === "inProgress"
     ? "inProgress"
     : item.status === "failed" || Boolean(item.error) ? "failed" : "completed";
@@ -90,11 +93,11 @@ export default function ThreadMcpToolCallItem ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
-      open={item.status !== "completed" || Boolean(item.error)}
+      defaultOpen={item.status !== "completed" || Boolean(item.error)}
       summary={(
         <>
           {outcomeDisplay ? (
-            <ThreadCommandSummary display={outcomeDisplay} />
+            <ThreadCommandSummary display={outcomeDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
           ) : (
             <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-[0.45rem]">
               <ThreadSummaryText text="MCP" />

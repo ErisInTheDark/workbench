@@ -507,7 +507,7 @@ export default function ThreadWebSearchItem ({
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
-      open={shouldOpen}
+      defaultOpen={shouldOpen}
       summary={getWebSearchSummary(item)}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >

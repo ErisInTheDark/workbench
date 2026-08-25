@@ -10,20 +10,25 @@ import {
   getWorkbenchCommandRoute,
   getWorkbenchCommandSummaryDisplay,
   isWorkbenchCommandPresentationName,
+  type WorkbenchCommandPresentationContext,
   type WorkbenchCommandRoute,
 } from "./workbench-command-rendering";
 
-export function getWorkbenchMcpCommandRoute({
-  argumentsValue,
-  server,
-  tool,
-}: {
+interface WorkbenchMcpCommandInput {
   argumentsValue: JsonValue;
+  context?: WorkbenchCommandPresentationContext;
   server: string;
   tool: string;
-}) {
+}
+
+export function getWorkbenchMcpCommandRoute({
+  argumentsValue,
+  context,
+  server,
+  tool,
+}: WorkbenchMcpCommandInput) {
   if (server !== "wb" || !isWorkbenchCommandPresentationName(tool)) return null;
-  return getWorkbenchCommandRoute(tool, argumentsValue);
+  return getWorkbenchCommandRoute(tool, argumentsValue, context);
 }
 
 export function shouldUseWorkbenchMcpSpecializedRenderer(
@@ -38,13 +43,10 @@ export function shouldUseWorkbenchMcpSpecializedRenderer(
 
 export function getWorkbenchMcpCommandDisplay({
   argumentsValue,
+  context,
   server,
   tool,
-}: {
-  argumentsValue: JsonValue;
-  server: string;
-  tool: string;
-}): ThreadCommandSummaryDisplay | null {
+}: WorkbenchMcpCommandInput): ThreadCommandSummaryDisplay | null {
   if (server !== "wb" || !isWorkbenchCommandPresentationName(tool)) return null;
-  return getWorkbenchCommandSummaryDisplay(tool, argumentsValue);
+  return getWorkbenchCommandSummaryDisplay(tool, argumentsValue, context);
 }

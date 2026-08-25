@@ -2467,6 +2467,7 @@ function ThreadRenderableBlockViewComponent ({
     case "mcpToolCall": {
       const route = getWorkbenchMcpCommandRoute({
         argumentsValue: block.item.arguments,
+        context: threadCwdPath ? { cwd: threadCwdPath, projectRootPath, workspaceRoots } : undefined,
         server: block.item.server,
         tool: block.item.tool,
       });
@@ -2528,6 +2529,9 @@ function ThreadRenderableBlockViewComponent ({
             <ThreadCommandDetailRows rows={browseDetails} projectFilePaths={projectFilePaths} projectId={projectId} />
           ) : undefined}
           item={block.item}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          route={route}
         />
       );
     }

@@ -35,6 +35,7 @@ interface TextPartInput {
 interface CommandMatcherBuilder {
   <T extends CommandMatcherDefinition>(definition: T): T;
   Code: (text: string, options?: TextPartInput) => ThreadCommandDisplayPart;
+  Pattern: (pattern: string, syntax: "literal" | "regex") => ThreadCommandDisplayPart;
   Path: (input: PathPartInput) => ThreadCommandDisplayPart;
   Result: (result: CommandMatcherResult) => CommandMatcherResult;
   Separator: () => ThreadCommandDisplayPart;
@@ -63,6 +64,9 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
         path,
         type: "path",
       } satisfies ThreadCommandDisplayPart;
+    },
+    Pattern(pattern: string, syntax: "literal" | "regex") {
+      return { pattern, syntax, type: "pattern" } satisfies ThreadCommandDisplayPart;
     },
     Result({
       hide = false,
