@@ -100,6 +100,15 @@ export default class WorkbenchWorkspaceGitArcController {
 
   async findLifecycleState(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {
     const members = await this.resolveRepoMembers(project);
+    return await this.findLifecycleStateInMembers(project, members, harness, threadId);
+  }
+
+  private async findLifecycleStateInMembers(
+    project: AgentEndpointProjectResolution,
+    members: readonly RepoMember[],
+    harness: WorkbenchHarness,
+    threadId: string,
+  ) {
     const values = (await Promise.all(members.map(async (member) => {
       const state = await this.local.findLifecycleState({ cwd: member.repoRoot, harness, threadId });
       return state ? { member, state } : null;
@@ -137,11 +146,15 @@ export default class WorkbenchWorkspaceGitArcController {
     threadId: string,
     absolutePaths: readonly string[],
   ) {
-    const lifecycle = await this.findLifecycleState(project, harness, threadId);
-    if (!lifecycle || lifecycle.phase !== "active") return { allowed: false, uncoveredPaths: [...absolutePaths] };
+    const members = await this.resolveRepoMembers(project);
+    const [lifecycle, ignoredPaths] = await Promise.all([
+      this.findLifecycleStateInMembers(project, members, harness, threadId),
+      this.listIgnoredPatchPaths(project, members, absolutePaths),
+    ]);
     const roots = [...project.project.roots].sort((left, right) => right.root.length - left.root.length);
     const directoryClaims = new Set<string>();
-    for (const claimedPath of lifecycle.claimedPaths) {
+    const claimedPaths = lifecycle?.phase === "active" ? lifecycle.claimedPaths : [];
+    for (const claimedPath of claimedPaths) {
       const parsed = this.parseRootPath(project, claimedPath, project.root.id);
       try {
         if ((await fs.stat(parsed.absolute)).isDirectory()) directoryClaims.add(comparable(parsed.absolute));
@@ -149,14 +162,36 @@ export default class WorkbenchWorkspaceGitArcController {
         // Missing claims cover only their exact path.
       }
     }
-    const claims = lifecycle.claimedPaths.map((claimedPath) => comparable(this.parseRootPath(project, claimedPath, project.root.id).absolute));
+    const claims = claimedPaths.map((claimedPath) => comparable(this.parseRootPath(project, claimedPath, project.root.id).absolute));
     const uncoveredPaths = absolutePaths.filter((candidate) => {
       const absolute = comparable(candidate);
       const insideWorkspace = roots.some((root) => isInside(absolute, root.root));
       if (!insideWorkspace) return true;
+      if (ignoredPaths.has(absolute)) return false;
       return !claims.some((claim) => absolute === claim || (directoryClaims.has(claim) && isInside(absolute, claim)));
     });
     return { allowed: uncoveredPaths.length === 0, uncoveredPaths };
+  }
+
+  private async listIgnoredPatchPaths(
+    project: AgentEndpointProjectResolution,
+    members: readonly RepoMember[],
+    absolutePaths: readonly string[],
+  ) {
+    const roots = [...project.project.roots].sort((left, right) => right.root.length - left.root.length);
+    const memberByRootId = new Map(members.flatMap((member) => member.roots.map((root) => [root.id, member] as const)));
+    const candidatesByRepo = new Map<string, string[]>();
+    for (const candidate of absolutePaths) {
+      const root = roots.find((projectRoot) => isInside(candidate, projectRoot.root));
+      const member = root ? memberByRootId.get(root.id) : null;
+      if (!root || !member || comparable(candidate) === comparable(root.root)) continue;
+      candidatesByRepo.set(member.repoRoot, [...candidatesByRepo.get(member.repoRoot) ?? [], candidate]);
+    }
+    const ignoredPaths = await Promise.all([...candidatesByRepo].map(async ([repoRoot, candidates]) => {
+      const repository = new WorkbenchGitRepository(repoRoot);
+      return (await repository.listIgnoredPaths(candidates)).map((ignoredPath) => comparable(repository.resolvePath(ignoredPath)));
+    }));
+    return new Set(ignoredPaths.flat());
   }
 
   async releaseActiveClaim(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {

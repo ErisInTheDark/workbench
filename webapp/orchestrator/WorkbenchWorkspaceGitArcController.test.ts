@@ -1,15 +1,19 @@
-/* No production exports. Tests protect workspace arc membership, root-qualified projection, repo deduplication, per-root proposals, and proposal-owned amendment routing. */
+/* No production exports. Tests protect workspace arc membership, patch claim coverage, Git-ignored exemptions, root-qualified projection, repo deduplication, per-root proposals, and proposal-owned amendment routing. */
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type WorkbenchGitCheckpointController from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import { WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema } from "../lib/workbench/thread/thread-state";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcController";
+
+const execFileAsync = promisify(execFile);
 
 class FakeLocalGitArcController {
   readonly lifecycleFindCalls: string[] = [];
@@ -118,7 +122,7 @@ function createWorkspace(primary: string, secondary: string): AgentEndpointProje
   };
 }
 
-test("active claims cover exact files and existing directory descendants across workspace roots", async (context) => {
+test("active claims and Git ignore rules cover patch paths across workspace roots", async (context) => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-claim-coverage-"));
   context.after(async () => await rm(temporaryRoot, { force: true, recursive: true }));
   const apiRoot = path.join(temporaryRoot, "api");
@@ -126,8 +130,16 @@ test("active claims cover exact files and existing directory descendants across 
   const apiSource = path.join(apiRoot, "src");
   await mkdir(apiSource, { recursive: true });
   await mkdir(webRoot, { recursive: true });
+  await Promise.all([
+    execFileAsync("git", ["init"], { cwd: apiRoot }),
+    execFileAsync("git", ["init"], { cwd: webRoot }),
+  ]);
   await writeFile(path.join(apiSource, "nested.ts"), "export {};\n", "utf8");
   await writeFile(path.join(webRoot, "claimed.ts"), "export {};\n", "utf8");
+  const trackedIgnored = path.join(apiRoot, "tracked.log");
+  await writeFile(trackedIgnored, "tracked\n", "utf8");
+  await execFileAsync("git", ["add", "tracked.log"], { cwd: apiRoot });
+  await writeFile(path.join(apiRoot, ".gitignore"), "ignored/\n*.log\n", "utf8");
   const project = createWorkspace(apiRoot, webRoot);
   const controller = new WorkbenchWorkspaceGitArcController(
     new FakeLocalGitArcController() as unknown as WorkbenchGitCheckpointController,
@@ -173,6 +185,19 @@ test("active claims cover exact files and existing directory descendants across 
   assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", identity.threadId, uncovered), {
     allowed: false,
     uncoveredPaths: uncovered,
+  });
+  const ignored = [path.join(apiRoot, "ignored", "generated.ts"), path.join(apiRoot, "untracked.log")];
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", identity.threadId, [...covered, ...ignored]), {
+    allowed: true,
+    uncoveredPaths: [],
+  });
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", identity.threadId, [...ignored, trackedIgnored]), {
+    allowed: false,
+    uncoveredPaths: [trackedIgnored],
+  });
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "no-active-arc", ignored), {
+    allowed: true,
+    uncoveredPaths: [],
   });
   assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "no-active-arc", covered), {
     allowed: false,
