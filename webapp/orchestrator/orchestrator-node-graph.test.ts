@@ -94,6 +94,30 @@ test("each production node matches a representative owned source path", () => {
   }
 });
 
+test("server:core owns Git source and test paths without absorbing unrelated server code", () => {
+  const core = createGitignoreMatcher(flattenParents(graph.roots).nodes.get("server:core")!.sources);
+
+  for (const sourcePath of [
+    "webapp/lib/workbench/git/GitArcProposalController.ts",
+    "webapp/lib/workbench/git/GitCheckpointStore.ts",
+    "webapp/lib/workbench/git/GitCheckpointStore.test.ts",
+    "webapp/lib/workbench/git/future/NestedGitOwner.test.ts",
+    "webapp/orchestrator/WorkbenchWorkspaceGitArcController.ts",
+    "webapp/orchestrator/WorkbenchWorkspaceGitArcController.test.ts",
+    "webapp/orchestrator/future-git-owner.ts",
+  ]) {
+    assert.equal(core.matches(sourcePath), true, `server:core must match ${sourcePath}`);
+  }
+
+  for (const sourcePath of [
+    "webapp/orchestrator/WorkbenchMcpNode.ts",
+    "webapp/orchestrator/index.ts",
+    "webapp/lib/workbench/gitignore-matcher.ts",
+  ]) {
+    assert.equal(core.matches(sourcePath), false, `server:core must not absorb ${sourcePath}`);
+  }
+});
+
 test("auto-fresh instruction Markdown has one acknowledgement-only scope", () => {
   const { nodes } = flattenParents(graph.roots);
   const matchingScopes = (sourcePath: string) => [...nodes.values()]
