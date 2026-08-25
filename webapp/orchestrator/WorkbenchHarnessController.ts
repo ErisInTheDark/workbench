@@ -8,15 +8,14 @@ import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/Th
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type { WorkbenchHarness } from "../lib/types";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type { WorkbenchTurnRecoveryPort } from "./WorkbenchTurnRecoveryController";
 
 export interface WorkbenchHarnessRuntimePort {
   handleBrowserMessage(message: JsonRpcRequest, client: BridgeClient): Promise<void>;
   request(request: JsonRpcRequest): Promise<JsonRpcResponse>;
   readThread(threadId: string): Promise<ThreadReadResponse>;
   steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<string | null>;
-  observeRecoveryNotification?(notification: JsonRpcNotification): void;
-  observeRecoveryRequest?(request: JsonRpcRequest): void;
-  resumeThread?(threadId: string): Promise<void>;
+  recoverInterruptedTurn?: WorkbenchTurnRecoveryPort;
 }
 
 type WorkbenchHarnessRecoveryCapability =
@@ -25,6 +24,7 @@ type WorkbenchHarnessRecoveryCapability =
       kind: "turn";
       observeNotification(notification: JsonRpcNotification): void;
       observeRequest(request: JsonRpcRequest): void;
+      recoverAvailable?(): Promise<void>;
       resumeThread(threadId: string): Promise<void>;
     };
 
@@ -107,6 +107,11 @@ export default class WorkbenchHarnessController {
   observeNotification(harness: WorkbenchHarness, notification: JsonRpcNotification) {
     const recovery = this.getAdapter(harness).recovery;
     if (recovery.kind === "turn") recovery.observeNotification(notification);
+  }
+
+  async recoverAvailable(harness: WorkbenchHarness) {
+    const recovery = this.getAdapter(harness).recovery;
+    if (recovery.kind === "turn") await recovery.recoverAvailable?.();
   }
 
   async resumeThread(harness: WorkbenchHarness, threadId: string) {

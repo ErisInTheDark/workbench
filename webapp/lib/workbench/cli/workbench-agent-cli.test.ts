@@ -45,6 +45,7 @@ const reloadCatalog = [
   { access: "agent" as const, description: "Core", safeAll: true, scope: "server:core" },
   { access: "agent" as const, description: "Browse", safeAll: true, scope: "server:browse" },
   { access: "agent" as const, description: "Codex bridge", safeAll: true, scope: "server:codex" },
+  { access: "agent" as const, description: "Commands", safeAll: true, scope: "server:commands" },
   { access: "agent" as const, description: "MCP", safeAll: true, scope: "server:mcp" },
   { access: "agent" as const, description: "OpenCode bridge", safeAll: true, scope: "server:opencode" },
   { access: "agent" as const, description: "Topology", safeAll: false, scope: "server:topology" },
@@ -531,6 +532,21 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   ], gitOptions);
   assert.equal(powerShellCheckpointPathRestore.kind, "request");
   assert.deepEqual(powerShellCheckpointPathRestore.request, checkpointPathRestore.request);
+
+  const ripgrep = await parseWorkbenchAgentCliCommand([
+    "rg", "--", "-n", "a pattern with 'quotes'", "webapp",
+  ], { cwd: "C:/workspace" });
+  assert.equal(ripgrep.kind, "request");
+  assert.deepEqual(ripgrep.request, {
+    body: { args: ["-n", "a pattern with 'quotes'", "webapp"], cwd: "C:/workspace" },
+    method: "POST",
+    path: "/api/rg",
+    responseKind: "native",
+  });
+
+  const ripgrepHelp = await parseWorkbenchAgentCliCommand(["rg", "--", "--help"], { cwd: "C:/workspace" });
+  assert.equal(ripgrepHelp.kind, "request");
+  assert.deepEqual(ripgrepHelp.request.body, { args: ["--help"], cwd: "C:/workspace" });
 
   const browse = await parseWorkbenchAgentCliCommand([
     "browse", "run", "--thread", "thread-1", "--session", "research",

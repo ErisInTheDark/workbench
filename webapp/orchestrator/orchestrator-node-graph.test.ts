@@ -7,7 +7,10 @@ import { test } from "node:test";
 import { createGitignoreMatcher } from "../lib/workbench/gitignore-matcher";
 import graph from "./orchestrator-root-node";
 import type ReloadableNode from "./ReloadableNode";
-import type { OrchestratorProcessContext } from "./orchestrator-process-context";
+import {
+  ORCHESTRATOR_PROCESS_REQUIRED_REGISTRATIONS,
+  type OrchestratorProcessContext,
+} from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 
 type Node = ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>;
@@ -31,7 +34,7 @@ function flattenParents(roots: readonly Node[]) {
 }
 
 test("the root knows only direct roots and parents declare every dependant", () => {
-  assert.deepEqual(graph.roots.map(({ scope }) => scope), ["server:core", "harness:codex", "harness:opencode", "client:all", "server:instructions"]);
+  assert.deepEqual(graph.roots.map(({ scope }) => scope), ["server:turns", "harness:codex", "harness:opencode", "client:all", "server:instructions"]);
   const { nodes, parents } = flattenParents(graph.roots);
 
   assert.deepEqual([...nodes.keys()].sort(), [
@@ -40,18 +43,31 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "harness:opencode",
     "server:browse",
     "server:codex",
+    "server:commands",
     "server:core",
     "server:instructions",
     "server:mcp",
     "server:opencode",
     "server:topology",
+    "server:turns",
     "server:websocket",
   ]);
-  assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:core", "server:topology"]);
-  assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:core"]);
-  assert.deepEqual([...parents.get("server:opencode")!].sort(), ["harness:opencode", "server:core"]);
+  assert.deepEqual([...parents.get("server:core")!], ["server:turns"]);
+  assert.deepEqual([...parents.get("server:commands")!], ["server:core"]);
+  assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:commands", "server:core", "server:topology", "server:turns"]);
+  assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:core", "server:turns"]);
+  assert.deepEqual([...parents.get("server:opencode")!].sort(), ["harness:opencode", "server:core", "server:turns"]);
   assert.deepEqual([...parents.get("server:browse")!], ["server:core"]);
   assert.deepEqual([...parents.get("server:websocket")!], ["server:core"]);
+  assert.equal(parents.has("harness:codex"), false);
+  assert.equal(parents.has("harness:opencode"), false);
+  assert.deepEqual({
+    lifecycle: nodes.get("server:turns")!.lifecycle,
+    provides: nodes.get("server:turns")!.provides,
+  }, {
+    lifecycle: "handoff",
+    provides: ["codexMcpGeneration", "turnRecovery"],
+  });
 });
 
 test("every child requirement is registered by one of its direct parents", () => {
@@ -64,10 +80,20 @@ test("every child requirement is registered by one of its direct parents", () =>
   }
 });
 
+test("the production graph provides every registration consumed by the process shell", () => {
+  const { nodes } = flattenParents(graph.roots);
+  const provided = new Set([...nodes.values()].flatMap(({ provides }) => provides));
+  for (const registration of ORCHESTRATOR_PROCESS_REQUIRED_REGISTRATIONS) {
+    assert.equal(provided.has(registration), true, `the process shell requires unprovided ${registration}`);
+  }
+});
+
 test("each production node matches a representative owned source path", () => {
   const { nodes } = flattenParents(graph.roots);
   const examples = new Map<string, string>([
+    ["server:turns", "webapp/orchestrator/WorkbenchTurnRecoveryController.ts"],
     ["server:core", "webapp/orchestrator/WorkbenchGitArcFeature.ts"],
+    ["server:commands", "webapp/orchestrator/WorkbenchRipgrepController.ts"],
     ["server:topology", "webapp/orchestrator/OpenCodeBridgeNode.ts"],
     ["server:mcp", "webapp/orchestrator/WorkbenchAgentMcpController.ts"],
     ["server:codex", "webapp/orchestrator/CodexStdioBridge.ts"],
@@ -92,6 +118,21 @@ test("each production node matches a representative owned source path", () => {
   ]) {
     assert.equal(createGitignoreMatcher(nodes.get("server:core")!.sources).matches(sourcePath), true, `server:core must match ${sourcePath}`);
   }
+});
+
+test("server:commands owns shared CLI and MCP command execution sources", () => {
+  const commands = createGitignoreMatcher(flattenParents(graph.roots).nodes.get("server:commands")!.sources);
+
+  for (const sourcePath of [
+    "webapp/orchestrator/WorkbenchAgentCommandController.ts",
+    "webapp/orchestrator/WorkbenchRipgrepController.test.ts",
+    "webapp/lib/workbench/commands/ripgrep-command-definition.ts",
+    "webapp/lib/workbench/cli/workbench-agent-cli.test.ts",
+  ]) {
+    assert.equal(commands.matches(sourcePath), true, `server:commands must match ${sourcePath}`);
+  }
+
+  assert.equal(commands.matches("webapp/orchestrator/WorkbenchAgentMcpController.ts"), false);
 });
 
 test("server:core owns Git source and test paths without absorbing unrelated server code", () => {

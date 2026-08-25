@@ -107,6 +107,10 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const resume = inventory.tools.find(({ name }) => name === "thread_resume");
     assert.ok(resume);
     assert.deepEqual(resume.inputSchema.properties, {});
+    const ripgrep = inventory.tools.find(({ name }) => name === "rg");
+    assert.ok(ripgrep);
+    assert.deepEqual(Object.keys(ripgrep.inputSchema.properties ?? {}), ["args"]);
+    assert.match(ripgrep.description ?? "", /without shell quoting.*no matches/u);
 
     for (const [toolName, action, responseKind] of [
       ["git_arc_compare", "compare", "git-arc-compare"],
@@ -129,6 +133,19 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
         responseKind,
       });
     }
+
+    const searchResult = await client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: { args: ["-n", "a pattern with 'quotes'", "webapp"] },
+      name: "rg",
+    });
+    assert.equal(searchResult.isError, false);
+    assert.deepEqual(executed.at(-1), {
+      body: { args: ["-n", "a pattern with 'quotes'", "webapp"], cwd: "C:/authoritative" },
+      method: "POST",
+      path: "/api/rg",
+      responseKind: "native",
+    });
 
     const result = await client.callTool({
       _meta: { threadId: "thread-1" },

@@ -7,7 +7,6 @@ import type { ReloadableNodeInstance } from "./ReloadableNode";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 
 export const WORKBENCH_CORE_FEATURE_KEYS = [
-  "agentCommand",
   "bridgeRequest",
   "browseSessionCleanup",
   "codexHealth",

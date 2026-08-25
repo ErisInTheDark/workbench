@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute shared structured commands while preserving reload, streaming, and direct-port lifecycle. Keywords: workbench, agent, command, shell, orchestrator, reload, transport, subagent.
+ * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute shared structured commands while preserving reload, search, streaming, and direct-port lifecycle. Keywords: workbench, agent, command, shell, orchestrator, reload, ripgrep, transport, subagent.
  */
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
@@ -18,6 +18,7 @@ import {
 import type { WorkbenchHarness } from "../lib/types";
 import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import WorkbenchRipgrepController from "./WorkbenchRipgrepController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
@@ -28,6 +29,7 @@ interface WorkbenchAgentDirectPort {
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
   requestOrchestratorReload?: (body: Record<string, unknown>, signal: AbortSignal) => Promise<Response>;
+  requestCodex?: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   requestSubagent?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
 }
 
@@ -123,12 +125,22 @@ function isLoopbackAddress(address: string | undefined) {
 }
 
 export default class WorkbenchAgentCommandController {
+  private readonly ripgrep: Pick<WorkbenchRipgrepController, "execute">;
+
   constructor(
     private readonly nextOrigin: string,
     private readonly orchestratorOrigin: string,
     private readonly direct: WorkbenchAgentDirectPort = UNCONFIGURED_DIRECT_PORT,
     private readonly fetchRequest: typeof fetch = fetch,
-  ) {}
+    ripgrep?: Pick<WorkbenchRipgrepController, "execute">,
+  ) {
+    this.ripgrep = ripgrep ?? new WorkbenchRipgrepController({
+      requestCodex: async (request) => {
+        if (!this.direct.requestCodex) throw new Error("Codex command execution is not configured.");
+        return await this.direct.requestCodex(request);
+      },
+    });
+  }
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
     const signal = bindRequestAbort(request, response);
@@ -242,6 +254,9 @@ export default class WorkbenchAgentCommandController {
     }
     if (request.path === "/api/git-checkpoint" && request.body && this.direct.executeGitArcRequest) {
       return await this.direct.executeGitArcRequest(request.body);
+    }
+    if (request.path === "/api/rg" && request.body) {
+      return await this.ripgrep.execute(request.body, signal);
     }
     if (request.path === "/api/orchestrator/reload" && request.body) {
       const scopes = Array.isArray(request.body.scopes) ? request.body.scopes : [];

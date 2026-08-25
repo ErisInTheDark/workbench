@@ -224,6 +224,39 @@ test("renders complete help without an internal capability request", async () =>
   }
 });
 
+test("dispatches ripgrep directly with one argument-vector request", async () => {
+  let received: { input: object; signal: AbortSignal } | null = null;
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+    async () => { throw new Error("unexpected internal fetch"); },
+    {
+      execute: async (input, signal) => {
+        received = { input, signal };
+        return new Response("one match\n");
+      },
+    },
+  );
+  const server = await startController(controller);
+  try {
+    const response = await fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: agentCommandBody(["rg", "--", "-n", "a pattern with 'quotes'", "webapp"]),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "one match\n");
+    assert.deepEqual(received?.input, {
+      args: ["-n", "a pattern with 'quotes'", "webapp"],
+      cwd: process.cwd(),
+    });
+    assert.equal(received?.signal.aborted, false);
+  } finally {
+    await server.close();
+  }
+});
+
 test("dispatches native subagent commands directly without waiting on Next fetch headers", async () => {
   let receivedRequest: { method?: string; params?: unknown } | null = null;
   const controller = new WorkbenchAgentCommandController(

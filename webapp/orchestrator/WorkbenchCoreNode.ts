@@ -4,7 +4,6 @@
  */
 import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
-import type { WorkbenchHarness } from "../lib/types";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "../lib/workbench/thread/thread-state";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
@@ -21,12 +20,12 @@ import type { OrchestratorProcessContext } from "./orchestrator-process-context"
 import type { OrchestratorReloadableModules, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 import { log } from "./process-helpers";
 import ReloadableNode, { type ReloadableNodeLease } from "./ReloadableNode";
-import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
+import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 import WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
 import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCoreFeature";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
-import WorkbenchHarnessController, { type WorkbenchHarnessAdapter, type WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
+import WorkbenchHarnessController, { type WorkbenchHarnessAdapter } from "./WorkbenchHarnessController";
 import WorkbenchLegacyMigrationSourceController, { readLegacyMigrationSourceConfig } from "./WorkbenchLegacyMigrationSourceController";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
@@ -35,6 +34,7 @@ import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
+import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
@@ -42,26 +42,28 @@ function createModules(): OrchestratorReloadableModules {
   return { copilotThreadState, opencodeLiveThreadState, opencodeThreadState, opencodeWorkbenchInstructions, project, threadBootstrap, workbenchLibrary, workbenchPromptFiles };
 }
 
-function requireTurnRecovery(port: WorkbenchHarnessRuntimePort, harness: WorkbenchHarness): WorkbenchHarnessAdapter["recovery"] {
-  if (!port.observeRecoveryNotification || !port.observeRecoveryRequest || !port.resumeThread) {
-    throw new Error(`Workbench harness ${harness} is missing its declared turn-recovery port.`);
-  }
+function createRecoveryCapability(
+  harness: "codex" | "opencode",
+  controller: WorkbenchTurnRecoveryController,
+): WorkbenchHarnessAdapter["recovery"] {
   return {
     kind: "turn",
-    observeNotification: port.observeRecoveryNotification,
-    observeRequest: port.observeRecoveryRequest,
-    resumeThread: port.resumeThread,
+    observeNotification: (notification) => controller.observeNotification(harness, notification),
+    observeRequest: (request) => controller.observeRequest(harness, request),
+    recoverAvailable: async () => await controller.recoverAvailable(harness),
+    resumeThread: async (threadId) => await controller.requestResume(harness, threadId),
   };
 }
 
-function createHarnessAdapters(ports: Record<WorkbenchHarness, WorkbenchHarnessRuntimePort>): WorkbenchHarnessAdapter[] {
+function createHarnessAdapters(context: OrchestratorProcessContext, controller: WorkbenchTurnRecoveryController): WorkbenchHarnessAdapter[] {
+  const ports = context.harnessPorts;
   return [
     {
       browse: ports.codex,
       browser: ports.codex,
       id: "codex",
       internal: ports.codex,
-      recovery: requireTurnRecovery(ports.codex, "codex"),
+      recovery: createRecoveryCapability("codex", controller),
       serverMethods: [
         "workbench/composerProfiles/read",
         "workbench/composerProfiles/importLegacy",
@@ -84,15 +86,18 @@ function createHarnessAdapters(ports: Record<WorkbenchHarness, WorkbenchHarnessR
       browser: ports.opencode,
       id: "opencode",
       internal: ports.opencode,
-      recovery: requireTurnRecovery(ports.opencode, "opencode"),
+      recovery: createRecoveryCapability("opencode", controller),
       serverMethods: ["thread/name/set"],
     },
   ];
 }
 
-function createWorkbenchCoreFeature(context: OrchestratorProcessContext, lease: ReloadableNodeLease) {
+function createWorkbenchCoreFeature(
+  context: OrchestratorProcessContext,
+  lease: ReloadableNodeLease,
+  turnRecovery: WorkbenchTurnRecoveryController,
+) {
   const modules = createModules();
-  const harnesses = new WorkbenchHarnessController(createHarnessAdapters(context.harnessPorts));
   const projectCatalog = new WorkbenchProjectCatalogController();
   const projectSnapshot = new WorkbenchProjectSnapshotController();
   const worktreeGitTransitions = createWorktreeGitTransitions(context.threadTransitions);
@@ -101,6 +106,7 @@ function createWorkbenchCoreFeature(context: OrchestratorProcessContext, lease: 
     if (!threadState) throw new Error("Thread state is not ready for subagent lifecycle projection.");
     return threadState;
   };
+  const harnesses = new WorkbenchHarnessController(createHarnessAdapters(context, turnRecovery));
   const gitArc = new WorkbenchGitArcFeature({
     getReloadScopesForPaths: context.getReloadScopesForPaths,
     getThreadClaimContext: async (projectId, harness, threadId) => {
@@ -159,17 +165,6 @@ function createWorkbenchCoreFeature(context: OrchestratorProcessContext, lease: 
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Legacy migration source" }),
   });
   const bridgeRequest = new WorkbenchBridgeRequestController({ harnesses });
-  const agentCommand = new WorkbenchAgentCommandController(context.localWorkbenchOrigin, context.localOrchestratorOrigin, {
-    checkApplyPatchClaims: async ({ cwd, harness, paths, threadId }) => await gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths),
-    executeBrowseRequest: context.executeBrowseRequest,
-    executeGitArcRequest: async (body) => await gitArc.executeRequest(body),
-    executeSessionRequest: context.executeBrowseSessionRequest,
-    getReloadScopeCatalog: context.getReloadScopeCatalog,
-    requestOrchestratorReload: context.requestOrchestratorReload,
-    requestSubagent: async (request) => request.method?.startsWith("workbench/thread/")
-      ? await threadState!.handleManagedThreadRequest(request)
-      : await subagents.handleRequest(request),
-  });
   const browseSessionCleanup = new BrowseSessionCleanupSupervisor({
     ...context.browseCleanupOptions,
     cleanupStaleInactiveSessions: async (options) => {
@@ -192,7 +187,7 @@ function createWorkbenchCoreFeature(context: OrchestratorProcessContext, lease: 
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
   const registrations: Pick<OrchestratorRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
-    agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, gitArc, harnesses, legacyMigrationSource, modules, nextDevHealth, projectCatalog, projectSnapshot, subagents, threadGit, threadState,
+    bridgeRequest, browseSessionCleanup, codexHealth, gitArc, harnesses, legacyMigrationSource, modules, nextDevHealth, projectCatalog, projectSnapshot, subagents, threadGit, threadState,
   };
   return new WorkbenchCoreFeature({
     beginRuntimeDrain: () => { subagents.beginRuntimeDrain(); },
@@ -227,18 +222,17 @@ function createWorkbenchCoreFeature(context: OrchestratorProcessContext, lease: 
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, import("./orchestrator-runtime-objects").OrchestratorProviderNotification>({
   access: "agent",
-  children: [WorkbenchTopologyNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
-  create: (context, { lease }) => createWorkbenchCoreFeature(context, lease),
+  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
+  create: (context, { get, lease }) => createWorkbenchCoreFeature(context, lease, get("turnRecovery")),
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: [],
+  requires: ["turnRecovery"],
   safeAll: true,
   scope: "server:core",
   sources: [
     "webapp/orchestrator/WorkbenchCoreNode.ts",
     "webapp/orchestrator/WorkbenchCoreFeature.ts",
-    "webapp/orchestrator/WorkbenchAgentCommandController.ts",
     "webapp/orchestrator/WorkbenchBridgeRequestController.ts",
     "webapp/orchestrator/*git*.ts",
     "webapp/orchestrator/WorkbenchHarnessController.ts",

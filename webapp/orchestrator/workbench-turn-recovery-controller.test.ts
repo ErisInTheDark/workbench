@@ -37,6 +37,66 @@ test("manual resume captures an exact active request even for a goal-owned threa
   assert.deepEqual((await store.load())?.candidates, handoff.candidates);
 });
 
+test("manual resume defers provider work through the lifecycle-owned scheduler", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-manual-resume-scheduler-"));
+  const store = new WorkbenchTurnRecoveryHandoffStore(root);
+  let calls = 0;
+  let execute = () => undefined;
+  let scheduledLabel = "";
+  let taskFinished = Promise.resolve();
+  const controller = new WorkbenchTurnRecoveryController(
+    store,
+    () => undefined,
+    undefined,
+    undefined,
+    { codex: async () => { calls += 1; return "recovered"; } },
+    (label, task) => {
+      scheduledLabel = label;
+      taskFinished = new Promise<void>((resolve, reject) => {
+        execute = () => { void task().then(resolve, reject); };
+      });
+      return taskFinished;
+    },
+  );
+  controller.observeRequest("codex", { id: "original", method: "turn/start", params: { input: [], threadId: "thread" } });
+  controller.observeNotification("codex", { method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } });
+  await controller.requestResume("codex", "thread");
+  assert.equal(calls, 0);
+  assert.equal(scheduledLabel, "manual resume codex:thread");
+  execute();
+  await taskFinished;
+  assert.equal(calls, 1);
+});
+
+test("controller pairs the latest prompt-bearing Codex resume with its turn", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-resume-pair-"));
+  const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => undefined);
+  const resumeRequest = {
+    method: "thread/resume",
+    params: { model: "gpt", serviceTier: "priority", threadId: "thread" },
+    workbenchPromptContext: { agentPath: "agent://lily.md", workflowIds: ["default"] },
+  };
+  controller.observeRequest("codex", resumeRequest);
+  controller.observeRequest("codex", { id: "start", method: "turn/start", params: { input: [], threadId: "thread" } });
+  assert.deepEqual(controller.capture(["codex"])[0]?.resumeRequest, resumeRequest);
+});
+
+test("controller handoff preserves active candidates and unmatched resume requests", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-state-"));
+  const store = new WorkbenchTurnRecoveryHandoffStore(root);
+  const controller = new WorkbenchTurnRecoveryController(store, () => undefined);
+  controller.observeRequest("codex", { method: "thread/resume", params: { threadId: "next" }, workbenchPromptContext: { workflowIds: ["default"] } });
+  controller.observeRequest("codex", { id: "start", method: "turn/start", params: { input: [], model: "gpt", threadId: "active" } });
+  const restored = new WorkbenchTurnRecoveryController(store, () => undefined, undefined, await controller.detachForReload());
+  assert.deepEqual(restored.capture(["codex"]), controller.capture(["codex"]));
+  restored.observeRequest("codex", { id: "next-start", method: "turn/start", params: { input: [], threadId: "next" } });
+  assert.deepEqual(restored.capture(["codex"]).find((candidate) => candidate.threadId === "next")?.resumeRequest, {
+    method: "thread/resume",
+    params: { threadId: "next" },
+    workbenchPromptContext: { workflowIds: ["default"] },
+  });
+});
+
 test("terminal notifications retire the exact candidate", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-terminal-"));
   const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => undefined);

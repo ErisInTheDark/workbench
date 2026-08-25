@@ -19,6 +19,7 @@ function handoff(count: number, createdAt = Date.now()): WorkbenchTurnRecoveryHa
       lastEventAt: createdAt,
       recoveryId: createWorkbenchThreadRecoveryId(`recovery-${index}`),
       request: { id: index, method: "turn/start", params: { input: [], threadId: `thread-${index}` } },
+      resumeRequest: { method: "thread/resume", params: { threadId: `thread-${index}` } },
       startedAt: createdAt,
       threadId: `thread-${index}`,
       turnId: null,
@@ -67,4 +68,17 @@ test("handoff store fails closed for duplicate, malformed, and legacy automatic-
   const legacy = { ...handoff(1), kind: undefined, schemaVersion: 1 };
   await fs.writeFile(store.filePath, JSON.stringify(legacy), "utf8");
   assert.equal(await store.load(), null);
+});
+
+test("schema-v2 Codex handoffs without resume data gain a compatible request", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-handoff-compatible-"));
+  const store = new WorkbenchTurnRecoveryHandoffStore(root);
+  const value = handoff(1);
+  delete value.candidates[0]!.resumeRequest;
+  await fs.mkdir(path.dirname(store.filePath), { recursive: true });
+  await fs.writeFile(store.filePath, JSON.stringify(value), "utf8");
+  assert.deepEqual((await store.load())?.candidates[0]?.resumeRequest, {
+    method: "thread/resume",
+    params: { threadId: "thread-0" },
+  });
 });

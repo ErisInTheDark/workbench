@@ -11,6 +11,7 @@ import WorkbenchOrchestratorHttpRouter from "./WorkbenchOrchestratorHttpRouter";
 const REQUIRED_REGISTRATIONS = [
   "agentCommand",
   "bridgeRequest",
+  "codexMcpGeneration",
   "gitArc",
   "harnesses",
   "legacyMigrationSource",
@@ -26,6 +27,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   create: (context, build) => {
     const agentCommand = build.get("agentCommand");
     const harnesses = build.get("harnesses");
+    const codexMcpGeneration = build.get("codexMcpGeneration");
     build.get("reloadController");
     const mcp = new WorkbenchAgentMcpController({
       executeCommand: async (request, signal) => await agentCommand.executeStructuredRequest(request, signal),
@@ -45,7 +47,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     });
     return {
       activate: () => {
-        if (build.mode === "replacement") context.advanceMcpGeneration();
+        if (build.mode === "replacement") codexMcpGeneration.bump();
       },
       beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); },
       dispose: () => { mcp.releaseRuntimeOwner(); },
@@ -71,7 +73,5 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/orchestrator/WorkbenchAgentMcpController.ts",
     "webapp/orchestrator/WorkbenchOrchestratorHttpRouter.ts",
     "webapp/orchestrator/workbench-agent-mcp-request-registry.ts",
-    "webapp/lib/workbench/commands/**",
-    "webapp/lib/workbench/cli/**",
   ].join("\n"),
 });

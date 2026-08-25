@@ -7,11 +7,13 @@ import { WORKBENCH_GIT_ARC_COMMANDS } from "./git-arc-command-definitions";
 import { WORKBENCH_GIT_COMMANDS } from "./git-command-definitions";
 import type { OrchestratorReloadScopeDescriptor } from "../orchestrator-reload";
 import { createWorkbenchOrchestratorCommands } from "./orchestrator-command-definitions";
+import { WORKBENCH_RIPGREP_COMMANDS } from "./ripgrep-command-definition";
 import { WORKBENCH_SUBAGENT_COMMANDS } from "./subagent-command-definitions";
 import { WORKBENCH_THREAD_COMMANDS } from "./thread-command-definitions";
 import type { WorkbenchAgentCommandDefinition } from "./workbench-agent-command-definition";
 
 const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Object.freeze([
+  ...WORKBENCH_RIPGREP_COMMANDS,
   ...WORKBENCH_SUBAGENT_COMMANDS,
   ...WORKBENCH_THREAD_COMMANDS,
   ...WORKBENCH_GIT_COMMANDS,

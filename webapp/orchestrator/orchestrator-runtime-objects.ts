@@ -24,6 +24,7 @@ import * as opencodeWorkbenchInstructions from "./opencode-workbench-instruction
 import type WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import type WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import type WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
+import type WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
 import type WorkbenchBrowseController from "./WorkbenchBrowseController";
 import type WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
@@ -35,6 +36,7 @@ import type WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotC
 import type WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import type WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
+import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type { HarnessKind, JsonRpcNotification } from "./bridge-types";
 
@@ -76,6 +78,7 @@ export interface OrchestratorRuntimeObjects {
   codexAppServer: OrchestratorCodexAppServerRuntime;
   codexBridge: CodexStdioBridge;
   codexHealth: CodexHealthMonitor;
+  codexMcpGeneration: WorkbenchCodexMcpGenerationController;
   gitArc: WorkbenchGitArcFeature;
   harnesses: WorkbenchHarnessController;
   legacyMigrationSource: WorkbenchLegacyMigrationSourceController;
@@ -91,5 +94,6 @@ export interface OrchestratorRuntimeObjects {
   subagents: WorkbenchSubagentFeature;
   threadGit: WorkbenchThreadGitFeature;
   threadState: WorkbenchThreadStateFeature;
+  turnRecovery: WorkbenchTurnRecoveryController;
   webSocketRequests: WorkbenchWebSocketRequestController;
 }

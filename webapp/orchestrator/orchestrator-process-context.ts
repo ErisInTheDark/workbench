@@ -18,6 +18,7 @@ import type { OpenCodeAppServerOptions } from "./OpenCodeAppServer";
 import type { WorkbenchBrowseResultCallbacks } from "./WorkbenchBrowseResultController";
 import type { WorkbenchHardReloadOptions } from "./WorkbenchOrchestratorReloadController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
+import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type { WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import type { OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 
@@ -33,11 +34,11 @@ export const ORCHESTRATOR_PROCESS_REQUIRED_REGISTRATIONS = [
   "reloadController",
   "subagents",
   "threadState",
+  "turnRecovery",
   "webSocketRequests",
 ] as const satisfies readonly (keyof OrchestratorRuntimeObjects)[];
 
 export interface OrchestratorProcessContext {
-  advanceMcpGeneration(): void;
   browseCleanupOptions: BrowseSessionCleanupSupervisorOptions;
   browseProjectResolvers: {
     resolveProjectById: WorkbenchBrowseProjectIdResolver;
@@ -59,18 +60,20 @@ export interface OrchestratorProcessContext {
   legacyMigrationProjectRoot: string;
   localOrchestratorOrigin: string;
   localWorkbenchOrigin: string;
+  logTurnRecovery(message: string): void;
   nextDevHealthOptions: NextDevHealthSupervisorOptions;
   notifyReloadEligibilityChanged(): void;
   notifyThreadLifecycle(projectId: string, entry: WorkbenchThreadSidebarEntry): void;
-  onCodexBridgeActivated(restartedAppServer: boolean): Promise<void>;
   onCodexBridgeReady(bridge: CodexStdioBridge): Promise<void>;
   onCodexBridgeUnavailable(restartingAppServer: boolean): void;
   onCodexFatalExit(reason: string, bridge: CodexStdioBridge | null): void;
   openCodeAppServerOptions: OpenCodeAppServerOptions;
   openCodeBridgeOptions: Omit<OpenCodeBridgeOptions, "appServer" | "getReloadableModules" | "initialState">;
   publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
+  reportTurnRecoveryFailure(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
   refreshWorkbenchPromptFiles(): Promise<void>;
   reloadClient(): Promise<void>;
   requestOrchestratorReload(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
+  runTurnRecoveryTask(owner: WorkbenchTurnRecoveryController, label: string, task: () => Promise<void>): Promise<void>;
   threadTransitions: WorkbenchThreadTransitionCoordinator;
 }

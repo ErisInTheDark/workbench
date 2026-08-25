@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchTurnRecoveryHandoffCandidate/WorkbenchTurnRecoveryHandoff: versioned provider-neutral manual-resume state. Keywords: recovery, handoff, persistence.
+ * - createCodexTurnRecoveryResumeRequest: derive a compatible cold-resume request from a captured turn start. Keywords: codex, resume, compatibility.
  * - WorkbenchRecoveryHarness: supported automatic recovery provider set. Keywords: recovery, harness, provider.
  * - default WorkbenchTurnRecoveryHandoffStore: atomically validate, update, and remove bounded recovery handoffs. Keywords: recovery, atomic, runtime.
  */
@@ -19,6 +20,7 @@ export interface WorkbenchTurnRecoveryHandoffCandidate {
   lastEventAt: number;
   request: JsonRpcRequest;
   recoveryId: string;
+  resumeRequest?: JsonRpcRequest | null;
   startedAt: number;
   threadId: string;
   turnId: string | null;
@@ -49,6 +51,27 @@ function isRequest(value: unknown): value is JsonRpcRequest {
     && typeof params?.threadId === "string";
 }
 
+function isResumeRequest(value: unknown, threadId: string): value is JsonRpcRequest {
+  if (!isRecord(value)) return false;
+  const params = isRecord(value.params) ? value.params : null;
+  return value.method === "thread/resume" && params?.threadId === threadId;
+}
+
+export function createCodexTurnRecoveryResumeRequest(request: JsonRpcRequest, threadId: string): JsonRpcRequest {
+  const params = isRecord(request.params) ? request.params : {};
+  const { id: _id, method: _method, params: _params, ...extensions } = request;
+  return {
+    ...extensions,
+    method: "thread/resume",
+    params: {
+      ...(typeof params.cwd === "string" ? { cwd: params.cwd } : {}),
+      ...(typeof params.model === "string" ? { model: params.model } : {}),
+      ...(Object.prototype.hasOwnProperty.call(params, "serviceTier") ? { serviceTier: params.serviceTier } : {}),
+      threadId,
+    },
+  };
+}
+
 function readCandidate(value: unknown): WorkbenchTurnRecoveryHandoffCandidate | null {
   if (!isRecord(value)) return null;
   const harness = value.harness;
@@ -65,7 +88,15 @@ function readCandidate(value: unknown): WorkbenchTurnRecoveryHandoffCandidate | 
   ) return null;
   const requestParams = isRecord(value.request.params) ? value.request.params : null;
   if (value.key !== `${harness}:${value.threadId}` || requestParams?.threadId !== value.threadId) return null;
-  return value as unknown as WorkbenchTurnRecoveryHandoffCandidate;
+  let resumeRequest: JsonRpcRequest | null = null;
+  if (harness === "codex") {
+    if (isResumeRequest(value.resumeRequest, value.threadId)) resumeRequest = value.resumeRequest;
+    else if (value.resumeRequest === undefined) resumeRequest = createCodexTurnRecoveryResumeRequest(value.request, value.threadId);
+    else return null;
+  } else if (value.resumeRequest !== null && value.resumeRequest !== undefined) {
+    return null;
+  }
+  return { ...(value as unknown as WorkbenchTurnRecoveryHandoffCandidate), resumeRequest };
 }
 
 export default class WorkbenchTurnRecoveryHandoffStore {

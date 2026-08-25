@@ -37,3 +37,13 @@ test("a bump during refresh requires the newer generation before admission", asy
   assert.equal(await prepared, "epoch:1");
   assert.equal(refreshes, 2);
 });
+
+test("reload handoff preserves the exact generation and refresh state", async () => {
+  const original = new WorkbenchCodexMcpGenerationController("epoch");
+  await original.prepare(null, async () => undefined);
+  original.bump();
+  const restored = new WorkbenchCodexMcpGenerationController(original.detachForReload());
+  let refreshes = 0;
+  assert.equal(await restored.prepare("epoch:0", async () => { refreshes += 1; }), "epoch:1");
+  assert.equal(refreshes, 1);
+});

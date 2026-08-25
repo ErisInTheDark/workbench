@@ -54,7 +54,8 @@ CRITICAL INSTRUCTION EDITING RULES:
 - Keep project discovery coalesced and `cwd`-validated with watcher invalidation and a bounded soft refresh. Do not reintroduce per-request project walks, and keep explorer tree snapshot caching separate from project discovery.
 - Preserve an active subagent controller across a bridge reload only while it owns active waiters. Ordinary bridge reloads may recreate the controller but must not restart the stable Codex app-server.
 - Give every new long-lived orchestrator subsystem an explicit reload/disposal boundary.
-- Treat `webapp/orchestrator/index.ts` and other files outside the reloadable orchestrator feature/module graph as non-reloadable process-shell code. Do not edit one without explicit user approval that names the file and calls out the full-process restart and validation cost. Prefer implementing behavior in the reloadable feature/module graph.
+- Treat the reloadable orchestrator as a dependency graph. Parents provide registrations to direct children, and reloading a node replaces its dependant closure. Put each subsystem at the lowest reloadable ancestor that spans its dependants; do not move cross-branch lifecycle into `webapp/orchestrator/index.ts`.
+- Treat `webapp/orchestrator/index.ts` and other files outside that graph as non-reloadable process-shell code. Do not edit one without explicit user approval that names the file and calls out the full-process restart and validation cost.
 
 ## Commands and Permission Boundaries
 

@@ -8,22 +8,49 @@ import type { OrchestratorProcessContext } from "./orchestrator-process-context"
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
 
+function record(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "agent",
   children: [],
   create: (context, build) => {
     const parent = build.get("codexAppServer");
-    const bridge = new CodexStdioBridge(context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined));
+    const codexMcpGeneration = build.get("codexMcpGeneration");
+    const harnesses = build.get("harnesses");
+    const threadState = build.get("threadState");
+    const turnRecovery = build.get("turnRecovery");
+    let bridge!: CodexStdioBridge;
+    const prepareTurnStart = async (request: import("./bridge-types").JsonRpcRequest) => {
+      const threadId = typeof record(request.params)?.threadId === "string" ? String(record(request.params)!.threadId).trim() : "";
+      if (!threadId) throw new Error("Codex turn/start requires a thread id before MCP freshness can be checked.");
+      const state = await threadState.getCodexMcpState(threadId);
+      const generation = await codexMcpGeneration.prepare(state.generation, async () => {
+        const response = await bridge.handleServerRequest({
+          id: `workbench:mcp-refresh:${codexMcpGeneration.generation}`,
+          method: "config/mcpServer/reload",
+          params: null,
+        });
+        if (response.error) throw new Error(response.error.message);
+      });
+      await threadState.setManagedCodexMcpGeneration(state.projectId, threadId, generation);
+    };
+    bridge = new CodexStdioBridge({
+      ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
+      prepareTurnStart,
+    });
     parent.attachBridge(bridge);
     let activated = build.mode === "initial";
     let detached = false;
     return {
       activate: async () => {
         activated = true;
-        await context.onCodexBridgeActivated(build.isReplacing("harness:codex"));
+        await harnesses.recoverAvailable("codex");
       },
       detachForReload: async (replacement) => {
         const restartingAppServer = replacement.isReplacing("harness:codex");
+        if (restartingAppServer) turnRecovery.captureForReload(["codex"]);
         context.onCodexBridgeUnavailable(restartingAppServer);
         const state = await parent.detachBridge(bridge);
         detached = true;
@@ -44,7 +71,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge"],
-  requires: ["codexAppServer", "codexHealth"],
+  requires: ["codexAppServer", "codexHealth", "codexMcpGeneration", "harnesses", "threadState", "turnRecovery"],
   safeAll: true,
   scope: "server:codex",
   sources: [

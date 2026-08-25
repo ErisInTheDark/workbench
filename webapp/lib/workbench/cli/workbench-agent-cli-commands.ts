@@ -85,6 +85,7 @@ export function listWorkbenchAgentCliCommandDescriptors(catalog: readonly Orches
 }
 
 const ROOT_HELP_COMMAND_ORDER = [
+  "rg",
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop", "subagent message",
   "thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand",
   "git add", "git unstage", "git commit", "git arc plan", "git arc start", "git arc continue", "git arc add",
@@ -93,6 +94,15 @@ const ROOT_HELP_COMMAND_ORDER = [
 ] as const;
 
 const HELP_GROUPS: readonly HelpGroupDefinition[] = [
+  {
+    commandOrder: ["rg"],
+    footer: [
+      "Pass each native ripgrep argument after --.",
+      "No matches return successful empty output.",
+      "Process-launching --pre and --hostname-bin arguments are unavailable.",
+    ].join("\n"),
+    key: "rg", usage: "wb rg -- <rg args>", words: ["rg"],
+  },
   {
     commandOrder: ["subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent message", "subagent stop"],
     footer: ["The current managed thread is always the parent.", "Run commands from the intended project working directory."].join("\n"),
@@ -204,6 +214,10 @@ function matchHelpGroup(argv: readonly string[]) {
     .sort((left, right) => right.words.length - left.words.length)[0]?.group ?? null;
 }
 function helpPath(argv: readonly string[]) { return argv[0] === "help" ? [] : argv.filter((argument) => argument !== "--help"); }
+function argsBeforeTrailingSeparator(argv: readonly string[]) {
+  const separatorIndex = argv.indexOf("--");
+  return separatorIndex < 0 ? [...argv] : argv.slice(0, separatorIndex);
+}
 
 export const WORKBENCH_AGENT_CLI_HELP = renderRootHelp();
 
@@ -226,8 +240,9 @@ export async function parseWorkbenchAgentCliCommand(
   const commands = listWorkbenchAgentCommands(reloadCatalog, "cli");
   const isLegacyCheckpointCommand = (argv[0] === "git" && argv[1] === "checkpoint") || argv[0] === "checkpoint" || (argv[0] === "git" && argv[1] === "plan");
   if (isLegacyCheckpointCommand) return { help: LEGACY_CHECKPOINT_MIGRATION_GUIDE, kind: "help" };
-  if (!argv.length || argv.includes("--help") || argv[0] === "help") {
-    const group = matchHelpGroup(helpPath(argv));
+  const workbenchArgs = argsBeforeTrailingSeparator(argv);
+  if (!argv.length || workbenchArgs.includes("--help") || argv[0] === "help") {
+    const group = matchHelpGroup(helpPath(workbenchArgs));
     return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), commands, reloadCatalog) : renderRootHelp(commands), kind: "help" };
   }
   const matched = commands.flatMap((definition) => (

@@ -19,7 +19,6 @@ import { WebSocketServer } from "next/dist/compiled/ws";
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import { createInitializeCapabilities, createInitializeRequest } from "../lib/codex/protocol";
-import { getCurrentTurn } from "../lib/codex/thread-state";
 import type {
     OrchestratorReloadResponse,
     OrchestratorReloadScope,
@@ -27,10 +26,6 @@ import type {
     WorkbenchHarness,
 } from "../lib/types";
 import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
-import {
-    createWorkbenchThreadRecoveryInput,
-    isWorkbenchThreadRecoveryUserMessage,
-} from "../lib/workbench/thread/thread-recovery-message";
 import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexRecoverySupervisor from "./CodexRecoverySupervisor";
 import type CodexStdioBridge from "./CodexStdioBridge";
@@ -52,12 +47,9 @@ import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } fro
 import { createReloadableNodeModuleLoader } from "./reloadable-node-loader";
 import ReloadableNodeHost from "./ReloadableNodeHost";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
-import WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
 import type { WorkbenchHardReloadNotification } from "./WorkbenchOrchestratorReloadController";
 import type { WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
-import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
-import WorkbenchTurnRecoveryHandoffStore, { type WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
 
 const ORCHESTRATOR_ROOT = __dirname;
 const WEBAPP_ROOT = path.resolve(ORCHESTRATOR_ROOT, "..");
@@ -138,23 +130,6 @@ let shuttingDown = false;
 let nextBridgeConnectionId = 0;
 const bridgeClientsByConnectionId = new Map<string, BridgeClient>();
 let codexRecoverySupervisor: CodexRecoverySupervisor;
-let codexReloadRecoveryCandidates: WorkbenchTurnRecoveryHandoffCandidate[] = [];
-const turnRecoveryHandoffStore = new WorkbenchTurnRecoveryHandoffStore(PROJECT_ROOT);
-const codexMcpGenerationController = new WorkbenchCodexMcpGenerationController();
-const turnRecoveryController = new WorkbenchTurnRecoveryController(
-  turnRecoveryHandoffStore,
-  (message) => log("turn-recovery", message),
-  async (candidate) => {
-    const params = asRecord(candidate.request.params);
-    const cwd = typeof params?.cwd === "string" ? params.cwd.trim() : "";
-    if (!cwd) {
-      logError("turn-recovery", `Recovery failure for ${candidate.harness}:${candidate.threadId} has no cwd for lifecycle publication.`);
-      return;
-    }
-    const project = await featureHost.run("projectCatalog", (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" }), "project catalog: turn recovery cwd");
-    await featureHost.run("threadState", (feature) => feature.controller.reportRecoveryFailed(project.project.id, candidate.harness, candidate.threadId), "thread state: report recovery failure");
-  },
-);
 const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
 const featureHost = new ReloadableNodeHost<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>(
   createOrchestratorFeatureContext(),
@@ -366,10 +341,6 @@ function restartChild(spec: ProcessSpec) {
 
 function createOrchestratorFeatureContext(): OrchestratorProcessContext {
   return {
-    advanceMcpGeneration: () => {
-      const generation = codexMcpGenerationController.bump();
-      log("orchestrator", `advanced wb MCP generation to ${generation}`);
-    },
     browseCleanupOptions: {
       cleanupStaleInactiveSessions: async (options) => await featureHost.run("browseExecution", (execution) => execution.cleanupStaleInactiveSessions(options), "Browse stale-session cleanup"),
       readThreadActive: readThreadActiveForBrowseCleanup,
@@ -413,7 +384,6 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
       handleWorkbenchRequest: (request) => featureHost.run("subagents", (feature) => feature.handleRequest(request), `subagents: ${request.method}`),
       initialState,
       onNotification: (notification) => broadcastToClients("codex", notification),
-      prepareTurnStart: prepareCodexTurnStart,
       resolveProjectFromCwd: resolveProjectFromCurrentCatalog,
       sendToClient: (client, message) => sendJsonToClient(client, message),
       storageRoot: PROJECT_ROOT,
@@ -442,6 +412,7 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
     legacyMigrationProjectRoot: PROJECT_ROOT,
     localOrchestratorOrigin: LOCAL_ORCHESTRATOR_ORIGIN,
     localWorkbenchOrigin: LOCAL_WORKBENCH_ORIGIN,
+    logTurnRecovery: (message) => log("turn-recovery", message),
     nextDevHealthOptions: {
       healthUrl: new URL(NEXT_DEV_HEALTH_PATH, `http://localhost:${NEXT_PORT}`).toString(),
       intervalMs: NEXT_DEV_HEALTH_INTERVAL_MS,
@@ -464,13 +435,6 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
       closeBridgeClients(1011, reason);
       codexRecoverySupervisor.requestRecovery(reason);
     },
-    onCodexBridgeActivated: async (restartedAppServer) => {
-      if (!restartedAppServer) return;
-      const candidates = codexReloadRecoveryCandidates;
-      codexReloadRecoveryCandidates = [];
-      await turnRecoveryController.recover(candidates, recoverTurnCandidate);
-      await recoverPersistedManualResume();
-    },
     onCodexBridgeReady: async (bridge) => {
       await ensureWorkbenchPromptFiles();
       try {
@@ -483,13 +447,24 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
     },
     onCodexBridgeUnavailable: (restartingAppServer) => {
       if (!restartingAppServer) return;
-      codexReloadRecoveryCandidates = turnRecoveryController.capture(["codex"]);
       closeBridgeClients(1012, "Codex app-server is reloading; reconnect shortly.");
     },
     openCodeAppServerOptions: {
       getReloadableModules: () => featureHost.get("modules"),
     },
     publishThreadState,
+    reportTurnRecoveryFailure: async (cwd, harness, threadId) => {
+      const project = await featureHost.run(
+        "projectCatalog",
+        (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" }),
+        "project catalog: turn recovery cwd",
+      );
+      await featureHost.run(
+        "threadState",
+        (feature) => feature.controller.reportRecoveryFailed(project.project.id, harness, threadId),
+        "thread state: report recovery failure",
+      );
+    },
     refreshWorkbenchPromptFiles: ensureWorkbenchPromptFiles,
     reloadClient: async () => {
       const nextSpec = findProcessSpec("next-dev");
@@ -522,6 +497,14 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
         threadId: threadId.trim(),
       }, signal));
     },
+    runTurnRecoveryTask: async (owner, label, task) => await featureHost.run(
+      "turnRecovery",
+      async (currentOwner) => {
+        if (currentOwner !== owner) throw new Error("The turn-recovery generation changed before scheduled work began.");
+        await task();
+      },
+      label,
+    ),
     threadTransitions: threadTransitionCoordinator,
   };
 }
@@ -555,15 +538,6 @@ function createCodexRecoverySupervisor() {
     logError: (message) => logError("codex-recovery", message),
     maxRetryDelayMs: CODEX_RECOVERY_MAX_RETRY_DELAY_MS,
     recover: recoverCodexBridge,
-  });
-}
-
-async function requestThreadResume(harness: "codex" | "opencode", threadId: string) {
-  const { candidate, handoff } = await turnRecoveryController.persistManualResume(harness, threadId);
-  setImmediate(() => {
-    void turnRecoveryController.recover([candidate], recoverTurnCandidate, handoff).catch((error) => {
-      logError("turn-recovery", `Manual resume failed outside the recovery boundary: ${error instanceof Error ? error.message : String(error)}`);
-    });
   });
 }
 
@@ -642,8 +616,6 @@ function createHarnessPorts(): Record<WorkbenchHarness, WorkbenchHarnessRuntimeP
           logError("codex-bridge", error instanceof Error ? error.message : String(error));
         });
       },
-      observeRecoveryNotification: (notification) => turnRecoveryController.observeNotification("codex", notification),
-      observeRecoveryRequest: (request) => turnRecoveryController.observeRequest("codex", request),
       readThread: async (threadId) => await runAfterCodexBridgeReload((bridge) => bridge.readThreadForBrowse(threadId)),
       request: async (request) => {
         requireHarnessAdmission();
@@ -652,7 +624,6 @@ function createHarnessPorts(): Record<WorkbenchHarness, WorkbenchHarnessRuntimeP
           return await bridge.handleServerRequest(request);
         });
       },
-      resumeThread: async (threadId) => await requestThreadResume("codex", threadId),
       steerTurn: async (threadId, expectedTurnId, input) => await runAfterCodexBridgeReload((bridge) => bridge.steerTurnForBrowse(threadId, expectedTurnId, input)),
     },
     copilot: {
@@ -674,38 +645,19 @@ function createHarnessPorts(): Record<WorkbenchHarness, WorkbenchHarnessRuntimeP
         requireHarnessAdmission();
         sendJsonToClient(client, await runAfterOpenCodeBridgeReload((bridge) => bridge.handleRequest(message)));
       },
-      observeRecoveryNotification: (notification) => turnRecoveryController.observeNotification("opencode", notification),
-      observeRecoveryRequest: (request) => turnRecoveryController.observeRequest("opencode", request),
       readThread: async (threadId) => await readGenericBrowseThread("opencode", threadId),
       request: async (request) => {
         requireHarnessAdmission();
         return await runAfterOpenCodeBridgeReload((bridge) => bridge.handleRequest(request));
       },
-      resumeThread: async (threadId) => await requestThreadResume("opencode", threadId),
+      recoverInterruptedTurn: async (candidate) => await runAfterOpenCodeBridgeReload((bridge) => bridge.recoverInterruptedTurn(candidate)),
       steerTurn: async (threadId, expectedTurnId, input) => await steerGenericBrowseTurn("opencode", threadId, expectedTurnId, input),
     },
   };
 }
 
-async function prepareCodexTurnStart(request: JsonRpcRequest) {
-  const params = asRecord(request.params);
-  const threadId = typeof params?.threadId === "string" ? params.threadId.trim() : "";
-  if (!threadId) throw new Error("Codex turn/start requires a thread id before MCP freshness can be checked.");
-  const state = await featureHost.run("threadState", (feature) => feature.getCodexMcpState(threadId), "thread state: read Codex MCP generation");
-  const generation = await codexMcpGenerationController.prepare(state.generation, async () => {
-    const response = await requestLiveHarness("codex", {
-      id: `workbench:mcp-refresh:${codexMcpGenerationController.generation}`,
-      method: "config/mcpServer/reload",
-      params: null,
-    });
-    if (response.error) throw new Error(response.error.message);
-  });
-  await featureHost.run("threadState", (feature) => feature.setManagedCodexMcpGeneration(state.projectId, threadId, generation), "thread state: write Codex MCP generation");
-}
-
 async function requestLiveCodexWithDeadline(request: JsonRpcRequest, timeoutMs = CODEX_HEALTH_REQUEST_TIMEOUT_MS) {
   if (featureHost.get("reloadController").isHardReloadPending()) throw new Error("The orchestrator is hard reloading; new harness work is temporarily unavailable.");
-  turnRecoveryController.observeRequest("codex", request);
   return await runAfterCodexBridgeReload(async (bridge) => {
     await ensureCodexReady(bridge);
     return await bridge.handleServerRequest(request, { timeoutMs });
@@ -742,76 +694,6 @@ function closeBridgeClients(code: number, reason: string) {
 async function recoverCodexBridge(reason: string) {
   await featureHost.reload(["harness:codex"]);
   log("codex-bridge", `restored bridge and app-server readiness after: ${reason}`);
-}
-
-function readThreadResult(response: JsonRpcResponse) {
-  if (response.error) throw new Error(response.error.message);
-  const result = asRecord(response.result);
-  const thread = result?.thread;
-  return thread && typeof thread === "object" ? thread as ThreadReadResponse["thread"] : null;
-}
-
-function containsRecoveryMarker(thread: ThreadReadResponse["thread"], recoveryId: string) {
-  return thread.turns.some((turn) => turn.items.some((item) => (
-    item.type === "userMessage"
-    && (item.clientId === recoveryId || item.id === `opencode:user:${recoveryId}`)
-    && isWorkbenchThreadRecoveryUserMessage(item)
-  )));
-}
-
-async function readRecoveryThread(candidate: WorkbenchTurnRecoveryHandoffCandidate) {
-  const response = await requestLiveCodexWithDeadline({
-    id: `recovery-read:${candidate.recoveryId}`,
-    method: "thread/read",
-    params: {
-      includeTurns: true,
-      ...asRecord(candidate.request.params),
-      threadId: candidate.threadId,
-    },
-    workbenchThreadHydration: { mode: "latest" },
-  });
-  const thread = readThreadResult(response);
-  if (!thread) throw new Error(`Recovery could not read ${candidate.harness} thread ${candidate.threadId}.`);
-  return thread;
-}
-
-async function recoverTurnCandidate(candidate: WorkbenchTurnRecoveryHandoffCandidate) {
-  if (candidate.harness === "opencode") {
-    return await runAfterOpenCodeBridgeReload((bridge) => bridge.recoverInterruptedTurn(candidate));
-  }
-  let thread = await readRecoveryThread(candidate);
-  if (containsRecoveryMarker(thread, candidate.recoveryId)) return "completed" as const;
-  const originalTurn = candidate.turnId
-    ? thread.turns.find((turn) => turn.id === candidate.turnId) ?? null
-    : null;
-  if (originalTurn?.status === "completed") return "completed" as const;
-
-  const currentTurn = getCurrentTurn(thread);
-  if (currentTurn?.status === "inProgress") {
-    const interruptResponse = await requestLiveCodexWithDeadline({
-      id: `recovery-interrupt:${candidate.recoveryId}`,
-      method: "turn/interrupt",
-      params: { threadId: candidate.threadId, turnId: currentTurn.id },
-    });
-    if (interruptResponse.error) throw new Error(interruptResponse.error.message);
-    thread = await readRecoveryThread(candidate);
-    if (getCurrentTurn(thread)?.status === "inProgress") {
-      throw new Error(`Interrupted Codex turn ${currentTurn.id} did not reach a terminal state.`);
-    }
-  }
-  if (containsRecoveryMarker(thread, candidate.recoveryId)) return "completed" as const;
-
-  const request = structuredClone(candidate.request);
-  request.id = `recovery-start:${candidate.recoveryId}`;
-  request.params = {
-    ...asRecord(request.params),
-    clientUserMessageId: candidate.recoveryId,
-    input: createWorkbenchThreadRecoveryInput(),
-    threadId: candidate.threadId,
-  };
-  const response = await requestLiveCodexWithDeadline(request);
-  if (response.error) throw new Error(response.error.message);
-  return "recovered" as const;
 }
 
 async function runAfterOpenCodeBridgeReload<TValue>(task: (bridge: OpenCodeBridge) => TValue | Promise<TValue>) {
@@ -851,14 +733,6 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
       logError("orchestrator", error instanceof Error ? error.stack ?? error.message : message);
     });
   });
-}
-
-async function recoverPersistedManualResume() {
-  const handoff = await turnRecoveryHandoffStore.load();
-  if (!handoff) return;
-  turnRecoveryController.loadCandidates(handoff.candidates);
-  await turnRecoveryController.recover(handoff.candidates, recoverTurnCandidate, handoff);
-  log("turn-recovery", `settled manual-resume handoff ${handoff.id}`);
 }
 
 function handleHardOrchestratorReload(response: http.ServerResponse) {
@@ -1136,7 +1010,10 @@ async function startOrchestrator() {
   const codexReadiness = ensureCodexReady(startupBridge);
   void codexReadiness
     .then(() => {
-      void recoverPersistedManualResume().catch((error) => {
+      void Promise.all([
+        featureHost.run("harnesses", (harnesses) => harnesses.recoverAvailable("codex"), "Codex persisted turn recovery"),
+        featureHost.run("harnesses", (harnesses) => harnesses.recoverAvailable("opencode"), "OpenCode persisted turn recovery"),
+      ]).catch((error) => {
         logError("turn-recovery", `startup manual-resume recovery failed: ${error instanceof Error ? error.message : String(error)}`);
       });
     })

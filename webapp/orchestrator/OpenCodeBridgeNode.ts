@@ -11,6 +11,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   access: "agent",
   children: [],
   create: (context, build) => {
+    const harnesses = build.get("harnesses");
     const modules = build.get("modules");
     const bridge = new OpenCodeBridge({
       ...context.openCodeBridgeOptions,
@@ -21,7 +22,10 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     let activated = build.mode === "initial";
     let detached = false;
     return {
-      activate: () => { activated = true; },
+      activate: async () => {
+        activated = true;
+        await harnesses.recoverAvailable("opencode");
+      },
       detachForReload: async () => {
         const state = await bridge.detachForReload();
         detached = true;
@@ -39,7 +43,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload OpenCode bridge code without restarting the OpenCode app-server.",
   lifecycle: "handoff",
   provides: ["openCodeBridge"],
-  requires: ["modules", "openCodeAppServer"],
+  requires: ["harnesses", "modules", "openCodeAppServer"],
   safeAll: true,
   scope: "server:opencode",
   sources: [
