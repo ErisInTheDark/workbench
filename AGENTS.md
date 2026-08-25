@@ -6,16 +6,8 @@
 - Do not add architecture inventories, temporary implementation notes, changelogs, task-specific procedures, or facts that an agent can recover by inspecting the source.
 - Update this file or nearby project guidance when a change materially alters a durable project constraint or operating workflow, and confirm that guidance change with the user.
 - In this project, "update instructions" means update sources under `webapp/lib/workbench/instructions/`. The user will explicitly name `AGENTS.md` or a particular skill when she intends either one.
-- Before interpreting fuzzy wording that sounds like a project term, quickly check `GLOSSARY.md`.
-- Before planning or editing project behavior or architecture, search `INVARIANTS.md` for invariants related to the task at hand.
-
-## Project Skills
-
-- `/opencode-diagnostics` owns the bounded local SDK-probe workflow for diagnosing OpenCode connectivity, event streams, sessions, prompt delivery, and bridge behavior under `webapp/orchestrator/`.
-
-## Project Vocabulary
-
-- When the user says "transcripts," they mean the persisted transcript files under `.workbench/transcripts/`. For Codex threads, inspect `thread.json`, `turns/*.json`, `turns/*.ndjson`, orphan-event files, and `assets/`, with `CodexTranscriptStore` as their owner. Do not substitute the rendered thread UI, Thread Recall output, questionnaire transcript projections, or realtime audio transcript events unless the user explicitly names them.
+- Ensure you're familiar with `GLOSSARY.md`.
+- Before planning or editing project behavior or architecture, search `INVARIANTS.md` for invariants related to the task at hand. Also keep the start of the file in mind.
 
 ## Code Organization
 

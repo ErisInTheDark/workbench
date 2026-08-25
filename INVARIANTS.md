@@ -1,8 +1,8 @@
-# Workbench Invariants
-
 This file records permanent Workbench requirements.
 
 Search this file for invariants related to the task at hand. Task specs can add stricter temporary rules. They cannot weaken these invariants.
+
+You may propose new invariants or changes to existing invariants, but you must make these proposals PROMINENT, and they must be truly durable invariants that are useful for the project in the longterm.
 
 ## Ownership
 
