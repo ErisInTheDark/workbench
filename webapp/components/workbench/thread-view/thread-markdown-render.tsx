@@ -238,13 +238,13 @@ function renderThreadListItem (
 ) {
   const content = renderThreadInlineMarkdown(item.text, options, `${keyPrefix}-content`);
   if (!item.children.length) {
-    return <li className="[&+li]:mt-1" key={keyPrefix}>{content.length ? content : <br />}</li>;
+    return <li className="[&+li]:mt-1" key={keyPrefix} value={item.ordinal ?? undefined}>{content.length ? content : <br />}</li>;
   }
 
   const childContent = renderThreadChildBlocks(item.children, options, keyPrefix);
 
   return (
-    <li className="[&+li]:mt-1" key={keyPrefix}>
+    <li className="[&+li]:mt-1" key={keyPrefix} value={item.ordinal ?? undefined}>
       <details
         className="thread-disclosure block min-w-0 max-w-full"
         open

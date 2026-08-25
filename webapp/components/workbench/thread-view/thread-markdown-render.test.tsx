@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect agent-authored inline markers, notice blocks, Markdown bodies, and literal fallback. Keywords: thread, markdown, icon, notice, color.
+ * No production exports. Regression wards protect ordered-list ordinals, agent-authored inline markers, notice blocks, Markdown bodies, and literal fallback. Keywords: thread, markdown, list, icon, notice, color.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -7,6 +7,17 @@ import { createElement, Fragment } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { renderThreadMarkdown } from "./thread-markdown-render";
+
+test("ordered lists render every source ordinal literally", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    "7. alpha",
+    "7. beta",
+    "42) gamma",
+  ].join("\n"))));
+  const ordinals = Array.from(html.matchAll(/<li[^>]*\svalue="(\d+)"[^>]*>/gu), (match) => match[1]);
+
+  assert.deepEqual(ordinals, ["7", "7", "42"]);
+});
 
 test("thread alert markers render every supported semantic color", () => {
   const colorClassNames = {

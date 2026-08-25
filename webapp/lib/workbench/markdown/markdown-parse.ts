@@ -35,6 +35,7 @@ import {
 export interface ParsedListItem {
   contentIndent: number;
   marker: string;
+  ordinal: string | null;
   text: string;
   children: ParsedBlock[];
 }
@@ -1015,6 +1016,7 @@ function parseSpecificListBlock(
     const item: ParsedListItem = {
       contentIndent: line.contentIndent,
       marker: line.marker,
+      ordinal: type === "ol" ? line.marker.slice(0, -1) : null,
       text: line.text,
       children: [],
     };

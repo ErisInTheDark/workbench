@@ -2,6 +2,7 @@
  * Exports:
  * - WorkbenchMarkupSerializationOptions: callbacks needed to serialize editor DOM and markup signatures without coordinator globals. Keywords: workbench, markdown, serialization, callbacks.
  * - createWorkbenchMarkupSignature: create a canonical rich-text markup signature for save-guard round-trip comparisons. Keywords: workbench, markup, signature, save guard.
+ * - resolveOrderedListItemOrdinals: preserve explicit item values and derive implicit continuations for ordered-list serialization. Keywords: markdown, ordered list, ordinal, serialization.
  * - serializeListItemMainText: serialize the visible markdown text for a structured list item. Keywords: workbench, markdown, list, serialization.
  * - serializeWorkbenchDomToMarkdown: serialize a normalized workbench editor DOM subtree back to markdown text. Keywords: workbench, markdown, serialization, save guard.
  */
@@ -255,16 +256,46 @@ export function serializeListItemMainText(item: Element) {
   return serializeInlineNodes(contentNodes).replace(/\n{3,}/g, "\n\n").trimEnd().trim();
 }
 
+function parseOrderedListOrdinal(value: string | null) {
+  if (!value || !/^\d+$/.test(value)) {
+    return null;
+  }
+
+  return BigInt(value);
+}
+
+export function resolveOrderedListItemOrdinals(
+  valueAttributes: readonly (string | null)[],
+  startAttribute: string | null,
+) {
+  let nextOrdinal = parseOrderedListOrdinal(startAttribute) ?? BigInt(1);
+
+  return valueAttributes.map((valueAttribute) => {
+    const explicitOrdinal = parseOrderedListOrdinal(valueAttribute);
+    const ordinal = explicitOrdinal === null ? nextOrdinal.toString() : valueAttribute!;
+    nextOrdinal = (explicitOrdinal ?? nextOrdinal) + BigInt(1);
+    return ordinal;
+  });
+}
+
 function serializeListElement(node: Element, indent = 0) {
   const listType = node.tagName.toLowerCase();
   if (listType !== "ul" && listType !== "ol") {
     return "";
   }
 
-  return Array.from(node.children)
-    .filter((child): child is HTMLLIElement => child instanceof HTMLLIElement)
+  const items = Array.from(node.children)
+    .filter((child): child is HTMLLIElement => child instanceof HTMLLIElement);
+  const orderedOrdinals = listType === "ol"
+    ? resolveOrderedListItemOrdinals(
+      items.map((item) => item.getAttribute("value")),
+      node.getAttribute("start"),
+    )
+    : [];
+
+  return items
     .map((item, index) => {
-      const prefix = listType === "ol" ? `${index + 1}. ` : "- ";
+      const prefix = listType === "ol" ? `${orderedOrdinals[index]}. ` : "- ";
       const text = serializeListItemMainText(item);
       const line = text
         ? `${" ".repeat(indent)}${prefix}${text}`.trimEnd()

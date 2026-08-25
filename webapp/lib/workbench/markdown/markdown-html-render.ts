@@ -203,15 +203,16 @@ function renderTableBlock(block: Extract<ParsedBlock, { type: "table" }>, option
 
 function renderListItem(item: ParsedListItem, options: MarkdownParseOptions = {}) {
   const content = renderInline(item.text, options) || "<br>";
+  const valueAttribute = item.ordinal === null ? "" : ` value="${item.ordinal}"`;
   if (!item.children.length) {
-    return `<li>${content}</li>`;
+    return `<li${valueAttribute}>${content}</li>`;
   }
 
   const childContent = item.children
     ? renderChildBlocks(item.children, options)
     : "";
 
-  return `<li><details open><summary>${content}</summary>${childContent}</details></li>`;
+  return `<li${valueAttribute}><details open><summary>${content}</summary>${childContent}</details></li>`;
 }
 
 function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {}) {
