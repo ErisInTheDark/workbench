@@ -106,7 +106,11 @@ export default class GitCheckpointStore {
   }
 
   async readProposalSummaryGroups(requests: GitArcProposalSummaryRequest[]) {
-    const refs = await this.repository.listRefsWithValues("refs/worktree/agents");
+    const namespaces = [...new Set(requests.flatMap(({ harness, proposalIds, threadId }) => (
+      proposalIds.length ? [proposalNamespace(harness, threadId), legacyProposalNamespace(threadId)] : []
+    )))];
+    if (!namespaces.length) return requests.map(() => []);
+    const refs = await this.repository.listRefsWithValues(...namespaces);
     const byRef = new Map(refs.map((entry) => [entry.ref, entry]));
     const selections = requests.map(({ harness, proposalIds, threadId }) => {
       const canonical = proposalNamespace(harness, threadId);

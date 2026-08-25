@@ -13,7 +13,11 @@ import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import GitArcProposalCache from "./GitArcProposalCache";
 import GitArcPublishState from "./GitArcPublishState";
 import GitArcRegistry, { REGISTRY_REF, type GitArcRegistryEntry } from "./GitArcRegistry";
-import GitCheckpointStore, { type StoredCheckpoint, type StoredProposal } from "./GitCheckpointStore";
+import GitCheckpointStore, {
+  type GitArcProposalSummary,
+  type StoredCheckpoint,
+  type StoredProposal,
+} from "./GitCheckpointStore";
 import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 import {
@@ -81,6 +85,26 @@ function lifecycleEntry(entry: GitArcRegistryEntry) {
     intentName: entry.intentName,
     phase: entry.phase === "resolved" ? "resolved" as const : "active" as const,
     proposalIds: entry.proposalIds ?? [],
+  };
+}
+
+function projectLifecycleState(
+  entry: GitArcRegistryEntry,
+  lifecycle: NonNullable<ReturnType<typeof lifecycleEntry>>,
+  summaries: GitArcProposalSummary[],
+): GitArcLifecycleState {
+  return {
+    checkpointCommit: lifecycle.checkpointCommit,
+    claimedPaths: lifecycle.claimedPaths,
+    harness: entry.harness,
+    intentDescription: lifecycle.intentDescription,
+    intentName: lifecycle.intentName,
+    phase: lifecycle.phase,
+    proposals: summaries.flatMap(({ proposalId, status }) => (
+      status === "proposed" || status === "committed" ? [{ proposalId, status }] : []
+    )),
+    threadId: entry.threadId,
+    updatedAt: entry.updatedAt,
   };
 }
 
@@ -389,25 +413,25 @@ export default class GitArcProposalController {
       proposalIds: lifecycle!.proposalIds,
       threadId: entry.threadId,
     })));
-    return projected.map(({ entry, lifecycle }, index) => ({
-      checkpointCommit: lifecycle!.checkpointCommit,
-      claimedPaths: lifecycle!.claimedPaths,
-      harness: entry.harness,
-      intentDescription: lifecycle!.intentDescription,
-      intentName: lifecycle!.intentName,
-      phase: lifecycle!.phase,
-      proposals: (summaries[index] ?? []).flatMap(({ proposalId, status }) => (
-        status === "proposed" || status === "committed" ? [{ proposalId, status }] : []
-      )),
-      threadId: entry.threadId,
-      updatedAt: entry.updatedAt,
-    }));
+    return projected.map(({ entry, lifecycle }, index) => (
+      projectLifecycleState(entry, lifecycle!, summaries[index] ?? [])
+    ));
   }
 
   async findLifecycleState(input: ArcIdentityInput) {
-    const states = await this.listLifecycleStates({ cwd: input.cwd });
+    const repository = await WorkbenchGitRepository.tryOpen(input.cwd);
+    if (!repository) return null;
     const harness = normalizeHarness(input.harness);
-    return states.find((state) => state.harness === harness && state.threadId === input.threadId) ?? null;
+    const entry = await new GitArcRegistry(repository).find({ harness, threadId: input.threadId });
+    if (!entry) return null;
+    const lifecycle = lifecycleEntry(entry);
+    if (!lifecycle) return null;
+    const summaries = await new GitCheckpointStore(repository).readProposalSummaries(
+      harness,
+      input.threadId,
+      lifecycle.proposalIds,
+    );
+    return projectLifecycleState(entry, lifecycle, summaries);
   }
 
   async requireNoAcceptedReceipts(input: ArcIdentityInput & { checkpointCommit: string }) {
@@ -685,6 +709,13 @@ export default class GitArcProposalController {
         ? currentTree
         : proposal.proposalCommit;
     return await buildProposalResult(repository, proposal.metadata, target, harness, threadId, includeNewerAvailable);
+  }
+
+  async getProposalPaths({ cwd, harness: rawHarness, proposalId, threadId }: ArcIdentityInput & { proposalId: string }) {
+    const repository = await WorkbenchGitRepository.open(cwd);
+    const harness = normalizeHarness(rawHarness);
+    const proposal = await new GitCheckpointStore(repository).readProposal(harness, threadId, proposalId);
+    return [...proposal.metadata.paths];
   }
 
   async rescindProposal(input: ArcIdentityInput & { proposalId: string }) {

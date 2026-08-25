@@ -1025,6 +1025,15 @@ export default class WorkbenchGitCheckpointController {
     return await this.proposals.getProposal({ cwd, harness: rawHarness, includeNewer, proposalId, threadId });
   }
 
+  async getProposalPaths({
+    cwd,
+    harness: rawHarness,
+    proposalId,
+    threadId,
+  }: ControllerInput & { proposalId: string }): Promise<string[]> {
+    return await this.proposals.getProposalPaths({ cwd, harness: rawHarness, proposalId, threadId });
+  }
+
   async rescindProposal(input: ControllerInput & { proposalId: string }) {
     return await this.proposals.rescindProposal(input);
   }

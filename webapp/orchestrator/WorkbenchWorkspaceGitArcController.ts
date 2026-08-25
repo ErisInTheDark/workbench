@@ -99,9 +99,12 @@ export default class WorkbenchWorkspaceGitArcController {
   }
 
   async findLifecycleState(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {
-    return (await this.listLifecycleStates(project)).find((state) => (
-      state.harness === harness && state.threadId === threadId
-    )) ?? null;
+    const members = await this.resolveRepoMembers(project);
+    const values = (await Promise.all(members.map(async (member) => {
+      const state = await this.local.findLifecycleState({ cwd: member.repoRoot, harness, threadId });
+      return state ? { member, state } : null;
+    }))).flatMap((value) => value ? [value] : []);
+    return values.length ? await this.aggregateLifecycle(project, values) : null;
   }
 
   async listPlanStates(project: AgentEndpointProjectResolution): Promise<WorkspaceGitArcPlanState[]> {
@@ -585,8 +588,8 @@ export default class WorkbenchWorkspaceGitArcController {
       ...state,
       claimedPaths: state.claimedPaths.map((candidate) => this.qualify(project, member, candidate)),
       proposals: await Promise.all(state.proposals.map(async (proposal) => {
-        const detail = await this.local.getProposal({ cwd: member.repoRoot, harness: state.harness as WorkbenchHarness, includeNewer: false, proposalId: proposal.proposalId, threadId: state.threadId });
-        const roots = unique(detail.paths.map((candidate) => this.rootForRepoPath(member, candidate).id));
+        const paths = await this.local.getProposalPaths({ cwd: member.repoRoot, harness: state.harness as WorkbenchHarness, proposalId: proposal.proposalId, threadId: state.threadId });
+        const roots = unique(paths.map((candidate) => this.rootForRepoPath(member, candidate).id));
         return { ...proposal, rootId: roots[0] ?? member.roots[0]!.id };
       })),
       repoRoot: member.repoRoot,

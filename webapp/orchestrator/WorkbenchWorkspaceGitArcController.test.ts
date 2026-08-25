@@ -12,6 +12,10 @@ import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoo
 import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcController";
 
 class FakeLocalGitArcController {
+  readonly lifecycleFindCalls: string[] = [];
+  readonly lifecycleListCalls: string[] = [];
+  readonly proposalDetailCalls: string[] = [];
+  readonly proposalPathCalls: string[] = [];
   private nextProposal = 0;
   private readonly plans = new Map<string, { checkpointCommit: string; harness: string; intentDescription: string; intentName: string; scopePaths: string[]; threadId: string; updatedAt: string }>();
   private readonly proposals = new Map<string, { cwd: string; paths: string[]; proposalId: string }>();
@@ -57,8 +61,16 @@ class FakeLocalGitArcController {
     };
   }
 
-  async findLifecycleState(input: { cwd: string }) { return this.states.get(input.cwd) ?? null; }
-  async listLifecycleStates(input: { cwd: string }) { return this.states.has(input.cwd) ? [this.states.get(input.cwd)!] : []; }
+  async findLifecycleState(input: { cwd: string; harness: string; threadId: string }) {
+    this.lifecycleFindCalls.push(input.cwd);
+    const state = this.states.get(input.cwd);
+    return state?.harness === input.harness && state.threadId === input.threadId ? state : null;
+  }
+
+  async listLifecycleStates(input: { cwd: string }) {
+    this.lifecycleListCalls.push(input.cwd);
+    return this.states.has(input.cwd) ? [this.states.get(input.cwd)!] : [];
+  }
   async findPlanState(input: { cwd: string }) { return this.plans.get(input.cwd) ?? null; }
   async listPlanStates(input: { cwd: string }) { return this.plans.has(input.cwd) ? [this.plans.get(input.cwd)!] : []; }
 
@@ -78,6 +90,16 @@ class FakeLocalGitArcController {
   }
 
   async getProposal(input: { cwd: string; proposalId: string }) {
+    this.proposalDetailCalls.push(input.proposalId);
+    return this.getStoredProposal(input);
+  }
+
+  async getProposalPaths(input: { cwd: string; proposalId: string }) {
+    this.proposalPathCalls.push(input.proposalId);
+    return this.getStoredProposal(input).paths;
+  }
+
+  private getStoredProposal(input: { cwd: string; proposalId: string }) {
     const proposal = this.proposals.get(input.proposalId);
     if (!proposal || proposal.cwd !== input.cwd) throw new Error(`Git arc proposal not found: ${input.proposalId}`);
     return proposal;
@@ -162,8 +184,9 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
   const apiRoot = "C:/workspace/api";
   const webRoot = "C:/workspace/web";
   const project = createWorkspace(apiRoot, webRoot);
+  const local = new FakeLocalGitArcController();
   const controller = new WorkbenchWorkspaceGitArcController(
-    new FakeLocalGitArcController() as unknown as WorkbenchGitCheckpointController,
+    local as unknown as WorkbenchGitCheckpointController,
     new WorkbenchThreadTransitionCoordinator(),
     async (rootPath) => rootPath,
   );
@@ -221,7 +244,19 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
     rootId: "web",
   });
 
+  const findCallsBefore = local.lifecycleFindCalls.length;
+  const listCallsBefore = local.lifecycleListCalls.length;
+  const proposalDetailCallsBefore = local.proposalDetailCalls.length;
+  const proposalPathCallsBefore = local.proposalPathCalls.length;
   const lifecycle = await controller.findLifecycleState(project, "codex", identity.threadId);
+  assert.deepEqual(local.lifecycleFindCalls.slice(findCallsBefore).sort(), [apiRoot, webRoot].sort());
+  assert.equal(local.lifecycleListCalls.length, listCallsBefore);
+  assert.equal(local.proposalDetailCalls.length, proposalDetailCallsBefore);
+  assert.deepEqual(local.proposalPathCalls.slice(proposalPathCallsBefore), [
+    apiProposal.proposalId,
+    webProposal.proposalId,
+    messageAmendment.proposalId,
+  ]);
   assert.ok(lifecycle);
   const { harness: _arcHarness, threadId: _arcThreadId, ...sidebarLifecycle } = lifecycle;
   assert.deepEqual(WorkbenchGitArcLifecycleStateSchema.parse(sidebarLifecycle).claimedPaths, ["api:one.txt", "web:two.txt"]);
