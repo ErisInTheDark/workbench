@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings. Keywords: instructions, selector, warning.
- * - filterWorkbenchInstructionContent: apply harness, shell, and mechanics-availability blocks without rejecting prompt assembly. Keywords: filter, tolerant parser, final payload.
+ * - filterWorkbenchInstructionContent: strip HTML comments and apply harness, shell, and mechanics-availability blocks without rejecting prompt assembly. Keywords: filter, tolerant parser, final payload.
  */
 
 import type { WorkbenchHarness } from "../../../types";
@@ -47,6 +47,68 @@ function closesFence(line: string, fence: Fence) {
   return new RegExp(`^(?: {0,3})${marker}{${fence.size},}\\s*$`, "u").test(line);
 }
 
+function stripHtmlCommentsOutsideFences(value: string) {
+  const lines = value.split("\n");
+  let fence: Fence | null = null;
+  let output = "";
+  let pendingComment: string | null = null;
+
+  const appendPlainText = (fragment: string) => {
+    let remaining = fragment;
+    while (remaining) {
+      const openingIndex = remaining.indexOf("<!--");
+      if (openingIndex < 0) {
+        output += remaining;
+        return;
+      }
+
+      output += remaining.slice(0, openingIndex);
+      const closingIndex = remaining.indexOf("-->", openingIndex + 4);
+      if (closingIndex < 0) {
+        pendingComment = remaining.slice(openingIndex);
+        return;
+      }
+
+      const comment = remaining.slice(openingIndex, closingIndex + 3);
+      output += comment.replace(/[^\n]/gu, "");
+      remaining = remaining.slice(closingIndex + 3);
+    }
+  };
+
+  lines.forEach((line, lineIndex) => {
+    const fragment = `${lineIndex > 0 ? "\n" : ""}${line}`;
+    if (fence) {
+      output += fragment;
+      if (closesFence(line, fence)) fence = null;
+      return;
+    }
+
+    if (pendingComment !== null) {
+      pendingComment += fragment;
+      const closingIndex = pendingComment.indexOf("-->");
+      if (closingIndex < 0) return;
+
+      const comment = pendingComment.slice(0, closingIndex + 3);
+      const remainder = pendingComment.slice(closingIndex + 3);
+      output += comment.replace(/[^\n]/gu, "");
+      pendingComment = null;
+      appendPlainText(remainder);
+      return;
+    }
+
+    const openedFence = readFence(line);
+    if (openedFence) {
+      output += fragment;
+      fence = openedFence;
+      return;
+    }
+
+    appendPlainText(fragment);
+  });
+
+  return output + (pendingComment ?? "");
+}
+
 function isKnownValue(axis: SelectorAxis, value: string) {
   if (axis === "harness") return value === "codex" || value === "copilot" || value === "opencode";
   if (axis === "shell") return value === "pwsh" || value === "bash";
@@ -65,7 +127,7 @@ function warn(context: WorkbenchInstructionFilterContext, line: number, recovery
 
 export function filterWorkbenchInstructionContent(value: string | null | undefined, context: WorkbenchInstructionFilterContext) {
   if (!value) return null;
-  const lines = value.replace(/\r\n?/gu, "\n").split("\n");
+  const lines = stripHtmlCommentsOutsideFences(value.replace(/\r\n?/gu, "\n")).split("\n");
   const controls = new Map<number, SelectorControl>();
   const openLines: number[] = [];
   let fence: Fence | null = null;

@@ -18,6 +18,23 @@ test("fenced selector examples remain literal", () => {
   assert.equal(filter(value).output, value);
 });
 
+test("html comments are stripped before selector parsing while preserving line breaks", () => {
+  const value = "before<!-- inline -->after\n<!--\n<harness:not-real>\nhidden\n</harness:not-real>\n-->\nkept";
+  const result = filter(value);
+  assert.equal(result.output, `beforeafter${"\n".repeat(6)}kept`);
+  assert.deepEqual(result.warnings, []);
+});
+
+test("fenced html comment examples remain literal", () => {
+  const value = "```md\n<!-- backtick example -->\n```\n~~~md\n<!-- tilde example -->\n~~~";
+  assert.equal(filter(value).output, value);
+});
+
+test("an unclosed html comment opener remains literal", () => {
+  const value = "before\n<!-- unfinished\nafter";
+  assert.equal(filter(value).output, value);
+});
+
 test("unknown and malformed controls preserve body and warn", () => {
   const result = filter("<available:not-real>\nbody\n</available:not-real>");
   assert.equal(result.output, "body");
