@@ -258,19 +258,7 @@ export default class WorkbenchThreadStateController {
   }
 
   async handleRequest(connectionId: string, input: WorkbenchThreadStateRequest | object) {
-    const startedAt = this.now();
-    const method = sanitizeLogValue((input as { method?: unknown }).method);
-    const safeConnectionId = sanitizeLogValue(connectionId);
-    this.options.log?.(`request started connection=${safeConnectionId} method=${method}`);
-    try {
-      const response = await this.handleRequestOwned(connectionId, input);
-      const outcome = "error" in response ? `error code=${sanitizeLogValue(response.error.code)}` : "success";
-      this.options.log?.(`request completed connection=${safeConnectionId} method=${method} outcome=${outcome} elapsedMs=${Math.max(0, this.now() - startedAt)}`);
-      return response;
-    } catch (error) {
-      this.options.log?.(`request completed connection=${safeConnectionId} method=${method} outcome=exception elapsedMs=${Math.max(0, this.now() - startedAt)}`);
-      throw error;
-    }
+    return await this.handleRequestOwned(connectionId, input);
   }
 
   private async handleRequestOwned(connectionId: string, input: WorkbenchThreadStateRequest | object) {

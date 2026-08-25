@@ -35,6 +35,7 @@ import type WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotC
 import type WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import type WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
+import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type { HarnessKind, JsonRpcNotification } from "./bridge-types";
 
 export type OrchestratorReloadableModules = {
@@ -90,4 +91,5 @@ export interface OrchestratorRuntimeObjects {
   subagents: WorkbenchSubagentFeature;
   threadGit: WorkbenchThreadGitFeature;
   threadState: WorkbenchThreadStateFeature;
+  webSocketRequests: WorkbenchWebSocketRequestController;
 }

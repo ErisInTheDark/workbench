@@ -41,6 +41,7 @@ import {
   type WorkbenchFileChangeFailureMarker,
 } from "../lib/workbench/thread/workbench-file-change";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import { CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS, createCodexTranscriptDiagnostic } from "./codex-transcript-diagnostics";
 import type CodexAppServer from "./CodexAppServer";
 import { log, logError } from "./process-helpers";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
@@ -167,8 +168,6 @@ const APPROVAL_DECISION_QUESTION_ID = "decision";
 const APPROVAL_ALLOW_ONCE_LABEL = "Allow once";
 const APPROVAL_ALLOW_SESSION_LABEL = "Allow for session";
 const APPROVAL_DECLINE_LABEL = "Decline";
-const TRANSCRIPT_INSTRUMENTATION_INTERVAL_MS = 5000;
-const TRANSCRIPT_INSTRUMENTATION_BACKLOG_THRESHOLD = 25;
 const TRANSCRIPT_MAX_PENDING_TASKS = 200;
 const TRANSCRIPT_COALESCE_FLUSH_MS = 100;
 const TRANSCRIPT_COALESCE_MAX_BUFFER_BYTES = 512 * 1024;
@@ -261,10 +260,6 @@ function sanitizeTranscriptErrorMessage(error: unknown) {
     .replace(/\b(Bearer\s+)[^\s,;]+/giu, "$1[redacted]")
     .replace(/\b(api[_-]?key|authorization|secret|token)(\s*[:=]\s*)[^\s,;]+/giu, "$1$2[redacted]");
   return truncateText(message, 1000) || "turn/steer transport failed.";
-}
-
-function formatBytes(value: number) {
-  return `${Math.round(value / 1024 / 1024)}MB`;
 }
 
 function shouldRecordHydratedThreadSnapshot(
@@ -979,23 +974,14 @@ export default class CodexStdioBridge {
   private readonly requestIdAllocator: RequestIdAllocator;
   private transcriptQueue: Promise<void> = Promise.resolve();
   private readonly transcriptTasks = new Set<Promise<void>>();
-  private readonly transcriptPendingTaskStartedAt = new Map<number, number>();
-  private readonly transcriptLabelCounts = new Map<string, number>();
+  private readonly transcriptPendingTasks = new Map<number, { label: string; startedAt: number }>();
   private readonly transcriptInstrumentationTimer: NodeJS.Timeout;
   private readonly coalescedTranscriptNotifications = new Map<string, JsonRpcNotification>();
   private coalescedTranscriptFlushTimer: NodeJS.Timeout | null = null;
   private coalescedTranscriptFlushPromise: Promise<void> | null = null;
   private coalescedTranscriptByteEstimate = 0;
-  private transcriptBackpressureCount = 0;
-  private transcriptAutoRefreshSkippedCount = 0;
   private nextTranscriptTaskId = 1;
-  private transcriptCompletedCount = 0;
-  private transcriptEnqueuedCount = 0;
-  private transcriptFailedCount = 0;
-  private transcriptLastLoggedAutoRefreshSkippedCount = 0;
-  private transcriptLastLabel = "";
-  private transcriptLastLogAt = 0;
-  private transcriptLastSkipLabel = "";
+  private transcriptLastLogAt: number | null = null;
   private upstreamInitialized: boolean;
   private upstreamInitializePromise: Promise<void> | null = null;
   private readonly resolveProjectFromCwd: CodexStdioBridgeOptions["resolveProjectFromCwd"];
@@ -1018,8 +1004,8 @@ export default class CodexStdioBridge {
     this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
     this.upstreamInitialized = initialState?.upstreamInitialized ?? false;
     this.transcriptInstrumentationTimer = setInterval(() => {
-      this.logTranscriptInstrumentation("interval");
-    }, TRANSCRIPT_INSTRUMENTATION_INTERVAL_MS);
+      this.logTranscriptInstrumentation();
+    }, CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS);
     this.transcriptInstrumentationTimer.unref();
   }
 
@@ -1517,8 +1503,6 @@ export default class CodexStdioBridge {
       signal?.addEventListener("abort", abortPendingResponse, { once: true });
       if (shouldCapturePollingTranscript(method, requestSource)) {
         void this.captureTranscript("client-request", () => this.ensureTranscriptStore().recordClientRequest(upstreamMessage));
-      } else {
-        this.recordSkippedAutoRefreshTranscript(`client-request:${method ?? "unknown"}`);
       }
       try {
         this.send(upstreamMessage);
@@ -1548,8 +1532,6 @@ export default class CodexStdioBridge {
     });
     if (shouldCapturePollingTranscript(method, requestSource)) {
       void this.captureTranscript("client-request", () => this.ensureTranscriptStore().recordClientRequest(upstreamMessage));
-    } else {
-      this.recordSkippedAutoRefreshTranscript(`client-request:${method ?? "unknown"}`);
     }
     try {
       this.send(upstreamMessage);
@@ -1699,8 +1681,6 @@ export default class CodexStdioBridge {
           await transcriptStore.recordHydratedThreadSnapshot(hydratedMessage);
         }
       });
-    } else {
-      this.recordSkippedAutoRefreshTranscript(`upstream-response:${pending.method ?? "unknown"}`);
     }
     const presentedMessage = this.withFileChangeFailurePresentation(hydratedMessage);
     if (isPendingInternalResponse(pending)) {
@@ -1803,57 +1783,17 @@ export default class CodexStdioBridge {
     });
   }
 
-  private logTranscriptInstrumentation(reason: "backlog" | "interval") {
-    const pendingCount = this.transcriptTasks.size;
-    const shouldLog = pendingCount > 0
-      || reason === "backlog"
-      || this.transcriptEnqueuedCount !== this.transcriptCompletedCount
-      || this.transcriptAutoRefreshSkippedCount !== this.transcriptLastLoggedAutoRefreshSkippedCount;
-    if (!shouldLog) {
-      return;
-    }
-
+  private logTranscriptInstrumentation() {
     const timestamp = Date.now();
-    if (reason === "backlog" && timestamp - this.transcriptLastLogAt < TRANSCRIPT_INSTRUMENTATION_INTERVAL_MS) {
-      return;
-    }
-
-    this.transcriptLastLogAt = timestamp;
-    const memory = process.memoryUsage();
-    let oldestPendingAgeMs = 0;
-    for (const startedAt of this.transcriptPendingTaskStartedAt.values()) {
-      oldestPendingAgeMs = Math.max(oldestPendingAgeMs, timestamp - startedAt);
-    }
-
-    const topLabels = Array.from(this.transcriptLabelCounts.entries())
-      .sort((left, right) => right[1] - left[1])
-      .slice(0, 5)
-      .map(([label, count]) => `${label}=${count}`)
-      .join(", ");
-
-    log("codex-transcript-memory", [
-      `reason=${reason}`,
-      `rss=${formatBytes(memory.rss)}`,
-      `heapUsed=${formatBytes(memory.heapUsed)}`,
-      `heapTotal=${formatBytes(memory.heapTotal)}`,
-      `external=${formatBytes(memory.external)}`,
-      `pending=${pendingCount}`,
-      `enqueued=${this.transcriptEnqueuedCount}`,
-      `completed=${this.transcriptCompletedCount}`,
-      `failed=${this.transcriptFailedCount}`,
-      `autoRefreshSkipped=${this.transcriptAutoRefreshSkippedCount}`,
-      `backpressure=${this.transcriptBackpressureCount}`,
-      `oldestPendingMs=${oldestPendingAgeMs}`,
-      `last=${this.transcriptLastLabel || "none"}`,
-      `lastSkipped=${this.transcriptLastSkipLabel || "none"}`,
-      `top=[${topLabels}]`,
-    ].join(" "));
-    this.transcriptLastLoggedAutoRefreshSkippedCount = this.transcriptAutoRefreshSkippedCount;
-  }
-
-  private recordSkippedAutoRefreshTranscript(label: string) {
-    this.transcriptAutoRefreshSkippedCount += 1;
-    this.transcriptLastSkipLabel = label;
+    const diagnostic = createCodexTranscriptDiagnostic({
+      lastLoggedAt: this.transcriptLastLogAt,
+      memory: process.memoryUsage(),
+      now: timestamp,
+      pending: [...this.transcriptPendingTasks.values()],
+    });
+    if (!diagnostic) return;
+    this.transcriptLastLogAt = diagnostic.loggedAt;
+    log("codex-transcript", diagnostic.message);
   }
 
   private async captureCoalescedTranscriptNotification({ key, notification }: CoalescedTranscriptNotification) {
@@ -1900,9 +1840,7 @@ export default class CodexStdioBridge {
       }
 
       if (this.transcriptTasks.size >= TRANSCRIPT_MAX_PENDING_TASKS) {
-        this.transcriptBackpressureCount += 1;
-        this.transcriptLastLabel = "upstream-notification:coalesced";
-        this.logTranscriptInstrumentation("backlog");
+        this.logTranscriptInstrumentation();
         await Promise.race(Array.from(this.transcriptTasks)).catch(() => undefined);
         continue;
       }
@@ -1930,31 +1868,24 @@ export default class CodexStdioBridge {
   ) {
     const taskId = this.nextTranscriptTaskId;
     this.nextTranscriptTaskId += 1;
-    this.transcriptEnqueuedCount += 1;
-    this.transcriptLastLabel = label;
-    this.transcriptPendingTaskStartedAt.set(taskId, Date.now());
-    this.transcriptLabelCounts.set(label, (this.transcriptLabelCounts.get(label) ?? 0) + 1);
+    this.transcriptPendingTasks.set(taskId, { label, startedAt: Date.now() });
     const transcriptTask = this.transcriptQueue
       .catch(() => undefined)
       .then(async () => {
         try {
           await task();
         } catch (error) {
-          this.transcriptFailedCount += 1;
           logError("codex-transcript", error instanceof Error ? error.message : String(error));
         }
       });
     this.transcriptQueue = transcriptTask.catch(() => undefined);
     this.transcriptTasks.add(transcriptTask);
-    if (this.transcriptTasks.size >= TRANSCRIPT_INSTRUMENTATION_BACKLOG_THRESHOLD) {
-      this.logTranscriptInstrumentation("backlog");
-    }
+    this.logTranscriptInstrumentation();
     try {
       await transcriptTask;
     } finally {
-      this.transcriptCompletedCount += 1;
       this.transcriptTasks.delete(transcriptTask);
-      this.transcriptPendingTaskStartedAt.delete(taskId);
+      this.transcriptPendingTasks.delete(taskId);
     }
   }
 

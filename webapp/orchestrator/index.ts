@@ -81,7 +81,6 @@ const CODEX_HEALTH_INTERVAL_MS = 60000;
 const CODEX_HEALTH_REQUEST_TIMEOUT_MS = 10000;
 const CODEX_HEALTH_FAILURE_THRESHOLD = 10;
 const BROWSE_CONTROLLER_RELOAD_DRAIN_TIMEOUT_MS = 5000;
-const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
 
 function readNonEmptyEnv(value: string | undefined) {
   const trimmedValue = value?.trim();
@@ -194,9 +193,13 @@ const specs: ProcessSpec[] = [
 ];
 
 function sendJsonToClient(client: BridgeClient, message: unknown) {
-  if (client.readyState === client.OPEN) {
-    client.send(JSON.stringify(message));
-  }
+  void featureHost.run(
+    "webSocketRequests",
+    (controller) => controller.sendJsonToClient(client, message),
+    "browser WebSocket send",
+  ).catch((error) => {
+    logError("websocket", error instanceof Error ? error.message : String(error));
+  });
 }
 
 function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification) {
@@ -215,12 +218,6 @@ function broadcastToClients(harness: HarnessKind, message: JsonRpcNotification) 
 function publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot) {
   const client = bridgeClientsByConnectionId.get(connectionId);
   if (client) sendJsonToClient(client, { method: "workbench/thread-state/updated", params: snapshot });
-}
-
-function stripHarnessField(message: JsonRpcRequest) {
-  const nextMessage = { ...message };
-  delete nextMessage[WORKBENCH_HARNESS_FIELD];
-  return nextMessage;
 }
 
 function asRecord(value: unknown) {
@@ -616,6 +613,18 @@ function createHarnessPorts(): Record<WorkbenchHarness, WorkbenchHarnessRuntimeP
   return {
     codex: {
       handleBrowserMessage: async (message, client) => {
+        if (message.method === "initialize" && "id" in message) {
+          try {
+            await runAfterCodexBridgeReload(async (bridge) => {
+              await ensureCodexReady(bridge);
+              sendJsonToClient(client, { id: message.id, result: bridge.getInitializeResult() });
+            });
+          } catch (error) {
+            sendJsonToClient(client, { id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : "Codex app-server initialize failed." } });
+          }
+          return;
+        }
+        if (message.method === "initialized" && !("id" in message)) return;
         if ("id" in message) {
           try {
             const bridgeResponse = await runAfterCodexBridgeReload((bridge) => bridge.handleBridgeRequest(message));
@@ -989,78 +998,12 @@ function startChild(spec: ProcessSpec) {
   });
 }
 
-async function handleClientMessage(client: BridgeClient, data: Buffer) {
-  let message: JsonRpcRequest;
-  try {
-    message = JSON.parse(data.toString()) as JsonRpcRequest;
-  } catch {
-    client.close(1003, "Invalid JSON.");
-    return;
-  }
-
-  if (featureHost.get("reloadController").isHardReloadPending()) {
-    if ("id" in message) {
-      sendJsonToClient(client, {
-        id: message.id,
-        error: { code: -32000, message: "The orchestrator is hard reloading; reconnect shortly." },
-      });
-    }
-    return;
-  }
-
-  if (message.method.startsWith("workbench/thread-state/") && "id" in message) {
-    const connectionId = [...bridgeClientsByConnectionId].find(([, candidate]) => candidate === client)?.[0];
-    if (!connectionId) return;
-    if (message.method === "workbench/thread-state/accepted") {
-      const params = asRecord(message.params) ?? {};
-      try {
-        const harness = featureHost.get("harnesses").resolveHarness(params.harness);
-        const projectId = typeof params.projectId === "string" ? params.projectId.trim() : "";
-        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-        const turnId = typeof params.turnId === "string" ? params.turnId.trim() : "";
-        if (!projectId || !threadId || !turnId) throw new Error("Invalid accepted-intent lifecycle evidence.");
-        const result = await featureHost.run("threadState", (feature) => feature.controller.acceptIntent(connectionId, { harness, projectId, threadId, turnId }), "thread state: accept intent");
-        sendJsonToClient(client, { id: message.id, result });
-      } catch (error) {
-        sendJsonToClient(client, { id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : "Accepted-intent publication failed." } });
-      }
-      return;
-    }
-    const result = await featureHost.run("threadState", (feature) => feature.controller.handleRequest(connectionId, { method: message.method, ...(asRecord(message.params) ?? {}) }), `thread state: ${message.method}`);
-    sendJsonToClient(client, { id: message.id, ...result });
-    return;
-  }
-
-  if (message.method === "initialize" && "id" in message) {
-    try {
-      await runAfterCodexBridgeReload(async (bridge) => {
-        await ensureCodexReady(bridge);
-        sendJsonToClient(client, {
-          id: message.id,
-          result: bridge.getInitializeResult(),
-        });
-      });
-    } catch (error) {
-      sendJsonToClient(client, {
-        id: message.id,
-        error: {
-          code: -32000,
-          message: error instanceof Error ? error.message : "Codex app-server initialize failed.",
-        },
-      });
-    }
-    return;
-  }
-
-  if (message.method === "initialized" && !("id" in message)) {
-    return;
-  }
-
-  const strippedMessage = stripHarnessField(message);
-  await featureHost.run("harnesses", (controller) => controller.handleBrowserMessage(message[WORKBENCH_HARNESS_FIELD], strippedMessage, client), `harness browser message: ${message[WORKBENCH_HARNESS_FIELD]} ${message.method}`).catch((error) => {
-    if ("id" in message) sendJsonToClient(client, { id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : "Harness bridge request failed." } });
-    else logError("harness-bridge", error instanceof Error ? error.message : String(error));
-  });
+async function handleClientMessage(client: BridgeClient, connectionId: string, data: Buffer) {
+  await featureHost.run(
+    "webSocketRequests",
+    (controller) => controller.handleMessage(client, connectionId, data, featureHost.get("reloadController").isHardReloadPending()),
+    "browser WebSocket message",
+  );
 }
 
 function startBridgeServer() {
@@ -1128,14 +1071,14 @@ function startBridgeServer() {
     log("codex-bridge", `client connected (${bridgeConnections.size} active)`);
 
     bridgeClient.on("message", (payload) => {
-      void handleClientMessage(bridgeClient, payload).catch((error) => {
+      void handleClientMessage(bridgeClient, connectionId, payload).catch((error) => {
         logError("codex-bridge", error instanceof Error ? error.message : String(error));
       });
     });
 
     bridgeClient.once("close", () => {
       bridgeClientsByConnectionId.delete(connectionId);
-      void featureHost.run("threadState", (feature) => feature.controller.disconnect(connectionId), "thread state: bridge disconnect");
+      void featureHost.run("webSocketRequests", (controller) => controller.disconnect(bridgeClient, connectionId), "browser WebSocket disconnect");
       bridgeConnections.delete(bridgeClient);
       log("codex-bridge", `client disconnected (${bridgeConnections.size} active)`);
     });

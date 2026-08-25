@@ -44,11 +44,13 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:mcp",
     "server:opencode",
     "server:topology",
+    "server:websocket",
   ]);
   assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:core", "server:topology"]);
   assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:core"]);
   assert.deepEqual([...parents.get("server:opencode")!].sort(), ["harness:opencode", "server:core"]);
   assert.deepEqual([...parents.get("server:browse")!], ["server:core"]);
+  assert.deepEqual([...parents.get("server:websocket")!], ["server:core"]);
 });
 
 test("every child requirement is registered by one of its direct parents", () => {

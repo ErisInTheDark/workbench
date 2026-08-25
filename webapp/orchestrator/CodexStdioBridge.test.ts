@@ -471,13 +471,10 @@ test("observational internal thread lists skip transcripts without forwarding th
     });
     await bridge.waitForIdle();
     assert.equal("workbenchRequestSource" in (upstreamRequests[0] ?? {}), false);
-    const instrumentation = bridge as unknown as {
-      transcriptAutoRefreshSkippedCount: number;
-      transcriptLabelCounts: Map<string, number>;
-    };
-    assert.equal(instrumentation.transcriptAutoRefreshSkippedCount, 2);
-    assert.equal(instrumentation.transcriptLabelCounts.get("client-request") ?? 0, 0);
-    assert.equal(instrumentation.transcriptLabelCounts.get("upstream-response:thread/list") ?? 0, 0);
+    await assert.rejects(
+      fs.access(path.join(root, ".workbench", "transcripts", "codex", "threads")),
+      (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+    );
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });

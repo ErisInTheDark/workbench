@@ -34,5 +34,5 @@ export type BridgeClient = {
   on: (event: "message", listener: (data: Buffer) => void) => void;
   once: (event: "close" | "error", listener: (arg?: unknown) => void) => void;
   readyState: number;
-  send: (data: string) => void;
+  send: (data: string, callback?: (error?: Error) => void) => void;
 };

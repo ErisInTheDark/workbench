@@ -35,6 +35,7 @@ import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
+import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
 function createModules(): OrchestratorReloadableModules {
@@ -226,7 +227,7 @@ function createWorkbenchCoreFeature(context: OrchestratorProcessContext, lease: 
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, import("./orchestrator-runtime-objects").OrchestratorProviderNotification>({
   access: "agent",
-  children: [WorkbenchTopologyNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode],
+  children: [WorkbenchTopologyNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
   create: (context, { lease }) => createWorkbenchCoreFeature(context, lease),
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",

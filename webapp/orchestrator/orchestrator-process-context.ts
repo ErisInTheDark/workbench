@@ -33,6 +33,7 @@ export const ORCHESTRATOR_PROCESS_REQUIRED_REGISTRATIONS = [
   "reloadController",
   "subagents",
   "threadState",
+  "webSocketRequests",
 ] as const satisfies readonly (keyof OrchestratorRuntimeObjects)[];
 
 export interface OrchestratorProcessContext {

@@ -809,9 +809,9 @@ test("request telemetry reports bounded validation evidence without logging requ
   });
   const response = await controller.handleRequest("observer", { method: "not-a-real-method", secret: "never-log-me" });
   assert.equal("error" in response, true);
-  assert.match(logs[0] ?? "", /request started connection=observer method=not-a-real-method/u);
-  assert.match(logs[1] ?? "", /request invalid method=not-a-real-method issueCode=invalid_union issuePath=method/u);
-  assert.match(logs[2] ?? "", /request completed connection=observer method=not-a-real-method outcome=error/u);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0] ?? "", /request invalid method=not-a-real-method issueCode=invalid_union issuePath=method/u);
+  assert.doesNotMatch(logs[0] ?? "", /request (?:started|completed)/u);
   assert.equal(logs.join("\n").includes("never-log-me"), false);
   await controller.dispose();
 });
