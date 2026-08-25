@@ -146,13 +146,14 @@ test("a failed batch rejects dependent waiters but leaves disjoint work eligible
   assert.deepEqual(batches, [["server:core"], ["client:all"]]);
 });
 
-test("admission rejects scopes outside the caller active claim", async () => {
+test("admission distinguishes missing path mappings from missing active arc ownership", async () => {
   const controller = new WorkbenchOrchestratorReloadController({
     executeBatch: async () => undefined,
-    listClaims: async () => [claim("caller", ["server:mcp"])],
+    listClaims: async () => [claim("caller", ["server:mcp"]), claim("unmapped", [])],
     listScopes,
   });
-  await assert.rejects(request(controller, "caller", ["client:all"]), /does not claim/u);
+  await assert.rejects(request(controller, "caller", ["client:all"]), /claimed paths do not map/u);
+  await assert.rejects(request(controller, "unmapped", ["server:codex"]), /claimed paths do not map/u);
   await assert.rejects(request(controller, "missing", ["server:mcp"]), /must own an active Git arc/u);
 });
 

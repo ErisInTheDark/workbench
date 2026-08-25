@@ -77,4 +77,9 @@ test("each production node matches a representative owned source path", () => {
   for (const [scope, sourcePath] of examples) {
     assert.equal(createGitignoreMatcher(nodes.get(scope)!.sources).matches(sourcePath), true, `${scope} must match ${sourcePath}`);
   }
+  assert.equal(
+    createGitignoreMatcher(nodes.get("server:codex")!.sources).matches("webapp/orchestrator/CodexTranscriptStore.ts"),
+    true,
+    "server:codex must match its PascalCase transcript store owner",
+  );
 });

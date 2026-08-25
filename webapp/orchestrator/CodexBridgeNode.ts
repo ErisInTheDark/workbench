@@ -52,6 +52,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/orchestrator/CodexStdioBridge.ts",
     "webapp/orchestrator/CodexBridgeTransitionController.ts",
     "webapp/orchestrator/CodexRecoverySupervisor.ts",
+    "webapp/orchestrator/CodexTranscriptStore.ts",
     "webapp/orchestrator/codex-transcript-*.ts",
     "webapp/orchestrator/copilot-bridge.ts",
     "webapp/orchestrator/copilot-thread-state.ts",

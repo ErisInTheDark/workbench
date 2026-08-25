@@ -115,7 +115,7 @@ test("stored item ownership rejects later duplicate turns without hiding their n
 
   const threadFile = await readThreadFile(root);
   assert.deepEqual(threadFile.turnIndex.map((entry) => [entry.turnId, entry.itemIds]), [
-    ["real", ["exec"]],
+    ["real", ["exec", "item-1"]],
     ["mixed", ["new"]],
   ]);
 
@@ -157,6 +157,43 @@ test("duplicate stored ownership repairs from canonical turn timelines once", as
   const repairedThreadFile = await readThreadFile(root);
   assert.deepEqual(repairedThreadFile.turnIndex.map((entry) => entry.turnId), ["real"]);
   assert.equal(repairedThreadFile.turnIndex[0]?.itemIds?.includes("exec"), true);
+}));
+
+test("selected hydration keeps notification items that arrived after the turn index", async () => withStore(async (store, root) => {
+  const initialTurn = transcriptTurn("active", ["user"]);
+  await store.recordHydratedThreadSnapshot({ id: 85, result: { thread: snapshot([initialTurn]) } });
+  await store.recordUpstreamNotification({
+    method: "item/completed",
+    params: {
+      item: { id: "commentary", memoryCitation: null, phase: "commentary", text: "visible", type: "agentMessage" },
+      threadId: "thread",
+      turnId: "active",
+    },
+  });
+
+  const hydrated = await hydrateThread(store, [initialTurn]);
+  assert.deepEqual(hydrated.turns[0]?.items.map((item) => item.id), ["user", "commentary"]);
+  const threadFile = await readThreadFile(root);
+  assert.deepEqual(threadFile.turnIndex[0]?.itemIds, ["user", "commentary"]);
+}));
+
+test("selected hydration replaces stale projected ids with canonical turn ids", async () => withStore(async (store, root) => {
+  const canonicalTurn = transcriptTurn("active", ["user", "commentary"]);
+  await store.recordHydratedThreadSnapshot({ id: 86, result: { thread: snapshot([canonicalTurn]) } });
+  const threadFile = await readThreadFile(root);
+  await fs.writeFile(threadFilePath(root), JSON.stringify({
+    ...threadFile,
+    turnIndex: threadFile.turnIndex.map((entry) => ({
+      ...entry,
+      itemCount: 2,
+      itemIds: ["stale-user", "stale-commentary"],
+    })),
+  }), "utf8");
+
+  const hydrated = await hydrateThread(store, [canonicalTurn]);
+  assert.deepEqual(hydrated.turns[0]?.items.map((item) => item.id), ["user", "commentary"]);
+  const repairedThreadFile = await readThreadFile(root);
+  assert.deepEqual(repairedThreadFile.turnIndex[0]?.itemIds, ["user", "commentary"]);
 }));
 
 test("a new empty transcript store completes every migration", async () => {

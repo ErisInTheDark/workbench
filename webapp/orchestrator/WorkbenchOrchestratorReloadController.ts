@@ -137,7 +137,7 @@ export default class WorkbenchOrchestratorReloadController {
     if (!callerClaim) throw new Error("The managed thread must own an active Git arc before requesting a reload.");
     const unclaimed = requestedScopes.filter((scope) => !callerClaim.reloadScopes.includes(scope));
     if (unclaimed.length) {
-      throw new Error(`The active Git arc does not claim these reload scopes: ${unclaimed.join(", ")}.`);
+      throw new Error(`The active Git arc's claimed paths do not map to these reload scopes: ${unclaimed.join(", ")}.`);
     }
 
     return await new Promise<OrchestratorReloadResponse>((resolve, reject) => {

@@ -153,7 +153,7 @@ export default class WorkbenchGitArcFeature {
 
   async listReloadScopeClaims(cwd: string): Promise<WorkbenchReloadScopeClaim[]> {
     const project = await this.resolveProject(cwd);
-    const claims = (await this.listLifecycleStates(cwd)).filter(({ phase, reloadScopes }) => phase === "active" && reloadScopes.length);
+    const claims = (await this.listLifecycleStates(cwd)).filter(({ phase }) => phase === "active");
     return await Promise.all(claims.map(async (claim) => {
       const harness = claim.harness as WorkbenchHarness;
       const context = await this.options.getThreadClaimContext(project.project.id, harness, claim.threadId);

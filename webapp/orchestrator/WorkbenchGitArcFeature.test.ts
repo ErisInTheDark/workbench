@@ -547,6 +547,28 @@ test("reload-scope plans require the exact running Workbench project root", asyn
   });
 });
 
+test("reload admission retains active arcs whose paths map to no reload scopes", async () => {
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async () => null,
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  Object.defineProperty(feature, "listLifecycleStates", {
+    value: async () => [
+      { harness: "codex", phase: "active", reloadScopes: [], threadId: "active" },
+      { harness: "codex", phase: "plan", reloadScopes: ["server:codex"], threadId: "planned" },
+    ],
+  });
+
+  assert.deepEqual(await feature.listReloadScopeClaims("C:/Git/Project"), [{
+    harness: "codex",
+    lifecycleKind: "unknown",
+    reloadScopes: [],
+    threadId: "active",
+  }]);
+});
+
 test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actions", async () => {
   const calls: string[] = [];
   const feature = new WorkbenchGitArcFeature({
