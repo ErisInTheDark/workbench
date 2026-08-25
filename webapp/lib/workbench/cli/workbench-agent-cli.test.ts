@@ -3,7 +3,7 @@
  * - No production exports; Node tests cover wb parsing, transport, and generated shims. Keywords: workbench, cli, test, shim, allowlist.
  */
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -25,6 +25,21 @@ import { parseGitArcReceipt } from "../git/git-arc-receipts.ts";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
 
 const execFileAsync = promisify(execFile);
+
+function execFileWithInput(command: string, args: string[], input: string, options: { cwd: string; env: NodeJS.ProcessEnv }) {
+  return new Promise<{ exitCode: number; stderr: string; stdout: string }>((resolve, reject) => {
+    const child = spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] });
+    let stderr = "";
+    let stdout = "";
+    child.stderr.setEncoding("utf8");
+    child.stdout.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.once("error", reject);
+    child.once("close", (exitCode) => resolve({ exitCode: exitCode ?? -1, stderr, stdout }));
+    child.stdin.end(input);
+  });
+}
 const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
 const shellSourcePath = fileURLToPath(new URL("./workbench-agent-cli.sh", import.meta.url));
 const requests: Array<{ body: string; method: string; url: string }> = [];
@@ -83,7 +98,15 @@ before(async () => {
   const address = server.address();
   assert(address && typeof address === "object");
   origin = `http://127.0.0.1:${address.port}`;
-  agentCommandController = new WorkbenchAgentCommandController(origin, origin);
+  agentCommandController = new WorkbenchAgentCommandController(origin, origin, {
+    checkApplyPatchClaims: async ({ paths }) => {
+      if (paths.some((filePath) => filePath.endsWith("unavailable.ts"))) throw new Error("claim registry unavailable");
+      const uncoveredPaths = paths.filter((filePath) => filePath.endsWith("unclaimed.ts"));
+      return { allowed: uncoveredPaths.length === 0, uncoveredPaths };
+    },
+    executeBrowseRequest: async () => { throw new Error("unexpected direct Browse dispatch"); },
+    executeSessionRequest: async () => { throw new Error("unexpected direct Browse session dispatch"); },
+  });
   temporaryDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-agent-cli-test-"));
 });
 
@@ -715,10 +738,15 @@ test("expands safe reload all without server replacement and keeps hard restart 
   assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard", "--all"], unmanaged)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard", "--server:codex"], unmanaged)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--server:process"], unmanaged)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--unsafe"], unmanaged)).kind, "error");
+  const reloadDefinition = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "orchestrator reload");
+  assert.ok(reloadDefinition);
+  assert.equal(reloadDefinition.inputSchema.safeParse({ scopes: ["server:mcp"] }).success, true);
+  assert.equal(reloadDefinition.inputSchema.safeParse({ scopes: ["harness:codex"] }).success, false);
   const help = await parseWorkbenchAgentCliCommand(["--help"]);
   assert.equal(help.kind, "help");
   if (help.kind === "help") {
-    assert.doesNotMatch(help.help, /--hard|--server:process/u);
+    assert.doesNotMatch(help.help, /--hard|--unsafe|server:process|harness:(?:codex|opencode)/u);
   }
   const reloadHelp = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--help"]);
   assert.equal(reloadHelp.kind, "help");
@@ -726,7 +754,14 @@ test("expands safe reload all without server replacement and keeps hard restart 
     assert.match(reloadHelp.help, /--all/u);
     assert.match(reloadHelp.help, /wb orchestrator reload --<scope> \[--<scope> \.\.\.\]/u);
     assert.match(reloadHelp.help, /--server:core\+browse\+mcp/u);
-    assert.doesNotMatch(reloadHelp.help, /--orchestrator-logic|--codex-bridge|--next-dev/u);
+    assert.doesNotMatch(reloadHelp.help, /--hard|--unsafe|server:process|harness:(?:codex|opencode)|--orchestrator-logic|--codex-bridge|--next-dev/u);
+  }
+  const unsafeHelp = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--help", "--unsafe"]);
+  assert.equal(unsafeHelp.kind, "help");
+  if (unsafeHelp.kind === "help") {
+    assert.match(unsafeHelp.help, /--harness:codex/u);
+    assert.match(unsafeHelp.help, /--harness:opencode/u);
+    assert.match(unsafeHelp.help, /--hard \(server:process\)/u);
   }
 });
 
@@ -746,6 +781,76 @@ test("runs the native shell transport and preserves the server response", async 
     kinds: ["commentary"],
     query: "needle",
   });
+});
+
+test("streams hook stdin, preserves claim decisions, and allows transport failures", async () => {
+  const env = {
+    ...process.env,
+    CODEX_THREAD_ID: "",
+    WORKBENCH_HARNESS: "codex",
+    WORKBENCH_ORIGIN: origin,
+    WORKBENCH_THREAD_ID: "",
+  };
+  const hookArgs = [shellSourcePath, "__hook", "apply-patch-claim"];
+  const hookInput = (filePath: string) => JSON.stringify({
+    cwd: temporaryDirectoryPath,
+    session_id: "hook-thread",
+    tool_input: { command: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-old\n+new\n*** End Patch` },
+    tool_name: "apply_patch",
+  });
+  const allowed = await execFileWithInput("bash", hookArgs, hookInput("claimed.ts"), {
+    cwd: temporaryDirectoryPath,
+    env,
+  });
+  assert.equal(allowed.exitCode, 0);
+  assert.equal(allowed.stderr, "");
+  assert.equal(JSON.parse(allowed.stdout).hookSpecificOutput.permissionDecision, "allow");
+
+  const denied = await execFileWithInput("bash", hookArgs, hookInput("unclaimed.ts"), {
+    cwd: temporaryDirectoryPath,
+    env,
+  });
+  assert.equal(denied.exitCode, 0);
+  assert.equal(denied.stderr, "");
+  assert.equal(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision, "deny");
+
+  const unavailable = await execFileWithInput("bash", hookArgs, hookInput("unavailable.ts"), {
+    cwd: temporaryDirectoryPath,
+    env,
+  });
+  assert.equal(unavailable.exitCode, 0);
+  assert.equal(unavailable.stderr, "");
+  assert.equal(JSON.parse(unavailable.stdout).hookSpecificOutput.permissionDecision, "deny");
+  assert.match(JSON.parse(unavailable.stdout).hookSpecificOutput.permissionDecisionReason, /claim registry unavailable/u);
+
+  const disconnected = await execFileWithInput("bash", hookArgs, hookInput("claimed.ts"), {
+    cwd: temporaryDirectoryPath,
+    env: { ...env, WORKBENCH_ORIGIN: "http://127.0.0.1:1" },
+  });
+  assert.equal(disconnected.exitCode, 0);
+  assert.match(disconnected.stderr, /curl:/u);
+  assert.deepEqual(JSON.parse(disconnected.stdout), {
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+  });
+
+  if (process.platform === "win32") {
+    const shimDirectoryPath = path.join(temporaryDirectoryPath, "hook-shims");
+    const shimEnv = { ...env };
+    await new WorkbenchAgentCliEnvironment({
+      origin,
+      runtimeDirectoryPath: shimDirectoryPath,
+      shellSourcePath,
+    }).install(shimEnv);
+    const nested = await execFileWithInput("C:\\Program Files\\PowerShell\\7\\pwsh.exe", [
+      "-NoProfile", "-Command", "wb __hook apply-patch-claim",
+    ], hookInput("unclaimed.ts"), {
+      cwd: temporaryDirectoryPath,
+      env: shimEnv,
+    });
+    assert.equal(nested.exitCode, 0, nested.stderr);
+    assert.equal(nested.stderr, "");
+    assert.equal(JSON.parse(nested.stdout).hookSpecificOutput.permissionDecision, "deny");
+  }
 });
 
 test("generates executable POSIX and working Windows shims", async (context) => {

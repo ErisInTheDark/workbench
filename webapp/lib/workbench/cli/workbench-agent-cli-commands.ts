@@ -32,6 +32,7 @@ interface HelpGroupDefinition {
   footer?: string;
   key: string;
   options?: string;
+  unsafeOptions?: string;
   usage: string;
   words: readonly string[];
 }
@@ -148,8 +149,12 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       "  --server:opencode             Reload OpenCode bridge code.",
       "  --server:reloader             Reload the lifecycle-owned reload coordinator.",
       "  --client:all                  Restart the complete client development server.",
-      "  --harness:codex               Request the future external Codex app-server swap hook. Currently warns and succeeds without action.",
-      "  --harness:opencode            Restart the managed OpenCode server.",
+    ].join("\n"),
+    unsafeOptions: [
+      "Destructive options:",
+      "  --harness:codex               Replace the managed Codex app-server and its dependant bridge.",
+      "  --harness:opencode            Replace the managed OpenCode server and its dependant bridge.",
+      "  --hard (server:process)       Restart the complete orchestrator process. Use by itself.",
     ].join("\n"),
     footer: [
       "Group any same-namespace scopes with +.",
@@ -177,13 +182,17 @@ function renderRootHelp() {
     "Project ownership is derived from the current working directory.", "",
   ].join("\n");
 }
-function renderGroupHelp(group: HelpGroupDefinition) {
+function renderGroupHelp(group: HelpGroupDefinition, includeUnsafe = false) {
   const commands = orderCommands(WORKBENCH_AGENT_COMMANDS.filter((command) => command.helpGroups.includes(group.key)), group.commandOrder ?? []);
   const commandSection = group.options ?? [
     "Commands:",
     ...commands.flatMap((command, index) => [...(index ? [""] : []), `  ${command.usage}`, `    ${command.description}`]),
   ].join("\n");
-  return ["Usage:", `  ${group.usage}`, "", commandSection, ...(group.footer ? ["", group.footer] : []), ""].join("\n");
+  return [
+    "Usage:", `  ${group.usage}`, "", commandSection,
+    ...(includeUnsafe && group.unsafeOptions ? ["", group.unsafeOptions] : []),
+    ...(group.footer ? ["", group.footer] : []), "",
+  ].join("\n");
 }
 function matchesWords(argv: readonly string[], words: readonly string[]) { return words.every((word, index) => argv[index] === word); }
 function matchHelpGroup(argv: readonly string[]) {
@@ -213,7 +222,7 @@ export async function parseWorkbenchAgentCliCommand(
   if (isLegacyCheckpointCommand) return { help: LEGACY_CHECKPOINT_MIGRATION_GUIDE, kind: "help" };
   if (!argv.length || argv.includes("--help") || argv[0] === "help") {
     const group = matchHelpGroup(helpPath(argv));
-    return { help: group ? renderGroupHelp(group) : renderRootHelp(), kind: "help" };
+    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe")) : renderRootHelp(), kind: "help" };
   }
   const matched = WORKBENCH_AGENT_COMMANDS.flatMap((definition) => (
     [definition.words, ...(definition.aliases ?? [])].map((words) => ({ definition, words }))

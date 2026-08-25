@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WorkbenchHarnessRuntimePort: stable bridge operations supplied to reloadable harness registrations. Keywords: harness, bridge, port, lifecycle.
- * - WorkbenchHarnessAdapter/WorkbenchHarnessReloadPlan: exhaustive reloadable registration and pure reload-plan contracts. Keywords: harness, capability, reload, plan.
- * - default WorkbenchHarnessController: validate registrations and own browser, server, Browse, recovery, and reload dispatch. Keywords: harness, routing, recovery, reload.
+ * - WorkbenchHarnessAdapter: exhaustive provider capability registration. Keywords: harness, capability, recovery.
+ * - default WorkbenchHarnessController: validate registrations and own browser, server, Browse, and recovery routing. Keywords: harness, routing, recovery.
  */
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
@@ -17,13 +17,6 @@ export interface WorkbenchHarnessRuntimePort {
   observeRecoveryNotification?(notification: JsonRpcNotification): void;
   observeRecoveryRequest?(request: JsonRpcRequest): void;
   resumeThread?(threadId: string): Promise<void>;
-  executeReload?(scopes: readonly string[]): Promise<void>;
-}
-
-export interface WorkbenchHarnessReloadScope {
-  refreshWorkbenchPromptFiles: boolean;
-  reloadOrchestratorLogic: boolean;
-  scope: string;
 }
 
 type WorkbenchHarnessRecoveryCapability =
@@ -35,28 +28,13 @@ type WorkbenchHarnessRecoveryCapability =
       resumeThread(threadId: string): Promise<void>;
     };
 
-type WorkbenchHarnessReloadCapability =
-  | { kind: "none" }
-  | {
-      execute(scopes: readonly string[]): Promise<void>;
-      kind: "scoped";
-      scopes: readonly WorkbenchHarnessReloadScope[];
-    };
-
 export interface WorkbenchHarnessAdapter {
   browse: Pick<WorkbenchHarnessRuntimePort, "readThread" | "steerTurn">;
   browser: Pick<WorkbenchHarnessRuntimePort, "handleBrowserMessage">;
   id: WorkbenchHarness;
   internal: Pick<WorkbenchHarnessRuntimePort, "request">;
   recovery: WorkbenchHarnessRecoveryCapability;
-  reload: WorkbenchHarnessReloadCapability;
   serverMethods: readonly string[];
-}
-
-export interface WorkbenchHarnessReloadPlan {
-  actions: readonly { harness: WorkbenchHarness; scopes: readonly string[] }[];
-  refreshWorkbenchPromptFiles: boolean;
-  reloadOrchestratorLogic: boolean;
 }
 
 function requireNonEmptyUniqueValues(values: readonly string[], label: string) {
@@ -70,29 +48,18 @@ function requireNonEmptyUniqueValues(values: readonly string[], label: string) {
 export default class WorkbenchHarnessController {
   private readonly adapters: readonly WorkbenchHarnessAdapter[];
   private readonly adaptersById: ReadonlyMap<WorkbenchHarness, WorkbenchHarnessAdapter>;
-  private readonly reloadScopes: ReadonlyMap<string, WorkbenchHarness>;
 
   constructor(adapters: readonly WorkbenchHarnessAdapter[]) {
     if (!adapters.length) throw new Error("At least one Workbench harness adapter is required.");
     const adaptersById = new Map<WorkbenchHarness, WorkbenchHarnessAdapter>();
-    const reloadScopes = new Map<string, WorkbenchHarness>();
     for (const adapter of adapters) {
       if (adaptersById.has(adapter.id)) throw new Error(`Workbench harness ${adapter.id} is registered more than once.`);
       requireNonEmptyUniqueValues(adapter.serverMethods, `Workbench harness ${adapter.id} server methods`);
-      if (adapter.reload.kind === "scoped") {
-        const scopes = requireNonEmptyUniqueValues(adapter.reload.scopes.map(({ scope }) => scope), `Workbench harness ${adapter.id} reload scopes`);
-        for (const scope of scopes) {
-          const owner = reloadScopes.get(scope);
-          if (owner) throw new Error(`Workbench reload scope ${scope} is registered by both ${owner} and ${adapter.id}.`);
-          reloadScopes.set(scope, adapter.id);
-        }
-      }
       adaptersById.set(adapter.id, adapter);
     }
     if (!adaptersById.has("codex")) throw new Error("The default Codex harness adapter is required.");
     this.adapters = [...adapters];
     this.adaptersById = adaptersById;
-    this.reloadScopes = reloadScopes;
   }
 
   listHarnesses() {
@@ -146,45 +113,6 @@ export default class WorkbenchHarnessController {
     const recovery = this.getAdapter(harness).recovery;
     if (recovery.kind !== "turn") throw new Error(`Manual thread resume is unavailable for ${harness} threads.`);
     await recovery.resumeThread(threadId);
-  }
-
-  planReload(scopes: readonly string[]): WorkbenchHarnessReloadPlan {
-    const requested = new Set(requireNonEmptyUniqueValues(scopes, "Workbench provider reload scopes"));
-    const actions: Array<{ harness: WorkbenchHarness; scopes: readonly string[] }> = [];
-    let refreshWorkbenchPromptFiles = false;
-    let reloadOrchestratorLogic = false;
-    for (const adapter of this.adapters) {
-      if (adapter.reload.kind !== "scoped") continue;
-      const selected = adapter.reload.scopes.filter(({ scope }) => requested.delete(scope));
-      if (!selected.length) continue;
-      refreshWorkbenchPromptFiles ||= selected.some((scope) => scope.refreshWorkbenchPromptFiles);
-      reloadOrchestratorLogic ||= selected.some((scope) => scope.reloadOrchestratorLogic);
-      actions.push({ harness: adapter.id, scopes: selected.map(({ scope }) => scope) });
-    }
-    const unknown = requested.values().next().value as string | undefined;
-    if (unknown) throw new Error(`Unknown Workbench provider reload scope: ${unknown}.`);
-    return { actions, refreshWorkbenchPromptFiles, reloadOrchestratorLogic };
-  }
-
-  async executeReloadPlan(plan: WorkbenchHarnessReloadPlan) {
-    const currentPlan = this.planReload(plan.actions.flatMap(({ scopes }) => scopes));
-    if (
-      currentPlan.refreshWorkbenchPromptFiles !== plan.refreshWorkbenchPromptFiles
-      || currentPlan.reloadOrchestratorLogic !== plan.reloadOrchestratorLogic
-    ) {
-      throw new Error("Workbench harness reload preparation changed during the feature reload.");
-    }
-    for (const action of currentPlan.actions) {
-      const adapter = this.getAdapter(action.harness);
-      if (adapter.reload.kind !== "scoped") throw new Error(`Workbench harness ${action.harness} no longer supports reload actions.`);
-      const registeredScopes = new Set(adapter.reload.scopes.map(({ scope }) => scope));
-      for (const scope of action.scopes) {
-        if (!registeredScopes.has(scope) || this.reloadScopes.get(scope) !== action.harness) {
-          throw new Error(`Workbench reload scope ${scope} is no longer registered by ${action.harness}.`);
-        }
-      }
-      await adapter.reload.execute(action.scopes);
-    }
   }
 
   private getAdapter(harness: WorkbenchHarness) {

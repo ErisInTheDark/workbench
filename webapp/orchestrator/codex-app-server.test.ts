@@ -32,10 +32,12 @@ function deferred() {
   return { promise, resolve };
 }
 
-test("managed Codex disables native subagents without process-scoped MCP config", () => {
+test("managed Codex disables native subagents and installs the apply_patch claim hook", () => {
   assert.deepEqual(getCodexAppServerArgs(), [
     "--config",
     "features.multi_agent=false",
+    "--config",
+    "hooks.PreToolUse=[{matcher='^apply_patch$',hooks=[{type='command',command='wb __hook apply-patch-claim'}]}]",
     "app-server",
     "--listen",
     "stdio://",

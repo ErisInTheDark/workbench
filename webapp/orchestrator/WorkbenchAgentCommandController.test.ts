@@ -41,12 +41,104 @@ function subagentCommandBody(args: string[]) {
   return body.toString();
 }
 
+function applyPatchHookBody(command: string, sessionId = "parent-thread", callerThreadId: string | null = "parent-thread") {
+  const body = new URLSearchParams(agentCommandBody(["__hook", "apply-patch-claim"]));
+  if (callerThreadId) body.set("callerThreadId", callerThreadId);
+  body.set("callerHarness", "codex");
+  body.set("hookInput", JSON.stringify({
+    cwd: process.cwd(),
+    session_id: sessionId,
+    tool_input: { command },
+    tool_name: "apply_patch",
+  }));
+  return body.toString();
+}
+
 function createBrowsePort(executeBrowseRequest: (body: Buffer, signal: AbortSignal) => Promise<Response>) {
   return {
     executeBrowseRequest,
     executeSessionRequest: async () => Response.json({ generatedAt: new Date(0).toISOString(), projectId: null, sessions: [] }),
   };
 }
+
+test("answers the private apply_patch hook from the active claim owner", async () => {
+  const checkedPaths: string[][] = [];
+  const checkedThreadIds: string[] = [];
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      checkApplyPatchClaims: async ({ paths, threadId }) => {
+        checkedPaths.push(paths);
+        checkedThreadIds.push(threadId);
+        return paths.some((filePath) => filePath.endsWith("unclaimed.ts"))
+          ? { allowed: false, uncoveredPaths: paths.filter((filePath) => filePath.endsWith("unclaimed.ts")) }
+          : { allowed: true, uncoveredPaths: [] };
+      },
+    },
+  );
+  const server = await startController(controller);
+  try {
+    const request = async (filePath: string) => await fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: applyPatchHookBody(`*** Begin Patch\n*** Update File: ${filePath}\n@@\n-old\n+new\n*** End Patch`, "provider-thread", null),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    const allowed = await request("claimed.ts");
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(JSON.parse(await allowed.text()), {
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+    });
+    const denied = await request("unclaimed.ts");
+    assert.equal(denied.status, 200);
+    assert.deepEqual(JSON.parse(await denied.text()), {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: `apply_patch denied. No active Git arc claim covers ${checkedPaths[1]![0]}. Claim every path before editing.`,
+      },
+    });
+    assert.deepEqual(checkedThreadIds, ["provider-thread", "provider-thread"]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("returns Codex deny decisions for mismatched identity, malformed input, and claim-read failure", async () => {
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      checkApplyPatchClaims: async () => { throw new Error("claim registry unavailable"); },
+    },
+  );
+  const server = await startController(controller);
+  try {
+    const send = async (body: string) => await fetch(`${server.origin}/orchestrator/agent-command`, {
+      body,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    const mismatch = await send(applyPatchHookBody("*** Begin Patch\n*** Delete File: claimed.ts\n*** End Patch", "different-thread"));
+    assert.equal(mismatch.status, 200);
+    assert.match((await mismatch.json() as { hookSpecificOutput: { permissionDecisionReason: string } }).hookSpecificOutput.permissionDecisionReason, /session_id does not match/u);
+    const unavailable = await send(applyPatchHookBody("*** Begin Patch\n*** Delete File: claimed.ts\n*** End Patch"));
+    assert.equal(unavailable.status, 200);
+    assert.match((await unavailable.json() as { hookSpecificOutput: { permissionDecisionReason: string } }).hookSpecificOutput.permissionDecisionReason, /claim registry unavailable/u);
+    const malformed = new URLSearchParams(agentCommandBody(["__hook", "apply-patch-claim"]));
+    malformed.set("callerHarness", "codex");
+    malformed.set("hookInput", "not json");
+    const malformedResponse = await send(malformed.toString());
+    assert.equal(malformedResponse.status, 200);
+    const malformedDecision = await malformedResponse.json() as { hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string } };
+    assert.equal(malformedDecision.hookSpecificOutput.permissionDecision, "deny");
+    assert.match(malformedDecision.hookSpecificOutput.permissionDecisionReason, /not valid JSON/u);
+  } finally {
+    await server.close();
+  }
+});
 
 test("dispatches Browse commands directly without an internal fetch and preserves response adaptation", async () => {
   let receivedBody = "";

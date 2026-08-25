@@ -8,7 +8,7 @@ import type { OrchestratorReloadScope } from "../lib/types";
 import ReloadableWorkbenchOrchestratorReloadController from "./ReloadableWorkbenchOrchestratorReloadController";
 import WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReloadController";
 
-test("coordinator self-reload executes other scopes first and completes through fresh code", async () => {
+test("coordinator self-reload executes one graph union and completes through fresh queue code", async () => {
   const executed: OrchestratorReloadScope[][] = [];
   const hardReloadEffects: string[] = [];
   let reloads = 0;
@@ -39,7 +39,7 @@ test("coordinator self-reload executes other scopes first and completes through 
   }, new AbortController().signal);
   assert.equal(response.state, "succeeded");
   assert.equal(reloads, 1);
-  assert.deepEqual(executed, [["server:core"]]);
+  assert.deepEqual(executed, [["server:core", "server:reloader"]]);
   boundary.admitHardReload();
   await boundary.beginHardReload();
   assert.deepEqual(hardReloadEffects, ["notify", "exit"]);
@@ -69,4 +69,3 @@ test("failed coordinator replacement restores the previous generation and reject
   }, new AbortController().signal), /fresh module failed/u);
   assert.equal(reloads, 1);
 });
-

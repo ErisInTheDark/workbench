@@ -71,7 +71,7 @@ function isPendingInternalResponse(pending: PendingResponse): pending is Pending
   return pending.internal === true;
 }
 
-type CodexStdioBridgeOptions = {
+export type CodexStdioBridgeOptions = {
   appServer: CodexAppServer;
   bridgeUrl: string;
   handleWorkbenchRequest: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
@@ -323,20 +323,29 @@ function asMutableParamsRecord(params: unknown) {
     : {};
 }
 
+function buildWorkbenchManagedThreadConfig(
+  params: Record<string, unknown>,
+  overrides: Record<string, unknown>,
+) {
+  return {
+    ...asRecord(params.config),
+    bypass_hook_trust: true,
+    ...overrides,
+  };
+}
+
 function buildWorkbenchOwnedPromptParams(
   params: Record<string, unknown>,
   promptInstructions: WorkbenchPromptInstructions,
 ) {
-  const existingConfig = asRecord(params.config);
   return {
     ...params,
     baseInstructions: promptInstructions.baseInstructions,
     developerInstructions: promptInstructions.developerInstructions,
-    config: {
-      ...existingConfig,
+    config: buildWorkbenchManagedThreadConfig(params, {
       instructions: "",
       developer_instructions: "",
-    },
+    }),
     personality: "none",
   };
 }
@@ -345,14 +354,12 @@ function buildWorkbenchOwnedDeveloperInstructionParams(
   params: Record<string, unknown>,
   developerInstructions: string | null,
 ) {
-  const existingConfig = asRecord(params.config);
   return {
     ...params,
     developerInstructions,
-    config: {
-      ...existingConfig,
+    config: buildWorkbenchManagedThreadConfig(params, {
       developer_instructions: "",
-    },
+    }),
   };
 }
 

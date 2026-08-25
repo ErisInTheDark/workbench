@@ -1,9 +1,11 @@
 /*
  * Exports:
  * - OrchestratorReloadableModules: helper modules consumed dynamically by persistent provider bridges. Keywords: bridge, module, reload.
- * - OrchestratorFeatures/OrchestratorFeatureContext/OrchestratorProviderNotification: typed stable-to-reloadable feature contract. Keywords: registry, ports, lifecycle.
+ * - OrchestratorProviderNotification: provider event routed into the core node. Keywords: provider, notification, thread state.
+ * - OrchestratorFeatureContext: stable process ports supplied to graph node factories. Keywords: registry, ports, lifecycle.
+ * - OrchestratorFeatures: feature-key contract owned across graph nodes. Keywords: ownership, lookup, graph.
  * - createWorktreeGitTransitions: adapt resolved worktree paths into canonical keys for the persistent transition coordinator. Keywords: git, worktree, transition, reload.
- * - createOrchestratorFeatureGeneration: construct the ordered reloadable feature graph and own start/disposal/notification dispatch. Keywords: feature generation, dependency order.
+ * - createOrchestratorFeatureNodes: declare the complete reloadable feature graph. Keywords: node, scope, dependency, lifecycle.
  */
 import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
@@ -12,14 +14,26 @@ import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest, Workbenc
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
 import BrowseSessionCleanupSupervisor, { type BrowseSessionCleanupSupervisorOptions } from "./BrowseSessionCleanupSupervisor";
+import type { WorkbenchBrowseProjectIdResolver, WorkbenchBrowseProjectResolver } from "../lib/workbench/browse/WorkbenchBrowseRuntime";
+import type CodexAppServer from "./CodexAppServer";
+import type CodexStdioBridge from "./CodexStdioBridge";
+import type { CodexStdioBridgeOptions, CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import CodexHealthMonitor, { type CodexHealthMonitorOptions } from "./CodexHealthMonitor";
 import NextDevHealthSupervisor, { type NextDevHealthSupervisorOptions } from "./NextDevHealthSupervisor";
-import type { OrchestratorFeatureGeneration, OrchestratorFeatureLease } from "./OrchestratorFeatureHost";
+import type { OrchestratorFeatureLease, OrchestratorFeatureNodeDefinition } from "./OrchestratorFeatureHost";
+import type OpenCodeAppServer from "./OpenCodeAppServer";
+import type { OpenCodeAppServerOptions } from "./OpenCodeAppServer";
+import type { OpenCodeBridge, OpenCodeBridgeOptions, OpenCodeBridgeState } from "./opencode-bridge";
+import type WorkbenchBrowseController from "./WorkbenchBrowseController";
+import type { WorkbenchBrowseResultCallbacks } from "./WorkbenchBrowseResultController";
+import { createOrchestratorProviderFeatureNodes } from "./orchestrator-provider-feature-nodes";
+import { createOrchestratorRuntimeFeatureNodes, PROCESS_FEATURE_NODE_ID } from "./orchestrator-runtime-feature-nodes";
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
+import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS, WORKBENCH_CORE_FEATURE_NODE_ID } from "./WorkbenchCoreFeature";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
-import WorkbenchHarnessController, { type WorkbenchHarnessAdapter, type WorkbenchHarnessReloadScope, type WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
+import WorkbenchHarnessController, { type WorkbenchHarnessAdapter, type WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import WorkbenchLegacyMigrationSourceController, { readLegacyMigrationSourceConfig } from "./WorkbenchLegacyMigrationSourceController";
 import WorkbenchOrchestratorHttpRouter from "./WorkbenchOrchestratorHttpRouter";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
@@ -49,12 +63,20 @@ export type OrchestratorReloadableModules = {
 export interface OrchestratorProviderNotification { harness: HarnessKind; notification: JsonRpcNotification }
 
 export interface OrchestratorFeatureContext {
+  advanceMcpGeneration(): void;
   browseCleanupOptions: BrowseSessionCleanupSupervisorOptions;
+  browseProjectResolvers: {
+    resolveProjectById: WorkbenchBrowseProjectIdResolver;
+    resolveProjectFromCwd: WorkbenchBrowseProjectResolver;
+  };
+  browseResultCallbacks: WorkbenchBrowseResultCallbacks;
   codexHealthOptions: CodexHealthMonitorOptions;
   codexBridgeUrl: string;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeBrowseSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
-  getCodexReadiness(): Promise<void> | null;
+  codexAppServerOptions: Omit<ConstructorParameters<typeof CodexAppServer>[0], "onFatalExit" | "onMessage">;
+  createCodexBridgeOptions(appServer: CodexAppServer, initialState?: CodexStdioBridgeReloadState): CodexStdioBridgeOptions;
+  openCodeBridgeOptions: Omit<OpenCodeBridgeOptions, "appServer" | "getReloadableModules" | "initialState">;
   harnessPorts: Record<WorkbenchHarness, WorkbenchHarnessRuntimePort>;
   installSubagentRelationship(record: WorkbenchSubagentRelationship): Promise<void>;
   legacyMigrationProjectRoot: string;
@@ -64,14 +86,41 @@ export interface OrchestratorFeatureContext {
   notifyReloadEligibilityChanged(): void;
   notifyThreadLifecycle(projectId: string, entry: import("../lib/workbench/thread/thread-state").WorkbenchThreadSidebarEntry): void;
   publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
+  refreshWorkbenchPromptFiles(): Promise<void>;
+  onCodexFatalExit(reason: string, bridge: CodexStdioBridge | null): void;
+  onCodexBridgeActivated(restartedAppServer: boolean): Promise<void>;
+  onCodexBridgeReady(bridge: CodexStdioBridge): Promise<void>;
+  onCodexBridgeUnavailable(restartingAppServer: boolean): void;
+  openCodeAppServerOptions: OpenCodeAppServerOptions;
+  reloadClient(): Promise<void>;
   requestOrchestratorReload(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   threadTransitions: WorkbenchThreadTransitionCoordinator;
+}
+
+export interface OrchestratorCodexAppServerRuntime {
+  appServer: CodexAppServer;
+  attachBridge(bridge: CodexStdioBridge): void;
+  detachBridge(bridge: CodexStdioBridge): Promise<CodexStdioBridgeReloadState>;
+  isTransitioning(): boolean;
+  isAvailable(): boolean;
+}
+
+export interface OrchestratorBrowseExecution {
+  cleanupStaleInactiveSessions(options: Parameters<WorkbenchBrowseController["cleanupStaleInactiveSessions"]>[0]): Promise<void>;
+  executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
+  executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
+  handleBrowseHttpRequest: WorkbenchBrowseController["handleBrowseHttpRequest"];
+  handleSessionsHttpRequest: WorkbenchBrowseController["handleSessionsHttpRequest"];
+  initialize(): Promise<void>;
 }
 
 export interface OrchestratorFeatures {
   agentCommand: WorkbenchAgentCommandController;
   bridgeRequest: WorkbenchBridgeRequestController;
+  browseExecution: OrchestratorBrowseExecution;
   browseSessionCleanup: BrowseSessionCleanupSupervisor;
+  codexAppServer: OrchestratorCodexAppServerRuntime;
+  codexBridge: CodexStdioBridge;
   codexHealth: CodexHealthMonitor;
   gitArc: WorkbenchGitArcFeature;
   harnesses: WorkbenchHarnessController;
@@ -79,6 +128,8 @@ export interface OrchestratorFeatures {
   mcp: WorkbenchAgentMcpController;
   modules: OrchestratorReloadableModules;
   nextDevHealth: NextDevHealthSupervisor;
+  openCodeAppServer: OpenCodeAppServer;
+  openCodeBridge: OpenCodeBridge;
   orchestratorHttp: WorkbenchOrchestratorHttpRouter;
   projectCatalog: WorkbenchProjectCatalogController;
   projectSnapshot: WorkbenchProjectSnapshotController;
@@ -103,15 +154,6 @@ function requireTurnRecovery(port: WorkbenchHarnessRuntimePort, harness: Workben
   };
 }
 
-function requireScopedReload(
-  port: WorkbenchHarnessRuntimePort,
-  harness: WorkbenchHarness,
-  scopes: readonly WorkbenchHarnessReloadScope[],
-): WorkbenchHarnessAdapter["reload"] {
-  if (!port.executeReload) throw new Error(`Workbench harness ${harness} is missing its declared reload executor.`);
-  return { execute: port.executeReload, kind: "scoped", scopes };
-}
-
 function createHarnessAdapters(ports: Record<WorkbenchHarness, WorkbenchHarnessRuntimePort>): WorkbenchHarnessAdapter[] {
   return [
     {
@@ -120,10 +162,6 @@ function createHarnessAdapters(ports: Record<WorkbenchHarness, WorkbenchHarnessR
       id: "codex",
       internal: ports.codex,
       recovery: requireTurnRecovery(ports.codex, "codex"),
-      reload: requireScopedReload(ports.codex, "codex", [
-        { refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: false, scope: "server:codex" },
-        { refreshWorkbenchPromptFiles: false, reloadOrchestratorLogic: false, scope: "harness:codex" },
-      ]),
       serverMethods: [
         "workbench/composerProfiles/read",
         "workbench/composerProfiles/importLegacy",
@@ -139,7 +177,6 @@ function createHarnessAdapters(ports: Record<WorkbenchHarness, WorkbenchHarnessR
       id: "copilot",
       internal: ports.copilot,
       recovery: { kind: "none" },
-      reload: { kind: "none" },
       serverMethods: ["thread/name/set"],
     },
     {
@@ -148,10 +185,6 @@ function createHarnessAdapters(ports: Record<WorkbenchHarness, WorkbenchHarnessR
       id: "opencode",
       internal: ports.opencode,
       recovery: requireTurnRecovery(ports.opencode, "opencode"),
-      reload: requireScopedReload(ports.opencode, "opencode", [
-        { refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: false, scope: "server:opencode" },
-        { refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: true, scope: "harness:opencode" },
-      ]),
       serverMethods: ["thread/name/set"],
     },
   ];
@@ -179,10 +212,10 @@ export function createWorktreeGitTransitions(transitions: Pick<WorkbenchThreadTr
   };
 }
 
-export function createOrchestratorFeatureGeneration(
+function createWorkbenchCoreFeature(
   context: OrchestratorFeatureContext,
   lease: OrchestratorFeatureLease,
-): OrchestratorFeatureGeneration<OrchestratorFeatures, OrchestratorProviderNotification> {
+) {
   const modules = createModules();
   const harnesses = new WorkbenchHarnessController(createHarnessAdapters(context.harnessPorts));
   const projectCatalog = new WorkbenchProjectCatalogController();
@@ -249,6 +282,7 @@ export function createOrchestratorFeatureGeneration(
   });
   const bridgeRequest = new WorkbenchBridgeRequestController({ harnesses });
   const agentCommand = new WorkbenchAgentCommandController(context.localWorkbenchOrigin, context.localOrchestratorOrigin, {
+    checkApplyPatchClaims: async ({ cwd, harness, paths, threadId }) => await gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths),
     executeBrowseRequest: context.executeBrowseRequest,
     executeGitArcRequest: async (body) => await gitArc.executeRequest(body),
     executeSessionRequest: context.executeBrowseSessionRequest,
@@ -256,21 +290,6 @@ export function createOrchestratorFeatureGeneration(
     requestSubagent: async (request) => request.method?.startsWith("workbench/thread/")
       ? await threadState.handleManagedThreadRequest(request)
       : await subagents.handleRequest(request),
-  });
-  const mcp = new WorkbenchAgentMcpController({
-    executeCommand: async (request, signal) => await agentCommand.executeStructuredRequest(request, signal),
-    orchestratorOrigin: context.localOrchestratorOrigin,
-    requestCodex: async (request) => await harnesses.request("codex", request),
-  });
-  const orchestratorHttp = new WorkbenchOrchestratorHttpRouter({
-    agentCommand,
-    bridgeRequest,
-    gitArc,
-    legacyMigrationSource,
-    mcp,
-    projectCatalog,
-    projectSnapshot,
-    threadGit,
   });
   const browseSessionCleanup = new BrowseSessionCleanupSupervisor({
     ...context.browseCleanupOptions,
@@ -293,9 +312,9 @@ export function createOrchestratorFeatureGeneration(
     isShuttingDown: () => !lease.isCurrent() || context.codexHealthOptions.isShuttingDown(),
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
-  const features: OrchestratorFeatures = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, gitArc, harnesses, legacyMigrationSource, mcp, modules, nextDevHealth, orchestratorHttp, projectCatalog, projectSnapshot, subagents, threadGit, threadState };
-  return {
-    beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
+  const features: Pick<OrchestratorFeatures, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = { agentCommand, bridgeRequest, browseSessionCleanup, codexHealth, gitArc, harnesses, legacyMigrationSource, modules, nextDevHealth, projectCatalog, projectSnapshot, subagents, threadGit, threadState };
+  return new WorkbenchCoreFeature({
+    beginRuntimeDrain: () => { subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
       reportPhase("codex health disposal");
       codexHealth.dispose();
@@ -311,15 +330,8 @@ export function createOrchestratorFeatureGeneration(
       projectSnapshot.dispose();
       reportPhase("project catalog disposal");
       projectCatalog.dispose();
-      reportPhase("MCP runtime owner release");
-      mcp.releaseRuntimeOwner();
     },
-    expireRuntimeDrain: () => { mcp.expireRuntimeDrain(); },
-    get: (key) => features[key],
-    listRuntimeDrainPending: () => mcp.listRuntimeDrainPending().map(({ ageMs, policy, toolName }) => ({
-      ageMs,
-      label: `mcp ${toolName}${policy ? ` [${policy}]` : ""}`,
-    })),
+    features,
     observeProviderNotification: async ({ harness, notification }) => {
       if (lease.isCurrent()) await threadState.observeProviderNotification(harness, notification);
     },
@@ -328,8 +340,67 @@ export function createOrchestratorFeatureGeneration(
       await subagents.start();
       browseSessionCleanup.start();
       nextDevHealth.start();
-      const readiness = context.getCodexReadiness();
-      if (readiness) void readiness.then(() => { if (lease.isCurrent()) codexHealth.start({ armed: true }); }).catch(() => undefined);
     },
-  };
+  });
+}
+
+export function createOrchestratorFeatureNodes(
+  context: OrchestratorFeatureContext,
+): readonly OrchestratorFeatureNodeDefinition<OrchestratorFeatureContext, OrchestratorFeatures, OrchestratorProviderNotification>[] {
+  return [
+    ...createOrchestratorRuntimeFeatureNodes(context).slice(0, 1),
+    {
+      create: (_context, { lease }) => createWorkbenchCoreFeature(context, lease),
+      dependencies: [PROCESS_FEATURE_NODE_ID],
+      featureKeys: WORKBENCH_CORE_FEATURE_KEYS,
+      id: WORKBENCH_CORE_FEATURE_NODE_ID,
+      lifecycle: "atomic",
+      scope: "server:core",
+    },
+    {
+      create: (_context, { get, mode }) => {
+        const agentCommand = get("agentCommand");
+        const harnesses = get("harnesses");
+        const mcp = new WorkbenchAgentMcpController({
+          executeCommand: async (request, signal) => await agentCommand.executeStructuredRequest(request, signal),
+          orchestratorOrigin: context.localOrchestratorOrigin,
+          requestCodex: async (request) => await harnesses.request("codex", request),
+        });
+        const orchestratorHttp = new WorkbenchOrchestratorHttpRouter({
+          agentCommand,
+          bridgeRequest: get("bridgeRequest"),
+          gitArc: get("gitArc"),
+          legacyMigrationSource: get("legacyMigrationSource"),
+          mcp,
+          projectCatalog: get("projectCatalog"),
+          projectSnapshot: get("projectSnapshot"),
+          threadGit: get("threadGit"),
+        });
+        return {
+          activate: () => {
+            if (mode === "replacement") context.advanceMcpGeneration();
+          },
+          beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); },
+          dispose: (_reportPhase = () => undefined) => { mcp.releaseRuntimeOwner(); },
+          expireRuntimeDrain: () => { mcp.expireRuntimeDrain(); },
+          features: { mcp, orchestratorHttp },
+          listRuntimeDrainPending: () => mcp.listRuntimeDrainPending().map(({ ageMs, policy, toolName }) => ({
+            ageMs,
+            label: `mcp ${toolName}${policy ? ` [${policy}]` : ""}`,
+          })),
+          start: async () => {
+            if (mode !== "replacement") return;
+            await context.refreshWorkbenchPromptFiles();
+          },
+        };
+      },
+      dependencies: [WORKBENCH_CORE_FEATURE_NODE_ID],
+      featureKeys: ["mcp", "orchestratorHttp"],
+      id: "workbench-mcp",
+      lifecycle: "atomic",
+      scope: "server:mcp",
+    },
+    ...createOrchestratorProviderFeatureNodes(context),
+    ...createOrchestratorRuntimeFeatureNodes(context).slice(1),
+  ];
 }

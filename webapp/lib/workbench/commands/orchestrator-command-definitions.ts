@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   expandOrchestratorReloadScopes,
   ORCHESTRATOR_ALL_RELOAD_SCOPES,
+  ORCHESTRATOR_CLI_RELOAD_SCOPES,
   ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES,
 } from "../orchestrator-reload";
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
@@ -45,6 +46,7 @@ function parseReloadCliSelections(args: string[]) {
 }
 
 const requestableReloadScopes = z.array(z.enum(ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES)).min(1);
+const cliReloadScopes = z.array(z.enum(ORCHESTRATOR_CLI_RELOAD_SCOPES)).min(1);
 const reloadInput = z.object({
   scopes: requestableReloadScopes,
 }).strict();
@@ -69,9 +71,11 @@ const reload = {
   ...documentedReload,
   async buildRequestFromCli(args, context) {
     const parsed = parseReloadCliSelections(args);
-    if (!parsed.hard) return await documentedReload.buildRequestFromCli(args, context);
-    if (args.length !== 1) throw new Error("--hard must be requested by itself.");
-    return buildReloadRequest(["server:process"], context);
+    if (parsed.hard) {
+      if (args.length !== 1) throw new Error("--hard must be requested by itself.");
+      return buildReloadRequest(["server:process"], context);
+    }
+    return buildReloadRequest(cliReloadScopes.parse(expandOrchestratorReloadScopes(parsed.scopes)), context);
   },
 };
 

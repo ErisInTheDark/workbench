@@ -1,5 +1,7 @@
 /* No production exports. Tests protect workspace arc membership, root-qualified projection, repo deduplication, per-root proposals, and proposal-owned amendment routing. */
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
@@ -93,6 +95,68 @@ function createWorkspace(primary: string, secondary: string): AgentEndpointProje
     root: roots[0]!,
   };
 }
+
+test("active claims cover exact files and existing directory descendants across workspace roots", async (context) => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-claim-coverage-"));
+  context.after(async () => await rm(temporaryRoot, { force: true, recursive: true }));
+  const apiRoot = path.join(temporaryRoot, "api");
+  const webRoot = path.join(temporaryRoot, "web");
+  const apiSource = path.join(apiRoot, "src");
+  await mkdir(apiSource, { recursive: true });
+  await mkdir(webRoot, { recursive: true });
+  await writeFile(path.join(apiSource, "nested.ts"), "export {};\n", "utf8");
+  await writeFile(path.join(webRoot, "claimed.ts"), "export {};\n", "utf8");
+  const project = createWorkspace(apiRoot, webRoot);
+  const controller = new WorkbenchWorkspaceGitArcController(
+    new FakeLocalGitArcController() as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async (rootPath) => rootPath,
+  );
+  const identity = { cwd: apiRoot, harness: "codex" as const, threadId: "claim-thread" };
+  const plan = await controller.execute(project, {
+    action: "plan",
+    adoptPaths: [],
+    intentDescription: "Protect patch paths.",
+    intentName: "claim coverage",
+    paths: [],
+    roots: [
+      { adoptPaths: [], paths: ["src", "future.ts"], rootId: "api" },
+      { adoptPaths: [], paths: ["claimed.ts"], rootId: "web" },
+    ],
+    ...identity,
+  }) as unknown as { members: Array<{ checkpointCommit: string; rootId: string }> };
+  await controller.execute(project, {
+    action: "arcStart",
+    refs: plan.members.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })),
+    ...identity,
+  });
+
+  const covered = [
+    path.join(apiSource, "nested.ts"),
+    path.join(apiSource, "new.ts"),
+    path.join(apiRoot, "future.ts"),
+    path.join(webRoot, "claimed.ts"),
+  ];
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", identity.threadId, covered), {
+    allowed: true,
+    uncoveredPaths: [],
+  });
+  if (process.platform === "win32") {
+    assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", identity.threadId, covered.map((filePath) => filePath.toLowerCase())), {
+      allowed: true,
+      uncoveredPaths: [],
+    });
+  }
+  const uncovered = [path.join(apiRoot, "sibling.ts"), path.join(webRoot, "destination.ts"), path.join(temporaryRoot, "outside.ts")];
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", identity.threadId, uncovered), {
+    allowed: false,
+    uncoveredPaths: uncovered,
+  });
+  assert.deepEqual(await controller.checkActiveClaimPaths(project, "codex", "no-active-arc", covered), {
+    allowed: false,
+    uncoveredPaths: covered,
+  });
+});
 
 test("one workspace arc aggregates two repositories and keeps proposals root-specific", async () => {
   const apiRoot = "C:/workspace/api";

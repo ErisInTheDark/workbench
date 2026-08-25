@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests protect harness registration, routing, recovery, and pure reload planning. Keywords: harness, controller, reload, test.
+ * - No production exports; Node tests protect harness registration, routing, and recovery. Keywords: harness, controller, recovery, test.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -37,14 +37,6 @@ function createAdapter(id: WorkbenchHarness, calls: string[] = []): WorkbenchHar
       observeRequest: (request) => { calls.push(`recovery:${id}:${request.method}`); },
       resumeThread: async (threadId) => { calls.push(`resume:${id}:${threadId}`); },
     },
-    reload: id === "copilot" ? { kind: "none" } : {
-      execute: async (scopes) => { calls.push(`reload:${id}:${scopes.join(",")}`); },
-      kind: "scoped",
-      scopes: [
-        { refreshWorkbenchPromptFiles: true, reloadOrchestratorLogic: false, scope: `server:${id}` },
-        { refreshWorkbenchPromptFiles: id === "opencode", reloadOrchestratorLogic: id === "opencode", scope: `harness:${id}` },
-      ],
-    },
     serverMethods: id === "codex" ? ["thread/read", "codex/only"] : ["thread/read"],
   };
 }
@@ -60,18 +52,9 @@ function createController(calls: string[] = []) {
 test("rejects invalid duplicate registrations and requires the default Codex adapter", () => {
   assert.throws(() => new WorkbenchHarnessController([createAdapter("copilot")]), /default Codex/u);
   assert.throws(() => new WorkbenchHarnessController([createAdapter("codex"), createAdapter("codex")]), /registered more than once/u);
-  const codex = createAdapter("codex");
-  const opencode = createAdapter("opencode");
-  assert.equal(codex.reload.kind, "scoped");
-  const duplicateScopeOpenCode: WorkbenchHarnessAdapter = {
-    ...opencode,
-    reload: {
-      execute: async () => undefined,
-      kind: "scoped",
-      scopes: codex.reload.kind === "scoped" ? codex.reload.scopes : [],
-    },
-  };
-  assert.throws(() => new WorkbenchHarnessController([codex, duplicateScopeOpenCode]), /registered by both/u);
+  const duplicateMethods = createAdapter("codex");
+  duplicateMethods.serverMethods = ["thread/read", "thread/read"];
+  assert.throws(() => new WorkbenchHarnessController([duplicateMethods]), /duplicate values/u);
 });
 
 test("defaults absent browser routing to Codex and rejects explicit unknown harnesses", async () => {
@@ -102,35 +85,4 @@ test("dispatches internal, server, Browse, and recovery work through the registe
     "notification:opencode:turn/started",
     "resume:opencode:thread-one",
   ]);
-});
-
-test("plans reloads without effects, rejects unknown scopes, and executes against the current registration", async () => {
-  const calls: string[] = [];
-  const controller = createController(calls);
-  const plan = controller.planReload(["server:opencode", "server:codex"]);
-  assert.deepEqual(plan, {
-    actions: [
-      { harness: "codex", scopes: ["server:codex"] },
-      { harness: "opencode", scopes: ["server:opencode"] },
-    ],
-    refreshWorkbenchPromptFiles: true,
-    reloadOrchestratorLogic: false,
-  });
-  assert.deepEqual(calls, []);
-  assert.throws(() => controller.planReload(["unknown-bridge"]), /Unknown Workbench provider reload scope/u);
-  await controller.executeReloadPlan(plan);
-  assert.deepEqual(calls, ["reload:codex:server:codex", "reload:opencode:server:opencode"]);
-});
-
-test("coalesces one harness's bridge and server scopes into one reload execution", async () => {
-  const calls: string[] = [];
-  const controller = createController(calls);
-  const plan = controller.planReload(["server:opencode", "harness:opencode"]);
-  assert.deepEqual(plan, {
-    actions: [{ harness: "opencode", scopes: ["server:opencode", "harness:opencode"] }],
-    refreshWorkbenchPromptFiles: true,
-    reloadOrchestratorLogic: true,
-  });
-  await controller.executeReloadPlan(plan);
-  assert.deepEqual(calls, ["reload:opencode:server:opencode,harness:opencode"]);
 });

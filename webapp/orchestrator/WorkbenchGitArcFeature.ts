@@ -1,6 +1,8 @@
 /*
  * Exports:
  * - WorkbenchGitArcFeatureOptions: project resolution and stable transition ports for reloadable Git arc work. Keywords: git, arc, feature, orchestrator.
+ * - WorkbenchGitArcLifecycleState: active logical lifecycle plus derived reload scopes. Keywords: git, arc, lifecycle, reload.
+ * - WorkbenchGitArcPlanState: inactive logical plan plus derived reload scopes. Keywords: git, arc, plan, reload.
  * - default WorkbenchGitArcFeature: own typed Git arc HTTP/direct dispatch inside the reloadable feature graph. Keywords: git, arc, controller, reload, HTTP.
  */
 import type http from "node:http";
@@ -138,6 +140,11 @@ export default class WorkbenchGitArcFeature {
 
   async findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcActiveClaim | null> {
     return await this.controller.findActiveClaim({ cwd, harness, threadId });
+  }
+
+  async checkActiveClaimPaths(cwd: string, harness: WorkbenchHarness, threadId: string, paths: readonly string[]) {
+    const project = await this.resolveProject(cwd);
+    return await this.workspaceController.checkActiveClaimPaths(project, harness, threadId, paths);
   }
 
   async listActiveClaims(cwd: string): Promise<GitArcActiveClaim[]> {

@@ -10,11 +10,14 @@ import {
   type WorkbenchAgentCliRequest,
 } from "../lib/workbench/cli/workbench-agent-cli-commands";
 import { adaptWorkbenchAgentCliResponse } from "../lib/workbench/cli/workbench-agent-cli-responses";
+import { allowCodexApplyPatch, denyCodexApplyPatch, parseCodexApplyPatchClaimHook, type CodexApplyPatchClaimHookDecision } from "../lib/workbench/codex-apply-patch-claim-hook";
+import type { WorkbenchHarness } from "../lib/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
 interface WorkbenchAgentDirectPort {
+  checkApplyPatchClaims?: (request: { cwd: string; harness: WorkbenchHarness; paths: string[]; threadId: string }) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
@@ -138,6 +141,10 @@ export default class WorkbenchAgentCommandController {
         sendText(response, 400, "A valid Workbench agent command request is required.\n");
         return;
       }
+      if (argv.length === 2 && argv[0] === "__hook" && argv[1] === "apply-patch-claim") {
+        await this.handleApplyPatchClaimHook(form, callerHarness, callerThreadId, response);
+        return;
+      }
       const parsed = await parseWorkbenchAgentCliCommand(argv, {
         callerHarness,
         callerThreadId,
@@ -165,6 +172,33 @@ export default class WorkbenchAgentCommandController {
 
   async executeStructuredRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
     return await this.dispatchRequest(request, signal);
+  }
+
+  private async handleApplyPatchClaimHook(
+    form: URLSearchParams,
+    callerHarness: string,
+    callerThreadId: string | null,
+    response: http.ServerResponse,
+  ) {
+    let decision: CodexApplyPatchClaimHookDecision;
+    try {
+      if (callerHarness !== "codex") throw new Error("A managed Codex thread is required for the apply_patch claim hook.");
+      if (!this.direct.checkApplyPatchClaims) throw new Error("The apply_patch claim checker is not configured.");
+      const hook = parseCodexApplyPatchClaimHook(form.get("hookInput") ?? "");
+      if (callerThreadId && hook.sessionId !== callerThreadId) throw new Error("Codex hook session_id does not match the managed thread.");
+      const result = await this.direct.checkApplyPatchClaims({ cwd: hook.cwd, harness: "codex", paths: hook.paths, threadId: hook.sessionId });
+      decision = result.allowed
+        ? allowCodexApplyPatch()
+        : denyCodexApplyPatch(`apply_patch denied. No active Git arc claim covers ${result.uncoveredPaths.join(", ")}. Claim every path before editing.`);
+    } catch (error) {
+      decision = denyCodexApplyPatch(`apply_patch claim check failed. ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!response.destroyed && !response.writableEnded) {
+      response.statusCode = 200;
+      response.setHeader("Cache-Control", "no-store");
+      response.setHeader("Content-Type", "application/json; charset=utf-8");
+      response.end(`${JSON.stringify(decision)}\n`);
+    }
   }
 
   private buildRequestInit(request: WorkbenchAgentCliRequest, signal: AbortSignal): RequestInit {

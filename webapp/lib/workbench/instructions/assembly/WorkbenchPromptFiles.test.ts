@@ -119,3 +119,9 @@ test("Workbench instruction sources prefer typed MCP tools with one exact CLI fa
   assert.match(sources.join("\n"), /mcp__wb__subagent_message/u);
   assert.match(sources.join("\n"), /mcp__wb__browse_run/u);
 });
+
+test("orchestrator reload instructions describe dependant closure without advertising destructive scopes", () => {
+  const source = buildWorkbenchOrchestratorReloadInstructions({ harness: "codex", threadId: "thread-1", workbenchOrigin: "http://localhost" }) ?? "";
+  assert.match(source, /every transitive dependant exactly once/u);
+  assert.doesNotMatch(source, /harness:(?:codex|opencode)|server:process/u);
+});

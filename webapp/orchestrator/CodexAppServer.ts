@@ -31,6 +31,8 @@ export function getCodexAppServerArgs() {
   return [
     "--config",
     "features.multi_agent=false",
+    "--config",
+    "hooks.PreToolUse=[{matcher='^apply_patch$',hooks=[{type='command',command='wb __hook apply-patch-claim'}]}]",
     "app-server",
     "--listen",
     "stdio://",

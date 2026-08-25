@@ -7,6 +7,8 @@ import {
   getReloadScopesForPaths,
   normalizeOrchestratorReloadScopes,
   ORCHESTRATOR_ALL_RELOAD_SCOPES,
+  ORCHESTRATOR_CLI_RELOAD_SCOPES,
+  ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES,
   validateOrchestratorReloadScopeCombination,
 } from "./orchestrator-reload";
 
@@ -17,6 +19,17 @@ test("--all excludes external harness, process, and reloader scopes", () => {
   assert.equal(allScopes.includes("harness:opencode"), false);
   assert.equal(allScopes.includes("server:reloader"), false);
   assert.equal(allScopes.includes("server:mcp"), true);
+});
+
+test("agent requests expose safe scopes while explicit CLI requests retain destructive harness scopes", () => {
+  const requestableScopes: readonly string[] = ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES;
+  const cliScopes: readonly string[] = ORCHESTRATOR_CLI_RELOAD_SCOPES;
+  assert.equal(requestableScopes.includes("harness:codex"), false);
+  assert.equal(requestableScopes.includes("harness:opencode"), false);
+  assert.equal(requestableScopes.includes("server:process"), false);
+  assert.equal(cliScopes.includes("harness:codex"), true);
+  assert.equal(cliScopes.includes("harness:opencode"), true);
+  assert.equal(cliScopes.includes("server:process"), false);
 });
 
 test("normalization keeps canonical atoms and drops legacy or unknown projection values", () => {
@@ -37,7 +50,7 @@ test("source and directory touch paths derive additive reload scopes", () => {
   assert.deepEqual(getReloadScopesForPaths(["webapp/lib/workbench/commands/git-arc-command-definitions.ts"]), ["server:mcp", "client:all"]);
   assert.deepEqual(getReloadScopesForPaths(["webapp/orchestrator/WorkbenchBrowseController.ts"]), ["server:browse"]);
   assert.deepEqual(getReloadScopesForPaths(["webapp/orchestrator"]), [
-    "server:core", "server:browse", "server:codex", "server:mcp", "server:opencode", "server:reloader", "server:process",
+    "server:core", "server:browse", "server:codex", "server:mcp", "server:opencode", "server:reloader", "harness:codex", "harness:opencode", "server:process",
   ]);
   assert.deepEqual(getReloadScopesForPaths(["webapp/lib/workbench/orchestrator-reload.test.ts"]), []);
   assert.deepEqual(getReloadScopesForPaths([
@@ -46,6 +59,9 @@ test("source and directory touch paths derive additive reload scopes", () => {
     "webapp/orchestrator/WorkbenchSubagentStore.ts",
   ]), ["server:core"]);
   assert.deepEqual(getReloadScopesForPaths(["webapp/orchestrator/CodexStdioBridge.ts"]), ["server:codex"]);
+  assert.deepEqual(getReloadScopesForPaths(["webapp/orchestrator/CodexAppServer.ts"]), ["harness:codex"]);
+  assert.deepEqual(getReloadScopesForPaths(["webapp/orchestrator/OpenCodeAppServer.ts"]), ["harness:opencode"]);
+  assert.deepEqual(getReloadScopesForPaths(["webapp/lib/workbench/cli/workbench-agent-cli.sh"]), ["server:process"]);
   assert.deepEqual(getReloadScopesForPaths(["webapp/orchestrator/index.ts"]), ["server:process"]);
 });
 

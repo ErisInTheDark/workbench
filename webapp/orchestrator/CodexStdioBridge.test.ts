@@ -366,7 +366,7 @@ test("caller cancellation clears a pending internal app-server response", async 
   }
 });
 
-test("managed thread starts, resumes, and forks receive wb MCP config without replacing caller config", async () => {
+test("managed thread starts, resumes, and forks receive runtime policy and wb MCP config without replacing caller config", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-mcp-config-test-"));
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
@@ -388,6 +388,7 @@ test("managed thread starts, resumes, and forks receive wb MCP config without re
         method,
         params: {
           config: {
+            bypass_hook_trust: false,
             existing_setting: "preserved",
             mcp_servers: { docs: { url: "https://example.com/mcp" } },
           },
@@ -397,6 +398,7 @@ test("managed thread starts, resumes, and forks receive wb MCP config without re
       }, method);
       const config = (result.params as { config: Record<string, unknown> }).config;
       assert.equal(config.existing_setting, "preserved");
+      assert.equal(config.bypass_hook_trust, true);
       assert.deepEqual((config.mcp_servers as Record<string, unknown>).docs, { url: "https://example.com/mcp" });
       const wb = (config.mcp_servers as { wb: Record<string, unknown> }).wb;
       const mcpUrl = new URL(String(wb.url));
@@ -414,6 +416,12 @@ test("managed thread starts, resumes, and forks receive wb MCP config without re
       });
     }
     assert.equal(clientScopes.size, 3);
+
+    const unmarked = await owner.withWorkbenchPromptInstructions({
+      method: "thread/start",
+      params: { config: { bypass_hook_trust: false, existing_setting: "preserved" } },
+    }, "thread/start");
+    assert.deepEqual(unmarked.params, { config: { bypass_hook_trust: false, existing_setting: "preserved" } });
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });

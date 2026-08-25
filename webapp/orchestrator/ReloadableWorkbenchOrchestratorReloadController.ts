@@ -109,8 +109,7 @@ export default class ReloadableWorkbenchOrchestratorReloadController {
       await this.options.executeScopes(scopes);
       return;
     }
-    const ordinaryScopes = scopes.filter((scope) => scope !== "server:reloader");
-    if (ordinaryScopes.length) await this.options.executeScopes(ordinaryScopes);
+    await this.options.executeScopes(scopes);
     const previous = this.current;
     const state = previous.detachForReload();
     try {

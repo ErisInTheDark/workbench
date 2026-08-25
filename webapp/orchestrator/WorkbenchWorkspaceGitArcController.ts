@@ -1,8 +1,12 @@
 /*
  * Exports:
  * - default WorkbenchWorkspaceGitArcController: aggregate repo-local Git arc members, route proposal-owned amendments, and prune thread history across one workspace lifecycle. Keywords: git, arc, workspace, multi-root, proposal, retention.
- * - WorkspaceGitArcLifecycleState/WorkspaceGitArcPlanState: expose deterministic logical projections with repo-local member truth. Keywords: git, arc, member, projection.
+ * - WorkspaceGitArcMemberState: active repo-local member plus root identity. Keywords: git, arc, active, member.
+ * - WorkspaceGitArcLifecycleState: active logical workspace projection. Keywords: git, arc, lifecycle, projection.
+ * - WorkspaceGitArcPlanMemberState: planned repo-local member plus root identity. Keywords: git, arc, plan, member.
+ * - WorkspaceGitArcPlanState: inactive logical workspace projection. Keywords: git, arc, plan, projection.
  */
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { ResolvedProjectRoot } from "../lib/project";
@@ -122,6 +126,34 @@ export default class WorkbenchWorkspaceGitArcController {
   async listActiveClaims(project: AgentEndpointProjectResolution) {
     const states = await this.listLifecycleStates(project);
     return states.filter((state) => state.phase === "active");
+  }
+
+  async checkActiveClaimPaths(
+    project: AgentEndpointProjectResolution,
+    harness: WorkbenchHarness,
+    threadId: string,
+    absolutePaths: readonly string[],
+  ) {
+    const lifecycle = await this.findLifecycleState(project, harness, threadId);
+    if (!lifecycle || lifecycle.phase !== "active") return { allowed: false, uncoveredPaths: [...absolutePaths] };
+    const roots = [...project.project.roots].sort((left, right) => right.root.length - left.root.length);
+    const directoryClaims = new Set<string>();
+    for (const claimedPath of lifecycle.claimedPaths) {
+      const parsed = this.parseRootPath(project, claimedPath, project.root.id);
+      try {
+        if ((await fs.stat(parsed.absolute)).isDirectory()) directoryClaims.add(comparable(parsed.absolute));
+      } catch {
+        // Missing claims cover only their exact path.
+      }
+    }
+    const claims = lifecycle.claimedPaths.map((claimedPath) => comparable(this.parseRootPath(project, claimedPath, project.root.id).absolute));
+    const uncoveredPaths = absolutePaths.filter((candidate) => {
+      const absolute = comparable(candidate);
+      const insideWorkspace = roots.some((root) => isInside(absolute, root.root));
+      if (!insideWorkspace) return true;
+      return !claims.some((claim) => absolute === claim || (directoryClaims.has(claim) && isInside(absolute, claim)));
+    });
+    return { allowed: uncoveredPaths.length === 0, uncoveredPaths };
   }
 
   async releaseActiveClaim(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {

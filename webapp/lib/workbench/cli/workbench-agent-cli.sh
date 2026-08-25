@@ -26,6 +26,9 @@ esac
 response_file="$(mktemp "${TMPDIR:-/tmp}/workbench-agent-response.XXXXXX")" || exit 1
 cleanup() { rm -f -- "$response_file"; }
 trap cleanup EXIT
+allow_unavailable_claim_hook() {
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
+}
 
 curl_args=(
   --silent
@@ -40,14 +43,29 @@ curl_args=(
   --data-urlencode "callerHarness=${WORKBENCH_HARNESS:-codex}"
   --data-urlencode "workbenchOrigin=$WORKBENCH_ORIGIN"
 )
+hook_mode=0
+if [[ "$#" -eq 0 && "${WORKBENCH_APPLY_PATCH_CLAIM_HOOK:-}" == "1" ]]; then
+  hook_mode=1
+  curl_args+=(--data-urlencode "arg=__hook" --data-urlencode "arg=apply-patch-claim")
+elif [[ "${1:-}" == "__hook" && "${2:-}" == "apply-patch-claim" && "$#" -eq 2 ]]; then
+  hook_mode=1
+fi
 for argument in "$@"; do
   curl_args+=(--data-urlencode "arg=$argument")
 done
+if (( hook_mode == 1 )); then
+  curl_args+=(--connect-timeout 2 --max-time 10)
+  curl_args+=(--data-urlencode "hookInput@-")
+fi
 
 http_status="$(curl "${curl_args[@]}" "$WORKBENCH_ORIGIN/orchestrator/agent-command")"
 curl_status=$?
 if (( curl_status != 0 )); then
   [[ -s "$response_file" ]] && cat "$response_file" >&2
+  if (( hook_mode == 1 )); then
+    allow_unavailable_claim_hook
+    exit 0
+  fi
   exit "$curl_status"
 fi
 
@@ -56,4 +74,8 @@ if [[ "$http_status" =~ ^2 ]]; then
   exit 0
 fi
 cat "$response_file" >&2
+if (( hook_mode == 1 )); then
+  allow_unavailable_claim_hook
+  exit 0
+fi
 exit 1

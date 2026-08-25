@@ -81,16 +81,17 @@ export function pipeChildStream(
   });
 }
 
-function quoteWindowsCommandPart(part: string) {
-  if (!part.length) {
-    return '""';
-  }
+const WINDOWS_COMMAND_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/gu;
 
-  if (!/[\s"]/u.test(part)) {
-    return part;
-  }
+function escapeWindowsCommand(part: string) {
+  return part.replace(WINDOWS_COMMAND_META_CHARACTERS, "^$1");
+}
 
-  return `"${part.replace(/"/g, '\\"')}"`;
+function escapeWindowsCommandArgument(part: string) {
+  const escapedQuotes = part
+    .replace(/(?=(\\+?)?)\1"/gu, "$1$1\\\"")
+    .replace(/(?=(\\+?)?)\1$/u, "$1$1");
+  return `"${escapedQuotes}"`.replace(WINDOWS_COMMAND_META_CHARACTERS, "^$1");
 }
 
 export function getSpawnDescriptor(spec: Pick<ProcessSpec, "args" | "command">) {
@@ -101,12 +102,10 @@ export function getSpawnDescriptor(spec: Pick<ProcessSpec, "args" | "command">) 
     };
   }
 
-  const commandLine = [spec.command, ...spec.args]
-    .map((part) => quoteWindowsCommandPart(part))
-    .join(" ");
+  const commandLine = [escapeWindowsCommand(spec.command), ...spec.args.map(escapeWindowsCommandArgument)].join(" ");
 
   return {
-    args: ["/d", "/s", "/c", commandLine],
+    args: ["/d", "/s", "/c", `"${commandLine}"`],
     command: process.env.ComSpec ?? "cmd.exe",
   };
 }
@@ -121,6 +120,7 @@ export function createSpawnOptions(
     detached: process.platform !== "win32",
     env,
     windowsHide,
+    ...(process.platform === "win32" ? { windowsVerbatimArguments: true } : {}),
   };
 }
 

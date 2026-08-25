@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES/ORCHESTRATOR_RELOAD_SCOPES/ORCHESTRATOR_ALL_RELOAD_SCOPES: public, complete, and safe-all atomic reload scope registries. Keywords: orchestrator, reload, scope, all.
+ * - ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES/ORCHESTRATOR_CLI_RELOAD_SCOPES/ORCHESTRATOR_RELOAD_SCOPES/ORCHESTRATOR_ALL_RELOAD_SCOPES: agent-facing, explicit CLI, complete, and safe-all atomic scope registries. Keywords: orchestrator, reload, scope, all.
  * - WORKBENCH_RELOAD_SCOPE_PATHS/getReloadScopesForPaths: derive additive runtime barriers from project touch paths. Keywords: path, gitignore, arc.
  * - normalizeOrchestratorReloadScopes/expandOrchestratorReloadScopes: normalize canonical atoms or validate grouped request input. Keywords: validation, CLI, MCP, group.
  * - validateOrchestratorReloadScopeCombination: reject full-process restart combined with another scope. Keywords: process, restart, exclusivity.
@@ -17,12 +17,16 @@ export const ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES = [
   "server:opencode",
   "server:reloader",
   "client:all",
+] as const satisfies readonly OrchestratorReloadScope[];
+
+export const ORCHESTRATOR_CLI_RELOAD_SCOPES = [
+  ...ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES,
   "harness:codex",
   "harness:opencode",
 ] as const satisfies readonly OrchestratorReloadScope[];
 
 export const ORCHESTRATOR_RELOAD_SCOPES = [
-  ...ORCHESTRATOR_REQUESTABLE_RELOAD_SCOPES,
+  ...ORCHESTRATOR_CLI_RELOAD_SCOPES,
   "server:process",
 ] as const satisfies readonly OrchestratorReloadScope[];
 
@@ -42,12 +46,17 @@ export const WORKBENCH_RELOAD_SCOPE_PATHS = {
 !**/*.test.*
 !/webapp/lib/workbench/browse/
 !/webapp/lib/workbench/commands/
+!/webapp/lib/workbench/cli/workbench-agent-cli.sh
 !/webapp/orchestrator/index.ts
 !/webapp/orchestrator/CodexAppServer.ts
 !/webapp/orchestrator/CodexStdioBridge.ts
+!/webapp/orchestrator/OpenCodeAppServer.ts
 !/webapp/orchestrator/opencode-bridge.ts
 !/webapp/orchestrator/OrchestratorFeatureHost.ts
 !/webapp/orchestrator/orchestrator-feature-loader.ts
+!/webapp/orchestrator/orchestrator-feature-registry.ts
+!/webapp/orchestrator/orchestrator-provider-feature-nodes.ts
+!/webapp/orchestrator/orchestrator-runtime-feature-nodes.ts
 !/webapp/orchestrator/ReloadableWorkbenchOrchestratorReloadController.ts
 !/webapp/orchestrator/WorkbenchAgentMcpController.ts
 !/webapp/orchestrator/WorkbenchBrowseController.ts
@@ -90,17 +99,25 @@ export const WORKBENCH_RELOAD_SCOPE_PATHS = {
 /webapp/public/
 /webapp/next.config.ts
 !**/*.test.*
+!/webapp/lib/workbench/cli/workbench-agent-cli.sh
 `,
-  "harness:codex": ``,
-  "harness:opencode": ``,
+  "harness:codex": `
+/webapp/orchestrator/CodexAppServer.ts
+`,
+  "harness:opencode": `
+/webapp/orchestrator/OpenCodeAppServer.ts
+`,
   "server:process": `
 /webapp/orchestrator/index.ts
-/webapp/orchestrator/CodexAppServer.ts
+/webapp/lib/workbench/cli/workbench-agent-cli.sh
 /webapp/orchestrator/CodexBridgeTransitionController.ts
 /webapp/orchestrator/CodexRecoverySupervisor.ts
 /webapp/orchestrator/copilot-bridge.ts
 /webapp/orchestrator/OrchestratorFeatureHost.ts
 /webapp/orchestrator/orchestrator-feature-loader.ts
+/webapp/orchestrator/orchestrator-feature-registry.ts
+/webapp/orchestrator/orchestrator-provider-feature-nodes.ts
+/webapp/orchestrator/orchestrator-runtime-feature-nodes.ts
 /webapp/orchestrator/process-helpers.ts
 /webapp/orchestrator/ReloadableWorkbenchOrchestratorReloadController.ts
 /webapp/orchestrator/WorkbenchAgentCliEnvironment.ts
