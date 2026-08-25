@@ -100,6 +100,7 @@ import {
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
+const EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS: ReadonlySet<string> = new Set();
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
 const EMPTY_THREAD_SIDEBAR_SUBSCRIBE = () => () => undefined;
@@ -1613,6 +1614,9 @@ export default memo(function ThreadView ({
   const terminalGitArc = activeGitArcSelection && currentTurn?.status !== "inProgress"
     ? activeGitArcSelection.gitArc
     : null;
+  const terminalGitArcProposalIds = useMemo(() => terminalGitArc
+    ? new Set(terminalGitArc.proposals.map(({ proposalId }) => proposalId))
+    : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS, [terminalGitArc]);
 
   return (
     <ProjectFilePathDisplayProvider
@@ -1623,7 +1627,7 @@ export default memo(function ThreadView ({
       <ThreadGitArcPresentationContext.Provider value={{
         harness: activeThread?.harness ?? thread.harness,
         hasActiveGitArc: activeGitArcSelection?.gitArc?.phase === "active",
-        hoistedProposalIds: new Set(terminalGitArc?.proposals.map(({ proposalId }) => proposalId) ?? []),
+        hoistedProposalIds: terminalGitArcProposalIds,
         onOpenThread,
         projectId,
         proposalIntents: visibleGitArcProposalIntents,
@@ -1676,6 +1680,7 @@ export default memo(function ThreadView ({
                       browseResultEntries={activeThreadBrowseResultEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES}
                       hiddenDynamicToolCallItemIds={turn.id === currentTurn?.id ? hiddenDynamicToolCallItemIds : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
                       hideFinalAgentMessage={hideFinalAgentMessage}
+                      hideTerminalReasoning={turn.id === currentTurn?.id && activeGitArcSelection?.lifecycle.kind === "completed"}
                       hideTopBorder={turn.items.some((item) => item.type === "userMessage" && isWorkbenchQuestionnaireResponseInput(item.content))}
                       hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
                       hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
@@ -1691,6 +1696,7 @@ export default memo(function ThreadView ({
                       turn={turn}
                       workspaceRoots={workspaceFileLinkRoots}
                       hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
+                      hoistedGitArcProposalIds={turn.id === currentTurn?.id ? terminalGitArcProposalIds : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS}
                       hiddenWebSearchItemIds={turn.id === currentTurn?.id && liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
                       itemTimeline={entry.itemTimeline}
                     />

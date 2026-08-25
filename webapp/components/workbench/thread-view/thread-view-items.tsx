@@ -113,12 +113,14 @@ import {
 } from "./thread-subagent-wait-groups";
 import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-sections";
 import { partitionCompletedThreadWork } from "./thread-completed-work";
+import getFinishedThreadTailHiddenItemIds from "./thread-finished-tail";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
 
 const THREAD_DETAIL_INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.88em] leading-[1.6] text-text";
 const LIVE_RENDER_BLOCK_TAIL_ITEM_COUNT = 8;
 const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
+const EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS: ReadonlySet<string> = new Set();
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
 type FileChangeItem = Extract<ThreadItem, { type: "fileChange" }>;
@@ -139,6 +141,7 @@ interface HiddenThreadItemIds {
   controlAgentMessages?: boolean;
   controlUserMessages?: boolean;
   dynamicToolCallIds?: ReadonlySet<string> | null;
+  itemIds?: ReadonlySet<string> | null;
   reasoningItemId?: string | null;
   webSearchItemIds?: ReadonlySet<string> | null;
 }
@@ -366,6 +369,9 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
   };
 
   for (const item of items) {
+    if (hiddenItemIds.itemIds?.has(item.id)) {
+      continue;
+    }
     if (item.type === "userMessage" && isWorkbenchHiddenSystemSteerInput(item.content)) {
       continue;
     }
@@ -2558,10 +2564,12 @@ function ThreadTurnDetailsComponent ({
   flattenCompletedWork = false,
   hiddenDynamicToolCallItemIds = [],
   hideFinalAgentMessage = false,
+  hideTerminalReasoning = false,
   hideTopBorder = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = false,
   hiddenReasoningItemId = null,
+  hoistedGitArcProposalIds = EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS,
   hiddenWebSearchItemIds = [],
   inlineMentionSources = null,
   itemTimeline = [],
@@ -2581,10 +2589,12 @@ function ThreadTurnDetailsComponent ({
   flattenCompletedWork?: boolean;
   hiddenDynamicToolCallItemIds?: readonly string[];
   hideFinalAgentMessage?: boolean;
+  hideTerminalReasoning?: boolean;
   hideTopBorder?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
   hiddenReasoningItemId?: string | null;
+  hoistedGitArcProposalIds?: ReadonlySet<string>;
   hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
@@ -2612,7 +2622,7 @@ function ThreadTurnDetailsComponent ({
   const isWorkbenchControlTurn = useMemo(() => (
     turn.items.some((item) => item.type === "userMessage" && isWorkbenchControlUserMessage(item))
   ), [turn.items]);
-  const hiddenItemIds = useMemo(() => ({
+  const baseHiddenItemIds = useMemo(() => ({
     controlAgentMessages: hideWorkbenchControlAgentMessages && isWorkbenchControlTurn,
     controlUserMessages: hideWorkbenchControlUserMessages,
     dynamicToolCallIds: hiddenDynamicToolCallIds,
@@ -2626,6 +2636,28 @@ function ThreadTurnDetailsComponent ({
     hideWorkbenchControlUserMessages,
     isWorkbenchControlTurn,
   ]);
+  const baseRenderableBlocks = useMemo(() => buildRenderableBlocks(turn.items, baseHiddenItemIds), [baseHiddenItemIds, turn.items]);
+  const finishedTailHiddenItemIds = useMemo(() => getFinishedThreadTailHiddenItemIds({
+    hideReasoning: hideTerminalReasoning,
+    hoistedProposalIds: hoistedGitArcProposalIds,
+    itemGroups: baseRenderableBlocks
+      .filter((block) => block.kind !== "item" || block.item.type !== "collabAgentToolCall")
+      .map(getRenderableBlockItems),
+    knownSkills,
+    projectRootPath,
+    workspaceRoots,
+  }), [
+    baseRenderableBlocks,
+    hideTerminalReasoning,
+    hoistedGitArcProposalIds,
+    knownSkills,
+    projectRootPath,
+    workspaceRoots,
+  ]);
+  const hiddenItemIds = useMemo(() => ({
+    ...baseHiddenItemIds,
+    itemIds: finishedTailHiddenItemIds,
+  } satisfies HiddenThreadItemIds), [baseHiddenItemIds, finishedTailHiddenItemIds]);
   const finalAgentMessageId = useMemo(() => getFinalAgentMessageId(turn), [turn.items]);
   const isCompleted = turn.status === "completed";
   const primaryUserItem = useMemo(() => (
@@ -2870,10 +2902,12 @@ function areThreadTurnDetailsPropsEqual (
     && left.flattenCompletedWork === right.flattenCompletedWork
     && left.hiddenDynamicToolCallItemIds === right.hiddenDynamicToolCallItemIds
     && left.hideFinalAgentMessage === right.hideFinalAgentMessage
+    && left.hideTerminalReasoning === right.hideTerminalReasoning
     && left.hideTopBorder === right.hideTopBorder
     && left.hideWorkbenchControlAgentMessages === right.hideWorkbenchControlAgentMessages
     && left.hideWorkbenchControlUserMessages === right.hideWorkbenchControlUserMessages
     && left.hiddenReasoningItemId === right.hiddenReasoningItemId
+    && left.hoistedGitArcProposalIds === right.hoistedGitArcProposalIds
     && left.hiddenWebSearchItemIds === right.hiddenWebSearchItemIds
     && left.browseResultEntries === right.browseResultEntries
     && left.inlineMentionSources === right.inlineMentionSources

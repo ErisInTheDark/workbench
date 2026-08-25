@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { createElement, Fragment, isValidElement, type KeyboardEvent, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import { parseUnifiedDiff } from "../../../lib/workbench/thread/thread-file-diff";
 import { getGitArcMatcherAction, getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
@@ -62,6 +63,93 @@ function proposedCheckpointState(status: "proposed" | "superseded" | "unavailabl
     },
     status: "loaded" as const,
   };
+}
+
+function finishedTailProposalItem(): Extract<ThreadItem, { type: "commandExecution" }> {
+  return {
+    aggregatedOutput: "Workbench arc proposal: proposal-one\n",
+    command: "wb git arc propose -m \"Clean finished thread tail\" -- src/one.ts",
+    commandActions: [],
+    cwd: "C:/workspace",
+    durationMs: 10,
+    exitCode: 0,
+    id: "proposal-command",
+    pluginId: null,
+    processId: null,
+    scriptPath: null,
+    source: "agent",
+    status: "completed",
+    type: "commandExecution",
+  };
+}
+
+function finishedTailReasoningItem(): Extract<ThreadItem, { type: "reasoning" }> {
+  return {
+    content: [],
+    id: "ending-reasoning",
+    summary: ["Sending empty final message"],
+    type: "reasoning",
+  };
+}
+
+function finishedTailMcpProposalItem(): Extract<ThreadItem, { type: "mcpToolCall" }> {
+  return {
+    appContext: null,
+    arguments: { paths: ["src/one.ts"], title: "Clean finished thread tail" },
+    durationMs: 10,
+    error: null,
+    id: "mcp-proposal-command",
+    pluginId: null,
+    readOnlyHint: false,
+    result: {
+      _meta: null,
+      content: [{ type: "text", text: "Workbench arc proposal: proposal-one\n" }],
+      structuredContent: null,
+    },
+    server: "wb",
+    status: "completed",
+    tool: "git_arc_propose",
+    type: "mcpToolCall",
+  };
+}
+
+function finishedTailMessageItem(id: string, text: string): Extract<ThreadItem, { type: "agentMessage" }> {
+  return {
+    id,
+    memoryCitation: null,
+    phase: "commentary",
+    text,
+    type: "agentMessage",
+  };
+}
+
+function renderFinishedTail(
+  items: ThreadItem[],
+  {
+    hideTerminalReasoning = true,
+    hoistedGitArcProposalIds = new Set(["proposal-one"]),
+  }: {
+    hideTerminalReasoning?: boolean;
+    hoistedGitArcProposalIds?: ReadonlySet<string>;
+  } = {},
+) {
+  return renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    defaultOpenCompletedWork: true,
+    hideTerminalReasoning,
+    hoistedGitArcProposalIds,
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+    turn: {
+      completedAt: 2,
+      durationMs: 1,
+      error: null,
+      id: "turn-one",
+      items,
+      itemsView: "full",
+      startedAt: 1,
+      status: "completed",
+    },
+  }));
 }
 
 test("checkpoint compare uses established file-change rows without empty disclosures", () => {
@@ -123,6 +211,51 @@ test("terminal arc presentation hoists one proposal controller and leaves a tran
 test("terminal arc release action distinguishes clean claims from dirty work", () => {
   assert.equal(getGitArcClaimReleaseAction(0), "unclaim");
   assert.equal(getGitArcClaimReleaseAction(1), "restore");
+});
+
+test("finished thread tail cleanup hides terminal reasoning and hoisted proposals in either order", () => {
+  const leadingMessage = finishedTailMessageItem("review-message", "Review complete.");
+  const proposalThenReasoning = renderFinishedTail([
+    leadingMessage,
+    finishedTailProposalItem(),
+    finishedTailReasoningItem(),
+  ]);
+  const reasoningThenProposal = renderFinishedTail([
+    leadingMessage,
+    finishedTailReasoningItem(),
+    finishedTailMcpProposalItem(),
+  ]);
+
+  for (const html of [proposalThenReasoning, reasoningThenProposal]) {
+    assert.match(html, /Review complete\./u);
+    assert.doesNotMatch(html, /data-thread-checkpoint-card="true"/u);
+    assert.doesNotMatch(html, /Reasoned:/u);
+    assert.doesNotMatch(html, /Sending empty final message/u);
+  }
+});
+
+test("finished thread tail cleanup preserves ineligible and non-terminal items", () => {
+  const leadingMessage = finishedTailMessageItem("review-message", "Review complete.");
+  const visibleTail = renderFinishedTail([
+    leadingMessage,
+    finishedTailReasoningItem(),
+    finishedTailProposalItem(),
+    finishedTailMessageItem("later-message", "Keep this ending."),
+  ]);
+  const unfinishedReasoning = renderFinishedTail([
+    leadingMessage,
+    finishedTailReasoningItem(),
+  ], { hideTerminalReasoning: false });
+  const unhoistedProposal = renderFinishedTail([
+    leadingMessage,
+    finishedTailProposalItem(),
+  ], { hoistedGitArcProposalIds: new Set() });
+
+  assert.match(visibleTail, /Reasoned:/u);
+  assert.match(visibleTail, /data-thread-checkpoint-card="true"/u);
+  assert.match(visibleTail, /Keep this ending\./u);
+  assert.match(unfinishedReasoning, /Reasoned:/u);
+  assert.match(unhoistedProposal, /data-thread-checkpoint-card="true"/u);
 });
 
 test("terminal proposals and claim resolution share one lifecycle card", () => {

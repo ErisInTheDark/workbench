@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover thread-global native steer identity, delivery, and scoped context collection. Keywords: codex, transcript, steer, context, test.
+ * - No production exports; Node tests cover turn ownership, thread-global native steer identity, delivery, and scoped context collection. Keywords: codex, transcript, turn ownership, steer, context, test.
  */
 
 import assert from "node:assert/strict";
@@ -13,7 +13,8 @@ import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry } from "../lib/types";
 import CodexTranscriptStore from "./CodexTranscriptStore";
 import type { JsonRpcRequest } from "./bridge-types";
-import type { CodexTranscriptRawEvent } from "./codex-transcript-types";
+import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
+import type { CodexTranscriptRawEvent, CodexTranscriptThreadFile } from "./codex-transcript-types";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
 
 function captureProcessStderr(context: TestContext) {
@@ -51,20 +52,112 @@ function snapshot(turns: Thread["turns"]): Thread {
   };
 }
 
+function transcriptTurn(id: string, itemIds: string[]): Thread["turns"][number] {
+  return {
+    completedAt: 2,
+    durationMs: 1,
+    error: null,
+    id,
+    items: itemIds.map((itemId) => ({
+      clientId: null,
+      content: [{ text: itemId, text_elements: [], type: "text" }],
+      id: itemId,
+      type: "userMessage",
+    })),
+    itemsView: "full",
+    startedAt: 1,
+    status: "completed",
+  };
+}
+
+function threadFilePath(root: string) {
+  return path.join(root, ".workbench", "transcripts", "codex", "threads", encodeTranscriptPathSegment("thread"), "thread.json");
+}
+
+async function readThreadFile(root: string) {
+  return JSON.parse(await fs.readFile(threadFilePath(root), "utf8")) as CodexTranscriptThreadFile;
+}
+
+async function hydrateThread(store: CodexTranscriptStore, turns: Thread["turns"]) {
+  const response = await store.hydrateThreadResponse(
+    { id: 90, method: "thread/read", params: { threadId: "thread" } },
+    { id: 90, result: { thread: snapshot(turns) } },
+  );
+  return (response.result as { thread: Thread }).thread;
+}
+
 function event(id: string): CodexTranscriptRawEvent {
   return { id, method: "turn/steer", payload: {}, receivedAt: 1, requestId: id, source: "workbench" };
 }
 
-async function withStore(run: (store: CodexTranscriptStore) => Promise<void>) {
+async function withStore(run: (store: CodexTranscriptStore, root: string) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-transcript-test-"));
   const store = new CodexTranscriptStore(root);
   try {
-    await run(store);
+    await run(store, root);
   } finally {
     await store.dispose();
     await fs.rm(root, { force: true, recursive: true });
   }
 }
+
+test("stored item ownership rejects later duplicate turns without hiding their new items", async () => withStore(async (store, root) => {
+  await store.recordHydratedThreadSnapshot({
+    id: 80,
+    result: { thread: snapshot([transcriptTurn("real", ["exec"])]) },
+  });
+  const refreshedTurns = [
+    transcriptTurn("real", ["item-1"]),
+    transcriptTurn("rollout-586", ["exec"]),
+    transcriptTurn("mixed", ["exec", "new"]),
+  ];
+  await store.recordHydratedThreadSnapshot({ id: 81, result: { thread: snapshot(refreshedTurns) } });
+
+  const threadFile = await readThreadFile(root);
+  assert.deepEqual(threadFile.turnIndex.map((entry) => [entry.turnId, entry.itemIds]), [
+    ["real", ["exec"]],
+    ["mixed", ["new"]],
+  ]);
+
+  const hydrated = await hydrateThread(store, refreshedTurns);
+  assert.deepEqual(hydrated.turns.map((turn) => [turn.id, turn.items.map((item) => item.id)]), [
+    ["mixed", ["new"]],
+  ]);
+}));
+
+test("duplicate stored ownership repairs from canonical turn timelines once", async () => withStore(async (store, root) => {
+  const originalTurn = transcriptTurn("real", ["exec"]);
+  const duplicateTurns = [
+    originalTurn,
+    transcriptTurn("rollout-586", ["exec"]),
+    transcriptTurn("synthetic-uuid", ["exec"]),
+  ];
+  await store.recordHydratedThreadSnapshot({ id: 82, result: { thread: snapshot([originalTurn]) } });
+  await store.recordHydratedThreadSnapshot({ id: 83, result: { thread: snapshot(duplicateTurns) } });
+
+  const cleanThreadFile = await readThreadFile(root);
+  const originalEntry = cleanThreadFile.turnIndex[0]!;
+  await fs.writeFile(threadFilePath(root), JSON.stringify({
+    ...cleanThreadFile,
+    turnIndex: [
+      { ...originalEntry, itemIds: ["item-1"], turnId: "real" },
+      { ...originalEntry, itemIds: ["exec"], turnId: "rollout-586" },
+      { ...originalEntry, itemIds: ["exec"], turnId: "synthetic-uuid" },
+    ],
+  }), "utf8");
+
+  const providerTurns = duplicateTurns.slice(1);
+  await store.recordHydratedThreadSnapshot({ id: 84, result: { thread: snapshot(providerTurns) } });
+  const firstHydration = await hydrateThread(store, providerTurns);
+  const secondHydration = await hydrateThread(store, providerTurns);
+  assert.deepEqual(firstHydration.turns.map((turn) => turn.id), ["real"]);
+  assert.deepEqual(secondHydration.turns.map((turn) => turn.id), ["real"]);
+  assert.equal(firstHydration.turns[0]?.items.some((item) => item.id === "exec"), true);
+
+  const repairedThreadFile = await readThreadFile(root);
+  assert.deepEqual(repairedThreadFile.turnIndex.map((entry) => entry.turnId), ["real"]);
+  assert.equal(repairedThreadFile.turnIndex[0]?.itemIds?.includes("exec"), true);
+}));
 
 test("a new empty transcript store completes every migration", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-transcript-empty-test-"));

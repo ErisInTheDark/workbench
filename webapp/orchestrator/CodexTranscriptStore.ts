@@ -504,7 +504,18 @@ function mergeTurnIndexes(
   const seenTurnIds = new Set<string>();
   const entries = storedEntries.map((entry) => {
     seenTurnIds.add(entry.turnId);
-    return upstreamEntriesById.get(entry.turnId) ?? entry;
+    const upstreamEntry = upstreamEntriesById.get(entry.turnId);
+    if (!upstreamEntry || !entry.itemIds?.length) {
+      return upstreamEntry ?? entry;
+    }
+
+    const appendedItemIds = upstreamEntry.itemIds?.slice(entry.itemIds.length) ?? [];
+    const itemIds = [...entry.itemIds, ...appendedItemIds];
+    return {
+      ...upstreamEntry,
+      itemCount: Math.max(entry.itemCount, upstreamEntry.itemCount, itemIds.length),
+      itemIds,
+    };
   });
 
   for (const turn of upstreamTurns) {
@@ -515,7 +526,70 @@ function mergeTurnIndexes(
     entries.push(createTurnIndexEntry(thread, turn));
   }
 
-  return entries;
+  return hasCrossTurnItemOwners(storedEntries) ? entries : keepFirstTurnItemOwners(entries);
+}
+
+function keepFirstTurnItemOwners(entries: CodexTranscriptThreadFile["turnIndex"]) {
+  const ownedItemIds = new Set<string>();
+  return entries.flatMap((entry) => {
+    if (!entry.itemIds) {
+      return [entry];
+    }
+
+    const itemIds = entry.itemIds.filter((itemId) => !ownedItemIds.has(itemId));
+    itemIds.forEach((itemId) => ownedItemIds.add(itemId));
+    if (entry.itemCount > 0 && itemIds.length === 0) {
+      return [];
+    }
+
+    return itemIds.length === entry.itemIds.length
+      ? [entry]
+      : [{ ...entry, itemCount: itemIds.length, itemIds }];
+  });
+}
+
+function hasCrossTurnItemOwners(entries: CodexTranscriptThreadFile["turnIndex"]) {
+  const ownedItemIds = new Set<string>();
+  for (const entry of entries) {
+    for (const itemId of entry.itemIds ?? []) {
+      if (ownedItemIds.has(itemId)) {
+        return true;
+      }
+      ownedItemIds.add(itemId);
+    }
+  }
+  return false;
+}
+
+function restoreTurnIndexItemIds(
+  entries: CodexTranscriptThreadFile["turnIndex"],
+  turnFiles: CodexTranscriptTurnFile[],
+) {
+  const turnFilesById = new Map(turnFiles.map((file) => [file.turnId, file]));
+  return keepFirstTurnItemOwners(entries.map((entry) => {
+    const turnFile = turnFilesById.get(entry.turnId);
+    if (!turnFile) {
+      return entry;
+    }
+
+    const itemIds = turnFile.itemTimeline.length
+      ? turnFile.itemTimeline.map((item) => item.itemId)
+      : turnFile.turn?.items.map((item) => item.id) ?? turnFile.itemOrder;
+    return { ...entry, itemCount: itemIds.length, itemIds };
+  }));
+}
+
+function keepIndexedTurnItems(
+  turn: Turn,
+  entry: CodexTranscriptThreadFile["turnIndex"][number],
+) {
+  if (!entry.itemIds) {
+    return turn;
+  }
+
+  const indexedItemIds = new Set(entry.itemIds);
+  const items = turn.items.filter((item) => indexedItemIds.has(item.id));
+  return items.length === turn.items.length ? turn : { ...turn, items };
 }
 
 function getLatestTurnId(entries: CodexTranscriptThreadFile["turnIndex"], upstreamTurns: Turn[]) {
@@ -1518,8 +1592,39 @@ export default class CodexTranscriptStore {
       threadFile?: CodexTranscriptThreadFile | null;
     },
   ) {
-    const storedThreadFile = threadFile ?? await this.json.read<CodexTranscriptThreadFile | null>(this.threadFilePath(thread.id), null);
+    let storedThreadFile = threadFile ?? await this.json.read<CodexTranscriptThreadFile | null>(this.threadFilePath(thread.id), null);
+    if (storedThreadFile && hasCrossTurnItemOwners(storedThreadFile.turnIndex)) {
+      const turnFiles = await this.readTurnFiles(thread.id, {
+        repair,
+        turnIds: storedThreadFile.turnIndex.map((entry) => entry.turnId),
+      });
+      const repairedTurnIndex = restoreTurnIndexItemIds(storedThreadFile.turnIndex, turnFiles);
+      if (repair) {
+        await this.updateThreadFile(thread.id, (file) => {
+          if (!hasCrossTurnItemOwners(file.turnIndex)) {
+            return file;
+          }
+          return {
+            ...file,
+            lastTouchedAt: now(),
+            turnIndex: restoreTurnIndexItemIds(file.turnIndex, turnFiles),
+          };
+        });
+        storedThreadFile = await this.json.read<CodexTranscriptThreadFile | null>(this.threadFilePath(thread.id), null);
+      } else {
+        storedThreadFile = { ...storedThreadFile, turnIndex: repairedTurnIndex };
+      }
+    }
     const turnIndex = mergeTurnIndexes(storedThreadFile?.turnIndex ?? [], thread.turns, thread);
+    const indexedTurnsById = new Map(turnIndex.map((entry) => [entry.turnId, entry]));
+    const indexedTurns = thread.turns.flatMap((turn) => {
+      const entry = indexedTurnsById.get(turn.id);
+      return entry ? [keepIndexedTurnItems(turn, entry)] : [];
+    });
+    const indexedThread = indexedTurns.length === thread.turns.length
+      && indexedTurns.every((turn, index) => turn === thread.turns[index])
+      ? thread
+      : { ...thread, turns: indexedTurns };
 
     if (hydration?.mode === "legacyFull") {
       const storedTurnFiles = orderTurnFilesByThreadIndex(storedThreadFile ?? createThreadFile(thread.id), await this.readTurnFiles(thread.id, {
@@ -1530,9 +1635,9 @@ export default class CodexTranscriptStore {
       const itemTimelineByTurnId = new Map(storedTurnFiles.map((file) => [file.turnId, file.itemTimeline]));
       const storedTurns = storedTurnFiles.map((file) => ({
         itemTimeline: file.itemTimeline,
-        turn: file.turn!,
+        turn: keepIndexedTurnItems(file.turn!, indexedTurnsById.get(file.turnId)!),
       }));
-      const legacyThread = hydrateThreadWithStoredTurns(thread, storedTurns);
+      const legacyThread = hydrateThreadWithStoredTurns(indexedThread, storedTurns);
       const compactedLegacyThread = compactCommandOutputPayload(legacyThread);
       return {
         ...compactedLegacyThread,
@@ -1547,11 +1652,11 @@ export default class CodexTranscriptStore {
 
     const requestedTurnId = hydration?.mode === "previous"
       ? getPreviousTurnId(turnIndex, hydration.beforeTurnId)
-      : getLatestTurnId(turnIndex, thread.turns);
+      : getLatestTurnId(turnIndex, indexedThread.turns);
     const selectedTurnIds = new Set(requestedTurnId ? [requestedTurnId] : []);
     const selectedUpstreamThread = {
-      ...thread,
-      turns: thread.turns.filter((turn) => selectedTurnIds.has(turn.id)),
+      ...indexedThread,
+      turns: indexedThread.turns.filter((turn) => selectedTurnIds.has(turn.id)),
     };
     const selectedStoredTurnFiles = requestedTurnId
       ? [await this.readTurnFile(thread.id, requestedTurnId, { repair })].filter((file): file is CodexTranscriptTurnFile => file !== null)
@@ -1561,7 +1666,7 @@ export default class CodexTranscriptStore {
       .filter((file) => file.turn !== null)
       .map((file) => ({
         itemTimeline: file.itemTimeline,
-        turn: file.turn!,
+        turn: keepIndexedTurnItems(file.turn!, indexedTurnsById.get(file.turnId)!),
       }));
     const hydratedThread = compactCommandOutputPayload(hydrateThreadWithStoredTurns(selectedUpstreamThread, storedTurns));
     const loadedTurnIds = new Set(hydratedThread.turns.map((turn) => turn.id));
