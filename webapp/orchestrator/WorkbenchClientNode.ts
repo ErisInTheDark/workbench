@@ -26,5 +26,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/components/**",
     "webapp/hooks/**",
     "webapp/lib/**",
+    "!webapp/lib/workbench/instructions/**/*.md",
   ].join("\n"),
 });

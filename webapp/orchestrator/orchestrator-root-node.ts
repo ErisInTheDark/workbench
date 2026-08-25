@@ -9,10 +9,12 @@ import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } fro
 import { defineReloadableNodeGraph } from "./ReloadableNode";
 import WorkbenchClientNode from "./WorkbenchClientNode";
 import WorkbenchCoreNode from "./WorkbenchCoreNode";
+import WorkbenchInstructionsNode from "./WorkbenchInstructionsNode";
 
 export default defineReloadableNodeGraph<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>([
   WorkbenchCoreNode,
   CodexAppServerNode,
   OpenCodeAppServerNode,
   WorkbenchClientNode,
+  WorkbenchInstructionsNode,
 ]);

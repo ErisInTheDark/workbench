@@ -31,7 +31,7 @@ function flattenParents(roots: readonly Node[]) {
 }
 
 test("the root knows only direct roots and parents declare every dependant", () => {
-  assert.deepEqual(graph.roots.map(({ scope }) => scope), ["server:core", "harness:codex", "harness:opencode", "client:all"]);
+  assert.deepEqual(graph.roots.map(({ scope }) => scope), ["server:core", "harness:codex", "harness:opencode", "client:all", "server:instructions"]);
   const { nodes, parents } = flattenParents(graph.roots);
 
   assert.deepEqual([...nodes.keys()].sort(), [
@@ -41,6 +41,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:browse",
     "server:codex",
     "server:core",
+    "server:instructions",
     "server:mcp",
     "server:opencode",
     "server:topology",
@@ -75,6 +76,7 @@ test("each production node matches a representative owned source path", () => {
     ["harness:codex", "webapp/orchestrator/CodexAppServer.ts"],
     ["harness:opencode", "webapp/orchestrator/OpenCodeAppServer.ts"],
     ["client:all", "webapp/components/workbench.tsx"],
+    ["server:instructions", "webapp/lib/workbench/instructions/workflows/default-workflow-prompt.md"],
   ]);
   for (const [scope, sourcePath] of examples) {
     assert.equal(createGitignoreMatcher(nodes.get(scope)!.sources).matches(sourcePath), true, `${scope} must match ${sourcePath}`);
@@ -84,4 +86,31 @@ test("each production node matches a representative owned source path", () => {
     true,
     "server:codex must match its PascalCase transcript store owner",
   );
+});
+
+test("auto-fresh instruction Markdown has one acknowledgement-only scope", () => {
+  const { nodes } = flattenParents(graph.roots);
+  const matchingScopes = (sourcePath: string) => [...nodes.values()]
+    .filter((node) => createGitignoreMatcher(node.sources).matches(sourcePath))
+    .map((node) => node.scope)
+    .sort();
+  const instructions = nodes.get("server:instructions")!;
+
+  assert.deepEqual({
+    access: instructions.access,
+    children: instructions.children.length,
+    lifecycle: instructions.lifecycle,
+    provides: instructions.provides,
+    requires: instructions.requires,
+    safeAll: instructions.safeAll,
+  }, {
+    access: "agent",
+    children: 0,
+    lifecycle: "atomic",
+    provides: [],
+    requires: [],
+    safeAll: false,
+  });
+  assert.deepEqual(matchingScopes("webapp/lib/workbench/instructions/workflows/default-workflow-prompt.md"), ["server:instructions"]);
+  assert.deepEqual(matchingScopes("webapp/lib/workbench/instructions/assembly/WorkbenchPromptFiles.ts"), ["client:all", "server:core"]);
 });
