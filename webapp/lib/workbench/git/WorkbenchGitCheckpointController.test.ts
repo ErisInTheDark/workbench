@@ -685,6 +685,7 @@ isolatedControllerTest("targeted message amendments need no active arc and prese
     cwd: source, harness: "codex", includeNewer: false,
     proposalId: state.commitTargetProposalId, threadId: "partial-thread",
   });
+  assert.deepEqual(original.amendability, { status: "available" });
   await fs.writeFile(path.join(source, "one.txt"), "unrelated unstaged\n");
   await fs.writeFile(path.join(source, "two.txt"), "unrelated staged\n");
   await git(source, ["add", "two.txt"]);

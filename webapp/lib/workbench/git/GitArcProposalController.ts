@@ -286,9 +286,12 @@ async function buildProposalResult(
   threadId: string,
   includeNewerAvailable = false,
 ): Promise<GitCheckpointProposal> {
-  const amendability = metadata.status === "committed" && metadata.committedSha
+  const classifiedAmendability = metadata.status === "committed" && metadata.committedSha
     ? await new WorkbenchGitHistoryRewriter(repository).classifyAmendability(metadata.committedSha)
     : null;
+  const amendability: GitCheckpointProposal["amendability"] = classifiedAmendability?.status === "available"
+    ? { status: "available" }
+    : classifiedAmendability;
   return {
     ...(amendability ? { amendability } : {}),
     amendTargetSha: metadata.amendTargetSha,
