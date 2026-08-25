@@ -115,6 +115,8 @@ import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-s
 import { partitionCompletedThreadWork } from "./thread-completed-work";
 import getFinishedThreadTailHiddenItemIds from "./thread-finished-tail";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
+import { getUserMessageCopyMarkdown } from "./bubble-copy";
+import ThreadBubbleCopyButton from "./ThreadBubbleCopyButton";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
 
 const THREAD_DETAIL_INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.88em] leading-[1.6] text-text";
@@ -783,6 +785,7 @@ function ThreadUserMessageItem ({
 
   const steerState = getSteerUserMessageState(item);
   const isDecoratedSteer = steerState !== null;
+  const copyMarkdown = getUserMessageCopyMarkdown(item.content);
   const steerMessageClass = steerState === "pending"
     ? " relative isolate overflow-hidden rounded-[1.4rem]"
     : steerState === "unsent"
@@ -792,27 +795,30 @@ function ThreadUserMessageItem ({
     ? " relative z-10 rounded-[1.4rem] border-[3px] border-transparent bg-[color:color-mix(in_srgb,var(--text)_6%,var(--shell-fade-bg))] [clip-path:padding-box] px-4 py-3"
     : isDecoratedSteer
       ? " relative z-10 rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3"
-      : "";
+      : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3";
   return (
     <section className="flex flex-col items-end py-2" data-thread-user-message-state={steerState ? `${steerState}-steer` : undefined}>
-      <div className={`w-full max-w-[42rem]${isDecoratedSteer ? steerMessageClass : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3"}`}>
-        {steerState === "pending" ? <WorkbenchSpinningBorder radius="1.4rem" /> : null}
-        <div className={`space-y-2 text-left${decoratedSteerSurfaceClass}`}>
-          {item.content.length ? item.content.map((content, index) => (
-            <ThreadUserInputLine
-              key={`${item.id}:content:${index}:${content.type}`}
-              input={content}
-              inlineMentionSources={inlineMentionSources}
-              threadCwdPath={threadCwdPath}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              workspaceRoots={workspaceRoots}
-            />
-          )) : (
-            <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No user content captured.</p>
-          )}
+      <div className="group/thread-bubble relative w-full max-w-[42rem]">
+        <div className={isDecoratedSteer ? steerMessageClass : undefined}>
+          {steerState === "pending" ? <WorkbenchSpinningBorder radius="1.4rem" /> : null}
+          <div className={`space-y-2 text-left${decoratedSteerSurfaceClass}`}>
+            {item.content.length ? item.content.map((content, index) => (
+              <ThreadUserInputLine
+                key={`${item.id}:content:${index}:${content.type}`}
+                input={content}
+                inlineMentionSources={inlineMentionSources}
+                threadCwdPath={threadCwdPath}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                workspaceRoots={workspaceRoots}
+              />
+            )) : (
+              <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No user content captured.</p>
+            )}
+          </div>
         </div>
+        <ThreadBubbleCopyButton markdown={copyMarkdown} side="right" />
       </div>
       {showStartedAt ? <ThreadMessageTimestamp align="right" className="mt-1" timestampSeconds={startedAt} /> : null}
     </section>

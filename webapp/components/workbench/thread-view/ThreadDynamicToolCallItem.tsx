@@ -21,6 +21,7 @@ import {
   getQuestionnaireTopicLabel,
   getSingleQuestionnaireSummaryLabel,
 } from "../../../lib/workbench/thread/thread-questionnaire-transcript";
+import ThreadBubbleCopyButton from "./ThreadBubbleCopyButton";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadMarkdown from "./ThreadMarkdown";
@@ -275,7 +276,7 @@ function ThreadQuestionnaireTranscriptPreview ({
               {pair.promptText}
             </div>
           ) : null}
-          <div className="ml-auto w-fit max-w-[min(42rem,86%)] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3 text-left leading-[1.55] text-text">
+          <div className="group/thread-bubble relative ml-auto w-fit max-w-[min(42rem,86%)] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3 text-left leading-[1.55] text-text">
             <ThreadMarkdown
               className="text-[0.98em] leading-[1.55] [&_h3]:mb-[0.2em] [&_h3]:text-[1.15em] [&_p]:leading-[1.55]"
               inlineMentionSources={inlineMentionSources}
@@ -286,6 +287,7 @@ function ThreadQuestionnaireTranscriptPreview ({
               projectRootPath={projectRootPath}
               workspaceRoots={workspaceRoots}
             />
+            <ThreadBubbleCopyButton markdown={pair.answerMarkdown} side="right" />
           </div>
         </div>
       ))}
