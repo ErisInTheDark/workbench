@@ -19,7 +19,7 @@ Let the active agent identity influence child names. Do not use task slugs, role
 
 `mcp__wb__subagent_wait` accepts any number of `names` and `threadIds` and returns when the first selected child needs attention, completes, or stops.
 
-Pass every active child in one wait call. Treat it as a blocking event wait, not polling. Allow the outer tool execution to remain attached for up to 25 minutes. Do not hide waits behind generic sleeping, repeated polling, or separate concurrent waits.
+Pass every active child in one wait call. Treat it as a Workbench Long Wait. Do not use separate concurrent waits.
 
 The wait tool is the only way to receive a child's final output. Do not leave children running without a later wait.
 

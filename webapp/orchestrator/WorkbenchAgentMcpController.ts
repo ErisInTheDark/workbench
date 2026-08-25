@@ -240,14 +240,16 @@ export default class WorkbenchAgentMcpController {
     let unregister: (() => void) | null = null;
     try {
       const toolName = getWorkbenchAgentCommandToolName(definition);
+      const callerThreadId = readThreadId(meta);
       const registration = this.requestRegistry.register(clientScope, requestId, {
         owner: this.runtimeOwner,
         policy: definition.mcpRuntimeDrainPolicy,
+        steerInterruptible: definition.mcpSteerInterruptible,
+        threadId: callerThreadId,
         toolName,
       });
       unregister = registration.unregister;
       signal = AbortSignal.any([signal, registration.signal]);
-      const callerThreadId = readThreadId(meta);
       const threadResponse = await this.requestCodex({
         id: 0,
         method: "thread/read",

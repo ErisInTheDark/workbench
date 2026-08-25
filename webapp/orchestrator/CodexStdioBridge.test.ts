@@ -289,10 +289,12 @@ test("successful external send remaps the response id and detaches with settled 
     },
   } as unknown as CodexAppServer;
   const clientMessages: unknown[] = [];
+  const acceptedSteers: string[] = [];
   const bridge = new CodexStdioBridge({
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
+    onAcceptedTurnSteer(threadId) { acceptedSteers.push(threadId); },
     onNotification() {},
     resolveProjectFromCwd: async () => null,
     sendToClient(_client, message) { clientMessages.push(message); },
@@ -310,11 +312,81 @@ test("successful external send remaps the response id and detaches with settled 
     assert.equal(upstreamRequest?.method, "turn/steer");
     await bridge.handleUpstreamMessage({ id: upstreamRequest!.id, result: { turnId: "turn" } });
     assert.deepEqual(clientMessages, [{ id: 41, result: { turnId: "turn" } }]);
+    assert.deepEqual(acceptedSteers, ["thread"]);
     const state = await bridge.detachForReload();
     assert.equal(state.pendingResponses.size, 0);
     assert.ok(state.requestIdAllocator.next > upstreamRequest!.id);
   } finally {
     await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("rejected and empty external steer responses do not interrupt MCP waits", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-rejected-steer-test-"));
+  const client: BridgeClient = {
+    OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
+  };
+  let upstreamRequest: JsonRpcRequest | null = null;
+  const appServer = {
+    send(message: JsonRpcRequest) { upstreamRequest = message; },
+  } as unknown as CodexAppServer;
+  const acceptedSteers: string[] = [];
+  const bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onAcceptedTurnSteer(threadId) { acceptedSteers.push(threadId); },
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const steer = (id: number) => bridge.forwardRequest({
+    id,
+    method: "turn/steer",
+    params: {
+      expectedTurnId: "turn",
+      input: [{ text: "one", text_elements: [], type: "text" }],
+      threadId: "thread",
+    },
+  }, client, id);
+  try {
+    await steer(42);
+    await bridge.handleUpstreamMessage({ id: upstreamRequest!.id, result: { turnId: "" } });
+    await steer(43);
+    await bridge.handleUpstreamMessage({ id: upstreamRequest!.id, error: { code: -32000, message: "rejected" } });
+    assert.deepEqual(acceptedSteers, []);
+  } finally {
+    await bridge.dispose();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("accepted internal steers do not interrupt MCP waits", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-internal-steer-test-"));
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      queueMicrotask(() => { void bridge.handleUpstreamMessage({ id: message.id ?? null, result: { turnId: "turn" } }); });
+    },
+  } as unknown as CodexAppServer;
+  const acceptedSteers: string[] = [];
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onAcceptedTurnSteer(threadId) { acceptedSteers.push(threadId); },
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    assert.equal(await bridge.steerTurnForBrowse("thread", "turn", [{ text: "one", text_elements: [], type: "text" }]), "turn");
+    assert.deepEqual(acceptedSteers, []);
+  } finally {
+    await bridge.dispose();
     await fs.rm(root, { force: true, recursive: true });
   }
 });

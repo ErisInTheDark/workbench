@@ -43,6 +43,52 @@ test("request IDs and cancellation are isolated by client across wrapper generat
   }
 });
 
+test("thread steers interrupt only declared waits for the matching thread across clients and owners", () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const firstOwner = {};
+  const secondOwner = {};
+  const subagentWait = registry.register("client-1", 1, {
+    owner: firstOwner,
+    steerInterruptible: true,
+    threadId: "parent-thread",
+    toolName: "subagent_wait",
+  });
+  const reloadWait = registry.register("client-2", 1, {
+    owner: secondOwner,
+    steerInterruptible: true,
+    threadId: "parent-thread",
+    toolName: "orchestrator_reload",
+  });
+  const otherThreadWait = registry.register("client-1", 2, {
+    owner: firstOwner,
+    steerInterruptible: true,
+    threadId: "other-thread",
+    toolName: "subagent_wait",
+  });
+  const ordinaryCall = registry.register("client-2", 2, {
+    owner: secondOwner,
+    threadId: "parent-thread",
+    toolName: "thread_title_get",
+  });
+
+  assert.equal(registry.interruptThreadWaits("parent-thread"), 2);
+  assert.equal(subagentWait.signal.aborted, true);
+  assert.equal(reloadWait.signal.aborted, true);
+  assert.equal(otherThreadWait.signal.aborted, false);
+  assert.equal(ordinaryCall.signal.aborted, false);
+  assert.equal(registry.interruptThreadWaits("parent-thread"), 0);
+  assert.throws(() => registry.register("client-3", 1, {
+    owner: {},
+    steerInterruptible: true,
+    toolName: "subagent_wait",
+  }), /requires a thread id/u);
+
+  subagentWait.unregister();
+  reloadWait.unregister();
+  otherThreadWait.unregister();
+  ordinaryCall.unregister();
+});
+
 test("runtime drain cancels only matching policies in the retiring generation", () => {
   let now = 100;
   const registry = new WorkbenchAgentMcpRequestRegistry(undefined, () => now);

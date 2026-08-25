@@ -50,6 +50,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   sources: [
     "webapp/orchestrator/CodexBridgeNode.ts",
     "webapp/orchestrator/CodexStdioBridge.ts",
+    "webapp/orchestrator/workbench-agent-mcp-request-registry.ts",
     "webapp/orchestrator/CodexBridgeTransitionController.ts",
     "webapp/orchestrator/CodexRecoverySupervisor.ts",
     "webapp/orchestrator/CodexTranscriptStore.ts",

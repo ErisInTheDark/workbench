@@ -121,6 +121,29 @@ test("cancellation removes a waiter without cancelling an executing batch", asyn
   release.resolve();
 });
 
+test("cancellation during claim validation prevents reload waiter admission", async () => {
+  const claimReadStarted = deferred<void>();
+  const claims = deferred<WorkbenchReloadScopeClaim[]>();
+  const batches: OrchestratorReloadScope[][] = [];
+  const abort = new AbortController();
+  const controller = new WorkbenchOrchestratorReloadController({
+    executeBatch: async (scopes) => { batches.push(scopes); },
+    listClaims: async () => {
+      claimReadStarted.resolve();
+      return await claims.promise;
+    },
+    listScopes,
+  });
+
+  const pending = request(controller, "caller", ["server:mcp"], abort.signal);
+  await claimReadStarted.promise;
+  abort.abort(new Error("user steer interrupted reload"));
+  claims.resolve([claim("caller", ["server:mcp"])]);
+
+  await assert.rejects(pending, /user steer interrupted reload/u);
+  assert.deepEqual(batches, []);
+});
+
 test("a failed batch rejects dependent waiters but leaves disjoint work eligible", async () => {
   let claims = [
     claim("logic", ["server:core"]),

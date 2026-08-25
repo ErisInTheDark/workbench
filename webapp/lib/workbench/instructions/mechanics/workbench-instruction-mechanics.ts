@@ -4,6 +4,7 @@
  * - listWorkbenchInstructionMechanics: list typed Workbench mechanics relevant to a prompt context. Keywords: instructions, mechanics, availability.
  * - buildWorkbenchBrowseInstructions: render fresh typed Browse mechanics. Keywords: browse, instructions, MCP.
  * - buildWorkbenchGitInstructions: render fresh managed Git mechanics. Keywords: git, instructions, MCP.
+ * - buildWorkbenchLongWaitInstructions: render shared blocking-call mechanics. Keywords: wait, steer, instructions.
  * - buildWorkbenchOrchestratorReloadInstructions: render fresh orchestrator reload mechanics. Keywords: orchestrator, reload, instructions.
  * - buildWorkbenchSubagentInstructions: render fresh typed subagent mechanics. Keywords: subagent, instructions, MCP.
  * - buildWorkbenchThreadRecallInstructions: render fresh current-thread recall mechanics. Keywords: thread, recall, instructions.
@@ -56,6 +57,12 @@ export async function buildWorkbenchBrowseInstructions(context: WorkbenchPromptC
 export function buildWorkbenchGitInstructions(context: WorkbenchPromptContext) {
   if (!isManagedPromptThread(context)) return null;
   return readInstructionSource("mechanics/workbench-git-instructions.md");
+}
+
+export function buildWorkbenchLongWaitInstructions(context: WorkbenchPromptContext) {
+  return context.workbenchOrigin?.trim()
+    ? readInstructionSource("mechanics/workbench-blocking-tool-instructions.md")
+    : null;
 }
 
 export function buildWorkbenchOrchestratorReloadInstructions(context: WorkbenchPromptContext) {

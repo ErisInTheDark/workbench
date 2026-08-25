@@ -139,6 +139,7 @@ export default class WorkbenchOrchestratorReloadController {
     if (unclaimed.length) {
       throw new Error(`The active Git arc's claimed paths do not map to these reload scopes: ${unclaimed.join(", ")}.`);
     }
+    if (signal.aborted) throw signal.reason;
 
     return await new Promise<OrchestratorReloadResponse>((resolve, reject) => {
       const waiterId = `${callerKey}\0${randomUUID()}`;

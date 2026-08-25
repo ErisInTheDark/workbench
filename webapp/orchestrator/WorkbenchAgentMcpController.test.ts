@@ -296,6 +296,61 @@ test("releases HTTP admission and propagates caller cancellation across controll
   }
 });
 
+test("thread steer interruption reaches declared long waits but preserves ordinary MCP calls", { timeout: 5_000 }, async () => {
+  const executions = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
+  const allStarted = deferred<void>();
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const controller = new WorkbenchAgentMcpController({
+    executeCommand: async (request, signal) => await new Promise<Response>((resolve, reject) => {
+      executions.set(request.responseKind, { resolve, signal });
+      if (executions.size === 3) allStarted.resolve();
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }),
+    getReloadScopeCatalog: () => reloadCatalog,
+    lifecycleLogError: () => undefined,
+    orchestratorOrigin: "http://127.0.0.1:4500",
+    requestCodex: async (request) => ({ id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } }),
+    requestRegistry,
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  try {
+    const subagentCall = client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: { names: ["momo"] },
+      name: "subagent_wait",
+    });
+    const reloadCall = client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: { scopes: ["server:mcp"] },
+      name: "orchestrator_reload",
+    });
+    const titleCall = client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: {},
+      name: "thread_title_get",
+    });
+    await allStarted.promise;
+
+    assert.equal(requestRegistry.interruptThreadWaits("thread-1"), 2);
+    const [subagentResult, reloadResult] = await Promise.all([subagentCall, reloadCall]);
+    assert.equal(subagentResult.isError, true);
+    assert.equal(reloadResult.isError, true);
+    assert.match(responseText(subagentResult), /interrupted by a user steer/u);
+    assert.match(responseText(reloadResult), /interrupted by a user steer/u);
+    assert.equal(executions.get("thread-title-get")?.signal.aborted, false);
+
+    executions.get("thread-title-get")?.resolve(Response.json({ title: "still running" }));
+    const titleResult = await titleCall;
+    assert.equal(titleResult.isError, false);
+    assert.match(responseText(titleResult), /still running/u);
+  } finally {
+    requestRegistry.dispose();
+    await client.close();
+    await server.close();
+  }
+});
+
 test("runtime drain aborts declared waits only in the retiring controller generation", { timeout: 5_000 }, async () => {
   const executions = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
   const bothStarted = deferred<void>();

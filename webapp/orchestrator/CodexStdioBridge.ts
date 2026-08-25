@@ -41,6 +41,7 @@ import {
   type WorkbenchFileChangeFailureMarker,
 } from "../lib/workbench/thread/workbench-file-change";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import { CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS, createCodexTranscriptDiagnostic } from "./codex-transcript-diagnostics";
 import type CodexAppServer from "./CodexAppServer";
 import { log, logError } from "./process-helpers";
@@ -84,6 +85,7 @@ export type CodexStdioBridgeOptions = {
   bridgeUrl: string;
   handleWorkbenchRequest: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   initialState?: CodexStdioBridgeReloadState;
+  onAcceptedTurnSteer?: (threadId: string) => void;
   onNotification: (notification: JsonRpcNotification) => void;
   prepareTurnStart?: (message: JsonRpcRequest) => Promise<void>;
   resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
@@ -960,6 +962,7 @@ export default class CodexStdioBridge {
   private readonly bridgeUrl: string;
   private readonly fileChangeFailureMarkers: Map<string, WorkbenchFileChangeFailureMarker>;
   private readonly fileChangeTurnCursors: Map<string, string>;
+  private readonly onAcceptedTurnSteer: NonNullable<CodexStdioBridgeOptions["onAcceptedTurnSteer"]>;
   private readonly onNotification: CodexStdioBridgeOptions["onNotification"];
   private readonly prepareTurnStart: NonNullable<CodexStdioBridgeOptions["prepareTurnStart"]>;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
@@ -987,9 +990,10 @@ export default class CodexStdioBridge {
   private readonly resolveProjectFromCwd: CodexStdioBridgeOptions["resolveProjectFromCwd"];
   private readonly handleWorkbenchRequest: CodexStdioBridgeOptions["handleWorkbenchRequest"];
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, onNotification, prepareTurnStart = async () => undefined, resolveProjectFromCwd, sendToClient, storageRoot }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, resolveProjectFromCwd, sendToClient, storageRoot }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
+    this.onAcceptedTurnSteer = onAcceptedTurnSteer;
     this.onNotification = onNotification;
     this.prepareTurnStart = prepareTurnStart;
     this.resolveProjectFromCwd = resolveProjectFromCwd;
@@ -1660,6 +1664,11 @@ export default class CodexStdioBridge {
     }
 
     this.pendingResponses.delete(Number(message.id));
+    if (!isPendingInternalResponse(pending) && pending.method === "turn/steer" && !message.error) {
+      const turnId = asString(asRecord(message.result)?.turnId)?.trim();
+      const threadId = asString(asRecord(pending.upstreamRequest.params)?.threadId)?.trim();
+      if (turnId && threadId) this.onAcceptedTurnSteer(threadId);
+    }
     let hydratedMessage = message;
     const shouldCaptureTranscript = shouldCapturePollingTranscript(pending.method, pending.requestSource);
     if (shouldHydrateThreadResponse(pending.upstreamRequest)) {

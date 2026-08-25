@@ -38,6 +38,7 @@ import { WORKBENCH_INJECTION_TEMPLATES } from "../injections/workbench-injection
 import {
   buildWorkbenchBrowseInstructions,
   buildWorkbenchGitInstructions,
+  buildWorkbenchLongWaitInstructions,
   buildWorkbenchOrchestratorReloadInstructions,
   buildWorkbenchSubagentInstructions,
   buildWorkbenchThreadRecallInstructions,
@@ -463,6 +464,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     buildWorkbenchSkillsDeveloperInstructions(skillManifest),
     buildInstructionPackSections(instructionPacks),
     browseInstructions,
+    buildWorkbenchLongWaitInstructions(context),
     buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadRecallInstructions(context),
     buildWorkbenchThreadResumeInstructions(context),
@@ -486,6 +488,7 @@ export async function buildWorkbenchThreadUtilityDeveloperInstructions(
   const browseInstructions = await buildWorkbenchBrowseInstructions(context);
   return joinInstructionSections([
     browseInstructions,
+    buildWorkbenchLongWaitInstructions(context),
     buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadRecallInstructions(context),
     buildWorkbenchThreadResumeInstructions(context),
@@ -516,6 +519,7 @@ export async function buildWorkbenchCollaborationDeveloperInstructions(
     buildWorkspaceRootsInjection(context),
     workflowInjection,
     browseInstructions,
+    buildWorkbenchLongWaitInstructions(context),
     buildWorkbenchOrchestratorReloadInstructions(context),
     buildWorkbenchThreadRecallInstructions(context),
     buildWorkbenchThreadResumeInstructions(context),

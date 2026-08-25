@@ -65,6 +65,7 @@ export function createWorkbenchOrchestratorCommands(
   const documentedReload = defineWorkbenchAgentCommand({
     description: "Reload selected Workbench runtime subsystems and wait for terminal reload status.",
     helpGroups: ["orchestrator"],
+    mcpSteerInterruptible: true,
     words: ["orchestrator", "reload"],
     usage: "wb orchestrator reload --<scope> [--<scope> ...]",
     inputSchema: reloadInput,

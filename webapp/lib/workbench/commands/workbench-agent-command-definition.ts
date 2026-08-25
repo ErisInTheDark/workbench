@@ -70,6 +70,7 @@ export interface WorkbenchAgentCommandDefinition {
   helpGroups: readonly string[];
   inputSchema: z.ZodType;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
+  mcpSteerInterruptible?: boolean;
   usage: string;
   words: readonly string[];
 }
@@ -83,6 +84,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   helpGroups: readonly string[];
   inputSchema: TSchema;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
+  mcpSteerInterruptible?: boolean;
   parseCliArgs(args: string[]): z.input<TSchema>;
   usage: string;
   words: readonly string[];
@@ -104,6 +106,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     helpGroups: definition.helpGroups,
     inputSchema: definition.inputSchema,
     mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,
+    mcpSteerInterruptible: definition.mcpSteerInterruptible,
     usage: definition.usage,
     words: definition.words,
   };

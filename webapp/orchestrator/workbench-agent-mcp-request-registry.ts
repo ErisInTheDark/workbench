@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAgentMcpPendingRequest: bounded active-request detail for runtime-drain diagnostics. Keywords: workbench, MCP, drain, diagnostics.
- * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation handles, generation drain policy, and duplicate-ID guards. Keywords: workbench, MCP, cancellation, registry.
+ * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation handles, thread-steer interruption, generation drain policy, and duplicate-ID guards. Keywords: workbench, MCP, cancellation, steer, registry.
  * - getProcessWorkbenchAgentMcpRequestRegistry: wrap reload-stable process state without retaining stale module methods. Keywords: workbench, MCP, reload, process.
  */
 import type { WorkbenchAgentMcpRuntimeDrainPolicy } from "../lib/workbench/commands/workbench-agent-command-definition";
@@ -17,6 +17,8 @@ interface WorkbenchAgentMcpRequestEntry {
   owner: WorkbenchAgentMcpRuntimeOwner;
   policy: WorkbenchAgentMcpRuntimeDrainPolicy | null;
   startedAt: number;
+  steerInterruptible?: boolean;
+  threadId?: string;
   toolName: string;
 }
 
@@ -35,6 +37,8 @@ interface WorkbenchAgentMcpRequestRegistryState {
 interface WorkbenchAgentMcpRequestRegistrationOptions {
   owner: WorkbenchAgentMcpRuntimeOwner;
   policy?: WorkbenchAgentMcpRuntimeDrainPolicy;
+  steerInterruptible?: boolean;
+  threadId?: string;
   toolName: string;
 }
 
@@ -98,6 +102,8 @@ export class WorkbenchAgentMcpRequestRegistry {
     if (this.state.disposed) throw new Error("Workbench MCP request registry is disposed.");
     const ownerState = this.state.ownerStates.get(options.owner) ?? { phase: "active", released: false };
     if (ownerState.released) throw new Error("Workbench MCP runtime owner is disposed.");
+    const threadId = options.threadId?.trim();
+    if (options.steerInterruptible && !threadId) throw new Error("A steer-interruptible Workbench MCP request requires a thread id.");
     this.state.ownerStates.set(options.owner, ownerState);
     const requests = this.state.requestsByClient.get(clientScope) ?? new Map<WorkbenchAgentMcpRequestId, WorkbenchAgentMcpRequestEntry>();
     if (requests.has(requestId)) throw new Error(`Workbench MCP request ID is already active for client ${clientScope}: ${requestId}`);
@@ -107,6 +113,8 @@ export class WorkbenchAgentMcpRequestRegistry {
       owner: options.owner,
       policy: options.policy ?? null,
       startedAt: this.now(),
+      steerInterruptible: options.steerInterruptible,
+      threadId,
       toolName: options.toolName,
     };
     requests.set(requestId, entry);
@@ -148,6 +156,20 @@ export class WorkbenchAgentMcpRequestRegistry {
     if (!controller || controller.signal.aborted) return false;
     controller.abort(new Error(reason?.trim() || "Workbench MCP tool call was cancelled."));
     return true;
+  }
+
+  interruptThreadWaits(threadId: string, reason = "Workbench MCP wait was interrupted by a user steer.") {
+    const canonicalThreadId = threadId.trim();
+    if (!canonicalThreadId) return 0;
+    let interrupted = 0;
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (!entry.steerInterruptible || entry.threadId !== canonicalThreadId || entry.controller.signal.aborted) continue;
+        entry.controller.abort(new Error(reason));
+        interrupted += 1;
+      }
+    }
+    return interrupted;
   }
 
   listRuntimeDrainPending(owner: WorkbenchAgentMcpRuntimeOwner): WorkbenchAgentMcpPendingRequest[] {

@@ -110,6 +110,7 @@ function targetCommand(action: "settle" | "stop" | "wait", description: string) 
     effects: action === "wait" ? { idempotent: true, readOnly: true } : action === "stop" ? { destructive: true } : {},
     helpGroups: ["subagent"],
     mcpRuntimeDrainPolicy: action === "wait" ? "abort-immediately" : undefined,
+    mcpSteerInterruptible: action === "wait" || undefined,
     words: ["subagent", action],
     usage: `wb subagent ${action} (--id <id> | --name <name>) [...]`,
     inputSchema: targetsSchema,
