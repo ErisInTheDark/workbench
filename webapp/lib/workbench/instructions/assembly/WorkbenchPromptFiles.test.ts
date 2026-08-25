@@ -86,9 +86,13 @@ test("default workflow filtering retains required thread behavior during materia
     onWarning: (warning) => warnings.push(`${warning.recovery}:${warning.line}`),
     shell: "pwsh",
   });
-  assert.match(filtered ?? "", /setting a concise title is required, not optional/u);
-  assert.match(filtered ?? "", /mcp__wb__thread_status/u);
-  assert.doesNotMatch(filtered ?? "", /<\/?available:/u);
+  const workflow = filtered ?? "";
+  assert.match(workflow, /setting a concise title is required, not optional/u);
+  assert.match(
+    workflow,
+    /### Completion gate[^]*mcp__wb__git_arc_diff[^]*mcp__wb__thread_status[^]*## Review Mode[^]*mcp__wb__git_arc_propose[^]*final channel/u,
+  );
+  assert.doesNotMatch(workflow, /<\/?available:/u);
   assert.deepEqual(warnings, []);
 });
 

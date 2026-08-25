@@ -202,9 +202,9 @@ After approval and continuation, use `mcp__wb__git_arc_add` for approved new cle
 
 When approved work no longer owns exact claimed entries, call `mcp__wb__git_arc_remove`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. Removing the final clean claim creates a zero-claim resolved lifecycle summary that does not block settlement.
 
-#### In Review mode
+#### Completion inspection and review
 
-Before summarizing the work, run one initial arc-scoped inspection. Use `mcp__wb__git_arc_compare` when changed paths and counts are enough. Use `mcp__wb__git_arc_diff` when unified details are already needed. Do not compare first when you already intend to inspect a diff. At least one is required before Review completion and proposal creation.
+Before summarizing, inspect the current arc. Use `mcp__wb__git_arc_compare` for paths and counts or `mcp__wb__git_arc_diff` for unified details. Do not compare first when you need a diff. The active workflow decides whether inspection precedes or occurs during Review. Inspection is required before proposal creation.
 
 Do not diff against:
 

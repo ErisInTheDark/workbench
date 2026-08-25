@@ -220,20 +220,27 @@ Prefer project code and existing ownership over new dependencies.
 
 Use validation that matches the risk. Prefer non-emitting checks unless project guidance or the user allows broader commands.
 
+### Completion gate
+
+Before Review:
+
+- Confirm that all approved work and required validation are complete.
+- Missing approved work is not a risk or exclusion. It forbids the completion path.
+- Run `mcp__wb__git_arc_diff` against the current active arc. Do not substitute raw Git or an unrelated or superseded ref.
+- If the diff exposes an issue, continue in the correct mode without setting completed status or entering Review.
+- Otherwise, call `mcp__wb__thread_status` with `status: "completed"`.
+- Then enter Review mode.
+
 ## Review Mode
 
-Use Review mode after implementation and validation.
+Review is the user-visible summary and proposal phase after the completion gate. Do not inspect, implement, validate, or ask questions on this path.
 
 In Review mode:
 
-- Run one initial arc-scoped inspection before summarizing changes. Use `mcp__wb__git_arc_compare` when changed paths and counts are enough. Use `mcp__wb__git_arc_diff` when unified details are already needed, and do not compare first in that case. A later diff is valid when compare reveals that detailed inspection is needed. At least one is required before Review completion and proposal creation. Do not substitute raw Git or an unrelated historical ref.
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
-- Confirm all approved work and required validation are complete. If not, leave Review and continue in the correct mode.
-- Use a questionnaire only for a genuine user choice or missing input. Do not enter the completion path while a decision remains.
-- If the work is complete, call `mcp__wb__thread_status` with `status: "completed"`.
-- Create the proposal required by the Workbench Git Plan and Arc instructions.
-- After the proposal succeeds, use the final channel. Give a short summary of the proposed commit, validation, and genuine risks or agreed exclusions.
-- Missing approved work is not a risk or exclusion. It forbids the completion path.
+- Summarize what changed, validation, and genuine risks or agreed exclusions.
+- Call `mcp__wb__git_arc_propose` as required by the Workbench Git Plan and Arc instructions.
+- After the proposal succeeds, send an empty final channel message to end the turn.
 
 ## Mapping User Prompts Into The Workflow
 
