@@ -1,13 +1,19 @@
-# Workbench Agent Guidance
+1. When you don't know what something might mean exactly in this project, reference `GLOSSARY.md`.
+2. Before planning or editing project behavior or architecture, search `INVARIANTS.md` for invariants related to the task at hand. Also keep the start of the file in mind.
 
 ## What Belongs Here
 
 - Keep this file limited to durable project constraints, project-skill routing, project-specific commands, validation commands, and explicit permission boundaries.
 - Do not add architecture inventories, temporary implementation notes, changelogs, task-specific procedures, or facts that an agent can recover by inspecting the source.
 - Update this file or nearby project guidance when a change materially alters a durable project constraint or operating workflow, and confirm that guidance change with the user.
-- In this project, "update instructions" means update sources under `webapp/lib/workbench/instructions/`. The user will explicitly name `AGENTS.md` or a particular skill when she intends either one.
-- Ensure you're familiar with `GLOSSARY.md`.
-- Before planning or editing project behavior or architecture, search `INVARIANTS.md` for invariants related to the task at hand. Also keep the start of the file in mind.
+
+## Updating Instructions
+
+In this project, "update instructions" means update sources under `webapp/lib/workbench/instructions/`. The user will explicitly name `AGENTS.md` or a particular skill when she intends either one. 
+
+CRITICAL INSTRUCTION EDITING RULES:
+- "Strengthening" instructions does not mean more words!!!!! It means making the existing words more clear and EMPHASISED.
+- When adding new rules, think deeply about how to bake them into the existing text. Aim for more clear rules expressed in less overall words. Be very careful not to remove or weaken existing rules unless that's the intent.
 
 ## Code Organization
 
