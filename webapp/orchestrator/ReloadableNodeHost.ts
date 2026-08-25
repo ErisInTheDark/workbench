@@ -476,54 +476,110 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     }
 
     const handoffStates = new Map<string, unknown>();
+    const detachedPreviousHandoffIds: string[] = [];
     let candidates = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
+    let candidatesPublished = false;
     try {
       for (const scope of [...previousIds].reverse()) {
         const node = this.requireNode(scope);
         if (node.definition.lifecycle === "handoff") {
           if (!node.instance.detachForReload) throw new Error(`Handoff reloadable node ${scope} does not implement detachForReload.`);
           handoffStates.set(scope, await node.instance.detachForReload({ isReplacing: (candidate) => selected.has(candidate) }));
+          detachedPreviousHandoffIds.push(scope);
         } else {
           this.beginDrain(node);
         }
       }
+
+      const retained = new Map(this.nodes);
+      for (const scope of previousIds) retained.delete(scope);
+      candidates = this.createNodes(definitions, candidateIds, retained, handoffStates, selected, "replacement");
+      this.publishGraph(new Map([...retained, ...candidates]), definitions, topology, candidateIds);
+      candidatesPublished = true;
       await this.disposeNodes([...previous].reverse());
-      for (const scope of previousIds) this.nodes.delete(scope);
-      candidates = this.createNodes(definitions, candidateIds, this.nodes, handoffStates, selected, "replacement");
-      if (this.started) {
-        for (const scope of candidateIds) await candidates.get(scope)!.instance.start();
-      }
-      for (const [scope, node] of candidates) this.nodes.set(scope, node);
-      this.definitions = definitions;
-      this.topology = topology;
-      this.featureOwners = this.validateFeatureOwnership(this.nodes);
-      for (const node of previous) this.openGate(node);
+      await this.startPublishedNodes(candidates, candidateIds);
       for (const scope of candidateIds) await candidates.get(scope)!.instance.activate?.();
+      for (const node of previous) this.openGate(node);
       await this.onSwap(candidateIds);
     } catch (error) {
       const rollbackErrors: unknown[] = [];
-      try {
-        await this.disposeNodes([...candidates.values()].reverse());
-      } catch (disposeError) {
-        rollbackErrors.push(disposeError);
+
+      if (!candidatesPublished) {
+        try {
+          await this.detachHandoffNodes(candidates, candidateIds, definitions, selected, handoffStates);
+          await this.disposeNodes([...candidates.values()].reverse());
+          if (detachedPreviousHandoffIds.length) await this.restoreHandoffNodes(detachedPreviousHandoffIds, handoffStates);
+        } catch (restoreError) {
+          rollbackErrors.push(restoreError);
+        }
+        for (const node of previous) this.openGate(node);
+      } else {
+        const candidateNodes = [...candidates.values()];
+        for (const node of candidateNodes) this.closeGate(node);
+        try {
+          await this.waitForNodesDrain(candidateNodes);
+          for (const node of candidateNodes) if (node.definition.lifecycle === "atomic") this.beginDrain(node);
+          await this.detachHandoffNodes(candidates, candidateIds, definitions, selected, handoffStates);
+
+          const retained = new Map(this.nodes);
+          for (const scope of new Set([...previousIds, ...candidateIds])) retained.delete(scope);
+          const restored = this.createNodes(previousDefinitions, previousIds, retained, handoffStates, selected, "restore");
+          this.publishGraph(new Map([...retained, ...restored]), previousDefinitions, previousTopology, previousIds);
+          await this.disposeNodes([...candidateNodes].reverse());
+          await this.startPublishedNodes(restored, previousIds);
+          for (const scope of previousIds) await restored.get(scope)!.instance.activate?.();
+          for (const node of candidateNodes) this.openGate(node);
+          for (const node of previous) this.openGate(node);
+        } catch (restoreError) {
+          rollbackErrors.push(restoreError);
+        }
       }
-      for (const scope of candidateIds) this.nodes.delete(scope);
-      this.definitions = previousDefinitions;
-      this.topology = previousTopology;
-      try {
-        const restored = this.createNodes(previousDefinitions, previousIds, this.nodes, handoffStates, selected, "restore");
-        if (this.started) for (const scope of previousIds) await restored.get(scope)!.instance.start();
-        for (const [scope, node] of restored) this.nodes.set(scope, node);
-        this.featureOwners = this.validateFeatureOwnership(this.nodes);
-        for (const scope of previousIds) await restored.get(scope)!.instance.activate?.();
-      } catch (restoreError) {
-        rollbackErrors.push(restoreError);
-      }
-      for (const node of previous) this.openGate(node);
+
       if (rollbackErrors.length) {
         throw new AggregateError([error, ...rollbackErrors], "Reloadable topology replacement and rollback both failed.");
       }
       throw error;
+    }
+  }
+
+  private publishGraph(
+    nodes: Map<string, ActiveNode<TContext, TFeatures, TNotification>>,
+    definitions: Map<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
+    topology: readonly OrchestratorReloadScope[],
+    gatedIds: readonly string[],
+  ) {
+    const featureOwners = this.validateFeatureOwnership(nodes);
+    for (const nodeId of gatedIds) this.closeGate(nodes.get(nodeId)!);
+    this.nodes = nodes;
+    this.definitions = definitions;
+    this.topology = topology;
+    this.featureOwners = featureOwners;
+  }
+
+  private async startPublishedNodes(
+    nodes: ReadonlyMap<string, ActiveNode<TContext, TFeatures, TNotification>>,
+    ordered: readonly string[],
+  ) {
+    for (const nodeId of ordered) {
+      const node = nodes.get(nodeId)!;
+      if (this.started) await node.instance.start();
+      this.openGate(node);
+    }
+  }
+
+  private async detachHandoffNodes(
+    nodes: ReadonlyMap<string, ActiveNode<TContext, TFeatures, TNotification>>,
+    ordered: readonly string[],
+    definitions: ReadonlyMap<string, OrchestratorFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
+    selected: ReadonlySet<string>,
+    handoffStates: Map<string, unknown>,
+  ) {
+    for (const nodeId of [...ordered].reverse()) {
+      if (definitions.get(nodeId)?.lifecycle !== "handoff") continue;
+      const node = nodes.get(nodeId);
+      if (!node) continue;
+      if (!node.instance.detachForReload) throw new Error(`Handoff reloadable node ${nodeId} does not implement detachForReload.`);
+      handoffStates.set(nodeId, await node.instance.detachForReload({ isReplacing: (candidate) => selected.has(candidate) }));
     }
   }
 

@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect parent-owned topology ordering, shared-child identity, candidate validation, topology replacement, and rollback. Keywords: graph, topology, reload, test.
+ * No production exports. Node tests protect parent-owned topology ordering, shared-child identity, candidate validation, gated topology publication, waiter transfer, and rollback. Keywords: graph, topology, reload, gate, handoff, test.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -197,6 +197,209 @@ test("topology reload adds and reparents nodes from the fresh parent declaration
 
   assert.equal(host.get("child"), "new parent:child");
   assert.deepEqual(events, ["dispose old child", "dispose old parent", "start new parent", "start new child"]);
+});
+
+test("topology replacement publishes complete candidates and gates new work until its owner starts", async () => {
+  let finishChildStart!: () => void;
+  let reportChildStart!: () => void;
+  const childCanFinish = new Promise<void>((resolve) => { finishChildStart = resolve; });
+  const childStarted = new Promise<void>((resolve) => { reportChildStart = resolve; });
+  let host!: ReloadableNodeHost<null, Objects, never>;
+  const liveParent = node({
+    create: () => ({ dispose: () => undefined, registrations: { a: "live" }, start: () => undefined }),
+    provides: ["a"],
+    scope: "server:a",
+  });
+  const candidateChild = node({
+    create: () => ({
+      dispose: () => undefined,
+      registrations: { child: "candidate child" },
+      start: async () => {
+        reportChildStart();
+        await childCanFinish;
+      },
+    }),
+    provides: ["child"],
+    scope: "server:child",
+  });
+  const candidateParent = node({
+    children: [candidateChild],
+    create: () => ({
+      dispose: () => undefined,
+      registrations: { a: "candidate", b: "candidate parent" },
+      start: () => { assert.equal(host.get("a"), "candidate"); },
+    }),
+    provides: ["a", "b"],
+    scope: "server:a",
+  });
+  host = new ReloadableNodeHost(null, loader(
+    defineReloadableNodeGraph([liveParent]),
+    defineReloadableNodeGraph([candidateParent]),
+  ));
+  await host.start();
+
+  const reload = host.reload(["server:topology"]);
+  await childStarted;
+  assert.equal(host.get("a"), "candidate");
+  let operationSettled = false;
+  const operation = host.run("child", (value) => value).finally(() => { operationSettled = true; });
+  await Promise.resolve();
+  assert.equal(operationSettled, false);
+
+  finishChildStart();
+  await reload;
+  assert.equal(await operation, "candidate child");
+});
+
+test("topology replacement releases retired waiters only after the complete candidate starts", async () => {
+  let finishCandidateStart!: () => void;
+  let finishLiveDetach!: () => void;
+  let reportCandidateStart!: () => void;
+  let reportLiveDetach!: () => void;
+  const candidateCanFinish = new Promise<void>((resolve) => { finishCandidateStart = resolve; });
+  const candidateStarted = new Promise<void>((resolve) => { reportCandidateStart = resolve; });
+  const liveCanDetach = new Promise<void>((resolve) => { finishLiveDetach = resolve; });
+  const liveDetachStarted = new Promise<void>((resolve) => { reportLiveDetach = resolve; });
+  const state = { value: "transferred" };
+  const liveParent = node({
+    create: () => {
+      let detached = false;
+      return {
+        detachForReload: async () => {
+          reportLiveDetach();
+          await liveCanDetach;
+          detached = true;
+          return state;
+        },
+        dispose: () => { assert.equal(detached, true); },
+        registrations: { a: "live" },
+        start: () => undefined,
+      };
+    },
+    lifecycle: "handoff",
+    provides: ["a"],
+    scope: "server:a",
+  });
+  const candidateParent = node({
+    create: (_context, build) => {
+      assert.equal(build.handoffState, state);
+      return {
+        detachForReload: () => state,
+        dispose: () => undefined,
+        registrations: { a: "candidate", b: "candidate parent" },
+        start: async () => {
+          reportCandidateStart();
+          await candidateCanFinish;
+        },
+      };
+    },
+    lifecycle: "handoff",
+    provides: ["a", "b"],
+    scope: "server:a",
+  });
+  const host = new ReloadableNodeHost(null, loader(
+    defineReloadableNodeGraph([liveParent]),
+    defineReloadableNodeGraph([candidateParent]),
+  ));
+  await host.start();
+
+  const reload = host.reload(["server:topology"]);
+  await liveDetachStarted;
+  let waiterSettled = false;
+  const waiter = host.run("a", (value) => value).finally(() => { waiterSettled = true; });
+  finishLiveDetach();
+  await candidateStarted;
+  await Promise.resolve();
+  assert.equal(waiterSettled, false);
+
+  finishCandidateStart();
+  await reload;
+  assert.equal(await waiter, "candidate");
+});
+
+test("failed topology startup preserves handoff state and releases waiters after restoration starts", async () => {
+  let finishCandidateStart!: () => void;
+  let finishRestoredStart!: () => void;
+  let reportCandidateStart!: () => void;
+  let reportRestoredStart!: () => void;
+  const candidateCanFail = new Promise<void>((resolve) => { finishCandidateStart = resolve; });
+  const candidateStarted = new Promise<void>((resolve) => { reportCandidateStart = resolve; });
+  const restoredCanFinish = new Promise<void>((resolve) => { finishRestoredStart = resolve; });
+  const restoredStarted = new Promise<void>((resolve) => { reportRestoredStart = resolve; });
+  const startupFailure = new Error("candidate start failed");
+  const state = { destroyed: false, transfers: 0 };
+  let host!: ReloadableNodeHost<null, Objects, never>;
+  const liveParent = node({
+    create: (_context, build) => {
+      const restored = build.mode === "restore";
+      let detached = false;
+      return {
+        detachForReload: () => {
+          detached = true;
+          state.transfers += 1;
+          return state;
+        },
+        dispose: () => { if (!detached) state.destroyed = true; },
+        registrations: { a: restored ? "restored" : "live" },
+        start: async () => {
+          if (!restored) return;
+          assert.equal(build.handoffState, state);
+          assert.equal(host.get("a"), "restored");
+          reportRestoredStart();
+          await restoredCanFinish;
+        },
+      };
+    },
+    lifecycle: "handoff",
+    provides: ["a"],
+    scope: "server:a",
+  });
+  const candidateParent = node({
+    create: (_context, build) => {
+      assert.equal(build.handoffState, state);
+      let detached = false;
+      return {
+        detachForReload: () => {
+          detached = true;
+          state.transfers += 1;
+          return state;
+        },
+        dispose: () => { if (!detached) state.destroyed = true; },
+        registrations: { a: "candidate", b: "candidate parent" },
+        start: async () => {
+          reportCandidateStart();
+          await candidateCanFail;
+          throw startupFailure;
+        },
+      };
+    },
+    lifecycle: "handoff",
+    provides: ["a", "b"],
+    scope: "server:a",
+  });
+  host = new ReloadableNodeHost(null, loader(
+    defineReloadableNodeGraph([liveParent]),
+    defineReloadableNodeGraph([candidateParent]),
+  ));
+  await host.start();
+
+  const reload = host.reload(["server:topology"]);
+  await candidateStarted;
+  let waiterSettled = false;
+  const waiter = host.run("a", (value) => value).finally(() => { waiterSettled = true; });
+  await Promise.resolve();
+  assert.equal(waiterSettled, false);
+
+  finishCandidateStart();
+  await restoredStarted;
+  await Promise.resolve();
+  assert.equal(waiterSettled, false);
+
+  finishRestoredStart();
+  await assert.rejects(reload, (error) => error === startupFailure);
+  assert.equal(await waiter, "restored");
+  assert.equal(state.destroyed, false);
+  assert.equal(state.transfers, 2);
 });
 
 test("failed topology startup restores the previous graph and registrations", async () => {
