@@ -3,6 +3,8 @@
  * - No production exports; Node tests cover direct request adapters, concurrent Browse producers, cancellation release, session-read bypass, active-work ownership, result draining, and reload behavior. Keywords: browse, controller, direct, concurrency, cancel, sessions, result, reload, test.
  */
 import assert from "node:assert/strict";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
 import type { WorkbenchBrowseSessionListRequest } from "../lib/types";
@@ -20,7 +22,7 @@ function deferred() {
 
 function createController(
   onListSessions: (request: WorkbenchBrowseSessionListRequest) => void = () => undefined,
-  onHandle: (signal: AbortSignal) => void = () => undefined,
+  onHandle: (signal: AbortSignal) => Promise<void> | void = () => undefined,
 ) {
   const results: WorkbenchBrowseResultSink = {
     record: () => undefined,
@@ -31,7 +33,7 @@ function createController(
     controlSession: async () => ({ result: null, session: null, stopped: false }),
     findStaleInactiveSessionStops: async () => [],
     handle: async (_body, signal) => {
-      onHandle(signal);
+      await onHandle(signal);
       return Response.json({ ok: true });
     },
     listSessions: async (request) => {
@@ -66,6 +68,44 @@ test("direct session request execution preserves query adaptation", async () => 
   assert.equal(receivedRequest?.cwd, "C:\\projects\\workbench");
   assert.equal(receivedRequest?.includeRuntime, false);
   assert.equal(receivedRequest?.threadId, "thread-1");
+});
+
+test("HTTP admission releases the graph handler and reload drain cancels its request owner", async () => {
+  const requestStarted = deferred();
+  const requestCancelled = deferred();
+  let receivedSignal: AbortSignal | null = null;
+  const controller = createController(() => undefined, async (signal) => {
+    receivedSignal = signal;
+    requestStarted.resolve();
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        requestCancelled.resolve();
+        reject(signal.reason);
+      }, { once: true });
+    });
+  });
+  const admitted = deferred();
+  const server = http.createServer((request, response) => {
+    void controller.handleBrowseHttpRequest(request, response).finally(admitted.resolve);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as AddressInfo;
+  try {
+    const client = fetch(`http://127.0.0.1:${address.port}/orchestrator/browse`, {
+      body: "{}",
+      method: "POST",
+    });
+    await requestStarted.promise;
+    await admitted.promise;
+
+    controller.beginDrain();
+    await requestCancelled.promise;
+    await controller.waitForIdle();
+    assert.equal(receivedSignal?.aborted, true);
+    assert.equal((await client).ok, false);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test("independent Browse command producers can run concurrently", async () => {

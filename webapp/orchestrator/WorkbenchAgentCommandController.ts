@@ -27,10 +27,17 @@ interface WorkbenchAgentDirectPort {
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
-  getReloadDirt?: () => Promise<WorkbenchReloadDirtSnapshot>;
+  getReloadDirt?: (signal?: AbortSignal) => Promise<WorkbenchReloadDirtSnapshot>;
   getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
   requestCodex?: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   requestSubagent?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
+}
+
+interface WorkbenchAgentCommandActiveRequest {
+  completion: Promise<void>;
+  controller: AbortController;
+  label: string;
+  startedAt: number;
 }
 
 const UNCONFIGURED_DIRECT_PORT: WorkbenchAgentDirectPort = {
@@ -74,7 +81,7 @@ function bindRequestAbort(request: http.IncomingMessage, response: http.ServerRe
   response.once("close", () => {
     if (!response.writableEnded) abort();
   });
-  return controller.signal;
+  return controller;
 }
 
 function waitForDelay(ms: number, signal: AbortSignal) {
@@ -125,6 +132,8 @@ function isLoopbackAddress(address: string | undefined) {
 }
 
 export default class WorkbenchAgentCommandController {
+  private readonly activeRequests = new Set<WorkbenchAgentCommandActiveRequest>();
+  private acceptingRequests = true;
   private readonly ripgrep: Pick<WorkbenchRipgrepController, "execute">;
 
   constructor(
@@ -143,7 +152,49 @@ export default class WorkbenchAgentCommandController {
   }
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
-    const signal = bindRequestAbort(request, response);
+    if (!this.acceptingRequests) {
+      sendText(response, 503, "Workbench agent commands are draining for reload.\n");
+      return;
+    }
+    const controller = bindRequestAbort(request, response);
+    const active = {
+      completion: Promise.resolve(),
+      controller,
+      label: "wb command admission",
+      startedAt: Date.now(),
+    };
+    active.completion = this.completeHttpRequest(request, response, controller.signal, active)
+      .finally(() => { this.activeRequests.delete(active); });
+    this.activeRequests.add(active);
+    void active.completion;
+  }
+
+  beginRuntimeDrain() {
+    this.acceptingRequests = false;
+    for (const active of this.activeRequests) {
+      active.controller.abort(new Error("Workbench agent command was cancelled by a user-authorized reload."));
+    }
+  }
+
+  async dispose() {
+    this.beginRuntimeDrain();
+    await Promise.allSettled([...this.activeRequests].map(({ completion }) => completion));
+  }
+
+  listRuntimeDrainPending() {
+    const now = Date.now();
+    return [...this.activeRequests].map(({ label, startedAt }) => ({
+      ageMs: Math.max(0, now - startedAt),
+      label,
+    }));
+  }
+
+  private async completeHttpRequest(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    signal: AbortSignal,
+    active: WorkbenchAgentCommandActiveRequest,
+  ) {
     try {
       if (!isLoopbackAddress(request.socket.remoteAddress)) {
         sendText(response, 403, "Workbench agent commands are available only over loopback.\n");
@@ -155,6 +206,7 @@ export default class WorkbenchAgentCommandController {
       const callerThreadId = form.get("callerThreadId")?.trim() || null;
       const callerHarness = form.get("callerHarness")?.trim() || "codex";
       const workbenchOrigin = form.get("workbenchOrigin")?.trim() || this.orchestratorOrigin;
+      active.label = `wb ${argv[0]?.trim() || "command"}`;
       if (!cwd || argv.length > 256 || argv.some((arg) => arg.length > 65_536 || arg.includes("\0"))) {
         sendText(response, 400, "A valid Workbench agent command request is required.\n");
         return;
@@ -179,12 +231,16 @@ export default class WorkbenchAgentCommandController {
         return;
       }
       if (parsed.request.waitForReload) {
+        this.activeRequests.delete(active);
         await this.admitReloadRequest(parsed.request, response, signal);
         return;
       }
       await this.writeCliResponse(parsed.request, response, await this.executeStructuredRequest(parsed.request, signal), signal);
     } catch (error) {
-      if (signal.aborted) return;
+      if (signal.aborted) {
+        sendText(response, 503, `${signal.reason instanceof Error ? signal.reason.message : "Workbench agent command was cancelled."}\n`);
+        return;
+      }
       sendText(response, 500, `${error instanceof Error ? error.message : String(error)}\n`);
     }
   }
@@ -247,7 +303,7 @@ export default class WorkbenchAgentCommandController {
   private async dispatchRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
     if (request.path === "/api/orchestrator/reload" && request.body?.all === true) {
       if (!this.direct.getReloadDirt) throw new Error("Reload dirt is not configured.");
-      const dirt = await this.direct.getReloadDirt();
+      const dirt = await this.direct.getReloadDirt(signal);
       const includeDestructive = request.body.unsafe === true;
       const scopes = [
         ...new Set([
@@ -276,7 +332,7 @@ export default class WorkbenchAgentCommandController {
     }
     if (request.path === "/api/orchestrator/dirt") {
       if (!this.direct.getReloadDirt) throw new Error("Reload dirt is not configured.");
-      return Response.json(await this.direct.getReloadDirt());
+      return Response.json(await this.direct.getReloadDirt(signal));
     }
     if (request.path === "/api/orchestrator/reload" && request.body) {
       const admission = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));

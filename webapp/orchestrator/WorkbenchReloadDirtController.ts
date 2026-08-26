@@ -135,8 +135,8 @@ export default class WorkbenchReloadDirtController {
     this.publish({ ...this.snapshot, error: state.error, pendingScopes: [] });
   }
 
-  async refresh() {
-    await this.enqueue(async () => await this.refreshNow());
+  async refresh(signal?: AbortSignal) {
+    await this.enqueue(async () => await this.refreshNow(signal));
     return this.snapshot;
   }
 
@@ -168,9 +168,10 @@ export default class WorkbenchReloadDirtController {
     await next;
   }
 
-  private async refreshNow() {
+  private async refreshNow(signal?: AbortSignal) {
     const state = this.requireState();
     try {
+      if (signal?.aborted) throw signal.reason;
       const dirtyScopes = [] as WorkbenchReloadDirtSnapshot["dirtyScopes"];
       const descriptors = [...state.descriptors.values()].filter(({ paths }) => paths.length);
       const pathsByBaseline = new Map<string, Set<string>>();
@@ -183,10 +184,10 @@ export default class WorkbenchReloadDirtController {
       const changedByBaseline = new Map<string, Set<string>>();
       for (const [baseline, paths] of pathsByBaseline) {
         const sourcePaths = [...paths];
-        const currentTree = await this.repository.writeScopedWorktreeTree(sourcePaths, baseline);
+        const currentTree = await this.repository.writeScopedWorktreeTree(sourcePaths, baseline, signal);
         changedByBaseline.set(
           baseline,
-          new Set(await this.repository.listChangedPaths(baseline, currentTree, sourcePaths)),
+          new Set(await this.repository.listChangedPaths(baseline, currentTree, sourcePaths, signal)),
         );
       }
       for (const descriptor of descriptors) {
@@ -199,6 +200,7 @@ export default class WorkbenchReloadDirtController {
       state.error = null;
       this.publish({ dirtyScopes, error: null, pendingScopes: state.pendingScopes });
     } catch (error) {
+      if (signal?.aborted) throw signal.reason;
       this.publishError(error);
     }
   }

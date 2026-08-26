@@ -6,12 +6,13 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import type { OrchestratorReloadResponse, WorkbenchReloadDirtScope, WorkbenchThreadSidebarStore } from "../../lib/types";
+import type { WorkbenchReloadDirtScope, WorkbenchThreadSidebarStore } from "../../lib/types";
 import ChevronIcon from "./ChevronIcon";
 import PrimaryButton from "./PrimaryButton";
 import {
   getReloadAllHoldMs,
   getReloadScopeHoldMs,
+  readReloadResponse,
   waitForReloadCompletion,
 } from "./reload-necessary-state";
 
@@ -53,7 +54,7 @@ export default function ReloadNecessary({
         method: "POST",
         signal: controller.signal,
       });
-      const payload = await response.json() as OrchestratorReloadResponse | { error?: string };
+      const payload = await readReloadResponse(response);
       if (!response.ok || !("ok" in payload && payload.ok)) {
         throw new Error("error" in payload && typeof payload.error === "string" ? payload.error : "Unable to reload the selected scopes.");
       }
@@ -65,7 +66,7 @@ export default function ReloadNecessary({
             method: "GET",
             signal,
           });
-          const status = await statusResponse.json() as OrchestratorReloadResponse | { error?: string };
+          const status = await readReloadResponse(statusResponse);
           if (!statusResponse.ok || !("ok" in status)) {
             throw new Error("error" in status && typeof status.error === "string" ? status.error : "Unable to read reload status.");
           }

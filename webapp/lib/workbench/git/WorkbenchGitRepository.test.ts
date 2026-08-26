@@ -92,6 +92,12 @@ test("reads ref objects and inspects text, binary, and literal-path changes with
   const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
   context.after(fixture.dispose);
   const repository = await WorkbenchGitRepository.open(fixture.root);
+  const cancellation = new AbortController();
+  cancellation.abort(new Error("cancel scoped snapshot"));
+  await assert.rejects(
+    repository.writeScopedWorktreeTree(["ordinary.txt"], "HEAD", cancellation.signal),
+    (error: unknown) => error instanceof Error && error.name === "AbortError",
+  );
 
   const head = await repository.currentHead();
   const commit = await repository.readCommitAt("HEAD");

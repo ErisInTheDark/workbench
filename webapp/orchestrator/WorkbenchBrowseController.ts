@@ -43,7 +43,7 @@ function bindRequestAbort(request: http.IncomingMessage, response: http.ServerRe
   response.once("close", () => {
     if (!response.writableEnded) abort();
   });
-  return controller.signal;
+  return controller;
 }
 
 function waitForResponseDrain(response: http.ServerResponse, signal: AbortSignal) {
@@ -90,9 +90,22 @@ function jsonResponse(payload: object, status = 200) {
   return Response.json(payload, { headers: { "Cache-Control": "no-store" }, status });
 }
 
+function sendHttpError(response: http.ServerResponse, error: unknown) {
+  if (response.destroyed || response.writableEnded) return;
+  if (response.headersSent) {
+    response.end();
+    return;
+  }
+  response.statusCode = 500;
+  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Content-Type", "application/json; charset=utf-8");
+  response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Browse request failed." }));
+}
+
 export default class WorkbenchBrowseController {
   private acceptingCommands = true;
   private readonly activeCommands = new Set<Promise<void>>();
+  private readonly activeHttpRequests = new Map<AbortController, Promise<void>>();
   private readonly requestHandler: WorkbenchBrowseRequestHandlerPort;
   private readonly results: WorkbenchBrowseResultSink;
 
@@ -164,25 +177,30 @@ export default class WorkbenchBrowseController {
   }
 
   async handleBrowseHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
-    const signal = bindRequestAbort(request, response);
-    const body = await readRequestBody(request);
-    const upstream = await this.executeBrowseRequest(body, signal);
-    await writeResponse(response, upstream, signal);
+    this.admitHttpRequest(request, response, async (signal) => {
+      const body = await readRequestBody(request);
+      const upstream = await this.executeBrowseRequest(body, signal);
+      await writeResponse(response, upstream, signal);
+    });
   }
 
   async handleSessionsHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
-    const signal = bindRequestAbort(request, response);
-    const body = request.method === "POST" ? await readRequestBody(request) : Buffer.alloc(0);
-    const upstream = await this.executeSessionRequest({
-      body,
-      method: request.method ?? "",
-      url: request.url ?? "/",
-    }, signal);
-    await writeResponse(response, upstream, signal);
+    this.admitHttpRequest(request, response, async (signal) => {
+      const body = request.method === "POST" ? await readRequestBody(request) : Buffer.alloc(0);
+      const upstream = await this.executeSessionRequest({
+        body,
+        method: request.method ?? "",
+        url: request.url ?? "/",
+      }, signal);
+      await writeResponse(response, upstream, signal);
+    });
   }
 
   beginDrain() {
     this.acceptingCommands = false;
+    for (const controller of this.activeHttpRequests.keys()) {
+      controller.abort(new Error("Browse request was cancelled by a user-authorized reload."));
+    }
   }
 
   resume() {
@@ -190,7 +208,10 @@ export default class WorkbenchBrowseController {
   }
 
   async waitForIdle() {
-    await Promise.allSettled([...this.activeCommands]);
+    await Promise.allSettled([
+      ...this.activeCommands,
+      ...this.activeHttpRequests.values(),
+    ]);
     await this.requestHandler.waitForIdle();
     await this.results.waitForIdle();
   }
@@ -206,5 +227,22 @@ export default class WorkbenchBrowseController {
       release();
       this.activeCommands.delete(active);
     }
+  }
+
+  private admitHttpRequest(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    operation: (signal: AbortSignal) => Promise<void>,
+  ) {
+    if (!this.acceptingCommands) {
+      sendHttpError(response, new Error("Browse controller is draining for reload."));
+      return;
+    }
+    const controller = bindRequestAbort(request, response);
+    const completion = operation(controller.signal)
+      .catch((error: unknown) => { sendHttpError(response, error); })
+      .finally(() => { this.activeHttpRequests.delete(controller); });
+    this.activeHttpRequests.set(controller, completion);
+    void completion;
   }
 }

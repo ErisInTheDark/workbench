@@ -120,12 +120,18 @@ export default class WorkbenchGitRepository {
     return new WorkbenchGitRepository(path.resolve(repoRoot));
   }
 
-  private static async runAt(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
+  private static async runAt(
+    cwd: string,
+    args: string[],
+    env: NodeJS.ProcessEnv = process.env,
+    signal?: AbortSignal,
+  ) {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
       encoding: "utf8",
       env,
       maxBuffer: GIT_MAX_BUFFER,
+      signal,
       windowsHide: true,
     });
     return stdout;
@@ -137,8 +143,8 @@ export default class WorkbenchGitRepository {
     this.root = path.resolve(repoRoot);
   }
 
-  async run(args: string[], env: NodeJS.ProcessEnv = process.env) {
-    return await WorkbenchGitRepository.runAt(this.root, args, env);
+  async run(args: string[], env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal) {
+    return await WorkbenchGitRepository.runAt(this.root, args, env, signal);
   }
 
   private async runWithInputResult(
@@ -435,18 +441,18 @@ export default class WorkbenchGitRepository {
     });
   }
 
-  async writeScopedWorktreeTree(paths: string[], baseTreeish = "HEAD") {
+  async writeScopedWorktreeTree(paths: string[], baseTreeish = "HEAD", signal?: AbortSignal) {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await this.run(["read-tree", baseTreeish], env);
+      await this.run(["read-tree", baseTreeish], env, signal);
       const matchedPaths = [...new Set(parseNullPaths(await this.run([
         "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
         ...paths.map((candidate) => this.literalPathspec(candidate)),
-      ], env)))].sort((left, right) => left.localeCompare(right));
+      ], env, signal)))].sort((left, right) => left.localeCompare(right));
       if (matchedPaths.length) {
-        await this.run(["add", "-A", "--", ...matchedPaths.map((candidate) => this.literalPathspec(candidate))], env);
+        await this.run(["add", "-A", "--", ...matchedPaths.map((candidate) => this.literalPathspec(candidate))], env, signal);
       }
-      return (await this.run(["write-tree"], env)).trim();
+      return (await this.run(["write-tree"], env, signal)).trim();
     });
   }
 
@@ -525,11 +531,11 @@ export default class WorkbenchGitRepository {
     return refs.map(({ ref, value }) => ({ objectType: types.get(value) ?? "missing", ref, value }));
   }
 
-  async listChangedPaths(from: string, to: string, paths: string[]) {
+  async listChangedPaths(from: string, to: string, paths: string[], signal?: AbortSignal) {
     return parseNullPaths(await this.run([
       "diff", "--name-only", "-z", "--no-renames", from, to, "--",
       ...paths.map((candidate) => this.literalPathspec(candidate)),
-    ])).sort((left, right) => left.localeCompare(right));
+    ], process.env, signal)).sort((left, right) => left.localeCompare(right));
   }
 
   async listFirstParentCommitPathChanges(fromExclusive: string, toInclusive: string, paths: string[]): Promise<GitCommitPathChange[]> {

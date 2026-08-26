@@ -10,6 +10,7 @@ import {
   getReloadAllHoldMs,
   getReloadScopeHoldMs,
   NORMAL_RELOAD_HOLD_MS,
+  readReloadResponse,
   waitForReloadCompletion,
 } from "./reload-necessary-state";
 
@@ -21,6 +22,35 @@ test("destructive scopes require the long hold and reload all uses the longest h
   assert.equal(getReloadScopeHoldMs(destructive), DESTRUCTIVE_RELOAD_HOLD_MS);
   assert.equal(getReloadAllHoldMs([regular]), NORMAL_RELOAD_HOLD_MS);
   assert.equal(getReloadAllHoldMs([regular, destructive]), DESTRUCTIVE_RELOAD_HOLD_MS);
+});
+
+test("reload response parsing accepts terminal payloads and bounded errors", async () => {
+  const terminal = await readReloadResponse(Response.json(response("succeeded")));
+  assert.equal("state" in terminal ? terminal.state : null, "succeeded");
+  assert.deepEqual(
+    await readReloadResponse(Response.json({ error: "reload failed" }, { status: 502 })),
+    { error: "reload failed" },
+  );
+});
+
+test("reload response parsing bounds HTML and empty responses without exposing their bodies", async () => {
+  await assert.rejects(
+    readReloadResponse(new Response("<!DOCTYPE html><p>secret route body</p>", {
+      headers: { "Content-Type": "text/html" },
+      status: 404,
+    })),
+    (error: unknown) => error instanceof Error
+      && /HTML.*HTTP 404/u.test(error.message)
+      && !error.message.includes("secret route body"),
+  );
+  await assert.rejects(
+    readReloadResponse(new Response("", { status: 502 })),
+    /empty response \(HTTP 502\)/u,
+  );
+  await assert.rejects(
+    readReloadResponse(Response.json({}, { status: 200 })),
+    /invalid response/u,
+  );
 });
 
 function response(state: "failed" | "running" | "succeeded", startedAt = 100): OrchestratorReloadResponse {

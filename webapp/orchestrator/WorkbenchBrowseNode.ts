@@ -43,7 +43,7 @@ class BrowseExecution implements OrchestratorBrowseExecution {
 
   async detach() {
     if (!this.controller) return;
-    this.controller.beginDrain();
+    this.beginDrain();
     try {
       await this.controller.waitForIdle();
     } catch (error) {
@@ -54,6 +54,10 @@ class BrowseExecution implements OrchestratorBrowseExecution {
 
   resume() {
     this.controller?.resume();
+  }
+
+  beginDrain() {
+    this.controller?.beginDrain();
   }
 
   private getController() {
@@ -71,6 +75,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       : new BrowseExecution(context);
     let detached = false;
     return {
+      beginRuntimeDrain: () => { execution.beginDrain(); },
       detachForReload: async () => {
         await execution.detach();
         detached = true;

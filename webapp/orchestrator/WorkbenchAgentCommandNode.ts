@@ -22,7 +22,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       executeBrowseRequest: context.executeBrowseRequest,
       executeGitArcRequest: async (body) => await gitArc.executeRequest(body),
       executeSessionRequest: context.executeBrowseSessionRequest,
-      getReloadDirt: async () => await reloadDirt.refresh(),
+      getReloadDirt: async (signal) => await reloadDirt.refresh(signal),
       getReloadScopeCatalog: () => reloadDirt.getCatalog(),
       requestCodex: async (request) => await harnesses.request("codex", request),
       requestSubagent: async (request) => request.method?.startsWith("workbench/thread/")
@@ -30,7 +30,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         : await subagents.handleRequest(request),
     });
     return {
-      dispose: () => undefined,
+      beginRuntimeDrain: () => { agentCommand.beginRuntimeDrain(); },
+      dispose: async () => { await agentCommand.dispose(); },
+      listRuntimeDrainPending: () => agentCommand.listRuntimeDrainPending(),
       registrations: { agentCommand },
       start: () => undefined,
     };

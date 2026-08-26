@@ -487,6 +487,7 @@ test("reload admission releases the handler before terminal polling completes", 
     await handled.promise;
     assert.equal(clientSettled, false);
     await pollStarted.promise;
+    controller.beginRuntimeDrain();
     terminal.resolve(Response.json({
       appliedScopes: ["server:core"], completedAt: 2, error: null, ok: true,
       queuedScopes: [], requestedScopes: ["server:core"], startedAt: 1, state: "succeeded",
@@ -495,6 +496,47 @@ test("reload admission releases the handler before terminal polling completes", 
     const response = await client;
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "Reload succeeded.\nApplied: server:core\nQueued: none\n");
+  } finally {
+    await server.close();
+  }
+});
+
+test("ordinary command admission releases the handler and runtime drain cancels dirt", async () => {
+  const handled = deferred<void>();
+  const dirtStarted = deferred<void>();
+  const dirtCancelled = deferred<Error>();
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      getReloadDirt: async (signal) => await new Promise((_, reject) => {
+        dirtStarted.resolve();
+        signal?.addEventListener("abort", () => {
+          const reason = signal.reason instanceof Error ? signal.reason : new Error("missing cancellation reason");
+          dirtCancelled.resolve(reason);
+          reject(reason);
+        }, { once: true });
+      }),
+    },
+  );
+  const server = await startController(controller, () => handled.resolve());
+  try {
+    const client = fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: agentCommandBody(["dirt"]),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    await dirtStarted.promise;
+    await handled.promise;
+
+    controller.beginRuntimeDrain();
+    assert.match((await dirtCancelled.promise).message, /user-authorized reload/u);
+    const response = await client;
+    assert.equal(response.status, 503);
+    assert.match(await response.text(), /user-authorized reload/u);
+    await controller.dispose();
+    assert.deepEqual(controller.listRuntimeDrainPending(), []);
   } finally {
     await server.close();
   }

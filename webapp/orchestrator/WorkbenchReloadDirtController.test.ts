@@ -95,6 +95,12 @@ test("scoped refresh detects loaded source deletion and recreation across its re
 
     await fs.writeFile(sourcePath, "export const value = 2;\n", "utf8");
     assert.deepEqual((await controller.refresh()).dirtyScopes.map(({ scope }) => scope), ["server:core"]);
+
+    const cancellation = new AbortController();
+    const reason = new Error("cancel dirt refresh");
+    cancellation.abort(reason);
+    await assert.rejects(controller.refresh(cancellation.signal), (error) => error === reason);
+    assert.equal(controller.getSnapshot().error, null);
   } finally {
     await controller?.dispose();
     await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
