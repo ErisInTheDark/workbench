@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchReloadDirtControllerState: transferable snapshot, baseline, and generated-path state. Keywords: reload, dirt, handoff.
+ * - WorkbenchReloadDirtControllerState: transferable snapshot, baseline, generated-path, and serialized-refresh state. Keywords: reload, dirt, handoff, queue.
  * - WorkbenchReloadDirtControllerOptions: workspace, graph, and publication ports. Keywords: reload, ports, Git.
  * - default WorkbenchReloadDirtController: own reload dirt, full-worktree snapshots, source generations, and watcher lifecycle. Keywords: reload, dirt, snapshot, watcher.
  */
@@ -21,6 +21,7 @@ export interface WorkbenchReloadDirtControllerState {
   error: string | null;
   pendingScopes: OrchestratorReloadScope[];
   snapshotCommit: string;
+  tail: Promise<void>;
 }
 
 export interface WorkbenchReloadDirtControllerOptions {
@@ -55,11 +56,12 @@ export default class WorkbenchReloadDirtController {
   private repository: WorkbenchGitRepository;
   private readonly listeners = new Set<() => void>();
   private snapshot: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
-  private tail = Promise.resolve();
+  private tail: Promise<void>;
   private watcher: FSWatcher | null = null;
 
   constructor(private readonly options: WorkbenchReloadDirtControllerOptions, private state: WorkbenchReloadDirtControllerState | null = null) {
     this.repository = new WorkbenchGitRepository(options.repoRoot);
+    this.tail = state?.tail ?? Promise.resolve();
   }
 
   async start() {
@@ -72,6 +74,7 @@ export default class WorkbenchReloadDirtController {
         error: null,
         pendingScopes: [],
         snapshotCommit,
+        tail: this.tail,
       };
     }
     this.connectInstructionObserver();
@@ -140,7 +143,9 @@ export default class WorkbenchReloadDirtController {
   detachForReload() {
     this.attached = false;
     this.disconnectRuntimeOwners();
-    return this.requireState();
+    const state = this.requireState();
+    state.tail = this.tail;
+    return state;
   }
 
   resumeAfterFailedReload() {
@@ -150,21 +155,22 @@ export default class WorkbenchReloadDirtController {
     this.watcher = watch(this.options.repoRoot, { recursive: true }, () => this.queueRefresh());
   }
 
-  dispose() {
+  async dispose() {
     this.attached = false;
     this.disconnectRuntimeOwners();
+    await this.tail;
   }
 
   private async enqueue(operation: () => Promise<void>) {
     const next = this.tail.then(operation);
     this.tail = next.catch(() => undefined);
+    if (this.state) this.state.tail = this.tail;
     await next;
   }
 
   private async refreshNow() {
     const state = this.requireState();
     try {
-      const currentTree = await this.repository.writeWorktreeTree();
       const dirtyScopes = [] as WorkbenchReloadDirtSnapshot["dirtyScopes"];
       const descriptors = [...state.descriptors.values()].filter(({ paths }) => paths.length);
       const pathsByBaseline = new Map<string, Set<string>>();
@@ -174,10 +180,15 @@ export default class WorkbenchReloadDirtController {
         for (const sourcePath of descriptor.paths) paths.add(sourcePath);
         pathsByBaseline.set(baseline, paths);
       }
-      const changedByBaseline = new Map(await Promise.all([...pathsByBaseline].map(async ([baseline, paths]) => [
-        baseline,
-        new Set(await this.repository.listChangedPaths(baseline, currentTree, [...paths])),
-      ] as const)));
+      const changedByBaseline = new Map<string, Set<string>>();
+      for (const [baseline, paths] of pathsByBaseline) {
+        const sourcePaths = [...paths];
+        const currentTree = await this.repository.writeScopedWorktreeTree(sourcePaths, baseline);
+        changedByBaseline.set(
+          baseline,
+          new Set(await this.repository.listChangedPaths(baseline, currentTree, sourcePaths)),
+        );
+      }
       for (const descriptor of descriptors) {
         const baseline = state.baselines.get(descriptor.scope) ?? state.snapshotCommit;
         const changed = changedByBaseline.get(baseline) ?? new Set<string>();
@@ -237,6 +248,7 @@ export default class WorkbenchReloadDirtController {
     this.refreshQueued = true;
     setImmediate(() => {
       this.refreshQueued = false;
+      if (!this.attached) return;
       void this.refresh();
     });
   }

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect full-worktree snapshots, shared-path dirt, partial baseline advancement, and observed Markdown. Keywords: reload, dirt, Git, instructions, test.
+ * No production exports. Tests protect full-worktree baselines, scoped refresh, shared-path dirt, partial advancement, and observed Markdown. Keywords: reload, dirt, Git, instructions, test.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -51,7 +51,52 @@ test("shared source dirt remains for scopes whose reload baseline did not advanc
     assert.deepEqual((await controller.refresh()).dirtyScopes.map(({ scope }) => scope), ["server:mcp", "server:instructions"]);
     assert.match((await git("rev-parse", "refs/worktree/workbench/reload-snapshot")).stdout, /^[0-9a-f]{40}\s*$/u);
   } finally {
-    controller?.dispose();
+    await controller?.dispose();
+    await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("scoped refresh detects loaded source deletion and recreation across its reload baseline", async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-reload-dirt-scoped-"));
+  const git = async (...args: string[]) => await run("git", args, { cwd: repoRoot });
+  let controller: WorkbenchReloadDirtController | null = null;
+  try {
+    await git("init");
+    await git("config", "user.email", "workbench@example.invalid");
+    await git("config", "user.name", "Workbench test");
+    await fs.mkdir(path.join(repoRoot, "webapp", "components"), { recursive: true });
+    const sourcePath = path.join(repoRoot, "webapp", "loaded.ts");
+    const clientPath = path.join(repoRoot, "webapp", "components", "client-only.tsx");
+    await fs.writeFile(sourcePath, "export const value = 1;\n", "utf8");
+    await fs.writeFile(clientPath, "export const client = 1;\n", "utf8");
+    await git("add", ".");
+    await git("commit", "-m", "initial");
+
+    const sourceState: ReloadNodeSourceState = {
+      dependantClosure: (scopes) => [...scopes],
+      descriptors: [{
+        access: "agent",
+        description: "Core",
+        destructive: false,
+        paths: ["webapp/loaded.ts"],
+        safeAll: true,
+        scope: "server:core",
+      }],
+    };
+    controller = new WorkbenchReloadDirtController({ getSourceState: () => sourceState, repoRoot });
+    await controller.start();
+
+    await fs.rm(sourcePath);
+    await fs.writeFile(clientPath, "export const client = 2;\n", "utf8");
+    assert.deepEqual((await controller.refresh()).dirtyScopes.map(({ scope }) => scope), ["server:core"]);
+
+    await controller.completeReload(["server:core"]);
+    assert.deepEqual(controller.getSnapshot().dirtyScopes, []);
+
+    await fs.writeFile(sourcePath, "export const value = 2;\n", "utf8");
+    assert.deepEqual((await controller.refresh()).dirtyScopes.map(({ scope }) => scope), ["server:core"]);
+  } finally {
+    await controller?.dispose();
     await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
   }
 });

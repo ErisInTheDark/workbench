@@ -181,6 +181,20 @@ test("hidden reload commands keep their raw operands out of thread rendering", (
   }).claimedBy, null);
 });
 
+test("reload help remains a read-only command instead of rendering reload activity", () => {
+  for (const command of [
+    "wb reload --help",
+    '"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command \'wb reload --help\'',
+  ]) {
+    assert.notEqual(getThreadCommandDisplay({
+      command,
+      commandActions: [],
+      cwd: PROJECT_ROOT,
+      projectRootPath: PROJECT_ROOT,
+    }).claimedBy, "workbench-cli.reload");
+  }
+});
+
 test("specialized typed wb MCP calls share CLI claims without duplicate summaries", () => {
   const cases = [
     ["wb thread status --status blocked", "thread_status", { status: "blocked" }],

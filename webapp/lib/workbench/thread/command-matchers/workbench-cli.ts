@@ -284,7 +284,10 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     id: "workbench-cli.reload",
     match: ({ stage }) => {
       const normalized = stage.text.trim();
-      if (!/^wb(?:\.cmd)?\s+reload(?:\s|$)/iu.test(normalized)) return null;
+      if (
+        !/^wb(?:\.cmd)?\s+reload(?:\s|$)/iu.test(normalized)
+        || /(?:^|\s)--help(?=\s|$)/iu.test(normalized)
+      ) return null;
       const selections = [...normalized.matchAll(/(?:^|\s)--([a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\+[a-z][a-z0-9-]*)*)(?=\s|$)/gu)]
         .map((match) => match[1]);
       const label = /(?:^|\s)--hard(?:\s|$)/u.test(normalized)
