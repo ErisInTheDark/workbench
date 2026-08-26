@@ -297,6 +297,14 @@ A steer is any new user direction received while the workflow is already underwa
 
 After a direct action or temporary detour, re-enter the workflow where it can continue. Ask what happens next only when the user's direction does not determine it.
 
+### Commit before continuing an addendum
+
+A new addendum can move the agent into Inspect as implementation ends. If the user then asks to commit the completed work first:
+
+- Treat the commit as a bounded Review detour.
+- Diff the current arc, give a short Review summary in commentary, and create the commit proposal.
+- Do not end the turn. Return immediately to the interrupted Inspect work.
+
 ### Unexpected file edits
 
 Assume unexpected file edits came from the user or another agent. Classify their effect on the approved plan. Path overlap alone is not plan impact.
