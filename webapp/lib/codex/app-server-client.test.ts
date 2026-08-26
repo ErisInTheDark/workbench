@@ -157,6 +157,49 @@ test("a normal request resolves once by response id", async () => {
   }
 });
 
+test("default receipt timers preserve the browser global receiver", async () => {
+  const originalClearTimeout = globalThis.clearTimeout;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalWebSocket = globalThis.WebSocket;
+  const timer = 123 as unknown as ReturnType<typeof setTimeout>;
+  let clearedTimer: ReturnType<typeof setTimeout> | null = null;
+  let scheduledCallback: (() => void) | null = null;
+  let socket: FakeWebSocket | null = null;
+  globalThis.clearTimeout = function (this: unknown, candidate?: ReturnType<typeof setTimeout>) {
+    if (this !== globalThis) throw new TypeError("Illegal invocation");
+    clearedTimer = candidate ?? null;
+  } as typeof clearTimeout;
+  globalThis.setTimeout = function (this: unknown, callback: () => void) {
+    if (this !== globalThis) throw new TypeError("Illegal invocation");
+    scheduledCallback = callback;
+    return timer;
+  } as typeof setTimeout;
+  globalThis.WebSocket = class extends FakeWebSocket {
+    constructor(url: string) {
+      super(url);
+      socket = this;
+    }
+  } as unknown as typeof WebSocket;
+  try {
+    const client = new CodexAppServerClient();
+    await client.connect("ws://test");
+    assert.ok(socket);
+    socket.notify({
+      [WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD]: 1,
+      method: "item/agentMessage/delta",
+      params: { delta: "first", itemId: "item", threadId: "thread", turnId: "turn" },
+      workbenchHarness: "codex",
+    });
+    assert.ok(scheduledCallback);
+    client.close();
+    assert.equal(clearedTimer, timer);
+  } finally {
+    globalThis.clearTimeout = originalClearTimeout;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
 test("batches cumulative receipts after notification listeners consume events", async () => {
   const originalWebSocket = globalThis.WebSocket;
   const clock = new FakeClock();

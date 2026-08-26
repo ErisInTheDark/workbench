@@ -70,8 +70,8 @@ export class CodexAppServerClient {
   private socket: WebSocket | null = null;
 
   constructor({
-    clearEventStreamAckTimeout: cancelEventStreamAck = clearTimeout,
-    setEventStreamAckTimeout: scheduleEventStreamAck = setTimeout,
+    clearEventStreamAckTimeout: cancelEventStreamAck = (timer) => globalThis.clearTimeout(timer),
+    setEventStreamAckTimeout: scheduleEventStreamAck = (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
   }: {
     clearEventStreamAckTimeout?: (timer: Timer) => void;
     setEventStreamAckTimeout?: (callback: () => void, delayMs: number) => Timer;
