@@ -351,11 +351,6 @@ test("selected active Codex steers settle at admission and canonical notificatio
 
 test("cumulative file-change patches stay live beyond an early large diff", async () => withClient(async (client, socket) => {
   client.selectThreadPayload(activeThread());
-  socket.notify("item/started", {
-    item: { changes: [], id: "live-file-change", status: "inProgress", type: "fileChange" },
-    threadId: "thread",
-    turnId: "turn",
-  });
 
   const initialDiff = `@@ -0,0 +1,240 @@\n${Array.from({ length: 240 }, (_, index) => `+initial line ${index}`).join("\n")}`;
   const initialChange = { diff: initialDiff, kind: { type: "add" as const }, path: "src/first.ts" };
@@ -386,6 +381,32 @@ test("cumulative file-change patches stay live beyond an early large diff", asyn
   assert.equal(grownSnapshotItem.status, "inProgress");
   assert.equal(grownSnapshotItem.changes[0]?.diff, grownDiff);
   assert.equal(grownSnapshotItem.changes[1]?.path, "src/second.ts");
+
+  socket.notify("item/started", {
+    item: { changes: [], id: "live-file-change", status: "inProgress", type: "fileChange" },
+    threadId: "thread",
+    turnId: "turn",
+  });
+  const reconciledItems = client.getSnapshot().currentThread?.turns[0]?.items.filter((item) => item.id === "live-file-change");
+  assert.equal(reconciledItems?.length, 1);
+  assert.equal(reconciledItems?.[0]?.type, "fileChange");
+  if (reconciledItems?.[0]?.type === "fileChange") {
+    assert.equal(reconciledItems[0].changes[0]?.diff, grownDiff);
+    assert.equal(reconciledItems[0].changes[1]?.path, "src/second.ts");
+  }
+
+  const completedChange = { ...initialChange, diff: `${grownDiff}\n+completed line` };
+  socket.notify("item/completed", {
+    item: { changes: [completedChange], id: "live-file-change", status: "completed", type: "fileChange" },
+    threadId: "thread",
+    turnId: "turn",
+  });
+  const completedItem = client.getSnapshot().currentThread?.turns[0]?.items.find((item) => item.id === "live-file-change");
+  assert.equal(completedItem?.type, "fileChange");
+  if (completedItem?.type === "fileChange") {
+    assert.equal(completedItem.status, "completed");
+    assert.equal(completedItem.changes[0]?.diff, completedChange.diff);
+  }
 }));
 
 test("differing acknowledgement runs the preserved tail once and tail failure stays admitted", async () => withClient(async (client, socket) => {

@@ -14,6 +14,7 @@ import { listWorkbenchAgentCommands } from "../lib/workbench/commands/workbench-
 import type { WorkbenchAgentCommandRequest } from "../lib/workbench/commands/workbench-agent-command-definition";
 import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+import { WORKBENCH_SHELL_SANDBOX_CAPABILITY } from "./WorkbenchShellController";
 
 const reloadCatalog = [
   { access: "agent" as const, description: "MCP", safeAll: true, scope: "server:mcp" },
@@ -64,6 +65,7 @@ function responseText(result: unknown) {
 test("lists one typed tool per eligible command and dispatches with trusted thread cwd", async () => {
   const executed: WorkbenchAgentCommandRequest[] = [];
   const codexRequests: Array<{ method?: string; params?: unknown }> = [];
+  const shellCalls: Array<{ input: object; meta: Record<string, unknown> | undefined }> = [];
   const controller = new WorkbenchAgentMcpController({
     executeCommand: async (request) => {
       executed.push(request);
@@ -76,6 +78,12 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       codexRequests.push(request);
       return { id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } };
     },
+    shell: {
+      execute: async (input, meta) => {
+        shellCalls.push({ input, meta });
+        return { exitCode: 3, stderr: "sandbox denial\n", stdout: "partial\n" };
+      },
+    },
   });
   const server = await startController(controller);
   const client = await connectClient(server.url);
@@ -85,7 +93,8 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   try {
     const inventory = await client.listTools();
     const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter(({ hideFromMcp }) => !hideFromMcp);
-    assert.equal(inventory.tools.length, eligible.length);
+    assert.equal(inventory.tools.length, eligible.length + 1);
+    assert.ok(client.getServerCapabilities()?.experimental?.[WORKBENCH_SHELL_SANDBOX_CAPABILITY]);
     assert.equal(inventory.tools.some(({ name }) => name === "browse_raw"), false);
     const plan = inventory.tools.find(({ name }) => name === "git_arc_plan");
     assert.ok(plan);
@@ -107,6 +116,23 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.ok(ripgrep);
     assert.deepEqual(Object.keys(ripgrep.inputSchema.properties ?? {}), ["args"]);
     assert.match(ripgrep.description ?? "", /without shell quoting.*no matches/u);
+    const shell = inventory.tools.find(({ name }) => name === "shell");
+    assert.ok(shell);
+    assert.deepEqual(Object.keys(shell.inputSchema.properties ?? {}).sort(), ["command", "login", "timeout_ms", "workdir"]);
+    assert.match(shell.description ?? "", /never escalates.*direct shell_command/u);
+
+    const shellMeta = {
+      [WORKBENCH_SHELL_SANDBOX_CAPABILITY]: { effective: "sandbox" },
+      threadId: "thread-1",
+    };
+    const shellResult = await client.callTool({
+      _meta: shellMeta,
+      arguments: { command: "Get-ChildItem", workdir: "child" },
+      name: "shell",
+    });
+    assert.equal(shellResult.isError, false);
+    assert.match(responseText(shellResult), /Exit code: 3[\s\S]*partial[\s\S]*sandbox denial/u);
+    assert.deepEqual(shellCalls, [{ input: { command: "Get-ChildItem", workdir: "child" }, meta: shellMeta }]);
 
     for (const [toolName, action, responseKind] of [
       ["git_arc_compare", "compare", "git-arc-compare"],
@@ -207,6 +233,17 @@ test("fails closed without trusted identity and sanitizes boundary failures", as
     assert.equal(missingIdentity.isError, true);
     assert.match(responseText(missingIdentity), /trusted MCP thread identity/u);
     assert.equal(codexReadCount, 0);
+
+    const missingShellIdentity = await client.callTool({ arguments: { command: "echo no" }, name: "shell" });
+    assert.equal(missingShellIdentity.isError, true);
+    assert.match(responseText(missingShellIdentity), /trusted MCP thread identity/u);
+    const missingSandboxState = await client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: { command: "echo no" },
+      name: "shell",
+    });
+    assert.equal(missingSandboxState.isError, true);
+    assert.match(responseText(missingSandboxState), /valid MCP sandbox state/u);
 
     const sanitized = await client.callTool({
       _meta: { threadId: "thread-1" },

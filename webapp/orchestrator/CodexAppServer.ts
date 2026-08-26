@@ -34,6 +34,8 @@ export function getCodexAppServerArgs() {
     "--config",
     "features.apply_patch_streaming_events=true",
     "--config",
+    "features.code_mode.direct_only_tool_namespaces=['functions']",
+    "--config",
     "hooks.PreToolUse=[{matcher='^apply_patch$',hooks=[{type='command',command='wb __hook apply-patch-claim'}]}]",
     "app-server",
     "--listen",

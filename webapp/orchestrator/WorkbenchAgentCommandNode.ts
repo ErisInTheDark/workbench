@@ -44,6 +44,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   sources: [
     "webapp/orchestrator/WorkbenchAgentCommandNode.ts",
     "webapp/orchestrator/WorkbenchAgentCommandController*.ts",
+    "webapp/orchestrator/CodexCommandExecController*.ts",
     "webapp/orchestrator/WorkbenchRipgrepController*.ts",
     "webapp/lib/workbench/commands/**",
     "webapp/lib/workbench/cli/**",

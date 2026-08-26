@@ -23,6 +23,11 @@ import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   type WorkbenchAgentMcpRequestRegistry,
 } from "./workbench-agent-mcp-request-registry";
+import WorkbenchShellController, {
+  WORKBENCH_SHELL_SANDBOX_CAPABILITY,
+  WORKBENCH_SHELL_TOOL_DESCRIPTION,
+  WorkbenchShellInputSchema,
+} from "./WorkbenchShellController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const LEGACY_MCP_CLIENT_SCOPE = "legacy";
@@ -36,6 +41,7 @@ export interface WorkbenchAgentMcpControllerOptions {
   orchestratorOrigin: string;
   requestRegistry?: WorkbenchAgentMcpRequestRegistry;
   requestCodex: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
+  shell?: Pick<WorkbenchShellController, "execute">;
 }
 
 function isLoopbackAddress(address: string | undefined) {
@@ -109,14 +115,16 @@ export default class WorkbenchAgentMcpController {
   private readonly requestRegistry: WorkbenchAgentMcpRequestRegistry;
   private readonly requestCodex: WorkbenchAgentMcpControllerOptions["requestCodex"];
   private readonly runtimeOwner = {};
+  private readonly shell: Pick<WorkbenchShellController, "execute">;
 
-  constructor({ executeCommand, getReloadScopeCatalog = () => [], lifecycleLogError = logError, orchestratorOrigin, requestCodex, requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry() }: WorkbenchAgentMcpControllerOptions) {
+  constructor({ executeCommand, getReloadScopeCatalog = () => [], lifecycleLogError = logError, orchestratorOrigin, requestCodex, requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry(), shell }: WorkbenchAgentMcpControllerOptions) {
     this.executeCommand = executeCommand;
     this.getReloadScopeCatalog = getReloadScopeCatalog;
     this.lifecycleLogError = lifecycleLogError;
     this.orchestratorOrigin = orchestratorOrigin;
     this.requestRegistry = requestRegistry;
     this.requestCodex = requestCodex;
+    this.shell = shell ?? new WorkbenchShellController({ requestCodex });
   }
 
   beginRuntimeDrain() {
@@ -198,11 +206,30 @@ export default class WorkbenchAgentMcpController {
   }
 
   private createServer(requestSignal: AbortSignal, clientScope: string) {
-    const server = new McpServer({ name: "wb", version: "1.0.0" });
+    const server = new McpServer({ name: "wb", version: "1.0.0" }, {
+      capabilities: { experimental: { [WORKBENCH_SHELL_SANDBOX_CAPABILITY]: {} } },
+    });
     server.server.setNotificationHandler(CancelledNotificationSchema, (notification) => {
       this.requestRegistry.cancel(clientScope, notification.params.requestId, notification.params.reason);
     });
     const names = new Set<string>();
+    names.add("shell");
+    server.registerTool("shell", {
+      annotations: {
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+        readOnlyHint: false,
+      },
+      description: WORKBENCH_SHELL_TOOL_DESCRIPTION,
+      inputSchema: WorkbenchShellInputSchema,
+    }, async (input, extra) => await this.callShell(
+      input as object,
+      extra._meta,
+      clientScope,
+      extra.requestId,
+      AbortSignal.any([requestSignal, extra.signal]),
+    ));
     for (const definition of listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent")) {
       if (definition.hideFromMcp) continue;
       const name = getWorkbenchAgentCommandToolName(definition);
@@ -227,6 +254,43 @@ export default class WorkbenchAgentMcpController {
       ));
     }
     return server;
+  }
+
+  private async callShell(
+    input: object,
+    meta: Record<string, unknown> | undefined,
+    clientScope: string,
+    requestId: WorkbenchAgentMcpRequestId,
+    signal: AbortSignal,
+  ) {
+    let unregister: (() => void) | null = null;
+    try {
+      const callerThreadId = readThreadId(meta);
+      const registration = this.requestRegistry.register(clientScope, requestId, {
+        owner: this.runtimeOwner,
+        policy: undefined,
+        steerInterruptible: false,
+        threadId: callerThreadId,
+        toolName: "shell",
+      });
+      unregister = registration.unregister;
+      signal = AbortSignal.any([signal, registration.signal]);
+      const result = await this.shell.execute(input, meta, signal);
+      if (signal.aborted) throw signal.reason;
+      const output = result.stdout && result.stderr
+        ? `${result.stdout}${result.stdout.endsWith("\n") ? "" : "\n"}${result.stderr}`
+        : result.stdout || result.stderr;
+      return {
+        content: [{ type: "text" as const, text: `Exit code: ${result.exitCode}\nOutput:\n${output}` }],
+        isError: false,
+      };
+    } catch (error) {
+      const message = sanitizeError(error) || "Workbench shell tool call failed.";
+      if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
+      return { content: [{ type: "text" as const, text: `Workbench shell failed: ${message}` }], isError: true };
+    } finally {
+      unregister?.();
+    }
   }
 
   private async callTool(

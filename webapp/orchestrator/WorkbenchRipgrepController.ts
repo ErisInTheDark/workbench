@@ -1,25 +1,16 @@
 /*
  * Exports:
- * - default WorkbenchRipgrepController: own safe ripgrep execution through Codex, cancellation, and exit semantics. Keywords: ripgrep, search, Codex, process, cancellation.
+ * - default WorkbenchRipgrepController: own safe ripgrep arguments and exit semantics above shared Codex command execution. Keywords: ripgrep, search, Codex, process.
  */
-import { randomUUID } from "node:crypto";
-
 import { WorkbenchRipgrepExecutionRequestSchema } from "../lib/workbench/commands/ripgrep-command-definition";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import { logError } from "./process-helpers";
-
-interface RipgrepProcessResult {
-  exitCode: number;
-  stderr: string;
-  stdout: string;
-}
-
-type RequestCodex = (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
+import CodexCommandExecController from "./CodexCommandExecController";
 
 interface WorkbenchRipgrepControllerOptions {
+  commandExec?: Pick<CodexCommandExecController, "execute">;
   createProcessId?: () => string;
   reportError?: (message: string) => void;
-  requestCodex: RequestCodex;
+  requestCodex?: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
 }
 
 function combinedOutput(stdout: string, stderr: string) {
@@ -35,37 +26,12 @@ function forbiddenProcessArgument(argument: string) {
     || argument.startsWith("--hostname-bin=");
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function readRipgrepProcessResult(response: JsonRpcResponse): RipgrepProcessResult {
-  if (response.error) throw new Error(response.error.message);
-  const result = response.result;
-  if (
-    !isRecord(result)
-    || typeof result.exitCode !== "number"
-    || typeof result.stdout !== "string"
-    || typeof result.stderr !== "string"
-  ) {
-    throw new Error("Codex command/exec returned an invalid ripgrep response.");
-  }
-  return {
-    exitCode: result.exitCode,
-    stderr: result.stderr,
-    stdout: result.stdout,
-  };
-}
-
 export default class WorkbenchRipgrepController {
-  private readonly createProcessId: () => string;
-  private readonly reportError: (message: string) => void;
-  private readonly requestCodex: RequestCodex;
+  private readonly commandExec: Pick<CodexCommandExecController, "execute">;
 
-  constructor({ createProcessId = randomUUID, reportError = (message) => logError("ripgrep", message), requestCodex }: WorkbenchRipgrepControllerOptions) {
-    this.createProcessId = createProcessId;
-    this.reportError = reportError;
-    this.requestCodex = requestCodex;
+  constructor({ commandExec, createProcessId, reportError, requestCodex }: WorkbenchRipgrepControllerOptions) {
+    if (!commandExec && !requestCodex) throw new Error("Codex command execution is not configured.");
+    this.commandExec = commandExec ?? new CodexCommandExecController({ createProcessId, reportError, requestCodex: requestCodex! });
   }
 
   async execute(input: object, signal: AbortSignal) {
@@ -76,51 +42,20 @@ export default class WorkbenchRipgrepController {
     }
     if (signal.aborted) throw signal.reason;
 
-    const processId = this.createProcessId();
-    let termination: Promise<void> | null = null;
-    const terminate = () => {
-      termination ??= this.requestCodex({
-        method: "command/exec/terminate",
-        params: { processId },
-      }).then((response) => {
-        if (response.error) throw new Error(response.error.message);
-      }).catch((error) => {
-        this.reportError(`failed to terminate Codex ripgrep process: ${error instanceof Error ? error.message : String(error)}`);
-      });
-      return termination;
-    };
-    const abort = () => { void terminate(); };
-    signal.addEventListener("abort", abort, { once: true });
-
     try {
-      const response = await this.requestCodex({
-        method: "command/exec",
-        params: {
-          command: ["rg", "--no-config", "--heading", ...request.data.args],
-          cwd: request.data.cwd,
-          disableTimeout: true,
-          env: { RIPGREP_CONFIG_PATH: null },
-          processId,
-          sandboxPolicy: { type: "dangerFullAccess" },
-        },
-      });
-      if (signal.aborted) {
-        await terminate();
-        throw signal.reason;
-      }
-
-      const result = readRipgrepProcessResult(response);
+      const result = await this.commandExec.execute({
+        command: ["rg", "--no-config", "--heading", ...request.data.args],
+        cwd: request.data.cwd,
+        disableTimeout: true,
+        env: { RIPGREP_CONFIG_PATH: null },
+        sandboxPolicy: { type: "dangerFullAccess" },
+      }, signal);
       const output = combinedOutput(result.stdout, result.stderr);
       if (result.exitCode === 0 || result.exitCode === 1) return new Response(output);
       return new Response(output || `Ripgrep exited with code ${result.exitCode}.\n`, { status: 400 });
     } catch (error) {
-      if (signal.aborted) {
-        await terminate();
-        throw signal.reason;
-      }
+      if (signal.aborted) throw signal.reason;
       return new Response(`Ripgrep could not run: ${error instanceof Error ? error.message : String(error)}\n`, { status: 400 });
-    } finally {
-      signal.removeEventListener("abort", abort);
     }
   }
 }

@@ -1912,6 +1912,18 @@ function WorkbenchThreadClient(
       };
     }
 
+    if (
+      incomingItem.type === "fileChange"
+      && liveItem.type === "fileChange"
+      && incomingItem.status === "inProgress"
+      && liveItem.status === "inProgress"
+    ) {
+      return {
+        ...incomingItem,
+        changes: liveItem.changes,
+      };
+    }
+
     return incomingItem;
   }
 
@@ -3609,6 +3621,15 @@ function WorkbenchThreadClient(
     };
   }
 
+  function createStreamingFileChangeItem(itemId: string): Extract<ThreadItem, { type: "fileChange" }> {
+    return {
+      type: "fileChange",
+      id: itemId,
+      changes: [],
+      status: "inProgress",
+    };
+  }
+
   function createStreamingTurn(turnId: string): Turn {
     return {
       id: turnId,
@@ -3891,7 +3912,7 @@ function WorkbenchThreadClient(
             : null
         ));
       case "item/fileChange/patchUpdated":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingFileChangeItem(notification.params.itemId), (item) => (
           item.type === "fileChange"
             ? { ...item, changes: notification.params.changes }
             : null
