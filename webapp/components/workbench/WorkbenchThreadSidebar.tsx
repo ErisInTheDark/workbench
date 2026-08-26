@@ -277,6 +277,7 @@ export default memo(function WorkbenchThreadSidebar({
     <>
       <nav aria-label="Threads">
         <WorkbenchThreadList
+          allowMainPanelDrop={showMosaicView}
           attentionLabelsByThreadId={attentionLabelsByThreadId}
           createThreadLabel="Create new thread"
           currentTarget={currentTarget}

@@ -605,9 +605,9 @@ export default function Workbench () {
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
   const threadViewInstanceKeysByThreadIdRef = useRef(new Map<string, string>());
   const workbenchDragController = useMemo(() => new WorkbenchDragController(), []);
-  const workbenchDragSnapshot = useSyncExternalStore(workbenchDragController.subscribe, workbenchDragController.getSnapshot, workbenchDragController.getSnapshot);
-  const activeWorkbenchDrag = workbenchDragSnapshot.active && workbenchDragSnapshot.payload
-    ? { payload: workbenchDragSnapshot.payload, x: workbenchDragSnapshot.x, y: workbenchDragSnapshot.y }
+  const workbenchDragActivity = useSyncExternalStore(workbenchDragController.subscribe, workbenchDragController.getActivitySnapshot, workbenchDragController.getActivitySnapshot);
+  const activeWorkbenchDrag = workbenchDragActivity.active && workbenchDragActivity.payload
+    ? { payload: workbenchDragActivity.payload }
     : null;
   useEffect(() => () => { workbenchDragController.dispose(); }, [workbenchDragController]);
 
@@ -2008,7 +2008,7 @@ export default function Workbench () {
     return { kind: "empty" };
   }, [effectiveFilePath, effectiveThreadTarget, settingsScope, showFileView, showSettingsView, showThreadView]);
   const temporaryDropLayout = useMemo(() => (
-    !isMobile && !showMosaicView && (activeWorkbenchDrag?.payload.type === "panel-target" || activeWorkbenchDrag?.payload.type === "thread-row")
+    !isMobile && !showMosaicView && activeWorkbenchDrag?.payload.type === "panel-target"
       ? WorkbenchMainLayout.fromTarget(routePanelTarget)
       : null
   ), [activeWorkbenchDrag?.payload.type, isMobile, routePanelTarget, showMosaicView]);
@@ -3358,7 +3358,6 @@ export default function Workbench () {
                 ) : null}
                 {shouldRenderMainLayout && mainLayoutForRender && (!showFileView || isFileViewReady || activeWorkbenchDrag?.payload.type === "panel-target" || activeWorkbenchDrag?.payload.type === "thread-row") ? (
                   <WorkbenchMainLayoutView
-                    activeDrag={activeWorkbenchDrag}
                     layout={mainLayoutForRender}
                     onFocusPanel={() => { }}
                     onLayoutChange={updateMainLayout}

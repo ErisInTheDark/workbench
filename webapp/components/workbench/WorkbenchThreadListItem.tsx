@@ -199,7 +199,7 @@ export default function WorkbenchThreadListItem({
   const compact = compactOverride ?? group === "settled";
   const hideCompactMetadata = showActions && Boolean(action);
   const actionButton = showActions && action ? (
-    <button type="button" aria-label={actionLabel} title={actionLabel} className={`pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-muted focus-visible:flex focus-visible:text-text${isDragActive ? "" : " hover:text-text group-hover/thread-row:flex group-focus-within/thread-row:flex"} ${compact ? "col-start-3 self-center" : "col-start-2 self-start"} ${action === "discard" ? "p-1" : "gap-1 px-1.5 py-1 text-[0.72rem] font-medium"}`} onClick={(event) => { event.stopPropagation(); onAction?.(canShiftSettle && (event.shiftKey || event.detail > 1) ? "settle" : action); }} onPointerDown={(event) => event.stopPropagation()}>
+    <button type="button" aria-label={actionLabel} title={actionLabel} className={`pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-muted focus-visible:flex focus-visible:text-text${isDragActive ? "" : " hover:text-text group-hover/thread-row:flex group-has-[:focus-visible]/thread-row:flex"} ${compact ? "col-start-3 self-center" : "col-start-2 self-start"} ${action === "discard" ? "p-1" : "gap-1 px-1.5 py-1 text-[0.72rem] font-medium"}`} onClick={(event) => { event.stopPropagation(); onAction?.(canShiftSettle && (event.shiftKey || event.detail > 1) ? "settle" : action); }} onPointerDown={(event) => event.stopPropagation()}>
       <ActionIcon className="size-4" />
       {action === "discard" ? null : <span>{actionLabel}</span>}
     </button>
@@ -221,8 +221,8 @@ export default function WorkbenchThreadListItem({
     </button>
   ) : null;
   return (
-    <li className={`group/thread-row relative isolate m-0 min-h-11 list-none md:min-h-0${dimmed ? ` opacity-50${isDragActive ? "" : " hover:opacity-100 focus-within:opacity-100"}` : ""}${className ? ` ${className}` : ""}`} data-thread-status-tone={entry.entryKind === "draft" ? "draft" : statusTone}>
-      <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out ${statusClassName} ${selected ? "opacity-100" : `opacity-0${isDragActive ? "" : " group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100"}`}`}>
+    <li className={`group/thread-row relative isolate m-0 min-h-11 list-none md:min-h-0${dimmed ? ` opacity-50${isDragActive ? "" : " hover:opacity-100 has-[:focus-visible]:opacity-100"}` : ""}${className ? ` ${className}` : ""}`} data-thread-status-tone={entry.entryKind === "draft" ? "draft" : statusTone}>
+      <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out ${statusClassName} ${selected ? "opacity-100" : `opacity-0${isDragActive ? "" : " group-hover/thread-row:opacity-100 group-has-[:focus-visible]/thread-row:opacity-100"}`}`}>
         <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="12.8" fill="color-mix(in srgb, var(--text) 4%, transparent)" stroke="currentColor" strokeWidth="1" strokeOpacity={strokeOpacity} strokeDasharray={hasDashedBorder ? "6 4" : undefined} vectorEffect="non-scaling-stroke" />
       </svg>
       <ContextMenuCapability menu={contextMenu}>
@@ -262,7 +262,7 @@ export default function WorkbenchThreadListItem({
         >
           <Icon className={`mr-1.5 size-3.5 ${statusClassName}`} />
           <span className={`${workbenchThreadListLabelClassName} truncate${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
-          <span className={`col-start-3 row-start-1 inline-flex items-center gap-1.5 text-[0.72rem] text-muted${hideCompactMetadata && !isDragActive ? " group-hover/thread-row:invisible group-focus-within/thread-row:invisible" : ""}`}>
+          <span className={`col-start-3 row-start-1 inline-flex items-center gap-1.5 text-[0.72rem] text-muted${hideCompactMetadata && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
             <span className="inline-flex size-4 items-center justify-center">{pinned ? <PinIcon className="size-3.5" /> : null}</span>
             <time dateTime={dateTime} title={exactTime}>{relativeTime}</time>
           </span>

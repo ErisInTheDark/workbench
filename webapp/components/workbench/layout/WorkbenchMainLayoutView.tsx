@@ -1,10 +1,11 @@
 /*
  * Exports:
  * - default WorkbenchMainLayoutView: render a recursive desktop split layout with panel drop targets. Keywords: workbench, split pane, drag drop.
+ * - Local helpers: resolve panel placement and render the isolated live drop preview. Keywords: mosaic, pointer, preview, geometry.
  */
 "use client";
 
-import { useEffect, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
+import { useSyncExternalStore, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 
 import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../../../lib/workbench/layout/workbench-drag";
 import WorkbenchMainLayout, {
@@ -15,6 +16,7 @@ import WorkbenchMainLayout, {
   type WorkbenchPanelTarget,
 } from "../../../lib/workbench/layout/workbench-layout";
 import DropTarget from "../drag/DropTarget";
+import { useWorkbenchDragController } from "../drag/workbench-drag-context";
 
 type WorkbenchMosaicPanelMetadata = Extract<WorkbenchMainLayoutNode, { readonly type: "leaf" }>["mosaicPanel"];
 type WorkbenchPanelDropPayload = Extract<WorkbenchDragPayload, { readonly type: "new-thread" | "panel-target" | "thread-row" }>;
@@ -28,11 +30,6 @@ type WorkbenchDropPreview = WorkbenchMainLayoutDrop & {
 };
 
 interface WorkbenchMainLayoutViewProps {
-  activeDrag: {
-    readonly payload: WorkbenchDragPayload;
-    readonly x: number;
-    readonly y: number;
-  } | null;
   layout: WorkbenchMainLayoutState;
   onFocusPanel: (panelId: string) => void;
   onLayoutChange: (layout: WorkbenchMainLayoutState) => void;
@@ -125,8 +122,54 @@ function getDropPreviewStyle(preview: WorkbenchDropPreview): CSSProperties {
   };
 }
 
+function getDropFromPoint(
+  clientX: number,
+  clientY: number,
+  payload: WorkbenchPanelDropPayload,
+): WorkbenchDropPreview | null {
+  if (typeof document === "undefined") return null;
+  const element = document.elementFromPoint(clientX, clientY);
+  const panel = element?.closest<HTMLElement>("[data-panel-id]");
+  const panelId = panel?.dataset.panelId;
+  if (payload.type === "panel-target" && payload.sourcePanelId && panelId === payload.sourcePanelId) return null;
+  const rect = panel?.getBoundingClientRect();
+  return panel && panelId
+    ? {
+      panelId,
+      placement: getDropPlacementFromPoint(panel, clientX, clientY),
+      rect: {
+        height: rect?.height ?? 0,
+        left: rect?.left ?? 0,
+        top: rect?.top ?? 0,
+        width: rect?.width ?? 0,
+      },
+    }
+    : null;
+}
+
+function WorkbenchDropPreviewOverlay() {
+  const controller = useWorkbenchDragController();
+  const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const preview = snapshot.active
+    && snapshot.payload
+    && (snapshot.payload.type === "panel-target" || snapshot.payload.type === "thread-row" || snapshot.payload.type === "new-thread")
+    ? getDropFromPoint(snapshot.x, snapshot.y, snapshot.payload)
+    : null;
+  return preview ? (
+    <div
+      aria-hidden="true"
+      className={joinClasses(
+        "pointer-events-none fixed z-[80] rounded-[0.75rem] border shadow-[0_0_0_1px_var(--accent)]",
+        preview.placement === "center"
+          ? "border-[#d0ad12]/70 bg-[#d0ad12]/25"
+          : "border-accent/55 bg-accent-soft/55",
+      )}
+      style={getDropPreviewStyle(preview)}
+    />
+  ) : null;
+}
+
 export default function WorkbenchMainLayoutView ({
-  activeDrag,
   layout,
   onFocusPanel,
   onLayoutChange,
@@ -135,39 +178,6 @@ export default function WorkbenchMainLayoutView ({
   onSplitResize,
   renderPanel,
 }: WorkbenchMainLayoutViewProps) {
-  const [dropPreview, setDropPreview] = useState<WorkbenchDropPreview | null>(null);
-
-  function getDropFromPoint(
-    clientX: number,
-    clientY: number,
-    payload: WorkbenchPanelDropPayload,
-  ): WorkbenchDropPreview | null {
-    if (typeof document === "undefined") {
-      return null;
-    }
-
-    const element = document.elementFromPoint(clientX, clientY);
-    const panel = element?.closest<HTMLElement>("[data-panel-id]");
-    const panelId = panel?.dataset.panelId;
-    if (payload.type === "panel-target" && payload.sourcePanelId && panelId === payload.sourcePanelId) {
-      return null;
-    }
-
-    const rect = panel?.getBoundingClientRect();
-    return panel && panelId
-      ? {
-        panelId,
-        placement: getDropPlacementFromPoint(panel, clientX, clientY),
-        rect: {
-          height: rect?.height ?? 0,
-          left: rect?.left ?? 0,
-          top: rect?.top ?? 0,
-          width: rect?.width ?? 0,
-        },
-      }
-      : null;
-  }
-
   function applyPanelTargetDrop(drop: WorkbenchMainLayoutDrop, payload: WorkbenchPanelDropPayload) {
     if (onPanelDrop) {
       onPanelDrop(drop, payload);
@@ -178,15 +188,6 @@ export default function WorkbenchMainLayoutView ({
       onLayoutChange(WorkbenchMainLayout.applyDrop(layout, drop, payload.target));
     }
   }
-
-  useEffect(() => {
-    if (activeDrag?.payload.type !== "panel-target" && activeDrag?.payload.type !== "thread-row" && activeDrag?.payload.type !== "new-thread") {
-      setDropPreview(null);
-      return;
-    }
-
-    setDropPreview(getDropFromPoint(activeDrag.x, activeDrag.y, activeDrag.payload));
-  }, [activeDrag]);
 
   function beginSplitResize(event: PointerEvent<HTMLDivElement>, node: Extract<WorkbenchMainLayoutNode, { type: "split" }>) {
     if (!onSplitResize || event.button !== 0) {
@@ -263,7 +264,6 @@ export default function WorkbenchMainLayoutView ({
         onDrop={(payload, point) => {
           if (payload.type !== "panel-target" && payload.type !== "thread-row" && payload.type !== "new-thread") return;
           const drop = getDropFromPoint(point.x, point.y, payload);
-          setDropPreview(null);
           if (drop) applyPanelTargetDrop(drop, payload);
           onPointerDrop();
         }}
@@ -292,18 +292,7 @@ export default function WorkbenchMainLayoutView ({
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1">
       {renderNode(layout.root)}
-      {dropPreview ? (
-        <div
-          aria-hidden="true"
-          className={joinClasses(
-            "pointer-events-none fixed z-[80] rounded-[0.75rem] border shadow-[0_0_0_1px_var(--accent)]",
-            dropPreview.placement === "center"
-              ? "border-[#d0ad12]/70 bg-[#d0ad12]/25"
-              : "border-accent/55 bg-accent-soft/55",
-          )}
-          style={getDropPreviewStyle(dropPreview)}
-        />
-      ) : null}
+      <WorkbenchDropPreviewOverlay />
     </div>
   );
 }

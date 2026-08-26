@@ -35,7 +35,6 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?isDragActive=\{isDragActive\}/u);
   assert.match(itemSource, /<WorkbenchTooltip[\s\S]*?enabled=\{showTooltip && !isDragActive\}[\s\S]*?<a/u);
   assert.match(itemSource, /More actions for \$\{entry\.title\}/u);
-  assert.match(itemSource, /isDragActive \? "" : " group-hover\/thread-row:opacity-100 group-focus-within\/thread-row:opacity-100"/u);
   assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?href=\{getThreadHref\(target\)\}[\s\S]*?role="tab"/u);
   assert.match(itemSource, /<a[\s\S]*?href=\{href\}[\s\S]*?role=\{role\}/u);
   assert.match(listSource, /href=\{getThreadHref\(\{ kind: "new" \}\)\}/u);

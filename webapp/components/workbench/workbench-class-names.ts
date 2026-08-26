@@ -12,7 +12,7 @@
 
 export const workbenchIconButtonClassName = "inline-flex min-h-[2.65rem] min-w-[2.65rem] items-center justify-center rounded-[0.7rem] p-[0.55rem] text-inherit transition-[background-color,color,opacity] duration-150 ease-out hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none data-[invalid=true]:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] data-[invalid=true]:text-danger data-[invalid=true]:hover:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)] data-[invalid=true]:focus-visible:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)] [&[data-invalid=true]_.save-icon-slash]:opacity-100 [&[data-invalid=true]_.save-icon-main]:opacity-45";
 
-export const workbenchNewEntryButtonClassName = "!min-h-0 !min-w-0 !p-1 h-full shrink-0 aspect-square md:opacity-0 md:transition-opacity md:duration-150 md:group-hover/entry-row:opacity-100 md:group-focus-within/entry-row:opacity-100";
+export const workbenchNewEntryButtonClassName = "!min-h-0 !min-w-0 !p-1 h-full shrink-0 aspect-square md:opacity-0 md:transition-opacity md:duration-150 md:group-hover/entry-row:opacity-100 md:group-has-[:focus-visible]/entry-row:opacity-100";
 
 export const workbenchThreadListButtonClassName = "flex w-full min-w-0 items-center rounded-lg px-2 py-1.5 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:py-1";
 

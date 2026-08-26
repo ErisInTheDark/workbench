@@ -113,7 +113,6 @@ test("compact sidebar rows hide metadata only while a real action is available",
   });
   assert.match(html, /aria-label="Restore"/u);
   assert.match(html, /group-hover\/thread-row:invisible/u);
-  assert.match(html, /group-focus-within\/thread-row:invisible/u);
 });
 
 test("thread state accepts phase-aware Git arc lifecycle state", () => {

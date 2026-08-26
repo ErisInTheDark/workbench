@@ -55,6 +55,7 @@ function itemThreadCount(item: WorkbenchThreadDisplayItem) {
 }
 
 export default function WorkbenchThreadList({
+  allowMainPanelDrop = false,
   attentionLabelsByThreadId = {},
   autoFocusFolderId = null,
   createThreadLabel = "Create new thread",
@@ -74,6 +75,7 @@ export default function WorkbenchThreadList({
   onRenameFolder,
   projectId,
 }: {
+  allowMainPanelDrop?: boolean;
   attentionLabelsByThreadId?: Record<string, string | undefined>;
   autoFocusFolderId?: string | null;
   createThreadLabel?: string;
@@ -174,9 +176,17 @@ export default function WorkbenchThreadList({
         tabIndex={selected || (!hasSelectedEntry && index === 0) ? 0 : -1}
       />
     );
+    const dropTargetIds = reorderSection
+      ? allowMainPanelDrop
+        ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID, WORKBENCH_MAIN_PANEL_DROP_TARGET_ID]
+        : [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID]
+      : allowMainPanelDrop
+        ? [WORKBENCH_MAIN_PANEL_DROP_TARGET_ID]
+        : [];
     return (
       <Draggable
-        dropTargetIds={reorderSection ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID, WORKBENCH_MAIN_PANEL_DROP_TARGET_ID] : [WORKBENCH_MAIN_PANEL_DROP_TARGET_ID]}
+        disabled={dropTargetIds.length === 0}
+        dropTargetIds={dropTargetIds}
         key={displayKey}
         label={entry.title}
         payload={reorderSection
@@ -272,48 +282,46 @@ export default function WorkbenchThreadList({
   };
 
   const renderReorderableSection = (items: WorkbenchThreadDisplayItem[], section: WorkbenchThreadDisplaySection) => (
-    <DropTargetBoundary className="min-w-0">
-      <ul className="m-0 flex flex-col gap-0.5 p-0">
-        {items.flatMap((item) => {
-          const key = itemKey(item);
-          return [
-            renderDropMarker(key, section, null),
-            item.itemKind === "folder" ? (
-              <li className="m-0 list-none" key={key}>
-                <WorkbenchThreadFolder
-                  autoFocusName={autoFocusFolderId === item.folder.folderId}
-                  attentionLabelsByThreadId={attentionLabelsByThreadId}
-                  entries={item.entries}
-                  folder={item.folder}
-                  isDragActive={isDragActive}
-                  nowMs={nowMs}
-                  onAutoFocusComplete={onAutoFocusFolderComplete}
-                  onMoveThread={(sourceKey, destinationFolderId, beforeKey) => onMove?.(sourceKey, section, destinationFolderId, beforeKey)}
-                  onOpenChange={(nextOpen) => setOpenFolderIds((current) => {
-                    const next = new Set(current);
-                    if (nextOpen) next.add(item.folder.folderId); else next.delete(item.folder.folderId);
-                    return next;
-                  })}
-                  onRename={(title) => onRenameFolder ? onRenameFolder(item.folder.folderId, title) : Promise.resolve(item.folder.title)}
-                  open={openFolderIds.has(item.folder.folderId)}
-                  tooltip={renderFolderTooltip(item)}
-                >
-                  {section === "settled" ? null : renderFolderCreateThread(item.folder.folderId)}
-                  {renderFolderEntries(item)}
-                </WorkbenchThreadFolder>
-              </li>
-            ) : renderEntry(item.entry, section),
-          ];
-        })}
-        {renderDropMarker("", section, null)}
-      </ul>
-    </DropTargetBoundary>
+    <ul className="m-0 flex flex-col gap-0.5 p-0">
+      {items.flatMap((item) => {
+        const key = itemKey(item);
+        return [
+          renderDropMarker(key, section, null),
+          item.itemKind === "folder" ? (
+            <li className="m-0 list-none" key={key}>
+              <WorkbenchThreadFolder
+                autoFocusName={autoFocusFolderId === item.folder.folderId}
+                attentionLabelsByThreadId={attentionLabelsByThreadId}
+                entries={item.entries}
+                folder={item.folder}
+                isDragActive={isDragActive}
+                nowMs={nowMs}
+                onAutoFocusComplete={onAutoFocusFolderComplete}
+                onMoveThread={(sourceKey, destinationFolderId, beforeKey) => onMove?.(sourceKey, section, destinationFolderId, beforeKey)}
+                onOpenChange={(nextOpen) => setOpenFolderIds((current) => {
+                  const next = new Set(current);
+                  if (nextOpen) next.add(item.folder.folderId); else next.delete(item.folder.folderId);
+                  return next;
+                })}
+                onRename={(title) => onRenameFolder ? onRenameFolder(item.folder.folderId, title) : Promise.resolve(item.folder.title)}
+                open={openFolderIds.has(item.folder.folderId)}
+                tooltip={renderFolderTooltip(item)}
+              >
+                {section === "settled" ? null : renderFolderCreateThread(item.folder.folderId)}
+                {renderFolderEntries(item)}
+              </WorkbenchThreadFolder>
+            </li>
+          ) : renderEntry(item.entry, section),
+        ];
+      })}
+      {renderDropMarker("", section, null)}
+    </ul>
   );
 
   const blankThreadSelected = isWorkbenchThreadTargetSelected({ kind: "new" }, currentTarget);
 
   return (
-    <div className="space-y-1">
+    <DropTargetBoundary className="space-y-1">
       <a
         href={getThreadHref({ kind: "new" })}
         title={createThreadLabel}
@@ -355,6 +363,6 @@ export default function WorkbenchThreadList({
           </ThreadDisclosure>
         ) : null}
       </div>
-    </div>
+    </DropTargetBoundary>
   );
 }

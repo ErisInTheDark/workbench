@@ -4,10 +4,14 @@
  */
 "use client";
 
-import { useContext, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 
+import type { WorkbenchDropTargetHandle, WorkbenchDropTargetSnapshot } from "../../../lib/workbench/layout/WorkbenchDragController";
 import type { WorkbenchDragPayload } from "../../../lib/workbench/layout/workbench-drag";
 import { DropTargetBoundaryContext, useWorkbenchDragController } from "./workbench-drag-context";
+
+const IDLE_TARGET_SNAPSHOT: WorkbenchDropTargetSnapshot = { selected: false, x: 0, y: 0 };
+const EMPTY_UNSUBSCRIBE = () => undefined;
 
 export default function DropTarget({ as = "div", children, className, dropTargetId, enabled, onDrop, range, style }: {
   as?: "div" | "li";
@@ -22,14 +26,13 @@ export default function DropTarget({ as = "div", children, className, dropTarget
   const controller = useWorkbenchDragController();
   const boundary = useContext(DropTargetBoundaryContext);
   const [element, setElement] = useState<HTMLElement | null>(null);
-  const [registrationId, setRegistrationId] = useState<number | null>(null);
+  const [registration, setRegistration] = useState<WorkbenchDropTargetHandle | null>(null);
   const enabledRef = useRef(enabled);
   const onDropRef = useRef(onDrop);
   enabledRef.current = enabled;
   onDropRef.current = onDrop;
   const rangeX = range?.x;
   const rangeY = range?.y;
-  const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   useEffect(() => {
     if (!element) return;
     const registration = controller.registerTarget({
@@ -40,12 +43,13 @@ export default function DropTarget({ as = "div", children, className, dropTarget
       onDrop: (payload, point) => onDropRef.current(payload, point),
       range: { x: rangeX, y: rangeY },
     });
-    setRegistrationId(registration.registrationId);
-    return registration.unregister;
+    setRegistration(registration);
+    return () => { registration.unregister(); };
   }, [boundary, controller, dropTargetId, element, rangeX, rangeY]);
-  const rendered = typeof children === "function"
-    ? children({ selected: snapshot.selectedRegistrationId === registrationId, x: snapshot.x, y: snapshot.y })
-    : children;
+  const subscribe = useCallback((listener: () => void) => registration?.subscribe(listener) ?? EMPTY_UNSUBSCRIBE, [registration]);
+  const getSnapshot = useCallback(() => registration?.getSnapshot() ?? IDLE_TARGET_SNAPSHOT, [registration]);
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const rendered = typeof children === "function" ? children(snapshot) : children;
   const Element = as;
   return <Element className={className} ref={setElement} style={style}>{rendered}</Element>;
 }

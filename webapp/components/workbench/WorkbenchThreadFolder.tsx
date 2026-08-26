@@ -27,7 +27,7 @@ import Draggable from "./drag/Draggable";
 import DropTarget from "./drag/DropTarget";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
 
-const THREAD_FOLDER_HOVER_OPEN_DELAY_MS = 500;
+const THREAD_FOLDER_HOVER_OPEN_DELAY_MS = 1_000;
 
 function boundedFolderError(error: unknown) {
   return (error instanceof Error ? error.message : "Unable to update the folder name.").slice(0, 160);
