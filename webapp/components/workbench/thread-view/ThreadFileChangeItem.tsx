@@ -62,9 +62,11 @@ function assertNeverFileChangeKind (kind: never): never {
 
 export function ThreadFileChangeTotals ({
   additions,
+  animateChanges = false,
   deletions,
 }: {
   additions: number;
+  animateChanges?: boolean;
   deletions: number;
 }) {
   if (!additions && !deletions) {
@@ -74,12 +76,18 @@ export function ThreadFileChangeTotals ({
   return (
     <span className="inline-flex items-baseline gap-2 font-mono text-[0.78em] leading-[1.6]">
       {additions ? (
-        <span className="text-[color:color-mix(in_srgb,var(--success)_78%,var(--text)_22%)]">
+        <span
+          className={`${animateChanges ? "thread-file-change-total-tick " : ""}text-[color:color-mix(in_srgb,var(--success)_78%,var(--text)_22%)]`}
+          key={animateChanges ? `additions-${additions}` : "additions"}
+        >
           +{additions}
         </span>
       ) : null}
       {deletions ? (
-        <span className="text-[color:color-mix(in_srgb,var(--danger)_78%,var(--text)_22%)]">
+        <span
+          className={`${animateChanges ? "thread-file-change-total-tick " : ""}text-[color:color-mix(in_srgb,var(--danger)_78%,var(--text)_22%)]`}
+          key={animateChanges ? `deletions-${deletions}` : "deletions"}
+        >
           -{deletions}
         </span>
       ) : null}
@@ -230,6 +238,7 @@ function ThreadFileChangeSummary ({
       <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" disambiguationPaths={projectFilePaths} path={parsedChange.displayPath} projectId={projectId} />
       <ThreadFileChangeTotals
         additions={parsedChange.summaryTotals.additions}
+        animateChanges
         deletions={parsedChange.summaryTotals.deletions}
       />
     </span>
