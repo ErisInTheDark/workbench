@@ -33,6 +33,7 @@ const ARC_MATCHER_IDS = {
   mv: "git-arc.mv",
   plan: "git-arc.plan",
   propose: "git-arc.propose",
+  release: "git-arc.release",
   remove: "git-arc.remove",
   restore: "git-arc.restore",
   start: "git-arc.start",
@@ -57,6 +58,7 @@ export interface GitCheckpointCommitCommandIntent {
 export interface GitArcCommandIntent {
   action: GitArcCommandAction;
   adoptPaths?: string[];
+  disown?: boolean;
   intentName: string | null;
   move?: GitArcMoveArguments;
   paths: string[];
@@ -153,6 +155,11 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     presentationName: "git_arc_remove",
   }),
   createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+release(?:\s|$)/iu,
+    id: ARC_MATCHER_IDS.release,
+    presentationName: "git_arc_release",
+  }),
+  createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+compare(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.compare,
     presentationName: "git_arc_compare",
@@ -225,11 +232,17 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   }
 
   let intentName: string | null = null;
+  let disown = false;
   let proposalId: string | null = null;
   let ref: string | null = null;
   const adoptPaths: string[] = [];
   for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
     const flag = tokens[cursor];
+    if (flag === "--disown") {
+      if (action !== "release" || disown) return null;
+      disown = true;
+      continue;
+    }
     const value = tokens[cursor + 1];
     if (!value || (flag !== "--adopt" && flag !== "--proposal" && flag !== "--ref" && flag !== "-m")) return null;
     if (flag === "--ref") {
@@ -264,7 +277,7 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   if (proposalId) return null;
   const refRequired = action === "continue" || action === "restore";
   if (refRequired !== Boolean(ref)) return null;
-  return { action, intentName: null, paths, ref };
+  return { action, ...(action === "release" ? { disown } : {}), intentName: null, paths, ref };
 }
 
 export function parseGitCheckpointCompareOutput(output: string) {

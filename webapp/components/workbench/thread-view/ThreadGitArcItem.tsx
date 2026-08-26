@@ -33,6 +33,7 @@ const ACTION_LABELS = {
   planAdopt: { completed: "Adopted changes", failed: "Failed to adopt changes into plan", inProgress: "Adopting changes into plan", timedOut: "Timed out adopting changes into plan" },
   planRemove: { completed: "Reduced", failed: "Failed to reduce plan", inProgress: "Reducing plan", timedOut: "Timed out reducing plan" },
   planStart: { completed: "Started", failed: "Failed to create and start", inProgress: "Creating and starting", timedOut: "Timed out creating and starting" },
+  release: { completed: "Released", failed: "Failed to release", inProgress: "Releasing", timedOut: "Timed out releasing" },
   rescind: { completed: "Rescinded", failed: "Failed to rescind", inProgress: "Rescinding", timedOut: "Timed out rescinding" },
   remove: { completed: "Reduced", failed: "Failed to reduce", inProgress: "Reducing", timedOut: "Timed out reducing" },
   restore: { completed: "Restored", failed: "Failed to restore", inProgress: "Restoring", timedOut: "Timed out restoring" },
@@ -64,6 +65,7 @@ function failureAction(action: GitArcCommandAction): GitArcFailureAction {
     planRemove: "planRemove",
     planStart: "planStart",
     propose: "proposalCreate",
+    release: "arcRelease",
     remove: "arcRemove",
     rescind: "proposalRescind",
     restore: "restore",
@@ -152,6 +154,8 @@ export default function ThreadGitArcItem({
   const ordinarySelectedPaths = selectedPaths.filter((candidate) => !adoptPathSet.has(candidate));
   const labels = movePreview
     ? { completed: "Previewed", failed: "Failed to preview moves", inProgress: "Previewing moves", timedOut: "Timed out previewing moves" }
+    : commandIntent.action === "release" && commandIntent.disown
+      ? { completed: "Disowned", failed: "Failed to disown", inProgress: "Disowning", timedOut: "Timed out disowning" }
     : adoptPaths.length && ordinarySelectedPaths.length && commandIntent.action === "plan"
       ? { completed: "Planned and adopted changes", failed: "Failed to plan and adopt changes", inProgress: "Planning and adopting changes", timedOut: "Timed out planning and adopting changes" }
       : adoptPaths.length && commandIntent.action === "plan"
@@ -171,7 +175,8 @@ export default function ThreadGitArcItem({
     ? ignoredFailure.paths
     : commandIntent.action === "plan" || commandIntent.action === "planStart"
     ? adoptPaths.length ? ordinarySelectedPaths : claimedPaths.length ? claimedPaths : selectedPaths
-    : commandIntent.action === "add" || commandIntent.action === "adopt" || commandIntent.action === "remove" || commandIntent.action === "restore"
+    : commandIntent.action === "add" || commandIntent.action === "adopt" || commandIntent.action === "remove"
+      || commandIntent.action === "release" || commandIntent.action === "restore"
       || commandIntent.action === "planAdd" || commandIntent.action === "planAdopt" || commandIntent.action === "planRemove"
       ? selectedPaths
       : commandIntent.action === "start" || commandIntent.action === "continue"
@@ -208,7 +213,8 @@ export default function ThreadGitArcItem({
                 ? "Failed to adopt"
                 : commandIntent.action === "add"
                   ? "Failed to claim"
-                  : commandIntent.action === "remove" ? "Failed to remove" : "Failed to restore"
+                  : commandIntent.action === "remove" ? "Failed to remove"
+                    : commandIntent.action === "release" ? "Failed to release" : "Failed to restore"
     : commandIntent.action === "plan"
       ? "Planned"
       : commandIntent.action === "planAdd"
@@ -219,6 +225,8 @@ export default function ThreadGitArcItem({
             ? "Adopted into plan"
             : commandIntent.action === "remove"
               ? "Removed"
+              : commandIntent.action === "release"
+                ? commandIntent.disown ? "Disowned" : "Released"
               : commandIntent.action === "restore" ? "Restored" : "Claimed";
   const primaryPathMarker = commandIntent.action === "plan"
     || commandIntent.action === "planAdd"

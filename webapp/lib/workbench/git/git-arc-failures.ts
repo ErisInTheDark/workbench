@@ -15,7 +15,7 @@ const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
 
 const GitArcFailureActionSchema = z.enum([
   "plan", "planAdd", "planAdopt", "planRemove", "planStart",
-  "arcContinue", "arcStart", "arcAdd", "arcAdopt", "arcRemove", "arcMove",
+  "arcContinue", "arcStart", "arcAdd", "arcAdopt", "arcRemove", "arcRelease", "arcMove",
   "compare", "diff", "proposalCreate", "proposalRescind", "proposalState", "proposalCommit",
   "readDiffArtifact", "restore", "unknown",
 ]);

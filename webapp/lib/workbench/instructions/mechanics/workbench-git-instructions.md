@@ -67,6 +67,8 @@ After approval and continuation, use:
 - `mcp__wb__git_arc_adopt` for approved existing dirty workspace paths.
 - `mcp__wb__git_arc_remove` for exact clean claims the active arc no longer owns.
 
+Use `mcp__wb__git_arc_release` to release every live claim without changing workspace or Git content. It rejects dirty claims by default. Set `disown: true` only after explicit user direction to release dirty ownership. Releasing retained claims keeps the current inactive plan.
+
 Never use these active-arc tools during Brief or Decision mode. Remember every returned successor ref.
 
 Use `mcp__wb__git_arc_mv` for approved path moves. Its `move` value accepts explicit operands, explicit source/destination mappings, or regex preview/confirmation. Regex mode previews at most 200 sorted mappings. Confirm the preview, then preview again when more matches remain.

@@ -9,7 +9,7 @@ import { ORCHESTRATOR_RELOAD_SCOPE_PATTERN } from "../orchestrator-reload";
 const RECEIPT_PREFIX = "Workbench arc receipt: ";
 
 const GitArcReceiptSchema = z.object({
-  action: z.enum(["add", "adopt", "compare", "continue", "diff", "mv", "plan", "propose", "remove", "restore", "start"]),
+  action: z.enum(["add", "adopt", "compare", "continue", "diff", "mv", "plan", "propose", "release", "remove", "restore", "start"]),
   additionalClaims: z.array(z.string().min(1)).optional(),
   claimedPaths: z.array(z.string().min(1)),
   intentName: z.string().min(1).nullable(),

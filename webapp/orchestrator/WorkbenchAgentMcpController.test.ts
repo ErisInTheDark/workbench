@@ -134,6 +134,24 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       });
     }
 
+    const release = inventory.tools.find(({ name }) => name === "git_arc_release");
+    assert.ok(release);
+    assert.deepEqual(Object.keys(release.inputSchema.properties ?? {}), ["disown"]);
+    assert.match(release.description ?? "", /Dirty claims are rejected unless disown is true/u);
+    const releaseDefinition = eligible.find(({ words }) => words.join("_") === "git_arc_release");
+    assert.ok(releaseDefinition);
+    assert.deepEqual(await releaseDefinition.buildRequestFromJson({}, {
+      callerHarness: "codex",
+      callerThreadId: "thread-1",
+      cwd: "C:/authoritative",
+      workbenchOrigin: null,
+    }), {
+      body: { action: "arcRelease", cwd: "C:/authoritative", disown: false, harness: "codex", threadId: "thread-1" },
+      method: "POST",
+      path: "/api/git-checkpoint",
+      responseKind: "git-arc-release",
+    });
+
     const searchResult = await client.callTool({
       _meta: { threadId: "thread-1" },
       arguments: { args: ["-n", "a pattern with 'quotes'", "webapp"] },

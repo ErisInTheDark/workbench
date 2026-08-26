@@ -52,6 +52,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_arc_adopt",
   "git_arc_mv",
   "git_arc_remove",
+  "git_arc_release",
   "git_arc_compare",
   "git_arc_diff",
   "git_arc_propose",
@@ -68,8 +69,9 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
 export type WorkbenchCommandPresentationName = typeof WORKBENCH_COMMAND_PRESENTATION_NAMES[number];
 
 export type WorkbenchGitArcOperation = {
-  action: "add" | "adopt" | "compare" | "continue" | "diff" | "mv" | "plan" | "planAdd" | "planAdopt" | "planRemove" | "planStart" | "propose" | "remove" | "rescind" | "restore" | "start";
+  action: "add" | "adopt" | "compare" | "continue" | "diff" | "mv" | "plan" | "planAdd" | "planAdopt" | "planRemove" | "planStart" | "propose" | "release" | "remove" | "rescind" | "restore" | "start";
   adoptPaths?: string[];
+  disown?: boolean;
   intentName: string | null;
   move?: GitArcMoveArguments;
   paths: string[];
@@ -340,6 +342,7 @@ function gitArcAction(name: WorkbenchCommandPresentationName): WorkbenchGitArcOp
     git_arc_plan_remove: "planRemove",
     git_arc_plan_start: "planStart",
     git_arc_propose: "propose",
+    git_arc_release: "release",
     git_arc_remove: "remove",
     git_arc_rescind: "rescind",
     git_arc_restore: "restore",
@@ -382,6 +385,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
   const operation: WorkbenchGitArcOperation = {
     action,
     ...(adoptPaths.length ? { adoptPaths } : {}),
+    ...(action === "release" ? { disown: readBoolean(args.disown) } : {}),
     intentName,
     ...(parsedMove ? { move: parsedMove } : {}),
     paths,
@@ -412,6 +416,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     planRemove: "git-arc.plan-remove",
     planStart: "git-arc.plan-start",
     propose: "git-arc.propose",
+    release: "git-arc.release",
     remove: "git-arc.remove",
     rescind: "git-arc.rescind",
     restore: "git-arc.restore",

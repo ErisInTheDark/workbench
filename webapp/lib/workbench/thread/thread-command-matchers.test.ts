@@ -150,6 +150,7 @@ test("specialized typed wb MCP calls share CLI claims without duplicate summarie
     ["wb subagent wait --name Lumi --name Nova", "subagent_wait", { names: ["Lumi", "Nova"] }],
     ['wb subagent message --parent --message "progress"', "subagent_message", { message: "progress", parent: true }],
     ["wb git arc mv --regex ^src --replace test -- src", "git_arc_mv", { move: { confirm: false, kind: "regex", pattern: "^src", replacement: "test", roots: ["src"] } }],
+    ["wb git arc release --disown", "git_arc_release", { disown: true }],
     ["wb git arc compare", "git_arc_compare", { paths: [] }],
     ["wb thread recall", "thread_recall", {}],
   ] satisfies Array<[string, string, JsonValue]>;
@@ -621,6 +622,21 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
     projectRootPath: PROJECT_ROOT,
   });
   assertRouteOnlyDisplay(removal, "git-arc.remove");
+
+  const release = getThreadCommandDisplay({
+    command: "wb git arc release --disown",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    projectRootPath: PROJECT_ROOT,
+  });
+  assertRouteOnlyDisplay(release, "git-arc.release");
+  assert.deepEqual(parseGitArcCommand("wb git arc release --disown"), {
+    action: "release",
+    disown: true,
+    intentName: null,
+    paths: [],
+    ref: null,
+  });
 
   const start = getThreadCommandDisplay({
     command: "wb git arc start --ref abc",

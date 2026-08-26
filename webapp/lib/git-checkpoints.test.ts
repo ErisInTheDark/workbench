@@ -30,6 +30,7 @@ const startGitArc = controller.startArc.bind(controller);
 const continueGitArc = controller.continueArc.bind(controller);
 const addToGitArc = controller.addToArc.bind(controller);
 const removeFromGitArc = controller.removeFromArc.bind(controller);
+const releaseGitArc = controller.releaseArc.bind(controller);
 const compareGitCheckpoint = controller.compare.bind(controller);
 const diffGitCheckpoint = controller.diff.bind(controller);
 const createGitCheckpointProposal = controller.createProposal.bind(controller);
@@ -350,6 +351,70 @@ checkpointTest("releasing a proposed arc makes the proposal unavailable", 2, asy
   });
   assert.equal(unavailableAfterUnclaim.status, "unavailable");
   assert.match(unavailableAfterUnclaim.unavailableReason ?? "", /unclaimed without committing/u);
+
+  const cleanPlan = await createGitPlan({
+    cwd: repoRoot,
+    intentName: "Release clean claims",
+    paths: ["selected.txt"],
+    threadId: "release-thread",
+  });
+  await startGitArc({ checkpointCommit: cleanPlan.checkpointCommit, cwd: repoRoot, threadId: "release-thread" });
+  const cleanRelease = await releaseGitArc({ cwd: repoRoot, disown: false, threadId: "release-thread" });
+  assert.deepEqual(cleanRelease.releasedClaims, ["selected.txt"]);
+  assert.deepEqual(cleanRelease.scopePaths, []);
+  assert.equal((await controller.findLifecycleState({ cwd: repoRoot, threadId: "release-thread" }))?.phase, "resolved");
+
+  const dirtyPlan = await createGitPlan({
+    cwd: repoRoot,
+    intentName: "Release dirty claims",
+    paths: ["selected.txt"],
+    threadId: "release-thread",
+  });
+  const dirtyArc = await startGitArc({ checkpointCommit: dirtyPlan.checkpointCommit, cwd: repoRoot, threadId: "release-thread" });
+  await write(repoRoot, "selected.txt", "staged dirty release\n");
+  await git(repoRoot, ["add", "--", "selected.txt"]);
+  await write(repoRoot, "selected.txt", "worktree dirty release\n");
+  const proposal = await createGitCheckpointProposal({
+    cwd: repoRoot,
+    description: "",
+    paths: ["selected.txt"],
+    threadId: "release-thread",
+    title: "Keep dirty work",
+  });
+  const futurePlan = await createGitPlan({
+    cwd: repoRoot,
+    intentName: "Keep the inactive plan",
+    paths: ["selected.txt"],
+    threadId: "release-thread",
+  });
+  const statusBefore = await git(repoRoot, ["status", "--short", "--", "selected.txt"]);
+  const indexBefore = await git(repoRoot, ["show", ":selected.txt"]);
+  const worktreeBefore = await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8");
+
+  await assert.rejects(
+    releaseGitArc({ cwd: repoRoot, disown: false, threadId: "release-thread" }),
+    /Arc release paths must be clean against HEAD: selected\.txt/u,
+  );
+  assert.equal((await controller.findPlanState({ cwd: repoRoot, threadId: "release-thread" }))?.checkpointCommit, futurePlan.checkpointCommit);
+
+  const disowned = await releaseGitArc({ cwd: repoRoot, disown: true, threadId: "release-thread" });
+  assert.deepEqual(disowned.releasedClaims, ["selected.txt"]);
+  assert.equal((await controller.findPlanState({ cwd: repoRoot, threadId: "release-thread" }))?.checkpointCommit, futurePlan.checkpointCommit);
+  const releasedLifecycle = await controller.findLifecycleState({ cwd: repoRoot, threadId: "release-thread" });
+  assert.equal(releasedLifecycle?.checkpointCommit, dirtyArc.checkpointCommit);
+  assert.deepEqual(releasedLifecycle?.claimedPaths, []);
+  assert.equal(releasedLifecycle?.phase, "resolved");
+  assert.equal(await git(repoRoot, ["status", "--short", "--", "selected.txt"]), statusBefore);
+  assert.equal(await git(repoRoot, ["show", ":selected.txt"]), indexBefore);
+  assert.equal(await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8"), worktreeBefore);
+  const unavailable = await readGitCheckpointProposal({
+    cwd: repoRoot,
+    includeNewer: false,
+    proposalId: proposal.proposalId,
+    threadId: "release-thread",
+  });
+  assert.equal(unavailable.status, "unavailable");
+  assert.match(unavailable.unavailableReason ?? "", /released without committing/u);
 });
 
 checkpointTest("arc additions preserve claimed baselines while advancing unclaimed paths to current HEAD", 6, async (context) => {

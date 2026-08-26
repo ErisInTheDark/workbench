@@ -181,6 +181,34 @@ test("compare forwards an explicit checkpoint ref to the controller", async () =
   assert.equal(receivedCheckpointCommit, "a".repeat(40));
 });
 
+test("arc release forwards explicit dirty disown intent to the controller", async () => {
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async () => null,
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  let receivedDisown: boolean | undefined;
+  const internal = (feature as unknown as {
+    controller: { releaseArc: (input: { disown: boolean }) => Promise<object> };
+  }).controller;
+  internal.releaseArc = async (input) => {
+    receivedDisown = input.disown;
+    return {};
+  };
+
+  const response = await feature.executeRequest({
+    action: "arcRelease",
+    cwd: "C:/Git/Project",
+    disown: true,
+    harness: "codex",
+    threadId: "thread-one",
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(receivedDisown, true);
+});
+
 test("settled threads cannot start claims", async () => {
   const feature = new WorkbenchGitArcFeature({
     getThreadClaimContext: async () => ({

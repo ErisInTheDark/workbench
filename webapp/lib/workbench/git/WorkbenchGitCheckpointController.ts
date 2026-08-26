@@ -87,6 +87,10 @@ export interface GitCheckpointCreateResult {
   scopePaths: string[];
 }
 
+export interface GitArcReleaseResult extends GitCheckpointCreateResult {
+  releasedClaims: string[];
+}
+
 type GitArcContinuationResult = GitCheckpointCreateResult;
 
 export interface GitCheckpointCompareResult {
@@ -385,6 +389,95 @@ export default class WorkbenchGitCheckpointController {
     return activeArc;
   }
 
+  private async requireReleasableArc({ cwd, harness: rawHarness, threadId }: ControllerInput) {
+    const repository = await WorkbenchGitRepository.open(cwd);
+    const harness = normalizeHarness(rawHarness);
+    const registry = new GitArcRegistry(repository);
+    const active = await registry.find({ harness, threadId });
+    const lifecycle = active?.phase === "plan"
+      ? active.retainedArc
+      : active?.phase === "resolved"
+        ? null
+        : active ? {
+          checkpointCommit: active.checkpointCommit,
+          claimedPaths: active.claimedPaths,
+          intentDescription: active.intentDescription,
+          intentName: active.intentName,
+          phase: "active" as const,
+          proposalIds: active.proposalIds ?? [],
+        } : null;
+    if (!active || !lifecycle || lifecycle.phase !== "active" || !lifecycle.claimedPaths.length) {
+      throw new Error("This thread does not own any live Git arc claims.");
+    }
+    const checkpoint = await readCheckpoint(repository.root, harness, threadId, lifecycle.checkpointCommit);
+    requireArcMetadata(checkpoint);
+    return { active, checkpoint, harness, lifecycle, registry, repository };
+  }
+
+  private async assertClaimPathsClean(repository: WorkbenchGitRepository, paths: string[]) {
+    const currentTree = await repository.writeScopedWorktreeTree(paths);
+    const dirtyPaths = await repository.listChangedPaths("HEAD", currentTree, paths);
+    if (dirtyPaths.length) throw new GitCheckpointDirtyPathsError(dirtyPaths, "Arc release");
+  }
+
+  async assertArcReleasable(input: ControllerInput): Promise<void> {
+    const { lifecycle, repository } = await this.requireReleasableArc(input);
+    await this.assertClaimPathsClean(repository, lifecycle.claimedPaths);
+  }
+
+  private async finishArcRelease({
+    active,
+    checkpoint,
+    harness,
+    lifecycle,
+    proposalUnavailableReason,
+    registry,
+    repository,
+    threadId,
+  }: Awaited<ReturnType<WorkbenchGitCheckpointController["requireReleasableArc"]>> & {
+    proposalUnavailableReason: string;
+    threadId: string;
+  }): Promise<GitArcReleaseResult> {
+    const proposalUpdates = await this.proposals.prepareUnavailableUpdates({
+      cwd: repository.root,
+      harness,
+      proposalIds: lifecycle.proposalIds ?? [],
+      reason: proposalUnavailableReason,
+      threadId,
+    });
+    const releasedEntry = active.phase === "plan"
+      ? {
+        ...active,
+        retainedArc: active.retainedArc ? { ...active.retainedArc, claimedPaths: [], phase: "resolved" as const } : null,
+      }
+      : { ...active, claimedPaths: [], phase: "resolved" as const };
+    const registryMutation = await registry.prepareSet(releasedEntry, active.checkpointCommit);
+    const previousOutcome = await readArcOutcome(repository, harness, threadId, checkpoint.checkpointCommit);
+    const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
+      acceptedProposals: previousOutcome?.acceptedProposals ?? [],
+      committedSha: previousOutcome?.committedSha ?? null,
+      proposalId: previousOutcome?.proposalId ?? null,
+      sourceCheckpoint: checkpoint.checkpointCommit,
+      status: "released",
+      successorCheckpoint: null,
+      version: 1,
+    });
+    await repository.updateRefs([
+      ...proposalUpdates,
+      outcomeUpdate,
+      ...(registryMutation.update ? [registryMutation.update] : []),
+    ]);
+    return {
+      checkpointCommit: checkpoint.checkpointCommit,
+      checkpointRef: checkpoint.checkpointRef,
+      intentName: lifecycle.intentName ?? null,
+      kind: "arc",
+      releasedClaims: [...lifecycle.claimedPaths],
+      repoRoot: repository.root,
+      scopePaths: [],
+    };
+  }
+
   private async createActiveSuccessor({
     active,
     harness,
@@ -529,6 +622,16 @@ export default class WorkbenchGitCheckpointController {
       { expectedCheckpointCommit: active.checkpointCommit },
     );
     if (mutation) await repository.updateRefs([mutation.update]);
+  }
+
+  async releaseArc({ cwd, disown, harness: rawHarness, threadId }: ControllerInput & { disown: boolean }): Promise<GitArcReleaseResult> {
+    const releasable = await this.requireReleasableArc({ cwd, harness: rawHarness, threadId });
+    if (!disown) await this.assertClaimPathsClean(releasable.repository, releasable.lifecycle.claimedPaths);
+    return await this.finishArcRelease({
+      ...releasable,
+      proposalUnavailableReason: "The active Git arc was released without committing this proposal.",
+      threadId,
+    });
   }
 
   async pruneThreadHistory({ cwd, harness: rawHarness, threadId }: ControllerInput): Promise<GitArcRetentionResult> {
@@ -815,37 +918,14 @@ export default class WorkbenchGitCheckpointController {
     const removedPaths = new Set(paths);
     const scopePaths = metadata.scopePaths.filter((candidate) => !removedPaths.has(candidate));
     if (!scopePaths.length) {
-      const proposalUpdates = await this.proposals.prepareUnavailableUpdates({
-        cwd: repository.root,
-        harness,
+      return await this.finishArcRelease({ active, checkpoint, harness, lifecycle: {
+        checkpointCommit: active.checkpointCommit,
+        claimedPaths: active.claimedPaths,
+        intentDescription: active.intentDescription,
+        intentName: active.intentName,
+        phase: "active",
         proposalIds: active.proposalIds ?? [],
-        reason: "The active Git arc was unclaimed without committing this proposal.",
-        threadId,
-      });
-      const registryMutation = await registry.prepareSet({ ...active, claimedPaths: [], phase: "resolved" }, active.checkpointCommit);
-      const previousOutcome = await readArcOutcome(repository, harness, threadId, checkpoint.checkpointCommit);
-      const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
-        acceptedProposals: previousOutcome?.acceptedProposals ?? [],
-        committedSha: previousOutcome?.committedSha ?? null,
-        proposalId: previousOutcome?.proposalId ?? null,
-        sourceCheckpoint: checkpoint.checkpointCommit,
-        status: "released",
-        successorCheckpoint: null,
-        version: 1,
-      });
-      await repository.updateRefs([
-        ...proposalUpdates,
-        outcomeUpdate,
-        ...(registryMutation.update ? [registryMutation.update] : []),
-      ]);
-      return {
-        checkpointCommit: checkpoint.checkpointCommit,
-        checkpointRef: checkpoint.checkpointRef,
-        intentName: metadata.intentName ?? null,
-        kind: "arc",
-        repoRoot: repository.root,
-        scopePaths: [],
-      };
+      }, proposalUnavailableReason: "The active Git arc was unclaimed without committing this proposal.", registry, repository, threadId });
     }
 
     const headMovement = await repository.classifyHeadMovement(checkpoint.parent, scopePaths, checkpoint.checkpointCommit);

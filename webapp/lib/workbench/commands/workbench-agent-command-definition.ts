@@ -22,6 +22,7 @@ export type WorkbenchAgentCommandResponseKind =
   | "git-arc-mv"
   | "git-arc-plan"
   | "git-arc-propose"
+  | "git-arc-release"
   | "git-arc-remove"
   | "git-arc-restore"
   | "git-arc-start"

@@ -26,6 +26,7 @@ import {
   check,
   defineTable,
   enumText,
+  evolveTable,
   foreignKey,
   integer,
   literal,
@@ -36,7 +37,7 @@ import {
   type SelectRow,
   type TableDefinition,
 } from "./schema-definition.ts";
-import { createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "./schema-history.ts";
+import { createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion } from "./schema-history.ts";
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
@@ -291,7 +292,27 @@ const threadOperationGitArcPresentationsV1 = defineTable("thread_operation_git_a
     onDelete: "CASCADE",
   })],
 }));
-const threadOperationGitArcPresentationsHistory = initialHistory(threadOperationGitArcPresentationsV1);
+const threadOperationGitArcPresentationsV2 = evolveTable(threadOperationGitArcPresentationsV1, {
+  add: {
+    action: enumText(
+      "add", "adopt", "compare", "continue", "diff", "mv", "plan", "planAdd", "planAdopt", "planRemove",
+      "planStart", "propose", "release", "remove", "rescind", "restore", "start",
+    ).notNull(),
+    disown: booleanInteger().notNull().default(0),
+  },
+  drop: ["action"],
+});
+const threadOperationGitArcPresentationsHistory = defineTableHistory({
+  versions: [
+    tableVersion({ schemaVersion: 1, table: threadOperationGitArcPresentationsV1, migration: createTable(threadOperationGitArcPresentationsV1) }),
+    tableVersion({
+      schemaVersion: 2,
+      table: threadOperationGitArcPresentationsV2,
+      migration: rebuildTable({ from: threadOperationGitArcPresentationsV1, to: threadOperationGitArcPresentationsV2 }),
+    }),
+  ],
+  current: threadOperationGitArcPresentationsV2,
+});
 export const threadOperationGitArcPresentations = threadOperationGitArcPresentationsHistory.current;
 
 const threadGitArcPathsV1 = defineTable("thread_git_arc_paths", {

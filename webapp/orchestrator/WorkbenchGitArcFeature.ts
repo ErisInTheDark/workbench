@@ -51,7 +51,7 @@ export type WorkbenchGitArcLifecycleState = WorkspaceGitArcLifecycleState & { re
 export type WorkbenchGitArcPlanState = WorkspaceGitArcPlanState & { reloadScopes: OrchestratorReloadScope[] };
 
 const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
-  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRemove", "arcStart", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
+  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRelease", "arcRemove", "arcStart", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "proposalCommit", "proposalCreate", "proposalRescind", "restore",
 ]);
 const COALESCED_CARD_READ_ACTIONS = new Set<GitCheckpointRequest["action"]>(["compare", "proposalState"]);
@@ -428,6 +428,7 @@ export default class WorkbenchGitArcFeature {
       case "arcAdopt": return Response.json(await this.controller.adoptIntoArc({ ...common, paths: input.paths }));
       case "arcMove": return Response.json(await this.controller.moveInArc({ ...common, move: input.move }));
       case "arcRemove": return Response.json(await this.controller.removeFromArc({ ...common, paths: input.paths }));
+      case "arcRelease": return Response.json(await this.controller.releaseArc({ ...common, disown: input.disown }));
       case "compare": return Response.json(await this.controller.compare({
         ...common, ...(input.checkpointCommit ? { checkpointCommit: input.checkpointCommit } : {}), ...(input.paths ? { paths: input.paths } : {}),
       }));

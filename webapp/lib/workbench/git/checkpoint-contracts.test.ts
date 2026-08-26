@@ -73,6 +73,23 @@ test("plan and arc requests encode claimed-path defaults and successor refs", ()
     paths: [],
     threadId: "thread-one",
   }).success, false);
+  assert.deepEqual(GitCheckpointRequestSchema.parse({
+    action: "arcRelease",
+    cwd: "C:/repo",
+    threadId: "thread-one",
+  }), {
+    action: "arcRelease",
+    cwd: "C:/repo",
+    disown: false,
+    harness: "codex",
+    threadId: "thread-one",
+  });
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcRelease",
+    cwd: "C:/repo",
+    disown: true,
+    threadId: "thread-one",
+  }).success, true);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "arcMove",
     cwd: "C:/repo",

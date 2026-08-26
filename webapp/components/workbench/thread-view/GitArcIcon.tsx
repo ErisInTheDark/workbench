@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcIcon: render the matching square action glyph for one Git arc command. Keywords: git, arc, icon, plan, start, continue, add, remove, compare, restore.
+ * - default GitArcIcon: render the matching square action glyph for one Git arc command. Keywords: git, arc, icon, plan, start, continue, add, remove, release, compare, restore.
  * - GitArcClaimIcon: render the flag marker used by claimed-file rows. Keywords: git, arc, icon, claim, file.
  * - GitArcPlannedClaimIcon: render the dashed flag marker used by planned-file rows. Keywords: git, arc, icon, plan, claim, file.
  * - GitArcConflictIcon: render the square-x marker used for conflicting planned and active claims. Keywords: git, arc, icon, conflict, overlap.
@@ -75,7 +75,7 @@ export default function GitArcIcon({ action, className = "size-4" }: { action: G
       </SvgFrame>
     );
   }
-  if (action === "add" || action === "adopt" || action === "remove") {
+  if (action === "add" || action === "adopt" || action === "remove" || action === "release") {
     return (
       <SvgFrame className={className}>
         <rect width="18" height="18" x="3" y="3" rx="2" />

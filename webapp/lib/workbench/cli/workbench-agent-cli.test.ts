@@ -430,6 +430,20 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     threadId: "thread-1",
   });
 
+  const release = await parseWorkbenchAgentCliCommand(["git", "arc", "release"], gitOptions);
+  assert.equal(release.kind, "request");
+  assert.deepEqual(release.request.body, {
+    action: "arcRelease",
+    cwd: "C:/workspace",
+    disown: false,
+    harness: "codex",
+    threadId: "thread-1",
+  });
+  assert.equal(release.request.responseKind, "git-arc-release");
+  const disown = await parseWorkbenchAgentCliCommand(["git", "arc", "release", "--disown"], gitOptions);
+  assert.equal(disown.kind, "request");
+  assert.deepEqual(disown.request.body, { ...release.request.body, disown: true });
+
   const proposal = await parseWorkbenchAgentCliCommand([
     "git", "arc", "propose", "-m", "Title", "-m", "Description",
   ], gitOptions);
@@ -710,6 +724,7 @@ test("routes canonical, compatibility, and leaf help to the nearest owning group
   const arcLeaf = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "--help"]);
   assert.deepEqual(arcLeaf, canonicalArc);
   assert.match(canonicalArc.kind === "help" ? canonicalArc.help : "", /wb git arc remove -- <claimed-path>/u);
+  assert.match(canonicalArc.kind === "help" ? canonicalArc.help : "", /wb git arc release \[--disown\]/u);
 
   const browse = await parseWorkbenchAgentCliCommand(["browse", "--help"]);
   const browseLeaf = await parseWorkbenchAgentCliCommand(["browse", "run", "--help"]);
@@ -1067,6 +1082,21 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     version: 1,
   });
   assert.match(adapt("git-arc-add", { checkpointCommit: successorRef }, { action: "arcAdd" }).stdout, /^Created successor arc ref/u);
+  const releaseResponse = adapt("git-arc-release", {
+    checkpointCommit: planRef,
+    intentName: "Release owned work",
+    releasedClaims: ["src/dirty.ts"],
+    scopePaths: [],
+  }, { action: "arcRelease", disown: true });
+  assert.match(releaseResponse.stdout, new RegExp(`^Released Git arc ${planRef}`, "u"));
+  assert.deepEqual(parseGitArcReceipt(releaseResponse.stdout), {
+    action: "release",
+    claimedPaths: [],
+    intentName: "Release owned work",
+    ref: planRef,
+    selectedPaths: ["src/dirty.ts"],
+    version: 1,
+  });
   const movePreview = adapt("git-arc-mv", {
     additionalClaims: ["src/old.ts", "tests/old.ts"],
     checkpointCommit: planRef,

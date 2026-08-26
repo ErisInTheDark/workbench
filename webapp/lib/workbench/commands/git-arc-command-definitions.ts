@@ -214,6 +214,28 @@ const move = defineWorkbenchAgentCommand({
   },
 });
 
+const release = defineWorkbenchAgentCommand({
+  description: "Release every live claim owned by this thread without changing Git or workspace content. Dirty claims are rejected unless disown is true.",
+  effects: { destructive: true },
+  helpGroups: ["git-arc"],
+  words: ["git", "arc", "release"],
+  usage: "wb git arc release [--disown]",
+  inputSchema: z.object({
+    disown: z.boolean().default(false).describe("Release ownership of dirty claims without changing their workspace or Git content."),
+  }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--disown"] });
+    return { disown: flags.has("--disown") };
+  },
+  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      action: "arcRelease",
+      ...baseBody(callerHarness, callerThreadId, cwd),
+      disown: input.disown,
+    }, "git-arc-release");
+  },
+});
+
 function inspectionCommand(action: "compare" | "diff") {
   return defineWorkbenchAgentCommand({
     description: action === "compare"
@@ -351,6 +373,7 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   activePathCommand("adopt", "Adopt intentional dirty unclaimed workspace paths into this thread's active arc."),
   move,
   activePathCommand("remove", "Relinquish exact clean claims without changing working-tree files."),
+  release,
   inspectionCommand("compare"),
   inspectionCommand("diff"),
   propose,

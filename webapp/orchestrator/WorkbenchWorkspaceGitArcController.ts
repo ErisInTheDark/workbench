@@ -231,6 +231,7 @@ export default class WorkbenchWorkspaceGitArcController {
       case "arcAdd":
       case "arcAdopt":
       case "arcRemove": return await this.executePathMutation(project, members, request);
+      case "arcRelease": return await this.executeRelease(project, members, request);
       case "arcStart":
       case "arcContinue": return await this.executeRefOperation(project, members, request);
       case "compare":
@@ -345,9 +346,25 @@ export default class WorkbenchWorkspaceGitArcController {
     return result;
   }
 
-  private async runMembers<T>(selected: readonly RepoMember[], operation: (member: RepoMember) => Promise<T>) {
+  private async runMembers<T>(
+    selected: readonly RepoMember[],
+    operation: (member: RepoMember) => Promise<T>,
+    preflight?: (member: RepoMember) => Promise<void>,
+  ) {
     if (!selected.length) throw new Error("This workspace Git arc has no matching repository members.");
     return await this.transitions.runMany(selected.map(({ repoRoot }) => repoRoot), async () => {
+      if (preflight) {
+        for (const member of selected) {
+          try {
+            await preflight(member);
+          } catch (error) {
+            throw new Error(
+              `Workspace Git arc member ${member.roots.map(({ id }) => id).join(", ")} failed before any member changed: ${error instanceof Error ? error.message : String(error)}`,
+              { cause: error },
+            );
+          }
+        }
+      }
       const results: Array<{ member: RepoMember; result: T }> = [];
       for (const member of selected) {
         try {
@@ -449,6 +466,28 @@ export default class WorkbenchWorkspaceGitArcController {
         case "arcRemove": return await this.local.removeFromArc(input);
       }
     });
+    return this.aggregateResults(project, values);
+  }
+
+  private async executeRelease(
+    project: AgentEndpointProjectResolution,
+    members: readonly RepoMember[],
+    request: Extract<GitCheckpointRequest, { action: "arcRelease" }>,
+  ) {
+    const lifecycle = await this.findLifecycleStateInMembers(project, members, request.harness, request.threadId);
+    const claimedRepoRoots = new Set(lifecycle?.members
+      .filter(({ claimedPaths }) => claimedPaths.length > 0)
+      .map(({ repoRoot }) => repoRoot));
+    const selected = members.filter((member) => claimedRepoRoots.has(member.repoRoot));
+    const values = await this.runMembers(
+      selected,
+      async (member) => await this.local.releaseArc({
+        cwd: member.repoRoot, disown: request.disown, harness: request.harness, threadId: request.threadId,
+      }),
+      request.disown ? undefined : async (member) => await this.local.assertArcReleasable({
+        cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
+      }),
+    );
     return this.aggregateResults(project, values);
   }
 

@@ -25,6 +25,8 @@ function createArcReceipt(
   if (!ref) return null;
   const selectedPaths = action === "propose"
     ? readStringArray(payload, "paths")
+    : action === "release"
+      ? readStringArray(payload, "releasedClaims")
     : readStringArray(request.body ?? null, "paths");
   const reloadScopes = normalizeOrchestratorReloadScopes(readStringArray(payload, "reloadScopes"));
   const memberRefs = Array.isArray(payload?.members) ? payload.members.filter(isRecord).flatMap((member) => {
@@ -139,6 +141,7 @@ export function adaptWorkbenchAgentCliResponse({
     case "git-arc-add":
     case "git-arc-adopt":
     case "git-arc-continue":
+    case "git-arc-release":
     case "git-arc-remove": {
       const action = request.responseKind === "git-arc-plan"
         ? "plan"
@@ -146,14 +149,16 @@ export function adaptWorkbenchAgentCliResponse({
           ? "add"
           : request.responseKind === "git-arc-adopt"
             ? "adopt"
-          : request.responseKind === "git-arc-continue" ? "continue" : "remove";
+          : request.responseKind === "git-arc-continue" ? "continue"
+            : request.responseKind === "git-arc-release" ? "release" : "remove";
       const label = action === "plan"
         ? request.body?.action === "planAdd" ? "Extended Git plan"
           : request.body?.action === "planRemove" ? "Reduced Git plan"
             : request.body?.action === "planAdopt" ? "Adopted changes into Git plan"
               : "Created Git plan"
         : action === "adopt" ? "Adopted workspace changes"
-        : action === "continue" ? "Continued Git arc" : "Created successor arc ref";
+        : action === "continue" ? "Continued Git arc"
+          : action === "release" ? "Released Git arc" : "Created successor arc ref";
       return succeeded(appendArcReceipt([
         `${label} ${readString(payload, "checkpointCommit") || "(unknown commit)"}`,
         ...memberRefLines(payload),

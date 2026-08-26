@@ -110,6 +110,11 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     ...checkpointBaseRequest,
   }),
   z.object({
+    action: z.literal("arcRelease"),
+    disown: z.boolean().default(false),
+    ...checkpointBaseRequest,
+  }),
+  z.object({
     action: z.literal("arcMove"),
     move: GitArcMoveRequestSchema,
     rootId: rootId.optional(),

@@ -16,6 +16,7 @@ import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcContro
 const execFileAsync = promisify(execFile);
 
 class FakeLocalGitArcController {
+  readonly dirtyRoots = new Set<string>();
   readonly lifecycleFindCalls: string[] = [];
   readonly lifecycleListCalls: string[] = [];
   readonly proposalDetailCalls: string[] = [];
@@ -69,6 +70,26 @@ class FakeLocalGitArcController {
     this.lifecycleFindCalls.push(input.cwd);
     const state = this.states.get(input.cwd);
     return state?.harness === input.harness && state.threadId === input.threadId ? state : null;
+  }
+
+  async assertArcReleasable(input: { cwd: string }) {
+    if (this.dirtyRoots.has(input.cwd)) throw new Error(`Arc release paths must be clean against HEAD: ${input.cwd}`);
+  }
+
+  async releaseArc(input: { cwd: string; disown: boolean }) {
+    if (!input.disown) await this.assertArcReleasable(input);
+    const state = this.states.get(input.cwd);
+    if (!state) throw new Error("This thread does not own any live Git arc claims.");
+    this.states.delete(input.cwd);
+    return {
+      checkpointCommit: state.checkpointCommit,
+      checkpointRef: `refs/${state.checkpointCommit}`,
+      intentName: state.intentName,
+      kind: "arc",
+      releasedClaims: state.claimedPaths,
+      repoRoot: input.cwd,
+      scopePaths: [],
+    };
   }
 
   async listLifecycleStates(input: { cwd: string }) {
@@ -291,6 +312,17 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
     { proposalId: webProposal.proposalId, rootId: "web" },
     { proposalId: messageAmendment.proposalId, rootId: "web" },
   ]);
+
+  local.dirtyRoots.add(webRoot);
+  await assert.rejects(controller.execute(project, {
+    action: "arcRelease", disown: false, ...identity,
+  }), /web failed before any member changed.*clean against HEAD/u);
+  assert.ok(await controller.findLifecycleState(project, "codex", identity.threadId));
+  const released = await controller.execute(project, {
+    action: "arcRelease", disown: true, ...identity,
+  }) as { releasedClaims: string[] };
+  assert.deepEqual(released.releasedClaims, ["api:one.txt", "web:two.txt"]);
+  assert.equal(await controller.findLifecycleState(project, "codex", identity.threadId), null);
 });
 
 test("workspace roots in one repository share one member while keeping qualified root paths", async () => {
