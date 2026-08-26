@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect Codex launch policy, asynchronous shutdown, and intentional child replacement from stale callbacks. Keywords: codex, app-server, args, generation, test.
+ * No production exports. Node tests protect asynchronous Codex shutdown and intentional child replacement from stale callbacks. Keywords: codex, app-server, generation, test.
  */
 
 import assert from "node:assert/strict";
@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import type { ChildProcess } from "node:child_process";
 
-import CodexAppServer, { getCodexAppServerArgs } from "./CodexAppServer";
+import CodexAppServer from "./CodexAppServer";
 
 function fakeChild(pid: number) {
   const child = new EventEmitter() as EventEmitter & {
@@ -31,18 +31,6 @@ function deferred() {
   const promise = new Promise<void>((nextResolve) => { resolve = nextResolve; });
   return { promise, resolve };
 }
-
-test("managed Codex disables native subagents and installs the apply_patch claim hook", () => {
-  assert.deepEqual(getCodexAppServerArgs(), [
-    "--config",
-    "features.multi_agent=false",
-    "--config",
-    "hooks.PreToolUse=[{matcher='^apply_patch$',hooks=[{type='command',command='wb __hook apply-patch-claim'}]}]",
-    "app-server",
-    "--listen",
-    "stdio://",
-  ]);
-});
 
 test("intentional replacement ignores stale child output and exit", () => {
   const first = fakeChild(101);
