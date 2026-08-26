@@ -9,20 +9,22 @@ import ThreadFileChangeItem, { ThreadFileChangeList } from "./ThreadFileChangeIt
 
 type FileChangeItem = WorkbenchFileChangeItem;
 
-function update(path: string): FileChangeItem["changes"][number] {
+function update(path: string, streaming = false): FileChangeItem["changes"][number] {
   return {
-    diff: "@@ -1,2 +1,3 @@\n-old\n+new\n+extra",
+    diff: streaming
+      ? "@@\n-old\n+new\n+extra"
+      : "@@ -1,2 +1,3 @@\n-old\n+new\n+extra",
     kind: { move_path: null, type: "update" },
     path,
   };
 }
 
-function changes(): FileChangeItem["changes"] {
+function changes(streaming = false): FileChangeItem["changes"] {
   return [
-    { diff: "+new", kind: { type: "add" }, path: "src/add.ts" },
-    { diff: "-old", kind: { type: "delete" }, path: "src/delete.ts" },
-    update("src/edit.ts"),
-    { ...update("src/move.ts"), kind: { move_path: "src/moved.ts", type: "update" } },
+    { diff: "new", kind: { type: "add" }, path: "src/add.ts" },
+    { diff: "old", kind: { type: "delete" }, path: "src/delete.ts" },
+    update("src/edit.ts", streaming),
+    { ...update("src/move.ts", streaming), kind: { move_path: "src/moved.ts", type: "update" } },
   ];
 }
 
@@ -34,15 +36,16 @@ function render(items: FileChangeItem[]) {
 }
 
 test("in-progress file changes stream count summaries without exposing partial diffs", () => {
-  const html = render([{ changes: changes(), id: "live", status: "inProgress", type: "fileChange" }]);
+  const html = render([{ changes: changes(true), id: "live", status: "inProgress", type: "fileChange" }]);
 
   assert.equal((html.match(/data-thread-file-change-row-mode="static"/gu) ?? []).length, 4);
   assert.match(html, /Creating/u);
   assert.match(html, /Deleting/u);
   assert.match(html, /Editing/u);
   assert.match(html, /Moving/u);
-  assert.match(html, />\+2</u);
-  assert.match(html, />-1</u);
+  assert.equal((html.match(/>\+1</gu) ?? []).length, 1);
+  assert.equal((html.match(/>\+2</gu) ?? []).length, 2);
+  assert.equal((html.match(/>-1</gu) ?? []).length, 3);
   assert.doesNotMatch(html, /<details/u);
 });
 

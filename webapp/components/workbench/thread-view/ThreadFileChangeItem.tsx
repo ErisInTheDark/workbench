@@ -138,24 +138,27 @@ function getFileChangeLifecycleLabel(change: FileUpdateChange, item: FileChangeI
   }
 }
 
-function parseAddedFileTextDiff (diffText: string): ParsedUnifiedDiff {
+function parseWholeFileTextDiff (diffText: string, lineType: "addition" | "deletion"): ParsedUnifiedDiff {
   const normalizedText = String(diffText ?? "").replace(/\r\n/g, "\n");
   const lines = normalizedText.endsWith("\n")
     ? normalizedText.slice(0, -1).split("\n")
     : normalizedText.split("\n");
-  const additionLines = lines.length === 1 && lines[0] === "" ? [] : lines;
+  const changedLines = lines.length === 1 && lines[0] === "" ? [] : lines;
+  const isAddition = lineType === "addition";
 
   return {
-    additions: additionLines.length,
-    deletions: 0,
+    additions: isAddition ? changedLines.length : 0,
+    deletions: isAddition ? 0 : changedLines.length,
     headers: [],
-    hunks: additionLines.length ? [{
-      header: `@@ -0,0 +1,${additionLines.length} @@`,
-      lines: additionLines.map((line, index) => ({
-        newLineNumber: index + 1,
-        oldLineNumber: null,
+    hunks: changedLines.length ? [{
+      header: isAddition
+        ? `@@ -0,0 +1,${changedLines.length} @@`
+        : `@@ -1,${changedLines.length} +0,0 @@`,
+      lines: changedLines.map((line, index) => ({
+        newLineNumber: isAddition ? index + 1 : null,
+        oldLineNumber: isAddition ? null : index + 1,
         text: line,
-        type: "addition",
+        type: lineType,
       })),
     }] : [],
   };
@@ -163,11 +166,17 @@ function parseAddedFileTextDiff (diffText: string): ParsedUnifiedDiff {
 
 function parseFileChangeDiff (change: FileUpdateChange) {
   const parsedDiff = parseUnifiedDiff(change.diff);
-  if (change.kind.type !== "add" || parsedDiff.hunks.length || !change.diff.trim()) {
+  if (parsedDiff.hunks.length || !change.diff.trim()) {
     return parsedDiff;
   }
 
-  return parseAddedFileTextDiff(change.diff);
+  if (change.kind.type === "add") {
+    return parseWholeFileTextDiff(change.diff, "addition");
+  }
+  if (change.kind.type === "delete") {
+    return parseWholeFileTextDiff(change.diff, "deletion");
+  }
+  return parsedDiff;
 }
 
 function ThreadFileChangeDetails ({
@@ -361,7 +370,7 @@ export default function ThreadFileChangeItem ({
   return (
     <div className="space-y-1.5 py-2">
       {items.map((item) => (
-        <div className={item.status === "completed" ? "space-y-1.5" : "space-y-0.5"} key={item.id}>
+        <div className="space-y-0.5" key={item.id}>
           <ThreadFileChangeRows
             changes={item.changes.map((change, sourceChangeIndex) => ({
               change,

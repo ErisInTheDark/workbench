@@ -82,19 +82,19 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
   };
 
   let currentHunk: UnifiedDiffHunk | null = null;
-  let oldLineNumber = 0;
-  let newLineNumber = 0;
+  let oldLineNumber: number | null = 0;
+  let newLineNumber: number | null = 0;
 
   for (const line of lines) {
     const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*$/);
-    if (hunkMatch) {
+    if (hunkMatch || line === "@@") {
       currentHunk = {
         header: line,
         lines: [],
       };
       parsed.hunks.push(currentHunk);
-      oldLineNumber = Number(hunkMatch[1]);
-      newLineNumber = Number(hunkMatch[3]);
+      oldLineNumber = hunkMatch ? Number(hunkMatch[1]) : null;
+      newLineNumber = hunkMatch ? Number(hunkMatch[3]) : null;
       continue;
     }
 
@@ -113,7 +113,9 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
         type: "addition",
       });
       parsed.additions += 1;
-      newLineNumber += 1;
+      if (newLineNumber !== null) {
+        newLineNumber += 1;
+      }
       continue;
     }
 
@@ -125,7 +127,9 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
         type: "deletion",
       });
       parsed.deletions += 1;
-      oldLineNumber += 1;
+      if (oldLineNumber !== null) {
+        oldLineNumber += 1;
+      }
       continue;
     }
 
@@ -136,8 +140,12 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
         text: displayLine.text,
         type: "context",
       });
-      oldLineNumber += 1;
-      newLineNumber += 1;
+      if (oldLineNumber !== null) {
+        oldLineNumber += 1;
+      }
+      if (newLineNumber !== null) {
+        newLineNumber += 1;
+      }
       continue;
     }
 
