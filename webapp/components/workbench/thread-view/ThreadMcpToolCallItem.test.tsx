@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect generic MCP routing, wb MCP details, and shell-to-command presentation. Keywords: MCP, shell, thread rendering, output.
+ * - No production exports; tests protect generic MCP routing, wb MCP details, shell presentation, and mixed command grouping. Keywords: MCP, shell, command block, thread rendering.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -185,4 +185,54 @@ test("wb shell calls render through the ordinary command execution surface", () 
   assert.match(html, /Get-ChildItem src/u);
   assert.match(html, /partial\s*denied/u);
   assert.doesNotMatch(html, /mcp__wb__shell/u);
+});
+
+test("adjacent wb rg and shell calls share one derived command block", () => {
+  const rgItem = makeItem({
+    arguments: { args: ["needle", "webapp"] },
+    id: "rg-one",
+    result: {
+      _meta: null,
+      content: [{ type: "text", text: "webapp/file.ts:1:needle" }],
+      structuredContent: null,
+    },
+    tool: "rg",
+  });
+  const shellItem = makeItem({
+    arguments: { command: "Get-ChildItem src", workdir: "C:/workspace" },
+    id: "shell-one",
+    readOnlyHint: false,
+    result: {
+      _meta: null,
+      content: [{ type: "text", text: "Exit code: 0\nOutput:\nfile.ts\n" }],
+      structuredContent: {
+        cwd: "C:/workspace",
+        exitCode: 0,
+        stderr: "",
+        stdout: "file.ts\n",
+      },
+    },
+    tool: "shell",
+  });
+  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    defaultOpenCompletedWork: true,
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: 12,
+      error: null,
+      id: "turn-one",
+      items: [rgItem, shellItem],
+      itemsView: "full",
+      startedAt: null,
+      status: "completed",
+    },
+  }));
+  const visibleText = html.replace(/<[^>]+>/gu, "");
+
+  assert.match(visibleText, /Searched 1 file, ran 1 other command/u);
+  assert.match(visibleText, /Search for needle in webapp/u);
+  assert.match(html, /Get-ChildItem src/u);
+  assert.match(html, /file\.ts/u);
 });

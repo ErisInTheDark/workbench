@@ -377,7 +377,10 @@ export function getThreadCommandBlockDisplay({
   projectRootPath,
   workspaceRoots,
 }: {
-  items: Array<Pick<CommandDisplayContext, "command" | "commandActions" | "cwd">>;
+  items: Array<
+    | Pick<CommandDisplayContext, "command" | "commandActions" | "cwd">
+    | { display: ThreadCommandSummaryDisplay }
+  >;
   knownSkills?: CommandDisplayContext["knownSkills"];
   projectRootPath?: string;
   workspaceRoots?: CommandDisplayContext["workspaceRoots"];
@@ -387,14 +390,16 @@ export function getThreadCommandBlockDisplay({
   const seenSummaryCategories = new Set<KnownCommandSummaryStatKey>();
 
   for (const item of items) {
-    const display = getThreadCommandDisplay({
-      command: item.command,
-      commandActions: item.commandActions,
-      cwd: item.cwd,
-      knownSkills,
-      projectRootPath,
-      workspaceRoots,
-    });
+    const display = "display" in item
+      ? item.display
+      : getThreadCommandDisplay({
+        command: item.command,
+        commandActions: item.commandActions,
+        cwd: item.cwd,
+        knownSkills,
+        projectRootPath,
+        workspaceRoots,
+      });
     for (const key of getKnownCommandSummaryCategoryKeys(display.summaryStats)) {
       if (seenSummaryCategories.has(key)) {
         continue;

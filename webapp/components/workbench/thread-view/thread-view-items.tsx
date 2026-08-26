@@ -38,6 +38,7 @@ import {
   getThreadCommandDisplay,
   getThreadCommandExecutionOutcome,
   getThreadCommandOutcomeDisplay,
+  getWorkbenchMcpCommandDisplay,
   getWorkbenchMcpCommandRoute,
   getWorkbenchMcpShellCommandItem,
   shouldUseWorkbenchMcpSpecializedRenderer,
@@ -57,6 +58,7 @@ import {
   parseGitCheckpointDiffOutput,
   parseGitArcCommand,
   parseGitArcReceipt,
+  type ThreadCommandSummaryDisplay,
   type ThreadCommandDetailRow,
   type ThreadCommandDetailTarget,
 } from "../../../lib/workbench/thread/thread-command-matchers";
@@ -126,13 +128,18 @@ const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [
 const EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS: ReadonlySet<string> = new Set();
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
+type McpCommandItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
+type CommandSequenceItem = CommandItem | McpCommandItem;
+type CommandBlockItem =
+  | Pick<CommandItem, "command" | "commandActions" | "cwd">
+  | { display: ThreadCommandSummaryDisplay };
 type FileChangeItem = Extract<ThreadItem, { type: "fileChange" }>;
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
 type WebSearchItem = Extract<ThreadItem, { type: "webSearch" }>;
 type NonGroupedItem = Exclude<ThreadItem, { type: "commandExecution" } | { type: "fileChange" } | { type: "reasoning" }>;
 
 type ThreadRenderableBlock =
-  | { kind: "commandSequence"; items: CommandItem[] }
+  | { kind: "commandSequence"; items: CommandSequenceItem[] }
   | { kind: "fileChangeSequence"; items: FileChangeItem[] }
   | { kind: "reasoningSequence"; items: ReasoningItem[] }
   | { kind: "webSearchSequence"; items: WebSearchItem[] }
@@ -319,7 +326,7 @@ function buildRenderableBlocks (
   fallbackCommandCwd = ".",
 ): ThreadRenderableBlock[] {
   const blocks: ThreadRenderableBlock[] = [];
-  let pendingCommands: CommandItem[] = [];
+  let pendingCommands: CommandSequenceItem[] = [];
   let pendingFileChanges: FileChangeItem[] = [];
   let pendingReasoning: ReasoningItem[] = [];
   let pendingWebSearches: WebSearchItem[] = [];
@@ -375,7 +382,7 @@ function buildRenderableBlocks (
     pendingWebSearches = [];
   };
 
-  const appendCommandItem = (item: CommandItem) => {
+  const appendCommandItem = (item: CommandSequenceItem) => {
     flushPendingReasoning();
     flushPendingFileChanges();
     flushPendingWebSearches();
@@ -426,6 +433,15 @@ function buildRenderableBlocks (
       const commandItem = getWorkbenchMcpShellCommandItem(item, fallbackCommandCwd);
       if (commandItem) {
         if (!isHiddenCommandExecution(commandItem.command)) appendCommandItem(commandItem);
+        continue;
+      }
+      const route = getWorkbenchMcpCommandRoute({
+        argumentsValue: item.arguments,
+        server: item.server,
+        tool: item.tool,
+      });
+      if (route?.kind === "simple" && route.rendering.claimedBy !== "browse.command") {
+        appendCommandItem(item);
         continue;
       }
     }
@@ -1390,11 +1406,14 @@ function isBrowseCommandItem({
   projectRootPath,
   workspaceRoots,
 }: {
-  item: CommandItem;
+  item: CommandSequenceItem;
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  if (item.type === "mcpToolCall") {
+    return false;
+  }
   const display = getThreadCommandDisplay({
     command: item.command,
     commandActions: item.commandActions,
@@ -1429,7 +1448,7 @@ function isThreadContextCommandItem({
 }
 
 type CommandSequenceRenderSegment =
-  | { items: CommandItem[]; kind: "commands" }
+  | { items: CommandSequenceItem[]; kind: "commands" }
   | { item: CommandItem; kind: "gitArc" }
   | { item: CommandItem; kind: "subagent" }
   | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
@@ -1443,13 +1462,13 @@ function buildCommandSequenceRenderSegments({
   projectRootPath,
   workspaceRoots,
 }: {
-  items: CommandItem[];
+  items: CommandSequenceItem[];
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const segments: CommandSequenceRenderSegment[] = [];
-  let pendingCommands: CommandItem[] = [];
+  let pendingCommands: CommandSequenceItem[] = [];
   let pendingSubagentWaits: ThreadSubagentWaitRenderEntry<CommandItem>[] = [];
 
   const flushPendingCommands = () => {
@@ -1477,6 +1496,17 @@ function buildCommandSequenceRenderSegments({
   };
 
   for (const item of items) {
+    if (item.type === "mcpToolCall") {
+      flushPendingSubagentWaits();
+      if (item.status !== "completed" || item.error) {
+        flushPendingCommands();
+        segments.push({ items: [item], kind: "commands" });
+      } else {
+        pendingCommands.push(item);
+      }
+      continue;
+    }
+
     const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
     if (
       isThreadContextCommandItem({ item, knownSkills, projectRootPath, workspaceRoots })
@@ -2069,6 +2099,70 @@ function ThreadCommandExecutionDetails ({
   );
 }
 
+function ThreadRegularCommandItem ({
+  browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  inlineMentionSources,
+  isMostRecent,
+  item,
+  knownSkills,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
+  relatedThreadsById,
+  subagents,
+  threadCwdPath,
+  threadId,
+  workspaceRoots,
+}: {
+  browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
+  inlineMentionSources?: InlineMentionHighlightSources | null;
+  isMostRecent: boolean;
+  item: CommandSequenceItem;
+  knownSkills?: WorkbenchSkillSummary[];
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
+  relatedThreadsById: RelatedThreadsById;
+  subagents: readonly WorkbenchSubagentSummary[];
+  threadCwdPath?: string;
+  threadId: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}) {
+  if (item.type === "mcpToolCall") {
+    const route = getWorkbenchMcpCommandRoute({
+      argumentsValue: item.arguments,
+      context: threadCwdPath ? { cwd: threadCwdPath, projectRootPath, workspaceRoots } : undefined,
+      server: item.server,
+      tool: item.tool,
+    });
+    return (
+      <ThreadMcpToolCallItem
+        item={item}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        route={route}
+      />
+    );
+  }
+
+  return (
+    <ThreadCommandExecutionDetails
+      browseResultEntries={browseResultEntries}
+      inlineMentionSources={inlineMentionSources}
+      isMostRecent={isMostRecent}
+      item={item}
+      knownSkills={knownSkills}
+      projectFilePaths={projectFilePaths}
+      projectId={projectId}
+      projectRootPath={projectRootPath}
+      relatedThreadsById={relatedThreadsById}
+      subagents={subagents}
+      threadId={threadId}
+      workspaceRoots={workspaceRoots}
+    />
+  );
+}
+
 function ThreadRegularCommandSequence ({
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   inlineMentionSources,
@@ -2080,19 +2174,21 @@ function ThreadRegularCommandSequence ({
   projectRootPath,
   relatedThreadsById,
   subagents,
+  threadCwdPath,
   threadId,
   workspaceRoots,
 }: {
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
-  items: CommandItem[];
+  items: CommandSequenceItem[];
   knownSkills?: WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   relatedThreadsById: RelatedThreadsById;
   subagents: readonly WorkbenchSubagentSummary[];
+  threadCwdPath?: string;
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
@@ -2108,11 +2204,22 @@ function ThreadRegularCommandSequence ({
       workspaceRoots,
     }));
   }, [items, knownSkills, projectRootPath, workspaceRoots]);
-  const commandBlockItems = useMemo(() => items.map((item) => ({
-    command: item.command,
-    commandActions: item.commandActions,
-    cwd: item.cwd,
-  })), [items]);
+  const commandBlockItems = useMemo(() => items.flatMap<CommandBlockItem>((item) => {
+    if (item.type === "commandExecution") {
+      return [{
+        command: item.command,
+        commandActions: item.commandActions,
+        cwd: item.cwd,
+      }];
+    }
+    const display = getWorkbenchMcpCommandDisplay({
+      argumentsValue: item.arguments,
+      context: threadCwdPath ? { cwd: threadCwdPath, projectRootPath, workspaceRoots } : undefined,
+      server: item.server,
+      tool: item.tool,
+    });
+    return display ? [{ display }] : [];
+  }), [items, projectRootPath, threadCwdPath, workspaceRoots]);
   const commandBlockDisplay = useMemo(() => {
     if (items.length <= 1 || allBrowseRequests) {
       return null;
@@ -2127,14 +2234,14 @@ function ThreadRegularCommandSequence ({
   }, [allBrowseRequests, commandBlockItems, items.length, knownSkills, projectRootPath, workspaceRoots]);
 
   if (items.length === 1) {
-    return <ThreadCommandExecutionDetails browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadId={threadId} workspaceRoots={workspaceRoots} />;
+    return <ThreadRegularCommandItem browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
   if (allBrowseRequests) {
     return (
       <div className="space-y-1">
         {items.map((item, index) => (
-          <ThreadCommandExecutionDetails
+          <ThreadRegularCommandItem
             browseResultEntries={browseResultEntries}
             inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === items.length - 1}
@@ -2146,6 +2253,7 @@ function ThreadRegularCommandSequence ({
             projectRootPath={projectRootPath}
             relatedThreadsById={relatedThreadsById}
             subagents={subagents}
+            threadCwdPath={threadCwdPath}
             threadId={threadId}
             workspaceRoots={workspaceRoots}
           />
@@ -2168,7 +2276,7 @@ function ThreadRegularCommandSequence ({
     >
       <>
         {items.map((item, index) => (
-          <ThreadCommandExecutionDetails
+          <ThreadRegularCommandItem
             browseResultEntries={browseResultEntries}
             inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === items.length - 1}
@@ -2180,6 +2288,7 @@ function ThreadRegularCommandSequence ({
             projectRootPath={projectRootPath}
             relatedThreadsById={relatedThreadsById}
             subagents={subagents}
+            threadCwdPath={threadCwdPath}
             threadId={threadId}
             workspaceRoots={workspaceRoots}
           />
@@ -2209,7 +2318,7 @@ function ThreadCommandSequence ({
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
-  items: CommandItem[];
+  items: CommandSequenceItem[];
   knownSkills?: WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -2241,6 +2350,7 @@ function ThreadCommandSequence ({
         projectRootPath={projectRootPath}
         relatedThreadsById={relatedThreadsById}
         subagents={subagents}
+        threadCwdPath={threadCwdPath}
         threadId={threadId}
         workspaceRoots={workspaceRoots}
       />
@@ -2338,6 +2448,7 @@ function ThreadCommandSequence ({
             projectRootPath={projectRootPath}
             relatedThreadsById={relatedThreadsById}
             subagents={subagents}
+            threadCwdPath={threadCwdPath}
             threadId={threadId}
             workspaceRoots={workspaceRoots}
           />
