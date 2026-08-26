@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - isStickyComposerSentinelBelowVisibleBoundary: decide when the composer source position has moved below its visible scrollport. Keywords: thread, composer, sticky, scrollport, viewport.
+ * - isStickyCollapsibleSentinelBelowVisibleBoundary: decide when a collapsible source position has moved below its visible scrollport. Keywords: sticky, collapsible, scrollport, viewport.
  */
 
-export function isStickyComposerSentinelBelowVisibleBoundary({
+export function isStickyCollapsibleSentinelBelowVisibleBoundary({
   scrollTargetBottom,
   sentinelTop,
   viewportBottom,

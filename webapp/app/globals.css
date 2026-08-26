@@ -242,35 +242,35 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     background-color: color-mix(in srgb, var(--text) 16%, transparent);
   }
 
-  .thread-composer-sticky-top-sentinel {
+  .sticky-collapsible-top-sentinel {
     height: 1px;
     margin-bottom: -1px;
     pointer-events: none;
   }
 
-  .thread-composer-sticky-host {
-    --thread-composer-motion-duration: 220ms;
-    --thread-composer-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  .sticky-collapsible-host {
+    --sticky-collapsible-motion-duration: 220ms;
+    --sticky-collapsible-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
     interpolate-size: allow-keywords;
     margin-top: 1.5rem;
     position: relative;
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"] {
+  .sticky-collapsible-host[data-sticky-armed="true"] {
     bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
     position: sticky;
     z-index: 20;
   }
 
-  .thread-composer-sticky-shell {
+  .sticky-collapsible-shell {
     background: color-mix(in srgb, var(--shell-fade-bg), transparent 20%);
     border-radius: 1.15rem;
     transition:
-      opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
-      transform var(--thread-composer-motion-duration) var(--thread-composer-motion-ease);
+      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
+      transform var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease);
   }
 
-  .thread-composer-sticky-surface {
+  .sticky-collapsible-surface {
     background: color-mix(in srgb, var(--text) 4%, transparent);
     border-radius: 1.15rem;
     display: grid;
@@ -278,8 +278,8 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     position: relative;
     backdrop-filter: blur(8px);
     transition:
-      border-color var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
-      padding var(--thread-composer-motion-duration) var(--thread-composer-motion-ease);
+      border-color var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
+      padding var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease);
   }
 
   .thread-composer-mode-stack {
@@ -298,9 +298,9 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     position: absolute;
     transform: translateY(0.45rem) scale(0.985);
     transition:
-      opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
-      transform var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
-      display var(--thread-composer-motion-duration) allow-discrete;
+      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
+      transform var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
+      display var(--sticky-collapsible-motion-duration) allow-discrete;
     transition-behavior: allow-discrete;
   }
 
@@ -318,17 +318,17 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       transform: translateY(0.45rem) scale(0.985);
     }
 
-    .thread-composer-sticky-host[data-sticky-motion="leaving"] .thread-composer-mode-panel[data-active="true"] {
+    .sticky-collapsible-host[data-sticky-motion="leaving"] .thread-composer-mode-panel[data-active="true"] {
       opacity: 1;
       transform: translateY(0) scale(1);
     }
   }
 
-  .thread-composer-sticky-spacer {
+  .sticky-collapsible-spacer {
     display: none;
   }
 
-  .thread-composer-sticky-expanded {
+  .sticky-collapsible-expanded {
     display: grid;
     gap: 0.75rem;
     grid-area: 1 / 1;
@@ -336,28 +336,28 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     opacity: 1;
     transform: translateY(0) scale(1);
     transition:
-      opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
-      transform var(--thread-composer-motion-duration) var(--thread-composer-motion-ease);
+      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
+      transform var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease);
     transition-behavior: allow-discrete;
   }
 
-  .thread-composer-sticky-collapse-button-slot,
-  .thread-composer-sticky-collapsed {
+  .sticky-collapsible-collapse-button-slot,
+  .sticky-collapsible-collapsed {
     display: none;
   }
 
-  .thread-composer-sticky-collapsed {
+  .sticky-collapsible-collapsed {
     grid-area: 1 / 1;
     opacity: 0;
     transform: translateY(0.35rem) scale(0.985);
     transition:
-      opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
-      transform var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
-      display var(--thread-composer-motion-duration) allow-discrete;
+      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
+      transform var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
+      display var(--sticky-collapsible-motion-duration) allow-discrete;
     transition-behavior: allow-discrete;
   }
 
-  .thread-composer-sticky-collapsed-text {
+  .sticky-collapsible-collapsed-text {
     display: -webkit-box;
     min-width: 0;
     overflow: hidden;
@@ -365,18 +365,18 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     -webkit-line-clamp: 2;
   }
 
-  .thread-composer-sticky-collapsed-text[data-preview-kind="placeholder"] {
+  .sticky-collapsible-collapsed-text[data-preview-kind="placeholder"] {
     color: var(--muted);
   }
 
-  .thread-composer-sticky-collapsed-attachments {
+  .sticky-collapsible-collapsed-accessory {
     display: inline-flex;
     flex-shrink: 0;
     flex-wrap: nowrap;
     gap: 0.35rem;
   }
 
-  @keyframes thread-composer-sticky-enter {
+  @keyframes sticky-collapsible-enter {
     from {
       opacity: 0.72;
       transform: translateY(0.6rem) scale(0.985);
@@ -388,65 +388,65 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     }
   }
 
-  .thread-composer-sticky-host[data-sticky-motion="entering"] .thread-composer-sticky-shell {
-    animation: thread-composer-sticky-enter var(--thread-composer-motion-duration) var(--thread-composer-motion-ease) both;
+  .sticky-collapsible-host[data-sticky-motion="entering"] .sticky-collapsible-shell {
+    animation: sticky-collapsible-enter var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease) both;
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-shell {
+  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-shell {
     opacity: 1;
     transform: translateY(0);
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-collapse-button-slot {
+  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-collapse-button-slot {
     display: block;
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-expanded {
+  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-expanded {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-surface {
+  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface {
     border: 1px solid color-mix(in srgb, var(--text), transparent 80%);
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-form-content,
-  .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
+  .sticky-collapsible-host[data-sticky-armed="true"] .thread-composer-sticky-form-content,
+  .sticky-collapsible-host[data-sticky-armed="true"] .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
     max-height: min(52dvh, calc(100dvh - env(safe-area-inset-bottom, 0px) - 11rem));
     overflow-y: auto;
     overscroll-behavior: contain;
     padding-right: 0.15rem;
     scrollbar-gutter: stable;
     transition:
-      max-height var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
-      opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease);
+      max-height var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
+      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease);
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"][data-collapsed="true"] .thread-composer-sticky-spacer {
+  .sticky-collapsible-host[data-sticky-armed="true"][data-collapsed="true"] .sticky-collapsible-spacer {
     display: block;
-    height: var(--thread-composer-expanded-height, 0px);
+    height: var(--sticky-collapsible-expanded-height, 0px);
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"][data-collapsed="true"] .thread-composer-sticky-shell {
+  .sticky-collapsible-host[data-sticky-armed="true"][data-collapsed="true"] .sticky-collapsible-shell {
     position: absolute;
     right: 0;
     bottom: 0;
     left: 0;
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-surface[data-collapsed="true"] .thread-composer-sticky-expanded {
+  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-expanded {
     position: absolute;
     inset: 0.75rem;
     opacity: 0;
     pointer-events: none;
     transform: translateY(-0.25rem) scale(0.985);
     transition:
-      opacity var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
-      transform var(--thread-composer-motion-duration) var(--thread-composer-motion-ease),
-      visibility 0s linear var(--thread-composer-motion-duration);
+      opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
+      transform var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease),
+      visibility 0s linear var(--sticky-collapsible-motion-duration);
     visibility: hidden;
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-surface[data-collapsed="true"] .thread-composer-sticky-collapsed {
+  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed {
     align-items: center;
     color: var(--text);
     cursor: pointer;
@@ -462,18 +462,18 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   @starting-style {
-    .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-surface[data-collapsed="true"] .thread-composer-sticky-collapsed {
+    .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed {
       opacity: 0;
       transform: translateY(0.35rem) scale(0.985);
     }
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-surface[data-collapsed="true"] .thread-composer-sticky-collapsed:focus-visible {
+  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed:focus-visible {
     border-radius: 0.85rem;
     box-shadow: 0 0 0 2px var(--accent-soft);
   }
 
-  .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-collapsed-chevron {
+  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-collapsed-chevron {
     color: var(--muted);
     display: inline-flex;
     align-items: center;
@@ -1004,12 +1004,12 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       background-position: 50% 50%;
     }
 
-    .thread-composer-sticky-host,
-    .thread-composer-sticky-shell,
-    .thread-composer-sticky-surface,
+    .sticky-collapsible-host,
+    .sticky-collapsible-shell,
+    .sticky-collapsible-surface,
     .thread-composer-mode-panel,
-    .thread-composer-sticky-expanded,
-    .thread-composer-sticky-collapsed,
+    .sticky-collapsible-expanded,
+    .sticky-collapsible-collapsed,
     .thread-composer-sticky-form-content,
     .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
       animation: none;
@@ -1088,18 +1088,18 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   @media (hover: none) and (pointer: coarse) {
-    .thread-composer-sticky-host[data-sticky-armed="true"] {
+    .sticky-collapsible-host[data-sticky-armed="true"] {
       bottom: 0;
       margin-inline: calc(0px - var(--thread-scroll-inline-padding, 0px));
     }
 
-    .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-shell,
-    .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-surface {
+    .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-shell,
+    .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface {
       border-bottom-left-radius: 0;
       border-bottom-right-radius: 0;
     }
 
-    .thread-composer-sticky-host[data-sticky-armed="true"] .thread-composer-sticky-surface {
+    .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface {
       padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
     }
 

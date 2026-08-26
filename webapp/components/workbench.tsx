@@ -2787,7 +2787,7 @@ export default function Workbench () {
                   className="flex h-full w-[200%] flex-row-reverse transition-transform duration-200 ease-out"
                   style={{ transform: sidebarTrackTransform }}
                 >
-                  <DropTargetBoundary className="explorer-scrollbar flex min-h-0 w-1/2 flex-col overflow-y-auto pb-8 pr-2">
+                  <DropTargetBoundary className="explorer-scrollbar flex min-h-0 w-1/2 flex-col overflow-y-auto pr-2">
                     <DropTarget
                       dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
                       enabled={(payload) => payload.type === "sidebar-section" && payload.sectionId !== "project"}
@@ -3036,6 +3036,12 @@ export default function Workbench () {
                         </a>
                       </div>
                     </footer>
+                    {sidebarMode === "main" ? (
+                      <ReloadNecessary
+                        order={sidebarSectionOrder.length + 2}
+                        store={threadSidebarStore}
+                      />
+                    ) : null}
                   </DropTargetBoundary>
 
                   <ProjectPicker
@@ -3048,7 +3054,6 @@ export default function Workbench () {
 
                 </div>
               </div>
-              {sidebarMode === "main" ? <ReloadNecessary store={threadSidebarStore} /> : null}
             </aside>
 
             <main

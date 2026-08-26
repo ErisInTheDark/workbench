@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
@@ -43,7 +43,7 @@ import {
 } from "../../../lib/workbench/thread/thread-recovery-message";
 import type { WorkbenchThreadLifecycle } from "../../../lib/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
-import ChevronIcon from "../ChevronIcon";
+import StickyCollapsibleSurface from "../StickyCollapsibleSurface";
 import { PlayIcon, StopIcon } from "../workbench-icons";
 import PlaintextEditable from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
@@ -55,27 +55,13 @@ import ThreadProfilePicker from "./ThreadProfilePicker";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { getThreadComposerStopControlState } from "./thread-composer-controls";
-import { isStickyComposerSentinelBelowVisibleBoundary } from "./thread-composer-sticky-state";
 import { getThreadUserInputRequestPreviewText } from "./thread-user-input-request-preview";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 
 const PICKER_REFRESH_COOLDOWN_MS = 1500;
 const PICKER_REFRESH_MIN_SPIN_MS = 500;
-const THREAD_SCROLL_TARGET_SELECTOR = '[data-thread-scroll-target="true"]';
-
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
-}
-
-function isStickyComposerArmedForElement(sentinelElement: HTMLElement) {
-  const viewport = window.visualViewport;
-  const viewportBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
-  const scrollTarget = sentinelElement.closest<HTMLElement>(THREAD_SCROLL_TARGET_SELECTOR);
-  return isStickyComposerSentinelBelowVisibleBoundary({
-    scrollTargetBottom: scrollTarget?.getBoundingClientRect().bottom ?? null,
-    sentinelTop: sentinelElement.getBoundingClientRect().top,
-    viewportBottom,
-  });
 }
 
 async function waitForMinimumDuration (work: Promise<void>, durationMs: number): Promise<void> {
@@ -92,18 +78,6 @@ async function waitForMinimumDuration (work: Promise<void>, durationMs: number):
   if (thrownError) {
     throw thrownError;
   }
-}
-
-function isCollapsedPreviewInteractiveTarget (
-  currentTarget: HTMLElement,
-  target: EventTarget | null,
-) {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  const interactiveTarget = target.closest("button,a,input,textarea,select,[contenteditable='true']");
-  return Boolean(interactiveTarget && interactiveTarget !== currentTarget);
 }
 
 interface ComposerImageAttachment {
@@ -324,10 +298,7 @@ export default function ThreadComposer ({
   const [isSending, setIsSending] = useState(false);
   const [isRecoveringInterruptedTurn, setIsRecoveringInterruptedTurn] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
-  const [isStickyComposerArmed, setIsStickyComposerArmed] = useState(false);
-  const [stickyComposerMotionState, setStickyComposerMotionState] = useState<"idle" | "entering" | "leaving">("idle");
   const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
-  const [stickyExpandedHeightPx, setStickyExpandedHeightPx] = useState(0);
   const acknowledgedDraftKeyRef = useRef(`${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`);
   const hydratedDraftSnapshotRef = useRef<HydratedComposerDraftSnapshot | null>(threadComposerDraft
     ? {
@@ -336,15 +307,11 @@ export default function ThreadComposer ({
       text: threadComposerDraft.text,
     }
     : null);
-  const previousStickyComposerArmedRef = useRef(false);
   const agentLoadGenerationRef = useRef(0);
   const modelLoadGenerationRef = useRef(0);
   const agentRefreshCooldownTimeoutRef = useRef<number | null>(null);
   const modelRefreshCooldownTimeoutRef = useRef<number | null>(null);
   const isComposerMountedRef = useRef(true);
-  const stickyTopSentinelRef = useRef<HTMLDivElement>(null);
-  const stickySurfaceRef = useRef<HTMLDivElement>(null);
-  const stickyExpandedRef = useRef<HTMLDivElement>(null);
   const onThreadComposerDraftChangeRef = useRef(onThreadComposerDraftChange);
   const onThreadComposerDraftClearRef = useRef(onThreadComposerDraftClear);
 
@@ -724,122 +691,6 @@ export default function ThreadComposer ({
   }, [loadAvailableModels]);
 
   useEffect(() => {
-    if (!stickyMode) {
-      setIsStickyComposerArmed(false);
-      return;
-    }
-
-    const sentinelElement = stickyTopSentinelRef.current;
-    if (!sentinelElement) {
-      setIsStickyComposerArmed(true);
-      return;
-    }
-
-    const scrollTarget = sentinelElement.closest<HTMLElement>(THREAD_SCROLL_TARGET_SELECTOR);
-    let frameId: number | null = null;
-    const updateArmedState = () => {
-      frameId = null;
-      setIsStickyComposerArmed(isStickyComposerArmedForElement(sentinelElement));
-    };
-    const requestUpdateArmedState = () => {
-      if (frameId === null) {
-        frameId = window.requestAnimationFrame(updateArmedState);
-      }
-    };
-    const resizeObserver = scrollTarget && typeof ResizeObserver !== "undefined"
-      ? new ResizeObserver(requestUpdateArmedState)
-      : null;
-    const scrollEventTarget: HTMLElement | Window = scrollTarget ?? window;
-
-    updateArmedState();
-    resizeObserver?.observe(scrollTarget!);
-    scrollEventTarget.addEventListener("scroll", requestUpdateArmedState, { passive: true });
-    window.addEventListener("resize", requestUpdateArmedState);
-    window.visualViewport?.addEventListener("resize", requestUpdateArmedState);
-    window.visualViewport?.addEventListener("scroll", requestUpdateArmedState);
-    return () => {
-      if (frameId !== null) {
-        window.cancelAnimationFrame(frameId);
-      }
-      resizeObserver?.disconnect();
-      scrollEventTarget.removeEventListener("scroll", requestUpdateArmedState);
-      window.removeEventListener("resize", requestUpdateArmedState);
-      window.visualViewport?.removeEventListener("resize", requestUpdateArmedState);
-      window.visualViewport?.removeEventListener("scroll", requestUpdateArmedState);
-    };
-  }, [stickyMode, thread.id]);
-
-  useEffect(() => {
-    if (!stickyMode) {
-      return;
-    }
-
-    const sentinelElement = stickyTopSentinelRef.current;
-    if (!sentinelElement) {
-      return;
-    }
-
-    setIsStickyComposerArmed(isStickyComposerArmedForElement(sentinelElement));
-  }, [stickyMode, thread]);
-
-  useEffect(() => {
-    if (!stickyMode) {
-      previousStickyComposerArmedRef.current = false;
-      setStickyComposerMotionState("idle");
-      return;
-    }
-
-    const previousIsArmed = previousStickyComposerArmedRef.current;
-    if (previousIsArmed === isStickyComposerArmed) {
-      return;
-    }
-
-    previousStickyComposerArmedRef.current = isStickyComposerArmed;
-    setStickyComposerMotionState(isStickyComposerArmed ? "entering" : "leaving");
-    const timeoutId = window.setTimeout(() => {
-      setStickyComposerMotionState("idle");
-    }, 240);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [isStickyComposerArmed, stickyMode]);
-
-  useEffect(() => {
-    if (!stickyMode || typeof ResizeObserver === "undefined") {
-      return;
-    }
-
-    const expandedElement = stickyExpandedRef.current;
-    const surfaceElement = stickySurfaceRef.current;
-    if (!expandedElement || !surfaceElement) {
-      return;
-    }
-
-    const updateHeight = () => {
-      const surfaceStyle = window.getComputedStyle(surfaceElement);
-      const verticalPadding = (
-        (Number.parseFloat(surfaceStyle.paddingTop) || 0) +
-        (Number.parseFloat(surfaceStyle.paddingBottom) || 0)
-      );
-      const nextHeight = expandedElement.getBoundingClientRect().height + verticalPadding;
-      setStickyExpandedHeightPx((currentHeight) => (
-        Math.abs(currentHeight - nextHeight) < 0.5 ? currentHeight : nextHeight
-      ));
-    };
-    updateHeight();
-    const frameId = window.requestAnimationFrame(updateHeight);
-
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(expandedElement);
-    observer.observe(surfaceElement);
-    return () => {
-      window.cancelAnimationFrame(frameId);
-      observer.disconnect();
-    };
-  }, [stickyMode, isStickyComposerArmed, isStickyComposerCollapsed, showQuestionnairePanel, isPickerOpen, attachments.length, helperText, value, visiblePendingUserInputRequest?.request.id]);
-
-  useEffect(() => {
     if (isCommentMode || !isModelPickerOpen) {
       return;
     }
@@ -1065,49 +916,7 @@ export default function ThreadComposer ({
   ).replace(/\s+/g, " ").trim();
   const collapsedAttachmentPreviews = attachments.slice(0, 3);
   const hiddenAttachmentCount = Math.max(0, attachments.length - collapsedAttachmentPreviews.length);
-  const stickyCollapseLabel = isStickyComposerCollapsed ? "Expand composer" : "Collapse composer";
-  const stickyCollapseButton = (
-    <button
-      type="button"
-      aria-expanded={!isStickyComposerCollapsed}
-      aria-label={stickyCollapseLabel}
-      title={stickyCollapseLabel}
-      className="inline-flex size-9 items-center justify-center rounded-full text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-      onClick={() => {
-        setIsStickyComposerCollapsed((current) => !current);
-      }}
-    >
-      <ChevronIcon
-        className={joinClasses(
-          "size-4 transition-transform",
-          isStickyComposerCollapsed ? "-rotate-90" : "rotate-90",
-        )}
-      />
-    </button>
-  );
-  const handleCollapsedPreviewClick = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (isCollapsedPreviewInteractiveTarget(event.currentTarget, event.target)) {
-      return;
-    }
-
-    setIsStickyComposerCollapsed(false);
-  };
-  const handleCollapsedPreviewKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Enter" && event.key !== " ") {
-      return;
-    }
-
-    if (isCollapsedPreviewInteractiveTarget(event.currentTarget, event.target)) {
-      return;
-    }
-
-    event.preventDefault();
-    setIsStickyComposerCollapsed(false);
-  };
   const effectiveSurface = stickyMode ? "bare" : surface;
-  const stickyHostStyle = stickyExpandedHeightPx > 0
-    ? { "--thread-composer-expanded-height": `${stickyExpandedHeightPx}px` } as CSSProperties
-    : undefined;
   const showComposerControlRow = !showQuestionnairePanel && !isModelPickerOpen && !isAgentPickerOpen && !isProfilePickerOpen;
   const hasNormalComposerSupplementalContent = attachments.length > 0 || Boolean(helperText);
   const activeComposerMode = showQuestionnairePanel
@@ -1447,73 +1256,41 @@ export default function ThreadComposer ({
       </form>
   );
   const composerContent = stickyMode ? (
-    <>
-      <div ref={stickyTopSentinelRef} className="thread-composer-sticky-top-sentinel" aria-hidden="true" />
-      <div
-        className="thread-composer-sticky-host"
-        data-collapsed={isStickyComposerCollapsed ? "true" : "false"}
-        data-sticky-armed={isStickyComposerArmed ? "true" : "false"}
-        data-sticky-motion={stickyComposerMotionState}
-        style={stickyHostStyle}
-      >
-      <div className="thread-composer-sticky-spacer" aria-hidden="true" />
-      <div className="thread-composer-sticky-shell">
-        <div
-          ref={stickySurfaceRef}
-          className="thread-composer-sticky-surface"
-          data-collapsed={isStickyComposerCollapsed ? "true" : "false"}
-        >
-          <div ref={stickyExpandedRef} className="thread-composer-sticky-expanded">
-            <div className="thread-composer-sticky-collapse-button-slot">
-              {stickyCollapseButton}
-            </div>
-            <div className="min-w-0">
-              {composerForm}
-            </div>
-          </div>
-          <div
-            role="button"
-            tabIndex={0}
-            aria-label="Expand composer"
-            className="thread-composer-sticky-collapsed"
-            onClick={handleCollapsedPreviewClick}
-            onKeyDown={handleCollapsedPreviewKeyDown}
-          >
-            <span className="thread-composer-sticky-collapsed-chevron" aria-hidden="true">
-              <ChevronIcon className="size-4 -rotate-90" />
+    <StickyCollapsibleSurface
+      collapseLabel="Collapse composer"
+      collapsed={isStickyComposerCollapsed}
+      collapsedAccessory={collapsedAttachmentPreviews.length ? (
+        <>
+          {collapsedAttachmentPreviews.map((attachment, index) => (
+            <span
+              key={attachment.id}
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+            >
+              <ThreadLightboxImage
+                alt={`Attached image ${index + 1}`}
+                buttonClassName="size-10 rounded-[0.75rem]"
+                imageClassName="h-full w-full object-cover"
+                src={attachment.url}
+              />
             </span>
-            <span className="thread-composer-sticky-collapsed-text" data-preview-kind={stickyPreviewKind}>
-              {stickyPreviewText}
+          ))}
+          {hiddenAttachmentCount ? (
+            <span className="inline-flex size-10 items-center justify-center rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] text-[0.76em] font-medium text-muted">
+              +{hiddenAttachmentCount}
             </span>
-            {collapsedAttachmentPreviews.length ? (
-              <span className="thread-composer-sticky-collapsed-attachments">
-                {collapsedAttachmentPreviews.map((attachment, index) => (
-                  <span
-                    key={attachment.id}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                    }}
-                  >
-                    <ThreadLightboxImage
-                      alt={`Attached image ${index + 1}`}
-                      buttonClassName="size-10 rounded-[0.75rem]"
-                      imageClassName="h-full w-full object-cover"
-                      src={attachment.url}
-                    />
-                  </span>
-                ))}
-                {hiddenAttachmentCount ? (
-                  <span className="inline-flex size-10 items-center justify-center rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] text-[0.76em] font-medium text-muted">
-                    +{hiddenAttachmentCount}
-                  </span>
-                ) : null}
-              </span>
-            ) : null}
-          </div>
-        </div>
-      </div>
-      </div>
-    </>
+          ) : null}
+        </>
+      ) : undefined}
+      collapsedContent={stickyPreviewText}
+      collapsedLabel="Expand composer"
+      collapsedPreviewKind={stickyPreviewKind}
+      onCollapsedChange={setIsStickyComposerCollapsed}
+      scrollTargetSelector='[data-thread-scroll-target="true"]'
+    >
+      {composerForm}
+    </StickyCollapsibleSurface>
   ) : composerForm;
 
   return (

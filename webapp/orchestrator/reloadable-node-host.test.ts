@@ -350,6 +350,81 @@ test("topology replacement releases retired waiters only after the complete cand
   assert.equal(await waiter, "candidate");
 });
 
+test("handoff replacement bounds retired disposal while keeping the candidate graph active", async () => {
+  let expireRetirement!: () => void;
+  let finishLiveDisposal!: () => void;
+  let reportLiveDisposal!: () => void;
+  const liveDisposalFinished = new Promise<void>((resolve) => { finishLiveDisposal = resolve; });
+  const liveDisposalStarted = new Promise<void>((resolve) => { reportLiveDisposal = resolve; });
+  const deadlines: Array<{ cancel(): void; expire(): void; expired: Promise<void> }> = [];
+  const child = (value: string) => node({
+    create: () => ({
+      detachForReload: () => ({ value }),
+      dispose: () => undefined,
+      registrations: { child: value },
+      start: () => undefined,
+    }),
+    lifecycle: "handoff",
+    provides: ["child"],
+    scope: "server:child",
+  });
+  const liveParent = node({
+    children: [child("live child")],
+    create: () => ({
+      dispose: async (reportPhase) => {
+        reportPhase("thread-state disposal");
+        reportLiveDisposal();
+        await liveDisposalFinished;
+      },
+      registrations: { a: "live" },
+      start: () => undefined,
+    }),
+    provides: ["a"],
+    scope: "server:a",
+  });
+  const candidateParent = node({
+    children: [child("candidate child")],
+    create: () => ({
+      dispose: () => undefined,
+      registrations: { a: "candidate" },
+      start: () => undefined,
+    }),
+    provides: ["a"],
+    scope: "server:a",
+  });
+  const host = new ReloadableNodeHost(null, loader(
+    defineReloadableNodeGraph([liveParent]),
+    defineReloadableNodeGraph([candidateParent]),
+  ), {
+    createRuntimeDrainDeadline: () => {
+      let expire!: () => void;
+      const expired = new Promise<void>((resolve) => { expire = resolve; });
+      const deadline = { cancel: () => undefined, expire, expired };
+      deadlines.push(deadline);
+      expireRetirement = expire;
+      return deadline;
+    },
+    runtimeDrainTimeoutMs: 30_000,
+  });
+  await host.start();
+
+  const reload = host.reload(["server:a"]);
+  await liveDisposalStarted;
+  assert.equal(deadlines.length, 2);
+  expireRetirement();
+
+  await assert.rejects(
+    reload,
+    /New feature nodes are active, but runtime drain exceeded 30000ms.*server:a: thread-state disposal/u,
+  );
+  assert.equal(host.get("a"), "candidate");
+  assert.equal(host.get("child"), "candidate child");
+
+  finishLiveDisposal();
+  await Promise.resolve();
+  await host.dispose();
+});
+
 test("failed topology startup preserves handoff state and releases waiters after restoration starts", async () => {
   let finishCandidateStart!: () => void;
   let finishRestoredStart!: () => void;

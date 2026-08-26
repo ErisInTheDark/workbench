@@ -406,8 +406,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       } catch (error) {
         activationError = error;
       }
-      for (const node of previous) if (node.definition.lifecycle === "atomic") this.beginDrain(node);
-      await this.disposeNodes([...previous].reverse());
+      await this.retireNodes([...previous].reverse());
       if (activationError) throw activationError;
     } catch (error) {
       if (committed) throw error;
