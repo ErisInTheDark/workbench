@@ -157,7 +157,7 @@ import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline";
-import type { WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
+import type { WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
 export type OrchestratorReloadScope = string;
@@ -1074,6 +1074,7 @@ export interface ExplorerSnapshot {
 }
 
 export interface WorkbenchThreadSidebarStore {
+  getProjectThreadSummaries?: () => WorkbenchProjectThreadSummaries;
   getSnapshot: () => WorkbenchThreadSidebarSnapshot | null;
   subscribe: (listener: () => void) => () => void;
 }

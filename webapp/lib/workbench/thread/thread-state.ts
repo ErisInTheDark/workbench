@@ -3,8 +3,9 @@
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity. Keywords: route, draft, provider, subagent.
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, plan, questionnaire, sidebar.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchThreadActivityUpdateSchema: full sidebar state and tiny activity delta contracts. Keywords: sidebar, websocket, revision.
- * - WorkbenchThreadStateOpenResultSchema/WorkbenchThreadStateOpenResult: atomic catalog, tree, and sidebar observation bootstrap. Keywords: open, bootstrap, snapshot.
- * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, mutation, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
+ * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled top-level thread details, counts, and activity with direct-child lifecycle projection. Keywords: project, status, summary, subagent, activity.
+ * - WorkbenchThreadStateOpenResultV2Schema/WorkbenchThreadStateOpenResultSchema: atomic v2 and current catalog, tree, sidebar, and project-summary observation bootstraps. Keywords: open, bootstrap, snapshot, compatibility.
+ * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, project-summary, mutation, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
  * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness. Keywords: git, arc, settlement, proposal, wake.
  * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition already-ordered entries into hidden, pinned, main, snoozed, and settled render sections. Keywords: grouping, pin, sidebar.
  * - getWorkbenchThreadPlanConflictEntries/createWorkbenchThreadPlanConflictSelector: derive and identity-stabilize visible sibling claim conflicts from one inactive plan and the live sidebar snapshot. Keywords: plan, claim, conflict, sidebar, selector.
@@ -298,11 +299,48 @@ export const WorkbenchThreadSidebarSnapshotSchema = z.object({
 }).strict();
 export type WorkbenchThreadSidebarSnapshot = z.infer<typeof WorkbenchThreadSidebarSnapshotSchema>;
 
-export const WorkbenchThreadStateOpenResultSchema = z.object({
+export const WorkbenchProjectThreadSummaryCountsSchema = z.object({
+  completed: z.number().int().nonnegative(),
+  needsAttention: z.number().int().nonnegative(),
+  needsAttentionActive: z.number().int().nonnegative(),
+  proposedCommit: z.number().int().nonnegative(),
+  stopped: z.number().int().nonnegative(),
+  working: z.number().int().nonnegative(),
+}).strict();
+export type WorkbenchProjectThreadSummaryCounts = z.infer<typeof WorkbenchProjectThreadSummaryCountsSchema>;
+
+export const WorkbenchProjectThreadSummaryEntrySchema = z.object({
+  activityAt: z.number().int().nonnegative(),
+  identity: ThreadIdentitySchema,
+  status: z.enum(["completed", "needsAttention", "needsAttentionActive", "proposedCommit", "stopped", "working"]),
+  title: z.string(),
+}).strict();
+export type WorkbenchProjectThreadSummaryEntry = z.infer<typeof WorkbenchProjectThreadSummaryEntrySchema>;
+
+export const WorkbenchProjectThreadSummarySchema = z.object({
+  counts: WorkbenchProjectThreadSummaryCountsSchema,
+  lastThreadUpdateAt: z.number().int().nonnegative().nullable(),
+  projectId: z.string().min(1),
+  revision: z.number().int().nonnegative(),
+  unsettledThreads: z.array(WorkbenchProjectThreadSummaryEntrySchema),
+}).strict();
+export type WorkbenchProjectThreadSummary = z.infer<typeof WorkbenchProjectThreadSummarySchema>;
+
+export const WorkbenchProjectThreadSummariesSchema = z.object({
+  projects: z.array(WorkbenchProjectThreadSummarySchema),
+}).strict();
+export type WorkbenchProjectThreadSummaries = z.infer<typeof WorkbenchProjectThreadSummariesSchema>;
+
+export const WorkbenchThreadStateOpenResultV2Schema = z.object({
   catalog: WorkbenchProjectsPayloadSchema,
   project: WorkbenchProjectStateUpdateSchema.nullable(),
   sidebar: WorkbenchThreadSidebarSnapshotSchema,
 }).strict();
+export type WorkbenchThreadStateOpenResultV2 = z.infer<typeof WorkbenchThreadStateOpenResultV2Schema>;
+
+export const WorkbenchThreadStateOpenResultSchema = WorkbenchThreadStateOpenResultV2Schema.extend({
+  projectThreads: WorkbenchProjectThreadSummariesSchema,
+});
 export type WorkbenchThreadStateOpenResult = z.infer<typeof WorkbenchThreadStateOpenResultSchema>;
 
 export const WorkbenchThreadActivityUpdateSchema = z.object({
@@ -316,9 +354,16 @@ export const WorkbenchThreadActivityUpdateSchema = z.object({
 }).strict();
 export type WorkbenchThreadActivityUpdate = z.infer<typeof WorkbenchThreadActivityUpdateSchema>;
 
+export const WorkbenchProjectThreadSummaryUpdateSchema = z.object({
+  summary: WorkbenchProjectThreadSummarySchema,
+  updateKind: z.literal("projectThreadSummary"),
+}).strict();
+export type WorkbenchProjectThreadSummaryUpdate = z.infer<typeof WorkbenchProjectThreadSummaryUpdateSchema>;
+
 export const WorkbenchThreadStateSnapshotSchema = z.union([
   WorkbenchThreadSidebarSnapshotSchema,
   WorkbenchThreadActivityUpdateSchema,
+  WorkbenchProjectThreadSummaryUpdateSchema,
   WorkbenchProjectStateUpdateSchema,
 ]);
 export type WorkbenchThreadStateSnapshot = z.infer<typeof WorkbenchThreadStateSnapshotSchema>;
@@ -338,7 +383,7 @@ export type WorkbenchThreadTitleMutationResult = z.infer<typeof WorkbenchThreadT
 
 const ProjectRequestBase = z.object({ projectId: z.string().trim().min(1) }).strict();
 export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", [
-  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.literal(2).optional() }),
+  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.union([z.literal(2), z.literal(3)]).optional() }),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/close") }),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/refresh") }),
   ProjectRequestBase.extend({ draftId: CanonicalUuidSchema.optional(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/intent/accept"), title: z.string().trim().min(1), turnId: z.string().trim().min(1) }),
@@ -583,6 +628,46 @@ export function projectWorkbenchThreadSidebarEntries(entries: readonly Workbench
     const working = childLifecycles.find((lifecycle) => lifecycle.kind === "working");
     return working ? { ...entry, lifecycle: working } : entry;
   });
+}
+
+export function createWorkbenchProjectThreadSummary(
+  projectId: string,
+  entries: readonly WorkbenchThreadSidebarEntry[],
+  revision: number,
+): WorkbenchProjectThreadSummary {
+  const counts: WorkbenchProjectThreadSummaryCounts = {
+    completed: 0,
+    needsAttention: 0,
+    needsAttentionActive: 0,
+    proposedCommit: 0,
+    stopped: 0,
+    working: 0,
+  };
+  const unsettledThreads: WorkbenchProjectThreadSummaryEntry[] = [];
+  for (const entry of projectWorkbenchThreadSidebarEntries(entries)) {
+    if (entry.entryKind !== "thread" || entry.lifecycle.settled || entry.metadata.snoozed) continue;
+    const status: WorkbenchProjectThreadSummaryEntry["status"] = entry.lifecycle.kind === "working"
+      ? "working"
+      : entry.lifecycle.kind === "needsAttention"
+        ? entry.gitArc?.phase === "active" ? "needsAttentionActive" : "needsAttention"
+        : entry.lifecycle.kind === "stopped"
+          ? "stopped"
+          : entry.gitArc?.proposals.some(({ status: proposalStatus }) => proposalStatus === "proposed")
+            ? "proposedCommit"
+            : "completed";
+    counts[status] += 1;
+    unsettledThreads.push({
+      activityAt: entry.activityAt,
+      identity: entry.identity,
+      status,
+      title: entry.title,
+    });
+  }
+  const lastThreadUpdateAt = entries.reduce<number | null>(
+    (latest, entry) => entry.entryKind === "draft" ? latest : Math.max(latest ?? 0, entry.activityAt),
+    null,
+  );
+  return { counts, lastThreadUpdateAt, projectId, revision, unsettledThreads };
 }
 
 export function countDraftPromptTokens(text: string) {

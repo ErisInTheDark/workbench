@@ -12,6 +12,7 @@
  * - PanelMinimizeIcon/PanelExpandIcon: render mosaic panel minimize controls. Keywords: workbench, icon, panel.
  * - PanelCloseIcon: render the mosaic panel close control. Keywords: workbench, icon, panel, close.
  * - GearIcon: render the settings navigation icon. Keywords: workbench, icon, settings.
+ * - ProjectStatusSummaryIcon: render the project-status summary visibility toggle. Keywords: workbench, icon, project, summary, chart.
  * - BlocksIcon: render the Lucide-style composer profile control icon. Keywords: workbench, icon, composer, profile, blocks.
  * - BrowserSessionIcon: render the Browse session sidebar icon. Keywords: workbench, icon, browse, session.
  * - ReloadIcon: render the local runtime reload icon. Keywords: workbench, icon, reload.
@@ -213,6 +214,18 @@ export function BlocksIcon ({ className = "size-4" }: IconProps) {
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M10 22V7a1 1 0 0 0-1-1H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 0 0-1-1H2" />
       <rect x="14" y="2" width="8" height="8" rx="1" />
+    </svg>
+  );
+}
+
+export function ProjectStatusSummaryIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+      <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" />
+      <path d="M14 2v5a1 1 0 0 0 1 1h5" />
+      <path d="M8 18v-1" />
+      <path d="M12 18v-6" />
+      <path d="M16 18v-3" />
     </svg>
   );
 }

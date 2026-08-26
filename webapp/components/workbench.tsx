@@ -4,7 +4,7 @@
  * Exports:
  * - default Workbench: client shell for project browsing, editing, and thread interaction. Keywords: workbench, project, editor, thread.
  */
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
@@ -125,7 +125,7 @@ import DropTargetBoundary from "./workbench/drag/DropTargetBoundary";
 import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
 import PrimaryButton from "./workbench/PrimaryButton";
 import ReloadNecessary from "./workbench/ReloadNecessary";
-import ProjectPicker from "./workbench/ProjectPicker";
+import ProjectSidebar from "./workbench/ProjectSidebar";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
@@ -537,7 +537,6 @@ export default function Workbench () {
   const [isDeletingFile, setIsDeletingFile] = useState(false);
   const [deleteDialogError, setDeleteDialogError] = useState("");
   const [projectActionError, setProjectActionError] = useState("");
-  const [sidebarMode, setSidebarMode] = useState<"main" | "projects">("main");
   const [globalSettings, setGlobalSettings] = useState<WorkbenchGlobalSettings>(() => {
     if (typeof window === "undefined") {
       return readGlobalWorkbenchSettings();
@@ -562,7 +561,7 @@ export default function Workbench () {
   const [mosaicDraftThreadsById, setMosaicDraftThreadsById] = useState<Record<string, ThreadPayload | undefined>>({});
   const [sidebarSectionOrder, setSidebarSectionOrder] = useState<WorkbenchSidebarSectionId[]>(() => {
     if (typeof window === "undefined") {
-      return ["project", "threads", "files"];
+      return ["threads", "files"];
     }
 
     return readStoredWorkbenchSidebarSectionOrder();
@@ -582,7 +581,6 @@ export default function Workbench () {
   const resetDraftButtonRef = useRef<HTMLButtonElement>(null);
   const saveFileButtonRef = useRef<HTMLButtonElement>(null);
   const shellHeaderRef = useRef<HTMLElement>(null);
-  const projectsPaneRef = useRef<HTMLDivElement>(null);
   const zoomOutButtonRef = useRef<HTMLButtonElement>(null);
   const zoomInButtonRef = useRef<HTMLButtonElement>(null);
   const saveConflictDialogRef = useRef<HTMLDivElement>(null);
@@ -998,9 +996,6 @@ export default function Workbench () {
   const currentProjectDisplayName = currentProject
     ? `${currentProject.name || currentProject.id}${currentProject.kind === "workspace" ? " workspace" : ""}`
     : null;
-  const currentProjectTitle = currentProject?.kind === "workspace"
-    ? currentProject.roots.map((root) => `${root.id}: ${root.rootPath}`).join("\n")
-    : currentProject?.rootPath ?? explorer.rootPath;
   const pageTitle = formatWorkbenchPageTitle(currentProjectDisplayName ?? explorer.root ?? explorer.currentProjectId);
   const projectSettings = explorer.currentProjectId
     ? projectSettingsByProjectId[explorer.currentProjectId] ?? createDefaultProjectWorkbenchSettings()
@@ -1053,23 +1048,6 @@ export default function Workbench () {
     setCreateEntryName("");
     setCreateDialogError("");
   };
-
-  const openProjectPicker = useCallback(() => {
-    setSidebarMode("projects");
-  }, []);
-
-  const closeProjectPicker = useCallback(() => {
-    setSidebarMode("main");
-  }, []);
-
-  const handleProjectsPaneKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Escape") {
-      return;
-    }
-
-    event.preventDefault();
-    closeProjectPicker();
-  }, [closeProjectPicker]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1212,14 +1190,6 @@ export default function Workbench () {
   }, [explorer.currentProjectId, updateGlobalSetting, updateProjectSetting]);
 
   useEffect(() => {
-    if (sidebarMode !== "projects") {
-      return;
-    }
-
-    projectsPaneRef.current?.focus();
-  }, [sidebarMode]);
-
-  useEffect(() => {
     document.documentElement.dataset.workbenchTheme = resolvedSettings.theme;
   }, [resolvedSettings.theme]);
 
@@ -1268,7 +1238,6 @@ export default function Workbench () {
 
     event.preventDefault();
     navigateToRoute(createSettingsRoute(activeProjectId, scope));
-    setSidebarMode("main");
   }, [activeProjectId, navigateToRoute]);
 
   const openSettingsFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
@@ -1292,14 +1261,12 @@ export default function Workbench () {
 
     event.preventDefault();
     if (projectId === explorer.currentProjectId) {
-      closeProjectPicker();
       return;
     }
 
     setCurrentThread(null);
     navigateToRoute(createProjectRoute(projectId));
-    setSidebarMode("main");
-  }, [closeProjectPicker, explorer.currentProjectId, navigateToRoute]);
+  }, [explorer.currentProjectId, navigateToRoute]);
 
   const openFileInWorkbench = useCallback(async (target: WorkbenchFileOpenTarget) => {
     const path = target.path;
@@ -1923,7 +1890,6 @@ export default function Workbench () {
     : effectiveSelectedThreadId;
   const activeThreadId = showThreadView ? threadViewInstanceKey : "";
   const activeFilePath = showFileView ? effectiveFilePath : "";
-  const sidebarTrackTransform = sidebarMode === "projects" ? "translateX(0)" : "translateX(-50%)";
   const visibleUserInputRequestsByThreadId = useMemo(() => (
     filterVisibleUserInputRequestsByThreadId(
       harnessUserInputRequestsByThreadId,
@@ -2781,63 +2747,40 @@ export default function Workbench () {
             className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
             style={mobileTrackStyle}
           >
-            <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden px-5 py-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
-              <div className="-ml-3 min-h-0 flex-1 overflow-hidden text-[0.95rem] leading-6">
-                <div
-                  className="flex h-full w-[200%] flex-row-reverse transition-transform duration-200 ease-out"
-                  style={{ transform: sidebarTrackTransform }}
-                >
-                  <DropTargetBoundary className="explorer-scrollbar flex min-h-0 w-1/2 flex-col overflow-y-auto pr-2">
-                    <DropTarget
-                      dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
-                      enabled={(payload) => payload.type === "sidebar-section" && payload.sectionId !== "project"}
-                      onDrop={(payload) => {
-                        if (payload.type === "sidebar-section") moveSidebarSection(payload.sectionId, "project");
-                      }}
-                      range={{ x: 24, y: 18 }}
-                      {...getSidebarSectionDragProps("project")}
+            <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden px-5 py-3 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
+              <div className="-ml-3 flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
+                <DropTargetBoundary className="explorer-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto pr-2">
+                <header className="grid shrink-0 grid-cols-[1fr_auto_auto] items-center gap-1 md:pr-2.5">
+                  <span className="min-w-0 truncate px-2 text-xl font-semibold leading-tight text-text">workbench</span>
+                  <a
+                    aria-label="Open settings"
+                    className={`${workbenchIconButtonClassName} shrink-0 text-muted`}
+                    href={createSettingsHref(activeProjectId, "global")}
+                    onClick={openSettingsFromLink}
+                    title="Open settings"
+                  >
+                    <GearIcon />
+                    <span className="sr-only">Open settings</span>
+                  </a>
+                  {usesDesktopSidebarCollapse ? (
+                    <button
+                      aria-label="Hide sidebar"
+                      className={`${workbenchIconButtonClassName} hidden shrink-0 text-muted md:inline-flex`}
+                      onClick={() => setIsDesktopSidebarCollapsed(true)}
+                      title="Hide sidebar"
+                      type="button"
                     >
-                      {({ selected }) => <section
-                        className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "project" ? " opacity-45" : ""}`}
-                        onPointerDown={(event) => {
-                          beginWorkbenchPointerDrag(event, { sectionId: "project", type: "sidebar-section" });
-                        }}
-                      >
-                      {selected ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                      <div className="flex min-w-0 items-center gap-1">
-                        <button
-                          type="button"
-                          className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-                          title={isProjectIdentityLoading ? "Loading project" : currentProjectTitle}
-                          onClick={openProjectPicker}
-                        >
-                          <span className="min-w-0 relative -top-0.5">
-                            {isProjectIdentityLoading ? (
-                              <span className="block h-6 w-40 max-w-full rounded-md workbench-skeleton" aria-hidden="true" />
-                            ) : (
-                              <span className="block truncate text-xl font-semibold leading-tight text-text">{currentProjectDisplayName ?? (explorer.currentProjectId || "No project")}</span>
-                            )}
-                          </span>
-                          <span className="shrink-0 relative -top-0.5 text-muted" aria-hidden="true">‹</span>
-                        </button>
-                        {usesDesktopSidebarCollapse ? (
-                          <button
-                            type="button"
-                            aria-label="Hide sidebar"
-                            title="Hide sidebar"
-                            className={`${workbenchIconButtonClassName} hidden shrink-0 text-muted md:inline-flex`}
-                            onClick={() => {
-                              setIsDesktopSidebarCollapsed(true);
-                            }}
-                          >
-                            <SidebarCollapseIcon />
-                            <span className="sr-only">Hide sidebar</span>
-                          </button>
-                        ) : null}
-                      </div>
-                      </section>}
-                    </DropTarget>
-
+                      <SidebarCollapseIcon />
+                      <span className="sr-only">Hide sidebar</span>
+                    </button>
+                  ) : null}
+                </header>
+                <ProjectSidebar
+                  activeProjectId={activeProjectId}
+                  onProjectLinkClick={selectProjectFromLink}
+                  projects={explorer.projects}
+                  store={threadSidebarStore}
+                />
                     <DropTarget
                       dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
                       enabled={(payload) => payload.type === "sidebar-section" && payload.sectionId !== "threads"}
@@ -2899,7 +2842,7 @@ export default function Workbench () {
                             clearSelectionFromUi();
                           }}
                         >
-                          Project
+                          Explorer
                         </button>
                         <div className="flex items-center gap-1">
                           <button
@@ -3019,40 +2962,11 @@ export default function Workbench () {
                         {selected ? <div className="pointer-events-none absolute left-2 right-6 top-2 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
                       </div>}
                     </DropTarget>
-                    <footer
-                      className="pr-2 pt-4 pb-1 md:pr-4.5"
-                      style={{ order: sidebarSectionOrder.length + 1 }}
-                    >
-                      <div className="flex items-center gap-1">
-                        <a
-                          aria-label="Open settings"
-                          href={createSettingsHref(activeProjectId, "global")}
-                          title="Open settings"
-                          className={`${workbenchIconButtonClassName} text-muted`}
-                          onClick={openSettingsFromLink}
-                        >
-                          <GearIcon />
-                          <span className="sr-only">Open settings</span>
-                        </a>
-                      </div>
-                    </footer>
-                    {sidebarMode === "main" ? (
-                      <ReloadNecessary
-                        order={sidebarSectionOrder.length + 2}
-                        store={threadSidebarStore}
-                      />
-                    ) : null}
-                  </DropTargetBoundary>
-
-                  <ProjectPicker
-                    ref={projectsPaneRef}
-                    activeProjectId={activeProjectId}
-                    onKeyDown={handleProjectsPaneKeyDown}
-                    onProjectLinkClick={selectProjectFromLink}
-                    projects={explorer.projects}
-                  />
-
-                </div>
+                    <ReloadNecessary
+                      order={sidebarSectionOrder.length + 1}
+                      store={threadSidebarStore}
+                    />
+                </DropTargetBoundary>
               </div>
             </aside>
 

@@ -134,6 +134,79 @@ test("UI subscribers share headless observation and warm snapshots without ownin
   assert.equal(projectObservationStops, 1);
 });
 
+test("version 3 bootstraps every project summary and publishes cross-project changes only to version 3 observers", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-project-summaries-"));
+  const reconcileCounts = new Map<string, number>();
+  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [
+        projectOption("alpha", path.join(root, "alpha")),
+        projectOption("beta", path.join(root, "beta")),
+      ],
+      rootPath: root,
+    }),
+    projectState: projectState(),
+    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
+    reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
+      const reconciliation = (reconcileCounts.get(projectId) ?? 0) + 1;
+      reconcileCounts.set(projectId, reconciliation);
+      const lifecycle = projectId === "beta" && reconciliation > 1
+        ? { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const }
+        : { agent: { agentStatus: "working" as const, turnId: "turn" }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const };
+      acceptProviderSnapshot("codex", [{
+        activityAt: reconciliation,
+        entryKind: "thread",
+        identity: { harness: "codex", threadId: `${projectId}-thread` },
+        lifecycle,
+        metadata: { archived: false, pinned: false, snoozed: false },
+        title: projectId,
+      }], { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+
+  await controller.open("warm-alpha", "alpha", 2);
+  await controller.open("warm-beta", "beta", 2);
+  await waitFor(() => reconcileCounts.get("alpha") === 1 && reconcileCounts.get("beta") === 1, "Project summaries did not warm.");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  const v2 = await controller.open("v2", "alpha", 2);
+  assert.equal("projectThreads" in v2, false);
+  const v3 = await controller.open("v3", "alpha", 3);
+  assert.deepEqual(v3.projectThreads.projects.map(({ counts, lastThreadUpdateAt, projectId, unsettledThreads }) => ({
+    lastThreadUpdateAt,
+    projectId,
+    threadStatuses: unsettledThreads.map(({ status }) => status),
+    working: counts.working,
+  })), [
+    { lastThreadUpdateAt: 1, projectId: "alpha", threadStatuses: ["working"], working: 1 },
+    { lastThreadUpdateAt: 1, projectId: "beta", threadStatuses: ["working"], working: 1 },
+  ]);
+
+  publications.length = 0;
+  await controller.refresh("beta");
+  const summaryPublications = publications.filter((publication) => "updateKind" in publication.snapshot
+    && publication.snapshot.updateKind === "projectThreadSummary");
+  assert.equal(summaryPublications.length > 0, true);
+  assert.equal(summaryPublications.every(({ connectionId }) => connectionId === "v3"), true);
+  const update = summaryPublications.at(-1)?.snapshot;
+  assert.deepEqual(update && "updateKind" in update && update.updateKind === "projectThreadSummary"
+    ? {
+      lastThreadUpdateAt: update.summary.lastThreadUpdateAt,
+      needsAttention: update.summary.counts.needsAttention,
+      threadStatuses: update.summary.unsettledThreads.map(({ status }) => status),
+    }
+    : null, {
+    lastThreadUpdateAt: 1,
+    needsAttention: 1,
+    threadStatuses: ["needsAttention"],
+  });
+  await controller.dispose();
+});
+
 test("incomplete provider snapshots retain unseen rows until an authoritative snapshot arrives", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-progressive-"));
   const oldEntry: WorkbenchThreadSidebarEntry = {
@@ -740,8 +813,10 @@ test("a late project observer receives the best-known snapshot without starting 
   });
   await controller.open("first", "project");
   const late = await controller.open("late", "project");
-  const projectPublications = publications.filter((entry) => "updateKind" in entry.snapshot && entry.snapshot.updateKind === "project");
-  assert.deepEqual(projectPublications.map((entry) => ({ connectionId: entry.connectionId, revision: entry.snapshot.revision })), [
+  const projectPublications = publications.flatMap((entry) => "updateKind" in entry.snapshot && entry.snapshot.updateKind === "project"
+    ? [{ connectionId: entry.connectionId, revision: entry.snapshot.revision }]
+    : []);
+  assert.deepEqual(projectPublications, [
     { connectionId: "first", revision: 7 },
     { connectionId: "late", revision: 7 },
   ]);

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import ThreadSidebarClient from "./ThreadSidebarClient.ts";
-import type { WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot } from "./thread-state.ts";
+import type { WorkbenchProjectThreadSummary, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot } from "./thread-state.ts";
 
 const draft = (prompt: string, clientUpdatedAt: number): WorkbenchThreadDraft => ({
   agent: null, attachments: [], clientUpdatedAt, composerSettings: {}, createdAt: 1,
@@ -10,6 +10,100 @@ const draft = (prompt: string, clientUpdatedAt: number): WorkbenchThreadDraft =>
   profileId: null, projectId: "project", prompt, reasoningEffort: null, serviceTier: null, updatedAt: clientUpdatedAt,
 });
 const snapshot = (revision: number): WorkbenchThreadSidebarSnapshot => ({ entries: [], error: null, freshness: "fresh", projectId: "project", revision });
+const counts = (working = 0) => ({
+  completed: 0,
+  needsAttention: 0,
+  needsAttentionActive: 0,
+  proposedCommit: 0,
+  stopped: 0,
+  working,
+});
+const projectSummary = (
+  projectId: string,
+  revision: number,
+  working = 0,
+): WorkbenchProjectThreadSummary => ({
+  counts: counts(working),
+  lastThreadUpdateAt: null,
+  projectId,
+  revision,
+  unsettledThreads: [],
+});
+
+test("project summaries bootstrap together, merge by revision, and follow selected optimistic status", async () => {
+  const stoppedEntry: WorkbenchThreadSidebarSnapshot["entries"][number] = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "thread" },
+    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "old-turn" },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Thread",
+  };
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => ({
+        projectThreads: {
+          projects: [
+            projectSummary("project", 0),
+            projectSummary("other", 1, 2),
+          ],
+        },
+        sidebar: { ...snapshot(1), entries: [stoppedEntry] },
+      }),
+      upsertDraft: async () => undefined,
+    },
+  });
+
+  await client.open("project");
+  assert.deepEqual(client.getProjectThreadSummaries().projects, [
+    {
+      counts: { ...counts(), stopped: 1 },
+      lastThreadUpdateAt: 1,
+      projectId: "project",
+      revision: 1,
+      unsettledThreads: [{
+        activityAt: 1,
+        identity: stoppedEntry.identity,
+        status: "stopped",
+        title: "Thread",
+      }],
+    },
+    projectSummary("other", 1, 2),
+  ]);
+  client.acceptProjectThreadSummary({
+    summary: projectSummary("other", 2, 3),
+    updateKind: "projectThreadSummary",
+  });
+  client.acceptProjectThreadSummary({
+    summary: projectSummary("other", 1, 9),
+    updateKind: "projectThreadSummary",
+  });
+  assert.deepEqual(client.getProjectThreadSummaries().projects[1], projectSummary("other", 2, 3));
+
+  await client.acceptIntent({ identity: stoppedEntry.identity, title: "Thread", turnId: "new-turn" });
+  const optimisticSummary = client.getProjectThreadSummaries().projects[0]!;
+  assert.deepEqual({
+    ...optimisticSummary,
+    lastThreadUpdateAt: 0,
+    unsettledThreads: optimisticSummary.unsettledThreads.map((thread) => ({ ...thread, activityAt: 0 })),
+  }, {
+    counts: counts(1),
+    lastThreadUpdateAt: 0,
+    projectId: "project",
+    revision: 1,
+    unsettledThreads: [{
+      activityAt: 0,
+      identity: stoppedEntry.identity,
+      status: "working",
+      title: "Thread",
+    }],
+  });
+  assert.equal(optimisticSummary.lastThreadUpdateAt, optimisticSummary.unsettledThreads[0]?.activityAt);
+  assert.equal((optimisticSummary.lastThreadUpdateAt ?? 0) > stoppedEntry.activityAt, true);
+});
 
 test("optimistic edits keep the newest value through one single-flight flush", async () => {
   const writes: WorkbenchThreadDraft[] = [];

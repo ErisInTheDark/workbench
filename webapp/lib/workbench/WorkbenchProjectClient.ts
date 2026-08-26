@@ -16,6 +16,7 @@ import { areDeeplyEqual } from "./deep-equality";
 import ProjectTreeFileIndex, { type ProjectTreeFileCandidate, type ProjectTreeFileIndex as ProjectTreeFileIndexRecord } from "./project/ProjectTreeFileIndex";
 import reportClientSchemaError from "./report-client-schema-error";
 import { persistExpandedDirectories, readStoredExpandedDirectories } from "./state/browser-state";
+import { conformToZodSchema } from "./zod-schema-conformer";
 
 export function cloneTreeNodes(nodes: TreeNode[]): TreeNode[] {
   return nodes.map((node) => {
@@ -303,12 +304,16 @@ function WorkbenchProjectClient({ onError = () => undefined, transport }: Workbe
       throw new Error(error.error, { cause: error.cause });
     }
 
-    const parsed = WorkbenchProjectsPayloadSchema.safeParse(await response.json());
+    const payload = await response.json();
+    const parsed = WorkbenchProjectsPayloadSchema.safeParse(payload);
     if (!parsed.success) {
-      reportClientSchemaError("Rejected Workbench project catalog response", parsed.error);
-      throw new Error("The project catalog response was invalid.");
+      reportClientSchemaError("Repaired Workbench project catalog response", parsed.error);
     }
-    return applyCatalog(parsed.data);
+    return applyCatalog(conformToZodSchema(
+      WorkbenchProjectsPayloadSchema,
+      payload,
+      { data: [], rootPath: "" },
+    ).data);
   }
 
   async function refreshProject() {

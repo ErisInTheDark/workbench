@@ -48,6 +48,22 @@ function installProjectsFetch(projects: WorkbenchProjectOption[]) {
   };
 }
 
+function installProjectsPayloadFetch(payload: unknown) {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = (async (input) => {
+    requests.push(String(input));
+    return new Response(JSON.stringify(payload), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    });
+  }) as typeof fetch;
+  return {
+    requests,
+    restore() { globalThis.fetch = originalFetch; },
+  };
+}
+
 function createTransport() {
   const calls: string[] = [];
   const transport: WorkbenchProjectTransport = {
@@ -84,6 +100,31 @@ test("project selection loads only the catalog and waits for a pushed tree snaps
   } finally {
     fetchHarness.restore();
   }
+});
+
+test("project catalog conformance is display-only and never becomes a transport mutation", async (context) => {
+  const fetchHarness = installProjectsPayloadFetch({
+    data: [createProject("alpha"), { id: 42 }],
+    rootPath: "C:/projects",
+  });
+  const diagnostics: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...values) => { diagnostics.push(values.map(String).join(" ")); };
+  context.after(() => {
+    console.error = originalConsoleError;
+    fetchHarness.restore();
+  });
+
+  const { calls, transport } = createTransport();
+  const client = WorkbenchProjectClient({ transport });
+  assert.equal(await client.selectProjectStrict("alpha"), true);
+  assert.equal(client.getSnapshot().projects.length, 1);
+  assert.equal(client.getSnapshot().projects[0]?.id, "alpha");
+  assert.deepEqual(calls, []);
+  assert.deepEqual(fetchHarness.requests, ["/api/projects"]);
+  assert.equal(diagnostics.length, 1);
+  assert.match(diagnostics[0]!, /Repaired Workbench project catalog response/u);
+  client.dispose();
 });
 
 test("route identity accepts a pushed tree before catalog enrichment and can roll back", () => {

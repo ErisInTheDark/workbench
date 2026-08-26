@@ -1,7 +1,7 @@
 /* No production exports. Tests protect strict lifecycle, grouping, folder mutation, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchThreadPlanConflictSelector, getThreadSidebarGroup, getWorkbenchThreadPlanConflictEntries, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanConflictSelector, getThreadSidebarGroup, getWorkbenchThreadPlanConflictEntries, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
 test("live claims and proposed commit proposals prevent thread settlement", () => {
   const resolved = {
@@ -396,4 +396,110 @@ test("completed parent status derives attention before working without mutating 
   assert.equal(projectedAttention.entryKind === "draft" ? null : projectedAttention.lifecycle.kind, "needsAttention");
   assert.equal(parent.lifecycle.kind, "completed");
   assert.equal(projectWorkbenchThreadSidebarEntries([parent])[0], parent);
+});
+
+test("project summaries count unsettled top-level status after direct-child projection", () => {
+  type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
+  const thread = (
+    threadId: string,
+    lifecycle: ThreadEntry["lifecycle"],
+    gitArc?: ThreadEntry["gitArc"],
+    activityAt = 1,
+    snoozed = false,
+  ): ThreadEntry => ({
+    activityAt,
+    entryKind: "thread",
+    ...(gitArc ? { gitArc } : {}),
+    identity: { harness: "codex", threadId },
+    lifecycle,
+    metadata: { archived: false, pinned: false, snoozed },
+    title: threadId,
+  });
+  const arc = {
+    checkpointCommit: "a".repeat(40),
+    claimedPaths: ["owned.ts"],
+    intentDescription: "",
+    intentName: "arc",
+    phase: "active" as const,
+    proposals: [],
+    updatedAt: "2026-08-26T00:00:00.000Z",
+  };
+  const parent = thread("parent", { kind: "completed", reason: "providerInactive", settled: true });
+  const child: WorkbenchThreadSidebarEntry = {
+    activityAt: 2,
+    createdAt: 1,
+    cwd: "C:/repo",
+    directSubagentIndex: 0,
+    entryKind: "subagent",
+    identity: { harness: "codex", threadId: "child" },
+    lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    name: "child",
+    parentThreadId: "parent",
+    pinned: false,
+    profileId: "default",
+    profileName: "Default",
+    projectId: "project",
+    title: "child",
+    updatedAt: 2,
+  };
+  const summary = createWorkbenchProjectThreadSummary("project", [
+    parent,
+    child,
+    thread("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }),
+    thread("active-attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }, arc),
+    thread("stopped", { kind: "stopped", reason: "userMarkedStopped", settled: false }),
+    thread("completed", { kind: "completed", reason: "providerInactive", settled: false }, undefined, 4, true),
+    thread("proposed", { kind: "completed", reason: "providerInactive", settled: false }, {
+      ...arc,
+      claimedPaths: [],
+      phase: "resolved",
+      proposals: [{ proposalId: "proposal", status: "proposed" }],
+    }),
+    thread("settled", { kind: "completed", reason: "providerInactive", settled: true }),
+  ], 7);
+  assert.deepEqual(summary, {
+    counts: {
+      completed: 0,
+      needsAttention: 1,
+      needsAttentionActive: 1,
+      proposedCommit: 1,
+      stopped: 1,
+      working: 1,
+    },
+    lastThreadUpdateAt: 4,
+    projectId: "project",
+    revision: 7,
+    unsettledThreads: [
+      {
+        activityAt: 1,
+        identity: { harness: "codex", threadId: "parent" },
+        status: "working",
+        title: "parent",
+      },
+      {
+        activityAt: 1,
+        identity: { harness: "codex", threadId: "attention" },
+        status: "needsAttention",
+        title: "attention",
+      },
+      {
+        activityAt: 1,
+        identity: { harness: "codex", threadId: "active-attention" },
+        status: "needsAttentionActive",
+        title: "active-attention",
+      },
+      {
+        activityAt: 1,
+        identity: { harness: "codex", threadId: "stopped" },
+        status: "stopped",
+        title: "stopped",
+      },
+      {
+        activityAt: 1,
+        identity: { harness: "codex", threadId: "proposed" },
+        status: "proposedCommit",
+        title: "proposed",
+      },
+    ],
+  });
 });

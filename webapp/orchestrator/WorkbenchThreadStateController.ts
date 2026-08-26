@@ -25,6 +25,7 @@ import {
 } from "../lib/workbench/thread/thread-display-order";
 import {
   areAllUnsnoozedThreadEntriesSettlementReady,
+  createWorkbenchProjectThreadSummary,
   WorkbenchThreadDraftSchema,
   WorkbenchThreadSidebarEntrySchema,
   WorkbenchThreadStateRequestSchema,
@@ -46,6 +47,7 @@ import {
   type WorkbenchThreadActivityUpdate,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadSidebarSnapshot,
+  type WorkbenchThreadStateOpenResultV2,
   type WorkbenchThreadStateOpenResult,
   type WorkbenchThreadStateRequest,
   type WorkbenchThreadStateSnapshot,
@@ -243,7 +245,7 @@ function describeInvalidRequest(input: object, issue: { code: string; message: s
 export default class WorkbenchThreadStateController {
   private static readonly SETTLED_GIT_RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
   private active = true;
-  private readonly connectionProjects = new Map<string, string>();
+  private readonly connectionProjects = new Map<string, { projectId: string; version: 1 | 2 | 3 }>();
   private readonly json = new AtomicJsonStore();
   private readonly now: () => number;
   private readonly options: WorkbenchThreadStateControllerOptions;
@@ -271,7 +273,7 @@ export default class WorkbenchThreadStateController {
   private async handleRequestOwned(connectionId: string, input: WorkbenchThreadStateRequest | object) {
     const projectRequest = WorkbenchProjectStateRequestSchema.safeParse(input);
     if (projectRequest.success) {
-      const observedProjectId = this.connectionProjects.get(connectionId);
+      const observedProjectId = this.connectionProjects.get(connectionId)?.projectId;
       if (observedProjectId !== projectRequest.data.projectId) {
         return { error: { code: "invalidProjectObservation", message: "The project request does not belong to this connection's observed project." } };
       }
@@ -301,7 +303,7 @@ export default class WorkbenchThreadStateController {
         turnId: request.turnId,
       }) };
       case "workbench/thread-state/title/set": {
-        if (this.connectionProjects.get(connectionId) !== request.projectId) {
+        if (this.connectionProjects.get(connectionId)?.projectId !== request.projectId) {
           return { error: { code: "invalidProjectObservation", message: "The title request does not belong to this connection's observed project." } };
         }
         try {
@@ -321,15 +323,16 @@ export default class WorkbenchThreadStateController {
     }
   }
 
-  async open(connectionId: string, projectId: string): Promise<WorkbenchThreadStateOpenResult>;
-  async open(connectionId: string, projectId: string, version: 2): Promise<WorkbenchThreadStateOpenResult>;
+  async open(connectionId: string, projectId: string): Promise<WorkbenchThreadStateOpenResultV2>;
+  async open(connectionId: string, projectId: string, version: 3): Promise<WorkbenchThreadStateOpenResult>;
+  async open(connectionId: string, projectId: string, version: 2): Promise<WorkbenchThreadStateOpenResultV2>;
   async open(connectionId: string, projectId: string, version: 1): Promise<WorkbenchThreadSidebarSnapshot>;
-  async open(connectionId: string, projectId: string, version: 1 | 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResult>;
-  async open(connectionId: string, projectId: string, version: 1 | 2 = 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResult> {
-    const priorProjectId = this.connectionProjects.get(connectionId);
+  async open(connectionId: string, projectId: string, version: 1 | 2 | 3): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult>;
+  async open(connectionId: string, projectId: string, version: 1 | 2 | 3 = 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult> {
+    const priorProjectId = this.connectionProjects.get(connectionId)?.projectId;
     if (priorProjectId && priorProjectId !== projectId) await this.close(connectionId, priorProjectId);
     const state = await this.getProject(projectId);
-    this.connectionProjects.set(connectionId, projectId);
+    this.connectionProjects.set(connectionId, { projectId, version });
     state.observers.add(connectionId);
     const currentProjectUpdate = this.options.projectState.getCurrentUpdate(projectId);
     if (currentProjectUpdate) {
@@ -338,15 +341,23 @@ export default class WorkbenchThreadStateController {
     }
     const sidebar = this.snapshot(projectId, state);
     if (version === 1) return sidebar;
-    return {
-      catalog: this.options.getProjectCatalog(),
+    const catalog = this.options.getProjectCatalog();
+    const composite = {
+      catalog,
       project: currentProjectUpdate ?? this.options.projectState.getCurrentUpdate(projectId),
       sidebar,
+    };
+    if (version === 2) return composite;
+    return {
+      ...composite,
+      projectThreads: {
+        projects: await Promise.all(catalog.data.map(({ id }) => this.getProjectThreadSummary(id))),
+      },
     };
   }
 
   async close(connectionId: string, expectedProjectId?: string) {
-    const projectId = this.connectionProjects.get(connectionId);
+    const projectId = this.connectionProjects.get(connectionId)?.projectId;
     if (!projectId || (expectedProjectId && projectId !== expectedProjectId)) return;
     this.connectionProjects.delete(connectionId);
     const state = this.projects.get(projectId);
@@ -386,7 +397,7 @@ export default class WorkbenchThreadStateController {
   async disconnect(connectionId: string) { await this.close(connectionId); }
 
   async acceptIntent(connectionId: string, input: { draftId?: string; harness: "codex" | "copilot" | "opencode"; projectId: string; threadId: string; title?: string; turnId: string }) {
-    if (this.connectionProjects.get(connectionId) !== input.projectId) throw new Error("The accepted intent does not belong to this connection's observed project.");
+    if (this.connectionProjects.get(connectionId)?.projectId !== input.projectId) throw new Error("The accepted intent does not belong to this connection's observed project.");
     let draftPinned = false;
     if (input.draftId) {
       const state = await this.getProject(input.projectId);
@@ -752,6 +763,19 @@ export default class WorkbenchThreadStateController {
     });
   }
 
+  private async getProjectThreadSummary(projectId: string) {
+    const state = this.projects.get(projectId);
+    if (state) {
+      return createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision);
+    }
+    const stored = await this.loadProjectStorage(projectId);
+    const entries = stored.records.flatMap((record) => {
+      const projected = projectWorkbenchThreadStateEntry(record);
+      return projected ? [projected] : [];
+    });
+    return createWorkbenchProjectThreadSummary(projectId, entries, 0);
+  }
+
   private decodeStoredProjectState(stored: Partial<StoredProjectState | StoredProjectStateV2 | StoredProjectStateV1>, projectId: string): StoredProjectState {
     const records = stored.version === 3 && Array.isArray(stored.records)
       ? stored.records.map((entry) => {
@@ -831,12 +855,17 @@ export default class WorkbenchThreadStateController {
     for (const [projectId, state] of this.projects) this.publish(projectId, state);
   }
   private publish(projectId: string, state: ProjectState, changedEntry?: WorkbenchThreadStateEntry) {
-    if (!this.active || !state.observers.size) return;
+    if (!this.active) return;
     state.revision += 1;
-    const snapshot = this.snapshot(projectId, state);
-    this.publishUpdate(state, snapshot);
+    if (state.observers.size) this.publishUpdate(state, this.snapshot(projectId, state));
+    const summary = createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision);
+    for (const [connectionId, observation] of this.connectionProjects) {
+      if (observation.version === 3) {
+        this.options.publish(connectionId, { summary, updateKind: "projectThreadSummary" });
+      }
+    }
     const projected = changedEntry ? projectWorkbenchThreadStateEntry(changedEntry) : null;
-    if (projected) for (const listener of this.subscribers) listener(projectId, projected);
+    if (projected && state.observers.size) for (const listener of this.subscribers) listener(projectId, projected);
   }
 
   private publishUpdate(state: ProjectState, update: WorkbenchThreadStateSnapshot) {
