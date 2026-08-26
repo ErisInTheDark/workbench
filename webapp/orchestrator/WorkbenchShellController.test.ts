@@ -43,7 +43,12 @@ test("runs one PowerShell command through the exact supplied Codex sandbox state
     workdir: "child",
   }, sandboxMeta(workspace), new AbortController().signal);
 
-  assert.deepEqual(result, { exitCode: 5, stderr: "denied\n", stdout: "partial\n" });
+  assert.deepEqual(result, {
+    cwd: path.resolve(workspace, "child"),
+    exitCode: 5,
+    stderr: "denied\n",
+    stdout: "partial\n",
+  });
   assert.equal(executions.length, 1);
   const execution = executions[0]!;
   assert.equal(execution.cwd, path.resolve(workspace, "child"));

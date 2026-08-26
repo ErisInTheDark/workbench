@@ -17,6 +17,11 @@ import {
   type WorkbenchAgentCommandDefinition,
   type WorkbenchAgentCommandRequest,
 } from "../lib/workbench/commands/workbench-agent-command-definition";
+import {
+  getWorkbenchShellAggregatedOutput,
+  WorkbenchShellInputSchema,
+  WorkbenchShellResultSchema,
+} from "../lib/workbench/commands/workbench-shell-command";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { logError } from "./process-helpers";
 import {
@@ -26,7 +31,6 @@ import {
 import WorkbenchShellController, {
   WORKBENCH_SHELL_SANDBOX_CAPABILITY,
   WORKBENCH_SHELL_TOOL_DESCRIPTION,
-  WorkbenchShellInputSchema,
 } from "./WorkbenchShellController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
@@ -223,6 +227,7 @@ export default class WorkbenchAgentMcpController {
       },
       description: WORKBENCH_SHELL_TOOL_DESCRIPTION,
       inputSchema: WorkbenchShellInputSchema,
+      outputSchema: WorkbenchShellResultSchema,
     }, async (input, extra) => await this.callShell(
       input as object,
       extra._meta,
@@ -277,12 +282,11 @@ export default class WorkbenchAgentMcpController {
       signal = AbortSignal.any([signal, registration.signal]);
       const result = await this.shell.execute(input, meta, signal);
       if (signal.aborted) throw signal.reason;
-      const output = result.stdout && result.stderr
-        ? `${result.stdout}${result.stdout.endsWith("\n") ? "" : "\n"}${result.stderr}`
-        : result.stdout || result.stderr;
+      const output = getWorkbenchShellAggregatedOutput(result);
       return {
         content: [{ type: "text" as const, text: `Exit code: ${result.exitCode}\nOutput:\n${output}` }],
         isError: false,
+        structuredContent: result,
       };
     } catch (error) {
       const message = sanitizeError(error) || "Workbench shell tool call failed.";

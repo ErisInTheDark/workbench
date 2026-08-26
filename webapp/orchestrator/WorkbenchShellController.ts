@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_SHELL_SANDBOX_CAPABILITY/WORKBENCH_SHELL_TOOL_DESCRIPTION/WorkbenchShellInputSchema: MCP-only sandboxed shell contract. Keywords: workbench, shell, MCP, sandbox, schema.
+ * - WORKBENCH_SHELL_SANDBOX_CAPABILITY/WORKBENCH_SHELL_TOOL_DESCRIPTION: advertise the MCP-only sandbox metadata and behavior contract. Keywords: workbench, shell, MCP, sandbox.
  * - WorkbenchShellControllerOptions: inject Codex execution and host command resolution. Keywords: workbench, shell, options, test.
  * - default WorkbenchShellController: run host-shell commands through Codex's exact MCP sandbox state. Keywords: workbench, shell, Codex, sandbox.
  */
@@ -10,6 +10,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import type { JsonValue } from "../lib/workbench/commands/workbench-agent-command-definition";
+import { WorkbenchShellInputSchema } from "../lib/workbench/commands/workbench-shell-command";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexCommandExecController from "./CodexCommandExecController";
 import { getSpawnDescriptor } from "./process-helpers";
@@ -28,13 +29,6 @@ const SandboxStateSchema = z.object({
   permissionProfile: z.record(z.string(), JsonValueSchema),
   sandboxCwd: z.string().url().refine((value) => new URL(value).protocol === "file:", "sandboxCwd must be a file URL"),
   useLegacyLandlock: z.boolean().optional(),
-});
-
-export const WorkbenchShellInputSchema = z.object({
-  command: z.string().min(1).describe("Shell command string to run inside the current turn sandbox."),
-  login: z.boolean().optional().describe("Use login-shell semantics. Defaults to true."),
-  timeout_ms: z.number().int().nonnegative().optional().describe("Maximum command runtime in milliseconds. Codex's command default applies when omitted."),
-  workdir: z.string().min(1).optional().describe("Working directory. Relative paths resolve from the current turn sandbox cwd."),
 });
 
 export const WORKBENCH_SHELL_TOOL_DESCRIPTION = "Run a shell command inside the current Codex turn sandbox. This tool never escalates or opens an approval prompt. If a necessary command fails because the sandbox blocked it, diagnose that restriction before retrying with the direct shell_command tool and require_escalated.";
@@ -94,11 +88,12 @@ export default class WorkbenchShellController {
       args: ["sandbox", "--sandbox-state-json", JSON.stringify(commandState), "--", ...shellCommand],
     });
 
-    return await this.commandExec.execute({
+    const result = await this.commandExec.execute({
       command: [descriptor.command, ...descriptor.args],
       cwd: commandCwd,
       sandboxPolicy: { type: "dangerFullAccess" },
       ...(request.timeout_ms === undefined ? {} : { timeoutMs: request.timeout_ms }),
     }, signal);
+    return { ...result, cwd: commandCwd };
   }
 }

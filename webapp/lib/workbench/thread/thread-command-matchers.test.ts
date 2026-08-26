@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { JsonValue } from "../../codex/generated/app-server/serde_json/JsonValue.ts";
+import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
 import { getWorkbenchAgentCommandToolName } from "../commands/workbench-agent-command-definition.ts";
 import type { ThreadCommandDisplayPart } from "./command-matchers/types.ts";
@@ -22,6 +23,7 @@ import {
   getThreadCommandOutcomeDisplay,
   getWorkbenchMcpCommandDisplay,
   getWorkbenchMcpCommandRoute,
+  getWorkbenchMcpShellCommandItem,
   shouldUseWorkbenchMcpSpecializedRenderer,
   parseGitCheckpointCompareOutput,
   parseGitCheckpointCommitCommand,
@@ -33,6 +35,26 @@ import {
 } from "./thread-command-matchers.ts";
 
 const PROJECT_ROOT = "C:/git/web/workbench";
+
+type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
+
+function shellMcpItem(overrides: Partial<McpToolCallItem> = {}): McpToolCallItem {
+  return {
+    appContext: null,
+    arguments: { command: "Get-ChildItem src" },
+    durationMs: null,
+    error: null,
+    id: "shell-one",
+    pluginId: null,
+    readOnlyHint: false,
+    result: null,
+    server: "wb",
+    status: "inProgress",
+    tool: "shell",
+    type: "mcpToolCall",
+    ...overrides,
+  };
+}
 
 function assertRouteOnlyDisplay(
   display: ReturnType<typeof getThreadCommandDisplay>,
@@ -187,6 +209,53 @@ test("non-wb and unknown MCP tools keep generic rendering", () => {
   assert.equal(getWorkbenchMcpCommandDisplay({ argumentsValue: {}, server: "wb", tool: "future_command" }), null);
   assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "other", tool: "git_arc_compare" }), null);
   assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "future_command" }), null);
+});
+
+test("wb shell MCP evidence derives ordinary command execution presentation", () => {
+  const running = getWorkbenchMcpShellCommandItem(shellMcpItem(), PROJECT_ROOT);
+  assert.ok(running);
+  assert.equal(running.type, "commandExecution");
+  assert.equal(running.command, "Get-ChildItem src");
+  assert.equal(running.cwd, PROJECT_ROOT);
+  assert.equal(running.status, "inProgress");
+  assert.equal(running.exitCode, null);
+
+  const completed = getWorkbenchMcpShellCommandItem(shellMcpItem({
+    durationMs: 42,
+    result: {
+      _meta: null,
+      content: [{ type: "text", text: "Exit code: 5" }],
+      structuredContent: {
+        cwd: "C:/git/web/workbench/child",
+        exitCode: 5,
+        stderr: "denied\n",
+        stdout: "partial\n",
+      },
+    },
+    status: "completed",
+  }), PROJECT_ROOT);
+  assert.ok(completed);
+  assert.equal(completed.cwd, "C:/git/web/workbench/child");
+  assert.equal(completed.exitCode, 5);
+  assert.equal(completed.aggregatedOutput, "partial\ndenied\n");
+  assert.equal(completed.durationMs, 42);
+
+  const failed = getWorkbenchMcpShellCommandItem(shellMcpItem({
+    error: { message: "Sandbox launcher failed." },
+    status: "failed",
+  }), PROJECT_ROOT);
+  assert.ok(failed);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.aggregatedOutput, "Sandbox launcher failed.");
+
+  assert.equal(getWorkbenchMcpShellCommandItem(shellMcpItem({
+    result: {
+      _meta: null,
+      content: [{ type: "text", text: "malformed" }],
+      structuredContent: { exitCode: 0 },
+    },
+    status: "completed",
+  }), PROJECT_ROOT), null);
 });
 
 test("failed Recall MCP calls use the generic error renderer", () => {

@@ -95,6 +95,7 @@ import {
 import {
     getWorkbenchMcpCommandDisplay,
     getWorkbenchMcpCommandRoute,
+    getWorkbenchMcpShellCommandItem,
     shouldUseWorkbenchMcpSpecializedRenderer,
 } from "./command-matchers/workbench-mcp";
 
@@ -236,7 +237,7 @@ export {
     parseGitCheckpointDiffOutput,
     parseGitCheckpointProposalId, parseWorkbenchSubagentCommand, parseWorkbenchThreadStatusCommand, parseWorkbenchThreadTitleCommand
 };
-export { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute, shouldUseWorkbenchMcpSpecializedRenderer };
+export { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem, shouldUseWorkbenchMcpSpecializedRenderer };
 export { getWorkbenchCommandRouteSummaryDisplay } from "./command-matchers/workbench-command-rendering";
 export type { WorkbenchCommandRoute, WorkbenchSpecializedOperation } from "./command-matchers/workbench-command-rendering";
 export type {

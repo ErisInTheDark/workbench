@@ -81,7 +81,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     shell: {
       execute: async (input, meta) => {
         shellCalls.push({ input, meta });
-        return { exitCode: 3, stderr: "sandbox denial\n", stdout: "partial\n" };
+        return { cwd: "C:/authoritative/child", exitCode: 3, stderr: "sandbox denial\n", stdout: "partial\n" };
       },
     },
   });
@@ -119,6 +119,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const shell = inventory.tools.find(({ name }) => name === "shell");
     assert.ok(shell);
     assert.deepEqual(Object.keys(shell.inputSchema.properties ?? {}).sort(), ["command", "login", "timeout_ms", "workdir"]);
+    assert.deepEqual(Object.keys(shell.outputSchema?.properties ?? {}).sort(), ["cwd", "exitCode", "stderr", "stdout"]);
     assert.match(shell.description ?? "", /never escalates.*direct shell_command/u);
 
     const shellMeta = {
@@ -132,6 +133,12 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     });
     assert.equal(shellResult.isError, false);
     assert.match(responseText(shellResult), /Exit code: 3[\s\S]*partial[\s\S]*sandbox denial/u);
+    assert.deepEqual(shellResult.structuredContent, {
+      cwd: "C:/authoritative/child",
+      exitCode: 3,
+      stderr: "sandbox denial\n",
+      stdout: "partial\n",
+    });
     assert.deepEqual(shellCalls, [{ input: { command: "Get-ChildItem", workdir: "child" }, meta: shellMeta }]);
 
     for (const [toolName, action, responseKind] of [

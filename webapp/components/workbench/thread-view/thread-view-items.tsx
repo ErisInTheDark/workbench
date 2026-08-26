@@ -39,6 +39,7 @@ import {
   getThreadCommandExecutionOutcome,
   getThreadCommandOutcomeDisplay,
   getWorkbenchMcpCommandRoute,
+  getWorkbenchMcpShellCommandItem,
   shouldUseWorkbenchMcpSpecializedRenderer,
   getGitArcMatcherAction,
   isBrowseCommandMatcherClaim,
@@ -312,7 +313,11 @@ function getWorkedSummary (turn: Turn) {
   return getWorkedSummaryForDuration(turn.durationMs);
 }
 
-function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThreadItemIds = {}): ThreadRenderableBlock[] {
+function buildRenderableBlocks (
+  items: ThreadItem[],
+  hiddenItemIds: HiddenThreadItemIds = {},
+  fallbackCommandCwd = ".",
+): ThreadRenderableBlock[] {
   const blocks: ThreadRenderableBlock[] = [];
   let pendingCommands: CommandItem[] = [];
   let pendingFileChanges: FileChangeItem[] = [];
@@ -370,6 +375,13 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
     pendingWebSearches = [];
   };
 
+  const appendCommandItem = (item: CommandItem) => {
+    flushPendingReasoning();
+    flushPendingFileChanges();
+    flushPendingWebSearches();
+    pendingCommands.push(item);
+  };
+
   for (const item of items) {
     if (hiddenItemIds.itemIds?.has(item.id)) {
       continue;
@@ -405,16 +417,17 @@ function buildRenderableBlocks (items: ThreadItem[], hiddenItemIds: HiddenThread
       continue;
     }
 
-    if (item.type === "commandExecution" && isHiddenCommandExecution(item.command)) {
+    if (item.type === "commandExecution") {
+      if (!isHiddenCommandExecution(item.command)) appendCommandItem(item);
       continue;
     }
 
-    if (item.type === "commandExecution") {
-      flushPendingReasoning();
-      flushPendingFileChanges();
-      flushPendingWebSearches();
-      pendingCommands.push(item);
-      continue;
+    if (item.type === "mcpToolCall") {
+      const commandItem = getWorkbenchMcpShellCommandItem(item, fallbackCommandCwd);
+      if (commandItem) {
+        if (!isHiddenCommandExecution(commandItem.command)) appendCommandItem(commandItem);
+        continue;
+      }
     }
 
     if (item.type === "reasoning") {
@@ -1569,7 +1582,7 @@ function ThreadSubagentCurrentActivityPreview ({
     return <ThreadContentLoadingSkeleton />;
   }
 
-  const blocks = buildRenderableBlocks(currentTurn.items);
+  const blocks = buildRenderableBlocks(currentTurn.items, {}, thread.cwd);
   const block = blocks.at(-1) ?? null;
   if (!block) {
     return (
@@ -2646,7 +2659,10 @@ function ThreadTurnDetailsComponent ({
     hideWorkbenchControlUserMessages,
     isWorkbenchControlTurn,
   ]);
-  const baseRenderableBlocks = useMemo(() => buildRenderableBlocks(turn.items, baseHiddenItemIds), [baseHiddenItemIds, turn.items]);
+  const baseRenderableBlocks = useMemo(
+    () => buildRenderableBlocks(turn.items, baseHiddenItemIds, threadCwdPath),
+    [baseHiddenItemIds, threadCwdPath, turn.items],
+  );
   const finishedTailHiddenItemIds = useMemo(() => getFinishedThreadTailHiddenItemIds({
     hideReasoning: hideTerminalReasoning,
     hoistedProposalIds: hoistedGitArcProposalIds,
@@ -2701,7 +2717,10 @@ function ThreadTurnDetailsComponent ({
     pinnedItemIds: pinnedCompactionItemIds,
   }), [completedWorkPartition, itemTimeline, pinnedCompactionItemIds, turn.items]);
   const turnBrowseResultEntries = browseResultEntries;
-  const renderableBlocks = useMemo(() => buildRenderableBlocks(turn.items, hiddenItemIds), [hiddenItemIds, turn.items]);
+  const renderableBlocks = useMemo(
+    () => buildRenderableBlocks(turn.items, hiddenItemIds, threadCwdPath),
+    [hiddenItemIds, threadCwdPath, turn.items],
+  );
   const allBlocks = useStableRenderableBlocks(renderableBlocks);
 
   const renderBlock = (
@@ -2742,7 +2761,7 @@ function ThreadTurnDetailsComponent ({
     />
   );
 
-  const buildBlocksForItems = (items: ThreadItem[]) => buildRenderableBlocks(items, hiddenItemIds);
+  const buildBlocksForItems = (items: ThreadItem[]) => buildRenderableBlocks(items, hiddenItemIds, threadCwdPath);
   const renderBlocks = (
     blocks: ThreadRenderableBlock[],
     primaryUserBlock: ThreadRenderableBlock | null,

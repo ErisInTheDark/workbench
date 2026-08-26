@@ -73,6 +73,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/orchestrator/WorkbenchAgentMcpController.ts",
     "webapp/orchestrator/WorkbenchOrchestratorHttpRouter.ts",
     "webapp/orchestrator/WorkbenchShellController*.ts",
+    "webapp/lib/workbench/commands/workbench-shell-command.ts",
     "webapp/orchestrator/workbench-agent-mcp-request-registry.ts",
   ].join("\n"),
 });

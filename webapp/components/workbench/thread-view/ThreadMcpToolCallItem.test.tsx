@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect generic MCP routing plus wb MCP invocation and error details. Keywords: MCP, thread rendering, TypeScript, output.
+ * - No production exports; tests protect generic MCP routing, wb MCP details, and shell-to-command presentation. Keywords: MCP, shell, thread rendering, output.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import { getWorkbenchMcpCommandRoute } from "../../../lib/workbench/thread/thread-command-matchers";
+import { ThreadTurnDetails } from "./thread-view-items";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
@@ -146,4 +147,42 @@ test("completed MCP calls leave disclosure toggles user-owned", () => {
   if (!isValidElement<{ defaultOpen?: boolean; open?: boolean }>(disclosure)) return;
   assert.equal(disclosure.props.defaultOpen, false);
   assert.equal(disclosure.props.open, undefined);
+});
+
+test("wb shell calls render through the ordinary command execution surface", () => {
+  const item = makeItem({
+    arguments: { command: "Get-ChildItem src", workdir: "C:/workspace" },
+    readOnlyHint: false,
+    result: {
+      _meta: null,
+      content: [{ type: "text", text: "Exit code: 5\nOutput:\npartial\ndenied\n" }],
+      structuredContent: {
+        cwd: "C:/workspace",
+        exitCode: 5,
+        stderr: "denied\n",
+        stdout: "partial\n",
+      },
+    },
+    tool: "shell",
+  });
+  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    defaultOpenCompletedWork: true,
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: 12,
+      error: null,
+      id: "turn-one",
+      items: [item],
+      itemsView: "full",
+      startedAt: null,
+      status: "completed",
+    },
+  }));
+
+  assert.match(html, /Failed/u);
+  assert.match(html, /Get-ChildItem src/u);
+  assert.match(html, /partial\s*denied/u);
+  assert.doesNotMatch(html, /mcp__wb__shell/u);
 });
