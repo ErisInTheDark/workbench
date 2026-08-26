@@ -488,7 +488,7 @@ export function getWorkbenchCommandRoute(
         kind: "simple",
         rendering: {
           claimedBy: "workbench-cli.ripgrep",
-          result: RipgrepCommand.searchResult(readStringArray(args.args), context)
+          result: RipgrepCommand.presentationResult(readStringArray(args.args), context)
             ?? CommandMatcher.Result({
               ongoingSummaryParts: actionTarget("Searching ", "project files"),
               summaryParts: actionTarget("Searched ", "project files"),

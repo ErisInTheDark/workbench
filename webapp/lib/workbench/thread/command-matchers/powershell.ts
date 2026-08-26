@@ -385,7 +385,7 @@ export const POWERSHELL_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (matchesRipgrepCommand(parsedStage) === false || hasPowerShellFlag(parsedStage, "--files")) {
         return null;
       }
-      return RipgrepCommand.searchResult(parsedStage.tokens.slice(1), context);
+      return RipgrepCommand.presentationResult(parsedStage.tokens.slice(1), context);
     },
   }),
   CommandMatcher({

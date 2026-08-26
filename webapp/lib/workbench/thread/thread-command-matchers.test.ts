@@ -342,6 +342,23 @@ test("typed ripgrep summaries exactly match the shell ripgrep presentation", () 
   }
 });
 
+test("typed ripgrep file listings expose their precise target path", () => {
+  const target = "C:/git/web/workbench/.workbench/worktrees/convex-lab/webapp/convex";
+  const display = getWorkbenchMcpCommandDisplay({
+    argumentsValue: { args: ["--files", target, ""] },
+    context: { cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT },
+    server: "wb",
+    tool: "rg",
+  });
+
+  assert.ok(display);
+  assert.deepEqual(displayPartKinds(display.summaryParts), ["plain", "plain", "path"]);
+  assert.deepEqual(displayPartKinds(display.ongoingSummaryParts), ["plain", "plain", "path"]);
+  assert.deepEqual(pathOperands(display.summaryParts), [".workbench/worktrees/convex-lab/webapp/convex"]);
+  assert.deepEqual(codeOperands(display.summaryParts), []);
+  assert.equal(display.summaryStats.searchedFiles, 1);
+});
+
 test("Workbench subagent commands share one semantic parser", () => {
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent wait --id child-thread"), {
     action: "wait",

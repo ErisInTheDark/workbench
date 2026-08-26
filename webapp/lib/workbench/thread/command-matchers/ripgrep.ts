@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - RipgrepCommand: parse native ripgrep arguments and build the shared shell/MCP search presentation. Keywords: ripgrep, search, arguments, rendering.
+ * - RipgrepCommand: parse native ripgrep arguments and build the shared shell/MCP presentation. Keywords: ripgrep, search, files, arguments, rendering.
  */
 import { CommandMatcher } from "./core";
 import {
@@ -8,7 +8,11 @@ import {
   buildDisplayPathPart,
   formatThreadCommandPath,
 } from "./helpers";
-import type { CommandMatcherResult, ParsedCommandDisplayContext } from "./types";
+import type {
+  CommandMatcherResult,
+  ParsedCommandDisplayContext,
+  ThreadCommandDisplayPart,
+} from "./types";
 
 const VALUE_FLAGS = new Set([
   "-A", "--after-context",
@@ -27,6 +31,7 @@ const VALUE_FLAGS = new Set([
 ]);
 
 interface RipgrepCommand {
+  readonly operation: "listFiles" | "search";
   readonly path: string | null;
   readonly query: string | null;
   readonly syntax: "literal" | "regex";
@@ -82,6 +87,7 @@ function RipgrepCommand(args: readonly string[]): RipgrepCommand {
     positional.push(argument);
   }
   return {
+    operation: searchesFiles ? "listFiles" : "search",
     path: searchesFiles
       ? positional[0] ?? null
       : explicitQuery
@@ -100,16 +106,11 @@ namespace RipgrepCommand {
     readonly workspaceRoots?: ParsedCommandDisplayContext["workspaceRoots"];
   }
 
-  export function searchResult(
+  export function presentationResult(
     args: readonly string[],
     context: PresentationContext = {},
   ): CommandMatcherResult | null {
     const command = RipgrepCommand(args);
-    if (!command.query) return null;
-
-    const query = command.query;
-    const summaryParts = [CommandMatcher.Text("Search for "), CommandMatcher.Pattern(query, command.syntax)];
-    const ongoingSummaryParts = [CommandMatcher.Text("Searching for "), CommandMatcher.Pattern(query, command.syntax)];
     const pathPart = command.path
       ? context.cwd
         ? buildCommandPathPart(command.path, {
@@ -119,6 +120,26 @@ namespace RipgrepCommand {
         })
         : buildDisplayPathPart(command.path)
       : buildDisplayPathPart(context.cwdDisplay ?? formatThreadCommandPath(context.cwd, context));
+
+    if (command.operation === "listFiles") {
+      const summaryParts: ThreadCommandDisplayPart[] = [CommandMatcher.Text("Listed files")];
+      const ongoingSummaryParts: ThreadCommandDisplayPart[] = [CommandMatcher.Text("Listing files")];
+      if (pathPart) {
+        summaryParts.push(CommandMatcher.Text(" in "), pathPart);
+        ongoingSummaryParts.push(CommandMatcher.Text(" in "), pathPart);
+      }
+      return CommandMatcher.Result({
+        ongoingSummaryParts,
+        summaryParts,
+        summaryStats: { searchedFiles: 1 },
+      });
+    }
+
+    if (!command.query) return null;
+
+    const query = command.query;
+    const summaryParts = [CommandMatcher.Text("Search for "), CommandMatcher.Pattern(query, command.syntax)];
+    const ongoingSummaryParts = [CommandMatcher.Text("Searching for "), CommandMatcher.Pattern(query, command.syntax)];
     if (pathPart) {
       summaryParts.push(CommandMatcher.Text(" in "), pathPart);
       ongoingSummaryParts.push(CommandMatcher.Text(" in "), pathPart);
