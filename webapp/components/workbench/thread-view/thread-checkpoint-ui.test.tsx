@@ -291,8 +291,7 @@ test("terminal proposals and claim resolution share one lifecycle card", () => {
   assert.match(html, /data-thread-git-arc-resolution="true"/u);
   assert.match(html, /data-thread-git-arc-resolution-separator="true"/u);
   assert.match(html, /2 claimed files/u);
-  assert.match(html, /data-thread-reload-scopes="true"/u);
-  assert.match(html, /data-thread-reload-scope="server:core"[\s\S]*data-thread-reload-scope="server:mcp"/u);
+  assert.doesNotMatch(html, /data-thread-reload-scopes/u);
   assert.match(html, /Checking claimed files/u);
   assert.doesNotMatch(html, /Harden arc lifecycle/u);
 });
@@ -994,7 +993,7 @@ test("nested plan cards label planned changes without claiming them", () => {
   assert.doesNotMatch(removeHtml, />Claimed</u);
 });
 
-test("completed plan cards render derived receipt scopes separately from file paths", () => {
+test("completed plan cards ignore legacy receipt scopes without hiding file paths", () => {
   const html = renderToStaticMarkup(createElement(ThreadGitArcItem, {
     commandIntent: {
       action: "plan",
@@ -1012,10 +1011,7 @@ test("completed plan cards render derived receipt scopes separately from file pa
       version: 1,
     },
   }));
-  assert.match(html, /data-thread-reload-scopes="true"/u);
-  assert.match(html, /Runtime reload scopes/u);
-  assert.match(html, /data-thread-reload-scope="server:core"/u);
-  assert.match(html, /data-thread-reload-scope="server:mcp"/u);
+  assert.doesNotMatch(html, /data-thread-reload-scopes|Runtime reload scopes/u);
   assert.equal((html.match(/src\/one\.ts/gu) ?? []).length, 1);
 });
 

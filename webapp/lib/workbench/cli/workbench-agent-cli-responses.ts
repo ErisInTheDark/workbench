@@ -115,6 +115,13 @@ export function adaptWorkbenchAgentCliResponse({
   }
 
   switch (request.responseKind) {
+    case "reload-dirt": {
+      const scopes = Array.isArray(payload?.dirtyScopes) ? payload.dirtyScopes.flatMap((entry) => {
+        const scope = isRecord(entry) ? readString(entry, "scope") : "";
+        return scope ? [scope] : [];
+      }) : [];
+      return succeeded(scopes.join("\n"));
+    }
     case "thread-title-get":
       return succeeded(`Thread title: ${readString(payload, "title") || "untitled"}`);
     case "thread-title":

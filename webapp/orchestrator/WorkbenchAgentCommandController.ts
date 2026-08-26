@@ -15,7 +15,7 @@ import {
   createWorkbenchFileChangeFailureSystemMessage,
   WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX,
 } from "../lib/workbench/thread/workbench-file-change";
-import type { WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness, WorkbenchReloadDirtSnapshot } from "../lib/types";
 import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchRipgrepController from "./WorkbenchRipgrepController";
@@ -27,8 +27,8 @@ interface WorkbenchAgentDirectPort {
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
+  getReloadDirt?: () => Promise<WorkbenchReloadDirtSnapshot>;
   getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
-  requestOrchestratorReload?: (body: Record<string, unknown>, signal: AbortSignal) => Promise<Response>;
   requestCodex?: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   requestSubagent?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
 }
@@ -245,6 +245,22 @@ export default class WorkbenchAgentCommandController {
   }
 
   private async dispatchRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
+    if (request.path === "/api/orchestrator/reload" && request.body?.all === true) {
+      if (!this.direct.getReloadDirt) throw new Error("Reload dirt is not configured.");
+      const dirt = await this.direct.getReloadDirt();
+      const includeDestructive = request.body.unsafe === true;
+      const scopes = [
+        ...new Set([
+          ...dirt.dirtyScopes.filter((entry) => !entry.destructive || includeDestructive).map(({ scope }) => scope),
+          ...(Array.isArray(request.body.scopes) ? request.body.scopes.filter((scope): scope is string => typeof scope === "string") : []),
+        ]),
+      ];
+      if (!scopes.length) {
+        const now = Date.now();
+        return Response.json({ appliedScopes: [], completedAt: now, error: null, ok: true, queuedScopes: [], requestedScopes: [], startedAt: now, state: "succeeded" });
+      }
+      request = { ...request, body: { scopes } };
+    }
     const body = Buffer.from(request.body ? JSON.stringify(request.body) : "");
     if (request.path === "/api/subagents" && request.body) {
       return await this.dispatchSubagentRequest(request.body, signal);
@@ -258,13 +274,11 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/api/rg" && request.body) {
       return await this.ripgrep.execute(request.body, signal);
     }
+    if (request.path === "/api/orchestrator/dirt") {
+      if (!this.direct.getReloadDirt) throw new Error("Reload dirt is not configured.");
+      return Response.json(await this.direct.getReloadDirt());
+    }
     if (request.path === "/api/orchestrator/reload" && request.body) {
-      const scopes = Array.isArray(request.body.scopes) ? request.body.scopes : [];
-      const managed = typeof request.body.callerThreadId === "string" && request.body.callerThreadId.trim();
-      if (managed && !(scopes.length === 1 && scopes[0] === "server:process")) {
-        if (!this.direct.requestOrchestratorReload) throw new Error("Direct orchestrator reload dispatch is not configured.");
-        return await this.direct.requestOrchestratorReload(request.body, signal);
-      }
       const admission = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
       const text = await admission.text();
       if (!admission.ok || readReloadState(text) !== "running") {

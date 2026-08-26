@@ -10,11 +10,21 @@ import CodexBridgeNode from "./CodexBridgeNode";
 import OpenCodeBridgeNode from "./OpenCodeBridgeNode";
 import WorkbenchCodexMcpGenerationController, { type WorkbenchCodexMcpGenerationState } from "./WorkbenchCodexMcpGenerationController";
 import WorkbenchCoreNode from "./WorkbenchCoreNode";
+import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
+import WorkbenchOrchestratorReloadController, { type WorkbenchOrchestratorReloadControllerState } from "./WorkbenchOrchestratorReloadController";
+import WorkbenchReloadDirtController, { type WorkbenchReloadDirtControllerState } from "./WorkbenchReloadDirtController";
 import WorkbenchTurnRecoveryController, { type WorkbenchTurnRecoveryControllerState } from "./WorkbenchTurnRecoveryController";
 import WorkbenchTurnRecoveryHandoffStore from "./WorkbenchTurnRecoveryHandoffStore";
+import {
+  activateReloadNodeSourceState,
+  cancelReloadNodeSourceState,
+  readReloadNodeSourceState,
+} from "./reload-node-source-map";
 
 interface WorkbenchTurnLifecycleState {
+  reloadController?: WorkbenchOrchestratorReloadControllerState;
+  reloadDirt?: WorkbenchReloadDirtControllerState;
   mcpGeneration: WorkbenchCodexMcpGenerationState;
   turnRecovery: WorkbenchTurnRecoveryControllerState;
 }
@@ -25,10 +35,22 @@ function record(value: unknown) {
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "agent",
-  children: [WorkbenchCoreNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode],
+  children: [WorkbenchCoreNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode],
   create: (context, build) => {
     const state = build.handoffState as WorkbenchTurnLifecycleState | undefined;
     const codexMcpGeneration = new WorkbenchCodexMcpGenerationController(state?.mcpGeneration);
+    const reloadDirt = new WorkbenchReloadDirtController({
+      activateSourceState: activateReloadNodeSourceState,
+      cancelSourceState: cancelReloadNodeSourceState,
+      getSourceState: readReloadNodeSourceState,
+      repoRoot: context.legacyMigrationProjectRoot,
+    }, state?.reloadDirt);
+    const reloadController = new WorkbenchOrchestratorReloadController({
+      dirt: reloadDirt,
+      executeBatch: context.executeReloadScopes,
+      hardReload: context.hardReload,
+      initialState: state?.reloadController,
+    });
     const recoverOpenCodeTurn = context.harnessPorts.opencode.recoverInterruptedTurn;
     if (!recoverOpenCodeTurn) throw new Error("OpenCode is missing its declared turn-recovery port.");
     let turnRecovery!: WorkbenchTurnRecoveryController;
@@ -72,6 +94,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       const turnRecoveryState = await turnRecovery.detachForReload();
       return {
         mcpGeneration: codexMcpGeneration.detachForReload(),
+        reloadController: reloadController.detachForReload(),
+        reloadDirt: reloadDirt.detachForReload(),
         turnRecovery: turnRecoveryState,
       } satisfies WorkbenchTurnLifecycleState;
     };
@@ -84,13 +108,16 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       },
       dispose: async () => { if (!detached) await drain(); },
       listRuntimeDrainPending: () => turnRecovery.listRuntimeDrainPending(),
-      registrations: { codexMcpGeneration, turnRecovery },
-      start: async () => { await turnRecovery.loadPersistedHandoff(); },
+      registrations: { codexMcpGeneration, reloadController, reloadDirt, turnRecovery },
+      start: async () => {
+        await reloadDirt.start();
+        await turnRecovery.loadPersistedHandoff();
+      },
     };
   },
   description: "Reload managed turn recovery and MCP freshness with their core and bridge dependants.",
   lifecycle: "handoff",
-  provides: ["codexMcpGeneration", "turnRecovery"],
+  provides: ["codexMcpGeneration", "reloadController", "reloadDirt", "turnRecovery"],
   requires: [],
   safeAll: true,
   scope: "server:turns",

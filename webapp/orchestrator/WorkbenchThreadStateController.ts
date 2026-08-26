@@ -6,7 +6,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { WorkbenchProjectsPayload } from "../lib/types";
+import type { WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot } from "../lib/types";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
@@ -106,6 +106,7 @@ function reconcileProviderLifecycle(
 
 export interface WorkbenchThreadStateControllerOptions {
   getProjectCatalog: () => WorkbenchProjectsPayload;
+  getReloadDirt?: () => WorkbenchReloadDirtSnapshot;
   log?: (message: string) => void;
   now?: () => number;
   projectState: {
@@ -127,6 +128,7 @@ export interface WorkbenchThreadStateControllerOptions {
   resolveProjectRoot: (projectId: string) => Promise<string>;
   runGitArcTransition: <TValue>(projectId: string, operation: () => Promise<TValue>) => Promise<TValue>;
   storageRoot: string;
+  subscribeReloadDirt?: (listener: () => void) => () => void;
 }
 
 export interface WorkbenchThreadReconciliationFailure {
@@ -248,11 +250,13 @@ export default class WorkbenchThreadStateController {
   private readonly projects = new Map<string, ProjectState>();
   private readonly operationQueues = new Map<string, Promise<unknown>>();
   private readonly reconciliationPromises = new Set<Promise<void>>();
+  private readonly stopReloadDirtSubscription: (() => void) | null;
   private readonly subscribers = new Set<(projectId: string, entry: WorkbenchThreadSidebarEntry) => void>();
 
   constructor(options: WorkbenchThreadStateControllerOptions) {
     this.options = options;
     this.now = options.now ?? Date.now;
+    this.stopReloadDirtSubscription = options.subscribeReloadDirt?.(() => this.publishReloadDirt()) ?? null;
   }
 
   subscribe(listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void) {
@@ -690,6 +694,7 @@ export default class WorkbenchThreadStateController {
 
   async dispose() {
     this.active = false;
+    this.stopReloadDirtSubscription?.();
     for (const state of this.projects.values()) {
       state.generation += 1;
       state.abort?.abort();
@@ -812,7 +817,18 @@ export default class WorkbenchThreadStateController {
   private snapshot(projectId: string, state: ProjectState): WorkbenchThreadSidebarSnapshot {
     const naturallyOrdered = this.naturallyOrderedEntries(state);
     const resolved = resolveWorkbenchThreadDisplayOrder(naturallyOrdered, state.displayOrder);
-    return { ...resolved, error: state.error, freshness: state.freshness, projectId, revision: state.revision };
+    return {
+      ...resolved,
+      error: state.error,
+      freshness: state.freshness,
+      projectId,
+      ...(this.options.getReloadDirt ? { reloadDirt: this.options.getReloadDirt() } : {}),
+      revision: state.revision,
+    };
+  }
+  private publishReloadDirt() {
+    if (!this.active) return;
+    for (const [projectId, state] of this.projects) this.publish(projectId, state);
   }
   private publish(projectId: string, state: ProjectState, changedEntry?: WorkbenchThreadStateEntry) {
     if (!this.active || !state.observers.size) return;

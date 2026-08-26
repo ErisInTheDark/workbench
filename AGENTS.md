@@ -76,17 +76,6 @@ pnpm typecheck
 - When tests are added or changed, run `pnpm test`; typechecking test files does not count as executing their assertions.
 - For agent-thread rendering, use `http://localhost:<port>/agent/thread/<threadId>` for the chrome-free thread view and `http://localhost:<port>/agent/thread-lab` for pasted payload, turn, item, command-string, and simplified-command rendering checks.
 
-### Allowed Runtime Reloads
-
-- Agents have permission to run `wb orchestrator reload` without additional user approval after making changes that require a reload. Use the narrowest applicable scope:
-
-```text
-wb orchestrator reload --<scope> [--<scope> ...]
-```
-
-- IMPORTANT: Reload the affected backend scope when required to activate a change. Next.js can hot-reload frontend code that expects matching backend behavior before that backend code is active, leaving the user's app broken until the backend reloads.
-- Do not broaden a reload beyond the subsystem changed.
-
 ### Ask the User First
 
 A direct user request to perform a specific bounded action counts as explicit permission for that exact action, including when delivered as a steer. Use a questionnaire when permission has not already been given, the request is ambiguous, or a bounded scope choice still needs user input.

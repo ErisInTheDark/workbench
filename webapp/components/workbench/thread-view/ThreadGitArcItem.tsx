@@ -19,7 +19,6 @@ import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
-import ThreadReloadScopeList from "./ThreadReloadScopeList";
 
 const ACTION_LABELS = {
   add: { completed: "Extended", failed: "Failed to extend", inProgress: "Extending", timedOut: "Timed out extending" },
@@ -235,7 +234,6 @@ export default function ThreadGitArcItem({
     ? "planned"
     : "claimed";
   const showNestedClaims = commandIntent.action !== "plan" && commandIntent.action !== "planStart" && claimedPaths.length > 0;
-  const reloadScopes = state === "completed" ? receipt?.reloadScopes ?? [] : [];
 
   return (
     <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-2.5 py-1.5" data-thread-git-arc-card={commandIntent.action}>
@@ -307,7 +305,6 @@ export default function ThreadGitArcItem({
             workspaceRoots={workspaceRoots}
           />
         ) : null}
-        <ThreadReloadScopeList scopes={reloadScopes} />
         {showNestedClaims ? (
           <ThreadDisclosure
             className="border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)] py-1.5"

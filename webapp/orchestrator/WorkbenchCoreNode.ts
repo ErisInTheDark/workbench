@@ -35,6 +35,7 @@ import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
+import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
@@ -95,6 +96,7 @@ function createHarnessAdapters(context: OrchestratorProcessContext, controller: 
 function createWorkbenchCoreFeature(
   context: OrchestratorProcessContext,
   lease: ReloadableNodeLease,
+  reloadDirt: WorkbenchReloadDirtController,
   turnRecovery: WorkbenchTurnRecoveryController,
 ) {
   const modules = createModules();
@@ -108,17 +110,14 @@ function createWorkbenchCoreFeature(
   };
   const harnesses = new WorkbenchHarnessController(createHarnessAdapters(context, turnRecovery));
   const gitArc = new WorkbenchGitArcFeature({
-    getReloadScopesForPaths: context.getReloadScopesForPaths,
     getThreadClaimContext: async (projectId, harness, threadId) => {
       if (!threadState) throw new Error("Thread state is not ready for Git arc ownership.");
       return await threadState.controller.getThreadClaimContext(projectId, harness, threadId);
     },
-    onReloadEligibilityChanged: context.notifyReloadEligibilityChanged,
     refreshThreadGitArcState: async (projectId, harness, threadId) => {
       if (!threadState) throw new Error("Thread state is not ready for Git arc publication.");
       await threadState.controller.refreshGitArcState(projectId, harness, threadId);
     },
-    reloadScopeProjectRoot: context.legacyMigrationProjectRoot,
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
     transitions: worktreeGitTransitions,
   });
@@ -150,6 +149,7 @@ function createWorkbenchCoreFeature(
     listSubagents: (projectId) => subagents.listRelationships(projectId),
     log: (message) => log("thread-state-ws", message),
     projectState: projectSnapshot,
+    reloadDirt,
     publish: (connectionId, snapshot) => { if (lease.isCurrent()) context.publishThreadState(connectionId, snapshot); },
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
@@ -223,11 +223,11 @@ function createWorkbenchCoreFeature(
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, import("./orchestrator-runtime-objects").OrchestratorProviderNotification>({
   access: "agent",
   children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
-  create: (context, { get, lease }) => createWorkbenchCoreFeature(context, lease, get("turnRecovery")),
+  create: (context, { get, lease }) => createWorkbenchCoreFeature(context, lease, get("reloadDirt"), get("turnRecovery")),
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: ["turnRecovery"],
+  requires: ["reloadDirt", "turnRecovery"],
   safeAll: true,
   scope: "server:core",
   sources: [

@@ -199,6 +199,39 @@ test("topology reload adds and reparents nodes from the fresh parent declaration
   assert.deepEqual(events, ["dispose old child", "dispose old parent", "start new parent", "start new child"]);
 });
 
+test("server topology migration preserves independent harness roots", async () => {
+  const harnessCreates = new Map<string, number>();
+  const harnessDisposes = new Map<string, number>();
+  const harness = (scope: "harness:codex" | "harness:opencode") => node({
+    create: () => {
+      harnessCreates.set(scope, (harnessCreates.get(scope) ?? 0) + 1);
+      return {
+        dispose: () => { harnessDisposes.set(scope, (harnessDisposes.get(scope) ?? 0) + 1); },
+        registrations: {},
+        start: () => undefined,
+      };
+    },
+    scope,
+  });
+  const initial = defineReloadableNodeGraph([
+    node({ children: [node({ scope: "server:core" })], scope: "server:turns" }),
+    harness("harness:codex"),
+    harness("harness:opencode"),
+  ]);
+  const replacement = defineReloadableNodeGraph([
+    node({ children: [node({ scope: "server:core" }), node({ scope: "server:added" })], scope: "server:turns" }),
+    harness("harness:codex"),
+    harness("harness:opencode"),
+  ]);
+  const host = new ReloadableNodeHost(null, loader(initial, replacement));
+  await host.start();
+  await host.reload(["server:topology"]);
+
+  assert.deepEqual(Object.fromEntries(harnessCreates), { "harness:codex": 1, "harness:opencode": 1 });
+  assert.deepEqual(Object.fromEntries(harnessDisposes), {});
+  await host.dispose();
+});
+
 test("topology replacement publishes complete candidates and gates new work until its owner starts", async () => {
   let finishChildStart!: () => void;
   let reportChildStart!: () => void;

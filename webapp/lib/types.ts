@@ -168,6 +168,18 @@ export interface OrchestratorReloadRequest {
   scopes?: OrchestratorReloadScope[];
 }
 
+export interface WorkbenchReloadDirtScope {
+  description: string;
+  destructive: boolean;
+  scope: OrchestratorReloadScope;
+}
+
+export interface WorkbenchReloadDirtSnapshot {
+  dirtyScopes: WorkbenchReloadDirtScope[];
+  error: string | null;
+  pendingScopes: OrchestratorReloadScope[];
+}
+
 export interface OrchestratorReloadResponse {
   ok: true;
   state: OrchestratorReloadState;

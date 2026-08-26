@@ -16,13 +16,14 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const harnesses = build.get("harnesses");
     const subagents = build.get("subagents");
     const threadState = build.get("threadState");
+    const reloadDirt = build.get("reloadDirt");
     const agentCommand = new WorkbenchAgentCommandController(context.localWorkbenchOrigin, context.localOrchestratorOrigin, {
       checkApplyPatchClaims: async ({ cwd, harness, paths, threadId }) => await gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths),
       executeBrowseRequest: context.executeBrowseRequest,
       executeGitArcRequest: async (body) => await gitArc.executeRequest(body),
       executeSessionRequest: context.executeBrowseSessionRequest,
-      getReloadScopeCatalog: context.getReloadScopeCatalog,
-      requestOrchestratorReload: context.requestOrchestratorReload,
+      getReloadDirt: async () => await reloadDirt.refresh(),
+      getReloadScopeCatalog: () => reloadDirt.getCatalog(),
       requestCodex: async (request) => await harnesses.request("codex", request),
       requestSubagent: async (request) => request.method?.startsWith("workbench/thread/")
         ? await threadState.handleManagedThreadRequest(request)
@@ -37,7 +38,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["gitArc", "harnesses", "subagents", "threadState"],
+  requires: ["gitArc", "harnesses", "reloadDirt", "subagents", "threadState"],
   safeAll: true,
   scope: "server:commands",
   sources: [

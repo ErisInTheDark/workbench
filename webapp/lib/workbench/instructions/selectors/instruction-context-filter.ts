@@ -30,7 +30,7 @@ interface Fence { include?: boolean; marker: "`" | "~"; size: number }
 const SELECTOR_LINE = /^\s*<(\/)?(available|harness|shell):([^<>]+)>\s*$/u;
 const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|harness|shell)(?::|\s|>)/u;
 const AVAILABLE_VALUE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
-const KNOWN_AVAILABLE_VALUES = new Set(["browse", "multi-root", "orchestrator-reload", "subagents", "thread-git", "thread-recall", "thread-status", "thread-title"]);
+const KNOWN_AVAILABLE_VALUES = new Set(["browse", "multi-root", "subagents", "thread-git", "thread-recall", "thread-status", "thread-title"]);
 
 function findLastMatchingIndex<T>(values: readonly T[], predicate: (value: T) => boolean) {
   for (let index = values.length - 1; index >= 0; index -= 1) if (predicate(values[index] as T)) return index;

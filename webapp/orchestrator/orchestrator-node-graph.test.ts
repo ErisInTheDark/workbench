@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { createGitignoreMatcher } from "../lib/workbench/gitignore-matcher";
 import graph from "./orchestrator-root-node";
+import { readReloadNodeSourceState } from "./reload-node-source-map";
 import type ReloadableNode from "./ReloadableNode";
 import {
   ORCHESTRATOR_PROCESS_REQUIRED_REGISTRATIONS,
@@ -53,7 +53,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:websocket",
   ]);
   assert.deepEqual([...parents.get("server:core")!], ["server:turns"]);
-  assert.deepEqual([...parents.get("server:commands")!], ["server:core"]);
+  assert.deepEqual([...parents.get("server:commands")!].sort(), ["server:core", "server:turns"]);
   assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:commands", "server:core", "server:topology", "server:turns"]);
   assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:core", "server:turns"]);
   assert.deepEqual([...parents.get("server:opencode")!].sort(), ["harness:opencode", "server:core", "server:turns"]);
@@ -66,7 +66,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
     provides: nodes.get("server:turns")!.provides,
   }, {
     lifecycle: "handoff",
-    provides: ["codexMcpGeneration", "turnRecovery"],
+    provides: ["codexMcpGeneration", "reloadController", "reloadDirt", "turnRecovery"],
   });
 });
 
@@ -88,100 +88,30 @@ test("the production graph provides every registration consumed by the process s
   }
 });
 
-test("each production node matches a representative owned source path", () => {
-  const { nodes } = flattenParents(graph.roots);
-  const examples = new Map<string, string>([
-    ["server:turns", "webapp/orchestrator/WorkbenchTurnRecoveryController.ts"],
-    ["server:core", "webapp/orchestrator/WorkbenchGitArcFeature.ts"],
-    ["server:commands", "webapp/orchestrator/WorkbenchRipgrepController.ts"],
-    ["server:topology", "webapp/orchestrator/OpenCodeBridgeNode.ts"],
-    ["server:mcp", "webapp/orchestrator/WorkbenchAgentMcpController.ts"],
-    ["server:codex", "webapp/orchestrator/CodexStdioBridge.ts"],
-    ["server:opencode", "webapp/orchestrator/opencode-bridge.ts"],
-    ["server:browse", "webapp/orchestrator/WorkbenchBrowseController.ts"],
-    ["harness:codex", "webapp/orchestrator/CodexAppServer.ts"],
-    ["harness:opencode", "webapp/orchestrator/OpenCodeAppServer.ts"],
-    ["client:all", "webapp/components/workbench.tsx"],
-    ["server:instructions", "webapp/lib/workbench/instructions/workflows/default-workflow-prompt.md"],
-  ]);
-  for (const [scope, sourcePath] of examples) {
-    assert.equal(createGitignoreMatcher(nodes.get(scope)!.sources).matches(sourcePath), true, `${scope} must match ${sourcePath}`);
-  }
-  assert.equal(
-    createGitignoreMatcher(nodes.get("server:codex")!.sources).matches("webapp/orchestrator/CodexTranscriptStore.ts"),
-    true,
-    "server:codex must match its PascalCase transcript store owner",
-  );
-  for (const sourcePath of [
-    "webapp/lib/workbench/thread/thread-display-order.ts",
-    "webapp/lib/workbench/thread/thread-state.ts",
-  ]) {
-    assert.equal(createGitignoreMatcher(nodes.get("server:core")!.sources).matches(sourcePath), true, `server:core must match ${sourcePath}`);
-  }
-});
-
-test("server:commands owns shared CLI and MCP command execution sources", () => {
-  const commands = createGitignoreMatcher(flattenParents(graph.roots).nodes.get("server:commands")!.sources);
-
-  for (const sourcePath of [
-    "webapp/orchestrator/WorkbenchAgentCommandController.ts",
-    "webapp/orchestrator/WorkbenchRipgrepController.test.ts",
-    "webapp/lib/workbench/commands/ripgrep-command-definition.ts",
-    "webapp/lib/workbench/cli/workbench-agent-cli.test.ts",
-  ]) {
-    assert.equal(commands.matches(sourcePath), true, `server:commands must match ${sourcePath}`);
-  }
-
-  assert.equal(commands.matches("webapp/orchestrator/WorkbenchAgentMcpController.ts"), false);
-});
-
-test("server:core owns Git source and test paths without absorbing unrelated server code", () => {
-  const core = createGitignoreMatcher(flattenParents(graph.roots).nodes.get("server:core")!.sources);
-
-  for (const sourcePath of [
-    "webapp/lib/workbench/git/GitArcProposalController.ts",
-    "webapp/lib/workbench/git/GitCheckpointStore.ts",
-    "webapp/lib/workbench/git/GitCheckpointStore.test.ts",
-    "webapp/lib/workbench/git/future/NestedGitOwner.test.ts",
-    "webapp/orchestrator/WorkbenchWorkspaceGitArcController.ts",
-    "webapp/orchestrator/WorkbenchWorkspaceGitArcController.test.ts",
-    "webapp/orchestrator/future-git-owner.ts",
-  ]) {
-    assert.equal(core.matches(sourcePath), true, `server:core must match ${sourcePath}`);
-  }
-
-  for (const sourcePath of [
-    "webapp/orchestrator/WorkbenchMcpNode.ts",
-    "webapp/orchestrator/index.ts",
-    "webapp/lib/workbench/gitignore-matcher.ts",
-  ]) {
-    assert.equal(core.matches(sourcePath), false, `server:core must not absorb ${sourcePath}`);
-  }
-});
-
-test("auto-fresh instruction Markdown has one acknowledgement-only scope", () => {
-  const { nodes } = flattenParents(graph.roots);
-  const matchingScopes = (sourcePath: string) => [...nodes.values()]
-    .filter((node) => createGitignoreMatcher(node.sources).matches(sourcePath))
-    .map((node) => node.scope)
+test("loaded modules generate narrow source ownership without mapping test files", () => {
+  const descriptors = new Map(readReloadNodeSourceState().descriptors.map((descriptor) => [descriptor.scope, descriptor]));
+  const owners = (sourcePath: string) => [...descriptors.values()]
+    .filter(({ paths }) => paths.includes(sourcePath))
+    .map(({ scope }) => scope)
     .sort();
-  const instructions = nodes.get("server:instructions")!;
 
-  assert.deepEqual({
-    access: instructions.access,
-    children: instructions.children.length,
-    lifecycle: instructions.lifecycle,
-    provides: instructions.provides,
-    requires: instructions.requires,
-    safeAll: instructions.safeAll,
-  }, {
-    access: "agent",
-    children: 0,
-    lifecycle: "atomic",
-    provides: [],
-    requires: [],
-    safeAll: false,
-  });
-  assert.deepEqual(matchingScopes("webapp/lib/workbench/instructions/workflows/default-workflow-prompt.md"), ["server:instructions"]);
-  assert.deepEqual(matchingScopes("webapp/lib/workbench/instructions/assembly/WorkbenchPromptFiles.ts"), ["client:all", "server:core"]);
+  assert.deepEqual(owners("webapp/orchestrator/WorkbenchCoreNode.ts"), ["server:core", "server:topology"]);
+  assert.equal(descriptors.get("server:core")!.paths.includes("webapp/orchestrator/WorkbenchGitArcFeature.ts"), true);
+  assert.equal(descriptors.get("server:commands")!.paths.includes("webapp/orchestrator/WorkbenchAgentCommandController.ts"), true);
+  assert.equal(descriptors.get("server:commands")!.paths.some((sourcePath) => sourcePath.endsWith(".test.ts")), false);
+  assert.equal(descriptors.get("server:process")!.paths.includes("webapp/orchestrator/WorkbenchCoreNode.ts"), false);
+});
+
+test("server branch and topology closures never acquire harness roots", () => {
+  const { dependantClosure, descriptors } = readReloadNodeSourceState();
+  const catalog = new Map(descriptors.map((descriptor) => [descriptor.scope, descriptor]));
+  for (const scope of ["server:turns", "server:core", "server:topology"] as const) {
+    const closure = dependantClosure([scope]);
+    assert.equal(closure.includes("harness:codex"), false, `${scope} must preserve the Codex harness root`);
+    assert.equal(closure.includes("harness:opencode"), false, `${scope} must preserve the OpenCode harness root`);
+    assert.equal(closure.includes("server:process"), false, `${scope} must not become a process restart`);
+  }
+  assert.equal(catalog.get("harness:codex")!.destructive, true);
+  assert.equal(catalog.get("harness:opencode")!.destructive, true);
+  assert.equal(catalog.get("server:process")!.destructive, true);
 });

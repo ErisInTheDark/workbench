@@ -63,7 +63,6 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "browse_sessions",
   "browse_stop",
   "browse_forget",
-  "orchestrator_reload",
 ] as const;
 
 export type WorkbenchCommandPresentationName = typeof WORKBENCH_COMMAND_PRESENTATION_NAMES[number];
@@ -521,11 +520,6 @@ export function getWorkbenchCommandRoute(
       return simple("workbench-git.selection", actionTarget("Removing ", "files from commit selection"), actionTarget("Removed ", "files from commit selection"));
     case "git_commit":
       return simple("workbench-git.commit", actionTarget("Committing ", "selected files"), actionTarget("Committed ", "selected files"));
-    case "orchestrator_reload": {
-      const scopes = readStringArray(args.scopes);
-      const label = scopes.length ? scopes.join(", ") : "orchestrator";
-      return simple("workbench-cli.orchestrator-reload", actionTarget("Reloading ", label), actionTarget("Reloaded ", label));
-    }
   }
 }
 

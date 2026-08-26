@@ -6,7 +6,6 @@
  * - default WorkbenchGitArcFeature: own typed Git arc HTTP/direct dispatch inside the reloadable feature graph. Keywords: git, arc, controller, reload, HTTP.
  */
 import type http from "node:http";
-import path from "node:path";
 
 import WorkbenchGitCheckpointController, { type GitArcActiveClaim } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import { GitArcAcceptedProposalsError } from "../lib/workbench/git/GitArcProposalController";
@@ -22,33 +21,27 @@ import { GitCheckpointDirtyPathsError, GitCheckpointIgnoredPathsError } from "..
 import { GitArcStartDiagnosticError } from "../lib/workbench/git/git-arc-start-diagnostics";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
-import type { OrchestratorReloadScope, WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness } from "../lib/types";
 import { GitCheckpointRequestSchema, type GitCheckpointRequest } from "../lib/workbench/git/checkpoint-contracts";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
-import type { WorkbenchReloadScopeClaim } from "./WorkbenchOrchestratorReloadController";
 import type { WorkbenchThreadClaimContext } from "./WorkbenchThreadStateController";
 import WorkbenchWorkspaceGitArcController, { type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
-function comparablePath(value: string) {
-  const normalized = path.resolve(value).replace(/\\/gu, "/").replace(/\/+$/u, "");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
 export interface WorkbenchGitArcFeatureOptions {
-  getReloadScopesForPaths?(paths: readonly string[]): OrchestratorReloadScope[];
+  getReloadScopesForPaths?(paths: readonly string[]): string[];
   getThreadClaimContext(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadClaimContext | null>;
-  onReloadEligibilityChanged?: () => void;
   refreshThreadGitArcState(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
+  onReloadEligibilityChanged?: () => void;
   reloadScopeProjectRoot?: string;
   resolveProjectFromCwd(cwd: string): Promise<AgentEndpointProjectResolution | { cwd: string; project: { id: string } }>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run"> & Partial<Pick<WorkbenchThreadTransitionCoordinator, "runMany">>;
 }
 
-export type WorkbenchGitArcLifecycleState = WorkspaceGitArcLifecycleState & { reloadScopes: OrchestratorReloadScope[] };
-export type WorkbenchGitArcPlanState = WorkspaceGitArcPlanState & { reloadScopes: OrchestratorReloadScope[] };
+export type WorkbenchGitArcLifecycleState = WorkspaceGitArcLifecycleState;
+export type WorkbenchGitArcPlanState = WorkspaceGitArcPlanState;
 
 const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
   "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRelease", "arcRemove", "arcStart", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
@@ -151,19 +144,8 @@ export default class WorkbenchGitArcFeature {
     return await this.controller.listActiveClaims({ cwd });
   }
 
-  async listReloadScopeClaims(cwd: string): Promise<WorkbenchReloadScopeClaim[]> {
-    const project = await this.resolveProject(cwd);
-    const claims = (await this.listLifecycleStates(cwd)).filter(({ phase }) => phase === "active");
-    return await Promise.all(claims.map(async (claim) => {
-      const harness = claim.harness as WorkbenchHarness;
-      const context = await this.options.getThreadClaimContext(project.project.id, harness, claim.threadId);
-      return {
-        harness,
-        lifecycleKind: context?.lifecycle.kind ?? "unknown",
-        reloadScopes: claim.reloadScopes,
-        threadId: claim.threadId,
-      };
-    }));
+  async listReloadScopeClaims(_cwd: string) {
+    return [];
   }
 
   async pruneThreadHistories(cwd: string, identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }>) {
@@ -175,44 +157,23 @@ export default class WorkbenchGitArcFeature {
   async findLifecycleState(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchGitArcLifecycleState | null> {
     const project = await this.resolveProject(cwd);
     const state = await this.workspaceController.findLifecycleState(project, harness, threadId);
-    return state ? this.withDerivedReloadScopes(project, state, state.claimedPaths) : null;
+    return state;
   }
 
   async listLifecycleStates(cwd: string): Promise<WorkbenchGitArcLifecycleState[]> {
     const project = await this.resolveProject(cwd);
-    return (await this.workspaceController.listLifecycleStates(project)).map((state) => (
-      this.withDerivedReloadScopes(project, state, state.claimedPaths)
-    ));
+    return await this.workspaceController.listLifecycleStates(project);
   }
 
   async findPlanState(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchGitArcPlanState | null> {
     const project = await this.resolveProject(cwd);
     const state = await this.workspaceController.findPlanState(project, harness, threadId);
-    return state ? this.withDerivedReloadScopes(project, state, state.scopePaths) : null;
+    return state;
   }
 
   async listPlanStates(cwd: string): Promise<WorkbenchGitArcPlanState[]> {
     const project = await this.resolveProject(cwd);
-    return (await this.workspaceController.listPlanStates(project)).map((state) => (
-      this.withDerivedReloadScopes(project, state, state.scopePaths)
-    ));
-  }
-
-  private withDerivedReloadScopes<TValue extends object>(project: AgentEndpointProjectResolution, value: TValue, paths: readonly string[]) {
-    const reloadScopes = this.options.reloadScopeProjectRoot
-      && comparablePath(project.cwd) === comparablePath(this.options.reloadScopeProjectRoot)
-      ? this.options.getReloadScopesForPaths?.(paths) ?? []
-      : [];
-    return { ...value, reloadScopes };
-  }
-
-  private async decorateReloadScopeResponse(project: AgentEndpointProjectResolution, response: Response) {
-    if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) return response;
-    const payload = await response.json() as Record<string, unknown>;
-    const paths = Array.isArray(payload.scopePaths) ? payload.scopePaths.filter((value): value is string => typeof value === "string") : null;
-    return paths
-      ? Response.json(this.withDerivedReloadScopes(project, payload, paths), { status: response.status })
-      : Response.json(payload, { status: response.status });
+    return await this.workspaceController.listPlanStates(project);
   }
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
@@ -257,7 +218,7 @@ export default class WorkbenchGitArcFeature {
               throw new Error("The thread settled while its Git arc claim was starting. The new claim was released.");
             }
           }
-          return await this.decorateReloadScopeResponse(project, response);
+          return response;
         } finally {
           if (mutatesGitArcState(request)) {
             await this.refreshThreadGitArcState(project.project.id, request.harness, request.threadId);
@@ -405,8 +366,6 @@ export default class WorkbenchGitArcFeature {
       await this.options.refreshThreadGitArcState(projectId, harness, threadId);
     } catch (error) {
       console.error(`Git arc state refresh failed after a mutation attempt: ${sanitizeError(error)}`);
-    } finally {
-      this.options.onReloadEligibilityChanged?.();
     }
   }
 

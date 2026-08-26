@@ -31,6 +31,7 @@ import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchLegacyMigrationSourceController from "./WorkbenchLegacyMigrationSourceController";
 import type WorkbenchOrchestratorHttpRouter from "./WorkbenchOrchestratorHttpRouter";
 import type WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReloadController";
+import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
 import type WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
@@ -91,6 +92,7 @@ export interface OrchestratorRuntimeObjects {
   projectCatalog: WorkbenchProjectCatalogController;
   projectSnapshot: WorkbenchProjectSnapshotController;
   reloadController: WorkbenchOrchestratorReloadController;
+  reloadDirt: WorkbenchReloadDirtController;
   subagents: WorkbenchSubagentFeature;
   threadGit: WorkbenchThreadGitFeature;
   threadState: WorkbenchThreadStateFeature;

@@ -502,10 +502,8 @@ test("failed Git mutations still refresh durable arc projection once", async () 
 
 test("plan creation and applied arc moves refresh Git arc state while move previews do not", async () => {
   let refreshCount = 0;
-  let reloadEligibilityChanges = 0;
   const feature = new WorkbenchGitArcFeature({
     getThreadClaimContext: async () => null,
-    onReloadEligibilityChanged: () => { reloadEligibilityChanges += 1; },
     refreshThreadGitArcState: async () => { refreshCount += 1; },
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: { run: async (_key, operation) => await operation() },
@@ -535,24 +533,20 @@ test("plan creation and applied arc moves refresh Git arc state while move previ
     ...common,
   })).status, 200);
   assert.equal(refreshCount, 2);
-  assert.equal(reloadEligibilityChanges, 2);
 });
 
-test("reload-scope plans require the exact running Workbench project root", async () => {
-  const createFeature = (cwd: string) => {
-    const feature = new WorkbenchGitArcFeature({
-      getReloadScopesForPaths: (paths) => paths.some((path) => path.includes("WorkbenchAgentMcpController")) ? ["server:mcp"] : [],
-      getThreadClaimContext: async () => null,
-      refreshThreadGitArcState: async () => undefined,
-      reloadScopeProjectRoot: "C:/Git/Project",
-      resolveProjectFromCwd: async () => ({ cwd, project: { id: "project" } }),
-      transitions: { run: async (_key, operation) => await operation() },
-    });
-    Object.defineProperty(feature, "dispatch", {
-      value: async (request: { paths: string[] }) => Response.json({ scopePaths: request.paths }),
-    });
-    return feature;
-  };
+test("Git arc responses ignore legacy reload projections and admission claims", async () => {
+  const feature = new WorkbenchGitArcFeature({
+    getReloadScopesForPaths: () => ["server:mcp"],
+    getThreadClaimContext: async () => null,
+    refreshThreadGitArcState: async () => undefined,
+    reloadScopeProjectRoot: "C:/Git/Project",
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  Object.defineProperty(feature, "dispatch", {
+    value: async (request: { paths: string[] }) => Response.json({ scopePaths: request.paths }),
+  });
   const request = {
     action: "plan" as const,
     cwd: "ignored",
@@ -561,40 +555,12 @@ test("reload-scope plans require the exact running Workbench project root", asyn
     paths: ["webapp/orchestrator/WorkbenchAgentMcpController.ts"],
     threadId: "thread-one",
   };
-  const workbench = await createFeature("C:/Git/Project").executeRequest(request);
-  assert.equal(workbench.status, 200);
-  assert.deepEqual(await workbench.json(), {
-    reloadScopes: ["server:mcp"],
+  const response = await feature.executeRequest(request);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
     scopePaths: ["webapp/orchestrator/WorkbenchAgentMcpController.ts"],
   });
-  const nestedProject = await createFeature("C:/Git/Project/webapp").executeRequest(request);
-  assert.equal(nestedProject.status, 200);
-  assert.deepEqual(await nestedProject.json(), {
-    reloadScopes: [],
-    scopePaths: ["webapp/orchestrator/WorkbenchAgentMcpController.ts"],
-  });
-});
-
-test("reload admission retains active arcs whose paths map to no reload scopes", async () => {
-  const feature = new WorkbenchGitArcFeature({
-    getThreadClaimContext: async () => null,
-    refreshThreadGitArcState: async () => undefined,
-    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
-    transitions: { run: async (_key, operation) => await operation() },
-  });
-  Object.defineProperty(feature, "listLifecycleStates", {
-    value: async () => [
-      { harness: "codex", phase: "active", reloadScopes: [], threadId: "active" },
-      { harness: "codex", phase: "plan", reloadScopes: ["server:codex"], threadId: "planned" },
-    ],
-  });
-
-  assert.deepEqual(await feature.listReloadScopeClaims("C:/Git/Project"), [{
-    harness: "codex",
-    lifecycleKind: "unknown",
-    reloadScopes: [],
-    threadId: "active",
-  }]);
+  assert.deepEqual(await feature.listReloadScopeClaims("C:/Git/Project"), []);
 });
 
 test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actions", async () => {

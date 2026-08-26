@@ -72,7 +72,6 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "browse_run": return { commands: ["snapshot --compact"], session: "rendering" };
     case "browse_stop": return { force: true, session: "rendering" };
     case "browse_forget": return { force: false, session: "rendering" };
-    case "orchestrator_reload": return { scopes: ["server:mcp"] };
     default: return {};
   }
 }
@@ -99,7 +98,6 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
 test("simple typed wb MCP calls share argument-sensitive CLI presentations", () => {
   const cases = [
     ["wb thread resume", "thread_resume", {}],
-    ["wb orchestrator reload --server:mcp", "orchestrator_reload", { scopes: ["server:mcp"] }],
     ["wb git add -- src/a.ts", "git_add", { paths: ["src/a.ts"] }],
     ["wb thread title get", "thread_title_get", {}],
     ["wb subagent list", "subagent_list", {}],
@@ -126,7 +124,6 @@ test("every valid simple typed wb MCP route emphasizes its important target", ()
     ["git_add", { paths: ["src/a.ts"] }, ["plain", "primary"]],
     ["git_unstage", { paths: ["src/a.ts"] }, ["plain", "primary"]],
     ["git_commit", { message: "Commit" }, ["plain", "primary"]],
-    ["orchestrator_reload", { scopes: ["server:core", "server:mcp"] }, ["plain", "primary"]],
     ["subagent_list", {}, ["plain", "primary"]],
     ["subagent_profiles", {}, ["plain", "primary"]],
     ["browse_run", { commands: ["snapshot --compact"] }, ["plain", "primary"]],
@@ -141,6 +138,25 @@ test("every valid simple typed wb MCP route emphasizes its important target", ()
     assert.deepEqual(displayPartKinds(display.summaryParts), expectedKinds, tool);
     assert.deepEqual(displayPartKinds(display.ongoingSummaryParts), expectedKinds, tool);
   }
+});
+
+test("hidden reload commands keep their raw operands out of thread rendering", () => {
+  const reload = getThreadCommandDisplay({
+    command: "wb reload --server:core+mcp",
+    commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(reload.claimedBy, "workbench-cli.reload");
+  assert.deepEqual(codeOperands(reload.summaryParts), []);
+  const dirt = getThreadCommandDisplay({
+    command: "wb dirt",
+    commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT,
+  });
+  assert.equal(dirt.claimedBy, "workbench-cli.dirt");
+  assert.deepEqual(codeOperands(dirt.summaryParts), []);
+  assert.equal(getThreadCommandDisplay({
+    command: "wb orchestrator reload --server:mcp",
+    commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT,
+  }).claimedBy, null);
 });
 
 test("specialized typed wb MCP calls share CLI claims without duplicate summaries", () => {

@@ -1,53 +1,31 @@
 /*
  * Exports:
- * - WorkbenchReloadScopeClaim/WorkbenchReloadRequest: active arc claim and managed reload admission contracts. Keywords: reload, arc, claim, lifecycle.
- * - WorkbenchOrchestratorReloadControllerState: transferable waiter and active-batch state for coordinator self-reload. Keywords: reload, queue, handoff.
- * - WorkbenchOrchestratorReloadControllerOptions: claim read and low-level scope execution ports. Keywords: reload, ports, ownership.
- * - WorkbenchHardReloadNotification/WorkbenchHardReloadOptions: operator-only impending-restart notification and force-exit ports. Keywords: hard reload, notification, deadline, exit.
- * - default WorkbenchOrchestratorReloadController: own reload admission, useful batching, cancellation, and waiter completion. Keywords: reload, queue, batch, cancellation.
+ * - WorkbenchOrchestratorReloadControllerState: transferable active-batch and hard-reload state. Keywords: reload, handoff, state.
+ * - WorkbenchHardReloadNotification/WorkbenchHardReloadOptions: impending-restart notification and force-exit ports. Keywords: hard reload, notification, deadline.
+ * - WorkbenchOrchestratorReloadControllerOptions: dirt selection and low-level execution ports. Keywords: reload, dirt, ports.
+ * - default WorkbenchOrchestratorReloadController: own user-requested reload execution, handoff completion, and hard reload. Keywords: reload, user, lifecycle.
  */
-import { randomUUID } from "node:crypto";
-
-import type { OrchestratorReloadResponse, OrchestratorReloadScope, WorkbenchHarness } from "../lib/types";
+import type { OrchestratorReloadResponse, OrchestratorReloadScope } from "../lib/types";
 import {
-  type OrchestratorReloadScopeDescriptor,
+  expandOrchestratorReloadScopes,
   resolveOrchestratorReloadSelections,
   validateOrchestratorReloadScopeCombination,
+  type OrchestratorReloadScopeDescriptor,
 } from "../lib/workbench/orchestrator-reload";
+import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 
 export interface WorkbenchReloadScopeClaim {
-  harness: WorkbenchHarness;
+  harness: "codex" | "copilot" | "opencode";
   lifecycleKind: "completed" | "needsAttention" | "stopped" | "unknown" | "working";
   reloadScopes: OrchestratorReloadScope[];
   threadId: string;
 }
 
-export interface WorkbenchReloadRequest {
-  cwd: string;
-  harness: WorkbenchHarness;
-  scopes: OrchestratorReloadScope[];
-  threadId: string;
-}
-
-interface ReloadWaiter {
-  cwd: string;
-  identityKey: string;
-  reject(error: unknown): void;
-  requestedScopes: OrchestratorReloadScope[];
-  resolve(response: OrchestratorReloadResponse): void;
-  satisfiedScopes: Set<OrchestratorReloadScope>;
-  startedAt: number;
-}
-
-interface ReloadBatch {
-  scopes: OrchestratorReloadScope[];
-}
+interface ReloadBatch { scopes: OrchestratorReloadScope[] }
 
 export interface WorkbenchOrchestratorReloadControllerState {
   activeBatch: ReloadBatch | null;
-  eligibilityChanged: boolean;
   hardReloadPhase: "admitted" | "idle" | "stopping";
-  waiters: Map<string, ReloadWaiter>;
 }
 
 interface HardReloadDeadline {
@@ -69,12 +47,13 @@ export interface WorkbenchHardReloadOptions {
 }
 
 export interface WorkbenchOrchestratorReloadControllerOptions {
+  dirt?: WorkbenchReloadDirtController;
   executeBatch(scopes: OrchestratorReloadScope[]): Promise<void>;
   getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
   hardReload?: WorkbenchHardReloadOptions;
   initialState?: WorkbenchOrchestratorReloadControllerState;
-  listClaims(cwd: string): Promise<WorkbenchReloadScopeClaim[]>;
-  listScopes(): readonly OrchestratorReloadScope[];
+  listClaims?: (cwd: string) => Promise<WorkbenchReloadScopeClaim[]>;
+  listScopes?: () => readonly OrchestratorReloadScope[];
   now?: () => number;
 }
 
@@ -82,9 +61,7 @@ const DEFAULT_HARD_RELOAD_TIMEOUT_MS = 5_000;
 
 function createDeadline(timeoutMs: number): HardReloadDeadline {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const expired = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, timeoutMs);
-  });
+  const expired = new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); });
   return {
     cancel: () => {
       if (timer === null) return;
@@ -95,93 +72,48 @@ function createDeadline(timeoutMs: number): HardReloadDeadline {
   };
 }
 
-function identityKey(harness: WorkbenchHarness, threadId: string) {
-  return `${harness}\0${threadId}`;
-}
-
-function remainingScopes(waiter: ReloadWaiter) {
-  return waiter.requestedScopes.filter((scope) => !waiter.satisfiedScopes.has(scope));
-}
-
-function isTerminalLifecycle(kind: WorkbenchReloadScopeClaim["lifecycleKind"]) {
-  return kind === "completed" || kind === "stopped";
-}
-
 export default class WorkbenchOrchestratorReloadController {
   private attached = true;
   private executionTail = Promise.resolve();
   private hardReloadExitRequested = false;
   private readonly now: () => number;
-  private selecting = false;
   private readonly state: WorkbenchOrchestratorReloadControllerState;
 
   constructor(private readonly options: WorkbenchOrchestratorReloadControllerOptions) {
     this.now = options.now ?? Date.now;
-    this.state = options.initialState ?? { activeBatch: null, eligibilityChanged: false, hardReloadPhase: "idle", waiters: new Map() };
-    // A controller loaded before hard reload existed transfers this same state object during self-reload.
-    this.state.hardReloadPhase ??= "idle";
+    this.state = options.initialState ?? { activeBatch: null, hardReloadPhase: "idle" };
   }
 
-  async request(input: WorkbenchReloadRequest, signal: AbortSignal): Promise<OrchestratorReloadResponse> {
-    if (!this.attached) throw new Error("The reload coordinator generation was replaced before admission completed.");
-    if (this.isHardReloadPending()) throw new Error("The orchestrator is hard reloading; new reload work is unavailable.");
-    if (signal.aborted) throw signal.reason;
-    const requestedScopes = Array.from(new Set(input.scopes));
-    const supportedScopes = new Set(this.options.listScopes());
-    if (!requestedScopes.length || requestedScopes.some((scope) => !supportedScopes.has(scope))) {
-      throw new Error("At least one supported reload scope is required.");
+  resolveSelections(
+    input: { all?: boolean; scopes?: unknown; unsafe?: boolean },
+    access: OrchestratorReloadScopeDescriptor["access"],
+  ) {
+    const catalog = this.options.dirt?.getCatalog() ?? this.options.getReloadScopeCatalog?.() ?? [];
+    if (!input.all) {
+      const selected = resolveOrchestratorReloadSelections(input, catalog, access);
+      return selected.includes("server:process") ? ["server:process"] : selected;
     }
-    const claims = await this.options.listClaims(input.cwd);
-    const callerKey = identityKey(input.harness, input.threadId);
-    const callerClaim = claims.find((claim) => identityKey(claim.harness, claim.threadId) === callerKey);
-    if (!callerClaim) throw new Error("The managed thread must own an active Git arc before requesting a reload.");
-    const unclaimed = requestedScopes.filter((scope) => !callerClaim.reloadScopes.includes(scope));
-    if (unclaimed.length) {
-      throw new Error(`The active Git arc's claimed paths do not map to these reload scopes: ${unclaimed.join(", ")}.`);
-    }
-    if (signal.aborted) throw signal.reason;
-
-    return await new Promise<OrchestratorReloadResponse>((resolve, reject) => {
-      const waiterId = `${callerKey}\0${randomUUID()}`;
-      const abort = () => {
-        if (!this.state.waiters.delete(waiterId)) return;
-        signal.removeEventListener("abort", abort);
-        reject(signal.reason);
-        this.notifyEligibilityChanged();
-      };
-      this.state.waiters.set(waiterId, {
-        cwd: input.cwd,
-        identityKey: callerKey,
-        reject: (error) => {
-          signal.removeEventListener("abort", abort);
-          reject(error);
-        },
-        requestedScopes,
-        resolve: (response) => {
-          signal.removeEventListener("abort", abort);
-          resolve(response);
-        },
-        satisfiedScopes: new Set(),
-        startedAt: this.now(),
-      });
-      signal.addEventListener("abort", abort, { once: true });
-      this.notifyEligibilityChanged();
-    });
-  }
-
-  resolveSelections(input: { all?: boolean; scopes?: unknown }, access: OrchestratorReloadScopeDescriptor["access"]) {
-    if (!this.options.getReloadScopeCatalog) throw new Error("The active reload scope catalog is unavailable.");
-    return resolveOrchestratorReloadSelections(input, this.options.getReloadScopeCatalog(), access);
+    const explicit = input.scopes === undefined ? [] : expandOrchestratorReloadScopes(input.scopes);
+    const dirt = (this.options.dirt?.getSnapshot().dirtyScopes ?? [])
+      .filter((entry) => !entry.destructive || input.unsafe)
+      .map(({ scope }) => scope);
+    const selections = [...new Set([...dirt, ...explicit])];
+    if (!selections.length) return [];
+    const selected = resolveOrchestratorReloadSelections({ scopes: selections }, catalog, access);
+    return selected.includes("server:process") ? ["server:process"] : selected;
   }
 
   validateCombination(scopes: readonly OrchestratorReloadScope[]) {
     return validateOrchestratorReloadScopeCombination(scopes);
   }
 
-  notifyEligibilityChanged() {
-    if (!this.attached || this.isHardReloadPending()) return;
-    this.state.eligibilityChanged = true;
-    this.schedule();
+  notifyEligibilityChanged() {}
+
+  async request(
+    _input?: { cwd: string; harness: "codex" | "copilot" | "opencode"; scopes: OrchestratorReloadScope[]; threadId: string },
+    _signal?: AbortSignal,
+  ): Promise<OrchestratorReloadResponse> {
+    throw new Error("Agent-managed reload admission is no longer available. Reloading is the user's decision.");
   }
 
   detachForReload() {
@@ -191,33 +123,46 @@ export default class WorkbenchOrchestratorReloadController {
 
   resumeAfterFailedReload() {
     this.attached = true;
-  }
-
-  completeTransferredBatch() {
-    if (!this.attached) throw new Error("A detached reload coordinator cannot complete a transferred batch.");
-    const batch = this.state.activeBatch;
-    if (!batch) throw new Error("No reload batch is available to complete after coordinator replacement.");
-    this.completeBatch(batch);
+    this.options.dirt?.resumeAfterFailedReload();
   }
 
   completeTransferredBatchIfPresent() {
-    if (this.state.activeBatch) this.completeTransferredBatch();
+    const batch = this.state.activeBatch;
+    if (!batch) return;
+    this.state.activeBatch = null;
+    const completion = this.options.dirt?.completeReload(batch.scopes) ?? Promise.resolve();
+    this.executionTail = completion.catch((error) => this.options.dirt?.failReload(error));
   }
 
   failTransferredBatch(error: unknown) {
-    const batch = this.state.activeBatch;
-    if (batch) this.failBatch(batch, error);
+    if (!this.state.activeBatch) return;
+    this.state.activeBatch = null;
+    this.options.dirt?.failReload(error);
   }
 
   async executeUnmanaged(scopes: OrchestratorReloadScope[]) {
-    await this.runExclusive(async () => await this.options.executeBatch(scopes));
+    await this.runExclusive(async () => {
+      if (this.state.activeBatch) throw new Error("A reload batch is already active.");
+      const batch = { scopes: [...new Set(scopes)] };
+      this.state.activeBatch = batch;
+      this.options.dirt?.beginReload(batch.scopes);
+      try {
+        await this.options.executeBatch(batch.scopes);
+        if (!this.attached) return;
+        this.state.activeBatch = null;
+        await this.options.dirt?.completeReload(batch.scopes);
+      } catch (error) {
+        if (this.attached) {
+          this.state.activeBatch = null;
+          this.options.dirt?.failReload(error);
+        }
+        throw error;
+      }
+    });
   }
 
   dispose() {
     this.attached = false;
-    const error = new Error("The reload coordinator was disposed before queued reloads completed.");
-    for (const waiter of this.state.waiters.values()) waiter.reject(error);
-    this.state.waiters.clear();
     this.state.activeBatch = null;
   }
 
@@ -227,14 +172,8 @@ export default class WorkbenchOrchestratorReloadController {
     const startedAt = this.now();
     this.state.hardReloadPhase = "admitted";
     return {
-      appliedScopes: [],
-      completedAt: startedAt,
-      error: null,
-      ok: true,
-      queuedScopes: ["server:process"],
-      requestedScopes: ["server:process"],
-      startedAt,
-      state: "succeeded",
+      appliedScopes: [], completedAt: startedAt, error: null, ok: true,
+      queuedScopes: ["server:process"], requestedScopes: ["server:process"], startedAt, state: "succeeded",
     };
   }
 
@@ -253,8 +192,6 @@ export default class WorkbenchOrchestratorReloadController {
     if (this.state.hardReloadPhase !== "admitted") throw new Error("Hard reload was not admitted before shutdown began.");
     this.state.hardReloadPhase = "stopping";
     this.attached = false;
-    this.failAll(new Error("The orchestrator is hard reloading."));
-
     const logError = options.logError ?? (() => undefined);
     const deadline = (options.createDeadline ?? createDeadline)(options.timeoutMs ?? DEFAULT_HARD_RELOAD_TIMEOUT_MS);
     const settlements = options.notifications().map(({ name, notify }) => {
@@ -268,109 +205,11 @@ export default class WorkbenchOrchestratorReloadController {
       }
     });
     const settled = Promise.all(settlements).then(() => undefined);
-    const outcome = await Promise.race([
-      settled.then(() => "settled" as const),
-      deadline.expired.then(() => "deadline" as const),
-    ]);
+    const outcome = await Promise.race([settled.then(() => "settled" as const), deadline.expired.then(() => "deadline" as const)]);
     if (outcome === "settled") deadline.cancel();
     if (this.hardReloadExitRequested) return;
     this.hardReloadExitRequested = true;
     options.exitProcess();
-  }
-
-  private schedule() {
-    if (!this.attached || this.isHardReloadPending() || this.selecting || this.state.activeBatch || !this.state.waiters.size) return;
-    this.selecting = true;
-    this.state.eligibilityChanged = false;
-    void this.selectBatch().then((batch) => {
-      this.selecting = false;
-      if (!this.attached) return;
-      if (!batch) {
-        if (this.state.eligibilityChanged) this.schedule();
-        return;
-      }
-      this.state.activeBatch = batch;
-      void this.executeBatch(batch);
-    }).catch((error) => {
-      this.selecting = false;
-      if (!this.attached) return;
-      this.failAll(error);
-    });
-  }
-
-  private async selectBatch(): Promise<ReloadBatch | null> {
-    const firstWaiter = this.state.waiters.values().next().value as ReloadWaiter | undefined;
-    if (!firstWaiter) return null;
-    const claims = await this.options.listClaims(firstWaiter.cwd);
-    if (!this.attached) return null;
-    const waitingIdentities = new Set(Array.from(this.state.waiters.values(), (waiter) => waiter.identityKey));
-    const safeScopes = new Set<OrchestratorReloadScope>();
-    const supportedScopes = [...this.options.listScopes()];
-    for (const scope of supportedScopes) {
-      const blockers = claims.filter((claim) => claim.reloadScopes.includes(scope));
-      if (blockers.every((claim) => isTerminalLifecycle(claim.lifecycleKind) || waitingIdentities.has(identityKey(claim.harness, claim.threadId)))) {
-        safeScopes.add(scope);
-      }
-    }
-    const batchScopes = new Set<OrchestratorReloadScope>();
-    for (const waiter of this.state.waiters.values()) {
-      const remaining = remainingScopes(waiter);
-      if (remaining.length && remaining.every((scope) => safeScopes.has(scope))) {
-        for (const scope of remaining) batchScopes.add(scope);
-      }
-    }
-    if (!batchScopes.size) return null;
-    return { scopes: supportedScopes.filter((scope) => batchScopes.has(scope)) };
-  }
-
-  private async executeBatch(batch: ReloadBatch) {
-    try {
-      await this.runExclusive(async () => await this.options.executeBatch(batch.scopes));
-      if (!this.attached) return;
-      this.completeBatch(batch);
-    } catch (error) {
-      if (!this.attached) return;
-      this.failBatch(batch, error);
-    }
-  }
-
-  private completeBatch(batch: ReloadBatch) {
-    if (this.state.activeBatch !== batch) throw new Error("Reload batch ownership changed before completion.");
-    this.state.activeBatch = null;
-    for (const [waiterId, waiter] of this.state.waiters) {
-      for (const scope of batch.scopes) {
-        if (waiter.requestedScopes.includes(scope)) waiter.satisfiedScopes.add(scope);
-      }
-      if (remainingScopes(waiter).length) continue;
-      this.state.waiters.delete(waiterId);
-      waiter.resolve({
-        appliedScopes: waiter.requestedScopes.filter((scope) => scope !== "client:all" && scope !== "server:process"),
-        completedAt: this.now(),
-        error: null,
-        ok: true,
-        queuedScopes: waiter.requestedScopes.filter((scope) => scope === "client:all" || scope === "server:process"),
-        requestedScopes: waiter.requestedScopes,
-        startedAt: waiter.startedAt,
-        state: "succeeded",
-      });
-    }
-    this.notifyEligibilityChanged();
-  }
-
-  private failBatch(batch: ReloadBatch, error: unknown) {
-    if (this.state.activeBatch !== batch) return;
-    this.state.activeBatch = null;
-    for (const [waiterId, waiter] of this.state.waiters) {
-      if (!remainingScopes(waiter).some((scope) => batch.scopes.includes(scope))) continue;
-      this.state.waiters.delete(waiterId);
-      waiter.reject(error);
-    }
-    this.notifyEligibilityChanged();
-  }
-
-  private failAll(error: unknown) {
-    for (const waiter of this.state.waiters.values()) waiter.reject(error);
-    this.state.waiters.clear();
   }
 
   private async runExclusive(operation: () => Promise<void>) {

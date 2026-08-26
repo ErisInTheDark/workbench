@@ -66,7 +66,7 @@ test("canonical command descriptors are immutable and unique", () => {
   const descriptors = listWorkbenchAgentCliCommandDescriptors();
   const definitions = listWorkbenchAgentCommands();
   assert.ok(descriptors.length > 0);
-  assert.equal(descriptors.length, definitions.length);
+  assert.equal(descriptors.length, definitions.filter(({ hideFromRootHelp }) => !hideFromRootHelp).length);
   assert.equal(new Set(descriptors.map(({ words }) => words.join(" "))).size, descriptors.length);
   assert.ok(descriptors.every(({ description, usage, words }) => description && usage.startsWith("wb ") && words.length > 0));
   assert.equal(Object.isFrozen(descriptors), true);
@@ -734,10 +734,12 @@ test("routes canonical, compatibility, and leaf help to the nearest owning group
 test("maps composable reload switches to one deduplicated fixed request", async () => {
   const unmanaged = { callerThreadId: null, reloadCatalog };
   const parsed = await parseWorkbenchAgentCliCommand([
-    "orchestrator", "reload", "--client:all", "--server:codex", "--harness:opencode", "--client:all",
+    "reload", "--client:all", "--server:codex", "--harness:opencode", "--client:all",
     "--server:core+browse", "--server:opencode",
   ], unmanaged);
+  if (parsed.kind === "error") throw new Error(parsed.error);
   assert.equal(parsed.kind, "request");
+  if (parsed.kind !== "request") return;
   assert.deepEqual(parsed.request, {
     body: { scopes: ["client:all", "server:codex", "harness:opencode", "server:core", "server:browse", "server:opencode"] },
     method: "POST",
@@ -745,66 +747,64 @@ test("maps composable reload switches to one deduplicated fixed request", async 
     responseKind: "orchestrator-reload",
     waitForReload: true,
   });
-  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload"], unmanaged)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["reload"], unmanaged)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--orchestrator-logic"], unmanaged)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand([
     "browse", "run", "--thread", "thread-1", "--command", "doctor", "--stream-progress",
   ])).kind, "error");
-  const managed = await parseWorkbenchAgentCliCommand([
-    "orchestrator", "reload", "--server:topology", "--server:mcp",
+  const callerLaunched = await parseWorkbenchAgentCliCommand([
+    "reload", "--server:topology", "--server:mcp",
   ], { callerHarness: "codex", callerThreadId: "thread-one", cwd: "C:/workspace", reloadCatalog });
-  assert.equal(managed.kind, "request");
-  if (managed.kind === "request") assert.deepEqual(managed.request.body, {
-    callerHarness: "codex",
-    callerThreadId: "thread-one",
-    cwd: "C:/workspace",
+  assert.equal(callerLaunched.kind, "request");
+  if (callerLaunched.kind === "request") assert.deepEqual(callerLaunched.request.body, {
     scopes: ["server:topology", "server:mcp"],
   });
 });
 
-test("keeps safe all dynamic and hides hard restart", async () => {
+test("keeps reload and dirt hidden while direct reload help explains user ownership", async () => {
   const unmanaged = { callerThreadId: null, reloadCatalog };
-  const parsed = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all"], unmanaged);
-  assert.equal(parsed.kind, "request");
+  const parsed = await parseWorkbenchAgentCliCommand(["reload", "--all"], unmanaged);
+  assert.equal(parsed.kind, "request", parsed.kind === "error" ? parsed.error : undefined);
   assert.deepEqual(parsed.request.body, { all: true });
-  const explicitServer = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--all", "--harness:opencode"], unmanaged);
+  const unsafeAll = await parseWorkbenchAgentCliCommand(["reload", "--all", "--unsafe"], unmanaged);
+  assert.equal(unsafeAll.kind, "request");
+  if (unsafeAll.kind === "request") assert.deepEqual(unsafeAll.request.body, { all: true, unsafe: true });
+  const explicitServer = await parseWorkbenchAgentCliCommand(["reload", "--harness:opencode"], unmanaged);
   assert.equal(explicitServer.kind, "request");
   if (explicitServer.kind === "request") {
     assert.deepEqual(explicitServer.request.body, {
-      all: true,
       scopes: ["harness:opencode"],
     });
   }
-  const hard = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard"], unmanaged);
+  const hard = await parseWorkbenchAgentCliCommand(["reload", "--hard"], unmanaged);
   assert.equal(hard.kind, "request");
   if (hard.kind === "request") assert.deepEqual(hard.request.body, { scopes: ["server:process"] });
-  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard", "--all"], unmanaged)).kind, "error");
-  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--hard", "--server:codex"], unmanaged)).kind, "error");
-  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--server:process"], unmanaged)).kind, "error");
-  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--unsafe"], unmanaged)).kind, "error");
-  const reloadDefinition = listWorkbenchAgentCommands(reloadCatalog, "agent").find(({ words }) => words.join(" ") === "orchestrator reload");
+  assert.equal((await parseWorkbenchAgentCliCommand(["reload", "--hard", "--all"], unmanaged)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["reload", "--server:process"], unmanaged)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["reload", "--unsafe"], unmanaged)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--server:core"], unmanaged)).kind, "error");
+  const reloadDefinition = listWorkbenchAgentCommands(reloadCatalog, "cli").find(({ words }) => words.join(" ") === "reload");
   assert.ok(reloadDefinition);
+  assert.equal(reloadDefinition.hideFromMcp, true);
+  assert.equal(reloadDefinition.hideFromRootHelp, true);
   assert.equal(reloadDefinition.inputSchema.safeParse({ scopes: ["server:mcp"] }).success, true);
-  assert.equal(reloadDefinition.inputSchema.safeParse({ scopes: ["harness:codex"] }).success, false);
+  assert.equal(reloadDefinition.inputSchema.safeParse({ scopes: ["harness:codex"] }).success, true);
   const help = await parseWorkbenchAgentCliCommand(["--help"], unmanaged);
   assert.equal(help.kind, "help");
   if (help.kind === "help") {
-    assert.doesNotMatch(help.help, /--hard|--unsafe|server:process|harness:(?:codex|opencode)/u);
+    assert.doesNotMatch(help.help, /wb reload|wb dirt|--hard|--unsafe|server:process|harness:(?:codex|opencode)/u);
   }
-  const reloadHelp = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--help"], unmanaged);
+  const reloadHelp = await parseWorkbenchAgentCliCommand(["reload", "--help"], unmanaged);
   assert.equal(reloadHelp.kind, "help");
   if (reloadHelp.kind === "help") {
     assert.match(reloadHelp.help, /--all/u);
-    assert.match(reloadHelp.help, /wb orchestrator reload --<scope> \[--<scope> \.\.\.\]/u);
+    assert.match(reloadHelp.help, /wb reload \[--all \[--unsafe\] \| --<scope> \.\.\. \| --hard\]/u);
     assert.match(reloadHelp.help, /--server:core\+browse\+mcp/u);
-    assert.doesNotMatch(reloadHelp.help, /--hard|--unsafe|server:process|harness:(?:codex|opencode)|--orchestrator-logic|--codex-bridge|--next-dev/u);
-  }
-  const unsafeHelp = await parseWorkbenchAgentCliCommand(["orchestrator", "reload", "--help", "--unsafe"], unmanaged);
-  assert.equal(unsafeHelp.kind, "help");
-  if (unsafeHelp.kind === "help") {
-    assert.match(unsafeHelp.help, /--harness:codex/u);
-    assert.match(unsafeHelp.help, /--harness:opencode/u);
-    assert.match(unsafeHelp.help, /--hard \(server:process\)/u);
+    assert.match(reloadHelp.help, /--hard/u);
+    assert.match(reloadHelp.help, /--unsafe/u);
+    assert.match(reloadHelp.help, /--harness:codex/u);
+    assert.match(reloadHelp.help, /--harness:opencode/u);
+    assert.match(reloadHelp.help, /reloading is the responsibility of the user\. if you intend to do a reload, you should be operating with the user's permission\./u);
   }
 });
 
@@ -942,7 +942,7 @@ test("generates executable POSIX and working Windows shims", async (context) => 
   env.CODEX_THREAD_ID = "";
   reloadStatusReadCount = 0;
   const result = await execFileAsync(installed.windowsShimPath, [
-    "orchestrator", "reload", "--server:codex", "--client:all",
+    "reload", "--server:codex", "--client:all",
   ], {
     cwd: temporaryDirectoryPath,
     env,

@@ -53,11 +53,11 @@ test("thread steers interrupt only declared waits for the matching thread across
     threadId: "parent-thread",
     toolName: "subagent_wait",
   });
-  const reloadWait = registry.register("client-2", 1, {
+  const secondWait = registry.register("client-2", 1, {
     owner: secondOwner,
     steerInterruptible: true,
     threadId: "parent-thread",
-    toolName: "orchestrator_reload",
+    toolName: "subagent_wait",
   });
   const otherThreadWait = registry.register("client-1", 2, {
     owner: firstOwner,
@@ -73,7 +73,7 @@ test("thread steers interrupt only declared waits for the matching thread across
 
   assert.equal(registry.interruptThreadWaits("parent-thread"), 2);
   assert.equal(subagentWait.signal.aborted, true);
-  assert.equal(reloadWait.signal.aborted, true);
+  assert.equal(secondWait.signal.aborted, true);
   assert.equal(otherThreadWait.signal.aborted, false);
   assert.equal(ordinaryCall.signal.aborted, false);
   assert.equal(registry.interruptThreadWaits("parent-thread"), 0);
@@ -84,7 +84,7 @@ test("thread steers interrupt only declared waits for the matching thread across
   }), /requires a thread id/u);
 
   subagentWait.unregister();
-  reloadWait.unregister();
+  secondWait.unregister();
   otherThreadWait.unregister();
   ordinaryCall.unregister();
 });
@@ -140,7 +140,7 @@ test("drain-independent requests stay client-cancellable but leave blocker diagn
   const owner = {};
   const registration = registry.register("client-1", 1, {
     owner,
-    toolName: "orchestrator_reload",
+    toolName: "subagent_wait",
   });
   registration.markDrainIndependent();
   assert.deepEqual(registry.listRuntimeDrainPending(owner), []);

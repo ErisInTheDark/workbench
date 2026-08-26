@@ -1,45 +1,23 @@
 /*
- * No production exports. Node tests protect topology-node queue ownership and handoff state transfer. Keywords: topology, reload, queue, handoff, test.
+ * No production exports. Tests protect graph-definition ownership from acquiring reload or harness lifecycle state. Keywords: topology, ownership, reload, test.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { OrchestratorProcessContext } from "./orchestrator-process-context";
-import type { OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
 
-test("the topology node transfers hard-reload admission state into its replacement", () => {
-  const context = Object.assign(Object.create(null) as OrchestratorProcessContext, {
-    executeReloadScopes: async () => undefined,
-    getReloadScopeCatalog: () => [
-      { access: "agent" as const, description: "Topology", safeAll: false, scope: "server:topology" },
-      { access: "operator" as const, description: "Process", safeAll: false, scope: "server:process" },
-    ],
-    hardReload: { exitProcess: () => undefined, notifications: () => [] },
-  });
-  const gitArc = Object.assign(Object.create(null) as OrchestratorRuntimeObjects["gitArc"], {
-    listReloadScopeClaims: async () => [],
-  });
-  const objects = Object.create(null) as OrchestratorRuntimeObjects;
-  objects.gitArc = gitArc;
-  const build = (handoffState?: unknown) => ({
-    get: <TKey extends keyof OrchestratorRuntimeObjects>(key: TKey) => {
-      assert.equal(key, "gitArc");
-      return objects[key];
-    },
-    handoffState,
+test("the topology node is an atomic graph marker without reload state", () => {
+  assert.equal(WorkbenchTopologyNode.scope, "server:topology");
+  assert.equal(WorkbenchTopologyNode.lifecycle, "atomic");
+  assert.deepEqual(WorkbenchTopologyNode.provides, []);
+  assert.deepEqual(WorkbenchTopologyNode.requires, []);
+  assert.equal(WorkbenchTopologyNode.children.some(({ scope }) => scope.startsWith("harness:")), false);
+  const instance = WorkbenchTopologyNode.create({} as never, {
+    get: () => { throw new Error("topology must not read runtime registrations"); },
+    handoffState: undefined,
     isReplacing: () => true,
     lease: { isCurrent: () => true },
-    mode: handoffState ? "replacement" as const : "initial" as const,
+    mode: "initial",
   });
-  const first = WorkbenchTopologyNode.create(context, build());
-  const firstController = first.registrations.reloadController!;
-  firstController.admitHardReload();
-  const state = first.detachForReload!({ isReplacing: () => true });
-
-  const replacement = WorkbenchTopologyNode.create(context, build(state));
-  const replacementController = replacement.registrations.reloadController!;
-  assert.equal(replacementController.isHardReloadPending(), true);
-  replacementController.cancelHardReloadAdmission();
-  assert.equal(replacementController.isHardReloadPending(), false);
+  assert.deepEqual(instance.registrations, {});
 });

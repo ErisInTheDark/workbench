@@ -13,7 +13,8 @@ const reloadCatalog = [
   { access: "agent" as const, description: "Core", safeAll: true, scope: "server:core" },
   { access: "agent" as const, description: "MCP", safeAll: true, scope: "server:mcp" },
   { access: "agent" as const, description: "Topology", safeAll: false, scope: "server:topology" },
-  { access: "operator" as const, description: "Process", safeAll: false, scope: "server:process" },
+  { access: "cli" as const, description: "Codex harness", destructive: true, safeAll: false, scope: "harness:codex" },
+  { access: "operator" as const, description: "Process", destructive: true, safeAll: false, scope: "server:process" },
 ];
 
 function deferred<TValue>() {
@@ -67,6 +68,7 @@ function createBrowsePort(executeBrowseRequest: (body: Buffer, signal: AbortSign
   return {
     executeBrowseRequest,
     executeSessionRequest: async () => Response.json({ generatedAt: new Date(0).toISOString(), projectId: null, sessions: [] }),
+    getReloadDirt: async () => ({ dirtyScopes: [], error: null, pendingScopes: [] }),
     getReloadScopeCatalog: () => reloadCatalog,
   };
 }
@@ -474,7 +476,7 @@ test("reload admission releases the handler before terminal polling completes", 
   try {
     let clientSettled = false;
     const client = fetch(`${server.origin}/orchestrator/agent-command`, {
-      body: agentCommandBody(["orchestrator", "reload", "--server:core"]),
+      body: agentCommandBody(["reload", "--server:core"]),
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       method: "POST",
     }).then((response) => {
@@ -498,48 +500,78 @@ test("reload admission releases the handler before terminal polling completes", 
   }
 });
 
-test("managed reloads wait on the direct coordinator without an internal fetch", async () => {
-  const handled = deferred<void>();
-  const started = deferred<{ body: Record<string, unknown>; signal: AbortSignal }>();
-  const terminal = deferred<Response>();
+test("caller metadata cannot convert a user reload into managed admission", async () => {
+  const requests: Record<string, unknown>[] = [];
   const controller = new WorkbenchAgentCommandController(
     "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
-      getReloadScopeCatalog: () => reloadCatalog,
-      requestOrchestratorReload: async (body, signal) => {
-        started.resolve({ body, signal });
-        return await terminal.promise;
-      },
     },
-    async () => { throw new Error("unexpected internal fetch"); },
+    async (_input, init) => {
+      requests.push(typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {});
+      return Response.json({
+        appliedScopes: ["server:mcp", "server:topology"], completedAt: 2, error: null, ok: true,
+        queuedScopes: [], requestedScopes: ["server:mcp", "server:topology"], startedAt: 1, state: "succeeded",
+      });
+    },
   );
-  const server = await startController(controller, () => handled.resolve());
+  const server = await startController(controller);
   try {
-    const body = new URLSearchParams(agentCommandBody(["orchestrator", "reload", "--server:mcp", "--server:topology"]));
+    const body = new URLSearchParams(agentCommandBody(["reload", "--server:mcp", "--server:topology"]));
     body.set("callerHarness", "codex");
     body.set("callerThreadId", "thread-one");
-    const client = fetch(`${server.origin}/orchestrator/agent-command`, {
+    const response = await fetch(`${server.origin}/orchestrator/agent-command`, {
       body: body.toString(),
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       method: "POST",
     });
-    const admitted = await started.promise;
-    await handled.promise;
-    assert.deepEqual(admitted.body, {
-      callerHarness: "codex",
-      callerThreadId: "thread-one",
-      cwd: process.cwd(),
-      scopes: ["server:mcp", "server:topology"],
-    });
-    terminal.resolve(Response.json({
-      appliedScopes: ["server:mcp", "server:topology"], completedAt: 2, error: null, ok: true,
-      queuedScopes: [], requestedScopes: ["server:mcp", "server:topology"], startedAt: 1, state: "succeeded",
-    }));
-    const response = await client;
     assert.equal(response.status, 200);
     assert.match(await response.text(), /Applied: server:mcp, server:topology/u);
+    assert.deepEqual(requests, [{ scopes: ["server:mcp", "server:topology"] }]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("dirt and all share the live dirt snapshot while unsafe remains explicit", async () => {
+  const requestBodies: Record<string, unknown>[] = [];
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      getReloadDirt: async () => ({
+        dirtyScopes: [
+          { description: "Core", destructive: false, scope: "server:core" },
+          { description: "Codex harness", destructive: true, scope: "harness:codex" },
+        ],
+        error: null,
+        pendingScopes: [],
+      }),
+    },
+    async (_input, init) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+      requestBodies.push(body);
+      const scopes = body.scopes as string[];
+      return Response.json({
+        appliedScopes: scopes, completedAt: 2, error: null, ok: true,
+        queuedScopes: [], requestedScopes: scopes, startedAt: 1, state: "succeeded",
+      });
+    },
+  );
+  const server = await startController(controller);
+  const run = async (args: string[]) => await fetch(`${server.origin}/orchestrator/agent-command`, {
+    body: agentCommandBody(args), headers: { "Content-Type": "application/x-www-form-urlencoded" }, method: "POST",
+  });
+  try {
+    assert.equal(await (await run(["dirt"])).text(), "server:core\nharness:codex\n");
+    assert.match(await (await run(["reload", "--all"])).text(), /Applied: server:core/u);
+    assert.match(await (await run(["reload", "--all", "--unsafe"])).text(), /Applied: server:core, harness:codex/u);
+    assert.deepEqual(requestBodies, [
+      { scopes: ["server:core"] },
+      { scopes: ["server:core", "harness:codex"] },
+    ]);
   } finally {
     await server.close();
   }
@@ -568,13 +600,12 @@ test("managed hard reloads bypass the direct coordinator", async () => {
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
       getReloadScopeCatalog: () => reloadCatalog,
-      requestOrchestratorReload: async () => { throw new Error("unexpected direct reload dispatch"); },
     },
     fetchRequest,
   );
   const server = await startController(controller);
   try {
-    const body = new URLSearchParams(agentCommandBody(["orchestrator", "reload", "--hard"]));
+    const body = new URLSearchParams(agentCommandBody(["reload", "--hard"]));
     body.set("callerThreadId", "thread-one");
     const response = await fetch(`${server.origin}/orchestrator/agent-command`, {
       body: body.toString(),
@@ -585,12 +616,7 @@ test("managed hard reloads bypass the direct coordinator", async () => {
     assert.match(await response.text(), /Applied: server:process/u);
     assert.deepEqual(requests, [
       {
-        body: {
-          callerHarness: "codex",
-          callerThreadId: "thread-one",
-          cwd: process.cwd(),
-          scopes: ["server:process"],
-        },
+        body: { scopes: ["server:process"] },
         method: "POST",
       },
       { body: {}, method: "GET" },
@@ -630,7 +656,7 @@ test("disconnecting after reload admission aborts terminal polling", async () =>
   );
   const server = await startController(controller, () => handled.resolve());
   try {
-    const body = agentCommandBody(["orchestrator", "reload", "--server:core"]);
+    const body = agentCommandBody(["reload", "--server:core"]);
     const request = http.request(`${server.origin}/orchestrator/agent-command`, {
       headers: {
         "Content-Length": Buffer.byteLength(body),

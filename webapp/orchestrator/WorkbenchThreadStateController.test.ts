@@ -1,4 +1,4 @@
-/* No production exports. Tests protect headless ownership, folder persistence, MCP generation, observation replay, reconciliation, mutations, and stale publication fences. */
+/* No production exports. Tests protect headless ownership, pushed reload dirt, folder persistence, MCP generation, observation replay, reconciliation, mutations, and stale publication fences. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,7 +7,8 @@ import test from "node:test";
 import WorkbenchThreadStateControllerOwner, { type WorkbenchThreadStateControllerOptions } from "./WorkbenchThreadStateController";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import type { WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchReloadDirtSnapshot } from "../lib/types";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 
 type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcTransition">
   & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcTransition">>;
@@ -293,6 +294,42 @@ test("project-local and old central thread state stay read-only until a real mut
   assert.deepEqual(JSON.parse(await fs.readFile(statePath(legacyRoot, "migrated"), "utf8")), { drafts: [migratedDraft], threads: [], version: 1 });
   await controller.dispose();
   await Promise.all([storageRoot, legacyRoot, centralWinsRoot].map((root) => fs.rm(root, { force: true, recursive: true })));
+});
+
+test("reload dirt publishes through every observed project's existing sidebar channel", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dirt-"));
+  let dirt: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
+  let dirtListener = () => undefined;
+  let unsubscribed = false;
+  const published: WorkbenchThreadSidebarSnapshot[] = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    getReloadDirt: () => dirt!,
+    projectState: projectState(),
+    publish: (_connectionId, update) => { if (!("updateKind" in update)) published.push(update); },
+    reconcileProject: async () => [],
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+    subscribeReloadDirt: (listener) => {
+      dirtListener = listener;
+      return () => { unsubscribed = true; };
+    },
+  });
+  try {
+    const opened = await controller.open("connection", "project");
+    assert.deepEqual(opened.sidebar.reloadDirt, dirt);
+    dirt = {
+      dirtyScopes: [{ description: "Core", destructive: false, scope: "server:core" }],
+      error: null,
+      pendingScopes: [],
+    };
+    dirtListener();
+    await waitFor(() => published.some((sidebar) => sidebar.reloadDirt?.dirtyScopes[0]?.scope === "server:core"), "Reload dirt did not publish.");
+  } finally {
+    await controller.dispose();
+    assert.equal(unsubscribed, true);
+    await fs.rm(root, { force: true, recursive: true });
+  }
 });
 
 test("stored state repairs invalid leaves without erasing thread or draft siblings", async () => {

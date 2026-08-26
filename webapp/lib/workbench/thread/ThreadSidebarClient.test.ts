@@ -131,6 +131,26 @@ test("activity updates preserve turn order until a new turn-start order arrives"
   assert.deepEqual(installed.at(-1)?.entries.map((candidate) => candidate.entryKind === "thread" ? candidate.identity.threadId : ""), ["older-turn", "newer-turn"]);
 });
 
+test("optimistic sidebar updates preserve pushed reload dirt", async () => {
+  const reloadDirt = {
+    dirtyScopes: [{ description: "Core", destructive: false, scope: "server:core" as const }],
+    error: null,
+    pendingScopes: [],
+  };
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => ({ ...snapshot(1), reloadDirt }),
+      upsertDraft: async () => undefined,
+    },
+  });
+  await client.open("project");
+  client.edit(draft("preserve reload dirt", 2));
+  assert.deepEqual(client.getSnapshot()?.reloadDirt, reloadDirt);
+});
+
 test("activity updates project pinned rows through durable user ordering", async () => {
   const entry = (threadId: string, orderAt: number): WorkbenchThreadSidebarSnapshot["entries"][number] => ({
     activityAt: orderAt,

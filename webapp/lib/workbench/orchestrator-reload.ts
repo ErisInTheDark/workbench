@@ -1,9 +1,9 @@
 /*
  * Exports:
  * - ORCHESTRATOR_RELOAD_SCOPE_PATTERN: canonical namespace:name scope syntax. Keywords: reload, scope, validation.
- * - OrchestratorReloadScopeDescriptor: active node catalog projection shared by CLI, MCP, and reload admission. Keywords: catalog, access, all.
+ * - OrchestratorReloadScopeDescriptor: active node catalog projection shared by CLI and reload admission. Keywords: catalog, access, destructive.
  * - normalizeOrchestratorReloadScopes/expandOrchestratorReloadScopes: validate atomic or grouped scope strings without owning topology. Keywords: normalize, group.
- * - resolveOrchestratorReloadSelections: resolve explicit scopes and safe all from one active catalog. Keywords: policy, dynamic, request.
+ * - resolveOrchestratorReloadSelections: resolve explicit scopes and destructive-aware all from one active catalog. Keywords: policy, dynamic, request.
  * - validateOrchestratorReloadScopeCombination: keep hard process reload exclusive. Keywords: process, restart.
  */
 
@@ -17,6 +17,7 @@ const MAX_RELOAD_SCOPE_LENGTH = 64;
 export interface OrchestratorReloadScopeDescriptor {
   access: "agent" | "cli" | "operator";
   description: string;
+  destructive?: boolean;
   safeAll: boolean;
   scope: OrchestratorReloadScope;
 }
@@ -43,21 +44,22 @@ export function expandOrchestratorReloadScopes(value: unknown): OrchestratorRelo
 }
 
 export function resolveOrchestratorReloadSelections(
-  input: { all?: boolean; scopes?: unknown },
+  input: { all?: boolean; scopes?: unknown; unsafe?: boolean },
   catalog: readonly OrchestratorReloadScopeDescriptor[],
   access: OrchestratorReloadScopeDescriptor["access"],
 ) {
   const explicit = input.scopes === undefined ? [] : expandOrchestratorReloadScopes(input.scopes);
   const allowedAccess = access === "operator" ? new Set(["agent", "cli", "operator"]) : access === "cli" ? new Set(["agent", "cli"]) : new Set(["agent"]);
   const available = new Map(catalog.filter((entry) => allowedAccess.has(entry.access)).map((entry) => [entry.scope, entry]));
+  if (input.unsafe && !input.all) throw new Error("--unsafe is only available with --all.");
   const scopes = [
-    ...(input.all ? catalog.filter((entry) => entry.safeAll && entry.access === "agent").map((entry) => entry.scope) : []),
+    ...(input.all ? [...available.values()].filter((entry) => entry.destructive !== true || input.unsafe).map((entry) => entry.scope) : []),
     ...explicit,
   ];
   const unknown = scopes.filter((scope) => !available.has(scope));
   if (unknown.length) throw new Error(`Unknown or unavailable reload scopes: ${[...new Set(unknown)].join(", ")}.`);
   const resolved = [...new Set(scopes)];
-  if (!resolved.length) throw new Error("At least one supported reload scope is required.");
+  if (!resolved.length && !input.all) throw new Error("At least one supported reload scope is required.");
   return resolved;
 }
 

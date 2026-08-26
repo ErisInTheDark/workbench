@@ -1,236 +1,113 @@
 /*
- * No production exports. Node tests protect reload claim barriers, useful batching, cancellation, and failure isolation. Keywords: reload, queue, claim, batch, test.
+ * No production exports. Tests protect user-owned reload selection, dirt advancement, handoff, and hard-reload lifecycle. Keywords: reload, dirt, user, handoff, test.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { OrchestratorReloadScope } from "../lib/types";
-import WorkbenchOrchestratorReloadController, {
-  type WorkbenchOrchestratorReloadControllerState,
-  type WorkbenchReloadScopeClaim,
-} from "./WorkbenchOrchestratorReloadController";
+import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
+import WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReloadController";
+import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 
-const TEST_RELOAD_SCOPES = ["client:all", "server:codex", "server:core", "server:mcp", "server:process"];
-const listScopes = () => TEST_RELOAD_SCOPES;
-
-function deferred<TValue>() {
-  let reject!: (error: unknown) => void;
-  let resolve!: (value: TValue) => void;
-  const promise = new Promise<TValue>((nextResolve, nextReject) => {
-    reject = nextReject;
-    resolve = nextResolve;
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
   });
   return { promise, reject, resolve };
 }
 
-function deadlineHarness() {
-  const expired = deferred<void>();
+const catalog: OrchestratorReloadScopeDescriptor[] = [
+  { access: "agent", description: "Core", scope: "server:core", safeAll: true },
+  { access: "agent", description: "MCP", scope: "server:mcp", safeAll: true },
+  { access: "cli", description: "Codex harness", destructive: true, scope: "harness:codex", safeAll: false },
+  { access: "operator", description: "Process", destructive: true, scope: "server:process", safeAll: false },
+];
+
+function dirtStub(options: {
+  dirty?: Array<{ destructive: boolean; scope: OrchestratorReloadScope }>;
+  events?: string[];
+}) {
+  const events = options.events ?? [];
   return {
-    create: () => ({ cancel: () => undefined, expired: expired.promise }),
-    expire: () => expired.resolve(),
-  };
+    beginReload: (scopes: readonly OrchestratorReloadScope[]) => events.push(`begin:${scopes.join(",")}`),
+    completeReload: async (scopes: readonly OrchestratorReloadScope[]) => { events.push(`complete:${scopes.join(",")}`); },
+    failReload: (error: unknown) => events.push(`fail:${error instanceof Error ? error.message : String(error)}`),
+    getCatalog: () => catalog,
+    getSnapshot: () => ({ dirtyScopes: options.dirty ?? [] }),
+    resumeAfterFailedReload: () => events.push("resume"),
+  } as unknown as WorkbenchReloadDirtController;
 }
 
-function claim(threadId: string, reloadScopes: OrchestratorReloadScope[], lifecycleKind: WorkbenchReloadScopeClaim["lifecycleKind"] = "working"): WorkbenchReloadScopeClaim {
-  return { harness: "codex", lifecycleKind, reloadScopes, threadId };
-}
-
-function request(controller: WorkbenchOrchestratorReloadController, threadId: string, scopes: OrchestratorReloadScope[], signal = new AbortController().signal) {
-  return controller.request({ cwd: "C:/workbench", harness: "codex", scopes, threadId }, signal);
-}
-
-test("a state handoff from the previous controller generation starts with no hard reload pending", () => {
-  const legacyState = {
-    activeBatch: null,
-    eligibilityChanged: false,
-    waiters: new Map(),
-  } as unknown as WorkbenchOrchestratorReloadControllerState;
+test("all selects live dirt while destructive scopes require unsafe or an explicit selection", () => {
   const controller = new WorkbenchOrchestratorReloadController({
+    dirt: dirtStub({ dirty: [
+      { destructive: false, scope: "server:core" },
+      { destructive: true, scope: "harness:codex" },
+    ] }),
     executeBatch: async () => undefined,
-    initialState: legacyState,
-    listClaims: async () => [],
-    listScopes,
   });
 
-  assert.equal(controller.isHardReloadPending(), false);
-  assert.equal(legacyState.hardReloadPhase, "idle");
+  assert.deepEqual(controller.resolveSelections({ all: true }, "cli"), ["server:core"]);
+  assert.deepEqual(controller.resolveSelections({ all: true, unsafe: true }, "cli"), ["server:core", "harness:codex"]);
+  assert.deepEqual(controller.resolveSelections({ scopes: ["harness:codex"] }, "cli"), ["harness:codex"]);
+  assert.deepEqual(controller.resolveSelections({ all: true, scopes: ["server:process"] }, "operator"), ["server:process"]);
+  assert.deepEqual(new WorkbenchOrchestratorReloadController({ dirt: dirtStub({}), executeBatch: async () => undefined }).resolveSelections({ all: true }, "cli"), []);
 });
 
-test("a useful partial batch satisfies all matching waiters and preserves the remaining request", async () => {
-  let claims = [
-    claim("one", ["client:all", "server:core"]),
-    claim("two", ["client:all"]),
-    claim("logic-worker", ["server:core"]),
-  ];
-  const batches: OrchestratorReloadScope[][] = [];
+test("successful and failed user reloads advance dirt through one lifecycle owner", async () => {
+  const events: string[] = [];
   const controller = new WorkbenchOrchestratorReloadController({
-    executeBatch: async (scopes) => { batches.push(scopes); },
-    listClaims: async () => claims,
-    listScopes,
-  });
-
-  let firstSettled = false;
-  const first = request(controller, "one", ["client:all", "server:core"]).finally(() => { firstSettled = true; });
-  await Promise.resolve();
-  assert.deepEqual(batches, []);
-
-  const second = request(controller, "two", ["client:all"]);
-  assert.deepEqual((await second).requestedScopes, ["client:all"]);
-  assert.deepEqual(batches, [["client:all"]]);
-  assert.equal(firstSettled, false);
-
-  claims = claims.map((entry) => entry.threadId === "logic-worker" ? { ...entry, lifecycleKind: "completed" } : entry);
-  controller.notifyEligibilityChanged();
-  assert.deepEqual((await first).requestedScopes, ["client:all", "server:core"]);
-  assert.deepEqual(batches, [["client:all"], ["server:core"]]);
-});
-
-test("needs-attention holders block while completed and stopped holders are safe", async () => {
-  for (const lifecycleKind of ["needsAttention", "working"] as const) {
-    let claims = [claim("caller", ["server:mcp"]), claim("holder", ["server:mcp"], lifecycleKind)];
-    const executed = deferred<void>();
-    const controller = new WorkbenchOrchestratorReloadController({
-      executeBatch: async () => executed.resolve(),
-      listClaims: async () => claims,
-      listScopes,
-    });
-    let settled = false;
-    const pending = request(controller, "caller", ["server:mcp"]).finally(() => { settled = true; });
-    await Promise.resolve();
-    assert.equal(settled, false);
-    claims = claims.map((entry) => entry.threadId === "holder" ? { ...entry, lifecycleKind: "stopped" } : entry);
-    controller.notifyEligibilityChanged();
-    await executed.promise;
-    assert.equal((await pending).state, "succeeded");
-  }
-});
-
-test("cancellation removes a waiter without cancelling an executing batch", async () => {
-  const executing = deferred<void>();
-  const release = deferred<void>();
-  const abort = new AbortController();
-  const controller = new WorkbenchOrchestratorReloadController({
-    executeBatch: async () => { executing.resolve(); await release.promise; },
-    listClaims: async () => [claim("caller", ["server:codex"])],
-    listScopes,
-  });
-  const pending = request(controller, "caller", ["server:codex"], abort.signal);
-  await executing.promise;
-  abort.abort(new Error("caller left"));
-  await assert.rejects(pending, /caller left/u);
-  release.resolve();
-});
-
-test("cancellation during claim validation prevents reload waiter admission", async () => {
-  const claimReadStarted = deferred<void>();
-  const claims = deferred<WorkbenchReloadScopeClaim[]>();
-  const batches: OrchestratorReloadScope[][] = [];
-  const abort = new AbortController();
-  const controller = new WorkbenchOrchestratorReloadController({
-    executeBatch: async (scopes) => { batches.push(scopes); },
-    listClaims: async () => {
-      claimReadStarted.resolve();
-      return await claims.promise;
-    },
-    listScopes,
-  });
-
-  const pending = request(controller, "caller", ["server:mcp"], abort.signal);
-  await claimReadStarted.promise;
-  abort.abort(new Error("user steer interrupted reload"));
-  claims.resolve([claim("caller", ["server:mcp"])]);
-
-  await assert.rejects(pending, /user steer interrupted reload/u);
-  assert.deepEqual(batches, []);
-});
-
-test("a failed batch rejects dependent waiters but leaves disjoint work eligible", async () => {
-  let claims = [
-    claim("logic", ["server:core"]),
-    claim("next", ["client:all"]),
-    claim("next-worker", ["client:all"]),
-  ];
-  const batches: OrchestratorReloadScope[][] = [];
-  const controller = new WorkbenchOrchestratorReloadController({
+    dirt: dirtStub({ events }),
     executeBatch: async (scopes) => {
-      batches.push(scopes);
-      if (scopes.includes("server:core")) throw new Error("logic reload failed");
+      events.push(`execute:${scopes.join(",")}`);
+      if (scopes.includes("server:mcp")) throw new Error("reload failed");
     },
-    listClaims: async () => claims,
-    listScopes,
   });
-  const failed = request(controller, "logic", ["server:core"]);
-  const disjoint = request(controller, "next", ["client:all"]);
-  await assert.rejects(failed, /logic reload failed/u);
 
-  claims = claims.map((entry) => entry.threadId === "next-worker" ? { ...entry, lifecycleKind: "completed" } : entry);
-  controller.notifyEligibilityChanged();
-  assert.equal((await disjoint).state, "succeeded");
-  assert.deepEqual(batches, [["server:core"], ["client:all"]]);
+  await controller.executeUnmanaged(["server:core"]);
+  assert.deepEqual(events, ["begin:server:core", "execute:server:core", "complete:server:core"]);
+  await assert.rejects(controller.executeUnmanaged(["server:mcp"]), /reload failed/u);
+  assert.deepEqual(events.slice(-3), ["begin:server:mcp", "execute:server:mcp", "fail:reload failed"]);
+  await assert.rejects(controller.request(), /user's decision/u);
 });
 
-test("admission distinguishes missing path mappings from missing active arc ownership", async () => {
-  const controller = new WorkbenchOrchestratorReloadController({
-    executeBatch: async () => undefined,
-    listClaims: async () => [claim("caller", ["server:mcp"]), claim("unmapped", [])],
-    listScopes,
+test("a replacement controller completes an in-flight batch without executing it twice", async () => {
+  const events: string[] = [];
+  const execution = deferred<void>();
+  const first = new WorkbenchOrchestratorReloadController({
+    dirt: dirtStub({ events }),
+    executeBatch: async () => await execution.promise,
   });
-  await assert.rejects(request(controller, "caller", ["client:all"]), /claimed paths do not map/u);
-  await assert.rejects(request(controller, "unmapped", ["server:codex"]), /claimed paths do not map/u);
-  await assert.rejects(request(controller, "missing", ["server:mcp"]), /must own an active Git arc/u);
+  const pending = first.executeUnmanaged(["server:core"]);
+  await Promise.resolve();
+  const state = first.detachForReload();
+  execution.resolve();
+  await pending;
+  assert.deepEqual(events, ["begin:server:core"]);
+
+  const replacement = new WorkbenchOrchestratorReloadController({
+    dirt: dirtStub({ events }), executeBatch: async () => { throw new Error("must not execute again"); }, initialState: state,
+  });
+  replacement.completeTransferredBatchIfPresent();
+  await Promise.resolve();
+  assert.deepEqual(events, ["begin:server:core", "complete:server:core"]);
 });
 
-test("hard reload notifies every owner together and exits when they settle", async () => {
-  const release = deferred<void>();
-  const effects: string[] = [];
-  let exits = 0;
+test("hard reload notifies owners before one process exit", async () => {
+  const events: string[] = [];
+  const deadline = deferred<void>();
   const controller = new WorkbenchOrchestratorReloadController({
     executeBatch: async () => undefined,
     hardReload: {
-      exitProcess: () => { exits += 1; },
-      notifications: () => [
-        { name: "first", notify: () => { effects.push("first"); } },
-        { name: "second", notify: async () => { effects.push("second"); await release.promise; } },
-      ],
+      createDeadline: () => ({ cancel: () => events.push("cancel"), expired: deadline.promise }),
+      exitProcess: () => events.push("exit"),
+      notifications: () => [{ name: "server", notify: () => { events.push("notify"); } }],
     },
-    listClaims: async () => [],
-    listScopes,
   });
-
   controller.admitHardReload();
-  const stopping = controller.beginHardReload();
-  assert.deepEqual(effects, ["first", "second"]);
-  assert.equal(exits, 0);
-  release.resolve();
-  await stopping;
-  assert.equal(exits, 1);
-});
-
-test("hard reload deadline bypasses a stuck partial reload and forces exit", async () => {
-  const executing = deferred<void>();
-  const release = deferred<void>();
-  const never = deferred<void>();
-  const deadline = deadlineHarness();
-  let exits = 0;
-  const controller = new WorkbenchOrchestratorReloadController({
-    executeBatch: async () => { executing.resolve(); await release.promise; },
-    hardReload: {
-      createDeadline: deadline.create,
-      exitProcess: () => { exits += 1; },
-      notifications: () => [{ name: "stuck", notify: async () => await never.promise }],
-      timeoutMs: 5_000,
-    },
-    listClaims: async () => [claim("caller", ["server:mcp"])],
-    listScopes,
-  });
-  const partialReload = request(controller, "caller", ["server:mcp"]);
-  await executing.promise;
-
-  controller.admitHardReload();
-  const stopping = controller.beginHardReload();
-  await assert.rejects(partialReload, /hard reloading/u);
-  deadline.expire();
-  await stopping;
-  assert.equal(exits, 1);
-  release.resolve();
+  await controller.beginHardReload();
+  assert.deepEqual(events, ["notify", "cancel", "exit"]);
 });

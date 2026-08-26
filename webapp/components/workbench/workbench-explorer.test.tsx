@@ -99,6 +99,20 @@ test("live sidebar state subscribes below the Workbench root", async () => {
   assert.doesNotMatch(clientSource, /threadSidebar: threadSidebarSnapshot/u);
 });
 
+test("reload dirt uses the pushed sidebar store without browser polling", async () => {
+  const [workbenchSource, reloadSource] = await Promise.all([
+    readFile(new URL("../workbench.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./ReloadNecessary.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(workbenchSource, /<ReloadNecessary store=\{threadSidebarStore\}/u);
+  assert.match(reloadSource, /useSyncExternalStore\(store\?\.subscribe/u);
+  assert.match(reloadSource, /dirt\.dirtyScopes\.map/u);
+  assert.match(reloadSource, /holdToConfirmMs=\{getReloadScopeHoldMs\(scope\)\}/u);
+  assert.match(reloadSource, /holdToConfirmMs=\{getReloadAllHoldMs\(dirt\.dirtyScopes\)\}/u);
+  assert.doesNotMatch(reloadSource, /setInterval|orchestrator\/dirt/u);
+  assert.doesNotMatch(workbenchSource, /\/api\/orchestrator\/dirt/u);
+});
+
 test("thread context actions group priority checkboxes and canonical status radios", async () => {
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");
   const openIndex = sidebarSource.indexOf('id: "open"');

@@ -72,7 +72,7 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
 ].join("\n");
 
 const COMMAND_DESCRIPTORS: readonly WorkbenchAgentCliCommandDescriptor[] = Object.freeze(
-  listWorkbenchAgentCommands().map(({ description, usage, words }) => Object.freeze({
+  listWorkbenchAgentCommands().filter((command) => !command.hideFromRootHelp).map(({ description, usage, words }) => Object.freeze({
     description,
     usage,
     words: Object.freeze([...words]),
@@ -81,7 +81,7 @@ const COMMAND_DESCRIPTORS: readonly WorkbenchAgentCliCommandDescriptor[] = Objec
 
 export function listWorkbenchAgentCliCommandDescriptors(catalog: readonly OrchestratorReloadScopeDescriptor[] = []) {
   return catalog.length
-    ? listWorkbenchAgentCommands(catalog, "cli").map(({ description, usage, words }) => ({ description, usage, words }))
+    ? listWorkbenchAgentCommands(catalog, "cli").filter((command) => !command.hideFromRootHelp).map(({ description, usage, words }) => ({ description, usage, words }))
     : COMMAND_DESCRIPTORS;
 }
 
@@ -91,7 +91,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand",
   "git add", "git unstage", "git commit", "git arc plan", "git arc start", "git arc continue", "git arc add",
   "git arc mv", "git arc remove", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc restore",
-  "browse run", "browse raw", "browse sessions", "browse stop", "browse forget", "orchestrator reload",
+  "browse run", "browse raw", "browse sessions", "browse stop", "browse forget",
 ] as const;
 
 const HELP_GROUPS: readonly HelpGroupDefinition[] = [
@@ -152,15 +152,14 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "browse", usage: "wb browse <command> [options]", words: ["browse"],
   },
   {
-    key: "orchestrator",
+    key: "reload",
     footer: [
       "Group any same-namespace scopes with +.",
-      "Example: wb orchestrator reload --server:core+browse+mcp",
-      "At least one option is required.",
-      "Use the narrowest applicable scope.",
+      "Example: wb reload --server:core+browse+mcp",
+      "reloading is the responsibility of the user. if you intend to do a reload, you should be operating with the user's permission.",
     ].join("\n"),
-    usage: "wb orchestrator reload --<scope> [--<scope> ...]",
-    words: ["orchestrator"],
+    usage: "wb reload [--all [--unsafe] | --<scope> ... | --hard]",
+    words: ["reload"],
   },
 ];
 
@@ -170,6 +169,7 @@ function orderCommands(commands: readonly WorkbenchAgentCommandDefinition[], ord
   return [...commands].sort((left, right) => (indexes.get(commandKey(left)) ?? Number.MAX_SAFE_INTEGER) - (indexes.get(commandKey(right)) ?? Number.MAX_SAFE_INTEGER));
 }
 function renderRootHelp(commands = listWorkbenchAgentCommands()) {
+  commands = commands.filter((command) => !command.hideFromRootHelp);
   commands = orderCommands(commands, ROOT_HELP_COMMAND_ORDER);
   const helpGroups = HELP_GROUPS.filter((group) => commands.some((command) => command.helpGroups.includes(group.key)));
   return [
@@ -180,15 +180,15 @@ function renderRootHelp(commands = listWorkbenchAgentCommands()) {
   ].join("\n");
 }
 function renderReloadOptions(catalog: readonly OrchestratorReloadScopeDescriptor[], includeUnsafe: boolean) {
-  const regular = catalog.filter((entry) => entry.access === "agent");
-  const restricted = catalog.filter((entry) => entry.access !== "agent");
+  const regular = catalog.filter((entry) => !entry.destructive && entry.scope !== "server:process");
+  const destructive = catalog.filter((entry) => entry.destructive && entry.scope !== "server:process");
   return [
     "Options:",
-    "  --all                         Reload every active safe source scope.",
+    "  --all                         Reload every dirty non-destructive scope.",
+    "  --all --unsafe                Include dirty destructive scopes.",
+    "  --hard                        Restart the complete orchestrator process.",
     ...regular.map((entry) => `  --${entry.scope.padEnd(28)} ${entry.description}`),
-    ...(includeUnsafe && restricted.length ? ["", "Restricted options:", ...restricted.map((entry) => entry.scope === "server:process"
-      ? `  --hard (${entry.scope})${" ".repeat(Math.max(1, 18 - entry.scope.length))}${entry.description}`
-      : `  --${entry.scope.padEnd(28)} ${entry.description}`)] : []),
+    ...(destructive.length ? ["", "Destructive scopes:", ...destructive.map((entry) => `  --${entry.scope.padEnd(28)} ${entry.description}`)] : []),
   ].join("\n");
 }
 function renderGroupHelp(
@@ -198,7 +198,7 @@ function renderGroupHelp(
   reloadCatalog: readonly OrchestratorReloadScopeDescriptor[] = [],
 ) {
   const commands = orderCommands(allCommands.filter((command) => command.helpGroups.includes(group.key)), group.commandOrder ?? []);
-  const commandSection = group.key === "orchestrator" ? renderReloadOptions(reloadCatalog, includeUnsafe) : group.options ?? [
+  const commandSection = group.key === "reload" ? renderReloadOptions(reloadCatalog, includeUnsafe) : group.options ?? [
     "Commands:",
     ...commands.flatMap((command, index) => [...(index ? [""] : []), `  ${command.usage}`, `    ${command.description}`]),
   ].join("\n");

@@ -28,6 +28,7 @@ export type WorkbenchAgentCommandResponseKind =
   | "git-arc-start"
   | "json"
   | "native"
+  | "reload-dirt"
   | "orchestrator-reload"
   | "subagent-create"
   | "subagent-list"
@@ -68,6 +69,7 @@ export interface WorkbenchAgentCommandDefinition {
   description: string;
   effects: WorkbenchAgentCommandEffects;
   hideFromMcp?: boolean;
+  hideFromRootHelp?: boolean;
   helpGroups: readonly string[];
   inputSchema: z.ZodType;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
@@ -82,6 +84,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   description: string;
   effects?: WorkbenchAgentCommandEffects;
   hideFromMcp?: boolean;
+  hideFromRootHelp?: boolean;
   helpGroups: readonly string[];
   inputSchema: TSchema;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
@@ -104,6 +107,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     description: definition.description,
     effects: definition.effects ?? {},
     hideFromMcp: definition.hideFromMcp,
+    hideFromRootHelp: definition.hideFromRootHelp,
     helpGroups: definition.helpGroups,
     inputSchema: definition.inputSchema,
     mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,

@@ -6,7 +6,7 @@ import { WORKBENCH_BROWSE_COMMANDS } from "./browse-command-definitions";
 import { WORKBENCH_GIT_ARC_COMMANDS } from "./git-arc-command-definitions";
 import { WORKBENCH_GIT_COMMANDS } from "./git-command-definitions";
 import type { OrchestratorReloadScopeDescriptor } from "../orchestrator-reload";
-import { createWorkbenchOrchestratorCommands } from "./orchestrator-command-definitions";
+import { createWorkbenchReloadCommands } from "./reload-command-definitions";
 import { WORKBENCH_RIPGREP_COMMANDS } from "./ripgrep-command-definition";
 import { WORKBENCH_SUBAGENT_COMMANDS } from "./subagent-command-definitions";
 import { WORKBENCH_THREAD_COMMANDS } from "./thread-command-definitions";
@@ -25,5 +25,5 @@ export function listWorkbenchAgentCommands(
   catalog: readonly OrchestratorReloadScopeDescriptor[] = [],
   access: OrchestratorReloadScopeDescriptor["access"] = "agent",
 ) {
-  return [...WORKBENCH_AGENT_COMMANDS, ...createWorkbenchOrchestratorCommands(catalog, access)];
+  return [...WORKBENCH_AGENT_COMMANDS, ...createWorkbenchReloadCommands(catalog, access)];
 }

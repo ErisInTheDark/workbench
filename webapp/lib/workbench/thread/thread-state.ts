@@ -277,12 +277,23 @@ export const WorkbenchThreadSidebarEntrySchema = z.discriminatedUnion("entryKind
 export type WorkbenchThreadSidebarEntry = z.infer<typeof WorkbenchThreadSidebarEntrySchema>;
 export type WorkbenchTopLevelThreadSidebarEntry = z.infer<typeof TopLevelEntrySchema>;
 
+export const WorkbenchReloadDirtSnapshotSchema = z.object({
+  dirtyScopes: z.array(z.object({
+    description: z.string(),
+    destructive: z.boolean(),
+    scope: z.string(),
+  }).strict()),
+  error: z.string().max(500).nullable(),
+  pendingScopes: z.array(z.string()),
+}).strict();
+
 export const WorkbenchThreadSidebarSnapshotSchema = z.object({
   displayOrder: WorkbenchThreadDisplayOrderSchema.optional(),
   entries: z.array(WorkbenchThreadSidebarEntrySchema),
   error: z.string().max(500).nullable(),
   freshness: z.enum(["loading", "fresh", "partial"]),
   projectId: z.string().min(1),
+  reloadDirt: WorkbenchReloadDirtSnapshotSchema.optional(),
   revision: z.number().int().nonnegative(),
 }).strict();
 export type WorkbenchThreadSidebarSnapshot = z.infer<typeof WorkbenchThreadSidebarSnapshotSchema>;

@@ -99,11 +99,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.match(planProperties.paths?.description ?? "", /sibling-claimed files.*does not claim/u);
     assert.match(planProperties.adoptPaths?.description ?? "", /dirty unclaimed work.*Never use for sibling-owned changes/u);
     assert.match(planProperties.adoptPaths?.description ?? "", /may overlap ordinary scope.*minimal claim/u);
-    const reload = inventory.tools.find(({ name }) => name === "orchestrator_reload");
-    assert.ok(reload);
-    const reloadScopes = reload.inputSchema.properties?.scopes as { items?: { enum?: string[] } } | undefined;
-    assert.equal(reloadScopes?.items?.enum?.includes("server:process"), false);
-    assert.equal(reloadScopes?.items?.enum?.includes("server:mcp"), true);
+    assert.equal(inventory.tools.some(({ name }) => name === "orchestrator_reload" || name === "reload" || name === "dirt"), false);
     const resume = inventory.tools.find(({ name }) => name === "thread_resume");
     assert.ok(resume);
     assert.deepEqual(resume.inputSchema.properties, {});
@@ -338,7 +334,7 @@ test("thread steer interruption reaches declared long waits but preserves ordina
   const controller = new WorkbenchAgentMcpController({
     executeCommand: async (request, signal) => await new Promise<Response>((resolve, reject) => {
       executions.set(request.responseKind, { resolve, signal });
-      if (executions.size === 3) allStarted.resolve();
+      if (executions.size === 2) allStarted.resolve();
       signal.addEventListener("abort", () => reject(signal.reason), { once: true });
     }),
     getReloadScopeCatalog: () => reloadCatalog,
@@ -355,11 +351,6 @@ test("thread steer interruption reaches declared long waits but preserves ordina
       arguments: { names: ["momo"] },
       name: "subagent_wait",
     });
-    const reloadCall = client.callTool({
-      _meta: { threadId: "thread-1" },
-      arguments: { scopes: ["server:mcp"] },
-      name: "orchestrator_reload",
-    });
     const titleCall = client.callTool({
       _meta: { threadId: "thread-1" },
       arguments: {},
@@ -367,12 +358,10 @@ test("thread steer interruption reaches declared long waits but preserves ordina
     });
     await allStarted.promise;
 
-    assert.equal(requestRegistry.interruptThreadWaits("thread-1"), 2);
-    const [subagentResult, reloadResult] = await Promise.all([subagentCall, reloadCall]);
+    assert.equal(requestRegistry.interruptThreadWaits("thread-1"), 1);
+    const subagentResult = await subagentCall;
     assert.equal(subagentResult.isError, true);
-    assert.equal(reloadResult.isError, true);
     assert.match(responseText(subagentResult), /interrupted by a user steer/u);
-    assert.match(responseText(reloadResult), /interrupted by a user steer/u);
     assert.equal(executions.get("thread-title-get")?.signal.aborted, false);
 
     executions.get("thread-title-get")?.resolve(Response.json({ title: "still running" }));

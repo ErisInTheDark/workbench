@@ -309,7 +309,6 @@ test("provider reconciliation starts concurrently and publishes each successful 
       intentName: lifecycleState.intentName,
       phase: "active",
       proposals: lifecycleState.proposals,
-      reloadScopes: ["server:mcp"],
       updatedAt: lifecycleState.updatedAt,
     },
     gitArcPlan: {
@@ -317,7 +316,6 @@ test("provider reconciliation starts concurrently and publishes each successful 
       intentDescription: planState.intentDescription,
       intentName: planState.intentName,
       scopePaths: planState.scopePaths,
-      reloadScopes: ["server:core"],
       updatedAt: planState.updatedAt,
     },
     lifecycleListCalls: 2,
@@ -331,7 +329,6 @@ test("provider reconciliation starts concurrently and publishes each successful 
     intentName: lifecycleState.intentName,
     phase: "active",
     proposals: lifecycleState.proposals,
-    reloadScopes: ["server:mcp"],
     updatedAt: lifecycleState.updatedAt,
   });
   assert.deepEqual(refreshedParent?.entryKind === "thread" ? refreshedParent.gitArcPlan : null, {
@@ -339,7 +336,6 @@ test("provider reconciliation starts concurrently and publishes each successful 
     intentDescription: planState.intentDescription,
     intentName: planState.intentName,
     scopePaths: planState.scopePaths,
-    reloadScopes: ["server:core"],
     updatedAt: planState.updatedAt,
   });
   await feature.dispose();

@@ -6,7 +6,6 @@
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, status, subagent, and reload commands. Keywords: workbench, cli, title, status, subagent, reload.
  */
 import type { CommandAction } from "../../../codex/generated/app-server/v2/CommandAction";
-import { expandOrchestratorReloadScopes } from "../../orchestrator-reload";
 
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
@@ -216,6 +215,17 @@ function semanticMatcherResult(ongoing: string, completed: string) {
   });
 }
 
+function hiddenCommandResult(ongoing: string, completed: string) {
+  return CommandMatcher.Result({
+    hideCommandCwd: true,
+    hideCommandOutput: true,
+    ongoingSummaryParts: [CommandMatcher.Text(ongoing)],
+    remainingCommand: null,
+    stop: true,
+    summaryParts: [CommandMatcher.Text(completed)],
+  });
+}
+
 function subagentCountLabel(count: number) {
   return count === 1 ? "subagent" : `${count} subagents`;
 }
@@ -271,30 +281,23 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     },
   }),
   CommandMatcher({
-    id: "workbench-cli.orchestrator-reload",
+    id: "workbench-cli.reload",
     match: ({ stage }) => {
       const normalized = stage.text.trim();
-      if (!/^wb(?:\.cmd)?\s+orchestrator\s+reload(?:\s|$)/iu.test(normalized)) {
-        return null;
-      }
+      if (!/^wb(?:\.cmd)?\s+reload(?:\s|$)/iu.test(normalized)) return null;
       const selections = [...normalized.matchAll(/(?:^|\s)--([a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\+[a-z][a-z0-9-]*)*)(?=\s|$)/gu)]
         .map((match) => match[1]);
-      const scopes = (() => {
-        try {
-          return expandOrchestratorReloadScopes([
-            ...(/(?:^|\s)--all(?:\s|$)/u.test(normalized) ? [] : []),
-            ...selections,
-          ]);
-        } catch {
-          return [];
-        }
-      })();
-      return getWorkbenchCommandRendering("orchestrator_reload", {
-        all: /(?:^|\s)--all(?:\s|$)/u.test(normalized),
-        hard: /(?:^|\s)--hard(?:\s|$)/u.test(normalized),
-        scopes,
-      })?.result ?? null;
+      const label = /(?:^|\s)--hard(?:\s|$)/u.test(normalized)
+        ? "Workbench process"
+        : selections.length ? selections.join(", ") : "dirty Workbench scopes";
+      return hiddenCommandResult(`Reloading ${label}`, `Reloaded ${label}`);
     },
+  }),
+  CommandMatcher({
+    id: "workbench-cli.dirt",
+    match: ({ stage, summaryParts }) => summaryParts.length || !/^wb(?:\.cmd)?\s+dirt(?:\s|$)/iu.test(stage.text.trim())
+      ? null
+      : hiddenCommandResult("Checking reload dirt", "Checked reload dirt"),
   }),
   CommandMatcher({
     id: "workbench-cli.subagent",
