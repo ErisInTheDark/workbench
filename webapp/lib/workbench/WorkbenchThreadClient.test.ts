@@ -349,7 +349,7 @@ test("selected active Codex steers settle at admission and canonical notificatio
   }
 });
 
-test("cumulative file-change patches stay live beyond an early large diff", async () => withClient(async (client, socket) => {
+test("cumulative file-change patches dedupe repeated snapshots and yield to canonical lifecycle items", async () => withClient(async (client, socket) => {
   client.selectThreadPayload(activeThread());
 
   const initialDiff = `@@ -0,0 +1,240 @@\n${Array.from({ length: 240 }, (_, index) => `+initial line ${index}`).join("\n")}`;
@@ -366,11 +366,12 @@ test("cumulative file-change patches stay live beyond an early large diff", asyn
   assert.equal(firstSnapshotItem.changes[0]?.diff, initialDiff);
 
   const grownDiff = `${initialDiff}\n+later streamed line`;
+  const grownChanges = [
+    { ...initialChange, diff: grownDiff },
+    { diff: "+second file", kind: { type: "add" as const }, path: "src/second.ts" },
+  ];
   socket.notify("item/fileChange/patchUpdated", {
-    changes: [
-      { ...initialChange, diff: grownDiff },
-      { diff: "+second file", kind: { type: "add" }, path: "src/second.ts" },
-    ],
+    changes: grownChanges,
     itemId: "live-file-change",
     threadId: "thread",
     turnId: "turn",
@@ -382,8 +383,25 @@ test("cumulative file-change patches stay live beyond an early large diff", asyn
   assert.equal(grownSnapshotItem.changes[0]?.diff, grownDiff);
   assert.equal(grownSnapshotItem.changes[1]?.path, "src/second.ts");
 
+  let publishedSnapshots = 0;
+  const unsubscribe = client.subscribe(() => {
+    publishedSnapshots += 1;
+  });
+  socket.notify("item/fileChange/patchUpdated", {
+    changes: grownChanges,
+    itemId: "live-file-change",
+    threadId: "thread",
+    turnId: "turn",
+  });
+  unsubscribe();
+  assert.equal(publishedSnapshots, 0);
+
+  const canonicalChanges = [
+    { ...initialChange, diff: `${grownDiff}\n+canonical line`, path: "C:/repo/src/first.ts" },
+    { diff: "+second canonical file", kind: { type: "add" as const }, path: "C:/repo/src/second.ts" },
+  ];
   socket.notify("item/started", {
-    item: { changes: [], id: "live-file-change", status: "inProgress", type: "fileChange" },
+    item: { changes: canonicalChanges, id: "live-file-change", status: "inProgress", type: "fileChange" },
     threadId: "thread",
     turnId: "turn",
   });
@@ -391,11 +409,10 @@ test("cumulative file-change patches stay live beyond an early large diff", asyn
   assert.equal(reconciledItems?.length, 1);
   assert.equal(reconciledItems?.[0]?.type, "fileChange");
   if (reconciledItems?.[0]?.type === "fileChange") {
-    assert.equal(reconciledItems[0].changes[0]?.diff, grownDiff);
-    assert.equal(reconciledItems[0].changes[1]?.path, "src/second.ts");
+    assert.deepEqual(reconciledItems[0].changes, canonicalChanges);
   }
 
-  const completedChange = { ...initialChange, diff: `${grownDiff}\n+completed line` };
+  const completedChange = { ...canonicalChanges[0], diff: `${canonicalChanges[0].diff}\n+completed line` };
   socket.notify("item/completed", {
     item: { changes: [completedChange], id: "live-file-change", status: "completed", type: "fileChange" },
     threadId: "thread",
@@ -407,6 +424,47 @@ test("cumulative file-change patches stay live beyond an early large diff", asyn
     assert.equal(completedItem.status, "completed");
     assert.equal(completedItem.changes[0]?.diff, completedChange.diff);
   }
+}));
+
+test("empty file-change starts preserve a provisional patch snapshot", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread());
+  const provisionalChange = { diff: "+preview", kind: { type: "add" as const }, path: "src/preview.ts" };
+  socket.notify("item/fileChange/patchUpdated", {
+    changes: [provisionalChange],
+    itemId: "live-file-change",
+    threadId: "thread",
+    turnId: "turn",
+  });
+  socket.notify("item/started", {
+    item: { changes: [], id: "live-file-change", status: "inProgress", type: "fileChange" },
+    threadId: "thread",
+    turnId: "turn",
+  });
+
+  const item = client.getSnapshot().currentThread?.turns[0]?.items.find((candidate) => candidate.id === "live-file-change");
+  assert.equal(item?.type, "fileChange");
+  if (item?.type === "fileChange") {
+    assert.deepEqual(item.changes, [provisionalChange]);
+  }
+}));
+
+test("a later lifecycle item discards an abandoned provisional file change", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread());
+  socket.notify("item/fileChange/patchUpdated", {
+    changes: [{ diff: "+never applied", kind: { type: "add" }, path: "src/abandoned.ts" }],
+    itemId: "abandoned-file-change",
+    threadId: "thread",
+    turnId: "turn",
+  });
+  socket.notify("item/started", {
+    item: { content: [], id: "later-reasoning", summary: [], type: "reasoning" },
+    threadId: "thread",
+    turnId: "turn",
+  });
+
+  const items = client.getSnapshot().currentThread?.turns[0]?.items ?? [];
+  assert.equal(items.some((item) => item.id === "abandoned-file-change"), false);
+  assert.equal(items.some((item) => item.id === "later-reasoning"), true);
 }));
 
 test("differing acknowledgement runs the preserved tail once and tail failure stays admitted", async () => withClient(async (client, socket) => {

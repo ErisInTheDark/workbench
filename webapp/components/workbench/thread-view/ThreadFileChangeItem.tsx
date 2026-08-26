@@ -7,7 +7,7 @@
  */
 "use client";
 
-import { Fragment, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { WorkbenchFileChangeItem } from "../../../lib/workbench/thread/workbench-file-change";
@@ -292,8 +292,8 @@ function ThreadFileChangeRows ({
     };
   });
 
-  return parsedChanges.map((change, index) => {
-    const key = `${change.sourceItemId}:change:${change.sourceChangeIndex}:${change.change.path}:${index}`;
+  return parsedChanges.map((change) => {
+    const key = `${change.sourceItemId}:change:${change.displayPath}:${change.movePathDisplay ?? ""}`;
     const summary = <ThreadFileChangeSummary parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />;
     return change.detailsAvailable ? (
       <ThreadDisclosure
@@ -361,7 +361,7 @@ export default function ThreadFileChangeItem ({
   return (
     <div className="space-y-1.5 py-2">
       {items.map((item) => (
-        <Fragment key={item.id}>
+        <div className={item.status === "completed" ? "space-y-1.5" : "space-y-0.5"} key={item.id}>
           <ThreadFileChangeRows
             changes={item.changes.map((change, sourceChangeIndex) => ({
               change,
@@ -384,7 +384,7 @@ export default function ThreadFileChangeItem ({
             workspaceRoots={workspaceRoots}
           />
           <ThreadFileChangeOutcome item={item} />
-        </Fragment>
+        </div>
       ))}
       {!hasRows ? (
         <p className="m-0 text-[0.92em] leading-[1.6] text-muted">No changed files captured.</p>

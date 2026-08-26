@@ -1920,7 +1920,7 @@ function WorkbenchThreadClient(
     ) {
       return {
         ...incomingItem,
-        changes: liveItem.changes,
+        changes: incomingItem.changes.length ? incomingItem.changes : liveItem.changes,
       };
     }
 
@@ -3663,14 +3663,14 @@ function WorkbenchThreadClient(
     turnId: string,
     itemId: string,
     createItem: () => ThreadItem,
-    updater: (item: ThreadItem) => ThreadItem | null,
+    updater: (item: ThreadItem, isExisting: boolean) => ThreadItem | null,
   ) {
     const itemKey = getThreadItemKey(turnId, itemId);
     ensureTurnForStreamingDelta(turnId);
     return updateTurnItems(turnId, (items) => {
       const itemIndex = items.findIndex((item) => item.id === itemId);
       if (itemIndex === -1) {
-        const nextItem = updater(createItem());
+        const nextItem = updater(createItem(), false);
         if (!nextItem) {
           return null;
         }
@@ -3685,7 +3685,7 @@ function WorkbenchThreadClient(
           return item;
         }
 
-        const nextItem = updater(item);
+        const nextItem = updater(item, true);
         if (!nextItem) {
           return item;
         }
@@ -3696,6 +3696,48 @@ function WorkbenchThreadClient(
 
       return updated ? nextItems : null;
     }, { pruneStreamingDuplicates: false });
+  }
+
+  function discardAbandonedStreamingFileChanges(turnId: string, incomingItemId: string) {
+    return updateTurnItems(turnId, (items) => {
+      const abandonedItemIds = items
+        .filter((item) => (
+          item.id !== incomingItemId
+          && item.type === "fileChange"
+          && item.status === "inProgress"
+          && streamingReconciler.hasClientCreatedItemKey(getThreadItemKey(turnId, item.id))
+        ))
+        .map((item) => item.id);
+      if (!abandonedItemIds.length) {
+        return null;
+      }
+
+      const abandonedItemIdSet = new Set(abandonedItemIds);
+      for (const itemId of abandonedItemIds) {
+        forgetStreamingItemKey(turnId, itemId);
+      }
+      return items.filter((item) => !abandonedItemIdSet.has(item.id));
+    }, { pruneStreamingDuplicates: false });
+  }
+
+  function areFileChangeSnapshotsEqual(
+    left: Extract<ThreadItem, { type: "fileChange" }>["changes"],
+    right: Extract<ThreadItem, { type: "fileChange" }>["changes"],
+  ) {
+    return left.length === right.length && left.every((change, index) => {
+      const candidate = right[index];
+      return candidate !== undefined
+        && change.path === candidate.path
+        && change.diff === candidate.diff
+        && change.kind.type === candidate.kind.type
+        && (
+          change.kind.type !== "update"
+          || (
+            candidate.kind.type === "update"
+            && change.kind.move_path === candidate.kind.move_path
+          )
+        );
+    });
   }
 
   function updateThreadItem(
@@ -3879,6 +3921,9 @@ function WorkbenchThreadClient(
         return upsertTurnMetadata(notification.params.turn);
       case "item/started":
       case "item/completed": {
+        const didDiscardAbandonedFileChanges = notification.method === "item/started"
+          ? discardAbandonedStreamingFileChanges(notification.params.turnId, notification.params.item.id)
+          : false;
         const didUpdateItem = upsertThreadItem(notification.params.turnId, notification.params.item);
         const timestamp = notification.method === "item/started"
           ? notification.params.startedAtMs
@@ -3891,7 +3936,7 @@ function WorkbenchThreadClient(
             timestamp,
           )
           : false;
-        return didUpdateItem || didUpdateTimeline;
+        return didDiscardAbandonedFileChanges || didUpdateItem || didUpdateTimeline;
       }
       case "item/agentMessage/delta":
         return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingAgentMessageItem(notification.params.itemId), (item) => (
@@ -3912,9 +3957,11 @@ function WorkbenchThreadClient(
             : null
         ));
       case "item/fileChange/patchUpdated":
-        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingFileChangeItem(notification.params.itemId), (item) => (
+        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingFileChangeItem(notification.params.itemId), (item, isExisting) => (
           item.type === "fileChange"
-            ? { ...item, changes: notification.params.changes }
+            ? isExisting && areFileChangeSnapshotsEqual(item.changes, notification.params.changes)
+              ? null
+              : { ...item, changes: notification.params.changes }
             : null
         ));
       case "item/reasoning/summaryPartAdded":
