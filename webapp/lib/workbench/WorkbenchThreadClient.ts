@@ -4615,7 +4615,7 @@ function WorkbenchThreadClient(
       const turnStartFence = captureThreadOperationFence(harness, resolvedThreadId, {
         selectionBound: sendOptions.selectThread !== false,
       });
-      const codexFirstTurnCollaborationMode = shouldBypassCodexDraftBootstrap && harness === "codex"
+      const codexCollaborationMode = harness === "codex"
         ? (() => {
           const collaborationModel = selectedModel ?? resumedThread.model;
           return collaborationModel
@@ -4630,7 +4630,7 @@ function WorkbenchThreadClient(
       try {
         turnStartResponse = await sendBridgeRequest<TurnStartResponse>(harness, {
           method: "turn/start",
-          ...(codexFirstTurnCollaborationMode
+          ...(codexCollaborationMode
             ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", resolvedThreadId, resumedThread.agentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
             : harness === "opencode"
             ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
@@ -4638,7 +4638,7 @@ function WorkbenchThreadClient(
           params: {
             ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
             ...(state.projectRootPath && harness !== "codex" ? { cwd: state.projectRootPath } : {}),
-            ...(codexFirstTurnCollaborationMode ? { collaborationMode: codexFirstTurnCollaborationMode } : {}),
+            ...(codexCollaborationMode ? { collaborationMode: codexCollaborationMode } : {}),
             input: normalizedInput,
             ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
             ...(selectedModel ? { model: selectedModel } : {}),

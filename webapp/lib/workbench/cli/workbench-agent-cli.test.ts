@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -794,12 +794,15 @@ test("keeps safe all dynamic and hides hard restart", async () => {
 });
 
 test("runs the native shell transport and preserves the server response", async () => {
+  const unusableTempPath = path.join(temporaryDirectoryPath, "not-a-directory");
+  await writeFile(unusableTempPath, "The shell transport must not use this as a temp directory.", "utf8");
+  const env = { ...process.env, TMPDIR: unusableTempPath, WORKBENCH_ORIGIN: origin };
   const result = await execFileAsync("bash", [
     shellSourcePath,
     "thread", "recall", "search", "--thread", "real-process", "--query", "needle", "--kind", "commentary",
   ], {
     cwd: temporaryDirectoryPath,
-    env: { ...process.env, WORKBENCH_ORIGIN: origin },
+    env,
   });
   assert.match(result.stdout, /"ok":true/u);
   assert.equal(result.stderr, "");
@@ -809,6 +812,19 @@ test("runs the native shell transport and preserves the server response", async 
     kinds: ["commentary"],
     query: "needle",
   });
+
+  await assert.rejects(
+    execFileAsync("bash", [shellSourcePath, "unsupported-command"], {
+      cwd: temporaryDirectoryPath,
+      env,
+    }),
+    (error: NodeJS.ErrnoException & { stderr?: string; stdout?: string }) => {
+      assert.equal(error.stdout, "");
+      assert.match(error.stderr ?? "", /Unsupported wb command: unsupported-command/u);
+      assert.doesNotMatch(error.stderr ?? "", /mktemp|workbench-agent-response/u);
+      return true;
+    },
+  );
 });
 
 test("streams hook stdin, preserves claim decisions, and allows transport failures", async () => {

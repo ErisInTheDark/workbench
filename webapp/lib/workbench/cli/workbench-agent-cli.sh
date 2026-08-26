@@ -23,21 +23,39 @@ case "$WORKBENCH_ORIGIN" in
     ;;
 esac
 
-response_file="$(mktemp "${TMPDIR:-/tmp}/workbench-agent-response.XXXXXX")" || exit 1
-cleanup() { rm -f -- "$response_file"; }
-trap cleanup EXIT
 allow_unavailable_claim_hook() {
   printf '%s\n' '{}'
+}
+
+route_response() {
+  local status_line header http_status
+  IFS= read -r status_line || return 1
+  status_line="${status_line%$'\r'}"
+  if ! [[ "$status_line" =~ ^HTTP/[0-9]+(\.[0-9]+)?[[:space:]]+([0-9]{3})([[:space:]]|$) ]]; then
+    return 1
+  fi
+  http_status="${BASH_REMATCH[2]}"
+
+  while IFS= read -r header; do
+    [[ -z "${header%$'\r'}" ]] && break
+  done
+
+  if [[ "$http_status" =~ ^2 ]]; then
+    cat
+    return
+  fi
+  cat >&2
+  return 1
 }
 
 curl_args=(
   --silent
   --show-error
   --no-buffer
-  --output "$response_file"
-  --write-out '%{http_code}'
+  --include
   --request POST
   --header 'Content-Type: application/x-www-form-urlencoded'
+  --header 'Expect:'
   --data-urlencode "cwd=$PWD"
   --data-urlencode "callerThreadId=${WORKBENCH_THREAD_ID:-${CODEX_THREAD_ID:-}}"
   --data-urlencode "callerHarness=${WORKBENCH_HARNESS:-codex}"
@@ -58,10 +76,11 @@ if (( hook_mode == 1 )); then
   curl_args+=(--data-urlencode "hookInput@-")
 fi
 
-http_status="$(curl "${curl_args[@]}" "$WORKBENCH_ORIGIN/orchestrator/agent-command")"
-curl_status=$?
+curl "${curl_args[@]}" "$WORKBENCH_ORIGIN/orchestrator/agent-command" | route_response
+pipeline_status=("${PIPESTATUS[@]}")
+curl_status="${pipeline_status[0]}"
+response_status="${pipeline_status[1]}"
 if (( curl_status != 0 )); then
-  [[ -s "$response_file" ]] && cat "$response_file" >&2
   if (( hook_mode == 1 )); then
     allow_unavailable_claim_hook
     exit 0
@@ -69,13 +88,8 @@ if (( curl_status != 0 )); then
   exit "$curl_status"
 fi
 
-if [[ "$http_status" =~ ^2 ]]; then
-  cat "$response_file"
-  exit 0
-fi
-cat "$response_file" >&2
-if (( hook_mode == 1 )); then
+if (( response_status != 0 && hook_mode == 1 )); then
   allow_unavailable_claim_hook
   exit 0
 fi
-exit 1
+exit "$response_status"

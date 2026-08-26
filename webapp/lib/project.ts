@@ -236,6 +236,14 @@ async function isDirectory(rootDir: string) {
   }
 }
 
+async function resolveCanonicalPath(filePath: string) {
+  try {
+    return await fs.realpath(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
 async function statMtimeMs(filePath: string) {
   try {
     return (await fs.stat(filePath)).mtimeMs;
@@ -321,6 +329,7 @@ async function getGitHeadActivityTimeMs(rootDir: string) {
 export interface ResolvedProjectRoot {
   id: string;
   name: string;
+  relativePath?: string;
   root: string;
   rootPath: string;
 }
@@ -333,28 +342,29 @@ export interface ResolvedProject {
   roots: ResolvedProjectRoot[];
 }
 
-function createSingleProjectRoot(rootDir: string): WorkbenchProjectRoot {
-  const name = path.basename(rootDir) || ".";
+function createSingleProjectRoot(discoveryRootDir: string, canonicalRootDir: string): WorkbenchProjectRoot {
+  const name = path.basename(discoveryRootDir) || ".";
   return {
     id: normalizeWorkspaceRootId(name),
     isPrimary: true,
     name,
-    relativePath: normalizeRelativePath(path.relative(projectsRoot, rootDir)) || ".",
-    rootPath: normalizeRelativePath(rootDir),
+    relativePath: normalizeRelativePath(path.relative(projectsRoot, discoveryRootDir)) || ".",
+    rootPath: normalizeRelativePath(canonicalRootDir),
   };
 }
 
 async function createProjectOption(rootDir: string): Promise<WorkbenchProjectOption> {
   const relativePath = normalizeRelativePath(path.relative(projectsRoot, rootDir)) || ".";
   const id = normalizeProjectId(relativePath) || ".";
-  const root = createSingleProjectRoot(rootDir);
+  const canonicalRootDir = await resolveCanonicalPath(rootDir);
+  const root = createSingleProjectRoot(rootDir, canonicalRootDir);
   return {
     id,
     kind: "git",
-    lastCommitTimeMs: await getGitHeadActivityTimeMs(rootDir),
+    lastCommitTimeMs: await getGitHeadActivityTimeMs(canonicalRootDir),
     name: path.basename(rootDir) || id,
     relativePath: id,
-    rootPath: normalizeRelativePath(rootDir),
+    rootPath: normalizeRelativePath(canonicalRootDir),
     roots: [root],
   };
 }
@@ -512,14 +522,15 @@ async function createWorkspaceProjectOption(workspacePath: string): Promise<Work
       continue;
     }
 
-    const resolvedRoot = path.resolve(workspaceDirectory, folder.path);
-    if (!await isDirectory(resolvedRoot)) {
+    const discoveryRoot = path.resolve(workspaceDirectory, folder.path);
+    if (!await isDirectory(discoveryRoot)) {
       continue;
     }
 
-    const name = getWorkspaceFolderName(folder, resolvedRoot);
+    const canonicalRoot = await resolveCanonicalPath(discoveryRoot);
+    const name = getWorkspaceFolderName(folder, discoveryRoot);
     const id = createUniqueWorkspaceRootId(name, usedRootIds);
-    const commitTimeMs = await getGitHeadActivityTimeMs(resolvedRoot);
+    const commitTimeMs = await getGitHeadActivityTimeMs(canonicalRoot);
     latestCommitTimeMs = commitTimeMs === null
       ? latestCommitTimeMs
       : latestCommitTimeMs === null
@@ -530,8 +541,8 @@ async function createWorkspaceProjectOption(workspacePath: string): Promise<Work
       id,
       isPrimary: roots.length === 0,
       name,
-      relativePath: normalizeRelativePath(path.relative(projectsRoot, resolvedRoot)) || ".",
-      rootPath: normalizeRelativePath(resolvedRoot),
+      relativePath: normalizeRelativePath(path.relative(projectsRoot, discoveryRoot)) || ".",
+      rootPath: normalizeRelativePath(canonicalRoot),
     });
   }
 
@@ -579,9 +590,19 @@ async function walkProjects(currentDir: string, projects: WorkbenchProjectOption
     return;
   }
 
-  const directories = entries
-    .filter((entry) => entry.isDirectory() && !discoveryIgnoredNames.has(entry.name))
-    .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" }));
+  const directories: typeof entries = [];
+  for (const entry of entries) {
+    if (discoveryIgnoredNames.has(entry.name)) {
+      continue;
+    }
+
+    const isLinkedGitProject = entry.isSymbolicLink()
+      && await hasGitMarker(path.join(currentDir, entry.name));
+    if (entry.isDirectory() || isLinkedGitProject) {
+      directories.push(entry);
+    }
+  }
+  directories.sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" }));
 
   for (const entry of directories) {
     await walkProjects(path.join(currentDir, entry.name), projects);
@@ -608,7 +629,11 @@ export async function discoverProjects() {
 }
 
 function getDefaultProjectIdFromProjects(projects: readonly WorkbenchProjectOption[]) {
-  const currentProjectOption = projects.find((project) => project.kind === "git" && normalizePathForComparison(project.rootPath) === normalizePathForComparison(projectRoot));
+  const currentProjectId = normalizeProjectId(path.relative(projectsRoot, projectRoot)) || ".";
+  const currentProjectOption = projects.find((project) => project.kind === "git" && (
+    project.id === currentProjectId
+    || normalizePathForComparison(project.rootPath) === normalizePathForComparison(projectRoot)
+  ));
   return currentProjectOption?.id ?? projects[0]?.id ?? "";
 }
 
@@ -616,14 +641,14 @@ export async function getDefaultProjectId() {
   return getDefaultProjectIdFromProjects(await discoverProjects());
 }
 
-export async function resolveProjectRoot(projectId?: string | null) {
+export async function resolveProjectRoot(projectId?: string | null): Promise<ResolvedProject> {
   return await resolveProjectRootFromProjects(await discoverProjects(), projectId);
 }
 
 export async function resolveProjectRootFromProjects(
   projects: readonly WorkbenchProjectOption[],
   projectId?: string | null,
-) {
+): Promise<ResolvedProject> {
   const requestedProjectId = normalizeProjectId(projectId ?? "") || getDefaultProjectIdFromProjects(projects);
   if (!requestedProjectId) {
     throw new Error("No projects were found under the configured projects root.");
@@ -637,7 +662,7 @@ export async function resolveProjectRootFromProjects(
   return await resolveDiscoveredProject(project);
 }
 
-export async function resolveDiscoveredProject(project: WorkbenchProjectOption) {
+export async function resolveDiscoveredProject(project: WorkbenchProjectOption): Promise<ResolvedProject> {
   if (project.kind === "workbench-library") {
     await ensureWorkbenchLibrary();
     return {
@@ -648,6 +673,7 @@ export async function resolveDiscoveredProject(project: WorkbenchProjectOption) 
       roots: [{
         id: project.roots[0]?.id ?? "workbench-library",
         name: project.roots[0]?.name ?? "Workbench Library",
+        relativePath: project.roots[0]?.relativePath ?? WORKBENCH_LIBRARY_PROJECT_ID,
         root: workbenchLibraryRoot,
         rootPath: normalizeRelativePath(workbenchLibraryRoot),
       }],
@@ -658,6 +684,7 @@ export async function resolveDiscoveredProject(project: WorkbenchProjectOption) 
     const roots = project.roots.map((root) => ({
       id: root.id,
       name: root.name,
+      relativePath: root.relativePath,
       root: path.resolve(root.rootPath),
       rootPath: normalizeRelativePath(path.resolve(root.rootPath)),
     }));
@@ -680,25 +707,27 @@ export async function resolveDiscoveredProject(project: WorkbenchProjectOption) 
     } satisfies ResolvedProject;
   }
 
-  const absolutePath = path.resolve(project.rootPath);
-  if (!isPathWithinRoot(absolutePath, projectsRoot)) {
+  const discoveryPath = path.resolve(projectsRoot, project.relativePath);
+  if (!isPathWithinRoot(discoveryPath, projectsRoot)) {
     throw new Error("Project is outside the configured projects root.");
   }
 
-  if (project.kind !== "git" || !await hasGitMarker(absolutePath)) {
+  const canonicalRoot = await resolveCanonicalPath(discoveryPath);
+  if (project.kind !== "git" || !await hasGitMarker(canonicalRoot)) {
     throw new Error("Project is missing a .git marker.");
   }
 
   return {
     id: project.id,
     kind: project.kind,
-    root: absolutePath,
-    rootPath: normalizeRelativePath(absolutePath),
+    root: canonicalRoot,
+    rootPath: normalizeRelativePath(canonicalRoot),
     roots: [{
-      id: project.roots[0]?.id ?? normalizeWorkspaceRootId(path.basename(absolutePath) || project.id),
-      name: project.roots[0]?.name ?? (path.basename(absolutePath) || project.id),
-      root: absolutePath,
-      rootPath: normalizeRelativePath(absolutePath),
+      id: project.roots[0]?.id ?? normalizeWorkspaceRootId(path.basename(discoveryPath) || project.id),
+      name: project.roots[0]?.name ?? (path.basename(discoveryPath) || project.id),
+      relativePath: project.roots[0]?.relativePath ?? project.relativePath,
+      root: canonicalRoot,
+      rootPath: normalizeRelativePath(canonicalRoot),
     }],
   } satisfies ResolvedProject;
 }
@@ -708,7 +737,7 @@ function toProjectSnapshotRoots(project: ResolvedProject): WorkbenchProjectRoot[
     id: root.id,
     isPrimary: index === 0,
     name: root.name,
-    relativePath: normalizeRelativePath(path.relative(projectsRoot, root.root)) || ".",
+    relativePath: root.relativePath ?? (normalizeRelativePath(path.relative(projectsRoot, root.root)) || "."),
     rootPath: root.rootPath,
   }));
 }
@@ -985,7 +1014,11 @@ export async function getProjectSnapshot(projectId?: string | null) {
   ]);
   return {
     projectId: resolvedProject.id,
-    root: resolvedProject.kind === "workspace" ? resolvedProject.id : path.basename(resolvedProject.root),
+    root: resolvedProject.kind === "workspace"
+      ? resolvedProject.id
+      : resolvedProject.kind === "git"
+        ? resolvedProject.roots[0]?.name ?? path.basename(resolvedProject.root)
+        : path.basename(resolvedProject.root),
     rootPath: normalizeRelativePath(resolvedProject.root),
     roots: toProjectSnapshotRoots(resolvedProject),
     tree,
