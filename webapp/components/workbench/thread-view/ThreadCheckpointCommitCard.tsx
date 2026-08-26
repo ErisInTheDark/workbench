@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CheckpointCommitCardState: describe pending enrichment, error, and loaded proposal card states. Keywords: checkpoint, commit, card, state.
- * - default ThreadCheckpointCommitCard: render one checkpoint proposal card with safe committed-message amendment controls. Keywords: checkpoint, commit, amend, proposal, changeset, actions.
+ * - default ThreadCheckpointCommitCard: render full, compact-preview, or compact-commit proposal cards with owned edit and commit controls. Keywords: checkpoint, commit, amend, proposal, changeset, actions, compact.
  */
 "use client";
 
@@ -41,6 +41,7 @@ export default function ThreadCheckpointCommitCard({
   projectFilePaths,
   projectId,
   projectRootPath,
+  presentation = "full",
   sourceItemId,
   state,
   title,
@@ -59,14 +60,18 @@ export default function ThreadCheckpointCommitCard({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  presentation?: "compact-commit" | "compact-preview" | "full";
   sourceItemId: string;
   state: CheckpointCommitCardState;
   title: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const proposal = state.status === "loaded" ? state.proposal : null;
+  const compact = presentation !== "full";
+  const compactCanCommit = presentation === "compact-commit";
+  const compactPreview = presentation === "compact-preview";
   const committedAmendable = proposal?.status === "committed" && proposal.amendability?.status === "available";
-  const editable = !proposal || proposal.status === "proposed" || committedAmendable;
+  const editable = !compactPreview && (!proposal || proposal.status === "proposed" || committedAmendable);
   const messageChanged = proposal?.status === "committed"
     && (title.trim() !== proposal.title.trim() || description.trim() !== proposal.description.trim());
   const additions = proposal?.changes.reduce((total, change) => total + change.additions, 0) ?? 0;
@@ -75,9 +80,11 @@ export default function ThreadCheckpointCommitCard({
   const changeSummary = proposal || paths.length
     ? `${fileCount} changed ${fileCount === 1 ? "file" : "files"}`
     : "Arc changes";
-  const canCommit = !committing && Boolean(title.trim()) && Boolean(
-    proposal?.status === "proposed" || (committedAmendable && messageChanged),
-  );
+  const canCommit = !committing
+    && Boolean(title.trim())
+    && Boolean(compactCanCommit
+      ? proposal?.status === "proposed"
+      : !compact && (proposal?.status === "proposed" || (committedAmendable && messageChanged)));
   const commitLabel = proposal?.mode === "amend" || proposal?.status === "committed" ? "Amend" : "Commit";
   const failure = state.status === "error"
     ? state.failure ?? createGitArcOperationRejected("proposalCreate", state.error)
@@ -102,20 +109,27 @@ export default function ThreadCheckpointCommitCard({
   return (
     <article
       aria-label="Checkpoint commit proposal"
-      className={embedded
-        ? "w-full px-3 py-2.5"
-        : "my-2 w-full rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-3 py-2.5"}
+      className={compact
+        ? "w-full px-0 py-0"
+        : embedded
+          ? "w-full px-3 py-2.5"
+          : "my-2 w-full rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-3 py-2.5"}
       data-thread-checkpoint-card="true"
       data-thread-checkpoint-card-embedded={embedded ? "true" : undefined}
+      data-thread-checkpoint-card-presentation={presentation}
     >
       <div className="flex min-w-0 gap-2" data-thread-checkpoint-card-content="true">
-        <span className="mt-1 inline-flex size-5 shrink-0 items-center justify-center text-muted" aria-hidden="true">
+        <span className={compact
+          ? "inline-flex h-6 w-5 shrink-0 items-center justify-center text-muted"
+          : "mt-1 inline-flex size-5 shrink-0 items-center justify-center text-muted"}
+          aria-hidden="true"
+        >
           <GitArcIcon action="propose" className="size-5" />
         </span>
         <div className="min-w-0 flex-1 space-y-1">
           <PlaintextEditable
             ariaLabel="Commit title"
-            className="min-h-6 w-full bg-transparent px-0 py-0.5 text-[0.94em] font-medium outline-none data-[empty=true]:before:text-muted data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent"
+            className={`${compact ? "min-h-5 text-[0.88em]" : "min-h-6 text-[0.94em]"} w-full bg-transparent px-0 py-0.5 font-medium outline-none data-[empty=true]:before:text-muted data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent`}
             onChange={onTitleChange}
             onKeyDown={commitFromEditable}
             placeholder="Commit title"
@@ -125,7 +139,7 @@ export default function ThreadCheckpointCommitCard({
           {editable || description.trim() ? (
             <PlaintextEditable
               ariaLabel="Commit description"
-              className="min-h-7 w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-[0.8em] leading-5 text-muted outline-none data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_32%,transparent)] data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text"
+              className={`${compact ? "min-h-5 text-[0.76em] leading-4" : "min-h-7 text-[0.8em] leading-5"} w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-muted outline-none data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_32%,transparent)] data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text`}
               onChange={onDescriptionChange}
               onKeyDown={commitFromEditable}
               placeholder="Optional description"
@@ -163,15 +177,15 @@ export default function ThreadCheckpointCommitCard({
                 data-thread-checkpoint-card-actions="true"
                 data-thread-summary-action="true"
               >
-                {proposal?.status === "proposed" && proposal.includeNewerAvailable ? (
+                {(!compact || compactCanCommit) && proposal?.status === "proposed" && proposal.includeNewerAvailable ? (
                   <WorkbenchCheckbox
                     checked={includeNewer}
                     label="Include newer changes"
                     onChange={onIncludeNewerChange}
                   />
                 ) : null}
-                {proposal?.status === "committed" && canCommit ? (
-                  <PrimaryButton className="!px-3 !py-1.5 !text-[0.78rem]" disabled={!canCommit} onClick={onCommit} pendingHalo={committing}>
+                {!compact && proposal?.status === "committed" && canCommit ? (
+                  <PrimaryButton className="!px-3 !py-1.5 !text-[0.78rem]" data-thread-checkpoint-commit-action="true" disabled={!canCommit} onClick={onCommit} pendingHalo={committing}>
                     {committing ? "Amending..." : "Amend"}
                   </PrimaryButton>
                 ) : proposal?.status === "committed" ? (
@@ -192,11 +206,11 @@ export default function ThreadCheckpointCommitCard({
                       Try again
                     </button>
                   ) : <span className="text-[0.78em] text-[color:var(--danger)]">Unavailable</span>
-                ) : (
-                  <PrimaryButton className="!px-3 !py-1.5 !text-[0.78rem]" disabled={!canCommit} onClick={onCommit} pendingHalo={committing}>
+                ) : !compact || compactCanCommit ? (
+                  <PrimaryButton className={`!px-3 ${compact ? "!py-1" : "!py-1.5"} !text-[0.78rem]`} data-thread-checkpoint-commit-action="true" disabled={!canCommit} onClick={onCommit} pendingHalo={committing}>
                     {committing ? (commitLabel === "Amend" ? "Amending..." : "Committing...") : commitLabel}
                   </PrimaryButton>
-                )}
+                ) : null}
               </span>
             </span>
           )}
@@ -212,6 +226,7 @@ export default function ThreadCheckpointCommitCard({
                     : change.kind,
                   path: change.path,
                 },
+                detailsAvailable: !compact,
                 sourceChangeIndex: index,
                 sourceItemId,
               }))}

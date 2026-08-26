@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchOptionCard: reusable questionnaire-faithful option row. Keywords: settings, questionnaire, option, card.
+ * - WorkbenchOptionCard: reusable questionnaire option with card and compact-inline presentations. Keywords: settings, questionnaire, option, card, compact.
  * - default WorkbenchOptionCards: reusable radio/checkbox-style option row group. Keywords: settings, questionnaire, options, reusable.
  */
 
@@ -34,6 +34,7 @@ type WorkbenchOptionCardProps = {
   label: ReactNode;
   markerId?: string;
   onClick?: () => void;
+  presentation?: "card" | "compact-inline";
 };
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -50,21 +51,26 @@ export function WorkbenchOptionCard ({
   label,
   markerId,
   onClick,
+  presentation = "card",
 }: WorkbenchOptionCardProps) {
   const optionDescription = description.trim();
+  const compactInline = presentation === "compact-inline";
   const optionCardClassName = joinClasses(
-    "flex w-full items-start gap-3 rounded-[0.95rem] border px-3 py-2.5 text-left transition",
-    isChecked
+    compactInline
+      ? "flex w-full min-w-0 items-center gap-2 border-0 bg-transparent px-0 py-1 text-left transition"
+      : "flex w-full items-start gap-3 rounded-[0.95rem] border px-3 py-2.5 text-left transition",
+    !compactInline && (isChecked
       ? "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-[color-mix(in_srgb,var(--text)_5%,transparent)]"
       : isHistoryMode || disabled
         ? "border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
-        : "border-[color-mix(in_srgb,var(--text)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_3%,transparent)]",
+        : "border-[color-mix(in_srgb,var(--text)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_3%,transparent)]"),
+    compactInline && !isHistoryMode && !disabled && "hover:text-text",
     disabled && "cursor-not-allowed opacity-45",
     className,
   );
   const optionBody = (
     <>
-      {isSingleChoice ? (
+      {!compactInline && isSingleChoice ? (
         <span
           id={markerId}
           aria-hidden="true"
@@ -76,16 +82,28 @@ export function WorkbenchOptionCard ({
           )}
         />
       ) : (
-        <WorkbenchCheckboxMarker checked={isChecked} className="mt-1" disabled={disabled} />
+        <WorkbenchCheckboxMarker checked={isChecked} className={compactInline ? undefined : "mt-1"} disabled={disabled} />
       )}
-      <span className="min-w-0">
-        <span className="block text-[0.86em] font-medium leading-[1.5] text-text">
+      <span className={compactInline ? "flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden" : "min-w-0"}>
+        <span className={compactInline
+          ? "max-w-[55%] shrink-0 truncate text-[0.84em] font-medium leading-[1.4] text-text"
+          : "block text-[0.86em] font-medium leading-[1.5] text-text"}
+        >
           {label}
         </span>
         {optionDescription ? (
-          <span className="mt-0.5 block text-[0.78em] leading-[1.55] text-muted">
-            {optionDescription}
-          </span>
+          compactInline ? (
+            <>
+              <span className="shrink-0 text-[0.72em] text-muted" aria-hidden="true">·</span>
+              <span className="min-w-0 flex-1 truncate text-[0.76em] leading-[1.4] text-muted">
+                {optionDescription}
+              </span>
+            </>
+          ) : (
+            <span className="mt-0.5 block text-[0.78em] leading-[1.55] text-muted">
+              {optionDescription}
+            </span>
+          )
         ) : null}
       </span>
     </>
@@ -96,6 +114,7 @@ export function WorkbenchOptionCard ({
       <div
         aria-pressed={isChecked}
         className={optionCardClassName}
+        data-workbench-option-presentation={presentation}
       >
         {optionBody}
       </div>
@@ -107,6 +126,7 @@ export function WorkbenchOptionCard ({
       type="button"
       aria-pressed={isChecked}
       className={optionCardClassName}
+      data-workbench-option-presentation={presentation}
       disabled={disabled}
       onClick={onClick}
     >

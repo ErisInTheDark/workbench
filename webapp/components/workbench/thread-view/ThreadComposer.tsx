@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadComposer: render thread composer controls, message input, attachments, and questionnaire handoff. Keywords: composer, thread, questionnaire, model, agent.
- * - Local helpers: attachment reading, sticky composer preview rendering, saved draft shelf rendering, pending questionnaire submission options, and compact composer icons. Keywords: attachments, saved drafts, user input, controls, sticky composer.
+ * - Local helpers: attachment reading, sticky composer preview rendering, saved draft shelf rendering, and compact composer icons. Keywords: attachments, saved drafts, user input, controls, sticky composer.
  */
 "use client";
 
@@ -34,8 +34,6 @@ import {
   buildInlineMentionHighlights,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
-import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
-import { isWorkbenchSyntheticSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import { runThreadComposerSubmission } from "../../../lib/workbench/thread/thread-message-submission";
 import {
   createWorkbenchThreadRecoveryInput,
@@ -56,6 +54,7 @@ import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { getThreadComposerStopControlState } from "./thread-composer-controls";
 import { getThreadUserInputRequestPreviewText } from "./thread-user-input-request-preview";
+import { buildPendingUserInputRequestSubmissionOptions } from "./thread-user-input-request-submission";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 
 const PICKER_REFRESH_COOLDOWN_MS = 1500;
@@ -118,76 +117,6 @@ function areComposerImageAttachmentsEqual(
     const candidate = right[index];
     return Boolean(candidate && attachment.id === candidate.id && attachment.url === candidate.url);
   });
-}
-
-function isQuestionnaireFallbackAnchorItem (item: ThreadPayload["turns"][number]["items"][number]) {
-  if (isWorkbenchSyntheticSteerUserMessage(item)) {
-    return false;
-  }
-
-  switch (item.type) {
-    case "agentMessage":
-      return Boolean(item.text.trim());
-    case "hookPrompt":
-    case "plan":
-    case "reasoning":
-    case "userMessage":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function getQuestionnaireFallbackAnchorIndex (items: ThreadPayload["turns"][number]["items"]) {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (isQuestionnaireFallbackAnchorItem(items[index]!)) {
-      return index;
-    }
-  }
-
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (items[index]?.type !== "contextCompaction") {
-      return index;
-    }
-  }
-
-  return -1;
-}
-
-function isDurableQuestionnairePlacementItem (item: ThreadPayload["turns"][number]["items"][number]) {
-  return !isSyntheticQuestionnaireHistoryItem(item)
-    && !isWorkbenchSyntheticSteerUserMessage(item);
-}
-
-function buildPendingUserInputRequestSubmissionOptions (
-  thread: ThreadPayload,
-  pendingUserInputRequest: WorkbenchPendingUserInputRequest,
-): WorkbenchSubmitUserInputRequestOptions {
-  const turn = pendingUserInputRequest.turnId
-    ? thread.turns.find((candidateTurn) => candidateTurn.id === pendingUserInputRequest.turnId) ?? null
-    : getCurrentInProgressTurn(thread) ?? thread.turns.at(-1) ?? null;
-  const insertAfterItemId = pendingUserInputRequest.itemId?.trim() ?? null;
-  if (!turn) {
-    return {
-      insertAfterItemId,
-      insertAfterItemIndex: null,
-      turnId: pendingUserInputRequest.turnId ?? null,
-    };
-  }
-
-  const visibleItems = turn.items.filter(isDurableQuestionnairePlacementItem);
-  const requestedAnchorIndex = insertAfterItemId
-    ? visibleItems.findIndex((item) => item.id === insertAfterItemId)
-    : -1;
-  const fallbackAnchorIndex = getQuestionnaireFallbackAnchorIndex(visibleItems);
-  const resolvedAnchorIndex = requestedAnchorIndex >= 0 ? requestedAnchorIndex : fallbackAnchorIndex;
-  const resolvedAnchorItem = resolvedAnchorIndex >= 0 ? visibleItems[resolvedAnchorIndex] : null;
-
-  return {
-    insertAfterItemId: resolvedAnchorItem?.id ?? insertAfterItemId,
-    insertAfterItemIndex: resolvedAnchorIndex >= 0 ? resolvedAnchorIndex : null,
-    turnId: pendingUserInputRequest.turnId ?? turn.id,
-  };
 }
 
 export default function ThreadComposer ({

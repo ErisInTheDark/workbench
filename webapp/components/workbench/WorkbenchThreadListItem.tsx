@@ -5,7 +5,7 @@
  */
 "use client";
 
-import type { ComponentType, DragEventHandler, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent, Ref } from "react";
+import type { ComponentType, DragEventHandler, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent, ReactNode, Ref } from "react";
 
 import {
   getThreadSidebarGroup,
@@ -57,6 +57,7 @@ function ThreadTooltipContent({
   claimedPaths,
   dateTime,
   exactTime,
+  extraDetails,
   Icon,
   pinned,
   projectId,
@@ -69,6 +70,7 @@ function ThreadTooltipContent({
   claimedPaths: readonly string[];
   dateTime: string;
   exactTime: string;
+  extraDetails?: ReactNode;
   Icon: ThreadStatusIcon;
   pinned: boolean;
   projectId: string;
@@ -92,6 +94,7 @@ function ThreadTooltipContent({
         ) : null}
         <time className="shrink-0" dateTime={dateTime} title={exactTime}>{relativeTime}</time>
       </div>
+      {extraDetails}
       {claimedPaths.length ? (
         <div className="explorer-scrollbar flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] p-2">
           <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted" aria-hidden="true">
@@ -130,6 +133,7 @@ export default function WorkbenchThreadListItem({
   showActions = false,
   showTooltip = true,
   tabIndex,
+  tooltipDetails,
 }: {
   anchorRef?: Ref<HTMLAnchorElement>;
   attentionLabel?: string;
@@ -154,6 +158,7 @@ export default function WorkbenchThreadListItem({
   showActions?: boolean;
   showTooltip?: boolean;
   tabIndex?: number;
+  tooltipDetails?: ReactNode;
 }) {
   const { openContextMenu } = useWorkbenchContextMenu();
   const target = targetForEntry(entry);
@@ -170,6 +175,7 @@ export default function WorkbenchThreadListItem({
     : entry.entryKind === "draft"
       ? "Draft"
       : lifecycle?.kind === "needsAttention" ? attentionLabel.trim() || "Needs attention" : lifecycle?.kind === "working" ? "Working" : lifecycle?.kind === "stopped" ? "Stopped" : "Completed";
+  const tooltipStatus = lifecycle?.kind === "needsAttention" && tooltipDetails ? "Needs attention" : status;
   const pinned = entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
   const timestamp = new Date(entry.activityAt);
   const dateTime = timestamp.toISOString();
@@ -227,7 +233,7 @@ export default function WorkbenchThreadListItem({
       </svg>
       <ContextMenuCapability menu={contextMenu}>
         <WorkbenchTooltip
-          content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} Icon={Icon} pinned={pinned} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={status} statusClassName={statusClassName} title={entry.title} />}
+          content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} extraDetails={tooltipDetails} Icon={Icon} pinned={pinned} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} title={entry.title} />}
           enabled={showTooltip && !isDragActive}
           interactive
         >
@@ -273,10 +279,9 @@ export default function WorkbenchThreadListItem({
           action={actionButton}
           contextMenu={Boolean(contextMenu)}
           metadata={(
-            <span className="grid grid-cols-[auto_auto] items-center gap-1.5">
-              {claimedFileCount ? <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true"><FlagIcon className="size-3.5" /><span>{claimedFileCount}</span></span> : null}
-              {group === "snoozed" || pinned ? <span data-role="thread-priority-icon" className="inline-flex size-4 items-center justify-center">{group === "snoozed" ? <SnoozedThreadIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}</span> : null}
-            </span>
+            group === "snoozed" || pinned
+              ? <span data-role="thread-priority-icon" className="inline-flex size-4 items-center justify-center">{group === "snoozed" ? <SnoozedThreadIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}</span>
+              : null
           )}
           statusIcon={<Icon className={`size-3.5 ${statusClassName}`} />}
           statusLabel={<span className={`truncate ${statusClassName}`}>{status}</span>}

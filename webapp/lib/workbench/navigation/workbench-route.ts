@@ -3,7 +3,7 @@
  * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
  * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread, settings, mosaic.
  * - createProjectRoute/createFileRoute/createThreadRoute/createSettingsRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder.
- * - getWorkbenchDraftIdFromThreadId/getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/isWorkbenchThreadTargetSelected: derive durable draft, parent hydration, selected tab identity, and sidebar selection. Keywords: thread, draft, subagent, parent.
+ * - getWorkbenchDraftIdFromThreadId/getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive durable draft, parent hydration, materialized mosaic roots, selected tab identity, and sidebar selection. Keywords: thread, draft, subagent, parent, mosaic.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
  * - createWorkbenchHref/createProjectHref/createFileHref/createThreadHref/createSettingsHref: build canonical hrefs. Keywords: links, URL, encode.
  * - isSameWorkbenchRoute/routeHasSelection/isWorkbenchRouteOwnerOfThread: compare, classify, and fence route-owned thread transitions. Keywords: route equality, active selection, draft promotion.
@@ -99,6 +99,24 @@ export function getWorkbenchThreadTargetRootId(target: WorkbenchThreadTarget) {
 
 export function getWorkbenchThreadTargetSelectedId(target: WorkbenchThreadTarget) {
   return target.kind === "subagent" ? target.threadId : getWorkbenchThreadTargetRootId(target);
+}
+
+export function getWorkbenchMosaicThreadRootIds(node: WorkbenchMosaicNode | null) {
+  const threadIds = new Set<string>();
+  const visit = (current: WorkbenchMosaicNode | null) => {
+    if (!current) return;
+    if (current.type === "split") {
+      current.children.forEach(visit);
+      return;
+    }
+    if (current.target.kind !== "thread") return;
+    const target = current.target.target;
+    if (target.kind === "provider" || target.kind === "subagent") {
+      threadIds.add(getWorkbenchThreadTargetRootId(target));
+    }
+  };
+  visit(node);
+  return threadIds;
 }
 
 export function isWorkbenchThreadTargetSelected(

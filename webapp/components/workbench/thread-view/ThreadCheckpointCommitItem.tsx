@@ -55,7 +55,7 @@ async function readProposalResponse(response: Response, action: GitArcFailureAct
 interface ThreadCheckpointCommitItemProps {
   commandOutcome: ThreadCommandExecutionOutcome;
   failureReason?: string | null;
-  cwd: string;
+  cwd: string | null;
   embedded?: boolean;
   harness?: WorkbenchHarness;
   hoisted?: boolean;
@@ -63,6 +63,7 @@ interface ThreadCheckpointCommitItemProps {
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  presentation?: "compact-commit" | "compact-preview" | "full";
   proposalId: string | null;
   sourceItemId: string;
   threadId: string;
@@ -79,13 +80,14 @@ function ThreadCheckpointCommitController({
   projectFilePaths,
   projectId,
   projectRootPath,
+  presentation,
   proposalId,
   sourceItemId,
   threadId,
   workspaceRoots,
-}: ThreadCheckpointCommitItemProps & { harness: WorkbenchHarness }) {
+}: ThreadCheckpointCommitItemProps & { cwd: string; harness: WorkbenchHarness }) {
   const [includeNewer, setIncludeNewer] = useState(false);
-  const [title, setTitle] = useState(intent?.title ?? "");
+  const [title, setTitle] = useState(intent?.title ?? (presentation && presentation !== "full" ? "Commit proposal" : ""));
   const [description, setDescription] = useState(intent?.description ?? "");
   const [committing, setCommitting] = useState(false);
   const [state, setState] = useState<CheckpointCommitCardState>({ status: "pending" });
@@ -208,6 +210,7 @@ function ThreadCheckpointCommitController({
       projectFilePaths={projectFilePaths}
       projectId={projectId}
       projectRootPath={projectRootPath}
+      presentation={presentation}
       sourceItemId={sourceItemId}
       state={state}
       title={title}
@@ -238,7 +241,31 @@ export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommit
       />
     );
   }
-  const controller = <ThreadCheckpointCommitController {...props} harness={harness} intent={resolvedIntent} />;
+  if (!props.cwd) {
+    return (
+      <ThreadCheckpointCommitCard
+        committing={false}
+        description={resolvedIntent?.description ?? ""}
+        embedded={props.embedded}
+        includeNewer={false}
+        onCommit={() => undefined}
+        onDescriptionChange={() => undefined}
+        onIncludeNewerChange={() => undefined}
+        onRetry={() => undefined}
+        onTitleChange={() => undefined}
+        paths={resolvedIntent?.paths ?? []}
+        presentation="compact-preview"
+        projectFilePaths={props.projectFilePaths}
+        projectId={props.projectId}
+        projectRootPath={props.projectRootPath}
+        sourceItemId={props.sourceItemId}
+        state={{ status: "pending" }}
+        title={resolvedIntent?.title ?? "Commit proposal"}
+        workspaceRoots={props.workspaceRoots}
+      />
+    );
+  }
+  const controller = <ThreadCheckpointCommitController {...props} cwd={props.cwd} harness={harness} intent={resolvedIntent} />;
   return props.hoisted && hoistedTargetId
     ? <div className="scroll-mt-6" id={hoistedTargetId}>{controller}</div>
     : controller;

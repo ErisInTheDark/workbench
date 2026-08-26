@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react";
 
 import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, WORKBENCH_THREAD_ORDER_DROP_TARGET_ID } from "../../lib/workbench/layout/workbench-drag";
@@ -74,6 +75,7 @@ export default function WorkbenchThreadList({
   onOpenThread,
   onRenameFolder,
   projectId,
+  renderThreadTooltipDetails,
 }: {
   allowMainPanelDrop?: boolean;
   attentionLabelsByThreadId?: Record<string, string | undefined>;
@@ -94,6 +96,7 @@ export default function WorkbenchThreadList({
   onOpenThread: (target: WorkbenchThreadTarget) => void;
   onRenameFolder?: (folderId: string, title: string) => Promise<string>;
   projectId: string;
+  renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
 }) {
   const rowRefs = useRef(new Map<string, HTMLAnchorElement>());
   const { mainEntries } = groupWorkbenchThreadSidebarEntries(entries);
@@ -174,6 +177,7 @@ export default function WorkbenchThreadList({
         selected={selected}
         showActions
         tabIndex={selected || (!hasSelectedEntry && index === 0) ? 0 : -1}
+        tooltipDetails={renderThreadTooltipDetails?.(entry)}
       />
     );
     const dropTargetIds = reorderSection

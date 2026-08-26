@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default ThreadUserInputRequest: render live and historical questionnaire requests. Keywords: questionnaire, custom input, thread.
- * - Local helpers: question display normalization, answered value derivation, pasted image attachments, and submit handling. Keywords: options, answers, drafts, images.
+ * - default ThreadUserInputRequest: render full or compact live, preview, and historical questionnaire requests. Keywords: questionnaire, custom input, thread, compact.
+ * - Local helpers: question display normalization, answered value derivation, pasted image attachments, and submit handling. Keywords: options, answers, drafts, images, presentation.
  */
 "use client";
 
@@ -91,6 +91,7 @@ type InteractiveThreadUserInputRequestProps = {
   onDraftChange: (draft: WorkbenchQuestionnaireDraft) => void;
   onDraftClear: () => void;
   onSubmit: (response: WorkbenchUserInputResponse, supplementalInput?: UserInput[]) => Promise<void>;
+  presentation?: "compact" | "full";
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   request: WorkbenchUserInputRequest;
@@ -101,12 +102,29 @@ type HistoryThreadUserInputRequestProps = {
   highlightSources?: InlineMentionHighlightSources;
   knownSkills?: WorkbenchSkillSummary[];
   mode: "history";
+  presentation?: "compact" | "full";
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   request: WorkbenchUserInputRequest;
   response: WorkbenchUserInputResponse | null;
   statusLabel?: string;
 };
+
+type PreviewThreadUserInputRequestProps = {
+  draft: WorkbenchQuestionnaireDraft | null;
+  highlightSources?: InlineMentionHighlightSources;
+  knownSkills?: WorkbenchSkillSummary[];
+  mode: "preview";
+  presentation?: "compact" | "full";
+  projectRootPath?: string;
+  request: WorkbenchUserInputRequest;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+};
+
+type ThreadUserInputRequestProps =
+  | HistoryThreadUserInputRequestProps
+  | InteractiveThreadUserInputRequestProps
+  | PreviewThreadUserInputRequestProps;
 
 function ThreadApprovalCommandSummary ({
   knownSkills,
@@ -149,15 +167,20 @@ function ThreadApprovalCommandSummary ({
   );
 }
 
-export default function ThreadUserInputRequest (props: InteractiveThreadUserInputRequestProps | HistoryThreadUserInputRequestProps) {
+export default function ThreadUserInputRequest (props: ThreadUserInputRequestProps) {
   const { mode, request } = props;
   const isHistoryMode = mode === "history";
+  const isPreviewMode = mode === "preview";
+  const isInteractiveMode = mode === "live";
+  const isReadOnlyMode = isHistoryMode || isPreviewMode;
+  const compact = props.presentation === "compact";
   const useCompactSingleQuestionDisplay = shouldUseCompactSingleQuestionDisplay(request);
   const compactQuestion = useCompactSingleQuestionDisplay ? request.questions[0] : null;
   const requestTitle = compactQuestion?.question.trim() || request.title;
   const requestSummary = useCompactSingleQuestionDisplay ? "" : request.summary.trim();
   const historyProps = mode === "history" ? props : null;
-  const interactiveProps = mode === "history" ? null : props;
+  const previewProps = mode === "preview" ? props : null;
+  const interactiveProps = isInteractiveMode ? props : null;
   const highlightSources = props.highlightSources;
   const interactiveDraft = interactiveProps?.draft ?? null;
   const onInteractiveDraftChange = interactiveProps?.onDraftChange;
@@ -172,19 +195,33 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   const hydratedRequestIdRef = useRef("");
   const onInteractiveDraftChangeRef = useRef(onInteractiveDraftChange);
   const onInteractiveDraftClearRef = useRef(onInteractiveDraftClear);
+  const latestDraftRef = useRef<WorkbenchQuestionnaireDraft>({
+    attachments,
+    customValues,
+    selectedValues,
+    updatedAt: Date.now(),
+  });
+  const submissionSucceededRef = useRef(false);
 
   onInteractiveDraftChangeRef.current = onInteractiveDraftChange;
   onInteractiveDraftClearRef.current = onInteractiveDraftClear;
+  latestDraftRef.current = {
+    attachments,
+    customValues,
+    selectedValues,
+    updatedAt: Date.now(),
+  };
   const isAttaching = pendingAttachmentReads > 0;
 
   useEffect(() => {
-    if (isHistoryMode) {
+    if (!interactiveProps) {
       return;
     }
 
     const requestChanged = hydratedRequestIdRef.current !== request.id;
     const draftKey = `${request.id}:${interactiveDraft?.updatedAt ?? 0}`;
     if (requestChanged) {
+      submissionSucceededRef.current = false;
       hydratedRequestIdRef.current = request.id;
       hydratedDraftKeyRef.current = draftKey;
       setSelectedValues(interactiveDraft?.selectedValues ?? {});
@@ -203,10 +240,10 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     }
     setError("");
     setIsSubmitting(false);
-  }, [attachments.length, customValues, interactiveDraft, isHistoryMode, request.id, selectedValues]);
+  }, [attachments.length, customValues, interactiveDraft, isInteractiveMode, request.id, selectedValues]);
 
   useEffect(() => {
-    if (isHistoryMode) {
+    if (!interactiveProps) {
       return;
     }
 
@@ -229,7 +266,26 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [attachments, customValues, isHistoryMode, selectedValues]);
+  }, [attachments, customValues, isInteractiveMode, selectedValues]);
+
+  useEffect(() => {
+    if (!interactiveProps) return;
+    submissionSucceededRef.current = false;
+    return () => {
+      if (submissionSucceededRef.current) return;
+      const draft = latestDraftRef.current;
+      const hasSelectedValues = hasSelectedDraftValues(draft.selectedValues);
+      const hasCustomValues = Object.values(draft.customValues).some((value) => value.trim());
+      if (!hasSelectedValues && !hasCustomValues && draft.attachments.length === 0) {
+        onInteractiveDraftClearRef.current?.();
+        return;
+      }
+      onInteractiveDraftChangeRef.current?.({
+        ...draft,
+        updatedAt: Date.now(),
+      });
+    };
+  }, [isInteractiveMode, request.id]);
 
   const resetAnswers = () => {
     setSelectedValues({});
@@ -241,7 +297,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   };
 
   const handleSubmit = async () => {
-    if (isHistoryMode || isSubmitting || isAttaching) {
+    if (!interactiveProps || isSubmitting || isAttaching) {
       return;
     }
 
@@ -271,7 +327,8 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     setIsSubmitting(true);
     setError("");
     try {
-      await interactiveProps?.onSubmit(response, supplementalInput.length ? supplementalInput : undefined);
+      await interactiveProps.onSubmit(response, supplementalInput.length ? supplementalInput : undefined);
+      submissionSucceededRef.current = true;
       onInteractiveDraftClearRef.current?.();
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "Unable to submit that response.");
@@ -280,7 +337,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
-    if (isHistoryMode) {
+    if (!interactiveProps) {
       return;
     }
 
@@ -308,7 +365,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
   };
 
   const handleLastQuestionKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (isHistoryMode || isSubmitting || isAttaching || event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) {
+    if (!interactiveProps || isSubmitting || isAttaching || event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) {
       return;
     }
 
@@ -319,10 +376,27 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
     event.preventDefault();
     void handleSubmit();
   };
+  const renderSubmitButton = () => (
+    <PrimaryButton
+      type="button"
+      data-thread-questionnaire-submit="true"
+      onClick={() => {
+        void handleSubmit();
+      }}
+      disabled={isSubmitting || isAttaching}
+      className={joinClasses("justify-self-end text-[0.84em]", compact && "!px-3 !py-1")}
+      pendingHalo={isSubmitting || isAttaching}
+    >
+      {isSubmitting ? "Submitting..." : isAttaching ? "Attaching..." : "Submit"}
+    </PrimaryButton>
+  );
 
   return (
-    <div className="thread-user-input-request space-y-4 px-1 py-1">
-      <div className="thread-user-input-request-content space-y-4">
+    <div
+      className={joinClasses("thread-user-input-request px-1 py-1", compact ? "space-y-2" : "space-y-4")}
+      data-thread-user-input-presentation={compact ? "compact" : "full"}
+    >
+      <div className={joinClasses("thread-user-input-request-content", compact ? "space-y-2.5" : "space-y-4")}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-2">
             <div className="space-y-1">
@@ -368,7 +442,10 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
             const { headerText, questionText } = formatQuestionDisplay(question, index);
             const answerValues = isHistoryMode
               ? deriveAnsweredValues(question, historyProps?.response ?? null)
-              : {
+              : isPreviewMode ? {
+                customValue: previewProps?.draft?.customValues[question.id] ?? "",
+                selectedValues: previewProps?.draft?.selectedValues[question.id] ?? [],
+              } : {
                 customValue: customValues[question.id] ?? "",
                 selectedValues: selectedValues[question.id] ?? [],
               };
@@ -396,12 +473,12 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                     ) : null}
                   </div>
                 ) : null}
-                <div className="mt-3 space-y-2">
+                <div className={compact ? "mt-2 space-y-0.5" : "mt-3 space-y-2"}>
                   {question.options.map((option, index) => {
                     const optionId = `${request.id}:${question.id}:option:${index}`;
                     const isChecked = selectedQuestionValues.includes(option.label);
 
-                    if (isHistoryMode) {
+                    if (isReadOnlyMode) {
                       return (
                         <WorkbenchOptionCard
                           key={optionId}
@@ -411,6 +488,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                           isSingleChoice={isSingleChoice}
                           label={option.label}
                           markerId={optionId}
+                          presentation={compact ? "compact-inline" : "card"}
                         />
                       );
                     }
@@ -423,6 +501,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                         isSingleChoice={isSingleChoice}
                         label={option.label}
                         markerId={optionId}
+                        presentation={compact ? "compact-inline" : "card"}
                         onClick={() => {
                           setSelectedValues((current) => {
                             const next = { ...current };
@@ -458,7 +537,7 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                       />
                     );
                   })}
-                  {isHistoryMode ? (
+                  {isReadOnlyMode ? (
                     customValue ? (
                       <PlaintextEditable
                         id={`${request.id}:${question.id}:custom`}
@@ -477,6 +556,34 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                         />
                       ) : null
                     )
+                  ) : compact && isLastQuestion ? (
+                    <div
+                      className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 [&:has([data-empty=false])]:grid-cols-1"
+                      data-thread-questionnaire-custom-layout="compact-flow"
+                    >
+                      <PlaintextEditable
+                        id={`${request.id}:${question.id}:custom`}
+                        ariaLabel={`${headerText} answer`}
+                        className="thread-plaintext-editable min-h-8 w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none"
+                        spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
+                        highlights={customValueHighlights}
+                        mentionSources={highlightSources}
+                        mentionSuggestionsPlacement="below"
+                        value={customValue}
+                        onChange={(nextValue) => {
+                          setCustomValues((current) => ({
+                            ...current,
+                            [question.id]: nextValue,
+                          }));
+                          if (error) {
+                            setError("");
+                          }
+                        }}
+                        onKeyDown={handleLastQuestionKeyDown}
+                        onPaste={handlePaste}
+                      />
+                      {renderSubmitButton()}
+                    </div>
                   ) : (
                     <PlaintextEditable
                       id={`${request.id}:${question.id}:custom`}
@@ -513,19 +620,19 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
             );
           })}
         </div>
-        {!isHistoryMode && (attachments.length || isAttaching) ? (
+        {!isHistoryMode && ((isPreviewMode ? previewProps?.draft?.attachments.length : attachments.length) || isAttaching) ? (
           <div className="space-y-2">
-            {attachments.length ? (
+            {(isPreviewMode ? previewProps?.draft?.attachments ?? [] : attachments).length ? (
               <div className="flex flex-wrap gap-3">
-                {attachments.map((attachment, index) => (
-                  <div key={attachment.id} className="relative h-24 w-24">
+                {(isPreviewMode ? previewProps?.draft?.attachments ?? [] : attachments).map((attachment, index) => (
+                  <div key={attachment.id} className={joinClasses("relative", compact ? "h-16 w-16" : "h-24 w-24")}>
                     <ThreadLightboxImage
                       alt={`Questionnaire attached image ${index + 1}`}
                       buttonClassName="h-full w-full rounded-[0.95rem]"
                       imageClassName="h-full w-full object-cover"
                       src={attachment.url}
                     />
-                    <button
+                    {!isPreviewMode ? <button
                       type="button"
                       aria-label={`Remove questionnaire attached image ${index + 1}`}
                       title="Remove attached image"
@@ -543,41 +650,31 @@ export default function ThreadUserInputRequest (props: InteractiveThreadUserInpu
                           strokeWidth="1.8"
                         />
                       </svg>
-                    </button>
+                    </button> : null}
                   </div>
                 ))}
               </div>
             ) : null}
-            {isAttaching ? (
+            {isAttaching && !isPreviewMode ? (
               <p className="m-0 text-[0.78em] leading-[1.6] text-muted">Attaching pasted image...</p>
             ) : null}
           </div>
         ) : null}
       </div>
 
-      {!isHistoryMode ? (
+      {interactiveProps && (!compact || interactiveProps.leadingActions || interactiveProps.actions) ? (
         <div className="thread-user-input-request-actions flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             {interactiveProps?.leadingActions}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
-            <PrimaryButton
-              type="button"
-              onClick={() => {
-                void handleSubmit();
-              }}
-              disabled={isSubmitting || isAttaching}
-              className="justify-self-end text-[0.84em]"
-              pendingHalo={isSubmitting || isAttaching}
-            >
-              {isSubmitting ? "Submitting..." : isAttaching ? "Attaching..." : request.submitLabel}
-            </PrimaryButton>
+            {!compact ? renderSubmitButton() : null}
             {interactiveProps?.actions}
           </div>
         </div>
       ) : null}
 
-      {!isHistoryMode && error ? (
+      {interactiveProps && error ? (
         <p className="m-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
       ) : null}
     </div>

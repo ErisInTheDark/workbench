@@ -70,6 +70,7 @@ import {
   createSettingsHref,
   createSettingsRoute,
   createThreadRoute,
+  getWorkbenchMosaicThreadRootIds,
   getWorkbenchThreadTargetRootId,
   getWorkbenchThreadTargetSelectedId,
   isWorkbenchRouteOwnerOfThread,
@@ -115,7 +116,7 @@ import {
 } from "../lib/workbench/storage/workbench-draft-storage";
 import { getThreadDocumentFromSnapshot } from "../lib/workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../lib/workbench/thread/thread-message-submission";
-import { countDraftPromptTokens, type WorkbenchThreadDraft, type WorkbenchThreadTarget } from "../lib/workbench/thread/thread-state";
+import { countDraftPromptTokens, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../lib/workbench/thread/thread-state";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
@@ -173,6 +174,7 @@ import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/Workbench
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
 import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
+import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
 
 installBrowserRandomUuidPolyfill();
 
@@ -1907,6 +1909,74 @@ export default function Workbench () {
       .map(([threadId]) => threadId)),
     [visibleUserInputRequestsByThreadId],
   );
+  const materializedThreadRootIds = useMemo(() => {
+    if (showMosaicView) return getWorkbenchMosaicThreadRootIds(route.mosaicNode);
+    const threadIds = new Set<string>();
+    if (
+      isThreadViewReady
+      && effectiveThreadTarget
+      && (effectiveThreadTarget.kind === "provider" || effectiveThreadTarget.kind === "subagent")
+    ) {
+      threadIds.add(getWorkbenchThreadTargetRootId(effectiveThreadTarget));
+    }
+    return threadIds;
+  }, [effectiveThreadTarget, isThreadViewReady, route.mosaicNode, showMosaicView]);
+  const renderThreadTooltipDetails = useCallback((entry: WorkbenchThreadSidebarEntry) => {
+    if (entry.entryKind === "draft") return null;
+    const threadId = entry.identity.threadId;
+    const pendingRequest = visibleUserInputRequestsByThreadId[threadId]
+      ?? (entry.pendingQuestionnaire ? {
+        ...entry.pendingQuestionnaire,
+        harness: entry.identity.harness,
+        itemId: entry.pendingQuestionnaire.itemId ?? null,
+        threadId,
+        turnId: entry.pendingQuestionnaire.turnId ?? null,
+      } satisfies WorkbenchPendingUserInputRequest : null);
+    const proposalId = entry.gitArc?.proposals.find(({ status }) => status === "proposed")?.proposalId ?? null;
+    if (!pendingRequest && !proposalId) return null;
+    const rootThreadId = entry.entryKind === "subagent" ? entry.parentThreadId : threadId;
+    const cwd = entry.entryKind === "subagent"
+      ? entry.cwd
+      : threadSummariesById.get(threadId)?.cwd ?? null;
+    const questionnaireDraft = pendingRequest
+      ? threadQuestionnaireDraftsByKey[`${threadId}:${pendingRequest.requestKey}`] ?? null
+      : null;
+    return (
+      <WorkbenchThreadTooltipDetails
+        cwd={cwd}
+        harness={entry.identity.harness}
+        materialized={materializedThreadRootIds.has(rootThreadId)}
+        onDraftChange={(draft) => handleThreadQuestionnaireDraftChange(threadId, pendingRequest?.requestKey ?? "", draft)}
+        onDraftClear={() => handleThreadQuestionnaireDraftClear(threadId, pendingRequest?.requestKey ?? "")}
+        onReadThread={controls ? readThread : null}
+        onSubmitUserInputRequest={submitUserInputRequest}
+        pendingRequest={pendingRequest}
+        projectFilePaths={explorer.projectFilePaths}
+        projectId={activeProjectId}
+        projectRootPath={explorer.rootPath}
+        proposalId={proposalId}
+        questionnaireDraft={questionnaireDraft}
+        spellCheck={resolvedSettings.composerSpellCheck}
+        threadId={threadId}
+        workspaceRoots={projectFileLinkRoots}
+      />
+    );
+  }, [
+    activeProjectId,
+    controls,
+    explorer.projectFilePaths,
+    explorer.rootPath,
+    handleThreadQuestionnaireDraftChange,
+    handleThreadQuestionnaireDraftClear,
+    materializedThreadRootIds,
+    projectFileLinkRoots,
+    readThread,
+    resolvedSettings.composerSpellCheck,
+    submitUserInputRequest,
+    threadQuestionnaireDraftsByKey,
+    threadSummariesById,
+    visibleUserInputRequestsByThreadId,
+  ]);
   const getSidebarLifecycleSignal = useCallback(() => {
     const entries = threadSidebarStore?.getSnapshot()?.entries ?? [];
     if (entries.some((entry) => entry.entryKind !== "draft" && entry.lifecycle.kind === "needsAttention")) return "needsAttention";
@@ -2811,6 +2881,7 @@ export default function Workbench () {
                         onOpenThread={openThreadFromExplorer}
                         onThreadSettled={handleThreadSettled}
                         projectId={explorer.currentProjectId || route.projectId}
+                        renderThreadTooltipDetails={renderThreadTooltipDetails}
                         showMosaicView={showMosaicView}
                         store={threadSidebarStore}
                         threadSummariesById={threadSummariesById}

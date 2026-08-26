@@ -43,7 +43,10 @@ interface TooltipPosition {
 }
 
 interface WorkbenchTooltipTriggerProps {
+  "aria-controls"?: string;
   "aria-describedby"?: string;
+  "aria-expanded"?: boolean;
+  "aria-haspopup"?: "dialog";
   onPointerEnter?: (event: ReactPointerEvent<HTMLElement>) => void;
   onPointerLeave?: (event: ReactPointerEvent<HTMLElement>) => void;
   ref?: Ref<HTMLElement>;
@@ -169,6 +172,15 @@ export default function WorkbenchTooltip({
     };
   }, [hide, reconcilePointer, trackingPointer]);
 
+  useEffect(() => {
+    if (!visible || !interactive) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") hide();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [hide, interactive, visible]);
+
   useLayoutEffect(() => {
     const trigger = triggerRef.current;
     const tooltip = tooltipRef.current;
@@ -210,9 +222,13 @@ export default function WorkbenchTooltip({
     triggerRef.current = node;
     assignRef(childRef, node);
   }, [childRef]);
-  const describedBy = [childProps["aria-describedby"], enabled && visible ? tooltipId : null].filter(Boolean).join(" ") || undefined;
+  const describedBy = [childProps["aria-describedby"], enabled && visible && !interactive ? tooltipId : null].filter(Boolean).join(" ") || undefined;
+  const controlledBy = [childProps["aria-controls"], enabled && visible && interactive ? tooltipId : null].filter(Boolean).join(" ") || undefined;
   const trigger = cloneElement(children, {
+    "aria-controls": controlledBy,
     "aria-describedby": describedBy,
+    "aria-expanded": enabled && interactive ? visible : childProps["aria-expanded"],
+    "aria-haspopup": enabled && interactive ? "dialog" : childProps["aria-haspopup"],
     onPointerEnter: (event: ReactPointerEvent<HTMLElement>) => {
       childProps.onPointerEnter?.(event);
       if (isWorkbenchTooltipPointerSupported(event.pointerType)) beginShowing();
@@ -235,7 +251,8 @@ export default function WorkbenchTooltip({
     <div
       id={tooltipId}
       ref={tooltipRef}
-      role="tooltip"
+      role={interactive ? "dialog" : "tooltip"}
+      aria-modal={interactive ? false : undefined}
       className={`fixed z-[90] w-max overflow-x-hidden overflow-y-auto rounded-[1.1rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,black_5%,color-mix(in_srgb,var(--shell-fade-bg),transparent_20%))] px-3 py-2.5 text-sm text-text shadow-float backdrop-blur-xl ${interactive ? "pointer-events-auto" : "pointer-events-none"}`}
       style={tooltipStyle}
     >

@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { memo, useCallback, useEffect, useState, useSyncExternalStore, type PointerEvent } from "react";
+import { memo, useCallback, useEffect, useState, useSyncExternalStore, type PointerEvent, type ReactNode } from "react";
 
 import type { ThreadSummary, WorkbenchControls, WorkbenchHarness, WorkbenchThreadSidebarStore } from "../../lib/types";
 import { writeTextToClipboard } from "../../lib/workbench/dom/clipboard";
@@ -58,6 +58,7 @@ interface WorkbenchThreadSidebarProps {
   onOpenThread: (target: WorkbenchThreadTarget) => void;
   onThreadSettled: (target: WorkbenchThreadTarget) => void;
   projectId: string;
+  renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
   showMosaicView: boolean;
   store: WorkbenchThreadSidebarStore | null;
   threadSummariesById: ReadonlyMap<string, ThreadSummary>;
@@ -74,6 +75,7 @@ export default memo(function WorkbenchThreadSidebar({
   onOpenThread,
   onThreadSettled,
   projectId,
+  renderThreadTooltipDetails,
   showMosaicView,
   store,
   threadSummariesById,
@@ -315,6 +317,7 @@ export default memo(function WorkbenchThreadSidebar({
             });
           }}
           projectId={projectId}
+          renderThreadTooltipDetails={renderThreadTooltipDetails}
           onRenameFolder={async (folderId, title) => {
             const accepted = await controls?.updateThreadStateWithAcceptance({
               folderId,

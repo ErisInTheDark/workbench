@@ -18,6 +18,7 @@ import ThreadCodeDisplay from "./ThreadCodeDisplay";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext, { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
+import { ThreadFileChangeList } from "./ThreadFileChangeItem";
 import ThreadPlanConflictCard from "./ThreadPlanConflictCard";
 import { ThreadTurnDetails } from "./thread-view-items";
 import WorkbenchContextMenuContext from "../WorkbenchContextMenuContext";
@@ -27,6 +28,11 @@ interface EditableElementProps {
   children?: ReactNode;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   readOnly?: boolean;
+}
+
+interface FileChangeListElementProps {
+  changes: Array<{ detailsAvailable?: boolean }>;
+  children?: ReactNode;
 }
 
 function findEditableProps(node: ReactNode): EditableElementProps[] {
@@ -41,6 +47,13 @@ function findEditableProps(node: ReactNode): EditableElementProps[] {
   return node.props.ariaLabel?.startsWith("Commit ")
     ? [node.props, ...descendants]
     : descendants;
+}
+
+function findFileChangeListProps(node: ReactNode): FileChangeListElementProps[] {
+  if (Array.isArray(node)) return node.flatMap(findFileChangeListProps);
+  if (!isValidElement<FileChangeListElementProps>(node)) return [];
+  const descendants = findFileChangeListProps(node.props.children);
+  return node.type === ThreadFileChangeList ? [node.props, ...descendants] : descendants;
 }
 
 function proposedCheckpointState(status: "proposed" | "superseded" | "unavailable" = "proposed") {
@@ -62,6 +75,24 @@ function proposedCheckpointState(status: "proposed" | "superseded" | "unavailabl
       unavailableReason: status === "unavailable" ? "Unavailable." : null,
     },
     status: "loaded" as const,
+  };
+}
+
+function compactProposedCheckpointState() {
+  const state = proposedCheckpointState();
+  return {
+    ...state,
+    proposal: {
+      ...state.proposal,
+      changes: [{
+        additions: 2,
+        deletions: 1,
+        diff: "@@ -1 +1 @@\n-old\n+new\n",
+        kind: { move_path: null, type: "update" as const },
+        path: "src/one.ts",
+      }],
+      includeNewerAvailable: true,
+    },
   };
 }
 
@@ -1586,6 +1617,54 @@ test("loaded checkpoint proposal cards keep actions in the summary and clean exp
   assert.match(html, /Include newer changes/u);
   assert.match(html, /type="checkbox"/u);
   assert.match(html, />Commit</u);
+});
+
+test("compact checkpoint previews keep the shared card read-only and omit mutation controls", () => {
+  const card = ThreadCheckpointCommitCard({
+    committing: false,
+    description: "Compact description",
+    includeNewer: false,
+    onCommit: () => undefined,
+    onDescriptionChange: () => undefined,
+    onIncludeNewerChange: () => undefined,
+    onRetry: () => undefined,
+    onTitleChange: () => undefined,
+    paths: ["src/one.ts"],
+    presentation: "compact-preview",
+    sourceItemId: "compact-preview",
+    state: compactProposedCheckpointState(),
+    title: "Compact proposal",
+  });
+  const html = renderToStaticMarkup(card);
+  assert.equal(findEditableProps(card).length, 2);
+  assert.equal(findEditableProps(card).every(({ readOnly }) => readOnly === true), true);
+  assert.equal(findFileChangeListProps(card)[0]?.changes.every(({ detailsAvailable }) => detailsAvailable === false), true);
+  assert.match(html, /data-thread-checkpoint-card-presentation="compact-preview"/u);
+  assert.doesNotMatch(html, /type="checkbox"|data-thread-checkpoint-commit-action/u);
+});
+
+test("compact checkpoint commit mode keeps editable messages and the real proposal actions", () => {
+  const card = ThreadCheckpointCommitCard({
+    committing: false,
+    description: "Compact description",
+    includeNewer: false,
+    onCommit: () => undefined,
+    onDescriptionChange: () => undefined,
+    onIncludeNewerChange: () => undefined,
+    onRetry: () => undefined,
+    onTitleChange: () => undefined,
+    paths: ["src/one.ts"],
+    presentation: "compact-commit",
+    sourceItemId: "compact-commit",
+    state: compactProposedCheckpointState(),
+    title: "Compact proposal",
+  });
+  const html = renderToStaticMarkup(card);
+  assert.equal(findEditableProps(card).length, 2);
+  assert.equal(findEditableProps(card).every(({ readOnly }) => readOnly === false), true);
+  assert.equal(findFileChangeListProps(card)[0]?.changes.every(({ detailsAvailable }) => detailsAvailable === false), true);
+  assert.match(html, /type="checkbox"/u);
+  assert.match(html, /data-thread-checkpoint-commit-action="true"/u);
 });
 
 test("preview diffs hide Git plumbing headers", () => {

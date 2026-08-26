@@ -1,8 +1,8 @@
-/* No production exports. Tests protect blank, draft, and provider route identity. */
+/* No production exports. Tests protect blank, draft, provider, and materialized mosaic route identity. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createThreadHref, getWorkbenchDraftIdFromThreadId, isWorkbenchRouteOwnerOfThread, isWorkbenchThreadTargetSelected, parseWorkbenchRouteFromPath } from "./workbench-route";
-import { parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route";
+import { createThreadHref, getWorkbenchDraftIdFromThreadId, getWorkbenchMosaicThreadRootIds, isWorkbenchRouteOwnerOfThread, isWorkbenchThreadTargetSelected, parseWorkbenchRouteFromPath } from "./workbench-route";
+import { createWorkbenchMosaicSplit, createWorkbenchMosaicTarget, parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route";
 
 test("thread routes discriminate blank drafts and provider ids", () => {
   const draftId = "123e4567-e89b-42d3-a456-426614174000";
@@ -62,4 +62,14 @@ test("mosaic routes preserve parent-owned subagent identity", () => {
   const node = parseWorkbenchMosaicRouteExpression("[thread/parent/sub/child]");
   assert.equal(node.ok, true);
   if (node.ok) assert.equal(serializeWorkbenchMosaicRouteExpression(node.node), "[thread/parent/sub/child]");
+});
+
+test("mosaic materialization projects every durable root and excludes non-provider panels", () => {
+  const node = createWorkbenchMosaicSplit([
+    createWorkbenchMosaicTarget({ kind: "thread", target: { kind: "provider", threadId: "one" } }),
+    createWorkbenchMosaicTarget({ filePath: "src/index.ts", kind: "file" }),
+    createWorkbenchMosaicTarget({ kind: "thread", target: { kind: "subagent", parentThreadId: "parent", threadId: "child" } }),
+    createWorkbenchMosaicTarget({ kind: "thread", target: { kind: "new" } }),
+  ]);
+  assert.deepEqual([...getWorkbenchMosaicThreadRootIds(node)].sort(), ["one", "parent"]);
 });
