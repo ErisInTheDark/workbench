@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchWebSocketNode: own reloadable browser WebSocket routing and pending-request telemetry with state handoff. Keywords: websocket, reload, handoff, diagnostics.
+ * - default WorkbenchWebSocketNode: own reloadable browser WebSocket routing, request timing, and aggregate event-stream health with state handoff. Keywords: websocket, stream, reload, handoff, diagnostics.
  */
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
@@ -27,14 +27,16 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       start: () => undefined,
     };
   },
-  description: "Reload browser WebSocket routing and request diagnostics without restarting sockets.",
+  description: "Reload browser WebSocket routing, request diagnostics, and aggregate event-stream health without restarting sockets.",
   lifecycle: "handoff",
   provides: ["webSocketRequests"],
   requires: ["harnesses", "threadState"],
   safeAll: true,
   scope: "server:websocket",
   sources: [
+    "webapp/lib/workbench/websocket-stream.ts",
     "webapp/orchestrator/WorkbenchWebSocketNode.ts",
     "webapp/orchestrator/WorkbenchWebSocketRequestController.ts",
+    "webapp/orchestrator/WorkbenchWebSocketStreamController.ts",
   ].join("\n"),
 });

@@ -1,13 +1,21 @@
 /*
  * Exports:
- * - WorkbenchWebSocketPendingRequestState/WorkbenchWebSocketRequestControllerState: handoff state for requests awaiting browser responses. Keywords: websocket, request, handoff, timer.
+ * - WorkbenchWebSocketPendingRequestState/WorkbenchWebSocketRequestControllerState: handoff state for browser requests and aggregate event-stream health. Keywords: websocket, request, stream, handoff, timer.
  * - WorkbenchWebSocketRequestControllerOptions: injected routing, clock, scheduler, and log ports. Keywords: websocket, dependency injection, diagnostics.
- * - default WorkbenchWebSocketRequestController: own browser WebSocket routing, pending warnings, response timing, send completion, and disconnect cleanup. Keywords: websocket, json-rpc, latency, lifecycle.
+ * - default WorkbenchWebSocketRequestController: route browser WebSocket messages and compose request timing with aggregate event-stream health. Keywords: websocket, json-rpc, latency, stream, lifecycle.
  */
 import type { WorkbenchHarness } from "../lib/types";
+import {
+  WORKBENCH_EVENT_STREAM_ACK_METHOD,
+  WorkbenchEventStreamAckSchema,
+  type WorkbenchEventStreamHealth,
+} from "../lib/workbench/websocket-stream";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import WorkbenchWebSocketStreamController, {
+  type WorkbenchWebSocketStreamControllerState,
+} from "./WorkbenchWebSocketStreamController";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
 const DEFAULT_PENDING_THRESHOLD_MS = 2_000;
@@ -36,6 +44,7 @@ export interface WorkbenchWebSocketPendingRequestState {
 
 export interface WorkbenchWebSocketRequestControllerState {
   pending: WorkbenchWebSocketPendingRequestState[];
+  stream?: WorkbenchWebSocketStreamControllerState;
 }
 
 interface PendingRequest extends WorkbenchWebSocketPendingRequestState {
@@ -103,6 +112,7 @@ export default class WorkbenchWebSocketRequestController {
   private readonly pending = new Map<BridgeClient, Map<RequestId, PendingRequest>>();
   private readonly schedule: NonNullable<WorkbenchWebSocketRequestControllerOptions["setTimeout"]>;
   private readonly cancel: NonNullable<WorkbenchWebSocketRequestControllerOptions["clearTimeout"]>;
+  private readonly stream: WorkbenchWebSocketStreamController;
   private readonly threadState: WorkbenchWebSocketRequestControllerOptions["threadState"];
   private readonly writeLine: NonNullable<WorkbenchWebSocketRequestControllerOptions["writeLine"]>;
 
@@ -119,6 +129,13 @@ export default class WorkbenchWebSocketRequestController {
     this.harnesses = harnesses;
     this.now = now;
     this.schedule = schedule;
+    this.stream = new WorkbenchWebSocketStreamController({
+      clearTimeout: cancel,
+      initialState: initialState?.stream,
+      now,
+      setTimeout: schedule,
+      writeLine,
+    });
     this.threadState = threadState;
     this.writeLine = writeLine;
     for (const state of initialState?.pending ?? []) this.restorePending(state);
@@ -135,6 +152,14 @@ export default class WorkbenchWebSocketRequestController {
     }
     const method = typeof message.method === "string" && message.method ? message.method : null;
     if (!method) throw new Error("Workbench WebSocket message is missing a method.");
+    this.stream.connect(client);
+
+    if (method === WORKBENCH_EVENT_STREAM_ACK_METHOD) {
+      const acknowledgement = WorkbenchEventStreamAckSchema.safeParse(message);
+      if (acknowledgement.success) this.stream.acknowledge(client, acknowledgement.data.params.sequence);
+      else this.stream.reportInvalidAcknowledgement();
+      return;
+    }
 
     const requestId = "id" in message ? message.id : undefined;
     const isRequest = requestId === null || typeof requestId === "number" || typeof requestId === "string";
@@ -198,29 +223,35 @@ export default class WorkbenchWebSocketRequestController {
 
   async sendJsonToClient(client: BridgeClient, message: unknown) {
     this.assertActive();
+    const streamEvent = this.stream.prepareDelivery(client, message);
+    const deliveryMessage = streamEvent?.message ?? message;
     const responseId = readResponseId(message);
     const pending = responseId === undefined ? null : this.pending.get(client)?.get(responseId) ?? null;
     const serializeStartedAt = this.now();
     let serialized: string;
     try {
-      const value = JSON.stringify(message);
+      const value = JSON.stringify(deliveryMessage);
       if (typeof value !== "string") throw new Error("Workbench WebSocket message did not serialize to JSON.");
       serialized = value;
     } catch (error) {
+      if (streamEvent) this.stream.abandonDelivery(streamEvent);
       if (pending) this.complete(pending, "error", serializeStartedAt - pending.startedAt, this.now() - serializeStartedAt, 0, 0);
       throw error;
     }
     const serializedAt = this.now();
     const processMs = pending ? serializeStartedAt - pending.startedAt : 0;
     const jsonMs = serializedAt - serializeStartedAt;
+    const outBytes = Buffer.byteLength(serialized);
     if (client.readyState !== client.OPEN) {
-      if (pending) this.complete(pending, "closed", processMs, jsonMs, 0, Buffer.byteLength(serialized));
+      if (streamEvent) this.stream.abandonDelivery(streamEvent);
+      if (pending) this.complete(pending, "closed", processMs, jsonMs, 0, outBytes);
       return;
     }
 
     await new Promise<void>((resolve, reject) => {
       const sentAt = this.now();
       const finish = (error?: Error) => {
+        if (error && streamEvent) this.stream.failDelivery(streamEvent);
         if (pending) {
           this.complete(
             pending,
@@ -228,13 +259,14 @@ export default class WorkbenchWebSocketRequestController {
             processMs,
             jsonMs,
             this.now() - sentAt,
-            Buffer.byteLength(serialized),
+            outBytes,
           );
         }
         if (error) reject(error);
         else resolve();
       };
       try {
+        if (streamEvent) this.stream.commitDelivery(streamEvent, outBytes);
         client.send(serialized, finish);
       } catch (error) {
         finish(error instanceof Error ? error : new Error(String(error)));
@@ -246,7 +278,13 @@ export default class WorkbenchWebSocketRequestController {
     this.assertActive();
     const requests = [...(this.pending.get(client)?.values() ?? [])];
     for (const request of requests) this.complete(request, "closed", this.now() - request.startedAt, 0, 0, 0);
+    this.stream.disconnect(client);
     await this.threadState.disconnect(connectionId);
+  }
+
+  readEventStreamHealth(): WorkbenchEventStreamHealth {
+    this.assertActive();
+    return this.stream.readEventStreamHealth();
   }
 
   detachForReload(): WorkbenchWebSocketRequestControllerState {
@@ -258,7 +296,7 @@ export default class WorkbenchWebSocketRequestController {
       return state;
     }));
     this.pending.clear();
-    return { pending };
+    return { pending, stream: this.stream.detachForReload() };
   }
 
   dispose() {
@@ -268,6 +306,7 @@ export default class WorkbenchWebSocketRequestController {
       for (const request of requests.values()) if (request.timer) this.cancel(request.timer);
     }
     this.pending.clear();
+    this.stream.dispose();
   }
 
   private beginRequest(client: BridgeClient, id: RequestId, inBytes: number, label: string, method: string) {

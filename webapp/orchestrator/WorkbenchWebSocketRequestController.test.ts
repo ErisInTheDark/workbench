@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests protect WebSocket pending warnings, terminal completion, handoff, socket isolation, and send failures. Keywords: websocket, latency, timer, handoff, test.
+ * - No production exports; Node tests protect WebSocket pending warnings, stream receipt routing, terminal completion, handoff, socket isolation, and send failures. Keywords: websocket, stream, latency, timer, handoff, test.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -84,6 +84,10 @@ function frame(method: string, id: number, extra: Record<string, unknown> = {}) 
   return Buffer.from(JSON.stringify({ id, method, ...extra }));
 }
 
+function notificationFrame(method: string, params: Record<string, unknown>) {
+  return Buffer.from(JSON.stringify({ method, params }));
+}
+
 test("warns every two seconds until the matching response send completes", async () => {
   const clock = new FakeClock();
   const { controller, lines } = createController({ clock });
@@ -157,6 +161,35 @@ test("keeps identical request ids isolated by WebSocket client", async () => {
   clock.advance(2_000);
   assert.equal(lines.filter((line) => line.includes("codex:thread/read")).length, 1);
   assert.equal(lines.filter((line) => line.includes("opencode:model/list") && line.includes("pending")).length, 1);
+  controller.dispose();
+});
+
+test("sequences provider events and consumes browser receipts without harness routing", async () => {
+  const clock = new FakeClock();
+  const sent: Array<Record<string, unknown>> = [];
+  const harnessMessages: JsonRpcRequest[] = [];
+  const client = createClient((data, callback) => {
+    sent.push(JSON.parse(data) as Record<string, unknown>);
+    callback?.();
+  });
+  const { controller, lines } = createController({
+    clock,
+    onHarnessMessage: (message) => { harnessMessages.push(message); },
+  });
+
+  await controller.sendJsonToClient(client, {
+    method: "item/agentMessage/delta",
+    params: { delta: "secret commentary", itemId: "item", threadId: "thread", turnId: "turn" },
+    workbenchHarness: "codex",
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.workbenchEventStreamSequence, 1);
+  assert.equal(controller.readEventStreamHealth().unacknowledgedEvents, 1);
+
+  await controller.handleMessage(client, "connection-1", notificationFrame("workbench/event-stream/ack", { sequence: 1 }), false);
+  assert.equal(controller.readEventStreamHealth().unacknowledgedEvents, 0);
+  assert.deepEqual(harnessMessages, []);
+  assert.deepEqual(lines, []);
   controller.dispose();
 });
 

@@ -3,6 +3,11 @@
  * - CodexAppServerClient: persistent typed WebSocket client for the local stdio bridge and app-server notifications. Keywords: codex, websocket, stdio, notifications.
  */
 import type { WorkbenchHarness } from "../types";
+import {
+  WORKBENCH_EVENT_STREAM_ACK_METHOD,
+  WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD,
+  type WorkbenchEventStreamAck,
+} from "../workbench/websocket-stream";
 import type {
     CodexAppServerNotification,
     CodexAppServerNotificationHandling,
@@ -33,12 +38,16 @@ type PendingResponseHandler = {
 
 type CodexIncomingMessage = CodexJsonRpcResponse<unknown> | CodexAppServerNotification;
 type WorkbenchNotification = { method: "workbench/thread-state/reset" | "workbench/thread-state/updated"; params: unknown };
+type Timer = ReturnType<typeof setTimeout>;
+
+const EVENT_STREAM_ACK_BATCH_MS = 50;
 
 function isCodexJsonRpcResponse(message: unknown): message is CodexJsonRpcResponse<unknown> {
   return !!message && typeof message === "object" && "id" in message && ("result" in message || "error" in message);
 }
 
 export class CodexAppServerClient {
+  private readonly cancelEventStreamAck: (timer: Timer) => void;
   private readonly notificationListeners = new Set<(
     notification: CodexAppServerNotification,
     handling: CodexAppServerNotificationHandling,
@@ -50,11 +59,26 @@ export class CodexAppServerClient {
   private connectPromise: Promise<void> | null = null;
   private socketPromise: Promise<void> | null = null;
   private initialized = false;
+  private lastConsumedEventStreamSequence = 0;
   private disposed = false;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private eventStreamAckTimer: Timer | null = null;
+  private pendingEventStreamAckSequence: number | null = null;
+  private readonly scheduleEventStreamAck: (callback: () => void, delayMs: number) => Timer;
   private url = getCodexAppServerUrl();
   private socket: WebSocket | null = null;
+
+  constructor({
+    clearEventStreamAckTimeout: cancelEventStreamAck = clearTimeout,
+    setEventStreamAckTimeout: scheduleEventStreamAck = setTimeout,
+  }: {
+    clearEventStreamAckTimeout?: (timer: Timer) => void;
+    setEventStreamAckTimeout?: (callback: () => void, delayMs: number) => Timer;
+  } = {}) {
+    this.cancelEventStreamAck = cancelEventStreamAck;
+    this.scheduleEventStreamAck = scheduleEventStreamAck;
+  }
 
   async connect(url = getCodexAppServerUrl()) {
     if (this.socket && this.socket.readyState === WebSocket.OPEN && this.initialized) {
@@ -110,7 +134,10 @@ export class CodexAppServerClient {
       }
       this.pendingResponses.clear();
       this.initialized = false;
-      if (this.socket === socket) this.socket = null;
+      if (this.socket === socket) {
+        this.clearEventStreamReceiptState();
+        this.socket = null;
+      }
       if (!this.disposed) this.scheduleReconnect();
     });
 
@@ -140,6 +167,7 @@ export class CodexAppServerClient {
 
   close(code?: number, reason?: string) {
     this.disposed = true;
+    this.clearEventStreamReceiptState();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.socket?.close(code, reason);
@@ -147,6 +175,7 @@ export class CodexAppServerClient {
 
   dispose() {
     this.disposed = true;
+    this.clearEventStreamReceiptState();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.socket?.close();
@@ -170,7 +199,7 @@ export class CodexAppServerClient {
     };
   }
 
-  send(message: CodexClientRequest | CodexClientNotification) {
+  send(message: CodexClientRequest | CodexClientNotification | WorkbenchEventStreamAck) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       throw new Error("Codex app-server socket is not connected.");
     }
@@ -226,6 +255,10 @@ export class CodexAppServerClient {
       for (const listener of this.notificationListeners) {
         listener(parsed, handling, harness);
       }
+      const sequence = (parsed as unknown as Record<string, unknown>)[WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD];
+      if (typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0) {
+        this.consumeEventStreamSequence(sequence);
+      }
       return;
     }
 
@@ -238,5 +271,31 @@ export class CodexAppServerClient {
       this.pendingResponses.delete(parsed.id);
       handler.resolve(parsed);
     }
+  }
+
+  private consumeEventStreamSequence(sequence: number) {
+    if (sequence <= this.lastConsumedEventStreamSequence) return;
+    if (sequence !== this.lastConsumedEventStreamSequence + 1) return;
+    this.lastConsumedEventStreamSequence = sequence;
+    this.queueEventStreamAck(sequence);
+  }
+
+  private queueEventStreamAck(sequence: number) {
+    this.pendingEventStreamAckSequence = Math.max(this.pendingEventStreamAckSequence ?? 0, sequence);
+    if (this.eventStreamAckTimer !== null) return;
+    this.eventStreamAckTimer = this.scheduleEventStreamAck(() => {
+      this.eventStreamAckTimer = null;
+      const pendingSequence = this.pendingEventStreamAckSequence;
+      this.pendingEventStreamAckSequence = null;
+      if (pendingSequence === null || !this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+      this.send({ method: WORKBENCH_EVENT_STREAM_ACK_METHOD, params: { sequence: pendingSequence } });
+    }, EVENT_STREAM_ACK_BATCH_MS);
+  }
+
+  private clearEventStreamReceiptState() {
+    if (this.eventStreamAckTimer !== null) this.cancelEventStreamAck(this.eventStreamAckTimer);
+    this.eventStreamAckTimer = null;
+    this.lastConsumedEventStreamSequence = 0;
+    this.pendingEventStreamAckSequence = null;
   }
 }
