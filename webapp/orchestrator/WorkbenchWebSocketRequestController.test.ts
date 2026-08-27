@@ -165,6 +165,7 @@ test("warns every two seconds until the matching response send completes", async
   await controller.sendJsonToClient(client, { id: 7, result: { ok: true } });
   assert.equal(lines.length, 3);
   assert.match(lines[2] ?? "", /codex:thread\/read .*ok.*process:.*json:.*send:.*in:.*out:/u);
+  assert.match(lines[2] ?? "", /in 4\.0s \u001b\[2m\(process:.*out:.*\)\u001b\[0m$/u);
   assert.equal(lines.join("\n").includes("never-log-me"), false);
   clock.advance(10_000);
   assert.equal(lines.length, 3);

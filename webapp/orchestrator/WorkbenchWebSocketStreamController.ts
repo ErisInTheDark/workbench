@@ -1,6 +1,8 @@
 /*
  * Exports:
  * - WorkbenchWebSocketStreamControllerState: reload handoff state for private delivery receipts, lag incidents, and warning cadence. Keywords: websocket, stream, handoff, acknowledgement.
+ * - WorkbenchWebSocketRuntimeMemorySample: one bounded process-memory sample carried through stream reload. Keywords: websocket, runtime, memory.
+ * - WorkbenchWebSocketRuntimePressureState: reload handoff state for warning lateness and process-memory evidence. Keywords: websocket, runtime, memory, timer.
  * - WorkbenchWebSocketPreparedStreamEvent: provider-event delivery metadata committed only after serialization succeeds. Keywords: websocket, sequence, delivery.
  * - WorkbenchWebSocketStreamControllerOptions: injected clock, scheduler, and log ports. Keywords: websocket, diagnostics, test.
  * - default WorkbenchWebSocketStreamController: own provider-event sequencing, receipts, stream health, lag reports, reload handoff, and cleanup. Keywords: websocket, backpressure, health, lifecycle.
@@ -11,10 +13,12 @@ import {
   type WorkbenchEventStreamHealth,
 } from "../lib/workbench/websocket-stream";
 import type { BridgeClient } from "./bridge-types";
+import { dimWebSocketDetail } from "./websocket-log-format";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
 const BEHIND_THRESHOLD_MS = 2_000;
 const BEHIND_WARNING_INTERVAL_MS = 2_000;
+const MEMORY_BASELINE_SAMPLE_INTERVAL_MS = 2_000;
 const INCIDENT_REPORT_INTERVAL_MS = 30_000;
 const MAX_INCIDENT_RANKING_ENTRIES = 3;
 const ANSI_BOLD = "\u001b[1m";
@@ -68,6 +72,21 @@ interface StreamIncident {
   byLabel: Map<string, StreamIncidentLabelStats>;
 }
 
+export interface WorkbenchWebSocketRuntimeMemorySample {
+  heapTotalBytes: number;
+  heapUsedBytes: number;
+  rssBytes: number;
+}
+
+export interface WorkbenchWebSocketRuntimePressureState {
+  baselineMemory: WorkbenchWebSocketRuntimeMemorySample;
+  currentMemory: WorkbenchWebSocketRuntimeMemorySample;
+  latestWarningLatenessMs: number;
+  peakHeapUsedBytes: number;
+  peakRssBytes: number;
+  peakWarningLatenessMs: number;
+}
+
 export interface WorkbenchWebSocketStreamControllerState {
   activityBytes: number;
   activityByLabel: Array<[string, { bytes: number; events: number }]>;
@@ -85,6 +104,7 @@ export interface WorkbenchWebSocketStreamControllerState {
   peakSocketBufferedBytes: number;
   peakUnacknowledgedBytes: number;
   peakUnacknowledgedEvents: number;
+  runtimePressure?: WorkbenchWebSocketRuntimePressureState | null;
 }
 
 export interface WorkbenchWebSocketPreparedStreamEvent {
@@ -98,6 +118,7 @@ export interface WorkbenchWebSocketStreamControllerOptions {
   clearTimeout?: (timer: Timer) => void;
   initialState?: WorkbenchWebSocketStreamControllerState;
   now?: () => number;
+  readMemoryUsage?: () => Pick<NodeJS.MemoryUsage, "heapTotal" | "heapUsed" | "rss">;
   setTimeout?: (callback: () => void, delayMs: number) => Timer;
   writeLine?: (line: string) => void;
 }
@@ -117,6 +138,10 @@ function formatBytes(value: number) {
 function formatDuration(value: number) {
   const duration = Math.max(0, value);
   return duration < 1_000 ? `${Math.round(duration)}ms` : `${(duration / 1_000).toFixed(1)}s`;
+}
+
+function formatSignedBytes(value: number) {
+  return `${value >= 0 ? "+" : "-"}${formatBytes(Math.abs(value))}`;
 }
 
 function formatEventVolume(events: number, bytes: number) {
@@ -179,12 +204,16 @@ export default class WorkbenchWebSocketStreamController {
   private readonly connections = new Map<BridgeClient, ConnectionState>();
   private detached = false;
   private incident: StreamIncident | null = null;
+  private lastMemorySample: WorkbenchWebSocketRuntimeMemorySample | null = null;
+  private lastMemorySampleAt: number | null = null;
   private readonly now: NonNullable<WorkbenchWebSocketStreamControllerOptions["now"]>;
   private nextIncidentReportAt: number | null = null;
   private nextWarningAt: number | null = null;
   private peakSocketBufferedBytes = 0;
   private peakUnacknowledgedBytes = 0;
   private peakUnacknowledgedEvents = 0;
+  private readonly readMemoryUsage: NonNullable<WorkbenchWebSocketStreamControllerOptions["readMemoryUsage"]>;
+  private runtimePressure: WorkbenchWebSocketRuntimePressureState | null = null;
   private readonly schedule: NonNullable<WorkbenchWebSocketStreamControllerOptions["setTimeout"]>;
   private warningTimer: Timer | null = null;
   private readonly writeLine: NonNullable<WorkbenchWebSocketStreamControllerOptions["writeLine"]>;
@@ -193,11 +222,13 @@ export default class WorkbenchWebSocketStreamController {
     clearTimeout: cancel = clearTimeout,
     initialState,
     now = Date.now,
+    readMemoryUsage = process.memoryUsage,
     setTimeout: schedule = setTimeout,
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketStreamControllerOptions = {}) {
     this.cancel = cancel;
     this.now = now;
+    this.readMemoryUsage = readMemoryUsage;
     this.schedule = schedule;
     this.writeLine = writeLine;
     if (initialState) {
@@ -211,12 +242,20 @@ export default class WorkbenchWebSocketStreamController {
       this.peakSocketBufferedBytes = initialState.peakSocketBufferedBytes;
       this.peakUnacknowledgedBytes = initialState.peakUnacknowledgedBytes;
       this.peakUnacknowledgedEvents = initialState.peakUnacknowledgedEvents;
+      this.runtimePressure = initialState.runtimePressure
+        ? {
+          ...initialState.runtimePressure,
+          baselineMemory: { ...initialState.runtimePressure.baselineMemory },
+          currentMemory: { ...initialState.runtimePressure.currentMemory },
+        }
+        : null;
       for (const state of initialState.connections) {
         this.connections.set(state.client, {
           ...state,
           unacknowledged: state.unacknowledged.map((event) => ({ ...event })),
         });
       }
+      if (!this.runtimePressure && this.hasUnacknowledgedEvents()) this.startRuntimePressure();
       if (initialState.incident) {
         this.incident = {
           affectedClients: new Set(initialState.incident.affectedClients.filter((client) => this.connections.has(client))),
@@ -251,7 +290,10 @@ export default class WorkbenchWebSocketStreamController {
 
   commitDelivery(event: WorkbenchWebSocketPreparedStreamEvent, bytes: number) {
     this.assertActive();
-    if (!this.hasUnacknowledgedEvents() && this.behindStartedAt === null) this.resetActivity();
+    if (!this.hasUnacknowledgedEvents() && this.behindStartedAt === null) {
+      this.resetActivity();
+      this.startRuntimePressure();
+    }
     const connection = this.connection(event.client);
     const eventBytes = Math.max(0, bytes);
     connection.unacknowledged.push({
@@ -377,6 +419,13 @@ export default class WorkbenchWebSocketStreamController {
       peakSocketBufferedBytes: this.peakSocketBufferedBytes,
       peakUnacknowledgedBytes: this.peakUnacknowledgedBytes,
       peakUnacknowledgedEvents: this.peakUnacknowledgedEvents,
+      runtimePressure: this.runtimePressure
+        ? {
+          ...this.runtimePressure,
+          baselineMemory: { ...this.runtimePressure.baselineMemory },
+          currentMemory: { ...this.runtimePressure.currentMemory },
+        }
+        : null,
     };
   }
 
@@ -417,9 +466,11 @@ export default class WorkbenchWebSocketStreamController {
     if (this.warningTimer !== null) this.cancel(this.warningTimer);
     this.nextWarningAt = nextWarningAt;
     this.warningTimer = this.schedule(() => {
+      const callbackAt = this.now();
       this.warningTimer = null;
       this.nextWarningAt = null;
       if (this.detached) return;
+      this.sampleRuntimePressure(callbackAt, nextWarningAt);
       this.updateHealthTransition(true);
     }, Math.max(0, nextWarningAt - this.now()));
   }
@@ -472,10 +523,16 @@ export default class WorkbenchWebSocketStreamController {
 
   private writeBehind(health: WorkbenchEventStreamHealth) {
     const top = this.topActivityLabel();
-    this.writeLine(` WS stream ${streamToken("behind")} for ${formatDuration(this.now() - (this.behindStartedAt ?? this.now()))} (consumers: ${health.behindConsumers}/${health.connectedConsumers} behind, unacked: ${health.unacknowledgedEvents}/${formatBytes(health.unacknowledgedBytes)}, socket: ${formatBytes(health.socketBufferedBytes)}, oldest: ${formatDuration(health.oldestUnacknowledgedMs)}, received: ${this.activityEvents}/${formatBytes(this.activityBytes)}, top received: ${top})`);
+    const runtime = this.runtimePressure;
+    const runtimeSuffix = runtime
+      ? `, warning callback: ${formatDuration(runtime.latestWarningLatenessMs)} late, rss: ${formatBytes(runtime.currentMemory.rssBytes)}, heap: ${formatBytes(runtime.currentMemory.heapUsedBytes)}/${formatBytes(runtime.currentMemory.heapTotalBytes)}`
+      : "";
+    const detail = dimWebSocketDetail(`(consumers: ${health.behindConsumers}/${health.connectedConsumers} behind, unacked: ${health.unacknowledgedEvents}/${formatBytes(health.unacknowledgedBytes)}, socket: ${formatBytes(health.socketBufferedBytes)}, oldest: ${formatDuration(health.oldestUnacknowledgedMs)}, received: ${this.activityEvents}/${formatBytes(this.activityBytes)}, top received: ${top}${runtimeSuffix})`);
+    this.writeLine(` WS stream ${streamToken("behind")} for ${formatDuration(this.now() - (this.behindStartedAt ?? this.now()))} ${detail}`);
   }
 
   private writeIncidentConclusion(health: WorkbenchEventStreamHealth, cause: StreamIncidentEndCause) {
+    this.sampleRuntimePressure(this.now());
     this.writeIncidentReport(health, cause === "acknowledged" ? "recovered" : "ended", cause);
     this.behindStartedAt = null;
     this.incident = null;
@@ -522,12 +579,14 @@ export default class WorkbenchWebSocketStreamController {
     const byCount = this.rankIncidentLabels(labels, (stats) => stats.observedEvents);
     const bySize = this.rankIncidentLabels(labels, (stats) => stats.observedBytes);
     const byDuration = this.rankIncidentLabels(labels, (stats) => stats.longestUnacknowledgedMs);
-    const causeSuffix = cause ? ` (cause: ${cause})` : "";
+    const causeSuffix = cause ? ` ${dimWebSocketDetail(`(cause: ${cause})`)}` : "";
+    const runtimePressure = this.formatRuntimePressure();
     const report = [
       ` WS stream ${streamToken(status)} after ${formatDuration(this.now() - (this.behindStartedAt ?? this.now()))}${causeSuffix}`,
-      `   consumers: ${incident.affectedConsumers} affected / ${health.connectedConsumers} connected`,
-      `   stream pressure: peak ${formatEventVolume(this.peakUnacknowledgedEvents, this.peakUnacknowledgedBytes)} unacknowledged | peak socket ${formatBytes(this.peakSocketBufferedBytes)}`,
-      `   outcomes: ${formatEventVolume(totals.acknowledgedEvents, totals.acknowledgedBytes)} acknowledged | ${formatEventVolume(totals.failedEvents, totals.failedBytes)} delivery failed | ${formatEventVolume(totals.disconnectedEvents, totals.disconnectedBytes)} disconnected | ${formatEventVolume(totals.currentEvents, totals.currentBytes)} still pending`,
+      dimWebSocketDetail(`   consumers: ${incident.affectedConsumers} affected / ${health.connectedConsumers} connected`),
+      dimWebSocketDetail(`   stream pressure: peak ${formatEventVolume(this.peakUnacknowledgedEvents, this.peakUnacknowledgedBytes)} unacknowledged | peak socket ${formatBytes(this.peakSocketBufferedBytes)}`),
+      ...runtimePressure.map(dimWebSocketDetail),
+      dimWebSocketDetail(`   outcomes: ${formatEventVolume(totals.acknowledgedEvents, totals.acknowledgedBytes)} acknowledged | ${formatEventVolume(totals.failedEvents, totals.failedBytes)} delivery failed | ${formatEventVolume(totals.disconnectedEvents, totals.disconnectedBytes)} disconnected | ${formatEventVolume(totals.currentEvents, totals.currentBytes)} still pending`),
       ...this.formatIncidentRanking(
         "unacked by count:",
         byCount,
@@ -566,7 +625,62 @@ export default class WorkbenchWebSocketStreamController {
       ...(labels.length
         ? labels.map(([label, stats], index) => `     ${index + 1}. ${label} | ${formatMetric(stats)}`)
         : ["     none"]),
+    ].map(dimWebSocketDetail);
+  }
+
+  private formatRuntimePressure() {
+    const runtime = this.runtimePressure;
+    if (!runtime) return [];
+    const rssGrowth = runtime.currentMemory.rssBytes - runtime.baselineMemory.rssBytes;
+    const heapGrowth = runtime.currentMemory.heapUsedBytes - runtime.baselineMemory.heapUsedBytes;
+    return [
+      `   ${sectionHeading("runtime pressure:")}`,
+      `     warning callback: ${formatDuration(runtime.latestWarningLatenessMs)} late | peak ${formatDuration(runtime.peakWarningLatenessMs)} late`,
+      `     orchestrator rss: ${formatBytes(runtime.currentMemory.rssBytes)} current | ${formatBytes(runtime.peakRssBytes)} peak | ${formatSignedBytes(rssGrowth)} from first unacked`,
+      `     orchestrator heap: ${formatBytes(runtime.currentMemory.heapUsedBytes)} / ${formatBytes(runtime.currentMemory.heapTotalBytes)} current | ${formatBytes(runtime.peakHeapUsedBytes)} peak | ${formatSignedBytes(heapGrowth)} from first unacked`,
     ];
+  }
+
+  private readFreshMemorySample(observedAt: number): WorkbenchWebSocketRuntimeMemorySample {
+    const memory = this.readMemoryUsage();
+    const sample = {
+      heapTotalBytes: Math.max(0, Number.isFinite(memory.heapTotal) ? memory.heapTotal : 0),
+      heapUsedBytes: Math.max(0, Number.isFinite(memory.heapUsed) ? memory.heapUsed : 0),
+      rssBytes: Math.max(0, Number.isFinite(memory.rss) ? memory.rss : 0),
+    };
+    this.lastMemorySample = sample;
+    this.lastMemorySampleAt = observedAt;
+    return sample;
+  }
+
+  private sampleRuntimePressure(observedAt: number, warningDeadline?: number) {
+    if (!this.runtimePressure) this.startRuntimePressure();
+    const runtime = this.runtimePressure!;
+    const memory = this.readFreshMemorySample(observedAt);
+    const warningLatenessMs = warningDeadline === undefined
+      ? runtime.latestWarningLatenessMs
+      : Math.max(0, observedAt - warningDeadline);
+    runtime.currentMemory = memory;
+    runtime.latestWarningLatenessMs = warningLatenessMs;
+    runtime.peakHeapUsedBytes = Math.max(runtime.peakHeapUsedBytes, memory.heapUsedBytes);
+    runtime.peakRssBytes = Math.max(runtime.peakRssBytes, memory.rssBytes);
+    runtime.peakWarningLatenessMs = Math.max(runtime.peakWarningLatenessMs, warningLatenessMs);
+  }
+
+  private startRuntimePressure() {
+    const observedAt = this.now();
+    const memory = this.lastMemorySample && this.lastMemorySampleAt !== null
+      && observedAt - this.lastMemorySampleAt < MEMORY_BASELINE_SAMPLE_INTERVAL_MS
+      ? this.lastMemorySample
+      : this.readFreshMemorySample(observedAt);
+    this.runtimePressure = {
+      baselineMemory: memory,
+      currentMemory: memory,
+      latestWarningLatenessMs: 0,
+      peakHeapUsedBytes: memory.heapUsedBytes,
+      peakRssBytes: memory.rssBytes,
+      peakWarningLatenessMs: 0,
+    };
   }
 
   private nextIncidentReportBoundary(now: number) {
@@ -665,6 +779,7 @@ export default class WorkbenchWebSocketStreamController {
     this.activityBytes = 0;
     this.activityByLabel.clear();
     this.activityEvents = 0;
+    this.runtimePressure = null;
   }
 
   private assertActive() {

@@ -31,6 +31,7 @@ import type WorkbenchThreadStateController from "./WorkbenchThreadStateControlle
 import WorkbenchWebSocketStreamController, {
   type WorkbenchWebSocketStreamControllerState,
 } from "./WorkbenchWebSocketStreamController";
+import { dimWebSocketDetail } from "./websocket-log-format";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
 const DEFAULT_PENDING_THRESHOLD_MS = 2_000;
@@ -560,7 +561,8 @@ export default class WorkbenchWebSocketRequestController {
     if (requests?.get(request.id) === request) requests.delete(request.id);
     if (requests?.size === 0) this.pending.delete(request.client);
     const totalMs = this.now() - request.startedAt;
-    this.writeLine(` WS ${request.method} ${completionToken(outcome)} in ${formatDuration(totalMs)} (process: ${formatDuration(processMs)}, json: ${formatDuration(jsonMs)}, send: ${formatDuration(sendMs)}, in: ${formatBytes(request.inBytes)}, out: ${formatBytes(outBytes)})`);
+    const detail = dimWebSocketDetail(`(process: ${formatDuration(processMs)}, json: ${formatDuration(jsonMs)}, send: ${formatDuration(sendMs)}, in: ${formatBytes(request.inBytes)}, out: ${formatBytes(outBytes)})`);
+    this.writeLine(` WS ${request.method} ${completionToken(outcome)} in ${formatDuration(totalMs)} ${detail}`);
   }
 
   private assertActive() {

@@ -76,16 +76,27 @@ function createController(options: {
   clock: FakeClock;
   initialState?: WorkbenchWebSocketStreamControllerOptions["initialState"];
   lines?: string[];
+  readMemoryUsage?: WorkbenchWebSocketStreamControllerOptions["readMemoryUsage"];
 }) {
   const lines = options.lines ?? [];
   const controller = new WorkbenchWebSocketStreamController({
     clearTimeout: options.clock.clearTimeout,
     initialState: options.initialState,
     now: () => options.clock.nowMs,
+    readMemoryUsage: options.readMemoryUsage,
     setTimeout: options.clock.setTimeout,
     writeLine: (line) => { lines.push(line); },
   });
   return { controller, lines };
+}
+
+function memory(heapUsedMb: number, heapTotalMb: number, rssMb: number) {
+  const megabyte = 1_024 * 1_024;
+  return {
+    heapTotal: heapTotalMb * megabyte,
+    heapUsed: heapUsedMb * megabyte,
+    rss: rssMb * megabyte,
+  };
 }
 
 function prepare(controller: WorkbenchWebSocketStreamController, client: BridgeClient, harness: "codex" | "copilot" | "opencode", method = "item/agentMessage/delta") {
@@ -232,6 +243,78 @@ test("hot deliveries do not rearm an overdue stream warning", () => {
   controller.acknowledge(client, latest.sequence);
   assert.equal(lines.length, 2);
   assert.match(lines[1] ?? "", /stream .*recovered.*after 2\.5s/u);
+  controller.dispose();
+});
+
+test("reports cumulative runtime pressure on one-line warnings and across reload recovery", () => {
+  const clock = new FakeClock();
+  const lines: string[] = [];
+  const readings = [
+    memory(80, 100, 150),
+    memory(120, 160, 210),
+    memory(110, 150, 190),
+    memory(100, 140, 180),
+  ];
+  const readMemoryUsage = () => readings.shift() ?? memory(100, 140, 180);
+  const client = createClient();
+  const first = createController({ clock, lines, readMemoryUsage });
+  const event = prepare(first.controller, client, "codex");
+  first.controller.commitDelivery(event, 100);
+
+  clock.advanceLate(7_000);
+  assert.equal(lines.length, 1);
+  assert.doesNotMatch(lines[0] ?? "", /\n/u);
+  assert.match(
+    lines[0] ?? "",
+    /for 7\.0s \u001b\[2m\(.*warning callback: 5\.0s late, rss: 210\.0MB, heap: 120\.0MB\/160\.0MB\)\u001b\[0m$/u,
+  );
+
+  const state = first.controller.detachForReload();
+  assert.equal(state.runtimePressure?.peakWarningLatenessMs, 5_000);
+  assert.equal(state.runtimePressure?.baselineMemory.heapUsedBytes, 80 * 1_024 * 1_024);
+  const replacement = createController({ clock, initialState: state, lines, readMemoryUsage });
+
+  clock.advance(2_000);
+  assert.equal(lines.length, 2);
+  assert.match(lines[1] ?? "", /warning callback: 0ms late, rss: 190\.0MB, heap: 110\.0MB\/150\.0MB/u);
+  replacement.controller.acknowledge(client, event.sequence);
+  assert.equal(lines.length, 3);
+  const recovery = lines[2] ?? "";
+  assert.match(recovery, /warning callback: 0ms late \| peak 5\.0s late/u);
+  assert.match(recovery, /orchestrator rss: 180\.0MB current \| 210\.0MB peak \| \+30\.0MB from first unacked/u);
+  assert.match(recovery, /orchestrator heap: 100\.0MB \/ 140\.0MB current \| 120\.0MB peak \| \+20\.0MB from first unacked/u);
+  assert.ok(recovery.split("\n").slice(1).every((line) => (
+    line.startsWith("\u001b[2m") && line.endsWith("\u001b[0m")
+  )));
+  replacement.controller.dispose();
+});
+
+test("bounds healthy-stream memory sampling without adding a recurring timer", () => {
+  const clock = new FakeClock();
+  let memoryReads = 0;
+  const { controller, lines } = createController({
+    clock,
+    readMemoryUsage: () => {
+      memoryReads += 1;
+      return memory(80, 100, 150);
+    },
+  });
+  const client = createClient();
+
+  for (let index = 0; index < 100; index += 1) {
+    const event = prepare(controller, client, "codex");
+    controller.commitDelivery(event, 10);
+    controller.acknowledge(client, event.sequence);
+  }
+  assert.equal(memoryReads, 1);
+  assert.deepEqual(lines, []);
+
+  clock.advance(2_000);
+  const laterEvent = prepare(controller, client, "codex");
+  controller.commitDelivery(laterEvent, 10);
+  controller.acknowledge(client, laterEvent.sequence);
+  assert.equal(memoryReads, 2);
+  assert.deepEqual(lines, []);
   controller.dispose();
 });
 
