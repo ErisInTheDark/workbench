@@ -89,6 +89,32 @@ test("thread steers interrupt only declared waits for the matching thread across
   ordinaryCall.unregister();
 });
 
+test("thread wait observation derives every active interruptible tool from live registrations", () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const states: Array<{ threadId: string; toolNames: string[] }> = [];
+  const stop = registry.subscribeThreadWaits((state) => states.push(state));
+  const owner = {};
+  const subagent = registry.register("client-1", 1, {
+    owner, steerInterruptible: true, threadId: "parent-thread", toolName: "subagent_wait",
+  });
+  const arc = registry.register("client-2", 1, {
+    owner, steerInterruptible: true, threadId: "parent-thread", toolName: "git_arc_wait",
+  });
+  const ordinary = registry.register("client-1", 2, {
+    owner, threadId: "parent-thread", toolName: "thread_title_get",
+  });
+  arc.unregister();
+  subagent.unregister();
+  ordinary.unregister();
+  stop();
+  assert.deepEqual(states, [
+    { threadId: "parent-thread", toolNames: ["subagent_wait"] },
+    { threadId: "parent-thread", toolNames: ["git_arc_wait", "subagent_wait"] },
+    { threadId: "parent-thread", toolNames: ["subagent_wait"] },
+    { threadId: "parent-thread", toolNames: [] },
+  ]);
+});
+
 test("runtime drain cancels only matching policies in the retiring generation", () => {
   let now = 100;
   const registry = new WorkbenchAgentMcpRequestRegistry(undefined, () => now);

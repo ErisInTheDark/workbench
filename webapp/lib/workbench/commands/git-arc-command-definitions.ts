@@ -137,6 +137,27 @@ const start = defineWorkbenchAgentCommand({
   },
 });
 
+const wait = defineWorkbenchAgentCommand({
+  description: "Wait until sibling claims no longer intersect the current or selected inactive plan.",
+  helpGroups: ["git-arc"],
+  words: ["git", "arc", "wait"],
+  usage: "wb git arc wait [--ref <ref>]",
+  inputSchema: z.object({ ref: requiredText.optional(), refs: z.array(memberRefSchema).default([]) }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--ref"] });
+    return { ref: flags.optional("--ref") ?? undefined, refs: [] };
+  },
+  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      action: "arcWait", ...(input.ref ? { checkpointCommit: input.ref } : {}),
+      ...(input.refs.length ? { refs: input.refs } : {}), ...baseBody(callerHarness, callerThreadId, cwd),
+    }, "git-arc-wait");
+  },
+  effects: { idempotent: true, readOnly: true },
+  mcpRuntimeDrainPolicy: "abort-immediately",
+  mcpSteerInterruptible: true,
+});
+
 const continueArc = defineWorkbenchAgentCommand({
   description: "Continue an active arc or resume it after its proposal was committed.",
   helpGroups: ["git-arc"],
@@ -368,6 +389,7 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   planMutation("adopt"),
   planStart,
   start,
+  wait,
   continueArc,
   activePathCommand("add", "Continue an arc while claiming additional clean paths."),
   activePathCommand("adopt", "Adopt intentional dirty unclaimed workspace paths into this thread's active arc."),

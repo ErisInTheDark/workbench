@@ -121,6 +121,11 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     presentationName: "git_arc_start",
   }),
   createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+wait(?:\s|$)/iu,
+    id: "git-arc.wait",
+    presentationName: "git_arc_wait",
+  }),
+  createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+continue(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.continue,
     presentationName: "git_arc_continue",

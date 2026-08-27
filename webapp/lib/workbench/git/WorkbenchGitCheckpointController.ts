@@ -18,7 +18,7 @@ import type {
   GitCheckpointProposal,
 } from "./checkpoint-contracts";
 import { GitArcMissingClaimSetError } from "./git-arc-failures";
-import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcRegistry, { findGitArcCollisions, type GitArcCollision, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
 import GitArcPlanController, {
   GitCheckpointDirtyPathsError,
@@ -59,6 +59,13 @@ const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^[a-f0-9]{64}$/u;
 
 export interface GitArcActiveClaim extends GitArcRegistryEntry {
   proposalStatus: GitArcProposalStatus | null;
+}
+
+export interface GitArcPlanClaimCollisionResult {
+  checkpointCommit: string;
+  collisions: GitArcCollision[];
+  repoRoot: string;
+  scopePaths: string[];
 }
 
 
@@ -360,6 +367,32 @@ async function buildFileChanges(repoRoot: string, from: string, to: string, path
 export default class WorkbenchGitCheckpointController {
   private readonly plans = new GitArcPlanController();
   private readonly proposals = new GitArcProposalController();
+
+  async findPlanClaimCollisions({
+    checkpointCommit: requestedCommit,
+    cwd,
+    harness: rawHarness,
+    threadId,
+  }: ControllerInput & { checkpointCommit?: string }): Promise<GitArcPlanClaimCollisionResult> {
+    const repository = await WorkbenchGitRepository.open(cwd);
+    const harness = normalizeHarness(rawHarness);
+    const registry = new GitArcRegistry(repository);
+    const current = await registry.find({ harness, threadId });
+    const checkpointCommit = requestedCommit
+      ?? (current?.phase === "plan" ? current.checkpointCommit : null);
+    if (!checkpointCommit) throw new Error("This thread does not have an inactive Git arc plan.");
+    const checkpoint = await readCheckpoint(repository.root, harness, threadId, checkpointCommit);
+    if (!checkpoint.metadata || checkpoint.metadata.kind !== "plan" || !checkpoint.metadata.scopePaths.length) {
+      throw new Error("The selected checkpoint is not an inactive Git arc plan.");
+    }
+    const scopePaths = repository.normalizePaths(checkpoint.metadata.scopePaths);
+    return {
+      checkpointCommit: checkpoint.checkpointCommit,
+      collisions: findGitArcCollisions(await registry.list(), { harness, threadId }, scopePaths),
+      repoRoot: repository.root,
+      scopePaths,
+    };
+  }
 
   private async requireActiveArc({ cwd, harness: rawHarness, threadId }: ControllerInput) {
     const repository = await WorkbenchGitRepository.open(cwd);

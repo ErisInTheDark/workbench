@@ -7,6 +7,7 @@ import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } fro
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import WorkbenchOrchestratorHttpRouter from "./WorkbenchOrchestratorHttpRouter";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 
 const REQUIRED_REGISTRATIONS = [
   "agentCommand",
@@ -19,6 +20,7 @@ const REQUIRED_REGISTRATIONS = [
   "projectSnapshot",
   "reloadController",
   "threadGit",
+  "threadState",
 ] as const satisfies readonly (keyof OrchestratorRuntimeObjects)[];
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
@@ -28,7 +30,11 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const agentCommand = build.get("agentCommand");
     const harnesses = build.get("harnesses");
     const codexMcpGeneration = build.get("codexMcpGeneration");
+    const threadState = build.get("threadState");
     build.get("reloadController");
+    const stopWaitObservation = getProcessWorkbenchAgentMcpRequestRegistry().subscribeThreadWaits(({ threadId, toolNames }) => {
+      threadState.controller.setThreadWaitState("codex", threadId, toolNames);
+    });
     const mcp = new WorkbenchAgentMcpController({
       executeCommand: async (request, signal) => await agentCommand.executeStructuredRequest(request, signal),
       getReloadScopeCatalog: context.getReloadScopeCatalog,
@@ -50,7 +56,10 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         if (build.mode === "replacement") codexMcpGeneration.bump();
       },
       beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); },
-      dispose: () => { mcp.releaseRuntimeOwner(); },
+      dispose: () => {
+        stopWaitObservation();
+        mcp.releaseRuntimeOwner();
+      },
       expireRuntimeDrain: () => { mcp.expireRuntimeDrain(); },
       listRuntimeDrainPending: () => mcp.listRuntimeDrainPending().map(({ ageMs, policy, toolName }) => ({
         ageMs,

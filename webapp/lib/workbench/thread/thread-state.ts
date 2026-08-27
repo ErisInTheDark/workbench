@@ -251,6 +251,7 @@ const TopLevelEntrySchema = SidebarCommonSchema.extend({
   orderAt: z.number().int().nonnegative().optional(),
   pendingQuestionnaire: WorkbenchDurableQuestionnaireSchema.nullable().optional(),
   questionnaireHistory: z.array(WorkbenchQuestionnaireHistoryEntrySchema).optional(),
+  waitingFor: z.enum(["subagents", "other"]).optional(),
 }).strict();
 const SubagentEntrySchema = SidebarCommonSchema.extend({
   createdAt: z.number().int().nonnegative(),
@@ -270,6 +271,7 @@ const SubagentEntrySchema = SidebarCommonSchema.extend({
   pendingQuestionnaire: WorkbenchDurableQuestionnaireSchema.nullable().optional(),
   questionnaireHistory: z.array(WorkbenchQuestionnaireHistoryEntrySchema).optional(),
   updatedAt: z.number().int().nonnegative(),
+  waitingFor: z.enum(["subagents", "other"]).optional(),
 }).strict().superRefine((value, context) => {
   if (value.lifecycle.settled && value.pinned) context.addIssue({ code: "custom", message: "Settled subagents cannot remain locked." });
 });
@@ -305,6 +307,7 @@ export const WorkbenchProjectThreadSummaryCountsSchema = z.object({
   needsAttentionActive: z.number().int().nonnegative(),
   proposedCommit: z.number().int().nonnegative(),
   stopped: z.number().int().nonnegative(),
+  waiting: z.number().int().nonnegative().optional(),
   working: z.number().int().nonnegative(),
 }).strict();
 export type WorkbenchProjectThreadSummaryCounts = z.infer<typeof WorkbenchProjectThreadSummaryCountsSchema>;
@@ -312,7 +315,7 @@ export type WorkbenchProjectThreadSummaryCounts = z.infer<typeof WorkbenchProjec
 export const WorkbenchProjectThreadSummaryEntrySchema = z.object({
   activityAt: z.number().int().nonnegative(),
   identity: ThreadIdentitySchema,
-  status: z.enum(["completed", "needsAttention", "needsAttentionActive", "proposedCommit", "stopped", "working"]),
+  status: z.enum(["completed", "needsAttention", "needsAttentionActive", "proposedCommit", "stopped", "waiting", "working"]),
   title: z.string(),
 }).strict();
 export type WorkbenchProjectThreadSummaryEntry = z.infer<typeof WorkbenchProjectThreadSummaryEntrySchema>;
@@ -466,6 +469,7 @@ export function getThreadSidebarGroup(entry: WorkbenchThreadSidebarEntry): Workb
 
 export function isWorkbenchThreadSettlementAvailable(entry: WorkbenchThreadSidebarEntry) {
   return entry.entryKind !== "draft"
+    && !entry.waitingFor
     && !entry.lifecycle.settled
     && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")
     && !gitArcPreventsThreadSettlement(entry.gitArc);
@@ -613,20 +617,25 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
 }
 
 export function projectWorkbenchThreadSidebarEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {
-  const childLifecyclesByParent = new Map<string, WorkbenchThreadLifecycle[]>();
+  const childrenByParent = new Map<string, Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>[]>();
   for (const entry of entries) {
     if (entry.entryKind !== "subagent") continue;
-    const lifecycles = childLifecyclesByParent.get(entry.parentThreadId) ?? [];
-    lifecycles.push(entry.lifecycle);
-    childLifecyclesByParent.set(entry.parentThreadId, lifecycles);
+    childrenByParent.set(entry.parentThreadId, [...childrenByParent.get(entry.parentThreadId) ?? [], entry]);
   }
   return entries.map((entry) => {
-    if (entry.entryKind !== "thread" || entry.lifecycle.kind !== "completed") return entry;
-    const childLifecycles = childLifecyclesByParent.get(entry.identity.threadId) ?? [];
-    const attention = childLifecycles.find((lifecycle) => lifecycle.kind === "needsAttention");
-    if (attention) return { ...entry, lifecycle: attention };
-    const working = childLifecycles.find((lifecycle) => lifecycle.kind === "working");
-    return working ? { ...entry, lifecycle: working } : entry;
+    if (
+      entry.entryKind !== "thread"
+      || (entry.lifecycle.kind !== "completed" && entry.waitingFor !== "subagents")
+    ) return entry;
+    const children = childrenByParent.get(entry.identity.threadId) ?? [];
+    const attention = children.find(({ lifecycle }) => !lifecycle.settled && lifecycle.kind === "needsAttention");
+    const working = children.find(({ lifecycle, waitingFor }) => !lifecycle.settled && lifecycle.kind === "working" && !waitingFor);
+    const waiting = children.find(({ lifecycle, waitingFor }) => !lifecycle.settled && lifecycle.kind === "working" && Boolean(waitingFor));
+    const { waitingFor: _waitingFor, ...withoutWaiting } = entry;
+    if (attention) return { ...withoutWaiting, lifecycle: attention.lifecycle };
+    if (working) return { ...withoutWaiting, lifecycle: working.lifecycle };
+    if (waiting) return { ...withoutWaiting, lifecycle: waiting.lifecycle, waitingFor: "subagents" as const };
+    return entry;
   });
 }
 
@@ -641,13 +650,16 @@ export function createWorkbenchProjectThreadSummary(
     needsAttentionActive: 0,
     proposedCommit: 0,
     stopped: 0,
+    waiting: 0,
     working: 0,
   };
   const unsettledThreads: WorkbenchProjectThreadSummaryEntry[] = [];
   for (const entry of projectWorkbenchThreadSidebarEntries(entries)) {
     if (entry.entryKind !== "thread" || entry.lifecycle.settled || entry.metadata.snoozed) continue;
-    const status: WorkbenchProjectThreadSummaryEntry["status"] = entry.lifecycle.kind === "working"
-      ? "working"
+    const status: WorkbenchProjectThreadSummaryEntry["status"] = entry.waitingFor
+      ? "waiting"
+      : entry.lifecycle.kind === "working"
+        ? "working"
       : entry.lifecycle.kind === "needsAttention"
         ? entry.gitArc?.phase === "active" ? "needsAttentionActive" : "needsAttention"
         : entry.lifecycle.kind === "stopped"
@@ -667,7 +679,14 @@ export function createWorkbenchProjectThreadSummary(
     (latest, entry) => entry.entryKind === "draft" ? latest : Math.max(latest ?? 0, entry.activityAt),
     null,
   );
-  return { counts, lastThreadUpdateAt, projectId, revision, unsettledThreads };
+  const { waiting, ...countsWithoutWaiting } = counts;
+  return {
+    counts: waiting ? counts : countsWithoutWaiting,
+    lastThreadUpdateAt,
+    projectId,
+    revision,
+    unsettledThreads,
+  };
 }
 
 export function countDraftPromptTokens(text: string) {

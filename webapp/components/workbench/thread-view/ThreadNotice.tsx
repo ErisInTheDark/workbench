@@ -14,6 +14,7 @@ const THREAD_NOTICE_BACKGROUND_CLASS_NAMES = {
   "needs-attention": "bg-[linear-gradient(to_right,color-mix(in_srgb,var(--color-violet-500)_11%,transparent),transparent_88%)]",
   "needs-attention-active": "bg-[linear-gradient(to_right,color-mix(in_srgb,var(--color-amber-500)_11%,transparent),transparent_88%)]",
   stopped: "bg-[linear-gradient(to_right,color-mix(in_srgb,var(--color-red-500)_11%,transparent),transparent_88%)]",
+  waiting: "bg-[linear-gradient(to_right,color-mix(in_srgb,var(--text)_5%,transparent),transparent_88%)]",
   working: "bg-[linear-gradient(to_right,color-mix(in_srgb,var(--color-sky-500)_11%,transparent),transparent_88%)]",
 } satisfies Record<WorkbenchThreadStatusTone, string>;
 

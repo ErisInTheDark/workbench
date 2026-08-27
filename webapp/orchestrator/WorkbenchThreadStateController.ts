@@ -254,6 +254,7 @@ export default class WorkbenchThreadStateController {
   private readonly reconciliationPromises = new Set<Promise<void>>();
   private readonly stopReloadDirtSubscription: (() => void) | null;
   private readonly subscribers = new Set<(projectId: string, entry: WorkbenchThreadSidebarEntry) => void>();
+  private readonly waitingByThreadKey = new Map<string, "subagents" | "other">();
 
   constructor(options: WorkbenchThreadStateControllerOptions) {
     this.options = options;
@@ -268,6 +269,19 @@ export default class WorkbenchThreadStateController {
 
   async handleRequest(connectionId: string, input: WorkbenchThreadStateRequest | object) {
     return await this.handleRequestOwned(connectionId, input);
+  }
+
+  setThreadWaitState(harness: WorkbenchHarnessId, threadId: string, toolNames: readonly string[]) {
+    const key = `${harness}:${threadId}`;
+    const waitingFor = toolNames.length
+      ? toolNames.every((toolName) => toolName === "subagent_wait") ? "subagents" : "other"
+      : null;
+    if (this.waitingByThreadKey.get(key) === waitingFor || (!waitingFor && !this.waitingByThreadKey.has(key))) return;
+    if (waitingFor) this.waitingByThreadKey.set(key, waitingFor);
+    else this.waitingByThreadKey.delete(key);
+    for (const [projectId, state] of this.projects) {
+      if (state.entries.has(key)) this.publish(projectId, state);
+    }
   }
 
   private async handleRequestOwned(connectionId: string, input: WorkbenchThreadStateRequest | object) {
@@ -706,6 +720,7 @@ export default class WorkbenchThreadStateController {
   async dispose() {
     this.active = false;
     this.stopReloadDirtSubscription?.();
+    this.waitingByThreadKey.clear();
     for (const state of this.projects.values()) {
       state.generation += 1;
       state.abort?.abort();
@@ -825,7 +840,9 @@ export default class WorkbenchThreadStateController {
   private naturallyOrderedEntries(state: ProjectState) {
     const entries = [...state.entries.values()].flatMap((entry) => {
       const projected = projectWorkbenchThreadStateEntry(entry);
-      return projected ? [projected] : [];
+      if (!projected || projected.entryKind === "draft") return projected ? [projected] : [];
+      const waitingFor = this.waitingByThreadKey.get(entryKey(projected));
+      return [{ ...projected, ...(waitingFor ? { waitingFor } : {}) }];
     });
     return sortThreadSidebarEntries(projectWorkbenchThreadSidebarEntries(entries)).filter((entry) => getThreadSidebarGroup(entry) !== "hidden");
   }

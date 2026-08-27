@@ -109,8 +109,11 @@ async function sendResponse(response: http.ServerResponse, upstream: Response) {
 
 export default class WorkbenchGitArcFeature {
   private readonly controller = new WorkbenchGitCheckpointController();
+  private readonly disposal = new AbortController();
   private readonly workspaceController: WorkbenchWorkspaceGitArcController;
   private readonly pendingCardReads = new Map<string, Promise<Response>>();
+  private claimRevision = 0;
+  private readonly claimWaiters = new Set<() => void>();
 
   constructor(private readonly options: WorkbenchGitArcFeatureOptions) {
     this.workspaceController = new WorkbenchWorkspaceGitArcController(this.controller, {
@@ -187,12 +190,15 @@ export default class WorkbenchGitArcFeature {
     }
   }
 
-  async executeRequest(input: object) {
+  async executeRequest(input: object, signal?: AbortSignal) {
     const parsed = GitCheckpointRequestSchema.safeParse(input);
     if (!parsed.success) return failureResponse(createGitArcOperationRejected("unknown", "Invalid checkpoint request."));
     try {
       const project = await this.resolveProject(parsed.data.cwd);
       const request = { ...parsed.data, cwd: project.cwd };
+      if (request.action === "arcWait") {
+        return Response.json(await this.waitForPlanClaims(project, request, signal));
+      }
       if (mutatesGitArcState(request)) this.fencePendingCardReads(project.cwd);
       const execute = async () => {
         try {
@@ -221,6 +227,7 @@ export default class WorkbenchGitArcFeature {
           return response;
         } finally {
           if (mutatesGitArcState(request)) {
+            this.notifyClaimMutation();
             await this.refreshThreadGitArcState(project.project.id, request.harness, request.threadId);
           }
         }
@@ -236,6 +243,61 @@ export default class WorkbenchGitArcFeature {
         );
       return failureResponse(failure);
     }
+  }
+
+  private async waitForPlanClaims(
+    project: AgentEndpointProjectResolution,
+    request: Extract<GitCheckpointRequest, { action: "arcWait" }>,
+    callerSignal?: AbortSignal,
+  ) {
+    const signal = callerSignal
+      ? AbortSignal.any([callerSignal, this.disposal.signal])
+      : this.disposal.signal;
+    while (true) {
+      signal.throwIfAborted();
+      const revision = this.claimRevision;
+      const result = usesWorkspaceController(project, request)
+        ? await this.workspaceController.findPlanClaimCollisions(project, request)
+        : await this.controller.findPlanClaimCollisions({
+          checkpointCommit: request.checkpointCommit,
+          cwd: project.cwd,
+          harness: request.harness,
+          threadId: request.threadId,
+        });
+      signal.throwIfAborted();
+      if (!result.collisions.length) return result;
+      await this.waitForClaimMutation(revision, signal);
+    }
+  }
+
+  private async waitForClaimMutation(revision: number, signal: AbortSignal) {
+    if (revision !== this.claimRevision) return;
+    await new Promise<void>((resolve, reject) => {
+      let finished = false;
+      const finish = (error?: unknown) => {
+        if (finished) return;
+        finished = true;
+        this.claimWaiters.delete(wake);
+        signal.removeEventListener("abort", abort);
+        error === undefined ? resolve() : reject(error);
+      };
+      const wake = () => finish();
+      const abort = () => finish(signal.reason ?? new Error("Git arc wait was interrupted."));
+      this.claimWaiters.add(wake);
+      signal.addEventListener("abort", abort, { once: true });
+      if (revision !== this.claimRevision) wake();
+      else if (signal.aborted) abort();
+    });
+  }
+
+  private notifyClaimMutation() {
+    this.claimRevision += 1;
+    for (const wake of [...this.claimWaiters]) wake();
+  }
+
+  dispose() {
+    this.disposal.abort(new Error("Git arc feature disposed."));
+    this.notifyClaimMutation();
   }
 
   private async coalesceCardRead(cwd: string, request: GitCheckpointRequest, execute: () => Promise<Response>) {
@@ -382,6 +444,7 @@ export default class WorkbenchGitArcFeature {
         ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
       }));
       case "arcStart": return Response.json(await this.controller.startArc({ ...common, checkpointCommit: input.checkpointCommit }));
+      case "arcWait": return Response.json(await this.controller.findPlanClaimCollisions({ ...common, checkpointCommit: input.checkpointCommit }));
       case "arcContinue": return Response.json(await this.controller.continueArc({ ...common, checkpointCommit: input.checkpointCommit }));
       case "arcAdd": return Response.json(await this.controller.addToArc({ ...common, paths: input.paths }));
       case "arcAdopt": return Response.json(await this.controller.adoptIntoArc({ ...common, paths: input.paths }));

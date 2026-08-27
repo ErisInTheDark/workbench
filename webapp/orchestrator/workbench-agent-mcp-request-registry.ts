@@ -30,6 +30,7 @@ interface WorkbenchAgentMcpRuntimeOwnerState {
 interface WorkbenchAgentMcpRequestRegistryState {
   disposed: boolean;
   exitHookInstalled: boolean;
+  threadWaitListeners: Set<(state: WorkbenchAgentMcpThreadWaitState) => void>;
   ownerStates: WeakMap<WorkbenchAgentMcpRuntimeOwner, WorkbenchAgentMcpRuntimeOwnerState>;
   requestsByClient: Map<WorkbenchAgentMcpClientScope, Map<WorkbenchAgentMcpRequestId, WorkbenchAgentMcpRequestEntry>>;
 }
@@ -48,12 +49,18 @@ export interface WorkbenchAgentMcpPendingRequest {
   toolName: string;
 }
 
+export interface WorkbenchAgentMcpThreadWaitState {
+  threadId: string;
+  toolNames: string[];
+}
+
 const PROCESS_REGISTRY_KEY = Symbol.for("workbench.agentMcpRequestRegistry.v2");
 
 function createState(): WorkbenchAgentMcpRequestRegistryState {
   return {
     disposed: false,
     exitHookInstalled: false,
+    threadWaitListeners: new Set(),
     ownerStates: new WeakMap(),
     requestsByClient: new Map(),
   };
@@ -68,6 +75,7 @@ function disposeState(state: WorkbenchAgentMcpRequestRegistryState, reason: stri
     }
   }
   state.requestsByClient.clear();
+  state.threadWaitListeners.clear();
   state.ownerStates = new WeakMap();
 }
 
@@ -77,6 +85,7 @@ function getProcessState() {
     state = createState();
     Reflect.set(globalThis, PROCESS_REGISTRY_KEY, state);
   }
+  state.threadWaitListeners ??= new Set();
   if (!state.exitHookInstalled) {
     state.exitHookInstalled = true;
     process.once("exit", () => disposeState(state, "Workbench orchestrator is shutting down."));
@@ -119,6 +128,7 @@ export class WorkbenchAgentMcpRequestRegistry {
     };
     requests.set(requestId, entry);
     this.state.requestsByClient.set(clientScope, requests);
+    if (entry.steerInterruptible && entry.threadId) this.notifyThreadWaits(entry.threadId);
     if (ownerState.phase !== "active" && phaseCancels(entry.policy, ownerState.phase)) {
       entry.controller.abort(new Error("Workbench MCP tool call was cancelled for runtime reload."));
     }
@@ -131,8 +141,25 @@ export class WorkbenchAgentMcpRequestRegistry {
         if (requests.size === 0 && this.state.requestsByClient.get(clientScope) === requests) {
           this.state.requestsByClient.delete(clientScope);
         }
+        if (entry.steerInterruptible && entry.threadId) this.notifyThreadWaits(entry.threadId);
       },
     };
+  }
+
+  subscribeThreadWaits(listener: (state: WorkbenchAgentMcpThreadWaitState) => void) {
+    this.state.threadWaitListeners.add(listener);
+    return () => this.state.threadWaitListeners.delete(listener);
+  }
+
+  private notifyThreadWaits(threadId: string) {
+    const toolNames = new Set<string>();
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (entry.steerInterruptible && entry.threadId === threadId) toolNames.add(entry.toolName);
+      }
+    }
+    const state = { threadId, toolNames: [...toolNames].sort((left, right) => left.localeCompare(right)) };
+    for (const listener of this.state.threadWaitListeners) listener(state);
   }
 
   beginRuntimeDrain(owner: WorkbenchAgentMcpRuntimeOwner, phase: WorkbenchAgentMcpRuntimeDrainPhase, reason: string) {

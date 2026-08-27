@@ -73,6 +73,30 @@ function createBrowsePort(executeBrowseRequest: (body: Buffer, signal: AbortSign
   };
 }
 
+test("direct Git arc dispatch receives the caller cancellation signal", async () => {
+  let receivedSignal: AbortSignal | null = null;
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      executeGitArcRequest: async (_body, signal) => {
+        receivedSignal = signal;
+        return Response.json({ checkpointCommit: "a".repeat(40), collisions: [], scopePaths: ["src/a.ts"] });
+      },
+    },
+  );
+  const cancellation = new AbortController();
+  const response = await controller.executeStructuredRequest({
+    body: { action: "arcWait", cwd: "C:/repo", harness: "codex", threadId: "thread-one" },
+    method: "POST",
+    path: "/api/git-checkpoint",
+    responseKind: "git-arc-wait",
+  }, cancellation.signal);
+  assert.equal(response.status, 200);
+  assert.equal(receivedSignal, cancellation.signal);
+});
+
 test("answers the private apply_patch hook from the active claim owner", async () => {
   const checkedPaths: string[][] = [];
   const checkedThreadIds: string[] = [];

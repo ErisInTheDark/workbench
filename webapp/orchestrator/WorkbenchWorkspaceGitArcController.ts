@@ -14,6 +14,7 @@ import type { WorkbenchHarness } from "../lib/types";
 import type { GitCheckpointRequest, GitArcMemberRef, GitArcRootPaths } from "../lib/workbench/git/checkpoint-contracts";
 import WorkbenchGitCheckpointController, {
   type GitArcLifecycleState,
+  type GitArcPlanClaimCollisionResult,
   type GitArcPlanState,
   type GitArcRetentionResult,
 } from "../lib/workbench/git/WorkbenchGitCheckpointController";
@@ -57,6 +58,13 @@ export interface WorkspaceGitArcPlanMemberState extends GitArcPlanState {
 
 export interface WorkspaceGitArcPlanState extends GitArcPlanState {
   members: WorkspaceGitArcPlanMemberState[];
+}
+
+export interface WorkspaceGitArcPlanClaimCollisionResult extends GitArcPlanClaimCollisionResult {
+  members: Array<GitArcPlanClaimCollisionResult & {
+    rootId: string;
+    rootIds: string[];
+  }>;
 }
 
 function comparable(filePath: string) {
@@ -173,6 +181,42 @@ export default class WorkbenchWorkspaceGitArcController {
     return { allowed: uncoveredPaths.length === 0, uncoveredPaths };
   }
 
+  async findPlanClaimCollisions(
+    project: AgentEndpointProjectResolution,
+    request: Extract<GitCheckpointRequest, { action: "arcWait" }>,
+  ): Promise<WorkspaceGitArcPlanClaimCollisionResult> {
+    const members = await this.resolveRepoMembers(project);
+    const refs = this.refsByRepo(project, members, request.refs);
+    if (request.checkpointCommit) refs.set(this.memberForRoot(members, project.root).repoRoot, request.checkpointCommit);
+    if (!refs.size) {
+      const plan = await this.findPlanState(project, request.harness, request.threadId);
+      for (const member of plan?.members ?? []) refs.set(member.repoRoot, member.checkpointCommit);
+    }
+    const selected = members.filter((member) => refs.has(member.repoRoot));
+    if (!selected.length) throw new Error("This workspace Git arc has no matching inactive plan members.");
+    const values = await Promise.all(selected.map(async (member) => ({
+      member,
+      result: await this.local.findPlanClaimCollisions({
+        checkpointCommit: refs.get(member.repoRoot),
+        cwd: member.repoRoot,
+        harness: request.harness,
+        threadId: request.threadId,
+      }),
+    })));
+    const decorated = values.map(({ member, result }) => ({
+      ...result,
+      rootId: member.roots[0]!.id,
+      rootIds: member.roots.map(({ id }) => id),
+      scopePaths: result.scopePaths.map((scopePath) => this.qualify(project, member, scopePath)),
+    }));
+    return {
+      ...decorated[0]!,
+      collisions: decorated.flatMap(({ collisions }) => collisions),
+      members: decorated,
+      scopePaths: decorated.flatMap(({ scopePaths }) => scopePaths),
+    };
+  }
+
   private async listIgnoredPatchPaths(
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
@@ -234,6 +278,7 @@ export default class WorkbenchWorkspaceGitArcController {
       case "arcRelease": return await this.executeRelease(project, members, request);
       case "arcStart":
       case "arcContinue": return await this.executeRefOperation(project, members, request);
+      case "arcWait": return await this.findPlanClaimCollisions(project, request);
       case "compare":
       case "diff": return await this.executeInspection(project, members, request);
       case "arcMove": return await this.executeMove(project, members, request);

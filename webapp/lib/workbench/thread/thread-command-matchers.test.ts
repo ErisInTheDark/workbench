@@ -99,7 +99,8 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
 }
 
 test("every exposed typed wb MCP tool has a semantic route", () => {
-  const exposedNames = listWorkbenchAgentCommands()
+  const commands = listWorkbenchAgentCommands();
+  const exposedNames = commands
     .filter((definition) => !definition.hideFromMcp)
     .map(getWorkbenchAgentCommandToolName)
     .sort();
@@ -115,12 +116,17 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
       tool,
     }), tool);
   }
+  const wait = commands.find((definition) => definition.words.join("_") === "git_arc_wait");
+  assert.deepEqual(wait?.effects, { idempotent: true, readOnly: true });
+  assert.equal(wait?.mcpRuntimeDrainPolicy, "abort-immediately");
+  assert.equal(wait?.mcpSteerInterruptible, true);
 });
 
 test("simple typed wb MCP calls share argument-sensitive CLI presentations", () => {
   const cases = [
     ["wb thread resume", "thread_resume", {}],
     ["wb git add -- src/a.ts", "git_add", { paths: ["src/a.ts"] }],
+    ["wb git arc wait", "git_arc_wait", {}],
     ["wb thread title get", "thread_title_get", {}],
     ["wb subagent list", "subagent_list", {}],
     ['wb browse run --thread thread-one --session rendering --summary "Check page" --command "snapshot --compact"', "browse_run", { commands: ["snapshot --compact"], session: "rendering", summary: "Check page" }],

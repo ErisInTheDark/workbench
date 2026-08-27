@@ -169,8 +169,11 @@ export default function WorkbenchThreadListItem({
   const claimedPaths = gitArc?.claimedPaths ?? [];
   const claimedFileCount = claimedPaths.length;
   const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
-  const showProposedCommit = lifecycle?.kind === "completed" && hasProposedCommit;
-  const status = showProposedCommit
+  const waiting = entry.entryKind !== "draft" && Boolean(entry.waitingFor);
+  const showProposedCommit = !waiting && lifecycle?.kind === "completed" && hasProposedCommit;
+  const status = waiting
+    ? "Waiting"
+    : showProposedCommit
     ? "Proposed commit"
     : entry.entryKind === "draft"
       ? "Draft"
@@ -181,15 +184,17 @@ export default function WorkbenchThreadListItem({
   const dateTime = timestamp.toISOString();
   const relativeTime = formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs);
   const exactTime = timestamp.toLocaleString();
-  const canComplete = entry.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned(entry.lifecycle) && (entry.lifecycle.kind === "needsAttention" || entry.lifecycle.kind === "stopped");
+  const canComplete = entry.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned(entry.lifecycle) && !waiting && (entry.lifecycle.kind === "needsAttention" || entry.lifecycle.kind === "stopped");
   const settlementBlocked = gitArcPreventsThreadSettlement(gitArc);
   const settlementAvailable = isWorkbenchThreadSettlementAvailable(entry);
   const baseAction: ThreadAction | null = entry.entryKind === "draft" ? "discard" : group === "settled" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : settlementAvailable ? "settle" : null;
   const canShiftSettle = canComplete && !settlementBlocked;
   const action = canShiftSettle && isShiftPressed ? "settle" : baseAction;
-  const Icon = entry.entryKind === "draft" ? DraftThreadIcon : showProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
-  const statusTone: WorkbenchThreadStatusTone = lifecycle?.kind === "working"
-    ? "working"
+  const Icon = entry.entryKind === "draft" ? DraftThreadIcon : waiting ? WorkingThreadIcon : showProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
+  const statusTone: WorkbenchThreadStatusTone = waiting
+    ? "waiting"
+    : lifecycle?.kind === "working"
+      ? "working"
     : lifecycle?.kind === "needsAttention"
       ? getNeedsAttentionThreadStatusTone(hasActiveGitArc)
       : lifecycle?.kind === "stopped"
@@ -200,7 +205,7 @@ export default function WorkbenchThreadListItem({
   const actionLabel = action === "complete" ? "Completed" : action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Wake";
   const rowName = `${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} claimed ${claimedFileCount === 1 ? "file" : "files"}` : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
   const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled"));
-  const hasDashedBorder = entry.entryKind === "draft" || lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped";
+  const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
   const compact = compactOverride ?? group === "settled";
   const hideCompactMetadata = showActions && Boolean(action);

@@ -207,6 +207,8 @@ function createWorkbenchCoreFeature(
       browseSessionCleanup.dispose();
       reportPhase("subagent disposal");
       subagents.dispose();
+      reportPhase("Git arc disposal");
+      gitArc.dispose();
       reportPhase("thread-state disposal");
       await threadState.dispose();
       reportPhase("project snapshot disposal");

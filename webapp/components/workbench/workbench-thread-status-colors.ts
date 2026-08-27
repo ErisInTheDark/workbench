@@ -5,8 +5,8 @@
  * - getWorkbenchThreadStatusClassName/getWorkbenchThreadStatusControlClassName: own shared text and context-control color classes. Keywords: thread, status, color, Tailwind.
  */
 
-export type WorkbenchThreadStatusTone = "completed" | "needs-attention" | "needs-attention-active" | "stopped" | "working";
-export type WorkbenchThreadStatusControlTone = Exclude<WorkbenchThreadStatusTone, "working">;
+export type WorkbenchThreadStatusTone = "completed" | "needs-attention" | "needs-attention-active" | "stopped" | "waiting" | "working";
+export type WorkbenchThreadStatusControlTone = Exclude<WorkbenchThreadStatusTone, "waiting" | "working">;
 
 export function getNeedsAttentionThreadStatusTone(hasActiveGitArc: boolean): "needs-attention" | "needs-attention-active" {
   return hasActiveGitArc ? "needs-attention-active" : "needs-attention";
@@ -14,6 +14,7 @@ export function getNeedsAttentionThreadStatusTone(hasActiveGitArc: boolean): "ne
 
 export function getWorkbenchThreadStatusClassName(tone: WorkbenchThreadStatusTone) {
   if (tone === "working") return "text-sky-600 dark:text-sky-300";
+  if (tone === "waiting") return "text-muted";
   if (tone === "needs-attention-active") return "text-amber-600 dark:text-amber-300";
   if (tone === "needs-attention") return "text-violet-600 dark:text-violet-300";
   if (tone === "stopped") return "text-red-600 dark:text-red-300";

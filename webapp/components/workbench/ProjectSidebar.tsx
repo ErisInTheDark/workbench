@@ -37,6 +37,7 @@ const EMPTY_COUNTS: WorkbenchProjectThreadSummaryCounts = {
   needsAttentionActive: 0,
   proposedCommit: 0,
   stopped: 0,
+  waiting: 0,
   working: 0,
 };
 
@@ -53,6 +54,7 @@ const STATUS_ITEMS: ProjectStatusItem[] = [
   { dashed: true, Icon: NeedsAttentionThreadIcon, key: "needsAttentionActive", label: "Needs attention with active work", tone: "needs-attention-active" },
   { dashed: true, Icon: NeedsAttentionThreadIcon, key: "needsAttention", label: "Needs attention", tone: "needs-attention" },
   { dashed: false, Icon: WorkingThreadIcon, key: "working", label: "Working", tone: "working" },
+  { dashed: false, Icon: WorkingThreadIcon, key: "waiting", label: "Waiting", tone: "waiting" },
   { dashed: true, Icon: StoppedThreadIcon, key: "stopped", label: "Stopped", tone: "stopped" },
   { dashed: false, Icon: ProposedCommitThreadIcon, key: "proposedCommit", label: "Proposed commit", tone: "completed" },
   { dashed: false, Icon: CompletedThreadIcon, key: "completed", label: "Completed", tone: "completed" },
@@ -82,12 +84,13 @@ function addCounts(
     needsAttentionActive: left.needsAttentionActive + right.needsAttentionActive,
     proposedCommit: left.proposedCommit + right.proposedCommit,
     stopped: left.stopped + right.stopped,
+    waiting: (left.waiting ?? 0) + (right.waiting ?? 0),
     working: left.working + right.working,
   };
 }
 
 function hasStatusCounts(counts: WorkbenchProjectThreadSummaryCounts) {
-  return STATUS_ITEMS.some(({ key }) => counts[key] > 0);
+  return STATUS_ITEMS.some(({ key }) => (counts[key] ?? 0) > 0);
 }
 
 function ProjectStatusCounts({

@@ -321,6 +321,19 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   });
   assert.equal(start.request.responseKind, "git-arc-start");
 
+  const wait = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "wait", "--ref", "abc",
+  ], gitOptions);
+  assert.equal(wait.kind, "request");
+  assert.deepEqual(wait.request.body, {
+    action: "arcWait",
+    checkpointCommit: "abc",
+    cwd: "C:/workspace",
+    harness: "codex",
+    threadId: "thread-1",
+  });
+  assert.equal(wait.request.responseKind, "git-arc-wait");
+
   const continuedArc = await parseWorkbenchAgentCliCommand([
     "git", "arc", "continue", "--ref", "abc",
   ], gitOptions);
@@ -725,6 +738,7 @@ test("routes canonical, compatibility, and leaf help to the nearest owning group
   assert.deepEqual(arcLeaf, canonicalArc);
   assert.match(canonicalArc.kind === "help" ? canonicalArc.help : "", /wb git arc remove -- <claimed-path>/u);
   assert.match(canonicalArc.kind === "help" ? canonicalArc.help : "", /wb git arc release \[--disown\]/u);
+  assert.match(canonicalArc.kind === "help" ? canonicalArc.help : "", /wb git arc wait \[--ref <ref>\]/u);
 
   const browse = await parseWorkbenchAgentCliCommand(["browse", "--help"]);
   const browseLeaf = await parseWorkbenchAgentCliCommand(["browse", "run", "--help"]);
@@ -1097,6 +1111,15 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     selectedPaths: ["src/dirty.ts"],
     version: 1,
   });
+  const waitResponse = adapt("git-arc-wait", {
+    checkpointCommit: planRef,
+    members: [
+      { checkpointCommit: planRef, rootId: "api" },
+      { checkpointCommit: successorRef, rootId: "web" },
+    ],
+  }, { action: "arcWait" });
+  assert.match(waitResponse.stdout, new RegExp(`^Intersecting Git arc claims released for plan ${planRef}`, "u"));
+  assert.match(waitResponse.stdout, new RegExp(`api: ${planRef}[\\s\\S]*web: ${successorRef}`, "u"));
   const movePreview = adapt("git-arc-mv", {
     additionalClaims: ["src/old.ts", "tests/old.ts"],
     checkpointCommit: planRef,

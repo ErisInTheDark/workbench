@@ -90,6 +90,12 @@ test("thread rows render counts only for active file claims", () => {
   assert.doesNotMatch(unclaimedHtml, /data-role="thread-file-claim"|claimed files/u);
 });
 
+test("thread rows expose waiting as a neutral working-icon status", () => {
+  const html = renderThreadItem({ ...createThreadEntry({ threadId: "waiting", title: "Waiting work" }), waitingFor: "other" });
+  assert.match(html, /aria-label="Waiting work, Waiting,/u);
+  assert.match(html, /data-thread-status-tone="waiting"/u);
+});
+
 test("thread rows project resolved Git arcs without treating them as live file claims", () => {
   const entry = createThreadEntry({ threadId: "resolved", title: "Resolved work" });
   const html = renderThreads([{ ...entry, gitArc: {

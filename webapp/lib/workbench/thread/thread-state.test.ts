@@ -398,6 +398,37 @@ test("completed parent status derives attention before working without mutating 
   assert.equal(projectWorkbenchThreadSidebarEntries([parent])[0], parent);
 });
 
+test("subagent waits inherit attention before working before waiting while other waits stay waiting", () => {
+  const parent: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: "parent" },
+    lifecycle: { agent: { agentStatus: "working", turnId: "parent-turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false }, title: "Parent", waitingFor: "subagents",
+  };
+  const child = (
+    threadId: string,
+    lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>["lifecycle"],
+    waitingFor?: "other" | "subagents",
+  ): Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> => ({
+    activityAt: 2, createdAt: 1, cwd: "C:/repo", directSubagentIndex: 0, entryKind: "subagent",
+    identity: { harness: "codex", threadId }, lifecycle, name: threadId, parentThreadId: "parent", pinned: false,
+    profileId: "default", profileName: "Default", projectId: "project", title: threadId, updatedAt: 2,
+    ...(waitingFor ? { waitingFor } : {}),
+  });
+  const waiting = child("waiting", { agent: { agentStatus: "working", turnId: "wait-turn" }, kind: "working", reason: "acceptedIntent", settled: false }, "other");
+  const working = child("working", { agent: { agentStatus: "working", turnId: "work-turn" }, kind: "working", reason: "acceptedIntent", settled: false });
+  const attention = child("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false });
+  const projectedWaiting = projectWorkbenchThreadSidebarEntries([parent, waiting])[0]!;
+  const projectedWorking = projectWorkbenchThreadSidebarEntries([parent, waiting, working])[0]!;
+  const projectedAttention = projectWorkbenchThreadSidebarEntries([parent, waiting, working, attention])[0]!;
+  assert.equal(projectedWaiting.entryKind === "thread" ? projectedWaiting.waitingFor : null, "subagents");
+  assert.equal(projectedWorking.entryKind === "draft" ? null : projectedWorking.lifecycle.kind, "working");
+  assert.equal(projectedWorking.entryKind === "thread" ? projectedWorking.waitingFor : null, undefined);
+  assert.equal(projectedAttention.entryKind === "draft" ? null : projectedAttention.lifecycle.kind, "needsAttention");
+  assert.equal(projectWorkbenchThreadSidebarEntries([{ ...parent, waitingFor: "other" }, working])[0]!.entryKind === "thread"
+    ? (projectWorkbenchThreadSidebarEntries([{ ...parent, waitingFor: "other" }, working])[0] as Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>).waitingFor
+    : null, "other");
+});
+
 test("project summaries count unsettled top-level status after direct-child projection", () => {
   type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
   const thread = (
@@ -445,6 +476,7 @@ test("project summaries count unsettled top-level status after direct-child proj
   const summary = createWorkbenchProjectThreadSummary("project", [
     parent,
     child,
+    { ...thread("waiting", { agent: { agentStatus: "working", turnId: "wait-turn" }, kind: "working", reason: "acceptedIntent", settled: false }), waitingFor: "other" },
     thread("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }),
     thread("active-attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }, arc),
     thread("stopped", { kind: "stopped", reason: "userMarkedStopped", settled: false }),
@@ -464,6 +496,7 @@ test("project summaries count unsettled top-level status after direct-child proj
       needsAttentionActive: 1,
       proposedCommit: 1,
       stopped: 1,
+      waiting: 1,
       working: 1,
     },
     lastThreadUpdateAt: 4,
@@ -475,6 +508,12 @@ test("project summaries count unsettled top-level status after direct-child proj
         identity: { harness: "codex", threadId: "parent" },
         status: "working",
         title: "parent",
+      },
+      {
+        activityAt: 1,
+        identity: { harness: "codex", threadId: "waiting" },
+        status: "waiting",
+        title: "waiting",
       },
       {
         activityAt: 1,

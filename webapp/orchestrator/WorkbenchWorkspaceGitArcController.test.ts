@@ -16,6 +16,7 @@ import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcContro
 const execFileAsync = promisify(execFile);
 
 class FakeLocalGitArcController {
+  readonly collisionCalls: Array<{ checkpointCommit?: string; cwd: string }> = [];
   readonly dirtyRoots = new Set<string>();
   readonly lifecycleFindCalls: string[] = [];
   readonly lifecycleListCalls: string[] = [];
@@ -98,6 +99,16 @@ class FakeLocalGitArcController {
   }
   async findPlanState(input: { cwd: string }) { return this.plans.get(input.cwd) ?? null; }
   async listPlanStates(input: { cwd: string }) { return this.plans.has(input.cwd) ? [this.plans.get(input.cwd)!] : []; }
+  async findPlanClaimCollisions(input: { checkpointCommit?: string; cwd: string }) {
+    this.collisionCalls.push({ checkpointCommit: input.checkpointCommit, cwd: input.cwd });
+    const plan = this.plans.get(input.cwd)!;
+    return {
+      checkpointCommit: input.checkpointCommit ?? plan.checkpointCommit,
+      collisions: [],
+      repoRoot: input.cwd,
+      scopePaths: plan.scopePaths,
+    };
+  }
 
   async createProposal(input: { amendProposalId?: string; cwd: string; paths?: string[] }) {
     const state = this.states.get(input.cwd);
@@ -142,6 +153,49 @@ function createWorkspace(primary: string, secondary: string): AgentEndpointProje
     root: roots[0]!,
   };
 }
+
+test("workspace claim waits resolve current and explicit refs for every inactive plan member", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async (rootPath) => rootPath,
+  );
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "thread-one" };
+  const plan = await controller.execute(project, {
+    action: "plan",
+    adoptPaths: [],
+    intentDescription: "",
+    intentName: "Wait plan",
+    paths: [],
+    roots: [
+      { adoptPaths: [], paths: ["src/api.ts"], rootId: "api" },
+      { adoptPaths: [], paths: ["src/web.ts"], rootId: "web" },
+    ],
+    ...identity,
+  }) as { members: Array<{ checkpointCommit: string; rootId: string }> };
+  const current = await controller.findPlanClaimCollisions(project, {
+    action: "arcWait", refs: [], ...identity,
+  });
+  assert.deepEqual(current.members.map(({ rootId, scopePaths }) => ({ rootId, scopePaths })), [
+    { rootId: "api", scopePaths: ["api:src/api.ts"] },
+    { rootId: "web", scopePaths: ["web:src/web.ts"] },
+  ]);
+  local.collisionCalls.length = 0;
+  await controller.findPlanClaimCollisions(project, {
+    action: "arcWait",
+    refs: plan.members.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })),
+    ...identity,
+  });
+  assert.deepEqual(local.collisionCalls.map(({ checkpointCommit, cwd }) => ({
+    checkpointCommit,
+    cwd,
+  })), [
+    { checkpointCommit: plan.members[0]!.checkpointCommit, cwd: "C:/repo/api" },
+    { checkpointCommit: plan.members[1]!.checkpointCommit, cwd: "C:/repo/web" },
+  ]);
+});
 
 test("active claims and Git ignore rules cover patch paths across workspace roots", async (context) => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-claim-coverage-"));

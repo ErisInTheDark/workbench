@@ -47,6 +47,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_arc_plan_adopt",
   "git_arc_plan_start",
   "git_arc_start",
+  "git_arc_wait",
   "git_arc_continue",
   "git_arc_add",
   "git_arc_adopt",
@@ -483,6 +484,8 @@ export function getWorkbenchCommandRoute(
   if (name.startsWith("subagent_")) return renderSubagent(name, args);
   if (name.startsWith("browse_")) return renderBrowse(name, args);
   switch (name) {
+    case "git_arc_wait":
+      return simple("git-arc.wait", actionTarget("Waiting for ", "Git arc claims"), actionTarget("Cleared ", "Git arc claims"));
     case "rg":
       return {
         kind: "simple",

@@ -37,25 +37,29 @@ type FolderEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "subagent" 
 type FolderStatusIcon = ComponentType<{ className?: string }>;
 
 function folderStatusRank(entry: FolderEntry) {
-  if (entry.entryKind === "draft") return 4;
+  if (entry.entryKind === "draft") return 5;
   if (entry.lifecycle.kind === "needsAttention") return 0;
-  if (entry.lifecycle.kind === "working") return 1;
-  if (entry.lifecycle.kind === "stopped") return 2;
-  return 3;
+  if (entry.lifecycle.kind === "working" && !entry.waitingFor) return 1;
+  if (entry.waitingFor) return 2;
+  if (entry.lifecycle.kind === "stopped") return 3;
+  return 4;
 }
 
 function getFolderStatus(entries: readonly FolderEntry[], attentionLabelsByThreadId: Record<string, string | undefined>) {
   const entry = [...entries].sort((left, right) => folderStatusRank(left) - folderStatusRank(right))[0]!;
   if (entry.entryKind === "draft") return { dashed: true, Icon: DraftThreadIcon as FolderStatusIcon, label: "Draft", statusClassName: "text-muted", strokeOpacity: 0.24 };
-  const proposed = entry.lifecycle.kind === "completed" && Boolean(entry.gitArc?.proposals.some(({ status }) => status === "proposed"));
-  const tone: WorkbenchThreadStatusTone = entry.lifecycle.kind === "needsAttention"
+  const waiting = Boolean(entry.waitingFor);
+  const proposed = !waiting && entry.lifecycle.kind === "completed" && Boolean(entry.gitArc?.proposals.some(({ status }) => status === "proposed"));
+  const tone: WorkbenchThreadStatusTone = waiting
+    ? "waiting"
+    : entry.lifecycle.kind === "needsAttention"
     ? getNeedsAttentionThreadStatusTone(entry.gitArc?.phase === "active")
     : entry.lifecycle.kind;
-  const Icon = proposed ? ProposedCommitThreadIcon : entry.lifecycle.kind === "needsAttention" ? NeedsAttentionThreadIcon : entry.lifecycle.kind === "working" ? WorkingThreadIcon : entry.lifecycle.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
+  const Icon = waiting ? WorkingThreadIcon : proposed ? ProposedCommitThreadIcon : entry.lifecycle.kind === "needsAttention" ? NeedsAttentionThreadIcon : entry.lifecycle.kind === "working" ? WorkingThreadIcon : entry.lifecycle.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
   return {
-    dashed: entry.lifecycle.kind === "needsAttention" || entry.lifecycle.kind === "stopped",
+    dashed: !waiting && (entry.lifecycle.kind === "needsAttention" || entry.lifecycle.kind === "stopped"),
     Icon: Icon as FolderStatusIcon,
-    label: proposed ? "Proposed commit" : entry.lifecycle.kind === "needsAttention" ? attentionLabelsByThreadId[entry.identity.threadId]?.trim() || "Needs attention" : entry.lifecycle.kind === "working" ? "Working" : entry.lifecycle.kind === "stopped" ? "Stopped" : "Completed",
+    label: waiting ? "Waiting" : proposed ? "Proposed commit" : entry.lifecycle.kind === "needsAttention" ? attentionLabelsByThreadId[entry.identity.threadId]?.trim() || "Needs attention" : entry.lifecycle.kind === "working" ? "Working" : entry.lifecycle.kind === "stopped" ? "Stopped" : "Completed",
     statusClassName: getWorkbenchThreadStatusClassName(tone),
     strokeOpacity: 1,
   };

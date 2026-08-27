@@ -92,6 +92,12 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     ...checkpointBaseRequest,
   }),
   z.object({
+    action: z.literal("arcWait"),
+    checkpointCommit: checkpointSha.optional(),
+    refs: z.array(GitArcMemberRefSchema).default([]),
+    ...checkpointBaseRequest,
+  }),
+  z.object({
     action: z.literal("arcAdd"),
     paths: optionalCheckpointPaths,
     roots: z.array(GitArcRootPathsSchema).default([]),

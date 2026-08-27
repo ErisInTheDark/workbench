@@ -25,7 +25,7 @@ const RELOAD_POLL_INTERVAL_MS = 250;
 interface WorkbenchAgentDirectPort {
   checkApplyPatchClaims?: (request: { cwd: string; harness: WorkbenchHarness; paths: string[]; threadId: string }) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
-  executeGitArcRequest?: (body: object) => Promise<Response>;
+  executeGitArcRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   getReloadDirt?: (signal?: AbortSignal) => Promise<WorkbenchReloadDirtSnapshot>;
   getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
@@ -325,7 +325,7 @@ export default class WorkbenchAgentCommandController {
       return await this.dispatchManagedThreadRequest(request.path, request.body, signal);
     }
     if (request.path === "/api/git-checkpoint" && request.body && this.direct.executeGitArcRequest) {
-      return await this.direct.executeGitArcRequest(request.body);
+      return await this.direct.executeGitArcRequest(request.body, signal);
     }
     if (request.path === "/api/rg" && request.body) {
       return await this.ripgrep.execute(request.body, signal);

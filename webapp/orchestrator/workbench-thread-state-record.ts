@@ -15,7 +15,9 @@ import {
   type WorkbenchThreadLifecycle,
 } from "../lib/workbench/thread/thread-state";
 
-type WorkbenchProviderThreadEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
+type WorkbenchProviderSidebarEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
+type WithoutWaiting<TValue> = TValue extends unknown ? Omit<TValue, "waitingFor"> : never;
+type WorkbenchProviderThreadEntry = WithoutWaiting<WorkbenchProviderSidebarEntry>;
 
 export type WorkbenchThreadStateRecord = WorkbenchProviderThreadEntry & {
   gitHistoryCleanedAt: number | null;
@@ -138,12 +140,13 @@ export function safeParseWorkbenchThreadStateEntry(value: unknown):
   | { data: WorkbenchThreadStateEntry; success: true }
   | { error: unknown; success: false } {
   const publicCandidate = value && typeof value === "object" && !Array.isArray(value)
-    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, settledAt: _settledAt, ...candidate }) => candidate)(value as Record<string, unknown>)
+    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, settledAt: _settledAt, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
     : value;
   const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(publicCandidate);
   if (!parsed.success) return { error: parsed.error, success: false };
   if (parsed.data.entryKind === "draft") return { data: parsed.data, success: true };
-  return { data: { ...parsed.data, ...internalFields(value) }, success: true };
+  const { waitingFor: _waitingFor, ...persistent } = parsed.data;
+  return { data: { ...persistent, ...internalFields(value) }, success: true };
 }
 
 export function parseWorkbenchThreadStateEntry(value: unknown): WorkbenchThreadStateEntry {
@@ -157,7 +160,7 @@ export function conformStoredWorkbenchThreadStateRecord(
   projectId: string,
 ): StoredWorkbenchThreadStateRecordConformance {
   const publicCandidate = value && typeof value === "object" && !Array.isArray(value)
-    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, settledAt: _settledAt, ...candidate }) => candidate)(value as Record<string, unknown>)
+    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, settledAt: _settledAt, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
     : value;
   const locator = StoredRecordLocatorSchema.safeParse(publicCandidate);
   if (!locator.success) return { error: locator.error, success: false };
@@ -170,8 +173,9 @@ export function conformStoredWorkbenchThreadStateRecord(
   if (conformed.data.entryKind === "draft") {
     return { error: new z.ZodError([{ code: "custom", message: "A stored provider record cannot be a draft.", path: ["entryKind"] }]), success: false };
   }
+  const { waitingFor: _waitingFor, ...persistent } = conformed.data;
   return {
-    data: { ...conformed.data, ...internalFields(value) },
+    data: { ...persistent, ...internalFields(value) },
     repairedPaths: conformed.repairedPaths,
     success: true,
   };

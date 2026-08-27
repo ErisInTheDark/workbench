@@ -17,6 +17,102 @@ import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpo
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 
+function waitFeature() {
+  return new WorkbenchGitArcFeature({
+    getThreadClaimContext: async () => ({
+      lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+      title: "Waiting thread",
+    }),
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+}
+
+test("Git arc wait returns when clear and rechecks after an event-driven claim mutation", async () => {
+  const feature = waitFeature();
+  const internal = feature as unknown as {
+    controller: {
+      addToPlan: () => Promise<object>;
+      findPlanClaimCollisions: () => Promise<object>;
+    };
+  };
+  let blocked = false;
+  let reads = 0;
+  let reportBlockedRead!: () => void;
+  const blockedRead = new Promise<void>((resolve) => { reportBlockedRead = resolve; });
+  internal.controller.findPlanClaimCollisions = async () => {
+    reads += 1;
+    if (blocked) reportBlockedRead();
+    return {
+      checkpointCommit: "a".repeat(40),
+      collisions: blocked ? [{
+        entry: {
+          checkpointCommit: "b".repeat(40), claimedPaths: ["src/a.ts"], harness: "codex", intentDescription: "",
+          intentName: "Sibling", threadId: "sibling", updatedAt: "2026-08-27T00:00:00.000Z",
+        },
+        overlaps: [{ claimedPath: "src/a.ts", requestedPath: "src/a.ts" }],
+      }] : [],
+      repoRoot: "C:/Git/Project",
+      scopePaths: ["src/a.ts"],
+    };
+  };
+  internal.controller.addToPlan = async () => ({
+    checkpointCommit: "a".repeat(40), intentName: "Plan", kind: "plan", repoRoot: "C:/Git/Project", scopePaths: ["src/a.ts"],
+  });
+  const request = {
+    action: "arcWait", checkpointCommit: "a".repeat(40), cwd: "C:/Git/Project",
+    harness: "codex" as const, threadId: "thread-one",
+  };
+  assert.equal((await feature.executeRequest(request)).status, 200);
+  blocked = true;
+  const pending = feature.executeRequest(request);
+  await blockedRead;
+  blocked = false;
+  assert.equal((await feature.executeRequest({
+    action: "planAdd", cwd: "C:/Git/Project", harness: "codex", paths: ["src/a.ts"], threadId: "thread-one",
+  })).status, 200);
+  assert.equal((await pending).status, 200);
+  assert.equal(reads, 3);
+});
+
+test("Git arc wait stops on caller cancellation and feature disposal", async () => {
+  const createBlocked = () => {
+    const feature = waitFeature();
+    let reportRead!: () => void;
+    const read = new Promise<void>((resolve) => { reportRead = resolve; });
+    (feature as unknown as { controller: { findPlanClaimCollisions: () => Promise<object> } }).controller.findPlanClaimCollisions = async () => {
+      reportRead();
+      return {
+        checkpointCommit: "a".repeat(40),
+        collisions: [{ entry: {
+          checkpointCommit: "b".repeat(40), claimedPaths: ["src/a.ts"], harness: "codex", intentDescription: "",
+          intentName: "Sibling", threadId: "sibling", updatedAt: "2026-08-27T00:00:00.000Z",
+        }, overlaps: [{ claimedPath: "src/a.ts", requestedPath: "src/a.ts" }] }],
+        repoRoot: "C:/Git/Project",
+        scopePaths: ["src/a.ts"],
+      };
+    };
+    return { feature, read };
+  };
+  const request = {
+    action: "arcWait", checkpointCommit: "a".repeat(40), cwd: "C:/Git/Project",
+    harness: "codex" as const, threadId: "thread-one",
+  };
+  const cancelled = createBlocked();
+  const caller = new AbortController();
+  const cancelledResponse = cancelled.feature.executeRequest(request, caller.signal);
+  await cancelled.read;
+  caller.abort(new Error("steered"));
+  assert.equal((await cancelledResponse).status, 400);
+
+  const disposed = createBlocked();
+  const disposedResponse = disposed.feature.executeRequest(request);
+  await disposed.read;
+  disposed.feature.dispose();
+  assert.equal((await disposedResponse).status, 400);
+});
+
 test("sibling threads in one worktree share the Git arc transition lane", async () => {
   const keys: string[] = [];
   const feature = new WorkbenchGitArcFeature({

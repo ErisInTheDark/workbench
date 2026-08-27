@@ -134,6 +134,44 @@ test("UI subscribers share headless observation and warm snapshots without ownin
   assert.equal(projectObservationStops, 1);
 });
 
+test("managed wait state is projected live and never persisted", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-waiting-"));
+  const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "waiting-thread" },
+    lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Waiting thread",
+  };
+  let reconciled = false;
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", [entry], { complete: true });
+      reconciled = true;
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  await controller.open("observer", "project");
+  await waitFor(() => reconciled, "Waiting-state provider thread was not reconciled.");
+  controller.setThreadWaitState("codex", "waiting-thread", ["subagent_wait"]);
+  const waiting = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread");
+  assert.equal(waiting?.entryKind === "thread" ? waiting.waitingFor : null, "subagents");
+  await controller.observeTitle("codex", "waiting-thread", "Still waiting");
+  const stored = await fs.readFile(threadStatePath(root, "project"), "utf8");
+  assert.doesNotMatch(stored, /waitingFor/u);
+  controller.setThreadWaitState("codex", "waiting-thread", []);
+  const cleared = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread");
+  assert.equal(cleared?.entryKind === "thread" ? cleared.waitingFor : null, undefined);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
 test("version 3 bootstraps every project summary and publishes cross-project changes only to version 3 observers", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-project-summaries-"));
   const reconcileCounts = new Map<string, number>();

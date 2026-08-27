@@ -20,7 +20,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const agentCommand = new WorkbenchAgentCommandController(context.localWorkbenchOrigin, context.localOrchestratorOrigin, {
       checkApplyPatchClaims: async ({ cwd, harness, paths, threadId }) => await gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths),
       executeBrowseRequest: context.executeBrowseRequest,
-      executeGitArcRequest: async (body) => await gitArc.executeRequest(body),
+      executeGitArcRequest: async (body, signal) => await gitArc.executeRequest(body, signal),
       executeSessionRequest: context.executeBrowseSessionRequest,
       getReloadDirt: async (signal) => await reloadDirt.refresh(signal),
       getReloadScopeCatalog: () => reloadDirt.getCatalog(),

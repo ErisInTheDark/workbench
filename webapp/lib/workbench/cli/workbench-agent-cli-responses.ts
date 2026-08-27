@@ -193,6 +193,11 @@ export function adaptWorkbenchAgentCliResponse({
         }),
       ], createArcReceipt(action, payload, request)).join("\n"));
     }
+    case "git-arc-wait":
+      return succeeded([
+        `Intersecting Git arc claims released for plan ${readString(payload, "checkpointCommit") || "(unknown commit)"}.`,
+        ...memberRefLines(payload),
+      ].join("\n"));
     case "git-arc-mv": {
       const mappings = readMappings(payload);
       const additionalClaims = readStringArray(payload, "additionalClaims");

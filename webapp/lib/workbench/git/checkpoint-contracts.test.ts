@@ -164,6 +164,12 @@ test("current-plan requests encode adoption, revision, atomic start, and ref-fre
     checkpointCommit: "abcdef1",
     ...common,
   }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({ action: "arcWait", ...common }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcWait",
+    refs: [{ ref: "a".repeat(40), rootId: "api" }],
+    ...common,
+  }).success, true);
   const workspacePlan = GitCheckpointRequestSchema.safeParse({
     action: "plan",
     intentName: "Workspace change",
@@ -361,7 +367,7 @@ test("registry collisions use only active and retained-plan claims", async () =>
 test("checkpoint facade exposes the complete plan, proposal, and lifecycle owner surface", () => {
   const prototype = WorkbenchGitCheckpointController.prototype as unknown as Record<string, unknown>;
   const required = [
-    "addToPlan", "adoptIntoPlan", "createAndStartPlan", "findPlanState", "listLifecycleStates", "listPlanStates", "removeFromPlan", "rescindProposal",
+    "addToPlan", "adoptIntoPlan", "createAndStartPlan", "findPlanClaimCollisions", "findPlanState", "listLifecycleStates", "listPlanStates", "removeFromPlan", "rescindProposal",
   ];
   assert.deepEqual(required.filter((method) => typeof prototype[method] !== "function"), []);
 });
