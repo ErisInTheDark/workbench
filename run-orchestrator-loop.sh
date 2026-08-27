@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Owner: supervise the restart loop, rotation, pause state, launcher diagnostics, inactivity recovery, and one runner stderr capture without owning child-process logging internals.
-# Functions: build_timestamped_line formats bounded direct evidence; emit_direct writes one timestamped line; emit_logged mirrors launcher lines to stdout and the active log; cleanup_runner_stderr removes only the active hidden capture; runner_is_active reads Bash job ownership; stop_active_runner terminates the current runner; cleanup_on_exit cleans up runner state; handle_interruption reports signals without replacing a completed runner failure; prune_log_files enforces retention; create_log_file creates a rotation target; wait_while_paused owns pause polling; select_log_file chooses or rotates the active log.
+# Owner: supervise the restart loop, log pipeline, rotation, pause state, inactivity recovery, launcher diagnostics, and owned-port cleanup.
+# Functions: build_timestamped_line formats bounded direct evidence; emit_direct writes one timestamped line; emit_logged mirrors launcher lines to stdout and the active log; timestamp_stream timestamps child output; runner_is_active reads Bash job ownership; stop_owned_runtime kills configured listeners; cleanup_on_exit cleans up active runtime state; handle_interruption reports signals without replacing a completed runner failure; kill_owned_ports clears configured listeners; prune_log_files enforces retention; create_log_file creates a rotation target; wait_while_paused owns pause polling; select_log_file chooses or rotates the active log.
 set -u
 
 restart_delay_seconds="${RESTART_DELAY_SECONDS:-3}"
@@ -8,8 +8,8 @@ max_log_lines="${MAX_LOG_LINES:-1000}"
 max_log_files="${MAX_LOG_FILES:-5}"
 log_idle_timeout_seconds="${LOG_IDLE_TIMEOUT_SECONDS:-120}"
 dry_run=0
-runner_stderr_file=""
 runner_pid=""
+active_log_file=""
 
 build_timestamped_line() {
   local message="$1"
@@ -45,17 +45,18 @@ emit_logged() {
   fi
 }
 
-cleanup_runner_stderr() {
-  local capture_file="$runner_stderr_file"
+timestamp_stream() {
+  local line
+  local timestamp
 
-  runner_stderr_file=""
-  if [[ -z "$capture_file" || ! -e "$capture_file" ]]; then
-    return 0
-  fi
-  if ! rm -f -- "$capture_file" 2>/dev/null; then
-    emit_direct "Unable to remove orchestrator runner stderr capture: $capture_file" >&2
-    return 1
-  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    timestamp="$(date '+%H:%M:%S.%3N' 2>/dev/null || true)"
+    if [[ ! "$timestamp" =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$ ]]; then
+      timestamp="00:00:00.000"
+    fi
+    printf '[%s] %s\n' "$timestamp" "$line" || return 1
+  done
 }
 
 runner_is_active() {
@@ -74,47 +75,24 @@ runner_is_active() {
   return 1
 }
 
-stop_active_runner() {
-  local pid="$runner_pid"
-  local remaining_seconds=5
-
-  if [[ -z "$pid" ]] || ! runner_is_active; then
+stop_owned_runtime() {
+  if ! runner_is_active; then
     return 0
   fi
-
-  if ! kill -TERM "$pid" 2>/dev/null; then
-    if runner_is_active; then
-      emit_direct "Unable to terminate orchestrator runner process: $pid" >&2
-      return 1
-    fi
-    return 0
-  fi
-
-  while ((remaining_seconds > 0)) && runner_is_active; do
-    sleep 1 || break
-    remaining_seconds=$((remaining_seconds - 1))
-  done
-
-  if runner_is_active; then
-    if ! kill -KILL "$pid" 2>/dev/null; then
-      emit_direct "Unable to kill unresponsive orchestrator runner process: $pid" >&2
-      return 1
-    fi
-  fi
+  kill_owned_ports "$active_log_file"
 }
 
 cleanup_on_exit() {
   local exit_status=$?
 
   trap - EXIT HUP INT TERM
-  stop_active_runner || true
+  stop_owned_runtime || true
 
   if [[ -n "$runner_pid" ]]; then
     wait "$runner_pid" 2>/dev/null || true
     runner_pid=""
   fi
 
-  cleanup_runner_stderr || true
   exit "$exit_status"
 }
 
@@ -152,25 +130,18 @@ esac
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 webapp_dir="$script_dir/webapp"
-env_file="$webapp_dir/.env.local"
 log_dir="$script_dir/.workbench/logs"
 log_prefix="workbench-orchestrator"
 pause_sentinel="$script_dir/.workbench/orchestrator-loop.pause"
-log_formatter="$webapp_dir/scripts/orchestrator/format-orchestrator-log-stream.mjs"
-command_runner="$webapp_dir/scripts/orchestrator/run-orchestrator-command.mjs"
+runtime_topology="$webapp_dir/scripts/orchestrator/runtime-topology.mjs"
 
 if [[ ! -d "$webapp_dir" ]]; then
   emit_direct "Expected webapp directory at $webapp_dir" >&2
   exit 1
 fi
 
-if [[ ! -f "$log_formatter" ]]; then
-  emit_direct "Expected log formatter at $log_formatter" >&2
-  exit 1
-fi
-
-if [[ ! -f "$command_runner" ]]; then
-  emit_direct "Expected orchestrator command runner at $command_runner" >&2
+if [[ ! -f "$runtime_topology" ]]; then
+  emit_direct "Expected orchestrator runtime topology at $runtime_topology" >&2
   exit 1
 fi
 
@@ -189,7 +160,7 @@ if [[ ! "$log_idle_timeout_seconds" =~ ^[0-9]+$ ]] || ((log_idle_timeout_seconds
   exit 1
 fi
 
-for command_name in node pnpm kill-by-port wc date sleep; do
+for command_name in node pnpm kill-by-port tee wc date sleep; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     emit_direct "Required command not found: $command_name" >&2
     exit 1
@@ -208,6 +179,30 @@ if ! owned_ports_output="$(
 fi
 
 mapfile -t owned_ports <<<"$owned_ports_output"
+
+kill_owned_ports() {
+  local log_file="$1"
+  local kill_line
+  local kill_output
+  local kill_status
+  local port
+
+  for port in "${owned_ports[@]}"; do
+    kill_output="$(kill-by-port "$port" 2>&1)"
+    kill_status=$?
+
+    if [[ -n "$kill_output" ]]; then
+      while IFS= read -r kill_line || [[ -n "$kill_line" ]]; do
+        emit_logged "$log_file" "$kill_line" || return 1
+      done <<<"$kill_output"
+    fi
+
+    if ((kill_status != 0)); then
+      emit_direct "kill-by-port failed for port $port with status $kill_status." >&2
+      return 1
+    fi
+  done
+}
 
 if ((dry_run == 1)); then
   emit_direct "Dry run: Workbench would kill listeners on configured ports: ${owned_ports[*]}"
@@ -312,6 +307,7 @@ while true; do
   if ! log_file="$(select_log_file "$restart_number")"; then
     exit 1
   fi
+  active_log_file="$log_file"
 
   if ! prune_log_files; then
     exit 1
@@ -337,45 +333,31 @@ while true; do
 
   emit_logged "$log_file" "Logging complete orchestrator output to: $log_file" || exit 1
 
-  for port in "${owned_ports[@]}"; do
-    kill_output="$(kill-by-port "$port" 2>&1)"
-    kill_status=$?
-
-    if [[ -n "$kill_output" ]]; then
-      while IFS= read -r kill_line || [[ -n "$kill_line" ]]; do
-        emit_logged "$log_file" "$kill_line" || exit 1
-      done <<<"$kill_output"
-    fi
-
-    if ((kill_status != 0)); then
-      emit_direct "kill-by-port failed for port $port with status $kill_status." >&2
-      exit 1
-    fi
-  done
-
-  runner_stderr_file="$log_dir/.orchestrator-runner-stderr-$$-$restart_number.log"
-
-  if ! : 2>/dev/null >"$runner_stderr_file"; then
-    emit_direct "Unable to create orchestrator runner stderr capture: $runner_stderr_file" >&2
-    exit 1
-  fi
+  kill_owned_ports "$log_file" || exit 1
 
   (
     if ! cd "$webapp_dir" 2>/dev/null; then
-      printf 'Unable to enter orchestrator working directory: %s\n' "$webapp_dir" >&2
+      emit_direct "Unable to enter orchestrator working directory: $webapp_dir" >&2
       exit 70
     fi
 
-    export WORKBENCH_ORCHESTRATOR_LOOP=1
-    exec node "$command_runner" \
-      --log-file "$log_file" \
-      --restart-delay-seconds "$restart_delay_seconds" \
-      -- pnpm dev:orchestrator
-  ) 2>"$runner_stderr_file" &
+    WORKBENCH_ORCHESTRATOR_LOOP=1 pnpm dev:orchestrator 2>&1 |
+      timestamp_stream |
+      tee -a "$log_file"
+
+    pipeline_status=("${PIPESTATUS[@]}")
+    orchestrator_status="${pipeline_status[0]}"
+    timestamp_status="${pipeline_status[1]}"
+    tee_status="${pipeline_status[2]}"
+    if ((timestamp_status != 0 || tee_status != 0)); then
+      emit_direct "Orchestrator logging pipeline failed: timestampStatus=$timestamp_status orchestratorStatus=$orchestrator_status teeStatus=$tee_status" >&2
+      exit 74
+    fi
+    exit "$orchestrator_status"
+  ) &
 
   runner_pid=$!
   runner_timed_out=0
-  runner_stderr_bytes_before_timeout=0
   last_log_activity_seconds=$SECONDS
 
   if ! last_log_size="$(wc -c 2>/dev/null <"$log_file")"; then
@@ -403,20 +385,12 @@ while true; do
     elif ((SECONDS - last_log_activity_seconds >= log_idle_timeout_seconds)); then
       runner_timed_out=1
 
-      # Preserve the original failure policy for stderr already emitted before
-      # the watchdog timeout. Only shutdown stderr emitted after this point is
-      # tolerated for the automatic restart.
-      if ! runner_stderr_bytes_before_timeout="$(wc -c 2>/dev/null <"$runner_stderr_file")"; then
-        emit_direct "Unable to inspect orchestrator runner stderr capture: $runner_stderr_file" >&2
-        exit 1
-      fi
-
       emit_logged \
         "$log_file" \
-        "No orchestrator output was logged for ${log_idle_timeout_seconds} seconds; terminating the runner for restart." \
+        "No orchestrator output was logged for ${log_idle_timeout_seconds} seconds; killing owned ports for restart." \
         || exit 1
 
-      stop_active_runner || exit 1
+      stop_owned_runtime || exit 1
       break
     fi
   done
@@ -425,36 +399,8 @@ while true; do
   runner_status=$?
   runner_pid=""
 
-  runner_failed=0
-  while IFS= read -r runner_line || [[ -n "$runner_line" ]]; do
-    runner_failed=1
-
-    if [[ "$runner_line" =~ ^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}\][[:space:]] ]]; then
-      printf '%s\n' "$runner_line" >&2
-    else
-      emit_direct "$runner_line" >&2
-    fi
-  done <"$runner_stderr_file"
-
-  if ! cleanup_runner_stderr; then
-    exit 1
-  fi
-
-  if ((runner_failed == 1)); then
-    if ((runner_timed_out == 0 || runner_stderr_bytes_before_timeout > 0)); then
-      if ((runner_status == 74)); then
-        exit 74
-      fi
-      exit 70
-    fi
-  fi
-
-  if ((runner_status == 70)); then
-    exit 70
-  fi
-
-  if ((runner_status == 74)); then
-    exit 74
+  if ((runner_timed_out == 0 && (runner_status == 70 || runner_status == 74))); then
+    exit "$runner_status"
   fi
 
   restart_number=$((restart_number + 1))
