@@ -130,6 +130,7 @@ import ProjectSidebar from "./workbench/ProjectSidebar";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
+import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
 import {
@@ -572,6 +573,7 @@ export default function Workbench () {
   const [threadQuestionnaireDraftsByKey, setThreadQuestionnaireDraftsByKey] = useState<Record<string, WorkbenchQuestionnaireDraft | undefined>>({});
   const editorRef = useRef<HTMLDivElement>(null);
   const mainPaneRef = useRef<HTMLElement>(null);
+  const directThreadScrollViewportRef = useRef<HTMLDivElement>(null);
   const customCaretRef = useRef<HTMLDivElement>(null);
   const diffGutterRef = useRef<HTMLDivElement>(null);
   const floatingToolbarRef = useRef<HTMLDivElement>(null);
@@ -2050,7 +2052,8 @@ export default function Workbench () {
   ), [activeWorkbenchDrag?.payload.type, isMobile, routePanelTarget, showMosaicView]);
   const mainLayoutForRender = routeMosaicProjection?.layout ?? temporaryDropLayout;
   const shouldRenderMainLayout = Boolean(mainLayoutForRender);
-  const isDirectMobileThreadSurface = isMobile && showThreadView && !shouldRenderMainLayout;
+  const isDirectThreadSurface = showThreadView && !shouldRenderMainLayout;
+  const isDirectMobileThreadSurface = isMobile && isDirectThreadSurface;
 
   useEffect(() => {
     if (!showMosaicView || !controls) {
@@ -2361,7 +2364,7 @@ export default function Workbench () {
   }, [isMobile, workbenchDragController]);
 
   useEffect(() => {
-    if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey) {
+    if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey || isDirectThreadSurface) {
       return;
     }
 
@@ -2374,7 +2377,7 @@ export default function Workbench () {
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [isMobile, mainPaneScrollKey, mobilePane]);
+  }, [isDirectThreadSurface, isMobile, mainPaneScrollKey, mobilePane]);
 
   useEffect(() => {
     const header = shellHeaderRef.current;
@@ -2420,11 +2423,19 @@ export default function Workbench () {
       setIsMobileShellHeaderVisible((current) => (current === nextVisible ? current : nextVisible));
     };
 
-    const getCurrentScrollY = () => (
-      isMobile
+    const getCurrentScrollY = () => {
+      const threadScrollTarget = directThreadScrollViewportRef.current;
+      if (isDirectThreadSurface && threadScrollTarget) {
+        return Math.max(
+          0,
+          threadScrollTarget.scrollHeight - threadScrollTarget.clientHeight + threadScrollTarget.scrollTop,
+        );
+      }
+
+      return isMobile
         ? mainPaneRef.current?.scrollTop ?? 0
-        : Math.max(window.scrollY, 0)
-    );
+        : Math.max(window.scrollY, 0);
+    };
 
     const resetHeaderVisibility = () => {
       cancelPendingFrame();
@@ -2496,7 +2507,9 @@ export default function Workbench () {
     };
 
     const viewport = window.visualViewport;
-    const scrollTarget = isMobile ? mainPaneRef.current : window;
+    const scrollTarget = isDirectThreadSurface
+      ? directThreadScrollViewportRef.current
+      : isMobile ? mainPaneRef.current : window;
     scrollTarget?.addEventListener("scroll", handleScroll, { passive: true });
     viewport?.addEventListener("scroll", handleScroll, { passive: true });
 
@@ -2505,7 +2518,7 @@ export default function Workbench () {
       viewport?.removeEventListener("scroll", handleScroll);
       cancelPendingFrame();
     };
-  }, [activeFilePath, activeThreadId, isMobile, mobileShellHeaderHeight, shouldShowShellHeader]);
+  }, [activeFilePath, activeThreadId, isDirectThreadSurface, isMobile, mobileShellHeaderHeight, shouldShowShellHeader]);
 
   useEffect(() => {
     if (!showEmptyState || !quickOpenPaths.length) {
@@ -3044,14 +3057,20 @@ export default function Workbench () {
 
             <main
               ref={mainPaneRef}
-              className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden overflow-y-auto md:w-auto${isDirectMobileThreadSurface
-                ? " px-0 pb-0 md:h-auto md:min-h-screen md:overflow-visible md:px-6 md:pb-5"
+              className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto${isDirectThreadSurface
+                ? " overflow-hidden px-0 pb-0 md:h-screen md:min-h-0 md:overflow-hidden md:px-6 md:pb-5"
                 : showFullBleedMainView
-                  ? " px-5 pb-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
-                  : " px-5 pb-5 md:h-auto md:min-h-screen md:overflow-visible md:px-6 md:pb-5"
+                  ? " overflow-y-auto px-5 pb-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
+                  : " overflow-y-auto px-5 pb-5 md:h-auto md:min-h-screen md:overflow-visible md:px-6 md:pb-5"
                 }`}
-              data-thread-scroll-target={isDirectMobileThreadSurface ? "true" : undefined}
             >
+              <ThreadScrollViewport
+                ref={directThreadScrollViewportRef}
+                className="h-full"
+                contentClassName="flex flex-col"
+                enabled={isDirectThreadSurface}
+                resetKey={`${activeProjectId}:${selectedThreadIdForView || activeThreadId}`}
+              >
               <header
                 ref={shellHeaderRef}
                 className={`
@@ -3164,7 +3183,7 @@ export default function Workbench () {
               </header>
 
               <section
-                className={`relative md:min-h-0 md:flex-1${showFullBleedMainView ? " min-h-0 overflow-hidden" : ""}`}
+                className={`relative ${isDirectThreadSurface ? "min-h-0 flex-1" : "md:min-h-0 md:flex-1"}${showFullBleedMainView ? " min-h-0 overflow-hidden" : ""}`}
                 aria-busy={isSelectionPending}
               >
                 {showThreadView && !shouldRenderMainLayout ? (
@@ -3206,6 +3225,7 @@ export default function Workbench () {
                       projectRoots={explorer.roots}
                       knownSubagents={explorer.subagents}
                       rateLimits={rateLimits}
+                      scrollViewportRef={directThreadScrollViewportRef}
                       threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                       threadComposerDraft={activeThreadComposerDraft}
                       threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
@@ -3513,6 +3533,7 @@ export default function Workbench () {
                   </div>
                 ) : null}
               </section>
+              </ThreadScrollViewport>
 
               <WorkbenchDialog
                 id="save-conflict-dialog"

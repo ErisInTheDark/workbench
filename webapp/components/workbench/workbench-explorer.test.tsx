@@ -187,8 +187,8 @@ test("blank thread routes render their private draft and preserve one view insta
   assert.doesNotMatch(workbenchSource, /currentThread\?\.id === effectiveThreadId/u);
   assert.match(workbenchSource, /key=\{`\$\{activeProjectId\}:\$\{threadViewInstanceKey\}`\}/u);
   assert.match(workbenchSource, /viewInstanceKey=\{threadViewInstanceKey\}/u);
-  assert.match(threadViewSource, /\[projectId, scrollAnchorController, viewInstanceKey\]/u);
-  assert.doesNotMatch(threadViewSource, /\[projectId, scrollAnchorController, thread\.id\]/u);
+  assert.match(threadViewSource, /\[projectId, viewInstanceKey\]/u);
+  assert.doesNotMatch(threadViewSource, /\[projectId, thread\.id\]/u);
   assert.match(clientSource, /onThreadCreated: \(createdThread\) => \{[\s\S]*?applyThreadPayloadToCurrentView\(createdThread, "Connecting thread\."\)/u);
   assert.match(clientSource, /sessionState\.currentThreadId === createdThreadId[\s\S]*?applyThreadPayloadToCurrentView\(thread\)/u);
 });

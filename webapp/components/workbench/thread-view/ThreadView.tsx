@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
@@ -92,7 +92,6 @@ import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadPlanConflictCard from "./ThreadPlanConflictCard";
 import ThreadRateLimits from "./ThreadRateLimits";
-import ThreadScrollAnchorController, { type ThreadScrollSnapshot } from "./ThreadScrollAnchorController";
 import {
   ThreadWebSearchActionRow,
 } from "./ThreadWebSearchItem";
@@ -120,11 +119,6 @@ type LiveThreadActivity =
     kind: "webSearch";
     title: string;
   };
-
-interface PendingPreviousTurnScrollRestore {
-  beforeTurnId: string;
-  snapshot: ThreadScrollSnapshot;
-}
 
 type RelatedThreadRecord = Record<string, ThreadPayload | undefined>;
 
@@ -273,21 +267,6 @@ function mergeSubthreadTurnSnapshots (
   }
 
   return mergedThread;
-}
-
-function hasExpandedSelectionWithin (root: HTMLElement | null) {
-  if (!root || typeof window === "undefined" || typeof window.getSelection !== "function") {
-    return false;
-  }
-
-  const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-    return false;
-  }
-
-  const anchorNode = selection.anchorNode;
-  const focusNode = selection.focusNode;
-  return Boolean(anchorNode && focusNode && root.contains(anchorNode) && root.contains(focusNode));
 }
 
 type CodeBlockCopyState = "copied" | "failed" | "idle";
@@ -606,6 +585,7 @@ export default memo(function ThreadView ({
   projectRoots,
   knownSubagents,
   rateLimits,
+  scrollViewportRef,
   selectedThreadId,
   threadCodeBlockWrap,
   threadComposerDraft,
@@ -662,6 +642,7 @@ export default memo(function ThreadView ({
   projectRoots?: readonly WorkbenchProjectRoot[];
   knownSubagents: readonly WorkbenchSubagentSummary[];
   rateLimits: RateLimitSnapshot | null;
+  scrollViewportRef: RefObject<HTMLDivElement | null>;
   selectedThreadId?: string;
   threadCodeBlockWrap: boolean;
   threadComposerDraft: WorkbenchComposerInputDraft | null;
@@ -684,16 +665,7 @@ export default memo(function ThreadView ({
   const threadViewRef = useRef<HTMLDivElement>(null);
   const historySentinelRef = useRef<HTMLDivElement>(null);
   const codeBlockCopyResetTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map());
-  const activeThreadScrollKeyRef = useRef("");
-  const bottomScrollFrameRef = useRef<number | null>(null);
-  const didRestorePreviousTurnScrollRef = useRef(false);
-  const pendingPreviousTurnScrollRestoreRef = useRef<PendingPreviousTurnScrollRestore | null>(null);
-  const scrollAnchorControllerRef = useRef<ReturnType<typeof ThreadScrollAnchorController> | null>(null);
   const subthreadLoadGenerationRef = useRef(0);
-  if (!scrollAnchorControllerRef.current) {
-    scrollAnchorControllerRef.current = ThreadScrollAnchorController();
-  }
-  const scrollAnchorController = scrollAnchorControllerRef.current;
   useEffect(() => {
     setActiveThreadId(selectedThreadId ?? thread.id);
   }, [selectedThreadId, thread.id]);
@@ -768,7 +740,6 @@ export default memo(function ThreadView ({
     }
     : profileResolvedActiveThread;
   void composerProfileSnapshot;
-  const activeThreadIdentity = activeThread ? `${activeThread.harness}:${activeThread.id}` : "";
   const activeThreadBrowseResultEntries = activeThread?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;
   const activeThreadBrowseResultEntriesByTurnId = useStableBrowseResultEntriesByTurn(activeThreadBrowseResultEntries);
   const activeHarnessUserInputRequest = activeThread
@@ -792,9 +763,6 @@ export default memo(function ThreadView ({
   const previousTurnLoadStatus = previousTurnLoadKey
     ? previousTurnLoadStates[previousTurnLoadKey]
     : undefined;
-  const visibleHistorySignature = useMemo(() => visibleHistoryEntries
-    .map((entry) => `${entry.turnId}:${entry.loadState}:${entry.itemCount}`)
-    .join("|"), [visibleHistoryEntries]);
   const canLoadPreviousTurn = Boolean(
     activeThread
     && previousTurnEntry?.loadState === "unloaded"
@@ -814,24 +782,6 @@ export default memo(function ThreadView ({
       .map((item) => item.id);
     return itemIds.length ? Array.from(new Set(itemIds)) : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS;
   }, [activePendingUserInputRequest?.harness, currentTurn]);
-  const activeThreadContentSignature = useMemo(() => {
-    if (!activeThread) {
-      return "";
-    }
-
-    const latestTurn = activeThread.turns.at(-1);
-    return [
-      activeThread.id,
-      activeThread.status,
-      activeThread.turns.length,
-      latestTurn?.id ?? "",
-      latestTurn?.status ?? "",
-      latestTurn?.items.length ?? 0,
-      visibleHistorySignature,
-      liveActivity?.kind ?? "",
-      activePendingUserInputRequest?.requestKey ?? "",
-    ].join("|");
-  }, [activePendingUserInputRequest?.requestKey, activeThread, liveActivity?.kind, visibleHistorySignature]);
   const workspaceFileLinkRoots = useMemo(() => (
     projectFileLinkRoots ?? (projectRoots && projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
@@ -876,20 +826,6 @@ export default memo(function ThreadView ({
       };
     });
   }, [loadingThreadIds, relatedThreadsById, subagents, visibleSubagentThreadIds]);
-
-  const scheduleScrollToBottom = useCallback((options: { force?: boolean } = {}) => {
-    if (bottomScrollFrameRef.current !== null) {
-      window.cancelAnimationFrame(bottomScrollFrameRef.current);
-    }
-
-    bottomScrollFrameRef.current = window.requestAnimationFrame(() => {
-      bottomScrollFrameRef.current = null;
-      if (!options.force && !scrollAnchorController.shouldStickToBottom()) {
-        return;
-      }
-      scrollAnchorController.scrollRootToBottom(threadViewRef.current);
-    });
-  }, [scrollAnchorController]);
 
   const loadSubthread = useCallback(async (
     threadId: string,
@@ -973,23 +909,6 @@ export default memo(function ThreadView ({
       return;
     }
 
-    const scrollTarget = scrollAnchorController.findScrollTarget(threadViewRef.current);
-    if (
-      !scrollTarget
-      || (!retry && !scrollAnchorController.isNearTop(scrollTarget))
-    ) {
-      return;
-    }
-
-    const scrollSnapshot = scrollAnchorController.captureSnapshot(threadViewRef.current);
-    if (scrollSnapshot) {
-      pendingPreviousTurnScrollRestoreRef.current = {
-        beforeTurnId: firstVisibleLoadedEntry.turnId,
-        snapshot: scrollSnapshot,
-      };
-      scrollAnchorController.setStickToBottom(false);
-    }
-
     const loadGeneration = subthreadLoadGenerationRef.current;
     const targetThreadId = activeThread.id;
     const targetHarness = activeThread.harness;
@@ -1008,7 +927,6 @@ export default memo(function ThreadView ({
         return;
       }
       if (!payload) {
-        pendingPreviousTurnScrollRestoreRef.current = null;
         dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
         return;
       }
@@ -1032,36 +950,18 @@ export default memo(function ThreadView ({
       if (loadGeneration !== subthreadLoadGenerationRef.current) {
         return;
       }
-      pendingPreviousTurnScrollRestoreRef.current = null;
       dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
       console.error("Previous thread turn load failed.", error);
     }
-  }, [activeThread, firstVisibleLoadedEntry, onReadThread, previousTurnLoadKey, previousTurnLoadStatus, scrollAnchorController, subagents, thread.id]);
-
-  const requestPreviousTurnIfAtTop = useCallback(() => {
-    if (!canLoadPreviousTurn || !previousTurnLoadKey || previousTurnLoadStatus) {
-      return;
-    }
-
-    const scrollTarget = scrollAnchorController.findScrollTarget(threadViewRef.current);
-    if (!scrollTarget || !scrollAnchorController.isNearTop(scrollTarget)) {
-      return;
-    }
-
-    void loadPreviousTurn();
-  }, [canLoadPreviousTurn, loadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus, scrollAnchorController]);
+  }, [activeThread, firstVisibleLoadedEntry, onReadThread, previousTurnLoadKey, previousTurnLoadStatus, subagents, thread.id]);
 
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;
-    activeThreadScrollKeyRef.current = "";
-    didRestorePreviousTurnScrollRef.current = false;
-    pendingPreviousTurnScrollRestoreRef.current = null;
-    scrollAnchorController.resetForThreadSwitch();
     setActiveThreadId(selectedThreadId ?? thread.id);
     setSubthreadsById({});
     setLoadingThreadIds({});
     dispatchPreviousTurnLoad({ type: "reset" });
-  }, [projectId, scrollAnchorController, viewInstanceKey]);
+  }, [projectId, viewInstanceKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1119,17 +1019,17 @@ export default memo(function ThreadView ({
 
   useEffect(() => {
     const sentinel = historySentinelRef.current;
-    const scrollTarget = scrollAnchorController.findScrollTarget(threadViewRef.current);
+    const scrollTarget = scrollViewportRef.current;
     if (!sentinel || !scrollTarget || !canLoadPreviousTurn || !previousTurnLoadKey || previousTurnLoadStatus) {
       return;
     }
 
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) {
-        requestPreviousTurnIfAtTop();
+        void loadPreviousTurn();
       }
     }, {
-      root: scrollTarget instanceof HTMLElement ? scrollTarget : null,
+      root: scrollTarget,
       rootMargin: "160px 0px 0px 0px",
       threshold: 0.1,
     });
@@ -1137,105 +1037,9 @@ export default memo(function ThreadView ({
     return () => {
       observer.disconnect();
     };
-  }, [canLoadPreviousTurn, loadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus, scrollAnchorController]);
-
-  useEffect(() => {
-    const scrollTarget = scrollAnchorController.findScrollTarget(threadViewRef.current);
-    if (!scrollTarget) {
-      return;
-    }
-
-    const updateBottomStickiness = () => {
-      scrollAnchorController.updateFromScroll(scrollTarget);
-      requestPreviousTurnIfAtTop();
-    };
-    scrollAnchorController.syncObservedScrollTop(scrollTarget);
-    requestPreviousTurnIfAtTop();
-
-    scrollTarget.addEventListener("scroll", updateBottomStickiness, { passive: true });
-    return () => {
-      scrollTarget.removeEventListener("scroll", updateBottomStickiness);
-    };
-  }, [activeThread?.id, requestPreviousTurnIfAtTop, scrollAnchorController]);
-
-  useEffect(() => {
-    if (!canLoadPreviousTurn || !previousTurnLoadKey || previousTurnLoadStatus) {
-      return;
-    }
-
-    const frameId = window.requestAnimationFrame(() => {
-      requestPreviousTurnIfAtTop();
-    });
-    return () => {
-      window.cancelAnimationFrame(frameId);
-    };
-  }, [activeThreadContentSignature, canLoadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus, requestPreviousTurnIfAtTop, visibleHistorySignature]);
-
-  useLayoutEffect(() => {
-    const pendingRestore = pendingPreviousTurnScrollRestoreRef.current;
-    if (!pendingRestore || firstVisibleLoadedEntry?.turnId === pendingRestore.beforeTurnId) {
-      return;
-    }
-
-    pendingPreviousTurnScrollRestoreRef.current = null;
-    scrollAnchorController.restoreSnapshotAfterPrepend(pendingRestore.snapshot);
-    didRestorePreviousTurnScrollRef.current = true;
-    scrollAnchorController.setStickToBottom(false);
-  }, [firstVisibleLoadedEntry?.turnId, scrollAnchorController, visibleHistorySignature]);
-
-  useLayoutEffect(() => {
-    if (!activeThread || isDraftThreadView) {
-      return;
-    }
-
-    const activeThreadScrollKey = `${projectId}:${activeThread.id}`;
-    const didSwitchActiveThread = activeThreadScrollKeyRef.current !== activeThreadScrollKey;
-    if (didSwitchActiveThread) {
-      activeThreadScrollKeyRef.current = activeThreadScrollKey;
-      scrollAnchorController.resetForThreadSwitch();
-    }
-
-    if (didRestorePreviousTurnScrollRef.current) {
-      didRestorePreviousTurnScrollRef.current = false;
-      return;
-    }
-
-    if (hasExpandedSelectionWithin(threadViewRef.current)) {
-      return;
-    }
-
-    if (
-      didSwitchActiveThread
-      || scrollAnchorController.shouldStickToBottom()
-    ) {
-      scheduleScrollToBottom({ force: didSwitchActiveThread });
-    }
-  }, [activeThreadIdentity, activeThreadContentSignature, isDraftThreadView, projectId, scheduleScrollToBottom, scrollAnchorController]);
-
-  useEffect(() => {
-    const root = threadViewRef.current;
-    if (!root || typeof ResizeObserver === "undefined") {
-      return;
-    }
-
-    const observer = new ResizeObserver(() => {
-      if (!scrollAnchorController.shouldStickToBottom() || hasExpandedSelectionWithin(root)) {
-        return;
-      }
-
-      scheduleScrollToBottom();
-    });
-    observer.observe(root);
-    return () => {
-      observer.disconnect();
-    };
-  }, [activeThread?.id, scheduleScrollToBottom, scrollAnchorController]);
+  }, [canLoadPreviousTurn, loadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus, scrollViewportRef]);
 
   useEffect(() => () => {
-    if (bottomScrollFrameRef.current !== null) {
-      window.cancelAnimationFrame(bottomScrollFrameRef.current);
-      bottomScrollFrameRef.current = null;
-    }
     codeBlockCopyResetTimersRef.current.forEach((timeoutId) => {
       window.clearTimeout(timeoutId);
     });
@@ -1639,10 +1443,9 @@ export default memo(function ThreadView ({
         data-thread-codeblock-wrap={threadCodeBlockWrap ? "true" : "false"}
         data-thread-project-file-link-boundary="true"
         className={joinClasses(
-          "mx-auto w-full min-w-0 max-w-[56rem] overflow-x-clip md:overflow-x-visible",
+          "mx-auto flex min-h-full w-full min-w-0 max-w-[56rem] flex-col overflow-x-clip md:overflow-x-visible",
           mobileFullBleed ? "px-5 pb-0" : contained ? "pb-8" : "pb-16",
-          !isDraftThreadView && "flex flex-col justify-end",
-          !isDraftThreadView && (contained ? "min-h-full" : "min-h-[calc(100dvh-8rem)]"),
+          !isDraftThreadView && "justify-end",
         )}
         onClick={handleThreadViewClick}
         style={{ fontSize: `${fontSizeRem}rem` }}
@@ -1650,8 +1453,8 @@ export default memo(function ThreadView ({
         {isDraftThreadView ? (
           <>
             <div className={joinClasses(
-              "flex w-full items-center",
-              contained ? "min-h-0 py-4" : "min-h-[calc(100dvh-8rem)]",
+              "flex w-full flex-1 items-center",
+              contained ? "py-4" : null,
             )}>
               <div className="w-full">
                 <header className="pb-4">

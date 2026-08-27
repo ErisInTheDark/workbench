@@ -4,10 +4,11 @@
  */
 "use client";
 
-import { useCallback, useEffect, useState, type ComponentProps, type PointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentProps, type PointerEvent } from "react";
 
 import type { ThreadPayload, ThreadSummary, WorkbenchThreadHydrationRequest } from "../../../lib/types";
 import ThreadLoadingSkeleton from "../thread-view/ThreadLoadingSkeleton";
+import ThreadScrollViewport from "../thread-view/ThreadScrollViewport";
 import ThreadView from "../thread-view/ThreadView";
 import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-formatters";
@@ -27,7 +28,7 @@ const THREAD_PANEL_IDLE_REFRESH_INTERVAL_MS = 5000;
 const THREAD_PANEL_HYDRATION: WorkbenchThreadHydrationRequest = { mode: "latest" };
 const THREAD_PANEL_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 
-interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "thread"> {
+interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewportRef" | "thread"> {
   fallbackThreadSummary?: ThreadSummary | null;
   hasSidebarRestoreInset?: boolean;
   isFocused: boolean;
@@ -66,6 +67,7 @@ export default function WorkbenchThreadPanel ({
   ...threadViewProps
 }: WorkbenchThreadPanelProps) {
   const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
+  const scrollViewportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (threadId !== "new" || thread?.id === threadId) {
@@ -244,8 +246,13 @@ export default function WorkbenchThreadPanel ({
           </div>
         </div>
       </header>
-      <div className="relative min-h-0 min-w-0 flex-1" hidden={isMinimized}>
-        <div className="explorer-scrollbar absolute inset-0 overflow-x-hidden overflow-y-auto px-5 md:px-6" data-thread-scroll-target="true">
+      <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden" hidden={isMinimized}>
+        <ThreadScrollViewport
+          ref={scrollViewportRef}
+          className="absolute inset-0 px-5 md:px-6"
+          contentClassName="flex flex-col"
+          resetKey={`${thread?.harness ?? "thread"}:${threadViewProps.selectedThreadId ?? thread?.id ?? threadId}`}
+        >
           <ThreadView
             {...threadViewProps}
             contained
@@ -253,9 +260,10 @@ export default function WorkbenchThreadPanel ({
             onReadThread={handleReadThread}
             onSendMessage={handleSendMessage}
             onStopThread={handleStopThread}
+            scrollViewportRef={scrollViewportRef}
             thread={thread}
           />
-        </div>
+        </ThreadScrollViewport>
       </div>
     </div>
   );
