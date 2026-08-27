@@ -37,7 +37,6 @@ import type {
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
 } from "../lib/types";
-import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { resolveAgentEndpointProjectFromCwd } from "../lib/workbench/project/agent-endpoint-project";
 import {
   getWorkbenchFileChangeFailureKey,
@@ -67,12 +66,12 @@ import {
   extractItem,
 } from "./codex-transcript-normalizers";
 import type CodexAppServer from "./CodexAppServer";
+import type { WorkbenchCodexInstructionPort } from "./WorkbenchCodexInstructionAdapter";
 import CodexThreadWindowLoader from "./CodexThreadWindowLoader";
 import CodexTranscriptShadowController from "./CodexTranscriptShadowController";
 import type { OrchestratorTranscriptShadowLog } from "./orchestrator-runtime-objects";
 import { logError } from "./process-helpers";
-import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
-import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
+import { WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
 
 type CodexTranscriptStoreInstance = import("./CodexTranscriptStore").default;
 type CodexTranscriptStoreConstructor = new (
@@ -112,6 +111,7 @@ export type CodexStdioBridgeOptions = {
   bridgeUrl: string;
   handleWorkbenchRequest: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   initialState?: CodexStdioBridgeReloadState;
+  instructions?: WorkbenchCodexInstructionPort;
   onAcceptedTurnSteer?: (threadId: string) => void;
   onNotification: (notification: JsonRpcNotification) => void;
   prepareTurnStart?: (message: JsonRpcRequest) => Promise<void>;
@@ -121,6 +121,16 @@ export type CodexStdioBridgeOptions = {
   storageRoot: string;
   transcriptShadowLog?: OrchestratorTranscriptShadowLog;
   transcriptShadowScheduleFlush?: (flush: () => void) => () => void;
+};
+
+const UNCONFIGURED_CODEX_INSTRUCTIONS: WorkbenchCodexInstructionPort = {
+  augment: async (message) => {
+    if (message[WORKBENCH_PROMPT_CONTEXT_FIELD] !== undefined) {
+      throw new Error("Codex instruction adaptation is not configured.");
+    }
+    return message;
+  },
+  createThreadResume: () => { throw new Error("Codex instruction adaptation is not configured."); },
 };
 
 type RequestIdAllocator = {
@@ -363,82 +373,6 @@ function createUpstreamRequest(message: JsonRpcRequest, upstreamRequestId: numbe
   delete upstreamMessage[WORKBENCH_REQUEST_SOURCE_FIELD];
   delete upstreamMessage[WORKBENCH_THREAD_HYDRATION_FIELD];
   return upstreamMessage;
-}
-
-function isPromptAugmentedThreadMethod(method: string | null) {
-  return method === "thread/start" || method === "thread/resume" || method === "thread/fork";
-}
-
-function isPromptAugmentedTurnMethod(method: string | null) {
-  return method === "turn/start";
-}
-
-function asMutableParamsRecord(params: unknown) {
-  return params && typeof params === "object" && !Array.isArray(params)
-    ? params as Record<string, unknown>
-    : {};
-}
-
-function buildWorkbenchManagedThreadConfig(
-  params: Record<string, unknown>,
-  overrides: Record<string, unknown>,
-) {
-  return {
-    ...asRecord(params.config),
-    bypass_hook_trust: true,
-    ...overrides,
-  };
-}
-
-function buildWorkbenchOwnedPromptParams(
-  params: Record<string, unknown>,
-  promptInstructions: WorkbenchPromptInstructions,
-) {
-  return {
-    ...params,
-    baseInstructions: promptInstructions.baseInstructions,
-    developerInstructions: promptInstructions.developerInstructions,
-    config: buildWorkbenchManagedThreadConfig(params, {
-      instructions: "",
-      developer_instructions: "",
-    }),
-    personality: "none",
-  };
-}
-
-function buildWorkbenchOwnedDeveloperInstructionParams(
-  params: Record<string, unknown>,
-  developerInstructions: string | null,
-) {
-  return {
-    ...params,
-    developerInstructions,
-    config: buildWorkbenchManagedThreadConfig(params, {
-      developer_instructions: "",
-    }),
-  };
-}
-
-function buildWorkbenchOwnedCollaborationParams(
-  params: Record<string, unknown>,
-  developerInstructions: string | null,
-) {
-  const collaborationMode = asRecord(params.collaborationMode);
-  if (!collaborationMode) {
-    return params;
-  }
-
-  const settings = asRecord(collaborationMode.settings) ?? {};
-  return {
-    ...params,
-    collaborationMode: {
-      ...collaborationMode,
-      settings: {
-        ...settings,
-        developer_instructions: developerInstructions,
-      },
-    },
-  };
 }
 
 function shouldCapturePollingTranscript(method: string | null, requestSource: WorkbenchRequestSource) {
@@ -1001,15 +935,6 @@ function loadCodexTranscriptStore({ reload = false }: { reload?: boolean } = {})
   return (require("./CodexTranscriptStore") as { default: CodexTranscriptStoreConstructor }).default;
 }
 
-function loadFreshWorkbenchPromptFiles() {
-  const resolvedPath = require.resolve("../lib/workbench/instructions/WorkbenchPromptFiles");
-  for (const moduleId of collectCacheSubtree(resolvedPath)) {
-    delete require.cache[moduleId];
-  }
-
-  return require("../lib/workbench/instructions/WorkbenchPromptFiles") as typeof import("../lib/workbench/instructions/WorkbenchPromptFiles");
-}
-
 export default class CodexStdioBridge {
   private readonly appServer: CodexAppServer;
   private readonly bridgeUrl: string;
@@ -1047,8 +972,9 @@ export default class CodexStdioBridge {
   private upstreamInitializePromise: Promise<void> | null = null;
   private readonly resolveProjectFromCwd: CodexStdioBridgeOptions["resolveProjectFromCwd"];
   private readonly handleWorkbenchRequest: CodexStdioBridgeOptions["handleWorkbenchRequest"];
+  private readonly instructions: WorkbenchCodexInstructionPort;
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, recordSqliteTranscript, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog, transcriptShadowScheduleFlush }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, recordSqliteTranscript, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog, transcriptShadowScheduleFlush }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onAcceptedTurnSteer = onAcceptedTurnSteer;
@@ -1057,6 +983,7 @@ export default class CodexStdioBridge {
     this.sqliteTranscriptEnabled = Boolean(recordSqliteTranscript);
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.handleWorkbenchRequest = handleWorkbenchRequest;
+    this.instructions = instructions;
     this.sendToClient = sendToClient;
     this.storageRoot = storageRoot;
     this.transcriptShadowLog = transcriptShadowLog;
@@ -1592,7 +1519,7 @@ export default class CodexStdioBridge {
       : readRequestSource(message);
     const method = typeof message.method === "string" ? message.method : null;
     const threadHydration = readThreadHydration(message);
-    const upstreamMessage = createUpstreamRequest(await this.withWorkbenchPromptInstructions(message, method), upstreamRequestId);
+    const upstreamMessage = createUpstreamRequest(await this.instructions.augment(message, method), upstreamRequestId);
 
     if (internal) {
       if (signal?.aborted) throw signal.reason;
@@ -1661,64 +1588,6 @@ export default class CodexStdioBridge {
     return { response: null };
   }
 
-  private async withWorkbenchPromptInstructions(message: JsonRpcRequest, method: string | null): Promise<JsonRpcRequest> {
-    if (!isPromptAugmentedThreadMethod(method) && !isPromptAugmentedTurnMethod(method)) {
-      return message;
-    }
-
-    const untrustedPromptContext = readWorkbenchPromptContext(message);
-    if (!untrustedPromptContext) {
-      return message;
-    }
-
-    const params = asMutableParamsRecord(message.params);
-    const workbenchPromptFiles = loadFreshWorkbenchPromptFiles();
-    const promptContext = {
-      ...untrustedPromptContext,
-      harness: "codex" as const,
-    };
-    const available = workbenchPromptFiles.listWorkbenchInstructionMechanics(promptContext);
-    const filter = (value: string | null, field: string) => workbenchPromptFiles.filterWorkbenchInstructionContent(value, {
-      available,
-      field,
-      harness: "codex",
-      onWarning: (warning) => logError("instruction-filter", `\u001b[31m${warning.field}:${warning.line} ${warning.recovery}: ${warning.source}\u001b[0m`),
-      shell: process.platform === "win32" ? "pwsh" : "bash",
-    });
-    if (isPromptAugmentedTurnMethod(method)) {
-      const developerInstructions = promptContext.instructionScope === "threadUtilities"
-        ? await workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(promptContext)
-        : await workbenchPromptFiles.buildWorkbenchCollaborationDeveloperInstructions(promptContext);
-      return {
-        ...message,
-        params: buildWorkbenchOwnedCollaborationParams(params, filter(developerInstructions, "collaborationMode.settings.developer_instructions")),
-      };
-    }
-
-    if (promptContext.instructionScope === "threadUtilities") {
-      const developerInstructions = await workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(promptContext);
-      return {
-        ...message,
-        params: withWorkbenchCodexMcpConfig(
-          buildWorkbenchOwnedDeveloperInstructionParams(params, filter(developerInstructions, "developerInstructions")),
-          this.bridgeUrl,
-        ),
-      };
-    }
-
-    const promptInstructions = await workbenchPromptFiles.buildWorkbenchPromptInstructions(promptContext);
-    return {
-      ...message,
-      params: withWorkbenchCodexMcpConfig(
-        buildWorkbenchOwnedPromptParams(params, {
-          baseInstructions: filter(promptInstructions.baseInstructions, "baseInstructions"),
-          developerInstructions: filter(promptInstructions.developerInstructions, "developerInstructions"),
-        }),
-        this.bridgeUrl,
-      ),
-    };
-  }
-
   private async prepareTurnStartRequest(message: JsonRpcRequest) {
     const params = asRecord(message.params);
     const threadId = asString(params?.threadId)?.trim();
@@ -1726,15 +1595,12 @@ export default class CodexStdioBridge {
       throw new Error("Codex turn/start requires a thread id before its Workbench runtime can be prepared.");
     }
 
-    const promptContext = readWorkbenchPromptContext(message);
-    const resumeResponse = await this.handleServerRequest({
-      method: "thread/resume",
-      params: withWorkbenchCodexMcpConfig({
+    const resumeResponse = await this.handleServerRequest(
+      this.instructions.createThreadResume({
         excludeTurns: true,
         threadId,
-      }, this.bridgeUrl),
-      ...(promptContext ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: promptContext } : {}),
-    });
+      }, { kind: "request", request: message }),
+    );
     if (resumeResponse.error) {
       throw new Error(resumeResponse.error.message);
     }
@@ -2387,14 +2253,14 @@ export default class CodexStdioBridge {
     let resumeResult: Record<string, unknown> | null = null;
 
     if (params.cursor === null && params.readScope !== "subagentBackground") {
-      const resumeDispatch = await this.dispatchRequest({
-        method: "thread/resume",
-        params: withWorkbenchCodexMcpConfig({
+      const resumeDispatch = await this.dispatchRequest(
+        this.instructions.createThreadResume({
           ...(params.cwd ? { cwd: params.cwd } : {}),
           excludeTurns: true,
           threadId: params.threadId,
-        }, this.bridgeUrl),
-      }, { internal: true });
+        }, { cwd: params.cwd, kind: "cwd" }),
+        { internal: true },
+      );
       if (!resumeDispatch.response) {
         throw new Error("Workbench thread-page resume did not create an internal response.");
       }

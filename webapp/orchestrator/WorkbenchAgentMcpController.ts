@@ -174,15 +174,15 @@ export default class WorkbenchAgentMcpController {
       sendJsonRpcError(response, 400, sanitizeError(error) || "Workbench MCP client scope is invalid.");
       return;
     }
-    void this.completeRequest(request, response, clientScope);
+    void this.completeRequest(request, response, clientScope, url.searchParams.get("project-local") === "true");
   }
 
-  private async completeRequest(request: http.IncomingMessage, response: http.ServerResponse, clientScope: string) {
+  private async completeRequest(request: http.IncomingMessage, response: http.ServerResponse, clientScope: string, projectLocal: boolean) {
     const requestAbort = new AbortController();
     const abortDisconnectedRequest = () => {
       if (!requestAbort.signal.aborted) requestAbort.abort(new Error("Workbench MCP caller disconnected."));
     };
-    const server = this.createServer(requestAbort.signal, clientScope);
+    const server = this.createServer(requestAbort.signal, clientScope, projectLocal);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     let closed = false;
     const close = () => {
@@ -209,7 +209,7 @@ export default class WorkbenchAgentMcpController {
     }
   }
 
-  private createServer(requestSignal: AbortSignal, clientScope: string) {
+  private createServer(requestSignal: AbortSignal, clientScope: string, projectLocal: boolean) {
     const server = new McpServer({ name: "wb", version: "1.0.0" }, {
       capabilities: { experimental: { [WORKBENCH_SHELL_SANDBOX_CAPABILITY]: {} } },
     });
@@ -236,7 +236,7 @@ export default class WorkbenchAgentMcpController {
       AbortSignal.any([requestSignal, extra.signal]),
     ));
     for (const definition of listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent")) {
-      if (definition.hideFromMcp) continue;
+      if (definition.hideFromMcp || (definition.projectLocal && !projectLocal)) continue;
       const name = getWorkbenchAgentCommandToolName(definition);
       if (names.has(name)) throw new Error(`Duplicate Workbench MCP tool name: ${name}`);
       names.add(name);

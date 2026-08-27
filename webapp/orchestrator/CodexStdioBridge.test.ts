@@ -11,6 +11,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 
 import type CodexAppServer from "./CodexAppServer";
+import WorkbenchCodexInstructionAdapter from "./WorkbenchCodexInstructionAdapter";
 import type CodexTranscriptStore from "./CodexTranscriptStore";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
@@ -142,6 +143,7 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
     resolveProjectFromCwd: async () => null,
     sendToClient() {},
@@ -913,6 +915,7 @@ test("turn-start preflight completes before upstream delivery and blocks deliver
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
     prepareTurnStart: async () => {
       events.push("prepare:start");
@@ -1085,6 +1088,7 @@ test("bounded context reads use one stored turn without calling the provider cat
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
     recordSqliteTranscript: async (observations) => {
       shadowBatches.push([...observations]);
@@ -1184,6 +1188,7 @@ test("bounded context reads bootstrap unseen threads through one full turn page"
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
     resolveProjectFromCwd: async () => null,
     sendToClient() {},
@@ -1294,64 +1299,3 @@ test("caller cancellation clears a pending internal app-server response", async 
   }
 });
 
-test("managed thread starts, resumes, and forks receive runtime policy and wb MCP config without replacing caller config", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-mcp-config-test-"));
-  const bridge = new CodexStdioBridge({
-    appServer: { send() {} } as unknown as CodexAppServer,
-    bridgeUrl: "ws://0.0.0.0:4500",
-    handleWorkbenchRequest: rejectWorkbenchRequest,
-    onNotification() {},
-    resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
-  });
-  const owner = bridge as unknown as {
-    withWorkbenchPromptInstructions(message: JsonRpcRequest, method: string): Promise<JsonRpcRequest>;
-  };
-  const clientScopes = new Set<string>();
-  try {
-    for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
-      const capable = method === "thread/start";
-      const result = await owner.withWorkbenchPromptInstructions({
-        method,
-        params: {
-          config: {
-            bypass_hook_trust: false,
-            existing_setting: "preserved",
-            mcp_servers: { docs: { url: "https://example.com/mcp" } },
-          },
-          threadId: "thread",
-        },
-        workbenchPromptContext: { ...(capable ? { cwd: root } : {}), instructionScope: "threadUtilities", threadId: "thread" },
-      }, method);
-      const config = (result.params as { config: Record<string, unknown> }).config;
-      assert.equal(config.existing_setting, "preserved");
-      assert.equal(config.bypass_hook_trust, true);
-      assert.deepEqual((config.mcp_servers as Record<string, unknown>).docs, { url: "https://example.com/mcp" });
-      const wb = (config.mcp_servers as { wb: Record<string, unknown> }).wb;
-      const mcpUrl = new URL(String(wb.url));
-      const clientScope = mcpUrl.searchParams.get("client") ?? "";
-      assert.equal(mcpUrl.origin, "http://127.0.0.1:4500");
-      assert.equal(mcpUrl.pathname, "/orchestrator/mcp");
-      assert.match(clientScope, /^[0-9a-f-]{36}$/u);
-      assert.equal(mcpUrl.searchParams.get("capabilities"), null);
-      clientScopes.add(clientScope);
-      const { url: _url, ...wbWithoutUrl } = wb;
-      assert.deepEqual(wbWithoutUrl, {
-        default_tools_approval_mode: "approve",
-        required: true,
-        tool_timeout_sec: 1800,
-      });
-    }
-    assert.equal(clientScopes.size, 3);
-
-    const unmarked = await owner.withWorkbenchPromptInstructions({
-      method: "thread/start",
-      params: { config: { bypass_hook_trust: false, existing_setting: "preserved" } },
-    }, "thread/start");
-    assert.deepEqual(unmarked.params, { config: { bypass_hook_trust: false, existing_setting: "preserved" } });
-  } finally {
-    await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
-  }
-});

@@ -22,6 +22,7 @@ const graph = (() => {
       require("./OpenCodeAppServerNode").default,
       require("./WorkbenchClientNode").default,
       require("./WorkbenchInstructionsNode").default,
+      require("./WorkbenchCodexInstructionNode").default,
     ]);
     return observeReloadNodeGraphSources(graph, module, completeReloadSourceGeneration(generation));
   } catch (error) {

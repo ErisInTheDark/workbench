@@ -66,13 +66,44 @@ test("canonical command descriptors are immutable and unique", () => {
   const descriptors = listWorkbenchAgentCliCommandDescriptors();
   const definitions = listWorkbenchAgentCommands();
   assert.ok(descriptors.length > 0);
-  assert.equal(descriptors.length, definitions.filter(({ hideFromRootHelp }) => !hideFromRootHelp).length);
+  assert.equal(descriptors.length, definitions.filter(({ hideFromRootHelp, projectLocal }) => !hideFromRootHelp && !projectLocal).length);
   assert.equal(new Set(descriptors.map(({ words }) => words.join(" "))).size, descriptors.length);
   assert.ok(descriptors.every(({ description, usage, words }) => description && usage.startsWith("wb ") && words.length > 0));
   assert.equal(Object.isFrozen(descriptors), true);
   assert.equal(Object.isFrozen(descriptors[0]), true);
   assert.equal(Object.isFrozen(descriptors[0]?.words), true);
   assert.equal(definitions.find(({ words }) => words.join(" ") === "browse raw")?.hideFromMcp, true);
+});
+
+test("token commands expose global text counting and project-local instruction counting", async () => {
+  const outside = { cwd: "C:/other", projectRoot: "C:/workbench" };
+  const inside = { cwd: "C:/workbench", projectRoot: "C:/workbench" };
+  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "--model", "gpt-test", "--", "exact  text"], outside), {
+    kind: "request",
+    request: {
+      body: { cwd: "C:/other", kind: "text", model: "gpt-test", text: "exact  text" },
+      method: "POST",
+      path: "/internal/tokens",
+      responseKind: "native",
+    },
+  });
+  assert.equal((await parseWorkbenchAgentCliCommand(["tokens", "instructions"], outside)).kind, "error");
+  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "instructions"], inside), {
+    kind: "request",
+    request: {
+      body: { cwd: "C:/workbench", kind: "instructions", model: "gpt-5.6" },
+      method: "POST",
+      path: "/internal/tokens",
+      responseKind: "native",
+    },
+  });
+  const outsideHelp = await parseWorkbenchAgentCliCommand(["--help"], outside);
+  const insideHelp = await parseWorkbenchAgentCliCommand(["--help"], inside);
+  assert.equal(outsideHelp.kind, "help");
+  assert.equal(insideHelp.kind, "help");
+  assert.match(outsideHelp.help, /wb tokens \[--model <model>\] -- <text>/u);
+  assert.doesNotMatch(outsideHelp.help, /wb tokens instructions/u);
+  assert.match(insideHelp.help, /wb tokens instructions/u);
 });
 
 before(async () => {

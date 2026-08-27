@@ -3,15 +3,13 @@
  * - WorkbenchSubagentCommand/WorkbenchSubagentCommandTarget/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered id/name targets, and messages from wb commands. Keywords: workbench, cli, subagent, parse, create, target, message.
  * - WorkbenchThreadTitleCommand/parseWorkbenchThreadTitleCommand/isWorkbenchThreadTitleSetMatcherClaim: parse title set/get actions and identify standalone title-set displays. Keywords: workbench, cli, thread, title, parse, matcher.
  * - WorkbenchThreadStatusCommand/parseWorkbenchThreadStatusCommand/isWorkbenchThreadStatusMatcherClaim: parse completed/blocked task status actions and identify standalone successful displays. Keywords: workbench, cli, thread, status, task, matcher.
- * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, status, subagent, and reload commands. Keywords: workbench, cli, title, status, subagent, reload.
+ * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, status, token, subagent, and reload commands. Keywords: workbench, cli, title, tokens, subagent, reload.
  */
 import type { CommandAction } from "../../../codex/generated/app-server/v2/CommandAction";
 
 import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
-import {
-    getWorkbenchCommandRendering,
-} from "./workbench-command-rendering";
+import { getWorkbenchCommandRendering } from "./workbench-command-rendering";
 
 export type WorkbenchSubagentCommandAction = "create" | "list" | "message" | "profiles" | "settle" | "stop" | "wait";
 
@@ -248,6 +246,20 @@ function renderSubagentCliFallback(command: WorkbenchSubagentCommand) {
 
 export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   CommandMatcher({
+    id: "workbench-cli.tokens",
+    match: ({ stage, summaryParts }) => {
+      if (summaryParts.length) return null;
+      const normalized = stage.text.trim();
+      if (/^wb(?:\.cmd)?\s+tokens\s+instructions(?:\s|$)/iu.test(normalized)) {
+        return getWorkbenchCommandRendering("tokens_instructions", {})?.result ?? null;
+      }
+      if (/^wb(?:\.cmd)?\s+tokens(?:\s|$)/iu.test(normalized)) {
+        return getWorkbenchCommandRendering("tokens", {})?.result ?? null;
+      }
+      return null;
+    },
+  }),
+  CommandMatcher({
     id: "workbench-cli.thread-status",
     match: ({ stage, summaryParts }) => {
       const command = parseSingleWorkbenchThreadStatusCommand(stage.text);
@@ -288,7 +300,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         !/^wb(?:\.cmd)?\s+reload(?:\s|$)/iu.test(normalized)
         || /(?:^|\s)--help(?=\s|$)/iu.test(normalized)
       ) return null;
-      const selections = [...normalized.matchAll(/(?:^|\s)--([a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\+[a-z][a-z0-9-]*)*)(?=\s|$)/gu)]
+      const selections = [...normalized.matchAll(/(?:^|\s)--([a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*(?:\+[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*)*)(?=\s|$)/gu)]
         .map((match) => match[1]);
       const label = /(?:^|\s)--hard(?:\s|$)/u.test(normalized)
         ? "Workbench process"

@@ -12,7 +12,7 @@ function asRecord(value: unknown) {
     : {};
 }
 
-function getWorkbenchMcpUrl(bridgeUrl: string) {
+function getWorkbenchMcpUrl(bridgeUrl: string, projectLocal: boolean) {
   const url = new URL(bridgeUrl);
   if (url.protocol !== "ws:" && url.protocol !== "wss:") {
     throw new Error(`Workbench Codex bridge URL must use ws:// or wss://, received ${bridgeUrl}`);
@@ -21,10 +21,15 @@ function getWorkbenchMcpUrl(bridgeUrl: string) {
   const port = url.port || (url.protocol === "wss:" ? "443" : "80");
   const mcpUrl = new URL(`/orchestrator/mcp`, `${protocol}//127.0.0.1:${port}`);
   mcpUrl.searchParams.set("client", randomUUID());
+  if (projectLocal) mcpUrl.searchParams.set("project-local", "true");
   return mcpUrl.toString();
 }
 
-export function withWorkbenchCodexMcpConfig(params: Record<string, unknown>, bridgeUrl: string) {
+export function withWorkbenchCodexMcpConfig(
+  params: Record<string, unknown>,
+  bridgeUrl: string,
+  { projectLocal = false }: { projectLocal?: boolean } = {},
+) {
   const config = asRecord(params.config);
   const mcpServers = asRecord(config.mcp_servers);
   return {
@@ -37,7 +42,7 @@ export function withWorkbenchCodexMcpConfig(params: Record<string, unknown>, bri
           default_tools_approval_mode: "approve",
           required: true,
           tool_timeout_sec: WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS,
-          url: getWorkbenchMcpUrl(bridgeUrl),
+          url: getWorkbenchMcpUrl(bridgeUrl, projectLocal),
         },
       },
     },

@@ -10,12 +10,14 @@ import { createWorkbenchReloadCommands } from "./reload-command-definitions";
 import { WORKBENCH_RIPGREP_COMMANDS } from "./ripgrep-command-definition";
 import { WORKBENCH_SUBAGENT_COMMANDS } from "./subagent-command-definitions";
 import { WORKBENCH_THREAD_COMMANDS } from "./thread-command-definitions";
+import { WORKBENCH_TOKEN_COMMANDS } from "./token-command-definition";
 import type { WorkbenchAgentCommandDefinition } from "./workbench-agent-command-definition";
 
 const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Object.freeze([
   ...WORKBENCH_RIPGREP_COMMANDS,
   ...WORKBENCH_SUBAGENT_COMMANDS,
   ...WORKBENCH_THREAD_COMMANDS,
+  ...WORKBENCH_TOKEN_COMMANDS,
   ...WORKBENCH_GIT_COMMANDS,
   ...WORKBENCH_GIT_ARC_COMMANDS,
   ...WORKBENCH_BROWSE_COMMANDS,

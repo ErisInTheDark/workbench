@@ -24,6 +24,8 @@ import type {
 
 export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "rg",
+  "tokens",
+  "tokens_instructions",
   "subagent_list",
   "subagent_profiles",
   "subagent_create",
@@ -499,6 +501,10 @@ export function getWorkbenchCommandRoute(
             }),
         },
       };
+    case "tokens":
+      return simple("workbench-cli.tokens", actionTarget("Counting ", "text tokens"), actionTarget("Counted ", "text tokens"));
+    case "tokens_instructions":
+      return simple("workbench-cli.tokens", actionTarget("Counting ", "instruction tokens"), actionTarget("Counted ", "instruction tokens"));
     case "thread_title_get":
       return simple("workbench-cli.thread-title-get", actionTarget("Checking ", "thread title"), actionTarget("Checked ", "thread title"));
     case "thread_title": {

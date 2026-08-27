@@ -37,8 +37,8 @@ async function startController(controller: WorkbenchAgentCommandController, onHa
   };
 }
 
-function agentCommandBody(args: string[]) {
-  const body = new URLSearchParams({ cwd: process.cwd() });
+function agentCommandBody(args: string[], cwd = process.cwd()) {
+  const body = new URLSearchParams({ cwd });
   for (const arg of args) body.append("arg", arg);
   return body.toString();
 }
@@ -72,6 +72,43 @@ function createBrowsePort(executeBrowseRequest: (body: Buffer, signal: AbortSign
     getReloadScopeCatalog: () => reloadCatalog,
   };
 }
+
+test("dispatches token counting and keeps project-local help cwd-aware", async () => {
+  const requests: object[] = [];
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      executeTokenCount: async (body) => {
+        requests.push(body);
+        return new Response("7 tokens for gpt-test\n");
+      },
+      workbenchProjectRoot: "C:/workbench",
+    },
+  );
+  const counted = await controller.executeStructuredRequest({
+    body: { cwd: "C:/other", kind: "text", model: "gpt-test", text: "hello" },
+    method: "POST",
+    path: "/internal/tokens",
+    responseKind: "native",
+  }, new AbortController().signal);
+  assert.equal(await counted.text(), "7 tokens for gpt-test\n");
+  assert.deepEqual(requests, [{ cwd: "C:/other", kind: "text", model: "gpt-test", text: "hello" }]);
+
+  const server = await startController(controller);
+  try {
+    const help = async (cwd: string) => await fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: agentCommandBody(["--help"], cwd),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    }).then(async (response) => await response.text());
+    assert.doesNotMatch(await help("C:/other"), /wb tokens instructions/u);
+    assert.match(await help("C:/workbench"), /wb tokens instructions/u);
+  } finally {
+    await server.close();
+  }
+});
 
 test("direct Git arc dispatch receives the caller cancellation signal", async () => {
   let receivedSignal: AbortSignal | null = null;

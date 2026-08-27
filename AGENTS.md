@@ -14,6 +14,7 @@ In this project, "update instructions" means update sources under `webapp/lib/wo
 CRITICAL INSTRUCTION EDITING RULES:
 - "Strengthening" instructions does not mean more words!!!!! It means making the existing words more clear and EMPHASISED.
 - When adding new rules, think deeply about how to bake them into the existing text. Aim for more clear rules expressed in less overall words. Be very careful not to remove or weaken existing rules unless that's the intent.
+- HTML comments are stripped from emitted instructions. Use them to name the agent failure the surrounding instructions prevent. Count instruction tokens before and after edits.
 
 ## Code Organization
 

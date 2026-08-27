@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute shared structured commands while preserving reload, search, streaming, and direct-port lifecycle. Keywords: workbench, agent, command, shell, orchestrator, reload, ripgrep, transport, subagent.
+ * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute shared structured commands while preserving reload, search, token, streaming, and direct-port lifecycle. Keywords: workbench, agent, command, shell, orchestrator, reload, tokens, transport.
  */
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
@@ -26,11 +26,13 @@ interface WorkbenchAgentDirectPort {
   checkApplyPatchClaims?: (request: { cwd: string; harness: WorkbenchHarness; paths: string[]; threadId: string }) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeTokenCount?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   getReloadDirt?: (signal?: AbortSignal) => Promise<WorkbenchReloadDirtSnapshot>;
   getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
   requestCodex?: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   requestSubagent?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
+  workbenchProjectRoot?: string;
 }
 
 interface WorkbenchAgentCommandActiveRequest {
@@ -220,6 +222,7 @@ export default class WorkbenchAgentCommandController {
         callerThreadId,
         cwd,
         reloadCatalog: this.direct.getReloadScopeCatalog?.() ?? [],
+        projectRoot: this.direct.workbenchProjectRoot ?? null,
         workbenchOrigin,
       });
       if (parsed.kind === "help") {
@@ -329,6 +332,10 @@ export default class WorkbenchAgentCommandController {
     }
     if (request.path === "/api/rg" && request.body) {
       return await this.ripgrep.execute(request.body, signal);
+    }
+    if (request.path === "/internal/tokens" && request.body) {
+      if (!this.direct.executeTokenCount) throw new Error("Token counting is not configured.");
+      return await this.direct.executeTokenCount(request.body, signal);
     }
     if (request.path === "/api/orchestrator/dirt") {
       if (!this.direct.getReloadDirt) throw new Error("Reload dirt is not configured.");

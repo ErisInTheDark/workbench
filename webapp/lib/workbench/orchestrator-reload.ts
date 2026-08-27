@@ -2,7 +2,7 @@
  * Exports:
  * - WORKBENCH_RELOAD_METHOD/OrchestratorReloadRequestSchema/OrchestratorReloadResponseSchema: one typed browser reload protocol. Keywords: WebSocket, Zod, contract.
  * - OrchestratorReloadScope/OrchestratorReloadState/OrchestratorReloadRequest/OrchestratorReloadResponse: inferred reload protocol types. Keywords: reload, types.
- * - ORCHESTRATOR_RELOAD_SCOPE_PATTERN: canonical namespace:name scope syntax. Keywords: reload, scope, validation.
+ * - ORCHESTRATOR_RELOAD_SCOPE_PATTERN: canonical namespace:path scope syntax. Keywords: reload, scope, validation.
  * - OrchestratorReloadScopeDescriptor: active node catalog projection shared by CLI and reload admission. Keywords: catalog, access, destructive.
  * - normalizeOrchestratorReloadScopes/expandOrchestratorReloadScopes: validate atomic or grouped scope strings without owning topology. Keywords: normalize, group.
  * - resolveOrchestratorReloadSelections: resolve explicit scopes and destructive-aware all from one active catalog. Keywords: policy, dynamic, request.
@@ -11,8 +11,8 @@
 
 import { z } from "zod";
 
-export const ORCHESTRATOR_RELOAD_SCOPE_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$/u;
-const RELOAD_SCOPE_GROUP_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\+[a-z][a-z0-9-]*)*$/u;
+export const ORCHESTRATOR_RELOAD_SCOPE_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u;
+const RELOAD_SCOPE_GROUP_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*(?:\+[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*)*$/u;
 const MAX_RELOAD_SCOPES = 64;
 const MAX_RELOAD_SCOPE_LENGTH = 64;
 const OrchestratorReloadScopeSchema = z.string().max(MAX_RELOAD_SCOPE_LENGTH).regex(ORCHESTRATOR_RELOAD_SCOPE_PATTERN);

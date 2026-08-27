@@ -20,6 +20,10 @@ const catalog: OrchestratorReloadScopeDescriptor[] = [
 test("canonical scope parsing owns syntax without freezing topology", () => {
   assert.deepEqual(normalizeOrchestratorReloadScopes(["server:new-node", "bad", "server:new-node"]), ["server:new-node"]);
   assert.deepEqual(expandOrchestratorReloadScopes(["server:core+topology"]), ["server:core", "server:topology"]);
+  assert.deepEqual(
+    expandOrchestratorReloadScopes(["server:codex/instructions+mcp"]),
+    ["server:codex/instructions", "server:mcp"],
+  );
 });
 
 test("the active catalog owns scope access and destructive all expansion", () => {

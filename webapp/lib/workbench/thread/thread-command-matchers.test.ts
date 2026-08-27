@@ -83,6 +83,7 @@ function pathOperands(parts: readonly ThreadCommandDisplayPart[]) {
 function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
   switch (name) {
     case "rg": return { args: ["-n", "needle", "webapp"] };
+    case "tokens": return { text: "count me" };
     case "thread_title": return { title: "Render typed wb tools" };
     case "thread_status": return { status: "completed" };
     case "subagent_wait":
@@ -125,6 +126,8 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
 test("simple typed wb MCP calls share argument-sensitive CLI presentations", () => {
   const cases = [
     ["wb thread resume", "thread_resume", {}],
+    ["wb tokens -- count-me", "tokens", { text: "count-me" }],
+    ["wb tokens instructions", "tokens_instructions", {}],
     ["wb git add -- src/a.ts", "git_add", { paths: ["src/a.ts"] }],
     ["wb git arc wait", "git_arc_wait", {}],
     ["wb thread title get", "thread_title_get", {}],

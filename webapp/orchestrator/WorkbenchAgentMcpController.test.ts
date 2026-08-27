@@ -90,12 +90,18 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   const capableUrl = new URL(server.url);
   capableUrl.searchParams.set("capabilities", "reload-scopes");
   const capableClient = await connectClient(capableUrl);
+  const projectUrl = new URL(server.url);
+  projectUrl.searchParams.set("project-local", "true");
+  const projectClient = await connectClient(projectUrl);
   try {
     const inventory = await client.listTools();
-    const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter(({ hideFromMcp }) => !hideFromMcp);
+    const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter(({ hideFromMcp, projectLocal }) => !hideFromMcp && !projectLocal);
     assert.equal(inventory.tools.length, eligible.length + 1);
     assert.ok(client.getServerCapabilities()?.experimental?.[WORKBENCH_SHELL_SANDBOX_CAPABILITY]);
     assert.equal(inventory.tools.some(({ name }) => name === "browse_raw"), false);
+    assert.equal(inventory.tools.some(({ name }) => name === "tokens"), true);
+    assert.equal(inventory.tools.some(({ name }) => name === "tokens_instructions"), false);
+    assert.equal((await projectClient.listTools()).tools.some(({ name }) => name === "tokens_instructions"), true);
     const plan = inventory.tools.find(({ name }) => name === "git_arc_plan");
     assert.ok(plan);
     assert.deepEqual(Object.keys(plan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths", "roots"]);
@@ -214,6 +220,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     });
     assert.ok(server.getReleasedRequestCount() >= 3);
   } finally {
+    await projectClient.close();
     await capableClient.close();
     await client.close();
     await server.close();

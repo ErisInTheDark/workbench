@@ -7,6 +7,7 @@ import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } fro
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
+import WorkbenchTokenCountController from "./WorkbenchTokenCountController";
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "agent",
@@ -17,10 +18,12 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const subagents = build.get("subagents");
     const threadState = build.get("threadState");
     const reloadDirt = build.get("reloadDirt");
+    const tokens = new WorkbenchTokenCountController({ projectRoot: context.legacyMigrationProjectRoot });
     const agentCommand = new WorkbenchAgentCommandController(context.localWorkbenchOrigin, context.localOrchestratorOrigin, {
       checkApplyPatchClaims: async ({ cwd, harness, paths, threadId }) => await gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths),
       executeBrowseRequest: context.executeBrowseRequest,
       executeGitArcRequest: async (body, signal) => await gitArc.executeRequest(body, signal),
+      executeTokenCount: async (body, signal) => await tokens.execute(body, signal),
       executeSessionRequest: context.executeBrowseSessionRequest,
       getReloadDirt: async (signal) => await reloadDirt.refresh(signal),
       getReloadScopeCatalog: () => reloadDirt.getCatalog(),
@@ -28,6 +31,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       requestSubagent: async (request) => request.method?.startsWith("workbench/thread/")
         ? await threadState.handleManagedThreadRequest(request)
         : await subagents.handleRequest(request),
+      workbenchProjectRoot: context.legacyMigrationProjectRoot,
     });
     return {
       beginRuntimeDrain: () => { agentCommand.beginRuntimeDrain(); },
@@ -48,6 +52,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/orchestrator/WorkbenchAgentCommandController*.ts",
     "webapp/orchestrator/CodexCommandExecController*.ts",
     "webapp/orchestrator/WorkbenchRipgrepController*.ts",
+    "webapp/orchestrator/WorkbenchTokenCountController*.ts",
     "webapp/lib/workbench/commands/**",
     "webapp/lib/workbench/cli/**",
   ].join("\n"),

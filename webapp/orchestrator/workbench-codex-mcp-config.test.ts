@@ -49,7 +49,7 @@ test("derives secure loopback MCP transport and rejects non-WebSocket bridge URL
 
 test("gives each configured client a unique scope without capability negotiation", () => {
   const ordinary = withWorkbenchCodexMcpConfig({}, "ws://0.0.0.0:4500");
-  const capable = withWorkbenchCodexMcpConfig({}, "ws://0.0.0.0:4500");
+  const capable = withWorkbenchCodexMcpConfig({}, "ws://0.0.0.0:4500", { projectLocal: true });
   const readUrl = (value: object) => new URL((value as { config: { mcp_servers: { wb: { url: string } } } }).config.mcp_servers.wb.url);
   const ordinaryUrl = readUrl(ordinary);
   const capableUrl = readUrl(capable);
@@ -58,4 +58,6 @@ test("gives each configured client a unique scope without capability negotiation
   assert.notEqual(ordinaryUrl.searchParams.get("client"), capableUrl.searchParams.get("client"));
   assert.equal(ordinaryUrl.searchParams.get("capabilities"), null);
   assert.equal(capableUrl.searchParams.get("capabilities"), null);
+  assert.equal(ordinaryUrl.searchParams.get("project-local"), null);
+  assert.equal(capableUrl.searchParams.get("project-local"), "true");
 });

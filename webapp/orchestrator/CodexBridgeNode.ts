@@ -18,6 +18,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   create: (context, build) => {
     const parent = build.get("codexAppServer");
     const codexMcpGeneration = build.get("codexMcpGeneration");
+    const codexInstructions = build.get("codexInstructions");
     const harnesses = build.get("harnesses");
     const transcript = build.get("transcript");
     const threadState = build.get("threadState");
@@ -39,6 +40,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     };
     bridge = new CodexStdioBridge({
       ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
+      instructions: codexInstructions,
       prepareTurnStart,
       recordSqliteTranscript: async (observations) => {
         await transcript.record(observations);
@@ -79,7 +81,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge"],
-  requires: ["codexAppServer", "codexHealth", "codexMcpGeneration", "harnesses", "threadState", "transcript", "transcriptShadowLog", "turnRecovery"],
+  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "harnesses", "threadState", "transcript", "transcriptShadowLog", "turnRecovery"],
   safeAll: true,
   scope: "server:codex",
   sources: [
