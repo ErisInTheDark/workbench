@@ -60,6 +60,20 @@ function turnObservation(
   };
 }
 
+function canonicalWindow(
+  observations: WorkbenchTranscriptAtomicObservation[],
+  materializedTurnIds: string[],
+  threadId = "thread",
+): WorkbenchTranscriptObservation {
+  return {
+    kind: "canonicalWindow",
+    contentVersion: 2,
+    materializedTurnIds,
+    observations,
+    threadId,
+  };
+}
+
 test("source replacement keeps canonical identity and Browse enrichment while replacing stale children", () => {
   const { database, repository } = createRepository();
   const browseAsset = {
@@ -89,7 +103,7 @@ test("source replacement keeps canonical identity and Browse enrichment while re
     },
   } satisfies WorkbenchTranscriptObservation;
   try {
-    repository.settle([
+    repository.settle([canonicalWindow([
       threadObservation(),
       turnObservation("turn-0", 0),
       {
@@ -128,7 +142,7 @@ test("source replacement keeps canonical identity and Browse enrichment while re
         },
       },
       browseObservation,
-    ]);
+    ], ["turn-0"])]);
 
     repository.settle([{
       kind: "item",
@@ -155,7 +169,7 @@ test("source replacement keeps canonical identity and Browse enrichment while re
 
     const snapshot = repository.read({ threadId: "thread", turnLimit: 10 });
     assert.ok(snapshot);
-    assert.deepEqual(snapshot.rows.threadItems.map(({ id, item_index }) => [id, item_index]), [
+    assert.deepEqual(snapshot.rows.threadItems.map(({ id, item_position }) => [id, item_position]), [
       ["reasoning", 0],
       ["command", 1],
     ]);
@@ -231,15 +245,15 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
     },
   ];
   try {
-    repository.settle([
+    repository.settle([canonicalWindow([
       threadObservation(),
       turnObservation("turn-0", 0),
-      ...entries.map((entry): WorkbenchTranscriptObservation => ({
+      ...entries.map((entry): WorkbenchTranscriptAtomicObservation => ({
         kind: "steer",
         entry,
         observedAt: entry.resolvedAt!,
       })),
-    ]);
+    ], ["turn-0"])]);
     const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
     assert.ok(snapshot);
     assert.deepEqual(
@@ -261,9 +275,9 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
 test("hydration pages keep full turn metadata and load only the requested immutable item window", () => {
   const { database, repository } = createRepository();
   try {
-    repository.settle([
+    repository.settle([canonicalWindow([
       threadObservation(),
-      ...[0, 1, 2].flatMap((turnIndex): WorkbenchTranscriptObservation[] => [
+      ...[0, 1, 2].flatMap((turnIndex): WorkbenchTranscriptAtomicObservation[] => [
         turnObservation(`turn-${turnIndex}`, turnIndex),
         {
           kind: "item",
@@ -280,19 +294,19 @@ test("hydration pages keep full turn metadata and load only the requested immuta
           },
         },
       ]),
-    ]);
+    ], ["turn-0", "turn-1", "turn-2"])]);
 
     const latest = repository.read({ threadId: "thread", turnLimit: 1 });
     assert.ok(latest);
     assert.deepEqual(latest.turns.map(({ id }) => id), ["turn-0", "turn-1", "turn-2"]);
     assert.deepEqual(latest.loadedTurnIds, ["turn-2"]);
-    assert.deepEqual(latest.rows.threadItems.map(({ id, item_index }) => [id, item_index]), [["message-2", 2]]);
+    assert.deepEqual(latest.rows.threadItems.map(({ id, item_position }) => [id, item_position]), [["message-2", 0]]);
     assert.equal(latest.hasPreviousTurns, true);
 
     const previous = repository.read({ threadId: "thread", beforeTurnIndex: 2, turnLimit: 1 });
     assert.ok(previous);
     assert.deepEqual(previous.loadedTurnIds, ["turn-1"]);
-    assert.deepEqual(previous.rows.threadItems.map(({ id, item_index }) => [id, item_index]), [["message-1", 1]]);
+    assert.deepEqual(previous.rows.threadItems.map(({ id, item_position }) => [id, item_position]), [["message-1", 0]]);
     assert.equal(previous.hasPreviousTurns, true);
 
     const exact = repository.read({ threadId: "thread", turnIds: ["turn-0", "turn-2"], turnLimit: 1 });
@@ -305,28 +319,139 @@ test("hydration pages keep full turn metadata and load only the requested immuta
   }
 });
 
+test("JIT windows materialize independent turns and replace one turn's local positions atomically", () => {
+  const { database, repository } = createRepository();
+  const turnHistory = Array.from({ length: 9 }, (_, turnIndex) => (
+    turnObservation(`turn-${turnIndex}`, turnIndex)
+  ));
+  const message = (id: string, text: string): WorkbenchTranscriptAtomicObservation => ({
+    kind: "item",
+    threadId: "thread",
+    turnId: "turn-8",
+    lifecycle: "completed",
+    observedAt: 20,
+    item: { id, memoryCitation: null, phase: "commentary", text, type: "agentMessage" },
+  });
+  try {
+    repository.settle([canonicalWindow([
+      threadObservation(),
+      ...turnHistory,
+      message("opening", "opening"),
+      message("answer", "answer"),
+    ], ["turn-8"])]);
+
+    const first = repository.read({ threadId: "thread", turnIds: ["turn-8"], turnLimit: 1 });
+    assert.ok(first);
+    assert.deepEqual(
+      first.rows.threadItems.map(({ id, item_position }) => [id, item_position]),
+      [["opening", 0], ["answer", 1]],
+    );
+    assert.equal(repository.read({ threadId: "thread", turnIds: ["turn-0"], turnLimit: 1 }), null);
+    assert.equal(repository.read({ threadId: "thread", turnIds: ["not-imported"], turnLimit: 1 }), null);
+    repository.settle([canonicalWindow([
+      threadObservation("other"),
+      turnObservation("other-turn", 0, "other"),
+    ], ["other-turn"], "other")]);
+    assert.throws(
+      () => repository.read({ threadId: "thread", turnIds: ["other-turn"], turnLimit: 1 }),
+      /belongs to thread other/,
+    );
+
+    repository.settle([canonicalWindow([
+      threadObservation(),
+      ...turnHistory,
+      message("opening", "opening"),
+      {
+        kind: "questionnaire",
+        entry: {
+          insertAfterItemId: "opening",
+          insertAfterItemIndex: 0,
+          itemId: null,
+          request: {
+            id: "request",
+            questions: [{
+              allowOther: false,
+              header: "Choice",
+              id: "choice",
+              isSecret: false,
+              options: [{ description: "Pick it", label: "One" }],
+              question: "Pick one",
+            }],
+            submitLabel: "Submit",
+            summary: "Choose",
+            title: "Questionnaire",
+          },
+          requestKey: "questionnaire",
+          resolvedAt: 21,
+          response: { answers: {} },
+          threadId: "thread",
+          turnId: "turn-8",
+        },
+        observedAt: 21,
+      },
+      message("answer", "answer"),
+    ], ["turn-8"])]);
+
+    const inserted = repository.read({ threadId: "thread", turnIds: ["turn-8"], turnLimit: 1 });
+    assert.ok(inserted);
+    const insertedPositions = new Map(inserted.rows.threadItems.map(({ id, item_position }) => [id, item_position]));
+    const insertedItemId = [...insertedPositions.keys()].find((id) => id !== "opening" && id !== "answer");
+    assert.ok(insertedItemId);
+    assert.deepEqual(
+      inserted.rows.threadItems.map(({ id, item_position }) => [id, item_position]),
+      [["opening", 0], [insertedItemId, 1], ["answer", 2]],
+    );
+
+    repository.settle([canonicalWindow([
+      threadObservation(),
+      ...turnHistory,
+      {
+        kind: "item",
+        threadId: "thread",
+        turnId: "turn-0",
+        lifecycle: "completed",
+        observedAt: 22,
+        item: { id: "ancestor", memoryCitation: null, phase: "commentary", text: "ancestor", type: "agentMessage" },
+      },
+    ], ["turn-0"])]);
+    const afterAncestor = repository.read({ threadId: "thread", turnIds: ["turn-8"], turnLimit: 1 });
+    assert.ok(afterAncestor);
+    assert.deepEqual(
+      afterAncestor.rows.threadItems.map(({ id, item_position }) => [id, item_position]),
+      inserted.rows.threadItems.map(({ id, item_position }) => [id, item_position]),
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test("complete version-one shadow import replaces only that thread atomically and preserves exact timelines", () => {
   const { database, repository } = createRepository();
   try {
     repository.settle([
-      threadObservation(),
-      turnObservation("partial", 0),
-      {
-        kind: "item",
-        threadId: "thread",
-        turnId: "partial",
-        lifecycle: "completed",
-        observedAt: 3,
-        item: { id: "partial-item", memoryCitation: null, phase: "commentary", text: "partial", type: "agentMessage" },
-      },
-      threadObservation("other"),
-      turnObservation("other-turn", 0, "other"),
+      canonicalWindow([
+        threadObservation(),
+        turnObservation("partial", 0),
+        {
+          kind: "item",
+          threadId: "thread",
+          turnId: "partial",
+          lifecycle: "completed",
+          observedAt: 3,
+          item: { id: "partial-item", memoryCitation: null, phase: "commentary", text: "partial", type: "agentMessage" },
+        },
+      ], ["partial"]),
+      canonicalWindow([
+        threadObservation("other"),
+        turnObservation("other-turn", 0, "other"),
+      ], ["other-turn"], "other"),
     ]);
     database.prepare("UPDATE workbench_threads SET transcript_content_version = 1").run();
 
     repository.settle([{
-      kind: "canonicalSnapshot",
+      kind: "canonicalWindow",
       contentVersion: 2,
+      materializedTurnIds: ["older", "newer"],
       threadId: "thread",
       observations: [
         threadObservation(),
@@ -338,7 +463,6 @@ test("complete version-one shadow import replaces only that thread atomically an
           turnId: "older",
           lifecycle: "completed",
           observedAt: 20,
-          itemIndex: 0,
           timeline: {
             aliases: ["message-alias"],
             completedAt: 20,
@@ -355,7 +479,7 @@ test("complete version-one shadow import replaces only that thread atomically an
     assert.ok(snapshot);
     assert.equal(snapshot.thread.transcript_content_version, 2);
     assert.deepEqual(snapshot.turns.map(({ id, turn_index }) => [id, turn_index]), [["older", 0], ["newer", 1]]);
-    assert.deepEqual(snapshot.rows.threadItems.map(({ id, item_index }) => [id, item_index]), [["message", 0]]);
+    assert.deepEqual(snapshot.rows.threadItems.map(({ id, item_position }) => [id, item_position]), [["message", 0]]);
     assert.deepEqual(snapshot.rows.threadItemTimelines, [{
       item_id: "message",
       first_seen_at: 10,
@@ -367,8 +491,9 @@ test("complete version-one shadow import replaces only that thread atomically an
     assert.ok(repository.read({ threadId: "other", turnLimit: 1 }));
 
     assert.throws(() => repository.settle([{
-      kind: "canonicalSnapshot",
+      kind: "canonicalWindow",
       contentVersion: 2,
+      materializedTurnIds: ["missing"],
       threadId: "other",
       observations: [
         threadObservation("other"),
@@ -381,7 +506,7 @@ test("complete version-one shadow import replaces only that thread atomically an
           item: { id: "invalid", memoryCitation: null, phase: "commentary", text: "invalid", type: "agentMessage" },
         },
       ],
-    }]), /unknown turn owner/);
+    }]), /materializes unknown turn/);
     const other = repository.read({ threadId: "other", turnLimit: 1 });
     assert.ok(other);
     assert.equal(other.thread.transcript_content_version, 1);
@@ -394,7 +519,10 @@ test("complete version-one shadow import replaces only that thread atomically an
 test("unsupported items remain opaque and a later invalid observation rolls back the complete settlement", () => {
   const { database, repository } = createRepository();
   try {
-    repository.settle([threadObservation(), turnObservation("turn-0", 0)]);
+    repository.settle([canonicalWindow(
+      [threadObservation(), turnObservation("turn-0", 0)],
+      ["turn-0"],
+    )]);
     assert.throws(() => repository.settle([
       {
         kind: "item",

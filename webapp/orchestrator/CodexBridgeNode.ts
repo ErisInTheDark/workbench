@@ -43,13 +43,14 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       recordSqliteTranscript: async (observations) => {
         await transcript.record(observations);
       },
-      sqliteTranscriptIdentity: transcript,
+      transcriptShadowLog: build.get("transcriptShadowLog"),
     });
     parent.attachBridge(bridge);
     let activated = build.mode === "initial";
     let detached = false;
     return {
       activate: async () => {
+        if (build.mode === "replacement") codexMcpGeneration.bump();
         activated = true;
         await harnesses.recoverAvailable("codex");
       },
@@ -68,7 +69,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       },
       registrations: { codexBridge: bridge },
       start: async () => {
-        if (build.mode !== "initial") await context.onCodexBridgeReady(bridge);
+        if (build.mode !== "initial") {
+          await context.onCodexBridgeReady(bridge);
+        }
         build.get("codexHealth").start({ armed: true });
       },
     };
@@ -76,15 +79,18 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge"],
-  requires: ["codexAppServer", "codexHealth", "codexMcpGeneration", "harnesses", "threadState", "transcript", "turnRecovery"],
+  requires: ["codexAppServer", "codexHealth", "codexMcpGeneration", "harnesses", "threadState", "transcript", "transcriptShadowLog", "turnRecovery"],
   safeAll: true,
   scope: "server:codex",
   sources: [
     "webapp/orchestrator/CodexBridgeNode.ts",
     "webapp/orchestrator/CodexStdioBridge.ts",
+    "webapp/orchestrator/CodexThreadWindowLoader.ts",
+    "webapp/lib/workbench/thread/workbench-thread-page.ts",
     "webapp/orchestrator/workbench-agent-mcp-request-registry.ts",
     "webapp/orchestrator/CodexBridgeTransitionController.ts",
     "webapp/orchestrator/CodexRecoverySupervisor.ts",
+    "webapp/orchestrator/CodexTranscriptShadowController.ts",
     "webapp/orchestrator/CodexTranscriptStore.ts",
     "webapp/orchestrator/codex-transcript-*.ts",
     "webapp/orchestrator/copilot-bridge.ts",

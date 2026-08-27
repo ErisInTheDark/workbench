@@ -142,6 +142,95 @@ test("stored item ownership rejects later duplicate turns without hiding their n
   ]);
 }));
 
+test("provider catalogs remain unloaded until one exact turn page materializes", async () => withStore(async (store, root) => {
+  const older = { ...transcriptTurn("older", []), itemsView: "notLoaded" as const };
+  const latest = transcriptTurn("latest", ["latest-item"]);
+  await store.recordProviderTurnCatalog(snapshot([]), [older, latest], {
+    cursor: "after-latest",
+    turnId: "latest",
+  });
+  await assert.rejects(fs.access(turnFilePath(root, "older")));
+  await assert.rejects(fs.access(turnFilePath(root, "latest")));
+
+  await store.recordProviderTurnPage(snapshot([]), latest, "after-latest");
+  const latestWindow = await store.hydrateThreadResponse(
+    { id: 91, method: "thread/read", params: { threadId: "thread" } },
+    { id: 91, result: { thread: snapshot([]) } },
+    { hydration: { mode: "latest" } },
+  );
+  const latestThread = (latestWindow.result as { thread: Thread }).thread as Thread & {
+    workbenchTurnHistory: Array<{ loadState: string; turnId: string }>;
+  };
+  assert.deepEqual(latestThread.turns.map((candidate) => candidate.id), ["latest"]);
+  assert.deepEqual(latestThread.workbenchTurnHistory.map(({ loadState, turnId }) => [turnId, loadState]), [
+    ["older", "unloaded"],
+    ["latest", "loaded"],
+  ]);
+  assert.equal(await store.readProviderPreviousCursor("thread", "latest"), "after-latest");
+
+  await store.recordProviderTurnPage(snapshot([]), transcriptTurn("older", ["older-item"]), null);
+  const olderWindow = await store.hydrateThreadResponse(
+    { id: 92, method: "thread/read", params: { threadId: "thread" } },
+    { id: 92, result: { thread: snapshot([]) } },
+    { hydration: { beforeTurnId: "latest", mode: "previous" } },
+  );
+  assert.deepEqual(
+    (olderWindow.result as { thread: Thread }).thread.turns.map((candidate) => candidate.id),
+    ["older"],
+  );
+  assert.equal(await store.readProviderPreviousCursor("thread", "older"), null);
+}));
+
+test("live turn lifecycle snapshots create and update one durable turn index entry", async () => withStore(async (store, root) => {
+  await store.recordHydratedThreadSnapshot({ id: 93, result: { thread: snapshot([]) } });
+  const startedTurn = {
+    ...transcriptTurn("live", ["user"]),
+    completedAt: null,
+    durationMs: null,
+    status: "inProgress" as const,
+  };
+  await store.recordUpstreamNotification({
+    method: "turn/started",
+    params: { threadId: "thread", turn: startedTurn },
+  });
+
+  const startedThreadFile = await readThreadFile(root);
+  assert.deepEqual(startedThreadFile.turnIndex.map((entry) => ({
+    itemIds: entry.itemIds,
+    status: entry.status,
+    turnId: entry.turnId,
+  })), [{
+    itemIds: ["user"],
+    status: "inProgress",
+    turnId: "live",
+  }]);
+
+  await store.recordUpstreamNotification({
+    method: "turn/completed",
+    params: {
+      threadId: "thread",
+      turn: {
+        ...transcriptTurn("live", ["user", "assistant"]),
+        completedAt: 4,
+        durationMs: 3_000,
+      },
+    },
+  });
+
+  const completedThreadFile = await readThreadFile(root);
+  assert.deepEqual(completedThreadFile.turnIndex.map((entry) => ({
+    completedAt: entry.completedAt,
+    itemIds: entry.itemIds,
+    status: entry.status,
+    turnId: entry.turnId,
+  })), [{
+    completedAt: 4,
+    itemIds: ["user", "assistant"],
+    status: "completed",
+    turnId: "live",
+  }]);
+}));
+
 test("duplicate stored ownership repairs from canonical turn timelines once", async () => withStore(async (store, root) => {
   const originalTurn = transcriptTurn("real", ["exec"]);
   const duplicateTurns = [
@@ -260,6 +349,29 @@ test("a new empty transcript store completes every migration", async () => {
     };
     assert.equal(migrationState.schemaVersion, CODEX_TRANSCRIPT_SCHEMA_VERSION);
     assert.equal(typeof migrationState.migratedAt, "number");
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("legacy transcript cleanup progress uses the dedicated transcript diagnostic log", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-transcript-diagnostic-test-"));
+  const requestsDirectory = path.join(root, ".workbench", "transcripts", "codex", "threads", "thread", "requests");
+  const records: Array<{ event: string; source: string }> = [];
+  await fs.mkdir(requestsDirectory, { recursive: true });
+  await fs.writeFile(path.join(requestsDirectory, "request.ndjson"), "{}\n", "utf8");
+  const store = new CodexTranscriptStore(root, () => [], {
+    flush: async () => undefined,
+    write: (record) => { records.push(record); },
+  });
+  try {
+    await store.dispose();
+    assert.ok(records.some(({ event, source }) => (
+      event === "request-journal-cleanup-started" && source === "codex-transcript"
+    )));
+    assert.ok(records.some(({ event, source }) => (
+      event === "request-journal-cleanup-completed" && source === "codex-transcript"
+    )));
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }

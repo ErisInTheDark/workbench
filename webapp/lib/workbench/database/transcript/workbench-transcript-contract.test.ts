@@ -21,7 +21,6 @@ const thread = {
   snoozed: 0,
   transcript_content_version: 1,
   next_turn_index: 0,
-  next_item_index: 0,
   created_at: 1,
   updated_at: 1,
   activity_at: 1,
@@ -85,6 +84,36 @@ test("parity reports admit only bounded content-free diagnostic context", () => 
   assert.equal(decodeWorkbenchTranscriptRequest(
     workbenchTranscriptOperations.reportParity.method,
     { ...diagnostic, jsonContext: Array.from({ length: 8 }, () => context) },
+  )?.success, false);
+});
+
+test("conformance reports admit only bounded structural paths without payload values", () => {
+  const diagnostic = {
+    issues: [{ code: "invalidValue", path: ["rows", "threadItems", 2, "type"] }],
+    method: "workbench/transcript/updated",
+    repairedPaths: [["rows", "threadTurns"]],
+  };
+  const decoded = decodeWorkbenchTranscriptRequest(
+    workbenchTranscriptOperations.reportConformance.method,
+    diagnostic,
+  );
+  assert.equal(decoded?.success, true);
+  if (decoded?.success) {
+    assert.equal(decoded.data.operation, workbenchTranscriptOperations.reportConformance);
+    assert.deepEqual(decoded.data.params, diagnostic);
+  }
+
+  assert.equal(decodeWorkbenchTranscriptRequest(
+    workbenchTranscriptOperations.reportConformance.method,
+    { ...diagnostic, method: "workbench/transcript/updated\nsecret" },
+  )?.success, false);
+  assert.equal(decodeWorkbenchTranscriptRequest(
+    workbenchTranscriptOperations.reportConformance.method,
+    { ...diagnostic, repairedPaths: [[{ payload: "secret" }]] },
+  )?.success, false);
+  assert.equal(decodeWorkbenchTranscriptRequest(
+    workbenchTranscriptOperations.reportConformance.method,
+    { ...diagnostic, issues: Array.from({ length: 65 }, () => diagnostic.issues[0]) },
   )?.success, false);
 });
 

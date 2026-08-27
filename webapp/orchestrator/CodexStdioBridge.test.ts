@@ -11,6 +11,8 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 
 import type CodexAppServer from "./CodexAppServer";
+import type CodexTranscriptStore from "./CodexTranscriptStore";
+import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
 import type { WorkbenchBrowseResultEntry } from "../lib/types";
 import {
@@ -52,12 +54,15 @@ function bridgeThread(items: ThreadItem[] = []) {
   return {
     agentNickname: null,
     agentRole: null,
+    canAcceptDirectInput: null,
     cliVersion: "test",
     createdAt: 1,
     cwd: "C:/repo",
     ephemeral: false,
+    extra: null,
     forkedFromId: null,
     gitInfo: null,
+    historyMode: "legacy" as const,
     id: "thread",
     modelProvider: "openai",
     name: null,
@@ -65,6 +70,8 @@ function bridgeThread(items: ThreadItem[] = []) {
     path: null,
     preview: "",
     recencyAt: null,
+    section: null,
+    sectionEnteredAt: null,
     sessionId: "session",
     source: "appServer" as const,
     status: { activeFlags: [], type: "active" as const },
@@ -83,15 +90,147 @@ function bridgeThread(items: ThreadItem[] = []) {
   };
 }
 
-test("the transcript queue preserves ready state for the same database and reseeds a replacement database", async () => {
+test("reload-safe clients receive the untouched upstream initialize result", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-capability-"));
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    initialState: {
+      initializeResult: { preserved: "upstream" },
+      pendingResponses: new Map(),
+      pendingUserInputRequests: new Map(),
+      requestIdAllocator: { next: 1 },
+      upstreamInitialized: true,
+    },
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    const initializeResult = bridge.getInitializeResult() as { preserved?: string };
+    assert.equal(initializeResult.preserved, "upstream");
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("thread pages map first and continuation reads into Codex-owned hydration", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-thread-page-"));
+  const upstreamRequests: JsonRpcRequest[] = [];
+  const contextRequests: JsonRpcRequest[] = [];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage({
+          id: message.id ?? null,
+          result: {
+            model: "gpt-test",
+            reasoningEffort: "high",
+            serviceTier: "fast",
+            thread: { ...bridgeThread(), turns: [] },
+          },
+        });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const pageOwner = bridge as unknown as {
+    readThreadContext(message: JsonRpcRequest): Promise<{
+      browseResultEntries: [];
+      questionnaireEntries: [];
+      steerEntries: [];
+      thread: Thread;
+    }>;
+  };
+  pageOwner.readThreadContext = async (message) => {
+    contextRequests.push(message);
+    return {
+      browseResultEntries: [],
+      questionnaireEntries: [],
+      steerEntries: [],
+      thread: {
+        ...bridgeThread(),
+        turns: [bridgeThread().turns[0]!],
+        workbenchTurnHistory: [
+          { completedAt: 1, durationMs: 1, itemCount: 0, loadState: "unloaded", startedAt: 1, status: "completed", turnId: "older" },
+          { completedAt: null, durationMs: null, itemCount: 0, loadState: "loaded", startedAt: 1, status: "inProgress", turnId: "turn" },
+        ],
+      },
+    };
+  };
+
+  try {
+    const first = await bridge.handleBridgeRequest({
+      id: 1,
+      method: "workbench/thread/page/read",
+      params: { cursor: null, cwd: "C:/repo", threadId: "thread" },
+    });
+    assert.equal(upstreamRequests.length, 1);
+    assert.equal(upstreamRequests[0]?.method, "thread/resume");
+    const resumeParams = upstreamRequests[0]?.params as {
+      config?: { mcp_servers?: { wb?: Record<string, unknown> } };
+      cwd?: string;
+      excludeTurns?: boolean;
+      threadId?: string;
+    };
+    assert.equal(resumeParams.cwd, "C:/repo");
+    assert.equal(resumeParams.excludeTurns, true);
+    assert.equal(resumeParams.threadId, "thread");
+    assert.equal(resumeParams.config?.mcp_servers?.wb?.required, true);
+    assert.match(String(resumeParams.config?.mcp_servers?.wb?.url), /^http:\/\/127\.0\.0\.1:1\/orchestrator\/mcp\?/u);
+    assert.deepEqual(contextRequests[0], {
+      method: "thread/context/read",
+      params: { includeTurns: false, threadId: "thread" },
+      workbenchThreadContextEntries: { mode: "hydratedTurns" },
+      workbenchThreadHydration: { mode: "latest" },
+    });
+    assert.equal((first?.result as { nextCursor?: string }).nextCursor, "turn");
+
+    await bridge.handleBridgeRequest({
+      id: 2,
+      method: "workbench/thread/page/read",
+      params: { cursor: "turn", threadId: "thread" },
+    });
+    assert.equal(upstreamRequests.length, 1);
+    assert.deepEqual(contextRequests[1]?.workbenchThreadHydration, {
+      beforeTurnId: "turn",
+      mode: "previous",
+    });
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("the legacy transcript queue stays independent while JIT shadow windows cross a bridge reload", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-sqlite-transcript-"));
   const batches: object[][] = [];
+  const shadowFlushes: (() => void)[] = [];
+  let shadowRecorded: ReturnType<typeof deferred<void>> | null = null;
   let activeRecords = 0;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
-  const firstDatabase = {};
-  const replacementDatabase = {};
+  const flushShadow = async () => {
+    const flush = shadowFlushes.shift();
+    assert.ok(flush);
+    shadowRecorded = deferred<void>();
+    flush();
+    await shadowRecorded.promise;
+    shadowRecorded = null;
+  };
   const createBridge = (
-    sqliteTranscriptIdentity: object,
     initialState?: import("./CodexStdioBridge").CodexStdioBridgeReloadState,
   ) => new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
@@ -105,6 +244,7 @@ test("the transcript queue preserves ready state for the same database and resee
       batches.push([...observations]);
       await Promise.resolve();
       activeRecords -= 1;
+      shadowRecorded?.resolve();
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
@@ -112,8 +252,14 @@ test("the transcript queue preserves ready state for the same database and resee
       root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
     }),
     sendToClient() {},
-    sqliteTranscriptIdentity,
     storageRoot: root,
+    transcriptShadowScheduleFlush: (flush) => {
+      shadowFlushes.push(flush);
+      return () => {
+        const index = shadowFlushes.indexOf(flush);
+        if (index >= 0) shadowFlushes.splice(index, 1);
+      };
+    },
   });
   const item: ThreadItem = {
     type: "agentMessage",
@@ -123,16 +269,18 @@ test("the transcript queue preserves ready state for the same database and resee
     memoryCitation: null,
   };
   try {
-    bridge = createBridge(firstDatabase);
+    bridge = createBridge();
     await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: bridgeThread([]) } });
     await bridge.handleUpstreamMessage({
       method: "item/completed",
       params: { completedAtMs: 2_000, item, threadId: "thread", turnId: "turn" },
     });
     await bridge.waitForIdle();
+    assert.deepEqual(batches, []);
+    await flushShadow();
     assert.deepEqual(batches.flatMap((batch) => batch.map((observation) => (
       (observation as { kind: string }).kind
-    ))), ["canonicalSnapshot", "turn", "item"]);
+    ))), ["canonicalWindow", "item"]);
     const bootstrap = batches[0]?.[0] as {
       observations?: Array<{ kind: string; turnIndex?: number }>;
     };
@@ -142,7 +290,7 @@ test("the transcript queue preserves ready state for the same database and resee
     );
 
     const state = await bridge.detachForReload();
-    bridge = createBridge(firstDatabase, state);
+    bridge = createBridge(state);
     await bridge.handleUpstreamMessage({
       method: "turn/completed",
       params: {
@@ -157,34 +305,11 @@ test("the transcript queue preserves ready state for the same database and resee
       },
     });
     await bridge.waitForIdle();
-    const finalBatch = batches.at(-1) as Array<{
-      endedAt?: number | null;
-      kind: string;
-      nativeLocation?: string;
-      startedAt?: number | null;
-    }>;
-    assert.deepEqual(finalBatch.map(({ endedAt, kind, nativeLocation, startedAt }) => ({
-      endedAt,
-      kind,
-      nativeLocation,
-      startedAt,
-    })), [
-      {
-        endedAt: null,
-        kind: "turn",
-        nativeLocation: "C:/repo",
-        startedAt: null,
-      },
-      {
-        endedAt: undefined,
-        kind: "item",
-        nativeLocation: undefined,
-        startedAt: undefined,
-      },
-    ]);
+    await flushShadow();
+    assert.equal((batches.at(-1)?.[0] as { kind?: string })?.kind, "canonicalWindow");
 
     const replacementState = await bridge.detachForReload();
-    bridge = createBridge(replacementDatabase, replacementState);
+    bridge = createBridge(replacementState);
     await bridge.handleUpstreamMessage({
       method: "turn/completed",
       params: {
@@ -198,20 +323,70 @@ test("the transcript queue preserves ready state for the same database and resee
       },
     });
     await bridge.waitForIdle();
-    assert.deepEqual(
-      batches.slice(-2).map((batch) => batch.map((observation) => (
-        (observation as { kind: string }).kind
-      ))),
-      [["canonicalSnapshot"], ["turn", "item"]],
-    );
-    const reseed = batches.at(-2)?.[0] as {
-      observations?: Array<{ kind: string }>;
-    };
-    assert.deepEqual(
-      reseed.observations?.map(({ kind }) => kind),
-      ["thread", "turn", "item"],
-    );
+    await flushShadow();
+    assert.equal((batches.at(-1)?.[0] as { kind?: string })?.kind, "canonicalWindow");
   } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("a blocked SQLite shadow cannot delay legacy item persistence or bridge detach", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-blocked-shadow-"));
+  const shadowFlushes: (() => void)[] = [];
+  const shadowStarted = deferred<void>();
+  const releaseShadow = deferred<void>();
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    recordSqliteTranscript: async () => {
+      shadowStarted.resolve();
+      await releaseShadow.promise;
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {},
+    storageRoot: root,
+    transcriptShadowScheduleFlush: (flush) => {
+      shadowFlushes.push(flush);
+      return () => undefined;
+    },
+  });
+  const item: ThreadItem = {
+    id: "message",
+    memoryCitation: null,
+    phase: "commentary",
+    text: "legacy survives",
+    type: "agentMessage",
+  };
+  try {
+    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: bridgeThread([]) } });
+    await bridge.waitForIdle();
+    const flush = shadowFlushes.shift();
+    assert.ok(flush);
+    flush();
+    await shadowStarted.promise;
+
+    await bridge.handleUpstreamMessage({
+      method: "item/completed",
+      params: { completedAtMs: 2_000, item, threadId: "thread", turnId: "turn" },
+    });
+    await bridge.waitForIdle();
+    const TranscriptStore = (await import("./CodexTranscriptStore.js")).default as unknown as typeof CodexTranscriptStore;
+    const inspection = new TranscriptStore(root);
+    const stored = await inspection.readStoredThreadWindow("thread", ["turn"]);
+    assert.deepEqual(stored?.turns[0]?.items.map(({ id }) => id), ["message"]);
+    await inspection.dispose();
+
+    const state = await bridge.detachForReload();
+    assert.equal(state.upstreamInitialized, false);
+  } finally {
+    releaseShadow.resolve();
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }
@@ -221,6 +396,9 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-browse-asset-"));
   const observations: object[] = [];
   const notifications: object[] = [];
+  const shadowFlushes: (() => void)[] = [];
+  let shadowRecorded: ReturnType<typeof deferred<void>> | null = null;
+  let shadowFailed: ReturnType<typeof deferred<void>> | null = null;
   const bytes = Buffer.from("verified browse image");
   const digest = createHash("sha256").update(bytes).digest("hex");
   const encodedThreadId = Buffer.from("thread", "utf8").toString("base64url");
@@ -242,7 +420,10 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification(notification) { notifications.push(notification); },
-    recordSqliteTranscript: async (batch) => { observations.push(...batch); },
+    recordSqliteTranscript: async (batch) => {
+      observations.push(...batch);
+      shadowRecorded?.resolve();
+    },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
       project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
@@ -250,7 +431,28 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
     }),
     sendToClient() {},
     storageRoot: root,
+    transcriptShadowLog: {
+      flush: async () => undefined,
+      write: (record) => {
+        if (record.event === "shadow-settlement-failed") shadowFailed?.resolve();
+      },
+    },
+    transcriptShadowScheduleFlush: (flush) => {
+      shadowFlushes.push(flush);
+      return () => {
+        const index = shadowFlushes.indexOf(flush);
+        if (index >= 0) shadowFlushes.splice(index, 1);
+      };
+    },
   });
+  const flushShadow = async () => {
+    const flush = shadowFlushes.shift();
+    assert.ok(flush);
+    shadowRecorded = deferred<void>();
+    flush();
+    await shadowRecorded.promise;
+    shadowRecorded = null;
+  };
   const entry: WorkbenchBrowseResultEntry = {
     action: "screenshot",
     actionIndex: 0,
@@ -271,10 +473,21 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
   try {
     await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: bridgeThread([]) } });
     await bridge.waitForIdle();
+    await flushShadow();
     observations.length = 0;
     notifications.length = 0;
     await bridge.recordBrowseResultForBrowse(entry);
-    assert.deepEqual(observations, [{
+    await flushShadow();
+    const window = observations[0] as {
+      kind?: string;
+      materializedTurnIds?: string[];
+      observations?: object[];
+    };
+    assert.equal(window.kind, "canonicalWindow");
+    assert.deepEqual(window.materializedTurnIds, ["turn"]);
+    assert.deepEqual(window.observations?.filter((observation) => (
+      (observation as { kind?: string }).kind === "browse"
+    )), [{
       kind: "browse",
       entry,
       asset: {
@@ -290,12 +503,15 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
     }]);
 
     await fs.writeFile(path.join(assetDirectory, `${digest}.png`), "tampered");
-    await assert.rejects(
-      bridge.recordBrowseResultForBrowse({ ...entry, entryKey: "tampered" }),
-      /contents do not match its digest/u,
-    );
+    await bridge.recordBrowseResultForBrowse({ ...entry, entryKey: "tampered" });
+    const failedFlush = shadowFlushes.shift();
+    assert.ok(failedFlush);
+    shadowFailed = deferred<void>();
+    failedFlush();
+    await shadowFailed.promise;
+    shadowFailed = null;
     assert.equal(observations.length, 1);
-    assert.equal(notifications.length, 1);
+    assert.equal(notifications.length, 2);
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
@@ -543,6 +759,63 @@ test("successful external send remaps the response id and detaches with settled 
   }
 });
 
+test("excludeTurns resume cannot rehydrate a stored transcript", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-metadata-resume-test-"));
+  const TranscriptStore = (await import("./CodexTranscriptStore.js")).default as unknown as typeof CodexTranscriptStore;
+  const transcriptStore = new TranscriptStore(root);
+  await transcriptStore.recordHydratedThreadSnapshot({
+    id: 1,
+    result: {
+      thread: bridgeThread([{
+        id: "stored-item",
+        memoryCitation: null,
+        phase: "commentary",
+        text: "stored",
+        type: "agentMessage",
+      }]),
+    },
+  });
+  await transcriptStore.dispose();
+
+  const client: BridgeClient = {
+    OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
+  };
+  let upstreamRequest: JsonRpcRequest | null = null;
+  const appServer = {
+    send(message: JsonRpcRequest) { upstreamRequest = message; },
+  } as unknown as CodexAppServer;
+  const clientMessages: unknown[] = [];
+  const bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient(_client, message) { clientMessages.push(message); },
+    storageRoot: root,
+  });
+  try {
+    await bridge.forwardRequest({
+      id: 51,
+      method: "thread/resume",
+      params: { excludeTurns: true, threadId: "thread" },
+      workbenchThreadHydration: { mode: "latest" },
+    }, client, 51);
+    assert.equal(upstreamRequest?.method, "thread/resume");
+
+    await bridge.handleUpstreamMessage({
+      id: upstreamRequest!.id,
+      result: { thread: { ...bridgeThread(), turns: [] } },
+    });
+
+    const response = clientMessages[0] as { result?: { thread?: Thread } };
+    assert.deepEqual(response.result?.thread?.turns, []);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("rejected and empty external steer responses do not interrupt MCP waits", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-rejected-steer-test-"));
   const client: BridgeClient = {
@@ -621,13 +894,22 @@ test("turn-start preflight completes before upstream delivery and blocks deliver
   const events: string[] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
   let rejectPreflight = false;
+  let rejectResume = false;
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
     send(message: JsonRpcRequest) {
       events.push(`send:${message.method}`);
       upstreamRequests.push(message);
+      if (message.method === "thread/resume") {
+        queueMicrotask(() => {
+          void bridge.handleUpstreamMessage(rejectResume
+            ? { error: { code: -32000, message: "resume failed" }, id: message.id ?? null }
+            : { id: message.id ?? null, result: { thread: { ...bridgeThread(), turns: [] } } });
+        });
+      }
     },
   } as unknown as CodexAppServer;
-  const bridge = new CodexStdioBridge({
+  bridge = new CodexStdioBridge({
     appServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -650,17 +932,44 @@ test("turn-start preflight completes before upstream delivery and blocks deliver
   try {
     const admitted = bridge.forwardRequest(request(1), client, 1);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(events, ["prepare:start"]);
-    assert.deepEqual(upstreamRequests, []);
+    assert.deepEqual(events, ["send:thread/resume", "prepare:start"]);
+    assert.equal(upstreamRequests.length, 1);
+    const firstResumeParams = upstreamRequests[0]?.params as {
+      config?: { mcp_servers?: { wb?: Record<string, unknown> } };
+      excludeTurns?: boolean;
+      threadId?: string;
+    };
+    assert.equal(firstResumeParams.excludeTurns, true);
+    assert.equal(firstResumeParams.threadId, "thread");
+    assert.equal(firstResumeParams.config?.mcp_servers?.wb?.required, true);
 
     gate.resolve();
     await admitted;
-    assert.deepEqual(events, ["prepare:start", "prepare:complete", "send:turn/start"]);
-    assert.equal(upstreamRequests.length, 1);
+    assert.deepEqual(events, [
+      "send:thread/resume",
+      "prepare:start",
+      "prepare:complete",
+      "send:turn/start",
+    ]);
+    assert.equal(upstreamRequests.length, 2);
 
     rejectPreflight = true;
     await assert.rejects(bridge.forwardRequest(request(2), client, 2), /MCP refresh failed/u);
-    assert.equal(upstreamRequests.length, 1);
+    assert.deepEqual(upstreamRequests.map((candidate) => candidate.method), [
+      "thread/resume",
+      "turn/start",
+      "thread/resume",
+    ]);
+
+    rejectPreflight = false;
+    rejectResume = true;
+    await assert.rejects(bridge.forwardRequest(request(3), client, 3), /resume failed/u);
+    assert.deepEqual(upstreamRequests.map((candidate) => candidate.method), [
+      "thread/resume",
+      "turn/start",
+      "thread/resume",
+      "thread/resume",
+    ]);
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
@@ -731,6 +1040,185 @@ test("context reads bypass the operation queue and negotiate scoped entries with
     assert.equal("entryScope" in ((legacyResponse?.result as object | undefined) ?? {}), false);
   } finally {
     queueGate.resolve({ data: [] });
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("bounded context reads use one stored turn without calling the provider catalog", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-known-window-"));
+  const shadowBatches: object[][] = [];
+  const shadowFlushes: (() => void)[] = [];
+  let shadowRecorded: ReturnType<typeof deferred<void>> | null = null;
+  const upstreamRequests: JsonRpcRequest[] = [];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      queueMicrotask(() => {
+        if (message.method === "thread/turns/list") {
+          const latest = bridgeThread().turns[0]!;
+          void bridge.handleUpstreamMessage({
+            id: message.id ?? null,
+            result: {
+              data: [{ ...latest, items: [], itemsView: "notLoaded" }],
+              nextCursor: null,
+            },
+          });
+          return;
+        }
+        if (message.method !== "thread/read") {
+          void bridge.handleUpstreamMessage({
+            error: { code: -32000, message: `unexpected ${message.method}` },
+            id: message.id ?? null,
+          });
+          return;
+        }
+        void bridge.handleUpstreamMessage({
+          id: message.id ?? null,
+          result: { thread: { ...bridgeThread(), turns: [] } },
+        });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    recordSqliteTranscript: async (observations) => {
+      shadowBatches.push([...observations]);
+      shadowRecorded?.resolve();
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {},
+    storageRoot: root,
+    transcriptShadowScheduleFlush: (flush) => {
+      shadowFlushes.push(flush);
+      return () => {
+        const index = shadowFlushes.indexOf(flush);
+        if (index >= 0) shadowFlushes.splice(index, 1);
+      };
+    },
+  });
+  const owner = bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore };
+  try {
+    const metadata = { ...bridgeThread(), turns: [] } as Thread;
+    const latest = bridgeThread().turns[0]!;
+    await owner.ensureTranscriptStore().recordProviderTurnCatalog(metadata, [latest], {
+      cursor: null,
+      turnId: latest.id,
+    });
+    await owner.ensureTranscriptStore().recordProviderTurnPage(metadata, latest, null);
+
+    const response = await bridge.handleBridgeRequest({
+      id: 20,
+      method: "thread/context/read",
+      params: { includeTurns: false, threadId: "thread" },
+      workbenchThreadContextEntries: { mode: "hydratedTurns" },
+      workbenchThreadHydration: { mode: "latest" },
+    });
+    assert.deepEqual(upstreamRequests.map((request) => request.method), [
+      "thread/read",
+      "thread/turns/list",
+    ]);
+    assert.deepEqual(upstreamRequests[1]?.params, {
+      itemsView: "notLoaded",
+      limit: 1,
+      sortDirection: "desc",
+      threadId: "thread",
+    });
+    assert.deepEqual(
+      ((response?.result as { thread: Thread }).thread.turns).map((turn) => turn.id),
+      ["turn"],
+    );
+    const flush = shadowFlushes.shift();
+    assert.ok(flush);
+    shadowRecorded = deferred<void>();
+    flush();
+    await shadowRecorded.promise;
+    const shadowWindow = shadowBatches.flat().find((observation) => (
+      (observation as { kind?: string }).kind === "canonicalWindow"
+    )) as { materializedTurnIds?: string[] } | undefined;
+    assert.deepEqual(shadowWindow?.materializedTurnIds, ["turn"]);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("bounded context reads bootstrap unseen threads through one full turn page", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-unseen-window-"));
+  const upstreamRequests: JsonRpcRequest[] = [];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      queueMicrotask(() => {
+        const result = message.method === "thread/read"
+          ? { thread: { ...bridgeThread(), turns: [] } }
+          : message.method === "thread/turns/list"
+            ? {
+              data: bridgeThread().turns.map((turn) => (
+                (message.params as { itemsView?: string } | undefined)?.itemsView === "notLoaded"
+                  ? { ...turn, items: [], itemsView: "notLoaded" }
+                  : turn
+              )),
+              nextCursor: null,
+            }
+            : null;
+        void bridge.handleUpstreamMessage(result
+          ? { id: message.id ?? null, result }
+          : {
+            error: { code: -32000, message: `unexpected ${message.method}` },
+            id: message.id ?? null,
+          });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    const response = await bridge.handleBridgeRequest({
+      id: 21,
+      method: "thread/context/read",
+      params: { includeTurns: false, threadId: "thread" },
+      workbenchThreadContextEntries: { mode: "hydratedTurns" },
+      workbenchThreadHydration: { mode: "latest" },
+    });
+    assert.deepEqual(upstreamRequests.map((request) => request.method), [
+      "thread/read",
+      "thread/turns/list",
+      "thread/turns/list",
+    ]);
+    assert.deepEqual(upstreamRequests[1]?.params, {
+      itemsView: "notLoaded",
+      limit: 1,
+      sortDirection: "desc",
+      threadId: "thread",
+    });
+    assert.deepEqual(upstreamRequests[2]?.params, {
+      itemsView: "full",
+      limit: 1,
+      sortDirection: "desc",
+      threadId: "thread",
+    });
+    assert.deepEqual(
+      ((response?.result as { thread: Thread }).thread.turns).map((turn) => turn.id),
+      ["turn"],
+    );
+  } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }

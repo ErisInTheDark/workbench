@@ -9,14 +9,8 @@ import {
   WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD,
   type WorkbenchEventStreamAck,
 } from "../workbench/websocket-stream";
-import type {
-    CodexAppServerNotification,
-    CodexAppServerNotificationHandling,
-} from "./app-server-notifications";
-import {
-    classifyCodexAppServerNotification,
-    isCodexAppServerNotification,
-} from "./app-server-notifications";
+import type { CodexAppServerNotification } from "./app-server-notifications";
+import { isCodexAppServerNotification } from "./app-server-notifications";
 import { getCodexAppServerUrl } from "./config";
 import type {
     CodexClientNotification,
@@ -58,7 +52,6 @@ export class CodexAppServerClient {
   private readonly cancelEventStreamAck: (timer: Timer) => void;
   private readonly notificationListeners = new Set<(
     notification: CodexAppServerNotification,
-    handling: CodexAppServerNotificationHandling,
     harness: WorkbenchHarness,
   ) => void>();
   private readonly pendingResponses = new Map<number, PendingResponseHandler>();
@@ -205,7 +198,6 @@ export class CodexAppServerClient {
 
   onNotification(listener: (
     notification: CodexAppServerNotification,
-    handling: CodexAppServerNotificationHandling,
     harness: WorkbenchHarness,
   ) => void) {
     this.notificationListeners.add(listener);
@@ -267,11 +259,10 @@ export class CodexAppServerClient {
     }
 
     if (isCodexAppServerNotification(parsed)) {
-      const handling = classifyCodexAppServerNotification(parsed);
       const rawHarness = (parsed as CodexAppServerNotification & { workbenchHarness?: WorkbenchHarness }).workbenchHarness;
       const harness = rawHarness === "copilot" || rawHarness === "opencode" ? rawHarness : "codex";
       for (const listener of this.notificationListeners) {
-        listener(parsed, handling, harness);
+        listener(parsed, harness);
       }
       const sequence = (parsed as unknown as Record<string, unknown>)[WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD];
       if (typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0) {

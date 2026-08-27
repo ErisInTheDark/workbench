@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type AtomicJsonStore from "../AtomicJsonStore";
-import { log, logError } from "../process-helpers";
+import type { OrchestratorTranscriptShadowLog } from "../orchestrator-runtime-objects";
 
 const STALE_TEMP_FILE_MS = 60 * 60 * 1000;
 
@@ -109,7 +109,10 @@ async function removeReclaimableArtifacts(rootDirectoryPath: string, directoryPa
   }));
 }
 
-async function runBackgroundCleanup(threadsDirectoryPath: string) {
+async function runBackgroundCleanup(
+  threadsDirectoryPath: string,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   if (!await hasDirectoryEntries(threadsDirectoryPath)) return;
   const startedAt = Date.now();
   const counts: CleanupCounts = {
@@ -118,21 +121,32 @@ async function runBackgroundCleanup(threadsDirectoryPath: string) {
     skipped: 0,
     visited: 0,
   };
-  log("codex-transcript", `background cleanup started root=${threadsDirectoryPath}`);
+  shadowLog?.write({
+    event: "legacy-cleanup-started",
+    level: "info",
+    source: "codex-transcript",
+  });
   await removeReclaimableArtifacts(threadsDirectoryPath, threadsDirectoryPath, counts);
-  log("codex-transcript", [
-    "background cleanup finished",
-    `deleted=${counts.deleted}`,
-    `errors=${counts.errors}`,
-    `skipped=${counts.skipped}`,
-    `visited=${counts.visited}`,
-    `durationMs=${Date.now() - startedAt}`,
-  ].join(" "));
+  shadowLog?.write({
+    event: "legacy-cleanup-completed",
+    fields: { ...counts, durationMs: Date.now() - startedAt },
+    level: "info",
+    source: "codex-transcript",
+  });
 }
 
-export default async function migrateV1(rootDirectoryPath: string, _jsonStore: AtomicJsonStore) {
+export default async function migrateV1(
+  rootDirectoryPath: string,
+  _jsonStore: AtomicJsonStore,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   const threadsDirectoryPath = path.join(rootDirectoryPath, "threads");
-  void runBackgroundCleanup(threadsDirectoryPath).catch((error) => {
-    logError("codex-transcript", `background cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+  void runBackgroundCleanup(threadsDirectoryPath, shadowLog).catch((error) => {
+    shadowLog?.write({
+      event: "legacy-cleanup-failed",
+      fields: { message: (error instanceof Error ? error.message : String(error)).slice(0, 500) },
+      level: "error",
+      source: "codex-transcript",
+    });
   });
 }

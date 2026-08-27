@@ -15,6 +15,8 @@ import ReloadableNode from "./ReloadableNode";
 import CodexBridgeNode from "./CodexBridgeNode";
 import WorkbenchCoreNode from "./WorkbenchCoreNode";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
+import WorkbenchTranscriptShadowLog from "./database/transcript/WorkbenchTranscriptShadowLog";
+import { logError } from "./process-helpers";
 
 type DatabaseControllerConstructor = new (
   options: { databasePath: string },
@@ -56,10 +58,23 @@ export default new ReloadableNode<
     const { DatabaseController, TranscriptController } = loadDatabaseControllers();
     const databasePath = join(context.legacyMigrationProjectRoot, ".workbench", "workbench.sqlite3");
     const resetRequestPath = join(context.legacyMigrationProjectRoot, ".workbench", "reset-workbench-sqlite");
+    const shadowLogPath = join(context.legacyMigrationProjectRoot, ".workbench", "logs", "workbench-transcript-shadow.jsonl");
     const database = new DatabaseController({ databasePath });
     const transcript = new TranscriptController(database);
+    const transcriptShadowLog = new WorkbenchTranscriptShadowLog(shadowLogPath, (error) => {
+      logError("workbench-transcript-shadow", `internal diagnostic log failed: ${error.message}`);
+    });
+    let shutdownPromise: Promise<void> | null = null;
+    const shutdown = () => {
+      shutdownPromise ??= (async () => {
+        transcript.dispose();
+        await transcriptShadowLog.flush();
+        await database.close();
+      })();
+      return shutdownPromise;
+    };
     return {
-      registrations: { database, transcript },
+      registrations: { database, transcript, transcriptShadowLog },
       start: async () => {
         await mkdir(dirname(databasePath), { recursive: true });
         const resetRequest = await readSqliteResetRequest(resetRequestPath);
@@ -67,22 +82,21 @@ export default new ReloadableNode<
           if (resetRequest !== SQLITE_RESET_REQUEST) {
             throw new Error(`Unexpected SQLite reset request: ${resetRequestPath}`);
           }
-          for (const target of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+          for (const target of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`, shadowLogPath]) {
             await rm(target, { force: true });
           }
         }
+        await transcriptShadowLog.start();
         await transcript.start();
         if (resetRequest !== null) await rm(resetRequestPath);
       },
-      dispose: async () => {
-        transcript.dispose();
-        await database.close();
-      },
+      detachForReload: shutdown,
+      dispose: shutdown,
     };
   },
   description: "Reload the mandatory SQLite worker and every direct database dependant.",
-  lifecycle: "atomic",
-  provides: ["database", "transcript"],
+  lifecycle: "handoff",
+  provides: ["database", "transcript", "transcriptShadowLog"],
   requires: [],
   safeAll: true,
   scope: "server:database",

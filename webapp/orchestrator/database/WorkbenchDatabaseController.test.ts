@@ -72,8 +72,8 @@ test("schema constraints reject invalid thread state and mismatched item augment
     assert.throws(() => database.prepare(`
       INSERT INTO workbench_threads(
         id,project_id,project_root,title,archived,pinned,snoozed,transcript_content_version,
-        next_turn_index,next_item_index,created_at,updated_at,activity_at
-      ) VALUES ('thread','project','C:/project','title',1,1,0,1,0,0,1,1,1)
+        next_turn_index,created_at,updated_at,activity_at
+      ) VALUES ('thread','project','C:/project','title',1,1,0,1,0,1,1,1)
     `).run(), /CHECK constraint failed/);
 
     database.prepare("INSERT INTO workbench_harnesses(id) VALUES ('codex')").run();
@@ -93,7 +93,7 @@ test("schema constraints reject invalid thread state and mismatched item augment
       ) VALUES ('terminal-without-provider-times','thread',1,'codex','C:/project','native','completed',1)
     `).run();
     database.prepare(`
-      INSERT INTO thread_items(id,thread_id,turn_id,item_index,type,created_at,updated_at)
+      INSERT INTO thread_items(id,thread_id,turn_id,item_position,type,created_at,updated_at)
       VALUES ('item','thread','turn',0,'plan',1,1)
     `).run();
     assert.throws(
@@ -102,7 +102,7 @@ test("schema constraints reject invalid thread state and mismatched item augment
     );
 
     database.prepare(`
-      INSERT INTO thread_items(id,thread_id,turn_id,item_index,type,created_at,updated_at)
+      INSERT INTO thread_items(id,thread_id,turn_id,item_position,type,created_at,updated_at)
       VALUES ('operation','thread','turn',1,'operation',1,1)
     `).run();
     database.prepare("INSERT INTO thread_item_operations(item_id,source_kind,source_revision) VALUES ('operation','tool',2)").run();
@@ -122,7 +122,7 @@ test("schema constraints reject invalid thread state and mismatched item augment
     `).run(), /CHECK constraint failed/);
 
     database.prepare(`
-      INSERT INTO thread_items(id,thread_id,turn_id,item_index,type,created_at,updated_at)
+      INSERT INTO thread_items(id,thread_id,turn_id,item_position,type,created_at,updated_at)
       VALUES ('process','thread','turn',2,'operation',1,1)
     `).run();
     database.prepare("INSERT INTO thread_item_operations(item_id,source_kind,source_revision) VALUES ('process','process',0)").run();
@@ -206,7 +206,6 @@ test("typed statement transactions preserve stable rows and roll back incomplete
         snoozed: 0,
         transcript_content_version: 1,
         next_turn_index: 0,
-        next_item_index: 0,
         created_at: 1,
         updated_at: 2,
         activity_at: 1,
@@ -248,7 +247,12 @@ test("terminal transcript turns may preserve missing native timestamps without p
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-native-turns-"));
   const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   try {
-    await controller.settleTranscript([
+    await controller.settleTranscript([{
+      kind: "canonicalWindow",
+      contentVersion: 2,
+      materializedTurnIds: ["turn"],
+      threadId: "thread",
+      observations: [
       {
         kind: "thread",
         threadId: "thread",
@@ -274,7 +278,8 @@ test("terminal transcript turns may preserve missing native timestamps without p
         endedAt: null,
         durationMs: null,
       },
-    ]);
+      ],
+    }]);
     assert.equal(controller.state, "ready");
     assert.deepEqual(
       (await controller.readTranscript({ threadId: "thread", turnLimit: 1 }))?.turns.map((turn) => ({

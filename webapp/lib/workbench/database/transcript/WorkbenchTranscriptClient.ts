@@ -6,6 +6,7 @@
 import {
   conformWorkbenchTranscriptCapabilities,
   conformWorkbenchTranscriptUpdated,
+  type WorkbenchTranscriptConformanceReport,
   type WorkbenchTranscriptOperation,
   type WorkbenchTranscriptParityDiagnostic,
   type WorkbenchTranscriptReadRequest,
@@ -15,10 +16,9 @@ import {
   workbenchTranscriptNotifications,
   workbenchTranscriptOperations,
 } from "./workbench-transcript-contract.ts";
-import type {
-  DatabaseConformanceIssue,
-  DatabaseConformancePath,
-} from "../schema/schema-conformance.ts";
+import type { DatabaseConformancePath } from "../schema/schema-conformance.ts";
+
+export type { WorkbenchTranscriptConformanceReport } from "./workbench-transcript-contract.ts";
 
 export interface WorkbenchTranscriptTransport {
   onDisconnect?: (listener: () => void) => () => void;
@@ -26,21 +26,32 @@ export interface WorkbenchTranscriptTransport {
   request: (method: string, params: unknown) => Promise<unknown>;
 }
 
-export interface WorkbenchTranscriptConformanceReport {
-  issues: DatabaseConformanceIssue[];
-  method: string;
-  repairedPaths: DatabaseConformancePath[];
-}
-
 interface WorkbenchTranscriptClientOptions {
   reportConformance?: (report: WorkbenchTranscriptConformanceReport) => void;
   transport: WorkbenchTranscriptTransport;
+}
+
+function conformancePathSignature(path: DatabaseConformancePath) {
+  return path.map((part) => `${typeof part === "number" ? "n" : "s"}:${part}`).join("/");
+}
+
+function conformanceReportSignature(report: WorkbenchTranscriptConformanceReport) {
+  const issues = report.issues
+    .map((issue) => `${issue.code}:${conformancePathSignature(issue.path)}`)
+    .sort()
+    .join(",");
+  const repairedPaths = report.repairedPaths
+    .map(conformancePathSignature)
+    .sort()
+    .join(",");
+  return `${report.method}|issues=${issues}|repaired=${repairedPaths}`;
 }
 
 export default class WorkbenchTranscriptClient {
   private available = false;
   private readonly availabilityListeners = new Set<(available: boolean) => void>();
   private readonly listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
+  private readonly reportedConformanceSignatures = new Set<string>();
   private readonly reportConformance: NonNullable<WorkbenchTranscriptClientOptions["reportConformance"]>;
   private readonly stopDisconnect: () => void;
   private readonly stopNotifications: () => void;
@@ -103,7 +114,7 @@ export default class WorkbenchTranscriptClient {
     const value = await this.transport.request(operation.method, params);
     const conformed = operation.conformResult(value);
     if (conformed.repairedPaths.length || !conformed.success) {
-      this.reportConformance({
+      this.reportConformanceOnce({
         method: operation.method,
         repairedPaths: conformed.repairedPaths,
         issues: "data" in conformed ? [] : conformed.issues,
@@ -121,7 +132,7 @@ export default class WorkbenchTranscriptClient {
     if (notification.method === workbenchTranscriptNotifications.capabilities.method) {
       const conformed = conformWorkbenchTranscriptCapabilities(notification.params);
       if (conformed.repairedPaths.length || !conformed.success) {
-        this.reportConformance({
+        this.reportConformanceOnce({
           method: workbenchTranscriptNotifications.capabilities.method,
           repairedPaths: conformed.repairedPaths,
           issues: "data" in conformed ? [] : conformed.issues,
@@ -133,7 +144,7 @@ export default class WorkbenchTranscriptClient {
     if (notification.method !== workbenchTranscriptNotifications.updated.method) return;
     const conformed = conformWorkbenchTranscriptUpdated(notification.params);
     if (conformed.repairedPaths.length || !conformed.success) {
-      this.reportConformance({
+      this.reportConformanceOnce({
         method: workbenchTranscriptNotifications.updated.method,
         repairedPaths: conformed.repairedPaths,
         issues: "data" in conformed ? [] : conformed.issues,
@@ -151,6 +162,14 @@ export default class WorkbenchTranscriptClient {
 
   private resetConnectionState() {
     this.listeners.clear();
+    this.reportedConformanceSignatures.clear();
     this.setAvailable(false);
+  }
+
+  private reportConformanceOnce(report: WorkbenchTranscriptConformanceReport) {
+    const signature = conformanceReportSignature(report);
+    if (this.reportedConformanceSignatures.has(signature)) return;
+    this.reportedConformanceSignatures.add(signature);
+    this.reportConformance(report);
   }
 }

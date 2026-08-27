@@ -48,6 +48,7 @@ class FakeWebSocket {
   readyState = FakeWebSocket.OPEN;
   throwNext = false;
   closeCalls = 0;
+  initializeResult: unknown = { userAgent: "test" };
   readonly sent: Array<Record<string, unknown>> = [];
   private readonly listeners = new Map<string, Listener[]>();
 
@@ -73,7 +74,7 @@ class FakeWebSocket {
     const request = JSON.parse(payload) as { id?: number; method?: string };
     this.sent.push(request as Record<string, unknown>);
     if (request.method === "initialize") {
-      queueMicrotask(() => this.respond(request.id ?? 0, { userAgent: "test" }));
+      queueMicrotask(() => this.respond(request.id ?? 0, this.initializeResult));
     }
   }
 

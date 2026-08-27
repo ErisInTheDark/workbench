@@ -92,7 +92,6 @@
  * - WorkbenchThreadDocumentSnapshot: thread document-store snapshot.
  * - WorkbenchThreadTurnLoadState: turn hydration state.
  * - WorkbenchThreadTurnHistoryEntry: turn history metadata.
- * - WorkbenchThreadHydrationRequest: thread hydration request union.
  * - WorkbenchThreadContextEntryScope: identifies which turn-owned context entries a thread read returned.
  * - WorkbenchReadThreadOptions: thread-read options.
  * - WorkbenchSendThreadMessageOptions: thread-send options.
@@ -805,6 +804,7 @@ export interface ThreadPayload extends ThreadSummary {
   serviceTier: string | null;
   agentPath: string | null;
   isDraft: boolean;
+  nextPageCursor?: string | null;
   tokenUsage: ThreadTokenUsage | null;
   turnHistory: WorkbenchThreadTurnHistoryEntry[];
   turns: Turn[];
@@ -836,14 +836,9 @@ export interface WorkbenchThreadTurnHistoryEntry {
   turnId: string;
 }
 
-export type WorkbenchThreadHydrationRequest =
-  | { mode: "latest" }
-  | { beforeTurnId: string; mode: "previous" }
-  | { mode: "legacyFull" };
-
 export interface WorkbenchReadThreadOptions {
+  cursor?: string | null;
   cwd?: string;
-  hydration?: WorkbenchThreadHydrationRequest;
   readScope?: "subagentBackground";
 }
 

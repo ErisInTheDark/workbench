@@ -51,11 +51,12 @@ You may propose new invariants or changes to existing invariants, but you must m
 ## Canonical transcript
 
 - Give every supported harness the same transcript guarantees.
+- Browser transcript reads use one Workbench first-page and next-page contract.
+- Browser page cursors are opaque. Each harness bridge translates them to native paging.
 - Store every permanent visible thread item as one row in `thread_items`.
-- Use one immutable thread-wide item index as the only durable history order.
-- Use a turn id to group items, not to order them.
-- Allow index gaps.
-- Require unique indexes and increasing read order.
+- Use turn indexes to order turns.
+- Use item positions to order items within one turn.
+- Use item ids as identity.
 - Do not give augmentation tables a second history order.
 - Store supported Workbench item shapes in typed tables.
 - Store unsupported provider items as opaque unknown items.

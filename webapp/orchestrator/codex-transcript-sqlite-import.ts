@@ -1,8 +1,11 @@
 /*
- * CodexTranscriptSqliteImportInput: complete legacy Codex transcript facts required for one canonical SQLite snapshot. Keywords: codex, transcript, import.
- * createCodexTranscriptSqliteImport: collapse one fully hydrated Codex transcript into stable Workbench observations. Keywords: codex, sqlite, transcript, import.
+ * CodexTranscriptSqliteImportInput: one hydrated Codex turn window plus its scoped Workbench facts. Keywords: codex, transcript, import, window.
+ * CodexTranscriptSqliteItemInput: one native Codex item lifecycle update ready for atomic shadow settlement. Keywords: codex, transcript, item, streaming.
+ * createCodexTranscriptSqliteItemObservation: convert one native Codex item without rereading its turn. Keywords: codex, sqlite, transcript, item.
+ * createCodexTranscriptSqliteImport: convert one hydrated Codex turn window into stable Workbench observations. Keywords: codex, sqlite, transcript, import, window.
  */
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
+import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem.ts";
 import { toThreadPayload } from "../lib/codex/thread-adapter.ts";
 import {
   SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX,
@@ -20,6 +23,7 @@ import type {
 } from "../lib/types.ts";
 import type {
   WorkbenchTranscriptAtomicObservation,
+  WorkbenchTranscriptItemLifecycle,
   WorkbenchTranscriptObservation,
 } from "./database/transcript/workbench-transcript-types.ts";
 
@@ -42,6 +46,14 @@ export interface CodexTranscriptSqliteImportInput {
   thread: Thread;
 }
 
+export interface CodexTranscriptSqliteItemInput {
+  item: ThreadItem;
+  lifecycle: WorkbenchTranscriptItemLifecycle;
+  observedAt: number;
+  threadId: string;
+  turnId: string;
+}
+
 function itemTimeline(
   itemId: string,
   timeline: ReturnType<typeof findWorkbenchThreadItemTimelineEntry>,
@@ -61,6 +73,23 @@ function itemTimeline(
   };
 }
 
+export function createCodexTranscriptSqliteItemObservation({
+  item,
+  lifecycle,
+  observedAt,
+  threadId,
+  turnId,
+}: CodexTranscriptSqliteItemInput): WorkbenchTranscriptAtomicObservation {
+  return {
+    item,
+    kind: "item",
+    lifecycle,
+    observedAt,
+    threadId,
+    turnId,
+  };
+}
+
 export function createCodexTranscriptSqliteImport({
   browseAssets = new Map(),
   browseResultEntries,
@@ -73,7 +102,6 @@ export function createCodexTranscriptSqliteImport({
     applyQuestionnaireHistoryToThread(toThreadPayload(thread), questionnaireEntries),
     steerEntries,
   );
-  const turnHistoryById = new Map(payload.turnHistory.map((entry, index) => [entry.turnId, { entry, index }]));
   const questionnaireBySyntheticId = new Map(questionnaireEntries.map((entry) => [
     `${SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX}${entry.threadId}:${entry.requestKey}`,
     entry,
@@ -89,57 +117,55 @@ export function createCodexTranscriptSqliteImport({
     updatedAt: context.updatedAt,
     activityAt: context.activityAt,
   }];
-  let itemIndex = 0;
-  const orderedTurns = [...payload.turns].sort((left, right) => (
-    (turnHistoryById.get(left.id)?.index ?? Number.MAX_SAFE_INTEGER)
-    - (turnHistoryById.get(right.id)?.index ?? Number.MAX_SAFE_INTEGER)
-  ));
-  for (const turn of orderedTurns) {
-    const history = turnHistoryById.get(turn.id);
+  const loadedTurnsById = new Map(payload.turns.map((turn) => [turn.id, turn]));
+  for (const [turnIndex, history] of payload.turnHistory.entries()) {
+    const turn = loadedTurnsById.get(history.turnId);
     observations.push({
       kind: "turn",
       threadId: thread.id,
-      turnId: turn.id,
-      turnIndex: history?.index,
+      turnId: history.turnId,
+      turnIndex,
       harnessId: "codex",
       nativeLocation: context.nativeLocation,
       nativeThreadId: thread.id,
-      nativeTurnId: turn.id,
-      state: turn.status,
-      createdAt: Math.round((turn.startedAt ?? thread.createdAt) * 1_000),
-      startedAt: turn.startedAt === null ? null : Math.round(turn.startedAt * 1_000),
-      endedAt: turn.completedAt === null ? null : Math.round(turn.completedAt * 1_000),
-      durationMs: turn.durationMs,
+      nativeTurnId: history.turnId,
+      state: turn?.status ?? history.status ?? "completed",
+      createdAt: Math.round((turn?.startedAt ?? history.startedAt ?? thread.createdAt) * 1_000),
+      startedAt: (turn?.startedAt ?? history.startedAt) === null
+        ? null
+        : Math.round((turn?.startedAt ?? history.startedAt)! * 1_000),
+      endedAt: (turn?.completedAt ?? history.completedAt) === null
+        ? null
+        : Math.round((turn?.completedAt ?? history.completedAt)! * 1_000),
+      durationMs: turn?.durationMs ?? history.durationMs,
     });
+    if (!turn) continue;
     for (const item of turn.items) {
       const questionnaire = questionnaireBySyntheticId.get(item.id);
       if (questionnaire) {
-        observations.push({ kind: "questionnaire", entry: questionnaire, observedAt: questionnaire.resolvedAt, itemIndex });
-        itemIndex += 1;
+        observations.push({ kind: "questionnaire", entry: questionnaire, observedAt: questionnaire.resolvedAt });
         continue;
       }
       const steer = steerBySyntheticId.get(item.id);
       if (steer) {
-        observations.push({ kind: "steer", entry: steer, observedAt: steer.attemptedAt, itemIndex });
-        itemIndex += 1;
+        observations.push({ kind: "steer", entry: steer, observedAt: steer.attemptedAt });
         continue;
       }
       const timeline = itemTimeline(
         item.id,
-        findWorkbenchThreadItemTimelineEntry(item.id, history?.entry.itemTimeline),
+        findWorkbenchThreadItemTimelineEntry(item.id, history.itemTimeline),
       );
       observations.push({
-        kind: "item",
-        threadId: thread.id,
-        turnId: turn.id,
-        item,
-        lifecycle: turn.status === "inProgress" ? "streaming" : "completed",
-        observedAt: timeline?.lastSeenAt
-          ?? Math.round((turn.completedAt ?? turn.startedAt ?? thread.updatedAt) * 1_000),
-        itemIndex,
+        ...createCodexTranscriptSqliteItemObservation({
+          item,
+          lifecycle: turn.status === "inProgress" ? "streaming" : "completed",
+          observedAt: timeline?.lastSeenAt
+            ?? Math.round((turn.completedAt ?? turn.startedAt ?? thread.updatedAt) * 1_000),
+          threadId: thread.id,
+          turnId: turn.id,
+        }),
         ...(timeline ? { timeline } : {}),
       });
-      itemIndex += 1;
     }
   }
   for (const entry of browseResultEntries) {
@@ -147,8 +173,9 @@ export function createCodexTranscriptSqliteImport({
     observations.push({ kind: "browse", entry, ...(asset ? { asset } : {}) });
   }
   return {
-    kind: "canonicalSnapshot",
+    kind: "canonicalWindow",
     contentVersion: 2,
+    materializedTurnIds: payload.turns.map(({ id }) => id),
     threadId: thread.id,
     observations,
   };

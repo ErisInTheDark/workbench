@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 
 import type AtomicJsonStore from "../AtomicJsonStore";
-import { log, logError } from "../process-helpers";
+import type { OrchestratorTranscriptShadowLog } from "../orchestrator-runtime-objects";
 
 const REQUEST_DIRECTORY_NAME = "requests";
 const RETIRED_REQUEST_DIRECTORY_PREFIX = "requests.retired-";
@@ -127,7 +127,12 @@ async function findRetiredRequestDirectories(threadsDirectoryPath: string, threa
     .filter((entryPath) => isWithinDirectory(threadsDirectoryPath, entryPath));
 }
 
-async function deleteDirectoryInBatches(rootDirectoryPath: string, directoryPath: string, counts: CleanupCounts) {
+async function deleteDirectoryInBatches(
+  rootDirectoryPath: string,
+  directoryPath: string,
+  counts: CleanupCounts,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   const pendingDirectories = [directoryPath];
   let pendingFiles: string[] = [];
   let lastLoggedAt = Date.now();
@@ -180,14 +185,12 @@ async function deleteDirectoryInBatches(rootDirectoryPath: string, directoryPath
 
     if (Date.now() - lastLoggedAt >= PROGRESS_LOG_INTERVAL_MS) {
       lastLoggedAt = Date.now();
-      log("codex-transcript", [
-        "request sidecar cleanup progress",
-        `deleted=${counts.deleted}`,
-        `errors=${counts.errors}`,
-        `renamed=${counts.renamed}`,
-        `skipped=${counts.skipped}`,
-        `visited=${counts.visited}`,
-      ].join(" "));
+      shadowLog?.write({
+        event: "request-sidecar-cleanup-progress",
+        fields: { ...counts },
+        level: "info",
+        source: "codex-transcript",
+      });
     }
 
     if (pendingDirectories.length || pendingFiles.length) {
@@ -198,24 +201,29 @@ async function deleteDirectoryInBatches(rootDirectoryPath: string, directoryPath
   await fs.rm(directoryPath, { force: true, recursive: true }).catch(() => undefined);
 }
 
-async function runBackgroundCleanup(threadsDirectoryPath: string, retiredDirectoryPaths: string[], counts: CleanupCounts) {
+async function runBackgroundCleanup(
+  threadsDirectoryPath: string,
+  retiredDirectoryPaths: string[],
+  counts: CleanupCounts,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   const startedAt = Date.now();
   for (const retiredDirectoryPath of retiredDirectoryPaths) {
-    await deleteDirectoryInBatches(threadsDirectoryPath, retiredDirectoryPath, counts);
+    await deleteDirectoryInBatches(threadsDirectoryPath, retiredDirectoryPath, counts, shadowLog);
   }
 
-  log("codex-transcript", [
-    "request sidecar cleanup finished",
-    `deleted=${counts.deleted}`,
-    `errors=${counts.errors}`,
-    `renamed=${counts.renamed}`,
-    `skipped=${counts.skipped}`,
-    `visited=${counts.visited}`,
-    `durationMs=${Date.now() - startedAt}`,
-  ].join(" "));
+  shadowLog?.write({
+    event: "request-sidecar-cleanup-completed",
+    fields: { ...counts, durationMs: Date.now() - startedAt },
+    level: "info",
+    source: "codex-transcript",
+  });
 }
 
-export async function queueCodexTranscriptRequestSidecarCleanup(rootDirectoryPath: string) {
+export async function queueCodexTranscriptRequestSidecarCleanup(
+  rootDirectoryPath: string,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   const resolvedRootDirectoryPath = path.resolve(rootDirectoryPath);
   if (activeCleanupRoots.has(resolvedRootDirectoryPath)) {
     return;
@@ -245,23 +253,36 @@ export async function queueCodexTranscriptRequestSidecarCleanup(rootDirectoryPat
     retiredDirectoryPaths.push(...await findRetiredRequestDirectories(threadsDirectoryPath, threadDirectoryName, counts));
   }
 
-  log("codex-transcript", [
-    "request sidecar retirement queued",
-    `threads=${threadDirectoryNames.length}`,
-    `retiredDirectories=${retiredDirectoryPaths.length}`,
-    `renamed=${counts.renamed}`,
-    `errors=${counts.errors}`,
-  ].join(" "));
+  shadowLog?.write({
+    event: "request-sidecar-retirement-queued",
+    fields: {
+      errors: counts.errors,
+      renamed: counts.renamed,
+      retiredDirectories: retiredDirectoryPaths.length,
+      threads: threadDirectoryNames.length,
+    },
+    level: "info",
+    source: "codex-transcript",
+  });
 
-  void runBackgroundCleanup(threadsDirectoryPath, Array.from(new Set(retiredDirectoryPaths)), counts)
+  void runBackgroundCleanup(threadsDirectoryPath, Array.from(new Set(retiredDirectoryPaths)), counts, shadowLog)
     .catch((error) => {
-      logError("codex-transcript", `request sidecar cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+      shadowLog?.write({
+        event: "request-sidecar-cleanup-failed",
+        fields: { message: (error instanceof Error ? error.message : String(error)).slice(0, 500) },
+        level: "error",
+        source: "codex-transcript",
+      });
     })
     .finally(() => {
       activeCleanupRoots.delete(resolvedRootDirectoryPath);
     });
 }
 
-export default async function migrateV3(rootDirectoryPath: string, _jsonStore: AtomicJsonStore) {
-  await queueCodexTranscriptRequestSidecarCleanup(rootDirectoryPath);
+export default async function migrateV3(
+  rootDirectoryPath: string,
+  _jsonStore: AtomicJsonStore,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
+  await queueCodexTranscriptRequestSidecarCleanup(rootDirectoryPath, shadowLog);
 }

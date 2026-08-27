@@ -12,7 +12,8 @@ import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/JsonValue";
 import { appendCommandOutputDelta, compactCommandOutputPayload } from "../lib/codex/thread-command-output";
 import { areUserInputsEquivalentForUserMessageDedupe, normalizeThreadItems } from "../lib/codex/thread-item-normalization";
-import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadContextReadResponse, WorkbenchThreadHydrationRequest, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
+import type { WorkbenchThreadHydrationRequest } from "../lib/codex/server-orchestrator";
+import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadContextReadResponse, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
 import { normalizeWorkbenchThreadItemTimeline } from "../lib/workbench/thread/thread-item-timeline";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { hydrateThreadWithStoredTurns } from "./codex-transcript-hydration";
@@ -52,6 +53,7 @@ import { runCodexTranscriptMigrations } from "./codex-transcript-migrations";
 import { queueCodexTranscriptRequestSidecarCleanup } from "./codex-transcript-migrations/v3";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
 import { logError } from "./process-helpers";
+import type { OrchestratorTranscriptShadowLog } from "./orchestrator-runtime-objects";
 
 const PRUNE_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -459,7 +461,7 @@ function createCompactThreadSnapshot(thread: Thread): Thread {
   };
 }
 
-function createTurnIndexEntry(thread: Thread, turn: Turn): CodexTranscriptThreadFile["turnIndex"][number] {
+function createTurnIndexEntry(thread: Thread | null, turn: Turn): CodexTranscriptThreadFile["turnIndex"][number] {
   return {
     completedAt: turn.completedAt,
     itemCount: turn.items.length,
@@ -498,7 +500,7 @@ function createTurnHistoryEntry(
 function mergeTurnIndexes(
   storedEntries: CodexTranscriptThreadFile["turnIndex"],
   upstreamTurns: Turn[],
-  thread: Thread,
+  thread: Thread | null,
 ) {
   const upstreamEntriesById = new Map(upstreamTurns.map((turn) => [turn.id, createTurnIndexEntry(thread, turn)]));
   const seenTurnIds = new Set<string>();
@@ -506,7 +508,12 @@ function mergeTurnIndexes(
     seenTurnIds.add(entry.turnId);
     const upstreamEntry = upstreamEntriesById.get(entry.turnId);
     if (!upstreamEntry || !entry.itemIds?.length) {
-      return upstreamEntry ?? entry;
+      return upstreamEntry
+        ? {
+          ...upstreamEntry,
+          ...(entry.previousCursor !== undefined ? { previousCursor: entry.previousCursor } : {}),
+        }
+        : entry;
     }
 
     const itemIds = Array.from(new Set([...entry.itemIds, ...(upstreamEntry.itemIds ?? [])]));
@@ -514,6 +521,7 @@ function mergeTurnIndexes(
       ...upstreamEntry,
       itemCount: Math.max(entry.itemCount, upstreamEntry.itemCount, itemIds.length),
       itemIds,
+      ...(entry.previousCursor !== undefined ? { previousCursor: entry.previousCursor } : {}),
     };
   });
 
@@ -1132,6 +1140,10 @@ function isTurnTerminalEvent(event: CodexTranscriptRawEvent) {
   return event.method === "turn/completed";
 }
 
+function isTurnLifecycleEvent(event: CodexTranscriptRawEvent) {
+  return event.method === "turn/started" || isTurnTerminalEvent(event);
+}
+
 function canonicalizeJson(value: unknown): unknown {
   if (!value || typeof value !== "object") {
     return value;
@@ -1173,10 +1185,18 @@ export default class CodexTranscriptStore {
   private readonly throttledThreadTouches = new Map<string, number>();
   private readonly threadsDirectoryPath: string;
 
-  constructor(projectRoot: string, getProtectedThreadIds: () => Iterable<string> = () => []) {
+  constructor(
+    projectRoot: string,
+    getProtectedThreadIds: () => Iterable<string> = () => [],
+    transcriptShadowLog?: OrchestratorTranscriptShadowLog,
+  ) {
     this.getProtectedThreadIds = getProtectedThreadIds;
     this.threadsDirectoryPath = path.join(projectRoot, ".workbench", "transcripts", "codex", "threads");
-    this.readyPromise = runCodexTranscriptMigrations(path.dirname(this.threadsDirectoryPath), this.json);
+    this.readyPromise = runCodexTranscriptMigrations(
+      path.dirname(this.threadsDirectoryPath),
+      this.json,
+      transcriptShadowLog,
+    );
     this.pruneTimer = setInterval(() => {
       void this.pruneExpiredThreads(now(), this.getProtectedThreadIds()).catch(() => undefined);
     }, PRUNE_INTERVAL_MS);
@@ -1185,7 +1205,7 @@ export default class CodexTranscriptStore {
     void this.readyPromise
       .then(async () => {
         const rootDirectoryPath = path.dirname(this.threadsDirectoryPath);
-        await queueCodexTranscriptRequestSidecarCleanup(rootDirectoryPath);
+        await queueCodexTranscriptRequestSidecarCleanup(rootDirectoryPath, transcriptShadowLog);
       })
       .catch(() => undefined);
   }
@@ -1560,6 +1580,58 @@ export default class CodexTranscriptStore {
     return await this.hydrateSelectedThread(threadFile.thread, null, { repair: false, threadFile });
   }
 
+  async readStoredThreadWindow(threadId: string, turnIds: readonly string[]) {
+    await this.ready();
+    const threadFile = await this.json.read<CodexTranscriptThreadFile | null>(this.threadFilePath(threadId), null);
+    if (!threadFile?.thread) return null;
+    return await this.hydrateSelectedThread(threadFile.thread, { mode: "exact", turnIds }, {
+      repair: false,
+      threadFile,
+    });
+  }
+
+  async readProviderPreviousCursor(threadId: string, beforeTurnId: string) {
+    await this.ready();
+    const threadFile = await this.json.read<CodexTranscriptThreadFile | null>(this.threadFilePath(threadId), null);
+    return threadFile?.turnIndex.find((entry) => entry.turnId === beforeTurnId)?.previousCursor;
+  }
+
+  async recordProviderTurnCatalog(
+    thread: Thread,
+    turns: Turn[],
+    boundary?: { cursor: string | null; turnId: string },
+  ) {
+    await this.ready();
+    await this.updateThreadFile(thread.id, (file) => {
+      let turnIndex = mergeTurnIndexes(file.turnIndex, turns, thread);
+      if (boundary) {
+        turnIndex = turnIndex.map((entry) => entry.turnId === boundary.turnId
+          ? { ...entry, previousCursor: boundary.cursor }
+          : entry);
+      }
+      return {
+        ...file,
+        cliVersion: thread.cliVersion,
+        lastTouchedAt: now(),
+        sourceThreadIds: Array.from(new Set([...file.sourceThreadIds, thread.id])),
+        thread: createCompactThreadSnapshot(thread),
+        turnIndex,
+      };
+    });
+  }
+
+  async recordProviderTurnPage(thread: Thread, turn: Turn, previousCursor: string | null) {
+    await this.ready();
+    await this.recordThreadSnapshot({ ...thread, turns: [turn] });
+    await this.updateThreadFile(thread.id, (file) => ({
+      ...file,
+      lastTouchedAt: now(),
+      turnIndex: file.turnIndex.map((entry) => entry.turnId === turn.id
+        ? { ...entry, previousCursor }
+        : entry),
+    }));
+  }
+
   async hydrateThreadResponse(
     originalRequest: JsonRpcRequest,
     response: JsonRpcResponse,
@@ -1623,7 +1695,7 @@ export default class CodexTranscriptStore {
 
   private async hydrateSelectedThread(
     thread: Thread,
-    hydration: WorkbenchThreadHydrationRequest | null,
+    hydration: WorkbenchThreadHydrationRequest | { mode: "exact"; turnIds: readonly string[] } | null,
     {
       repair,
       threadFile,
@@ -1691,12 +1763,16 @@ export default class CodexTranscriptStore {
       };
     }
 
-    const requestedTurnId = hydration?.mode === "previous"
-      ? getPreviousTurnId(turnIndex, hydration.beforeTurnId)
-      : getLatestTurnId(turnIndex, indexedThread.turns);
-    const selectedTurnIds = new Set(requestedTurnId ? [requestedTurnId] : []);
-    const selectedStoredTurnFiles = requestedTurnId
-      ? [await this.readTurnFile(thread.id, requestedTurnId, { repair })].filter((file): file is CodexTranscriptTurnFile => file !== null)
+    const requestedTurnIds = hydration?.mode === "exact"
+      ? [...new Set(hydration.turnIds)]
+      : [
+        hydration?.mode === "previous"
+          ? getPreviousTurnId(turnIndex, hydration.beforeTurnId)
+          : getLatestTurnId(turnIndex, indexedThread.turns),
+      ].filter((turnId): turnId is string => Boolean(turnId));
+    const selectedTurnIds = new Set(requestedTurnIds);
+    const selectedStoredTurnFiles = requestedTurnIds.length
+      ? await this.readTurnFiles(thread.id, { repair, turnIds: selectedTurnIds })
       : [];
     turnIndex = reconcileTurnIndexItemIds(turnIndex, selectedStoredTurnFiles, thread.turns);
     if (repair && selectedStoredTurnFiles.length) {
@@ -1719,8 +1795,8 @@ export default class CodexTranscriptStore {
     const hydratedThread = compactCommandOutputPayload(hydrateThreadWithStoredTurns(selectedUpstreamThread, storedTurns));
     const loadedTurnIds = new Set(hydratedThread.turns.map((turn) => turn.id));
     const missingTurnIds = new Set<string>();
-    if (requestedTurnId && !loadedTurnIds.has(requestedTurnId)) {
-      missingTurnIds.add(requestedTurnId);
+    for (const requestedTurnId of requestedTurnIds) {
+      if (!loadedTurnIds.has(requestedTurnId)) missingTurnIds.add(requestedTurnId);
     }
 
     return {
@@ -1928,9 +2004,18 @@ export default class CodexTranscriptStore {
       };
     });
     await this.appendTurnEvent(threadId, turn.id, event);
+    if (isTurnLifecycleEvent(event)) {
+      await this.updateThreadFile(threadId, (file) => ({
+        ...file,
+        lastTouchedAt: now(),
+        turnIndex: mergeTurnIndexes(file.turnIndex, [turn], file.thread),
+      }));
+    }
     if (isTurnTerminalEvent(event)) {
       await this.compactTurnJournal(threadId, turn.id);
-      await this.touchThread(threadId, null);
+      return;
+    }
+    if (isTurnLifecycleEvent(event)) {
       return;
     }
     await this.touchThreadThrottled(threadId);

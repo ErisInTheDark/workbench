@@ -10,7 +10,10 @@ import type { WorkbenchQuestionnaireHistoryEntry } from "../../types";
 import type { WorkbenchFileChangeItem } from "../thread/workbench-file-change";
 import { installWorkbenchDatabaseSchema } from "../../../orchestrator/database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "../../../orchestrator/database/transcript/WorkbenchTranscriptRepository";
-import type { WorkbenchTranscriptObservation } from "../../../orchestrator/database/transcript/workbench-transcript-types";
+import type {
+  WorkbenchTranscriptAtomicObservation,
+  WorkbenchTranscriptObservation,
+} from "../../../orchestrator/database/transcript/workbench-transcript-types";
 import { projectWorkbenchTranscript } from "./workbench-transcript-projection";
 
 function createRepository() {
@@ -23,7 +26,7 @@ function createRepository() {
   };
 }
 
-function thread(): WorkbenchTranscriptObservation {
+function thread(): WorkbenchTranscriptAtomicObservation {
   return {
     activityAt: 7_000,
     createdAt: 1_000,
@@ -36,7 +39,7 @@ function thread(): WorkbenchTranscriptObservation {
   };
 }
 
-function turn(turnId: string, turnIndex: number): WorkbenchTranscriptObservation {
+function turn(turnId: string, turnIndex: number): WorkbenchTranscriptAtomicObservation {
   return {
     createdAt: (turnIndex + 1) * 1_000,
     durationMs: 1_000,
@@ -56,10 +59,10 @@ function turn(turnId: string, turnIndex: number): WorkbenchTranscriptObservation
 
 function item(
   turnId: string,
-  value: Extract<WorkbenchTranscriptObservation, { kind: "item" }>["item"],
+  value: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }>["item"],
   observedAt: number,
-  timeline?: Extract<WorkbenchTranscriptObservation, { kind: "item" }>["timeline"],
-): WorkbenchTranscriptObservation {
+  timeline?: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }>["timeline"],
+): WorkbenchTranscriptAtomicObservation {
   return {
     item: value,
     kind: "item",
@@ -68,6 +71,19 @@ function item(
     ...(timeline ? { timeline } : {}),
     threadId: "thread",
     turnId,
+  };
+}
+
+function canonicalWindow(
+  observations: WorkbenchTranscriptAtomicObservation[],
+  materializedTurnIds: string[],
+): WorkbenchTranscriptObservation {
+  return {
+    contentVersion: 2,
+    kind: "canonicalWindow",
+    materializedTurnIds,
+    observations,
+    threadId: "thread",
   };
 }
 
@@ -110,7 +126,7 @@ test("real SQLite rows project the renderer facts used by current command, file,
       threadId: "thread",
       turnId: "turn-1",
     };
-    repository.settle([
+    repository.settle([canonicalWindow([
       thread(),
       turn("turn-0", 0),
       turn("turn-1", 1),
@@ -194,7 +210,7 @@ test("real SQLite rows project the renderer facts used by current command, file,
       item("turn-1", fileChange, 5_500),
       { entry: questionnaire, kind: "questionnaire", observedAt: 6_000 },
       item("turn-1", { id: "opaque", path: "C:/project/image.png", type: "imageView" }, 7_000),
-    ]);
+    ], ["turn-1"])]);
 
     const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
     assert.ok(snapshot);
@@ -284,11 +300,11 @@ test("real SQLite rows project the renderer facts used by current command, file,
 test("projection fails closed when a canonical root loses its required augmentation", () => {
   const { database, repository } = createRepository();
   try {
-    repository.settle([
+    repository.settle([canonicalWindow([
       thread(),
       turn("turn-0", 0),
       item("turn-0", { id: "plan", text: "planned", type: "plan" }, 2_000),
-    ]);
+    ], ["turn-0"])]);
     database.prepare("DELETE FROM thread_item_plans WHERE item_id = 'plan'").run();
     const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
     assert.ok(snapshot);
@@ -296,6 +312,47 @@ test("projection fails closed when a canonical root loses its required augmentat
       issues: [{ code: "missingRow", itemId: "plan", table: "threadItemPlans" }],
       success: false,
     });
+  } finally {
+    database.close();
+  }
+});
+
+test("projection reads an augmentation collection linearly as item count grows", () => {
+  const { database, repository } = createRepository();
+  try {
+    const itemCount = 50;
+    repository.settle([canonicalWindow([
+      thread(),
+      turn("turn-0", 0),
+      ...Array.from({ length: itemCount }, (_, index) => item(
+        "turn-0",
+        {
+          id: `message-${index}`,
+          memoryCitation: null,
+          phase: null,
+          text: `message ${index}`,
+          type: "agentMessage",
+        },
+        2_000 + index,
+      )),
+    ], ["turn-0"])]);
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
+    assert.ok(snapshot);
+    let rowReads = 0;
+    const assistantMessages = snapshot.rows.threadItemAssistantMessages;
+    snapshot.rows.threadItemAssistantMessages = new Proxy(assistantMessages, {
+      get(target, property, receiver) {
+        if (typeof property === "string" && /^\d+$/u.test(property)) rowReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const result = projectWorkbenchTranscript(snapshot);
+    assert.equal(result.success, true);
+    assert.ok(
+      rowReads <= itemCount * 2,
+      `projection rescanned the assistant-message collection: ${rowReads} row reads for ${itemCount} rows`,
+    );
   } finally {
     database.close();
   }

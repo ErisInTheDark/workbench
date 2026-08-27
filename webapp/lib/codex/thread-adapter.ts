@@ -8,13 +8,18 @@
  * - isProjectCodexThreadAtExpectedCwd: validate a relationship-owned descendant cwd without broadening ordinary project thread membership. Keywords: thread, cwd, subagent, worktree.
  * - toThreadSummary: normalize generated Codex threads for the explorer sidebar. Keywords: summary, thread list.
  * - toThreadPayload: normalize generated Codex threads for the thread detail view. Keywords: payload, turns, thread read.
+ * - toThreadResumePayload: normalize resume metadata plus its optional initial turn page. Keywords: payload, resume, pagination, lifecycle.
  */
 import type { ThreadPayload, ThreadSummary, WorkbenchHarness, WorkbenchThreadTurnHistoryEntry } from "../types";
 import type { SessionSource } from "./generated/app-server/v2/SessionSource";
 import type { Thread } from "./generated/app-server/v2/Thread";
+import type { ThreadResumeResponse } from "./generated/app-server/v2/ThreadResumeResponse";
 import type { ThreadStatus } from "./generated/app-server/v2/ThreadStatus";
 import type { ThreadTokenUsage } from "./generated/app-server/v2/ThreadTokenUsage";
 import { normalizeWorkbenchThreadItemTimeline } from "../workbench/thread/thread-item-timeline";
+
+type ThreadResumePayloadSource = Pick<ThreadResumeResponse, "thread">
+  & Partial<Pick<ThreadResumeResponse, "initialTurnsPage" | "model" | "reasoningEffort" | "serviceTier">>;
 
 function normalizeAbsolutePathForComparison(filePath: string) {
   const normalized = String(filePath ?? "")
@@ -168,6 +173,7 @@ export function toThreadPayload(
   serviceTier: string | null = null,
   agentPath: string | null = null,
   tokenUsage: ThreadTokenUsage | null = null,
+  nextPageCursor: string | null | undefined = undefined,
 ): ThreadPayload {
   return {
     ...toThreadSummary(thread, harness),
@@ -176,19 +182,34 @@ export function toThreadPayload(
     serviceTier,
     agentPath,
     isDraft: false,
+    ...(nextPageCursor !== undefined ? { nextPageCursor } : {}),
     tokenUsage,
-    turnHistory: readWorkbenchTurnHistory(thread) ?? createTurnHistoryFromLoadedTurns(thread.turns),
+    turnHistory: readWorkbenchTurnHistory(thread) ?? createTurnHistoryFromTurns(thread.turns),
     turns: thread.turns,
   };
 }
 
-function createTurnHistoryFromLoadedTurns(turns: Thread["turns"]): WorkbenchThreadTurnHistoryEntry[] {
+export function toThreadResumePayload(
+  response: ThreadResumePayloadSource,
+  harness: WorkbenchHarness = "codex",
+  model: string | null = response.model ?? null,
+  reasoningEffort: string | null = response.reasoningEffort ?? null,
+  serviceTier: string | null = response.serviceTier ?? null,
+  agentPath: string | null = null,
+): ThreadPayload {
+  const thread = response.initialTurnsPage
+    ? { ...response.thread, turns: response.initialTurnsPage.data }
+    : response.thread;
+  return toThreadPayload(thread, harness, model, reasoningEffort, serviceTier, agentPath);
+}
+
+function createTurnHistoryFromTurns(turns: Thread["turns"]): WorkbenchThreadTurnHistoryEntry[] {
   return turns.map((turn) => ({
     completedAt: turn.completedAt,
     durationMs: turn.durationMs,
     itemCount: turn.items.length,
-    itemIds: turn.items.map((item) => item.id),
-    loadState: "loaded",
+    ...(turn.itemsView === "notLoaded" ? {} : { itemIds: turn.items.map((item) => item.id) }),
+    loadState: turn.itemsView === "notLoaded" ? "unloaded" : "loaded",
     startedAt: turn.startedAt,
     status: turn.status,
     turnId: turn.id,

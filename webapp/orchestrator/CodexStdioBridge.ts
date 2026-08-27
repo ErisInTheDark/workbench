@@ -27,12 +27,12 @@ import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-se
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
 import type { TurnSteerResponse } from "../lib/codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
+import type { WorkbenchThreadHydrationRequest } from "../lib/codex/server-orchestrator";
 import type {
     WorkbenchApprovalCommandContext,
     WorkbenchBrowseResultEntry,
     WorkbenchQuestionnaireHistoryEntry,
     WorkbenchThreadContextReadResponse,
-    WorkbenchThreadHydrationRequest,
     WorkbenchUserInputQuestion,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
@@ -45,18 +45,32 @@ import {
   withWorkbenchFileChangeFailure,
   type WorkbenchFileChangeFailureMarker,
 } from "../lib/workbench/thread/workbench-file-change";
+import {
+  readWorkbenchThreadPageNextCursor,
+  WORKBENCH_THREAD_PAGE_READ_METHOD,
+  WorkbenchThreadPageReadParamsSchema,
+  type WorkbenchThreadPageResponse,
+} from "../lib/workbench/thread/workbench-thread-page";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
 } from "./database/transcript/workbench-transcript-types.ts";
-import { findWorkbenchThreadItemTimelineEntry } from "../lib/workbench/thread/thread-item-timeline.ts";
-import { createCodexTranscriptSqliteImport } from "./codex-transcript-sqlite-import.ts";
+import {
+  createCodexTranscriptSqliteImport,
+  createCodexTranscriptSqliteItemObservation,
+} from "./codex-transcript-sqlite-import.ts";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import { CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS, createCodexTranscriptDiagnostic } from "./codex-transcript-diagnostics";
-import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
+import {
+  encodeTranscriptPathSegment,
+  extractItem,
+} from "./codex-transcript-normalizers";
 import type CodexAppServer from "./CodexAppServer";
-import { log, logError } from "./process-helpers";
+import CodexThreadWindowLoader from "./CodexThreadWindowLoader";
+import CodexTranscriptShadowController from "./CodexTranscriptShadowController";
+import type { OrchestratorTranscriptShadowLog } from "./orchestrator-runtime-objects";
+import { logError } from "./process-helpers";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
 
@@ -64,6 +78,7 @@ type CodexTranscriptStoreInstance = import("./CodexTranscriptStore").default;
 type CodexTranscriptStoreConstructor = new (
   projectRoot: string,
   getProtectedThreadIds?: () => Iterable<string>,
+  transcriptShadowLog?: OrchestratorTranscriptShadowLog,
 ) => CodexTranscriptStoreInstance;
 
 type PendingClientResponse = {
@@ -103,8 +118,9 @@ export type CodexStdioBridgeOptions = {
   recordSqliteTranscript?: (observations: readonly WorkbenchTranscriptObservation[]) => Promise<void>;
   resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
   sendToClient: (client: BridgeClient, message: unknown) => void;
-  sqliteTranscriptIdentity?: object;
   storageRoot: string;
+  transcriptShadowLog?: OrchestratorTranscriptShadowLog;
+  transcriptShadowScheduleFlush?: (flush: () => void) => () => void;
 };
 
 type RequestIdAllocator = {
@@ -118,8 +134,6 @@ export type CodexStdioBridgeReloadState = {
   pendingResponses: Map<number, PendingResponse>;
   pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
   requestIdAllocator: RequestIdAllocator;
-  sqliteTranscriptIdentity?: object;
-  sqliteTranscriptReadyThreadIds?: Set<string>;
   transcriptThreadContexts?: Map<string, CodexTranscriptThreadContext>;
   upstreamInitialized: boolean;
 };
@@ -437,15 +451,25 @@ function shouldCapturePollingTranscript(method: string | null, requestSource: Wo
     case "questionnaire/list":
     case "thread/list":
     case "thread/read":
+    case "thread/turns/list":
       return false;
     default:
       return true;
   }
 }
 
-function shouldHydrateThreadResponse(request: JsonRpcRequest) {
+function shouldHydrateThreadResponse(
+  request: JsonRpcRequest,
+  hydration: WorkbenchThreadHydrationRequest | null,
+) {
   const method = asString(request.method);
-  if (method === "thread/read" && asRecord(request.params)?.includeTurns === false) {
+  if (method === "thread/resume"
+    && asRecord(request.params)?.excludeTurns === true) {
+    return false;
+  }
+  if (method === "thread/read"
+    && asRecord(request.params)?.includeTurns === false
+    && hydration === null) {
     return false;
   }
 
@@ -994,12 +1018,10 @@ export default class CodexStdioBridge {
   private readonly onAcceptedTurnSteer: NonNullable<CodexStdioBridgeOptions["onAcceptedTurnSteer"]>;
   private readonly onNotification: CodexStdioBridgeOptions["onNotification"];
   private readonly prepareTurnStart: NonNullable<CodexStdioBridgeOptions["prepareTurnStart"]>;
-  private readonly recordSqliteTranscript: NonNullable<CodexStdioBridgeOptions["recordSqliteTranscript"]>;
   private readonly sqliteTranscriptEnabled: boolean;
-  private readonly sqliteTranscriptIdentity: object | null;
-  private readonly sqliteTranscriptReadyThreadIds: Set<string>;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
   private readonly storageRoot: string;
+  private readonly threadWindowLoader: CodexThreadWindowLoader;
   private transcriptStore: CodexTranscriptStoreInstance | null = null;
   private transcriptStoreReloadPending = false;
   private initializeResult: unknown;
@@ -1019,27 +1041,33 @@ export default class CodexStdioBridge {
   private nextTranscriptTaskId = 1;
   private transcriptLastLogAt: number | null = null;
   private readonly transcriptThreadContexts: Map<string, CodexTranscriptThreadContext>;
+  private readonly transcriptShadowLog: OrchestratorTranscriptShadowLog | undefined;
+  private readonly transcriptShadow: CodexTranscriptShadowController;
   private upstreamInitialized: boolean;
   private upstreamInitializePromise: Promise<void> | null = null;
   private readonly resolveProjectFromCwd: CodexStdioBridgeOptions["resolveProjectFromCwd"];
   private readonly handleWorkbenchRequest: CodexStdioBridgeOptions["handleWorkbenchRequest"];
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, recordSqliteTranscript, resolveProjectFromCwd, sendToClient, sqliteTranscriptIdentity, storageRoot }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, recordSqliteTranscript, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog, transcriptShadowScheduleFlush }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onAcceptedTurnSteer = onAcceptedTurnSteer;
     this.onNotification = onNotification;
     this.prepareTurnStart = prepareTurnStart;
     this.sqliteTranscriptEnabled = Boolean(recordSqliteTranscript);
-    this.recordSqliteTranscript = recordSqliteTranscript ?? (async () => undefined);
-    this.sqliteTranscriptIdentity = sqliteTranscriptIdentity ?? recordSqliteTranscript ?? null;
-    this.sqliteTranscriptReadyThreadIds = initialState?.sqliteTranscriptIdentity === this.sqliteTranscriptIdentity
-      ? initialState.sqliteTranscriptReadyThreadIds ?? new Set()
-      : new Set();
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.handleWorkbenchRequest = handleWorkbenchRequest;
     this.sendToClient = sendToClient;
     this.storageRoot = storageRoot;
+    this.transcriptShadowLog = transcriptShadowLog;
+    this.threadWindowLoader = new CodexThreadWindowLoader(async (request) => {
+      const dispatch = await this.dispatchRequest({
+        ...request,
+        [WORKBENCH_REQUEST_SOURCE_FIELD]: "autoRefresh",
+      }, { internal: true });
+      if (!dispatch.response) throw new Error(`${request.method ?? "Codex request"} did not create an internal response.`);
+      return await dispatch.response;
+    });
     this.fileChangeFailureMarkers = initialState?.fileChangeFailureMarkers ?? new Map();
     this.fileChangeTurnCursors = initialState?.fileChangeTurnCursors ?? new Map();
     this.initializeResult = initialState?.initializeResult ?? null;
@@ -1047,6 +1075,19 @@ export default class CodexStdioBridge {
     this.pendingUserInputRequests = initialState?.pendingUserInputRequests ?? new Map();
     this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
     this.transcriptThreadContexts = initialState?.transcriptThreadContexts ?? new Map();
+    this.transcriptShadow = new CodexTranscriptShadowController({
+      onError: (error) => {
+        const message = error.message.slice(0, 500);
+        this.transcriptShadowLog?.write({
+          event: "shadow-settlement-failed",
+          fields: { message },
+          level: "error",
+          source: "workbench-transcript",
+        });
+      },
+      record: recordSqliteTranscript ?? (async () => undefined),
+      ...(transcriptShadowScheduleFlush ? { scheduleFlush: transcriptShadowScheduleFlush } : {}),
+    });
     this.upstreamInitialized = initialState?.upstreamInitialized ?? false;
     this.transcriptInstrumentationTimer = setInterval(() => {
       this.logTranscriptInstrumentation();
@@ -1072,6 +1113,7 @@ export default class CodexStdioBridge {
 
   stop() {
     this.beginStopping();
+    this.transcriptShadow.dispose();
     clearInterval(this.transcriptInstrumentationTimer);
     if (this.coalescedTranscriptFlushTimer) {
       clearTimeout(this.coalescedTranscriptFlushTimer);
@@ -1100,6 +1142,7 @@ export default class CodexStdioBridge {
   }
 
   async dispose() {
+    this.transcriptShadow.dispose();
     await this.stopAfterFlushingTranscripts();
     if (this.transcriptStore) {
       await this.transcriptStore.dispose();
@@ -1113,6 +1156,7 @@ export default class CodexStdioBridge {
   }
 
   async detachForReload(options: CodexStdioBridgeReloadOptions = {}): Promise<CodexStdioBridgeReloadState> {
+    this.transcriptShadow.dispose();
     await withTimeout(
       this.waitForIdle(),
       options.idleTimeoutMs,
@@ -1131,8 +1175,6 @@ export default class CodexStdioBridge {
       pendingResponses: this.pendingResponses,
       pendingUserInputRequests: this.pendingUserInputRequests,
       requestIdAllocator: this.requestIdAllocator,
-      sqliteTranscriptIdentity: this.sqliteTranscriptIdentity ?? undefined,
-      sqliteTranscriptReadyThreadIds: this.sqliteTranscriptReadyThreadIds,
       transcriptThreadContexts: this.transcriptThreadContexts,
       upstreamInitialized: this.upstreamInitialized,
     };
@@ -1190,7 +1232,7 @@ export default class CodexStdioBridge {
   }
 
   async forwardRequest(message: JsonRpcRequest, client: BridgeClient, clientRequestId: number | string) {
-    if (message.method === "turn/start") await this.prepareTurnStart(message);
+    if (message.method === "turn/start") await this.prepareTurnStartRequest(message);
     await this.enqueueOperation(() => {
       this.assertAcceptingWork();
       return this.dispatchRequest(message, { client, clientRequestId });
@@ -1209,6 +1251,9 @@ export default class CodexStdioBridge {
       this.assertAcceptingWork();
       return await this.handleWorkbenchRequest(message);
     }
+    if (message.method === WORKBENCH_THREAD_PAGE_READ_METHOD) {
+      return await this.handleThreadPageReadRequest(message);
+    }
     if (message.method === "thread/context/read") {
       return await this.handleThreadContextReadRequest(message);
     }
@@ -1222,7 +1267,7 @@ export default class CodexStdioBridge {
     if (options.signal?.aborted) abortFromCaller();
     else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     const run = async () => {
-      if (message.method === "turn/start") await this.prepareTurnStart(message);
+      if (message.method === "turn/start") await this.prepareTurnStartRequest(message);
       const bridgeResponse = await this.handleBridgeRequest(message);
       if (bridgeResponse) return bridgeResponse;
       const dispatch = await this.enqueueOperation(() => {
@@ -1262,7 +1307,7 @@ export default class CodexStdioBridge {
     this.assertAcceptingWork();
     const response = await this.readThreadContext({
       method: "thread/context/read",
-      params: { includeTurns: true, threadId },
+      params: { includeTurns: false, threadId },
       workbenchThreadHydration: { mode: "latest" },
     });
     return { thread: response.thread };
@@ -1303,6 +1348,26 @@ export default class CodexStdioBridge {
         error: {
           code: -32000,
           message: error instanceof Error ? error.message : "Codex user-input bridge request failed.",
+        },
+      };
+    }
+  }
+
+  private async handleThreadPageReadRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const requestId = message.id ?? null;
+
+    try {
+      this.assertAcceptingWork();
+      return {
+        id: requestId,
+        result: await this.readThreadPage(message),
+      };
+    } catch (error) {
+      return {
+        id: requestId,
+        error: {
+          code: -32000,
+          message: error instanceof Error ? error.message : "Codex thread-page read failed.",
         },
       };
     }
@@ -1654,6 +1719,29 @@ export default class CodexStdioBridge {
     };
   }
 
+  private async prepareTurnStartRequest(message: JsonRpcRequest) {
+    const params = asRecord(message.params);
+    const threadId = asString(params?.threadId)?.trim();
+    if (!threadId) {
+      throw new Error("Codex turn/start requires a thread id before its Workbench runtime can be prepared.");
+    }
+
+    const promptContext = readWorkbenchPromptContext(message);
+    const resumeResponse = await this.handleServerRequest({
+      method: "thread/resume",
+      params: withWorkbenchCodexMcpConfig({
+        excludeTurns: true,
+        threadId,
+      }, this.bridgeUrl),
+      ...(promptContext ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: promptContext } : {}),
+    });
+    if (resumeResponse.error) {
+      throw new Error(resumeResponse.error.message);
+    }
+
+    await this.prepareTurnStart(message);
+  }
+
   private async enqueueOperation<TValue>(task: () => TValue | Promise<TValue>) {
     const nextOperation = this.operationQueue
       .catch(() => undefined)
@@ -1680,7 +1768,7 @@ export default class CodexStdioBridge {
     const TranscriptStore = loadCodexTranscriptStore({ reload });
     return new TranscriptStore(this.storageRoot, () => (
       Array.from(this.pendingUserInputRequests.values(), (request) => request.threadId)
-    ));
+    ), this.transcriptShadowLog);
   }
 
   private ensureTranscriptStore() {
@@ -1715,14 +1803,22 @@ export default class CodexStdioBridge {
     }
     let hydratedMessage = message;
     const shouldCaptureTranscript = shouldCapturePollingTranscript(pending.method, pending.requestSource);
-    if (shouldHydrateThreadResponse(pending.upstreamRequest)) {
+    if (shouldHydrateThreadResponse(pending.upstreamRequest, pending.threadHydration)) {
       try {
         hydratedMessage = await this.ensureTranscriptStore().hydrateThreadResponse(pending.upstreamRequest, message, {
           hydration: pending.threadHydration,
           touchThread: shouldCaptureTranscript,
         });
       } catch (error) {
-        logError("codex-transcript", `failed to hydrate thread response: ${error instanceof Error ? error.message : String(error)}`);
+        this.transcriptShadowLog?.write({
+          event: "hydration-failed",
+          fields: {
+            message: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+            method: pending.upstreamRequest.method ?? "unknown",
+          },
+          level: "error",
+          source: "codex-transcript",
+        });
       }
     }
     if (shouldCaptureTranscript) {
@@ -1733,7 +1829,7 @@ export default class CodexStdioBridge {
         if (responseToRecord !== hydratedMessage && shouldRecordHydratedThreadSnapshot(pending.upstreamRequest, message, hydratedMessage)) {
           await transcriptStore.recordHydratedThreadSnapshot(hydratedMessage);
         }
-        await this.recordSqliteResponse(pending.upstreamRequest, message, transcriptStore);
+        this.scheduleSqliteResponse(pending.upstreamRequest, hydratedMessage, transcriptStore);
       });
     }
     const presentedMessage = this.withFileChangeFailurePresentation(hydratedMessage);
@@ -1811,9 +1907,9 @@ export default class CodexStdioBridge {
         this.captureTranscript(`upstream-notification:${message.method}`, async () => {
           const transcriptStore = this.ensureTranscriptStore();
           await transcriptStore.recordUpstreamNotification(message);
-          await this.recordSqliteNotification(message, transcriptStore);
+          this.scheduleSqliteNotification(message, transcriptStore);
           if (syntheticFileChangeNotification) {
-            await this.recordSqliteNotification(syntheticFileChangeNotification, transcriptStore);
+            this.scheduleSqliteNotification(syntheticFileChangeNotification, transcriptStore);
           }
         })
       ));
@@ -1854,7 +1950,12 @@ export default class CodexStdioBridge {
     });
     if (!diagnostic) return;
     this.transcriptLastLogAt = diagnostic.loggedAt;
-    log("codex-transcript", diagnostic.message);
+    this.transcriptShadowLog?.write({
+      event: "backlog",
+      fields: { message: diagnostic.message },
+      level: "warning",
+      source: "codex-transcript",
+    });
   }
 
   private async captureCoalescedTranscriptNotification({ key, notification }: CoalescedTranscriptNotification) {
@@ -1878,7 +1979,12 @@ export default class CodexStdioBridge {
     this.coalescedTranscriptFlushTimer = setTimeout(() => {
       this.coalescedTranscriptFlushTimer = null;
       void this.flushCoalescedTranscriptNotifications().catch((error) => {
-        logError("codex-transcript", error instanceof Error ? error.message : String(error));
+        this.transcriptShadowLog?.write({
+          event: "notification-flush-failed",
+          fields: { message: (error instanceof Error ? error.message : String(error)).slice(0, 500) },
+          level: "error",
+          source: "codex-transcript",
+        });
       });
     }, TRANSCRIPT_COALESCE_FLUSH_MS);
     this.coalescedTranscriptFlushTimer.unref();
@@ -1936,7 +2042,13 @@ export default class CodexStdioBridge {
         try {
           await task();
         } catch (error) {
-          logError("codex-transcript", error instanceof Error ? error.message : String(error));
+          const message = error instanceof Error ? error.message : String(error);
+          this.transcriptShadowLog?.write({
+            event: "capture-failed",
+            fields: { label, message: message.slice(0, 500) },
+            level: "error",
+            source: "codex-transcript",
+          });
         }
       });
     this.transcriptQueue = transcriptTask.catch(() => undefined);
@@ -2196,18 +2308,42 @@ export default class CodexStdioBridge {
     const readRequest: JsonRpcRequest = {
       method: "thread/read",
       params: readParams,
-      ...(hydration ? { [WORKBENCH_THREAD_HYDRATION_FIELD]: hydration } : {}),
+      ...(readParams.includeTurns === false && hydration !== null
+        ? { [WORKBENCH_REQUEST_SOURCE_FIELD]: "autoRefresh" as const }
+        : {}),
+      ...(hydration && readParams.includeTurns !== false
+        ? { [WORKBENCH_THREAD_HYDRATION_FIELD]: hydration }
+        : {}),
     };
     const dispatch = await this.dispatchRequest(readRequest, { internal: true });
     if (!dispatch.response) throw new Error("thread/context/read did not create an internal response.");
     const upstreamReadResponse = await dispatch.response;
     const transcriptStore = this.ensureTranscriptStore();
-    const readResponse = isSubagentBackgroundRead
+    let readResponse = isSubagentBackgroundRead || (readParams.includeTurns === false && hydration !== null)
       ? await transcriptStore.hydrateThreadResponse(readRequest, upstreamReadResponse, {
         hydration,
-        touchThread: false,
+        touchThread: !isSubagentBackgroundRead,
       })
       : upstreamReadResponse;
+    if (!isSubagentBackgroundRead && readParams.includeTurns === false && hydration && !readResponse.error) {
+      const metadataThread = asRecord(asRecord(upstreamReadResponse.result)?.thread) as Thread | null;
+      const hydratedThread = asRecord(asRecord(readResponse.result)?.thread) as Thread | null;
+      if (!metadataThread?.id || !hydratedThread?.id) {
+        throw new Error("Bounded thread/context/read did not receive a readable thread.");
+      }
+      if (await this.threadWindowLoader.ensureWindow(
+        transcriptStore,
+        metadataThread,
+        hydratedThread,
+        hydration,
+      )) {
+        readResponse = await transcriptStore.hydrateThreadResponse(readRequest, upstreamReadResponse, {
+          hydration,
+          touchThread: false,
+        });
+      }
+      this.scheduleSqliteResponse(readRequest, readResponse, transcriptStore);
+    }
     if (readResponse.error) {
       throw new Error(readResponse.error.message);
     }
@@ -2243,6 +2379,50 @@ export default class CodexStdioBridge {
       questionnaireEntries,
       steerEntries,
       thread,
+    };
+  }
+
+  private async readThreadPage(message: JsonRpcRequest): Promise<WorkbenchThreadPageResponse> {
+    const params = WorkbenchThreadPageReadParamsSchema.parse(message.params);
+    let resumeResult: Record<string, unknown> | null = null;
+
+    if (params.cursor === null && params.readScope !== "subagentBackground") {
+      const resumeDispatch = await this.dispatchRequest({
+        method: "thread/resume",
+        params: withWorkbenchCodexMcpConfig({
+          ...(params.cwd ? { cwd: params.cwd } : {}),
+          excludeTurns: true,
+          threadId: params.threadId,
+        }, this.bridgeUrl),
+      }, { internal: true });
+      if (!resumeDispatch.response) {
+        throw new Error("Workbench thread-page resume did not create an internal response.");
+      }
+      const resumeResponse = await resumeDispatch.response;
+      if (resumeResponse.error) throw new Error(resumeResponse.error.message);
+      resumeResult = asRecord(resumeResponse.result);
+    }
+
+    const hydration: WorkbenchThreadHydrationRequest = params.cursor === null
+      ? { mode: "latest" }
+      : { beforeTurnId: params.cursor, mode: "previous" };
+    const context = await this.readThreadContext({
+      method: "thread/context/read",
+      params: {
+        includeTurns: false,
+        ...(params.readScope ? { workbenchReadScope: params.readScope } : {}),
+        threadId: params.threadId,
+      },
+      [WORKBENCH_THREAD_CONTEXT_ENTRIES_FIELD]: { mode: "hydratedTurns" },
+      [WORKBENCH_THREAD_HYDRATION_FIELD]: hydration,
+    });
+
+    return {
+      ...context,
+      model: asString(resumeResult?.model),
+      nextCursor: readWorkbenchThreadPageNextCursor(context.thread),
+      reasoningEffort: asString(resumeResult?.reasoningEffort),
+      serviceTier: asString(resumeResult?.serviceTier),
     };
   }
 
@@ -2290,15 +2470,9 @@ export default class CodexStdioBridge {
       threadId,
       turnId,
     };
-    const asset = await this.readSqliteBrowseAsset(threadId, assetUrl);
     const transcriptStore = this.ensureTranscriptStore();
     await transcriptStore.recordBrowseResultEntry(entry);
-    await this.ensureSqliteThreadReady(threadId, transcriptStore);
-    await this.recordSqliteTranscript([{
-      kind: "browse",
-      entry,
-      ...(asset ? { asset } : {}),
-    }]);
+    this.scheduleSqliteStoredWindow(threadId, [turnId], transcriptStore);
     this.onNotification({
       method: "browse/result/recorded",
       params: {
@@ -2464,18 +2638,15 @@ export default class CodexStdioBridge {
     const transcriptStore = this.ensureTranscriptStore();
     await transcriptStore.recordQuestionnaireResolved(historyEntry).catch((error) => {
       warning = "Your response was sent, but Workbench could not save it to local transcript history.";
-      logError("codex-transcript", `failed to persist questionnaire response: ${error instanceof Error ? error.message : String(error)}`);
-    });
-    await this.ensureSqliteThreadReady(historyEntry.threadId, transcriptStore)
-      .then(() => this.recordSqliteTranscript([{
-        kind: "questionnaire",
-        entry: historyEntry,
-        observedAt: historyEntry.resolvedAt,
-      }]))
-      .catch((error) => {
-      warning = "Your response was sent, but Workbench could not save it to SQLite transcript history.";
-      logError("workbench-transcript", `failed to persist questionnaire response: ${error instanceof Error ? error.message : String(error)}`);
+      this.transcriptShadowLog?.write({
+        event: "questionnaire-persist-failed",
+        fields: { message: (error instanceof Error ? error.message : String(error)).slice(0, 500) },
+        level: "error",
+        source: "codex-transcript",
+        threadId: historyEntry.threadId,
       });
+    });
+    this.scheduleSqliteStoredWindow(historyEntry.threadId, [historyEntry.turnId], transcriptStore);
 
     this.pendingUserInputRequests.delete(pendingRequest.requestKey);
     this.onNotification({
@@ -2489,30 +2660,26 @@ export default class CodexStdioBridge {
     return warning ? { ok: true, warning } : { ok: true };
   }
 
-  private async recordSqliteResponse(
+  private scheduleSqliteResponse(
     request: JsonRpcRequest,
     response: JsonRpcResponse,
     transcriptStore: CodexTranscriptStoreInstance,
   ) {
     if (!this.sqliteTranscriptEnabled) return;
     if (response.error || !["thread/fork", "thread/read", "thread/resume", "thread/start"].includes(request.method ?? "")) return;
-    const fullResponse = await transcriptStore.hydrateThreadResponse(request, response, {
-      hydration: { mode: "legacyFull" },
-      touchThread: false,
-    });
-    const thread = asRecord(fullResponse.result)?.thread as Thread | undefined;
+    const thread = asRecord(response.result)?.thread as Thread | undefined;
     if (!thread?.id || !Array.isArray(thread.turns)) return;
-    await this.recordSqliteThreadSnapshot(thread, transcriptStore);
+    this.scheduleSqliteThreadWindow(thread, transcriptStore);
   }
 
-  private async recordSqliteNotification(
+  private scheduleSqliteNotification(
     notification: JsonRpcNotification,
     transcriptStore: CodexTranscriptStoreInstance,
   ) {
     if (!this.sqliteTranscriptEnabled) return;
     if (notification.method === "thread/started") {
       const thread = asRecord(notification.params)?.thread as Thread | undefined;
-      if (thread?.id) await this.recordSqliteThreadSnapshot(thread, transcriptStore);
+      if (thread?.id) this.scheduleSqliteThreadWindow(thread, transcriptStore);
       return;
     }
     if (!["turn/started", "turn/completed", "item/started", "item/completed"].includes(notification.method ?? "")) return;
@@ -2520,45 +2687,59 @@ export default class CodexStdioBridge {
     const threadId = asString(params?.threadId);
     const turnId = asString(params?.turnId) ?? asString(asRecord(params?.turn)?.id);
     if (!threadId || !turnId) return;
-    await this.ensureSqliteThreadReady(threadId, transcriptStore);
-    const stored = await transcriptStore.readStoredTurnSnapshot(threadId, turnId);
-    const context = this.transcriptThreadContexts.get(threadId);
-    if (!stored || !context) {
-      throw new Error(`Codex transcript turn ${turnId} has no stored snapshot or validated thread location`);
-    }
-    const observations: CodexSqliteTranscriptObservation[] = [
-      this.createSqliteTurnObservation(threadId, stored.turn, context),
-    ];
-    for (const item of stored.turn.items) {
-      const timeline = findWorkbenchThreadItemTimelineEntry(item.id, stored.itemTimeline);
-      observations.push({
-        kind: "item",
+    if (notification.method === "item/started" || notification.method === "item/completed") {
+      const item = extractItem(notification);
+      if (!item?.id) return;
+      const observation = createCodexTranscriptSqliteItemObservation({
+        item,
+        lifecycle: notification.method === "item/started" ? "streaming" : "completed",
+        observedAt: Date.now(),
         threadId,
         turnId,
-        item,
-        lifecycle: stored.turn.status === "inProgress" ? "streaming" : "completed",
-        observedAt: timeline?.lastSeenAt
-          ?? Math.round((stored.turn.completedAt ?? stored.turn.startedAt ?? context.updatedAt / 1_000) * 1_000),
-        ...(timeline ? { timeline } : {}),
       });
+      this.transcriptShadow.schedule({
+        key: `item:${turnId}:${item.id}`,
+        load: async () => [observation],
+        threadId,
+      });
+      return;
     }
-    await this.recordSqliteTranscript(observations);
+    this.scheduleSqliteStoredWindow(threadId, [turnId], transcriptStore);
   }
 
-  private async ensureSqliteThreadReady(
+  private scheduleSqliteStoredWindow(
     threadId: string,
+    turnIds: readonly string[],
     transcriptStore: CodexTranscriptStoreInstance,
   ) {
-    if (!this.sqliteTranscriptEnabled || this.sqliteTranscriptReadyThreadIds.has(threadId)) return;
-    const thread = await transcriptStore.readStoredThreadSnapshot(threadId);
-    if (!thread) throw new Error(`Codex transcript thread ${threadId} has no durable snapshot for SQLite recovery`);
-    await this.recordSqliteThreadSnapshot(thread, transcriptStore);
+    if (!this.sqliteTranscriptEnabled) return;
+    this.transcriptShadow.schedule({
+      key: `window:${turnIds.join(",") || "empty"}`,
+      load: async () => {
+        const thread = await transcriptStore.readStoredThreadWindow(threadId, turnIds);
+        if (!thread) throw new Error(`Codex transcript thread ${threadId} has no durable window for SQLite shadowing`);
+        return [await this.loadSqliteThreadWindow(thread, transcriptStore)];
+      },
+      threadId,
+    });
   }
 
-  private async recordSqliteThreadSnapshot(
+  private scheduleSqliteThreadWindow(
     thread: Thread,
     transcriptStore: CodexTranscriptStoreInstance,
   ) {
+    if (!this.sqliteTranscriptEnabled) return;
+    this.transcriptShadow.schedule({
+      key: `window:${thread.turns.map(({ id }) => id).join(",") || "empty"}`,
+      load: async () => [await this.loadSqliteThreadWindow(thread, transcriptStore)],
+      threadId: thread.id,
+    });
+  }
+
+  private async loadSqliteThreadWindow(
+    thread: Thread,
+    transcriptStore: CodexTranscriptStoreInstance,
+  ): Promise<WorkbenchTranscriptObservation> {
     const resolution = await this.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex transcript" });
     const context: CodexTranscriptThreadContext = {
       activityAt: Math.round((thread.recencyAt ?? thread.updatedAt) * 1_000),
@@ -2570,45 +2751,20 @@ export default class CodexStdioBridge {
       updatedAt: Math.round(thread.updatedAt * 1_000),
     };
     this.transcriptThreadContexts.set(thread.id, context);
-    const entries = await transcriptStore.readThreadContextEntries(thread.id);
+    const materializedTurnIds = thread.turns.map(({ id }) => id);
+    const entries = await transcriptStore.readThreadContextEntries(thread.id, { turnIds: materializedTurnIds });
     const browseAssets = new Map<string, Extract<WorkbenchTranscriptAtomicObservation, { kind: "browse" }>["asset"]>();
     for (const entry of entries.browseResultEntries) {
       const asset = await this.readSqliteBrowseAsset(thread.id, entry.assetUrl);
       if (asset) browseAssets.set(entry.entryKey, asset);
     }
-    await this.recordSqliteTranscript([createCodexTranscriptSqliteImport({
+    return createCodexTranscriptSqliteImport({
       browseAssets,
       browseResultEntries: entries.browseResultEntries,
       context,
       questionnaireEntries: entries.questionnaireEntries,
       steerEntries: entries.steerEntries,
       thread,
-    })]);
-    this.sqliteTranscriptReadyThreadIds.add(thread.id);
-  }
-
-  private createSqliteTurnObservation(
-    threadId: string,
-    turn: Turn,
-    context: CodexTranscriptThreadContext,
-    turnIndex?: number,
-  ): Extract<CodexSqliteTranscriptObservation, { kind: "turn" }> {
-    const startedAt = turn.startedAt === null ? null : Math.round(turn.startedAt * 1_000);
-    const endedAt = turn.completedAt === null ? null : Math.round(turn.completedAt * 1_000);
-    return {
-      kind: "turn",
-      threadId,
-      turnId: turn.id,
-      ...(turnIndex === undefined ? {} : { turnIndex }),
-      harnessId: "codex",
-      nativeLocation: context.nativeLocation,
-      nativeThreadId: threadId,
-      nativeTurnId: turn.id,
-      state: turn.status,
-      createdAt: startedAt ?? context.createdAt,
-      startedAt,
-      endedAt,
-      durationMs: turn.durationMs,
-    };
+    });
   }
 }

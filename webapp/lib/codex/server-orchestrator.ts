@@ -2,6 +2,7 @@
  * Exports:
  * - WorkbenchServerOrchestratorRequest: allowlisted server RPC request shape forwarded through the orchestrator HTTP boundary. Keywords: orchestrator, http, rpc, contract.
  * - WorkbenchServerOrchestratorRequestOptions: injectable fetch and signal override for deterministic tests and abort-owned cleanup. Keywords: orchestrator, http, fetch, abort, test.
+ * - WorkbenchThreadHydrationRequest: Codex-orchestrator transcript window request kept outside browser contracts. Keywords: codex, transcript, hydration, internal.
  * - getServerWorkbenchOrchestratorOrigins: resolve candidate loopback HTTP orchestrator origins for stateless server routes. Keywords: orchestrator, http, server, loopback, fallback.
  * - sendServerWorkbenchOrchestratorRequest: send one buffered allowlisted bridge request to the orchestrator without constructing a WebSocket client. Keywords: orchestrator, http, bridge, rpc, server.
  */
@@ -13,9 +14,13 @@ import {
   getCodexAppServerUrl,
 } from "./config";
 import type { WorkbenchHarness } from "../types";
-import type { WorkbenchThreadHydrationRequest } from "../types";
 
 const ORCHESTRATOR_BRIDGE_REQUEST_PATH = "/orchestrator/bridge-request";
+
+export type WorkbenchThreadHydrationRequest =
+  | { mode: "latest" }
+  | { beforeTurnId: string; mode: "previous" }
+  | { mode: "legacyFull" };
 
 export interface WorkbenchServerOrchestratorRequest {
   method: string;

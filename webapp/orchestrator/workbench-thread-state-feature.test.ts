@@ -108,6 +108,55 @@ test("provider activity mapping observes meaningful cross-provider work without 
   assert.equal(mapProviderActivityNotification({ method: "item/agentMessage/delta", params: { threadId: "thread", turnId: "turn" } }), null);
 });
 
+test("Codex MCP admission reads thread metadata without hydrating transcript turns", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-mcp-admission-"));
+  const requests: JsonRpcRequest[] = [];
+  const feature = new WorkbenchThreadStateFeature({
+    getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    harnesses: createHarnesses(async (_harness, request) => {
+      requests.push(request);
+      return {
+        id: request.id ?? null,
+        result: {
+          thread: {
+            cwd: storageRoot,
+            id: "thread",
+            name: "Thread",
+            status: { type: "idle" },
+            turns: [],
+            updatedAt: 1,
+          },
+        },
+      };
+    }),
+    listSubagents: async () => ({ subagents: [] }),
+    projectState: {
+      getCurrentUpdate: () => null,
+      handleRequest: async () => ({ accepted: true }),
+      observe: () => () => undefined,
+    },
+    publish: () => undefined,
+    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
+    storageRoot,
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+
+  assert.deepEqual(await feature.getCodexMcpState("thread"), {
+    generation: null,
+    projectId: "project",
+  });
+  assert.deepEqual(requests, [{
+    id: 0,
+    method: "thread/read",
+    params: { includeTurns: false, threadId: "thread" },
+  }]);
+
+  await feature.dispose();
+  await fs.rm(storageRoot, { force: true, recursive: true });
+});
+
 test("a relationship committed during provider pagination remains a subagent after final reconciliation", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-subagent-race-"));
   const secondPageStarted = deferred<void>();

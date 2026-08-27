@@ -11,7 +11,7 @@ import { createInterface } from "node:readline";
 
 import type AtomicJsonStore from "../AtomicJsonStore";
 import externalizeCodexTranscriptInlineImages from "../codex-transcript-image-assets";
-import { log, logError } from "../process-helpers";
+import type { OrchestratorTranscriptShadowLog } from "../orchestrator-runtime-objects";
 
 const FILE_BATCH_SIZE = 25;
 const FILE_BATCH_DELAY_MS = 20;
@@ -111,6 +111,7 @@ async function migrateJsonLinesFile(
   encodedThreadId: string,
   filePath: string,
   counts: MigrationCounts,
+  shadowLog?: OrchestratorTranscriptShadowLog,
 ) {
   counts.filesVisited += 1;
   const tempPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
@@ -200,6 +201,7 @@ async function migrateTranscriptFile(
   encodedThreadId: string,
   filePath: string,
   counts: MigrationCounts,
+  shadowLog?: OrchestratorTranscriptShadowLog,
 ) {
   try {
     if (filePath.endsWith(".ndjson")) {
@@ -209,11 +211,23 @@ async function migrateTranscriptFile(
     await migrateJsonFile(threadDirectoryPath, encodedThreadId, filePath, counts);
   } catch (error) {
     counts.errors += 1;
-    logError("codex-transcript", `inline image asset migration failed for ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    shadowLog?.write({
+      event: "image-asset-file-migration-failed",
+      fields: {
+        filePath: filePath.slice(0, 500),
+        message: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+      },
+      level: "error",
+      source: "codex-transcript",
+    });
   }
 }
 
-async function runBackgroundImageAssetMigration(rootDirectoryPath: string, counts: MigrationCounts) {
+async function runBackgroundImageAssetMigration(
+  rootDirectoryPath: string,
+  counts: MigrationCounts,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   const startedAt = Date.now();
   const threadsDirectoryPath = path.join(rootDirectoryPath, "threads");
   const threadDirectoryNames = await listThreadDirectoryNames(threadsDirectoryPath);
@@ -226,20 +240,17 @@ async function runBackgroundImageAssetMigration(rootDirectoryPath: string, count
     const threadDirectoryPath = path.join(threadsDirectoryPath, encodedThreadId);
     const files = await listThreadTranscriptFiles(threadsDirectoryPath, encodedThreadId, counts);
     for (const filePath of files) {
-      await migrateTranscriptFile(threadDirectoryPath, encodedThreadId, filePath, counts);
+      await migrateTranscriptFile(threadDirectoryPath, encodedThreadId, filePath, counts, shadowLog);
       filesSinceYield += 1;
 
       if (Date.now() - lastLoggedAt >= PROGRESS_LOG_INTERVAL_MS) {
         lastLoggedAt = Date.now();
-        log("codex-transcript", [
-          "inline image asset migration progress",
-          `threads=${counts.threadsVisited}/${threadDirectoryNames.length}`,
-          `filesVisited=${counts.filesVisited}`,
-          `filesChanged=${counts.filesChanged}`,
-          `assets=${counts.assets}`,
-          `errors=${counts.errors}`,
-          `skipped=${counts.skipped}`,
-        ].join(" "));
+        shadowLog?.write({
+          event: "image-asset-migration-progress",
+          fields: { ...counts, totalThreads: threadDirectoryNames.length },
+          level: "info",
+          source: "codex-transcript",
+        });
       }
 
       if (filesSinceYield >= FILE_BATCH_SIZE) {
@@ -249,19 +260,18 @@ async function runBackgroundImageAssetMigration(rootDirectoryPath: string, count
     }
   }
 
-  log("codex-transcript", [
-    "inline image asset migration finished",
-    `threads=${counts.threadsVisited}`,
-    `filesVisited=${counts.filesVisited}`,
-    `filesChanged=${counts.filesChanged}`,
-    `assets=${counts.assets}`,
-    `errors=${counts.errors}`,
-    `skipped=${counts.skipped}`,
-    `durationMs=${Date.now() - startedAt}`,
-  ].join(" "));
+  shadowLog?.write({
+    event: "image-asset-migration-completed",
+    fields: { ...counts, durationMs: Date.now() - startedAt },
+    level: "info",
+    source: "codex-transcript",
+  });
 }
 
-export async function queueCodexTranscriptImageAssetMigration(rootDirectoryPath: string) {
+export async function queueCodexTranscriptImageAssetMigration(
+  rootDirectoryPath: string,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   const resolvedRootDirectoryPath = path.resolve(rootDirectoryPath);
   const activeMigration = activeMigrationsByRoot.get(resolvedRootDirectoryPath);
   if (activeMigration) {
@@ -277,9 +287,14 @@ export async function queueCodexTranscriptImageAssetMigration(rootDirectoryPath:
     threadsVisited: 0,
   };
 
-  const migration = runBackgroundImageAssetMigration(rootDirectoryPath, counts)
+  const migration = runBackgroundImageAssetMigration(rootDirectoryPath, counts, shadowLog)
     .catch((error) => {
-      logError("codex-transcript", `inline image asset migration failed: ${error instanceof Error ? error.message : String(error)}`);
+      shadowLog?.write({
+        event: "image-asset-migration-failed",
+        fields: { message: (error instanceof Error ? error.message : String(error)).slice(0, 500) },
+        level: "error",
+        source: "codex-transcript",
+      });
       throw error;
     });
   activeMigrationsByRoot.set(resolvedRootDirectoryPath, migration);
@@ -292,6 +307,10 @@ export async function queueCodexTranscriptImageAssetMigration(rootDirectoryPath:
   return await migration;
 }
 
-export default async function migrateV4(rootDirectoryPath: string, _jsonStore: AtomicJsonStore) {
-  await queueCodexTranscriptImageAssetMigration(rootDirectoryPath);
+export default async function migrateV4(
+  rootDirectoryPath: string,
+  _jsonStore: AtomicJsonStore,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
+  await queueCodexTranscriptImageAssetMigration(rootDirectoryPath, shadowLog);
 }

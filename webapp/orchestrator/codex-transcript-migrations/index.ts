@@ -7,6 +7,7 @@ import path from "node:path";
 
 import type AtomicJsonStore from "../AtomicJsonStore";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "../codex-transcript-version";
+import type { OrchestratorTranscriptShadowLog } from "../orchestrator-runtime-objects";
 import migrateV0 from "./v0";
 import migrateV1 from "./v1";
 import migrateV2 from "./v2";
@@ -47,7 +48,11 @@ async function readMigrationState(filePath: string): Promise<MigrationState> {
   return { schemaVersion: 0 };
 }
 
-export async function runCodexTranscriptMigrations(rootDirectoryPath: string, jsonStore: AtomicJsonStore) {
+export async function runCodexTranscriptMigrations(
+  rootDirectoryPath: string,
+  jsonStore: AtomicJsonStore,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   await fs.mkdir(rootDirectoryPath, { recursive: true });
   const stateFilePath = path.join(rootDirectoryPath, "migration.json");
   const state = await readMigrationState(stateFilePath);
@@ -58,7 +63,32 @@ export async function runCodexTranscriptMigrations(rootDirectoryPath: string, js
       throw new Error(`Missing Codex transcript migration v${version}.`);
     }
 
-    await migration(rootDirectoryPath, jsonStore);
+    shadowLog?.write({
+      event: "legacy-migration-started",
+      fields: { version },
+      level: "info",
+      source: "codex-transcript",
+    });
+    try {
+      await migration(rootDirectoryPath, jsonStore, shadowLog);
+    } catch (error) {
+      shadowLog?.write({
+        event: "legacy-migration-failed",
+        fields: {
+          message: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+          version,
+        },
+        level: "error",
+        source: "codex-transcript",
+      });
+      throw error;
+    }
+    shadowLog?.write({
+      event: "legacy-migration-completed",
+      fields: { version },
+      level: "info",
+      source: "codex-transcript",
+    });
     didRunMigration = true;
   }
 

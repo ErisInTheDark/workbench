@@ -23,7 +23,6 @@ const emptySnapshot = {
     snoozed: 0,
     transcript_content_version: 1,
     next_turn_index: 0,
-    next_item_index: 0,
     created_at: 1,
     updated_at: 1,
     activity_at: 1,
@@ -131,10 +130,12 @@ test("transcript client ignores a method-matched malformed notification after bo
   });
 
   await client.subscribe({ subscriptionId: "sub", threadId: "thread", turnLimit: 20 }, () => publications += 1);
-  receiveNotification?.({
-    method: workbenchTranscriptNotifications.updated.method,
-    params: { stream: "workbench:transcript", subscriptionId: "sub", snapshot: "fake" },
-  });
+  for (let index = 0; index < 100; index += 1) {
+    receiveNotification?.({
+      method: workbenchTranscriptNotifications.updated.method,
+      params: { stream: "workbench:transcript", subscriptionId: "sub", snapshot: "fake" },
+    });
+  }
 
   assert.equal(publications, 0);
   assert.equal(reports.length, 1);

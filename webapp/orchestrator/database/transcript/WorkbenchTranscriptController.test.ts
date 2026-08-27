@@ -16,7 +16,12 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
   const controller = new WorkbenchTranscriptController(database);
   try {
     await controller.start();
-    await controller.record([
+    await controller.record([{
+      kind: "canonicalWindow",
+      contentVersion: 2,
+      materializedTurnIds: ["turn"],
+      threadId: "thread",
+      observations: [
       {
         kind: "thread",
         threadId: "thread",
@@ -42,7 +47,8 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
         endedAt: null,
         durationMs: null,
       },
-    ]);
+      ],
+    }]);
 
     const published: number[] = [];
     await controller.subscribe({
@@ -53,18 +59,47 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
       },
     });
     await controller.record([{
-      kind: "item",
+      kind: "canonicalWindow",
+      contentVersion: 2,
+      materializedTurnIds: ["turn"],
       threadId: "thread",
-      turnId: "turn",
-      lifecycle: "completed",
-      observedAt: 3,
-      item: {
-        type: "agentMessage",
-        id: "message",
-        text: "hello",
-        phase: "final_answer",
-        memoryCitation: null,
-      },
+      observations: [{
+        kind: "thread",
+        threadId: "thread",
+        projectId: "project",
+        projectRoot: "C:/project",
+        title: "Thread",
+        createdAt: 1,
+        updatedAt: 3,
+        activityAt: 3,
+      }, {
+        kind: "turn",
+        threadId: "thread",
+        turnId: "turn",
+        turnIndex: 0,
+        harnessId: "codex",
+        nativeLocation: "C:/project",
+        nativeThreadId: "native",
+        nativeTurnId: "turn",
+        state: "inProgress",
+        createdAt: 2,
+        startedAt: 2,
+        endedAt: null,
+        durationMs: null,
+      }, {
+        kind: "item",
+        threadId: "thread",
+        turnId: "turn",
+        lifecycle: "completed",
+        observedAt: 3,
+        item: {
+          type: "agentMessage",
+          id: "message",
+          text: "hello",
+          phase: "final_answer",
+          memoryCitation: null,
+        },
+      }],
     }]);
     assert.deepEqual(published, [0, 1]);
     assert.deepEqual(

@@ -80,8 +80,8 @@ test("the root knows only direct roots and parents declare every dependant", () 
     lifecycle: nodes.get("server:database")!.lifecycle,
     provides: nodes.get("server:database")!.provides,
   }, {
-    lifecycle: "atomic",
-    provides: ["database", "transcript"],
+    lifecycle: "handoff",
+    provides: ["database", "transcript", "transcriptShadowLog"],
   });
 });
 

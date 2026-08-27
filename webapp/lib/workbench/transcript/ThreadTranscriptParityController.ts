@@ -33,22 +33,27 @@ function sameTurnIds(
 
 interface ThreadTranscriptParityControllerOptions {
   available?: boolean;
+  cancelComparison?: (timer: ReturnType<typeof setTimeout>) => void;
   onError?: (error: Error) => void;
   reconcileProjection?: (
     projection: WorkbenchTranscriptProjection,
     selection: ThreadTranscriptParitySelection,
   ) => WorkbenchTranscriptProjection;
+  scheduleComparison?: (callback: () => void) => ReturnType<typeof setTimeout>;
   transcripts: Pick<WorkbenchTranscriptClient, "reportParity" | "subscribe" | "unsubscribe">;
   turnLimit: number;
 }
 
 export default class ThreadTranscriptParityController {
+  readonly #cancelComparison: NonNullable<ThreadTranscriptParityControllerOptions["cancelComparison"]>;
   readonly #onError: NonNullable<ThreadTranscriptParityControllerOptions["onError"]>;
   readonly #reconcileProjection: NonNullable<ThreadTranscriptParityControllerOptions["reconcileProjection"]>;
+  readonly #scheduleComparison: NonNullable<ThreadTranscriptParityControllerOptions["scheduleComparison"]>;
   readonly #transcripts: ThreadTranscriptParityControllerOptions["transcripts"];
   readonly #turnLimit: number;
   #activeSubscriptionId: string | null = null;
   #available: boolean;
+  #comparisonTimer: ReturnType<typeof setTimeout> | null = null;
   #disposed = false;
   #generation = 0;
   #lastDiagnostic: WorkbenchTranscriptParityDiagnostic | null = null;
@@ -59,14 +64,18 @@ export default class ThreadTranscriptParityController {
 
   constructor({
     available = false,
+    cancelComparison = (timer) => clearTimeout(timer),
     onError = (error) => console.error("Workbench transcript parity failed.", error),
     reconcileProjection = (projection) => projection,
+    scheduleComparison = (callback) => setTimeout(callback, 0),
     transcripts,
     turnLimit,
   }: ThreadTranscriptParityControllerOptions) {
+    this.#cancelComparison = cancelComparison;
     this.#onError = onError;
     this.#available = available;
     this.#reconcileProjection = reconcileProjection;
+    this.#scheduleComparison = scheduleComparison;
     this.#transcripts = transcripts;
     this.#turnLimit = turnLimit;
   }
@@ -74,6 +83,7 @@ export default class ThreadTranscriptParityController {
   dispose() {
     if (this.#disposed) return;
     this.#disposed = true;
+    this.#cancelScheduledComparison();
     this.#selection = null;
     this.#projection = null;
     this.#lastDiagnostic = null;
@@ -84,6 +94,7 @@ export default class ThreadTranscriptParityController {
   setAvailable(available: boolean) {
     if (this.#disposed || this.#available === available) return;
     this.#available = available;
+    this.#cancelScheduledComparison();
     this.#projection = null;
     this.#lastDiagnostic = null;
     if (!available) {
@@ -101,6 +112,7 @@ export default class ThreadTranscriptParityController {
     const loadedTurnsChanged = !sameTurnIds(this.#selection?.thread.turns, selection?.thread.turns);
     this.#selection = selection;
     if (previousThreadId !== nextThreadId || loadedTurnsChanged) {
+      this.#cancelScheduledComparison();
       this.#projection = null;
       this.#lastDiagnostic = null;
       if (!this.#available) {
@@ -111,7 +123,23 @@ export default class ThreadTranscriptParityController {
       this.#replaceSubscription();
       return;
     }
-    this.#compare();
+    this.#scheduleCompare();
+  }
+
+  #cancelScheduledComparison() {
+    if (this.#comparisonTimer === null) return;
+    this.#cancelComparison(this.#comparisonTimer);
+    this.#comparisonTimer = null;
+  }
+
+  #scheduleCompare() {
+    if (this.#comparisonTimer !== null || !this.#selection || !this.#projection) return;
+    const generation = this.#generation;
+    this.#comparisonTimer = this.#scheduleComparison(() => {
+      this.#comparisonTimer = null;
+      if (this.#disposed || !this.#available || generation !== this.#generation) return;
+      this.#compare();
+    });
   }
 
   #compare() {
@@ -138,6 +166,7 @@ export default class ThreadTranscriptParityController {
   #receiveSnapshot(generation: number, snapshot: WorkbenchTranscriptSnapshot | null) {
     if (this.#disposed || generation !== this.#generation) return;
     if (snapshot === null) {
+      this.#cancelScheduledComparison();
       this.#projection = null;
       this.#lastDiagnostic = null;
       return;
@@ -150,12 +179,18 @@ export default class ThreadTranscriptParityController {
       return;
     }
     this.#projection = result.data;
-    this.#compare();
+    this.#scheduleCompare();
   }
 
-  #reportError(error: unknown) {
+  #reportError(stage: "report" | "subscription", error: unknown) {
     if (this.#disposed || !this.#available) return;
-    this.#onError(error instanceof Error ? error : new Error(String(error)));
+    const cause = error instanceof Error ? error : new Error(String(error));
+    const threadId = this.#selection?.thread.id ?? "none";
+    const turnIds = this.#selection?.thread.turns.map(({ id }) => id).join(",") || "none";
+    this.#onError(new Error(
+      `Workbench transcript parity lifecycle failed. stage=${stage} threadId=${threadId} turnIds=${turnIds}: ${cause.message}`,
+      { cause },
+    ));
   }
 
   #replaceSubscription() {
@@ -188,7 +223,7 @@ export default class ThreadTranscriptParityController {
           await this.#transcripts.unsubscribe({ subscriptionId });
         }
       })
-      .catch((error) => this.#reportError(error));
+      .catch((error) => this.#reportError("subscription", error));
   }
 
   #report(diagnostic: WorkbenchTranscriptParityDiagnostic) {
@@ -201,6 +236,6 @@ export default class ThreadTranscriptParityController {
         if (this.#disposed || !this.#available || generation !== this.#generation) return;
         await this.#transcripts.reportParity(diagnostic);
       })
-      .catch((error) => this.#reportError(error));
+      .catch((error) => this.#reportError("report", error));
   }
 }

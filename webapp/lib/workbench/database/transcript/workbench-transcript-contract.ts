@@ -2,7 +2,7 @@
  * transcriptSnapshotTables/WorkbenchTranscriptSnapshotRows: one table-selection owner for transcript snapshot types and conformance. Keywords: transcript, database, schema, snapshot.
  * WorkbenchTranscriptSnapshot/conformWorkbenchTranscriptSnapshot: shared relational transcript wire shape and schema-derived browser conformance. Keywords: transcript, browser, compatibility.
  * WorkbenchTranscriptOperation/workbenchTranscriptOperations: shared typed request and response operation registry. Keywords: transcript, websocket, protocol.
- * WorkbenchTranscriptParityDiagnostic: bounded semantic mismatch evidence safe for browser-to-orchestrator logging. Keywords: transcript, parity, diagnostic.
+ * WorkbenchTranscriptConformanceReport/WorkbenchTranscriptParityDiagnostic: bounded structural and semantic mismatch evidence safe for browser-to-orchestrator logging. Keywords: transcript, conformance, parity, diagnostic.
  * WorkbenchTranscriptRequest/decodeWorkbenchTranscriptRequest: exact server dispatch union decoded by the shared registry. Keywords: transcript, websocket, request.
  * workbenchTranscriptNotifications/conformWorkbenchTranscriptCapabilities/conformWorkbenchTranscriptUpdated: shared notification identities and payload conformance. Keywords: transcript, websocket, capability, notification.
  */
@@ -105,6 +105,13 @@ export interface WorkbenchTranscriptParityDiagnostic {
   sqliteContext: WorkbenchTranscriptParityContextEntry[];
   threadId: string;
 }
+
+export interface WorkbenchTranscriptConformanceReport {
+  issues: DatabaseConformanceIssue[];
+  method: string;
+  repairedPaths: DatabaseConformancePath[];
+}
+
 export interface WorkbenchTranscriptSnapshot {
   hasPreviousTurns: boolean;
   loadedTurnIds: string[];
@@ -231,6 +238,13 @@ export interface WorkbenchTranscriptOperation<
 
 const PARITY_CONTEXT_LIMIT = 7;
 const PARITY_TEXT_LIMIT = 200;
+const CONFORMANCE_ENTRY_LIMIT = 64;
+const CONFORMANCE_PATH_LIMIT = 8;
+const conformanceIssueCodes = new Set<DatabaseConformanceIssue["code"]>([
+  "invalidRow",
+  "invalidValue",
+  "missingRequired",
+]);
 const parityScopes = new Set<WorkbenchTranscriptParityScope>(["browse", "display", "item", "projection", "timeline", "turn"]);
 const parityMismatches = new Set<WorkbenchTranscriptParityMismatch>(["extra", "missing", "order", "ownership", "payload", "projectionFailure", "segment", "type"]);
 
@@ -241,6 +255,70 @@ function boundedDiagnosticText(value: unknown) {
     && !/[\u0000-\u001f\u007f]/u.test(value)
     ? value
     : null;
+}
+
+function decodeConformancePath(value: unknown): DecodeResult<DatabaseConformancePath> {
+  if (!Array.isArray(value) || value.length === 0 || value.length > CONFORMANCE_PATH_LIMIT) {
+    return { success: false, message: "Transcript conformance path must be a bounded array." };
+  }
+  const path: Array<number | string> = [];
+  for (const part of value) {
+    if (typeof part === "number" && Number.isSafeInteger(part) && part >= 0) {
+      path.push(part);
+      continue;
+    }
+    const text = boundedDiagnosticText(part);
+    if (text === null) return { success: false, message: "Transcript conformance path contains an invalid part." };
+    path.push(text);
+  }
+  return { success: true, data: path };
+}
+
+function decodeConformancePaths(value: unknown): DecodeResult<DatabaseConformancePath[]> {
+  if (!Array.isArray(value) || value.length > CONFORMANCE_ENTRY_LIMIT) {
+    return { success: false, message: "Transcript conformance paths must be a bounded array." };
+  }
+  const paths: DatabaseConformancePath[] = [];
+  for (const candidate of value) {
+    const path = decodeConformancePath(candidate);
+    if ("message" in path) return { success: false, message: path.message };
+    paths.push(path.data);
+  }
+  return { success: true, data: paths };
+}
+
+function decodeConformanceReport(value: unknown): DecodeResult<WorkbenchTranscriptConformanceReport> {
+  if (!isRecord(value)) return { success: false, message: "Transcript conformance report must be an object." };
+  const method = boundedDiagnosticText(value.method);
+  const repairedPaths = decodeConformancePaths(value.repairedPaths);
+  if (
+    method === null
+    || !repairedPaths.success
+    || !Array.isArray(value.issues)
+    || value.issues.length > CONFORMANCE_ENTRY_LIMIT
+  ) {
+    return { success: false, message: "Transcript conformance report is invalid or unbounded." };
+  }
+  const issues: DatabaseConformanceIssue[] = [];
+  for (const candidate of value.issues) {
+    if (!isRecord(candidate) || !conformanceIssueCodes.has(candidate.code as DatabaseConformanceIssue["code"])) {
+      return { success: false, message: "Transcript conformance report contains an invalid issue." };
+    }
+    const path = decodeConformancePath(candidate.path);
+    if ("message" in path) return { success: false, message: path.message };
+    issues.push({
+      code: candidate.code as DatabaseConformanceIssue["code"],
+      path: path.data,
+    });
+  }
+  return {
+    success: true,
+    data: {
+      issues,
+      method,
+      repairedPaths: repairedPaths.data,
+    },
+  };
 }
 
 function decodeParityContext(value: unknown): DecodeResult<WorkbenchTranscriptParityContextEntry[]> {
@@ -412,6 +490,17 @@ const subscribeOperation = Object.freeze({
   conformResult: conformLiteralResult("subscribed"),
 }) satisfies WorkbenchTranscriptOperation<"subscribe", "workbench/transcript/subscribe", WorkbenchTranscriptSubscribeParams, { subscribed: true }>;
 
+const reportConformanceOperation = Object.freeze({
+  kind: "reportConformance",
+  method: "workbench/transcript/conformance/report",
+  decodeParams: decodeConformanceReport,
+  conformResult: conformLiteralResult("reported"),
+}) satisfies WorkbenchTranscriptOperation<
+  "reportConformance",
+  "workbench/transcript/conformance/report",
+  WorkbenchTranscriptConformanceReport,
+  { reported: true }
+>;
 const reportParityOperation = Object.freeze({
   kind: "reportParity",
   method: "workbench/transcript/parity/report",
@@ -427,6 +516,7 @@ const unsubscribeOperation = Object.freeze({
 
 export const workbenchTranscriptOperations = Object.freeze({
   read: readOperation,
+  reportConformance: reportConformanceOperation,
   reportParity: reportParityOperation,
   subscribe: subscribeOperation,
   unsubscribe: unsubscribeOperation,
@@ -434,6 +524,7 @@ export const workbenchTranscriptOperations = Object.freeze({
 
 export type WorkbenchTranscriptRequest =
   | { kind: "read"; operation: typeof readOperation; params: WorkbenchTranscriptReadRequest }
+  | { kind: "reportConformance"; operation: typeof reportConformanceOperation; params: WorkbenchTranscriptConformanceReport }
   | { kind: "reportParity"; operation: typeof reportParityOperation; params: WorkbenchTranscriptParityDiagnostic }
   | { kind: "subscribe"; operation: typeof subscribeOperation; params: WorkbenchTranscriptSubscribeParams }
   | { kind: "unsubscribe"; operation: typeof unsubscribeOperation; params: WorkbenchTranscriptUnsubscribeParams };
@@ -452,6 +543,12 @@ export function decodeWorkbenchTranscriptRequest(
     const decoded = operation.decodeParams(params);
     return "data" in decoded
       ? { success: true, data: { kind: "read", operation, params: decoded.data } }
+      : { success: false, message: decoded.message };
+  }
+  if (operation.kind === "reportConformance") {
+    const decoded = operation.decodeParams(params);
+    return "data" in decoded
+      ? { success: true, data: { kind: "reportConformance", operation, params: decoded.data } }
       : { success: false, message: decoded.message };
   }
   if (operation.kind === "reportParity") {

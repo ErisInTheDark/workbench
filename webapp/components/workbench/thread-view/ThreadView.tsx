@@ -750,23 +750,20 @@ export default memo(function ThreadView ({
   const currentTurn = activeThread?.turns.at(-1) ?? null;
   const visibleHistoryEntries = useMemo(() => activeThread ? getThreadVisibleHistoryEntries(activeThread) : [], [activeThread]);
   const loadedTurnsById = useMemo(() => new Map(activeThread?.turns.map((turn) => [turn.id, turn]) ?? []), [activeThread?.turns]);
-  const firstVisibleLoadedEntry = visibleHistoryEntries.find((entry) => loadedTurnsById.has(entry.turnId)) ?? null;
-  const firstVisibleLoadedEntryIndex = firstVisibleLoadedEntry
-    ? visibleHistoryEntries.indexOf(firstVisibleLoadedEntry)
+  const pageBoundaryIndex = activeThread?.nextPageCursor
+    ? visibleHistoryEntries.findIndex((entry) => entry.turnId === activeThread.nextPageCursor)
     : -1;
-  const previousTurnEntry = firstVisibleLoadedEntryIndex > 0
-    ? visibleHistoryEntries[firstVisibleLoadedEntryIndex - 1] ?? null
+  const previousTurnEntry = pageBoundaryIndex > 0
+    ? visibleHistoryEntries[pageBoundaryIndex - 1] ?? null
     : null;
-  const previousTurnLoadKey = activeThread && firstVisibleLoadedEntry
-    ? `${activeThread.id}:${firstVisibleLoadedEntry.turnId}`
+  const previousTurnLoadKey = activeThread?.nextPageCursor
+    ? `${activeThread.id}:${activeThread.nextPageCursor}`
     : "";
   const previousTurnLoadStatus = previousTurnLoadKey
     ? previousTurnLoadStates[previousTurnLoadKey]
     : undefined;
   const canLoadPreviousTurn = Boolean(
-    activeThread
-    && previousTurnEntry?.loadState === "unloaded"
-    && !loadedTurnsById.has(previousTurnEntry.turnId),
+    activeThread?.nextPageCursor,
   );
   const liveActivity = useMemo(() => getLiveThreadActivity({
     pendingUserInputRequest: activePendingUserInputRequest,
@@ -850,7 +847,7 @@ export default memo(function ThreadView ({
       const subagentCwd = getSubagentSummary(subagents, threadId)?.cwd.trim();
       const payload = await onReadThread(threadId, harness, {
         ...(subagentCwd ? { cwd: subagentCwd } : {}),
-        hydration: { mode: "latest" },
+        cursor: null,
         ...(options.background ? { readScope: "subagentBackground" as const } : {}),
       });
       if (!payload) {
@@ -901,7 +898,7 @@ export default memo(function ThreadView ({
   const loadPreviousTurn = useCallback(async ({ retry = false }: { retry?: boolean } = {}) => {
     if (
       !activeThread
-      || !firstVisibleLoadedEntry
+      || !activeThread.nextPageCursor
       || !previousTurnLoadKey
       || previousTurnLoadStatus === "loading"
       || (previousTurnLoadStatus === "failed" && !retry)
@@ -918,10 +915,7 @@ export default memo(function ThreadView ({
       const subagentCwd = getSubagentSummary(subagents, targetThreadId)?.cwd.trim();
       const payload = await onReadThread(targetThreadId, targetHarness, {
         ...(subagentCwd ? { cwd: subagentCwd } : {}),
-        hydration: {
-          beforeTurnId: firstVisibleLoadedEntry.turnId,
-          mode: "previous",
-        },
+        cursor: activeThread.nextPageCursor,
       });
       if (loadGeneration !== subthreadLoadGenerationRef.current) {
         return;
@@ -953,7 +947,7 @@ export default memo(function ThreadView ({
       dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
       console.error("Previous thread turn load failed.", error);
     }
-  }, [activeThread, firstVisibleLoadedEntry, onReadThread, previousTurnLoadKey, previousTurnLoadStatus, subagents, thread.id]);
+  }, [activeThread, onReadThread, previousTurnLoadKey, previousTurnLoadStatus, subagents, thread.id]);
 
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;

@@ -35,10 +35,12 @@ test("the database node proves readiness before exposing transcript work and clo
   );
   const database = instance.registrations.database!;
   const transcript = instance.registrations.transcript!;
+  const transcriptShadowLog = instance.registrations.transcriptShadowLog!;
   try {
     await instance.start();
     database.assertReady();
     assert.equal(transcript.failure, null);
+    transcriptShadowLog.write({ event: "ready", level: "info", source: "test" });
 
     await instance.dispose();
     assert.equal(database.state, "closed");
@@ -52,34 +54,53 @@ test("the database node proves readiness before exposing transcript work and clo
 test("the replacement database node consumes one reset request before opening SQLite", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-node-reset-"));
   const storage = join(directory, ".workbench");
-  const databasePath = join(storage, "workbench.sqlite3");
   const resetRequestPath = join(storage, "reset-workbench-sqlite");
-  await mkdir(storage);
-  await writeFile(databasePath, "invalid old database", "utf8");
-  await writeFile(`${databasePath}-wal`, "old wal", "utf8");
-  await writeFile(`${databasePath}-shm`, "old shm", "utf8");
-  await writeFile(resetRequestPath, "workbench-sqlite-shadow-reset-v1\n", "utf8");
+  const shadowLogPath = join(storage, "logs", "workbench-transcript-shadow.jsonl");
   const preserved = join(storage, "transcripts.json");
-  await writeFile(preserved, "keep", "utf8");
-  const instance = WorkbenchDatabaseNode.create(
+  const active = WorkbenchDatabaseNode.create(
     { legacyMigrationProjectRoot: directory } as OrchestratorProcessContext,
     {
       get: () => {
         throw new Error("The database root has no registration requirements");
       },
       handoffState: undefined,
-      isReplacing: () => true,
+      isReplacing: () => false,
       lease: { isCurrent: () => true },
-      mode: "replacement",
+      mode: "initial",
     },
   );
+  let replacement: ReturnType<typeof WorkbenchDatabaseNode.create> | null = null;
   try {
-    await instance.start();
-    instance.registrations.database!.assertReady();
+    assert.equal(WorkbenchDatabaseNode.lifecycle, "handoff");
+    await active.start();
+    active.registrations.transcriptShadowLog!.write({ event: "before-reset", level: "info", source: "test" });
+    await writeFile(preserved, "keep", "utf8");
+    await writeFile(resetRequestPath, "workbench-sqlite-shadow-reset-v1\n", "utf8");
+
+    assert.ok(active.detachForReload);
+    await active.detachForReload({ isReplacing: () => true });
+    assert.equal(active.registrations.database!.state, "closed");
+
+    replacement = WorkbenchDatabaseNode.create(
+      { legacyMigrationProjectRoot: directory } as OrchestratorProcessContext,
+      {
+        get: () => {
+          throw new Error("The database root has no registration requirements");
+        },
+        handoffState: undefined,
+        isReplacing: () => true,
+        lease: { isCurrent: () => true },
+        mode: "replacement",
+      },
+    );
+    await replacement.start();
+    replacement.registrations.database!.assertReady();
     assert.equal(await exists(resetRequestPath), false);
+    assert.equal(await exists(shadowLogPath), false);
     assert.equal(await readFile(preserved, "utf8"), "keep");
   } finally {
-    await instance.dispose();
+    await replacement?.dispose();
+    await active.dispose();
     await rm(directory, { recursive: true, force: true });
   }
 });

@@ -7,7 +7,7 @@ import path from "node:path";
 import type { Dir, Dirent } from "node:fs";
 
 import type AtomicJsonStore from "../AtomicJsonStore";
-import { log } from "../process-helpers";
+import type { OrchestratorTranscriptShadowLog } from "../orchestrator-runtime-objects";
 
 const PROGRESS_LOG_INTERVAL_MS = 5_000;
 const PROGRESS_LOG_PERCENT_STEP = 5;
@@ -113,7 +113,11 @@ async function deleteRequestJournals(
   }
 }
 
-export default async function migrateV2(rootDirectoryPath: string, _jsonStore: AtomicJsonStore) {
+export default async function migrateV2(
+  rootDirectoryPath: string,
+  _jsonStore: AtomicJsonStore,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   const startedAt = Date.now();
   const threadsDirectoryPath = path.join(rootDirectoryPath, "threads");
   const threadDirectories = await listThreadDirectories(threadsDirectoryPath);
@@ -129,7 +133,12 @@ export default async function migrateV2(rootDirectoryPath: string, _jsonStore: A
   let lastLoggedAt = 0;
   let lastLoggedPercent = -PROGRESS_LOG_PERCENT_STEP;
 
-  log("codex-transcript", `request journal cleanup started root=${threadsDirectoryPath} threadDirectories=${total}`);
+  shadowLog?.write({
+    event: "request-journal-cleanup-started",
+    fields: { threadDirectories: total },
+    level: "info",
+    source: "codex-transcript",
+  });
 
   for (const [index, threadDirectoryName] of threadDirectories.entries()) {
     await deleteRequestJournals(threadsDirectoryPath, threadDirectoryName, counts);
@@ -138,26 +147,27 @@ export default async function migrateV2(rootDirectoryPath: string, _jsonStore: A
     if (shouldLogProgress({ lastLoggedAt, lastLoggedPercent, percent })) {
       lastLoggedAt = Date.now();
       lastLoggedPercent = percent;
-      log("codex-transcript", [
-        "request journal cleanup progress",
-        `percent=${percent}`,
-        `threads=${completed}/${total}`,
-        `deleted=${counts.deleted}`,
-        `errors=${counts.errors}`,
-        `skipped=${counts.skipped}`,
-        `visited=${counts.visited}`,
-      ].join(" "));
+      shadowLog?.write({
+        event: "request-journal-cleanup-progress",
+        fields: {
+          completed,
+          deleted: counts.deleted,
+          errors: counts.errors,
+          percent,
+          skipped: counts.skipped,
+          total,
+          visited: counts.visited,
+        },
+        level: "info",
+        source: "codex-transcript",
+      });
     }
   }
 
-  log("codex-transcript", [
-    "request journal cleanup finished",
-    "percent=100",
-    `threadDirectories=${counts.threadDirectories}`,
-    `deleted=${counts.deleted}`,
-    `errors=${counts.errors}`,
-    `skipped=${counts.skipped}`,
-    `visited=${counts.visited}`,
-    `durationMs=${Date.now() - startedAt}`,
-  ].join(" "));
+  shadowLog?.write({
+    event: "request-journal-cleanup-completed",
+    fields: { ...counts, durationMs: Date.now() - startedAt, percent: 100 },
+    level: "info",
+    source: "codex-transcript",
+  });
 }

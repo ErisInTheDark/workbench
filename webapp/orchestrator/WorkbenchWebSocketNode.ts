@@ -17,6 +17,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       reload: build.get("reloadController"),
       threadState: build.get("threadState").controller,
       transcript: build.get("transcript"),
+      transcriptShadowLog: build.get("transcriptShadowLog"),
     });
     let detached = false;
     return {
@@ -32,7 +33,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload browser WebSocket routing, request diagnostics, and aggregate event-stream health without restarting sockets.",
   lifecycle: "handoff",
   provides: ["webSocketRequests"],
-  requires: ["harnesses", "reloadController", "threadState", "transcript"],
+  requires: ["harnesses", "reloadController", "threadState", "transcript", "transcriptShadowLog"],
   safeAll: true,
   scope: "server:websocket",
   sources: [

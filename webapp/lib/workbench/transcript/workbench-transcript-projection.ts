@@ -168,12 +168,11 @@ function commandActions(
 
 function userMessage(
   itemId: string,
-  rows: Rows,
-  partsByItem: ReadonlyMap<string, Rows["threadUserMessageParts"]>,
+  indexes: ReturnType<typeof createIndexes>,
 ): Extract<ThreadItem, { type: "userMessage" }> {
-  const owner = one(rows.threadItemUserMessages.filter(({ item_id }) => item_id === itemId), "threadItemUserMessages", itemId);
+  const owner = one(indexes.userMessages.get(itemId) ?? [], "threadItemUserMessages", itemId);
   const parts = indexedRows(
-    partsByItem.get(itemId) ?? [],
+    indexes.userMessageParts.get(itemId) ?? [],
     ({ part_index }) => part_index,
     "threadUserMessageParts",
     itemId,
@@ -199,10 +198,9 @@ function userMessage(
 
 function processOperation(
   itemId: string,
-  rows: Rows,
-  processActionsByItem: ReadonlyMap<string, Rows["threadProcessCommandActions"]>,
+  indexes: ReturnType<typeof createIndexes>,
 ): Extract<ThreadItem, { type: "commandExecution" }> {
-  const source = one(rows.threadOperationProcessSources.filter(({ item_id }) => item_id === itemId), "threadOperationProcessSources", itemId);
+  const source = one(indexes.processSources.get(itemId) ?? [], "threadOperationProcessSources", itemId);
   const status = source.state === "queued"
     ? "inProgress"
     : source.state === "timedOut"
@@ -211,7 +209,7 @@ function processOperation(
   return {
     aggregatedOutput: source.output_text,
     command: source.command,
-    commandActions: commandActions(processActionsByItem.get(itemId) ?? [], "threadProcessCommandActions", itemId),
+    commandActions: commandActions(indexes.processActions.get(itemId) ?? [], "threadProcessCommandActions", itemId),
     cwd: source.cwd,
     durationMs: source.duration_ms,
     exitCode: source.exit_code,
@@ -227,24 +225,22 @@ function processOperation(
 
 function callableOperation(
   itemId: string,
-  rows: Rows,
-  dynamicContentByItem: ReadonlyMap<string, Rows["threadCallableDynamicContent"]>,
-  mcpContentByItem: ReadonlyMap<string, Rows["threadCallableMcpResultContent"]>,
+  indexes: ReturnType<typeof createIndexes>,
 ): Extract<ThreadItem, { type: "mcpToolCall" | "dynamicToolCall" }> {
   const source = one(
-    rows.threadOperationCallableToolSources.filter(({ item_id }) => item_id === itemId),
+    indexes.callableSources.get(itemId) ?? [],
     "threadOperationCallableToolSources",
     itemId,
   );
   const tool = one(
-    rows.threadOperationToolSources.filter(({ item_id }) => item_id === itemId),
+    indexes.toolSources.get(itemId) ?? [],
     "threadOperationToolSources",
     itemId,
   );
   const argumentsValue = parseJson(source.arguments_json, "threadOperationCallableToolSources", itemId);
   if (source.callable_kind === "dynamic") {
     const contentItems = indexedRows(
-      dynamicContentByItem.get(itemId) ?? [],
+      indexes.dynamicContent.get(itemId) ?? [],
       ({ content_index }) => content_index,
       "threadCallableDynamicContent",
       itemId,
@@ -272,12 +268,12 @@ function callableOperation(
   }
 
   if (source.server_name === null) fail("invalidRow", "threadOperationCallableToolSources", itemId);
-  const resultRows = rows.threadCallableMcpResults.filter(({ item_id }) => item_id === itemId);
+  const resultRows = indexes.mcpResults.get(itemId) ?? [];
   const result = resultRows.length
     ? (() => {
       const owner = one(resultRows, "threadCallableMcpResults", itemId);
       const content = indexedRows(
-        (mcpContentByItem.get(itemId) ?? []).filter(({ source_revision }) => source_revision === owner.source_revision),
+        (indexes.mcpContent.get(itemId) ?? []).filter(({ source_revision }) => source_revision === owner.source_revision),
         ({ content_index }) => content_index,
         "threadCallableMcpResultContent",
         itemId,
@@ -321,23 +317,21 @@ function callableOperation(
 
 function collaborationOperation(
   itemId: string,
-  rows: Rows,
-  receiversByItem: ReadonlyMap<string, Rows["threadCollaborationReceivers"]>,
-  agentStatesByItem: ReadonlyMap<string, Rows["threadCollaborationAgentStates"]>,
+  indexes: ReturnType<typeof createIndexes>,
 ): Extract<ThreadItem, { type: "collabAgentToolCall" }> {
   const source = one(
-    rows.threadOperationCollaborationToolSources.filter(({ item_id }) => item_id === itemId),
+    indexes.collaborationSources.get(itemId) ?? [],
     "threadOperationCollaborationToolSources",
     itemId,
   );
   const receivers = indexedRows(
-    receiversByItem.get(itemId) ?? [],
+    indexes.collaborationReceivers.get(itemId) ?? [],
     ({ receiver_index }) => receiver_index,
     "threadCollaborationReceivers",
     itemId,
   );
   return {
-    agentsStates: Object.fromEntries((agentStatesByItem.get(itemId) ?? []).map((state) => [
+    agentsStates: Object.fromEntries((indexes.collaborationStates.get(itemId) ?? []).map((state) => [
       state.agent_thread_id,
       { message: state.message, status: state.status },
     ])),
@@ -356,16 +350,12 @@ function collaborationOperation(
 function interactionItem(
   itemId: string,
   type: "approval" | "questionnaire",
-  rows: Rows,
-  questionsByItem: ReadonlyMap<string, Rows["threadInteractionQuestions"]>,
-  optionsByItem: ReadonlyMap<string, Rows["threadInteractionOptions"]>,
-  answersByItem: ReadonlyMap<string, Rows["threadInteractionAnswers"]>,
-  approvalActionsByItem: ReadonlyMap<string, Rows["threadApprovalCommandActions"]>,
+  indexes: ReturnType<typeof createIndexes>,
 ): WorkbenchProjectedInteractionItem {
-  const owner = one(rows.threadItemInteractions.filter(({ item_id }) => item_id === itemId), "threadItemInteractions", itemId);
+  const owner = one(indexes.interactions.get(itemId) ?? [], "threadItemInteractions", itemId);
   if (owner.item_type !== type) fail("invalidRow", "threadItemInteractions", itemId);
   const questions = indexedRows(
-    questionsByItem.get(itemId) ?? [],
+    indexes.interactionQuestions.get(itemId) ?? [],
     ({ question_index }) => question_index,
     "threadInteractionQuestions",
     itemId,
@@ -375,7 +365,7 @@ function interactionItem(
     id: question.question_id,
     isSecret: question.is_secret === 1,
     options: indexedRows(
-      (optionsByItem.get(itemId) ?? []).filter(({ question_index }) => question_index === question.question_index),
+      (indexes.interactionOptions.get(itemId) ?? []).filter(({ question_index }) => question_index === question.question_index),
       ({ option_index }) => option_index,
       "threadInteractionOptions",
       itemId,
@@ -386,14 +376,14 @@ function interactionItem(
   for (const question of questions) {
     answers[question.id] = {
       answers: indexedRows(
-        (answersByItem.get(itemId) ?? []).filter(({ question_id }) => question_id === question.id),
+        (indexes.interactionAnswers.get(itemId) ?? []).filter(({ question_id }) => question_id === question.id),
         ({ answer_index }) => answer_index,
         "threadInteractionAnswers",
         itemId,
       ).map(({ answer }) => answer),
     };
   }
-  const approvalContext = rows.threadApprovalCommandContexts.filter(({ item_id }) => item_id === itemId);
+  const approvalContext = indexes.approvalContexts.get(itemId) ?? [];
   const approval = type === "approval"
     ? (() => {
       const command = one(approvalContext, "threadApprovalCommandContexts", itemId);
@@ -401,7 +391,7 @@ function interactionItem(
         command: {
           command: command.command,
           commandActions: commandActions(
-            approvalActionsByItem.get(itemId) ?? [],
+            indexes.approvalActions.get(itemId) ?? [],
             "threadApprovalCommandActions",
             itemId,
           ),
@@ -432,15 +422,14 @@ function interactionItem(
 
 function projectItem(
   root: Rows["threadItems"][number],
-  rows: Rows,
   indexes: ReturnType<typeof createIndexes>,
 ): WorkbenchProjectedTranscriptItem {
   const itemId = root.id;
   switch (root.type) {
     case "userMessage":
-      return userMessage(itemId, rows, indexes.userMessageParts);
+      return userMessage(itemId, indexes);
     case "assistantMessage": {
-      const item = one(rows.threadItemAssistantMessages.filter(({ item_id }) => item_id === itemId), "threadItemAssistantMessages", itemId);
+      const item = one(indexes.assistantMessages.get(itemId) ?? [], "threadItemAssistantMessages", itemId);
       return {
         id: itemId,
         memoryCitation: null,
@@ -450,11 +439,11 @@ function projectItem(
       };
     }
     case "plan": {
-      const item = one(rows.threadItemPlans.filter(({ item_id }) => item_id === itemId), "threadItemPlans", itemId);
+      const item = one(indexes.plans.get(itemId) ?? [], "threadItemPlans", itemId);
       return { id: itemId, text: item.text, type: "plan" };
     }
     case "reasoning": {
-      one(rows.threadItemReasoning.filter(({ item_id }) => item_id === itemId), "threadItemReasoning", itemId);
+      one(indexes.reasoning.get(itemId) ?? [], "threadItemReasoning", itemId);
       const sections = indexedRows(
         indexes.reasoningSections.get(itemId) ?? [],
         ({ section_index }) => section_index,
@@ -464,15 +453,15 @@ function projectItem(
       return { content: [], id: itemId, summary: sections, type: "reasoning" };
     }
     case "operation": {
-      const owner = one(rows.threadItemOperations.filter(({ item_id }) => item_id === itemId), "threadItemOperations", itemId);
-      if (owner.source_kind === "process") return processOperation(itemId, rows, indexes.processActions);
-      const tool = one(rows.threadOperationToolSources.filter(({ item_id }) => item_id === itemId), "threadOperationToolSources", itemId);
+      const owner = one(indexes.operations.get(itemId) ?? [], "threadItemOperations", itemId);
+      if (owner.source_kind === "process") return processOperation(itemId, indexes);
+      const tool = one(indexes.toolSources.get(itemId) ?? [], "threadOperationToolSources", itemId);
       return tool.tool_kind === "callable"
-        ? callableOperation(itemId, rows, indexes.dynamicContent, indexes.mcpContent)
-        : collaborationOperation(itemId, rows, indexes.collaborationReceivers, indexes.collaborationStates);
+        ? callableOperation(itemId, indexes)
+        : collaborationOperation(itemId, indexes);
     }
     case "fileChange": {
-      const owner = one(rows.threadItemFileChanges.filter(({ item_id }) => item_id === itemId), "threadItemFileChanges", itemId);
+      const owner = one(indexes.fileChangeItems.get(itemId) ?? [], "threadItemFileChanges", itemId);
       return {
         changes: indexedRows(
           indexes.fileChanges.get(itemId) ?? [],
@@ -495,7 +484,7 @@ function projectItem(
       };
     }
     case "webSearch": {
-      const owner = one(rows.threadItemWebSearches.filter(({ item_id }) => item_id === itemId), "threadItemWebSearches", itemId);
+      const owner = one(indexes.webSearchItems.get(itemId) ?? [], "threadItemWebSearches", itemId);
       const queries = indexedRows(
         indexes.webSearchQueries.get(itemId) ?? [],
         ({ query_index }) => query_index,
@@ -521,20 +510,12 @@ function projectItem(
     }
     case "questionnaire":
     case "approval":
-      return interactionItem(
-        itemId,
-        root.type,
-        rows,
-        indexes.interactionQuestions,
-        indexes.interactionOptions,
-        indexes.interactionAnswers,
-        indexes.approvalActions,
-      );
+      return interactionItem(itemId, root.type, indexes);
     case "contextCompaction":
-      one(rows.threadItemContextCompactions.filter(({ item_id }) => item_id === itemId), "threadItemContextCompactions", itemId);
+      one(indexes.contextCompactions.get(itemId) ?? [], "threadItemContextCompactions", itemId);
       return { id: itemId, type: "contextCompaction" };
     case "unknown": {
-      const item = one(rows.threadItemUnknown.filter(({ item_id }) => item_id === itemId), "threadItemUnknown", itemId);
+      const item = one(indexes.unknownItems.get(itemId) ?? [], "threadItemUnknown", itemId);
       return {
         id: itemId,
         nativeType: item.native_type,
@@ -548,17 +529,33 @@ function projectItem(
 function createIndexes(rows: Rows) {
   return {
     approvalActions: byItem(rows.threadApprovalCommandActions),
+    approvalContexts: byItem(rows.threadApprovalCommandContexts),
+    assistantMessages: byItem(rows.threadItemAssistantMessages),
+    callableSources: byItem(rows.threadOperationCallableToolSources),
     collaborationReceivers: byItem(rows.threadCollaborationReceivers),
+    collaborationSources: byItem(rows.threadOperationCollaborationToolSources),
     collaborationStates: byItem(rows.threadCollaborationAgentStates),
+    contextCompactions: byItem(rows.threadItemContextCompactions),
     dynamicContent: byItem(rows.threadCallableDynamicContent),
+    fileChangeItems: byItem(rows.threadItemFileChanges),
     fileChanges: byItem(rows.threadFileChanges),
     interactionAnswers: byItem(rows.threadInteractionAnswers),
+    interactions: byItem(rows.threadItemInteractions),
     interactionOptions: byItem(rows.threadInteractionOptions),
     interactionQuestions: byItem(rows.threadInteractionQuestions),
     mcpContent: byItem(rows.threadCallableMcpResultContent),
+    mcpResults: byItem(rows.threadCallableMcpResults),
+    operations: byItem(rows.threadItemOperations),
+    plans: byItem(rows.threadItemPlans),
     processActions: byItem(rows.threadProcessCommandActions),
+    processSources: byItem(rows.threadOperationProcessSources),
+    reasoning: byItem(rows.threadItemReasoning),
     reasoningSections: byItem(rows.threadReasoningSections),
+    toolSources: byItem(rows.threadOperationToolSources),
+    unknownItems: byItem(rows.threadItemUnknown),
+    userMessages: byItem(rows.threadItemUserMessages),
     userMessageParts: byItem(rows.threadUserMessageParts),
+    webSearchItems: byItem(rows.threadItemWebSearches),
     webSearchQueries: byItem(rows.threadWebSearchQueries),
     webSearchResults: byItem(rows.threadWebSearchResults),
   };
@@ -620,14 +617,17 @@ export function projectWorkbenchTranscript(
 
     const itemRootsById = new Map(snapshot.rows.threadItems.map((item) => [item.id, item]));
     if (itemRootsById.size !== snapshot.rows.threadItems.length) fail("duplicateRow", "threadItems");
-    const indexes = createIndexes(snapshot.rows);
-    const projectedItems = snapshot.rows.threadItems
-      .map((root) => ({ payload: projectItem(root, snapshot.rows, indexes), root }))
-      .sort((left, right) => left.root.item_index - right.root.item_index);
-    for (const { root } of projectedItems) {
+    for (const root of snapshot.rows.threadItems) {
       if (!loadedTurnIds.has(root.turn_id)) fail("invalidReference", "threadItems", root.id);
       if (root.thread_id !== snapshot.thread.id) fail("invalidReference", "threadItems", root.id);
     }
+    const indexes = createIndexes(snapshot.rows);
+    const projectedItems = snapshot.rows.threadItems
+      .map((root) => ({ payload: projectItem(root, indexes), root }))
+      .sort((left, right) => (
+        turnsById.get(left.root.turn_id)!.turn_index - turnsById.get(right.root.turn_id)!.turn_index
+        || left.root.item_position - right.root.item_position
+      ));
     const projectedItemsByTurn = new Map<string, WorkbenchProjectedTranscriptItem[]>();
     for (const { payload, root } of projectedItems) {
       const turnItems = projectedItemsByTurn.get(root.turn_id) ?? [];
@@ -692,9 +692,9 @@ export function projectWorkbenchTranscript(
       };
     });
     const display = planCanonicalTranscriptDisplay({
-      items: projectedItems.map(({ payload, root }) => ({
+      items: projectedItems.map(({ payload, root }, itemIndex) => ({
         itemId: root.id,
-        itemIndex: root.item_index,
+        itemIndex,
         payload,
         turnId: root.turn_id,
       })),

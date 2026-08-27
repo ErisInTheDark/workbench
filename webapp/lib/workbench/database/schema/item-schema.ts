@@ -43,7 +43,7 @@ const threadItemsV1 = defineTable("thread_items", {
   id: text().primaryKey(),
   thread_id: text().notNull(),
   turn_id: text().notNull(),
-  item_index: integer().notNull().nonNegative(),
+  item_position: integer().notNull().nonNegative(),
   type: enumText(
     "userMessage",
     "assistantMessage",
@@ -61,7 +61,7 @@ const threadItemsV1 = defineTable("thread_items", {
   updated_at: integer().notNull(),
 }, (table) => ({
   constraints: [
-    unique([table.thread_id, table.item_index]),
+    unique([table.turn_id, table.item_position]),
     unique([table.id, table.type]),
     unique([table.id, table.thread_id, table.type]),
     unique([table.id, table.thread_id, table.turn_id]),

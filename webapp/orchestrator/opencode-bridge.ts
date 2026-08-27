@@ -34,6 +34,11 @@ import {
   isWorkbenchThreadRecoveryInput,
   isWorkbenchThreadRecoveryUserMessage,
 } from "../lib/workbench/thread/thread-recovery-message";
+import {
+  WORKBENCH_THREAD_PAGE_READ_METHOD,
+  WorkbenchThreadPageReadParamsSchema,
+  type WorkbenchThreadPageResponse,
+} from "../lib/workbench/thread/workbench-thread-page";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { OpenCodeLiveThreadState } from "./opencode-live-thread-state";
 import type OpenCodeAppServer from "./OpenCodeAppServer";
@@ -452,6 +457,24 @@ export class OpenCodeBridge {
       }
 
       switch (method) {
+        case WORKBENCH_THREAD_PAGE_READ_METHOD: {
+          const params = WorkbenchThreadPageReadParamsSchema.parse(message.params);
+          if (params.cursor !== null) {
+            return errorResponse(requestId, -32602, "OpenCode thread pages do not have a continuation cursor.");
+          }
+          const response = await this.readThread(params.threadId, params.cwd ?? this.projectRoot);
+          const page: WorkbenchThreadPageResponse = {
+            browseResultEntries: [],
+            model: response.model,
+            nextCursor: null,
+            questionnaireEntries: [],
+            reasoningEffort: response.reasoningEffort,
+            serviceTier: response.serviceTier,
+            steerEntries: [],
+            thread: response.thread,
+          };
+          return okResponse(requestId, page);
+        }
         case "thread/list":
           return okResponse(requestId, await this.listThreads(requestDirectories(message.params, this.projectRoot)));
         case "thread/read":

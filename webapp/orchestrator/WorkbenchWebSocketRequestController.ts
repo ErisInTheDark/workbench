@@ -15,7 +15,10 @@ import {
   type WorkbenchTranscriptRequest,
   workbenchTranscriptNotifications,
 } from "../lib/workbench/database/transcript/workbench-transcript-contract";
-import type { OrchestratorTranscriptRegistration } from "./orchestrator-runtime-objects";
+import type {
+  OrchestratorTranscriptRegistration,
+  OrchestratorTranscriptShadowLog,
+} from "./orchestrator-runtime-objects";
 import {
   WORKBENCH_EVENT_STREAM_ACK_METHOD,
   WorkbenchEventStreamAckSchema,
@@ -81,6 +84,7 @@ export interface WorkbenchWebSocketRequestControllerOptions {
   setTimeout?: (callback: () => void, delayMs: number) => Timer;
   threadState: Pick<WorkbenchThreadStateController, "acceptIntent" | "disconnect" | "handleRequest">;
   transcript: Pick<OrchestratorTranscriptRegistration, "read" | "subscribe" | "unsubscribe">;
+  transcriptShadowLog?: OrchestratorTranscriptShadowLog;
   writeLine?: (line: string) => void;
 }
 
@@ -139,6 +143,7 @@ export default class WorkbenchWebSocketRequestController {
   private readonly stream: WorkbenchWebSocketStreamController;
   private readonly threadState: WorkbenchWebSocketRequestControllerOptions["threadState"];
   private readonly transcript: WorkbenchWebSocketRequestControllerOptions["transcript"];
+  private readonly transcriptShadowLog: WorkbenchWebSocketRequestControllerOptions["transcriptShadowLog"];
   private readonly transcriptSubscriptions = new Map<string, WorkbenchWebSocketTranscriptSubscriptionState>();
   private readonly transcriptCapabilitiesAnnounced = new WeakSet<BridgeClient>();
   private readonly writeLine: NonNullable<WorkbenchWebSocketRequestControllerOptions["writeLine"]>;
@@ -152,6 +157,7 @@ export default class WorkbenchWebSocketRequestController {
     setTimeout: schedule = setTimeout,
     threadState,
     transcript,
+    transcriptShadowLog,
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketRequestControllerOptions) {
     this.cancel = cancel;
@@ -168,6 +174,7 @@ export default class WorkbenchWebSocketRequestController {
     });
     this.threadState = threadState;
     this.transcript = transcript;
+    this.transcriptShadowLog = transcriptShadowLog;
     this.writeLine = writeLine;
     for (const state of initialState?.pending ?? []) this.restorePending(state);
   }
@@ -403,8 +410,35 @@ export default class WorkbenchWebSocketRequestController {
         snapshot: await this.transcript.read(request.params),
       };
     }
+    if (request.kind === "reportConformance") {
+      this.transcriptShadowLog?.write({
+        event: "conformance-mismatch",
+        fields: {
+          issues: request.params.issues.map((issue) => ({
+            code: issue.code,
+            path: [...issue.path],
+          })),
+          method: request.params.method,
+          repairedPaths: request.params.repairedPaths.map((path) => [...path]),
+        },
+        level: "warning",
+        source: "workbench-transcript-conformance",
+      });
+      return { reported: true };
+    }
     if (request.kind === "reportParity") {
-      this.writeLine(`[workbench-transcript-parity] ${JSON.stringify(request.params)}`);
+      this.transcriptShadowLog?.write({
+        event: "parity-mismatch",
+        fields: {
+          jsonContext: request.params.jsonContext.map((entry) => ({ ...entry })),
+          mismatch: request.params.mismatch,
+          scope: request.params.scope,
+          sqliteContext: request.params.sqliteContext.map((entry) => ({ ...entry })),
+        },
+        level: "warning",
+        source: "workbench-transcript-parity",
+        threadId: request.params.threadId,
+      });
       return { reported: true };
     }
     const { subscriptionId } = request.params;

@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ComponentProps, type PointerEvent } from "react";
 
-import type { ThreadPayload, ThreadSummary, WorkbenchThreadHydrationRequest } from "../../../lib/types";
+import type { ThreadPayload, ThreadSummary } from "../../../lib/types";
 import ThreadLoadingSkeleton from "../thread-view/ThreadLoadingSkeleton";
 import ThreadScrollViewport from "../thread-view/ThreadScrollViewport";
 import ThreadView from "../thread-view/ThreadView";
@@ -23,9 +23,6 @@ import {
 
 type ThreadViewProps = ComponentProps<typeof ThreadView>;
 
-const THREAD_PANEL_REFRESH_INTERVAL_MS = 1500;
-const THREAD_PANEL_IDLE_REFRESH_INTERVAL_MS = 5000;
-const THREAD_PANEL_HYDRATION: WorkbenchThreadHydrationRequest = { mode: "latest" };
 const THREAD_PANEL_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 
 interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewportRef" | "thread"> {
@@ -42,10 +39,6 @@ interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewpor
   panelZoomDelta?: number;
   thread: ThreadPayload | null;
   threadId: string;
-}
-
-function isThreadStatusActive(status: string) {
-  return status === "active" || status.startsWith("active:");
 }
 
 export default function WorkbenchThreadPanel ({
@@ -84,7 +77,7 @@ export default function WorkbenchThreadPanel ({
 
     async function loadThread() {
       await onReadThread(threadId, undefined, {
-        hydration: THREAD_PANEL_HYDRATION,
+        cursor: null,
       });
     }
 
@@ -114,12 +107,6 @@ export default function WorkbenchThreadPanel ({
     };
   }, [threadActivityTimestampMs, threadDisplaySource?.id]);
 
-  const readPanelThread = useCallback(async () => {
-    return await onReadThread(threadId, thread?.harness, {
-      hydration: THREAD_PANEL_HYDRATION,
-    });
-  }, [onReadThread, thread?.harness, threadId]);
-
   const handleReadThread = useCallback<ThreadViewProps["onReadThread"]>(async (nextThreadId, harness, options) => {
     return await onReadThread(nextThreadId, harness, options);
   }, [onReadThread]);
@@ -131,20 +118,6 @@ export default function WorkbenchThreadPanel ({
   const handleStopThread = useCallback<ThreadViewProps["onStopThread"]>(async (activeThread) => {
     return await onStopThread(activeThread);
   }, [onStopThread]);
-
-  useEffect(() => {
-    if (!thread || thread.isDraft) {
-      return;
-    }
-
-    const intervalId = window.setInterval(() => {
-      void readPanelThread();
-    }, isThreadStatusActive(thread.status) ? THREAD_PANEL_REFRESH_INTERVAL_MS : THREAD_PANEL_IDLE_REFRESH_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [readPanelThread, thread?.id, thread?.isDraft, thread?.status]);
 
   if (!thread) {
     return (

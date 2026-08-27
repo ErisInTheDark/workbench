@@ -21,8 +21,8 @@ import type {
   OrchestratorDatabaseRegistration,
   OrchestratorReloadableModules,
   OrchestratorRuntimeObjects,
+  OrchestratorTranscriptShadowLog,
 } from "./orchestrator-runtime-objects";
-import { log } from "./process-helpers";
 import ReloadableNode, { type ReloadableNodeLease } from "./ReloadableNode";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 import WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
@@ -103,6 +103,7 @@ function createWorkbenchCoreFeature(
   reloadDirt: WorkbenchReloadDirtController,
   turnRecovery: WorkbenchTurnRecoveryController,
   database: OrchestratorDatabaseRegistration,
+  transcriptShadowLog: OrchestratorTranscriptShadowLog,
 ) {
   const modules = createModules();
   const projectCatalog = new WorkbenchProjectCatalogController();
@@ -154,7 +155,14 @@ function createWorkbenchCoreFeature(
     gitArcs: gitArc,
     harnesses,
     listSubagents: (projectId) => subagents.listRelationships(projectId),
-    log: (message) => log("thread-state-ws", message),
+    log: (message) => {
+      transcriptShadowLog.write({
+        event: "thread-state",
+        fields: { message: message.slice(0, 500) },
+        level: "warning",
+        source: "thread-state-ws",
+      });
+    },
     projectState: projectSnapshot,
     reloadDirt,
     publish: (connectionId, snapshot) => { if (lease.isCurrent()) context.publishThreadState(connectionId, snapshot); },
@@ -238,11 +246,12 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     get("reloadDirt"),
     get("turnRecovery"),
     get("database"),
+    get("transcriptShadowLog"),
   ),
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: ["database", "reloadDirt", "turnRecovery", "transcript"],
+  requires: ["database", "reloadDirt", "transcriptShadowLog", "turnRecovery", "transcript"],
   safeAll: true,
   scope: "server:core",
   sources: [

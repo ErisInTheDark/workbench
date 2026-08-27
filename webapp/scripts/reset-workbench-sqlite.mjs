@@ -1,5 +1,5 @@
 /*
- * Temporary one-shot reset request for the disposable pre-authority Workbench SQLite database. Keywords: sqlite, reset, shadow.
+ * Temporary one-shot reset request for the disposable pre-authority SQLite database and transcript-shadow log. Keywords: sqlite, reset, shadow, transcript.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";

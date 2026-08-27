@@ -6,7 +6,10 @@ import test from "node:test";
 
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
 import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "../lib/types.ts";
-import { createCodexTranscriptSqliteImport } from "./codex-transcript-sqlite-import.ts";
+import {
+  createCodexTranscriptSqliteImport,
+  createCodexTranscriptSqliteItemObservation,
+} from "./codex-transcript-sqlite-import.ts";
 
 function thread() {
   return {
@@ -124,15 +127,15 @@ test("complete import uses full history order, exact timeline facts, and durable
     steerEntries: [],
     thread: thread(),
   });
-  assert.equal(snapshot.kind, "canonicalSnapshot");
-  if (snapshot.kind !== "canonicalSnapshot") return;
+  assert.equal(snapshot.kind, "canonicalWindow");
+  if (snapshot.kind !== "canonicalWindow") return;
   const turns = snapshot.observations.filter((entry) => entry.kind === "turn");
   assert.deepEqual(turns.map(({ turnId, turnIndex }) => [turnId, turnIndex]), [["older", 0], ["newer", 1]]);
   const items = snapshot.observations.filter((entry) => entry.kind === "item" || entry.kind === "questionnaire");
-  assert.deepEqual(items.map((entry) => [
-    entry.kind === "questionnaire" ? entry.entry.requestKey : entry.item.id,
-    entry.itemIndex,
-  ]), [["older-message", 0], ["prompt", 1], ["request-key", 2], ["answer", 3]]);
+  assert.deepEqual(snapshot.materializedTurnIds, ["older", "newer"]);
+  assert.deepEqual(items.map((entry) => (
+    entry.kind === "questionnaire" ? entry.entry.requestKey : entry.item.id
+  )), ["older-message", "prompt", "request-key", "answer"]);
   const older = items[0];
   assert.equal(older?.kind, "item");
   if (older?.kind === "item") {
@@ -145,4 +148,22 @@ test("complete import uses full history order, exact timeline facts, and durable
       startedAt: 1_200,
     });
   }
+});
+
+test("one Codex item lifecycle update becomes one atomic observation without a turn snapshot", () => {
+  const item = { id: "answer", memoryCitation: null, phase: "commentary" as const, text: "streaming", type: "agentMessage" as const };
+  assert.deepEqual(createCodexTranscriptSqliteItemObservation({
+    item,
+    lifecycle: "streaming",
+    observedAt: 2_000,
+    threadId: "thread",
+    turnId: "turn",
+  }), {
+    item,
+    kind: "item",
+    lifecycle: "streaming",
+    observedAt: 2_000,
+    threadId: "thread",
+    turnId: "turn",
+  });
 });

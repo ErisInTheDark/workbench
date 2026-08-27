@@ -39,6 +39,7 @@ import type WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
+import type WorkbenchTranscriptShadowLog from "./database/transcript/WorkbenchTranscriptShadowLog";
 import type { HarnessKind, JsonRpcNotification } from "./bridge-types";
 
 export type OrchestratorReloadableModules = {
@@ -93,6 +94,8 @@ export interface OrchestratorTranscriptRegistration {
   unsubscribe(id: string): void;
 }
 
+export type OrchestratorTranscriptShadowLog = Pick<WorkbenchTranscriptShadowLog, "flush" | "write">;
+
 export interface OrchestratorRuntimeObjects {
   agentCommand: WorkbenchAgentCommandController;
   bridgeRequest: WorkbenchBridgeRequestController;
@@ -120,6 +123,7 @@ export interface OrchestratorRuntimeObjects {
   threadGit: WorkbenchThreadGitFeature;
   threadState: WorkbenchThreadStateFeature;
   transcript: OrchestratorTranscriptRegistration;
+  transcriptShadowLog: OrchestratorTranscriptShadowLog;
   turnRecovery: WorkbenchTurnRecoveryController;
   webSocketRequests: WorkbenchWebSocketRequestController;
 }

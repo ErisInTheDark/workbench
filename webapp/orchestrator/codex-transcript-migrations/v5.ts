@@ -11,7 +11,7 @@ import { createInterface } from "node:readline";
 
 import { compactCommandOutputPayload } from "../../lib/codex/thread-command-output";
 import type AtomicJsonStore from "../AtomicJsonStore";
-import { log, logError } from "../process-helpers";
+import type { OrchestratorTranscriptShadowLog } from "../orchestrator-runtime-objects";
 
 const FILE_BATCH_SIZE = 25;
 const FILE_BATCH_DELAY_MS = 20;
@@ -178,7 +178,11 @@ async function listThreadTranscriptFiles(threadsDirectoryPath: string, encodedTh
   ].filter((filePath) => isWithinDirectory(threadDirectoryPath, filePath));
 }
 
-async function migrateTranscriptFile(filePath: string, counts: MigrationCounts) {
+async function migrateTranscriptFile(
+  filePath: string,
+  counts: MigrationCounts,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   try {
     if (filePath.endsWith(".ndjson")) {
       await migrateJsonLinesFile(filePath, counts);
@@ -187,11 +191,23 @@ async function migrateTranscriptFile(filePath: string, counts: MigrationCounts) 
     await migrateJsonFile(filePath, counts);
   } catch (error) {
     counts.errors += 1;
-    logError("codex-transcript", `command output compaction failed for ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    shadowLog?.write({
+      event: "command-output-file-compaction-failed",
+      fields: {
+        filePath: filePath.slice(0, 500),
+        message: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+      },
+      level: "error",
+      source: "codex-transcript",
+    });
   }
 }
 
-async function runBackgroundCommandOutputCompaction(rootDirectoryPath: string, counts: MigrationCounts) {
+async function runBackgroundCommandOutputCompaction(
+  rootDirectoryPath: string,
+  counts: MigrationCounts,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   const startedAt = Date.now();
   const threadsDirectoryPath = path.join(rootDirectoryPath, "threads");
   const threadDirectoryNames = await listThreadDirectoryNames(threadsDirectoryPath);
@@ -203,19 +219,17 @@ async function runBackgroundCommandOutputCompaction(rootDirectoryPath: string, c
     counts.threadsVisited += 1;
     const files = await listThreadTranscriptFiles(threadsDirectoryPath, encodedThreadId, counts);
     for (const filePath of files) {
-      await migrateTranscriptFile(filePath, counts);
+      await migrateTranscriptFile(filePath, counts, shadowLog);
       filesSinceYield += 1;
 
       if (Date.now() - lastLoggedAt >= PROGRESS_LOG_INTERVAL_MS) {
         lastLoggedAt = Date.now();
-        log("codex-transcript", [
-          "command output compaction progress",
-          `threads=${counts.threadsVisited}/${threadDirectoryNames.length}`,
-          `filesVisited=${counts.filesVisited}`,
-          `filesChanged=${counts.filesChanged}`,
-          `errors=${counts.errors}`,
-          `skipped=${counts.skipped}`,
-        ].join(" "));
+        shadowLog?.write({
+          event: "command-output-compaction-progress",
+          fields: { ...counts, totalThreads: threadDirectoryNames.length },
+          level: "info",
+          source: "codex-transcript",
+        });
       }
 
       if (filesSinceYield >= FILE_BATCH_SIZE) {
@@ -225,18 +239,18 @@ async function runBackgroundCommandOutputCompaction(rootDirectoryPath: string, c
     }
   }
 
-  log("codex-transcript", [
-    "command output compaction finished",
-    `threads=${counts.threadsVisited}`,
-    `filesVisited=${counts.filesVisited}`,
-    `filesChanged=${counts.filesChanged}`,
-    `errors=${counts.errors}`,
-    `skipped=${counts.skipped}`,
-    `durationMs=${Date.now() - startedAt}`,
-  ].join(" "));
+  shadowLog?.write({
+    event: "command-output-compaction-completed",
+    fields: { ...counts, durationMs: Date.now() - startedAt },
+    level: "info",
+    source: "codex-transcript",
+  });
 }
 
-export async function queueCodexTranscriptCommandOutputCompactionMigration(rootDirectoryPath: string) {
+export async function queueCodexTranscriptCommandOutputCompactionMigration(
+  rootDirectoryPath: string,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
   const resolvedRootDirectoryPath = path.resolve(rootDirectoryPath);
   const activeMigration = activeMigrationsByRoot.get(resolvedRootDirectoryPath);
   if (activeMigration) {
@@ -251,9 +265,14 @@ export async function queueCodexTranscriptCommandOutputCompactionMigration(rootD
     threadsVisited: 0,
   };
 
-  const migration = runBackgroundCommandOutputCompaction(rootDirectoryPath, counts)
+  const migration = runBackgroundCommandOutputCompaction(rootDirectoryPath, counts, shadowLog)
     .catch((error) => {
-      logError("codex-transcript", `command output compaction failed: ${error instanceof Error ? error.message : String(error)}`);
+      shadowLog?.write({
+        event: "command-output-compaction-failed",
+        fields: { message: (error instanceof Error ? error.message : String(error)).slice(0, 500) },
+        level: "error",
+        source: "codex-transcript",
+      });
       throw error;
     });
   activeMigrationsByRoot.set(resolvedRootDirectoryPath, migration);
@@ -266,6 +285,10 @@ export async function queueCodexTranscriptCommandOutputCompactionMigration(rootD
   return await migration;
 }
 
-export default async function migrateV5(rootDirectoryPath: string, _jsonStore: AtomicJsonStore) {
-  await queueCodexTranscriptCommandOutputCompactionMigration(rootDirectoryPath);
+export default async function migrateV5(
+  rootDirectoryPath: string,
+  _jsonStore: AtomicJsonStore,
+  shadowLog?: OrchestratorTranscriptShadowLog,
+) {
+  await queueCodexTranscriptCommandOutputCompactionMigration(rootDirectoryPath, shadowLog);
 }

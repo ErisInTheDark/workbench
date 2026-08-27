@@ -3,6 +3,7 @@
  * workbenchThreads: current Workbench thread table. Keywords: database, schema, thread.
  * workbenchPendingImportThreads: current temporary native import mapping table. Keywords: database, schema, import.
  * threadTurns: current harness turn table. Keywords: database, schema, turn.
+ * threadTurnMaterializations: current complete transcript-body marker for one turn. Keywords: database, schema, transcript, materialization.
  * workbenchThreadLifecycle: current thread lifecycle table. Keywords: database, schema, lifecycle.
  * coreTables: current core table inventory. Keywords: database, schema, core.
  * CoreSchemaRows: selected row types for current core tables. Keywords: database, schema, types.
@@ -53,7 +54,6 @@ const workbenchThreadsV1 = defineTable("workbench_threads", {
   snoozed: booleanInteger().notNull().default(0),
   transcript_content_version: integer().notNull().nonNegative(),
   next_turn_index: integer().notNull().default(0).nonNegative(),
-  next_item_index: integer().notNull().default(0).nonNegative(),
   created_at: integer().notNull(),
   updated_at: integer().notNull(),
   activity_at: integer().notNull(),
@@ -108,6 +108,22 @@ const threadTurnsV1 = defineTable("thread_turns", {
 const threadTurnsHistory = initialHistory(threadTurnsV1);
 export const threadTurns = threadTurnsHistory.current;
 
+const threadTurnMaterializationsV1 = defineTable("thread_turn_materializations", {
+  turn_id: text().primaryKey(),
+  thread_id: text().notNull(),
+  materialized_at: integer().notNull(),
+}, (table) => ({
+  constraints: [
+    foreignKey([table.turn_id, table.thread_id], {
+      table: "thread_turns",
+      columns: ["id", "thread_id"],
+      onDelete: "CASCADE",
+    }),
+  ],
+}));
+const threadTurnMaterializationsHistory = initialHistory(threadTurnMaterializationsV1);
+export const threadTurnMaterializations = threadTurnMaterializationsHistory.current;
+
 const workbenchThreadLifecycleV1 = defineTable("workbench_thread_lifecycle", {
   thread_id: text().primaryKey().references("workbench_threads", "id", { onDelete: "CASCADE" }),
   lifecycle_kind: enumText("working", "needsAttention", "completed", "stopped").notNull(),
@@ -143,6 +159,7 @@ export const coreTables = Object.freeze({
   workbenchThreads,
   workbenchPendingImportThreads,
   threadTurns,
+  threadTurnMaterializations,
   workbenchThreadLifecycle,
 });
 
@@ -155,5 +172,6 @@ export const coreSchemaHistory = defineSubsystemHistory([
   workbenchThreadsHistory,
   workbenchPendingImportThreadsHistory,
   threadTurnsHistory,
+  threadTurnMaterializationsHistory,
   workbenchThreadLifecycleHistory,
 ]);

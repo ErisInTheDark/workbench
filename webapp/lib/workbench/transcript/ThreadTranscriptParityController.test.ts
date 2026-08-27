@@ -18,6 +18,10 @@ function flush() {
   return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+function flushComparison() {
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
 function thread(id: string, turnIds = ["turn"]): ThreadPayload {
   return {
     agentNickname: null,
@@ -78,7 +82,6 @@ function emptySnapshot(threadId: string): WorkbenchTranscriptSnapshot {
       archived: 0,
       created_at: 1_000,
       id: threadId,
-      next_item_index: 0,
       next_turn_index: 0,
       pinned: 0,
       project_id: "project",
@@ -137,7 +140,9 @@ test("a failed subscription reports immediately without poisoning replacement wo
 
   controller.select({ browseResultEntries: [], thread: thread("one") });
   await flush();
-  assert.deepEqual(errors.map(({ message }) => message), ["subscription failed"]);
+  assert.deepEqual(errors.map(({ message }) => message), [
+    "Workbench transcript parity lifecycle failed. stage=subscription threadId=one turnIds=turn: subscription failed",
+  ]);
 
   controller.select({ browseResultEntries: [], thread: thread("two") });
   await flush();
@@ -197,12 +202,52 @@ test("repeated comparison emits one bounded report and later absence clears comp
   assert.ok(listener);
   listener(emptySnapshot("thread"));
   listener(emptySnapshot("thread"));
+  await flushComparison();
+  await flush();
   listener(null);
   controller.select({ browseResultEntries: [], thread: { ...selected } });
   await flush();
 
   assert.equal(reports.length, 1);
   assert.equal(reports[0]?.scope, "turn");
+  controller.dispose();
+});
+
+test("rapid selected-thread updates defer and coalesce comparison work", async () => {
+  const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
+  const reports: WorkbenchTranscriptParityDiagnostic[] = [];
+  const scheduled = new Map<number, () => void>();
+  let nextTimer = 0;
+  const controller = new ThreadTranscriptParityController({
+    available: true,
+    cancelComparison: (timer) => { scheduled.delete(timer as unknown as number); },
+    scheduleComparison: (callback) => {
+      const timer = ++nextTimer;
+      scheduled.set(timer, callback);
+      return timer as unknown as ReturnType<typeof setTimeout>;
+    },
+    transcripts: {
+      reportParity: async (diagnostic) => { reports.push(diagnostic); },
+      subscribe: async (params, listener) => { listeners.set(params.subscriptionId, listener); },
+      unsubscribe: async (params) => { listeners.delete(params.subscriptionId); },
+    },
+    turnLimit: 4,
+  });
+  const selected = thread("thread");
+  controller.select({ browseResultEntries: [], thread: selected });
+  await flush();
+  [...listeners.values()][0]?.(emptySnapshot("thread"));
+  for (let index = 0; index < 100; index += 1) {
+    controller.select({
+      browseResultEntries: [],
+      thread: { ...selected, updatedAt: selected.updatedAt + index },
+    });
+  }
+
+  assert.equal(scheduled.size, 1);
+  [...scheduled.values()][0]?.();
+  await flush();
+  assert.equal(reports.length, 1);
   controller.dispose();
 });
 
@@ -309,6 +354,7 @@ test("a queued parity report cannot cross a disconnect generation", async () => 
   controller.select({ browseResultEntries: [], thread: thread("one") });
   await flush();
   [...listeners.values()][0]?.(emptySnapshot("one"));
+  await flushComparison();
   await flush();
 
   controller.select({ browseResultEntries: [], thread: thread("two") });

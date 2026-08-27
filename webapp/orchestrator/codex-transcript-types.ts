@@ -2,7 +2,11 @@
  * Exports:
  * - SerializableJson: recursive JSON value type for raw transcript payloads. Keywords: json, raw events, transcript.
  * - CodexTranscriptRawEvent: raw bridge/app-server event persisted in thread transcript files. Keywords: codex, transcript, raw event.
- * - CodexTranscriptThreadFile/CodexTranscriptTurnFile: disk schema records for thread transcript storage. Keywords: disk schema, thread, turn.
+ * - CodexTranscriptTurnIndexEntry: durable turn identity, metadata, and provider continuation state. Keywords: codex, transcript, turn, cursor.
+ * - CodexTranscriptThreadFile: compact thread metadata and ordered turn catalog. Keywords: disk schema, thread, catalog.
+ * - CodexTranscriptTurnTimelineEntry: durable item ordering and lifecycle metadata. Keywords: transcript, turn, item, timeline.
+ * - CodexTranscriptTurnFile: one materialized turn and its Workbench sidecars. Keywords: disk schema, turn, sidecar.
+ * - CodexTranscriptOrphanEventsFile: metadata for thread events without a turn owner. Keywords: transcript, orphan, event.
  */
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
@@ -29,6 +33,7 @@ export interface CodexTranscriptTurnIndexEntry {
   completedAt: number | null;
   itemCount: number;
   itemIds?: string[];
+  previousCursor?: string | null;
   startedAt: number | null;
   status: Turn["status"] | null;
   turnId: string;

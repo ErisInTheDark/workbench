@@ -24,6 +24,11 @@ import type {
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
 } from "../lib/types";
+import {
+  WORKBENCH_THREAD_PAGE_READ_METHOD,
+  WorkbenchThreadPageReadParamsSchema,
+  type WorkbenchThreadPageResponse,
+} from "../lib/workbench/thread/workbench-thread-page";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { CopilotThreadState } from "./copilot-thread-state";
 import { appendCopilotEventLog, log, logError } from "./process-helpers";
@@ -363,6 +368,24 @@ export class CopilotBridge {
     }
     try {
       switch (method) {
+        case WORKBENCH_THREAD_PAGE_READ_METHOD: {
+          const params = WorkbenchThreadPageReadParamsSchema.parse(message.params);
+          if (params.cursor !== null) {
+            return this.errorResponse(requestId, -32602, "Copilot thread pages do not have a continuation cursor.");
+          }
+          const response = await this.readThread(params.threadId, null, null, null, null, null, null);
+          const page: WorkbenchThreadPageResponse = {
+            browseResultEntries: [],
+            model: response.model,
+            nextCursor: null,
+            questionnaireEntries: [],
+            reasoningEffort: response.reasoningEffort,
+            serviceTier: null,
+            steerEntries: [],
+            thread: response.thread,
+          };
+          return { id: requestId, result: page };
+        }
         case "thread/list":
           return {
             id: requestId,

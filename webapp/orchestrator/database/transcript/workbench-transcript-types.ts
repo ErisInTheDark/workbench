@@ -54,20 +54,20 @@ export type WorkbenchTranscriptAtomicObservation =
     item: ThreadItem | WorkbenchFileChangeItem;
     lifecycle: WorkbenchTranscriptItemLifecycle;
     observedAt: number;
-    itemIndex?: number;
+    itemPosition?: number;
     timeline?: WorkbenchThreadItemTimelineEntry;
   }
   | {
     kind: "questionnaire";
     entry: WorkbenchQuestionnaireHistoryEntry;
     observedAt: number;
-    itemIndex?: number;
+    itemPosition?: number;
   }
   | {
     kind: "steer";
     entry: WorkbenchSteerHistoryEntry;
     observedAt: number;
-    itemIndex?: number;
+    itemPosition?: number;
   }
   | {
     kind: "browse";
@@ -100,8 +100,9 @@ export type WorkbenchTranscriptAtomicObservation =
 export type WorkbenchTranscriptObservation =
   | WorkbenchTranscriptAtomicObservation
   | {
-    kind: "canonicalSnapshot";
+    kind: "canonicalWindow";
     contentVersion: number;
+    materializedTurnIds: readonly string[];
     threadId: string;
     observations: readonly WorkbenchTranscriptAtomicObservation[];
   };

@@ -1,5 +1,5 @@
 /*
- * WorkbenchTranscriptRepository: owns atomic transcript settlements, stable item indexes, and hydration-bounded reads on one SQLite connection. Keywords: transcript, repository, transaction.
+ * WorkbenchTranscriptRepository: owns atomic transcript settlements, turn-owned item positions, and hydration-bounded reads on one SQLite connection. Keywords: transcript, repository, transaction.
  */
 import type Database from "better-sqlite3";
 
@@ -55,8 +55,8 @@ export default class WorkbenchTranscriptRepository {
     const changedThreadIds = new Set<string>();
     this.#database.transaction(() => {
       for (const observation of observations) {
-        const threadId = observation.kind === "canonicalSnapshot"
-          ? this.#settleCanonicalSnapshot(observation)
+        const threadId = observation.kind === "canonicalWindow"
+          ? this.#settleCanonicalWindow(observation)
           : this.#settleObservation(observation);
         if (threadId) changedThreadIds.add(threadId);
       }
@@ -85,13 +85,23 @@ export default class WorkbenchTranscriptRepository {
         ? eligibleTurns.filter((turn) => requestedTurnIds.has(turn.id))
         : eligibleTurns.slice(-request.turnLimit);
       if (requestedTurnIds && loadedTurns.length !== requestedTurnIds.size) {
-        throw new Error("Transcript turnIds contain a turn outside the requested thread");
+        const missingTurnIds = [...requestedTurnIds].filter((turnId) => !loadedTurns.some(({ id }) => id === turnId));
+        const foreignTurn = missingTurnIds
+          .map((turnId) => this.#one(selectRows(coreTables.threadTurns, { where: { id: turnId } })))
+          .find((turn) => turn !== null);
+        if (!foreignTurn) return null;
+        throw new Error(`Transcript turn ${foreignTurn.id} belongs to thread ${foreignTurn.thread_id}, not ${request.threadId}`);
       }
       const loadedTurnIds = loadedTurns.map(({ id }) => id);
+      const materializations = this.#all(selectRows(coreTables.threadTurnMaterializations, {
+        where: { thread_id: request.threadId },
+      }));
+      const materializedTurnIds = new Set(materializations.map(({ turn_id }) => turn_id));
+      if (loadedTurnIds.some((turnId) => !materializedTurnIds.has(turnId))) return null;
       const firstLoadedTurnIndex = loadedTurns[0]?.turn_index;
       const threadItems = this.#all(selectRows(itemTables.threadItems, {
         whereIn: { turn_id: loadedTurnIds },
-        orderBy: [{ column: "item_index" }],
+        orderBy: [{ column: "item_position" }],
       }));
       const itemIds = threadItems.map(({ id }) => id);
       const rows = this.#readRows(request.threadId, itemIds);
@@ -107,34 +117,108 @@ export default class WorkbenchTranscriptRepository {
     })();
   }
 
-  #settleCanonicalSnapshot(
-    snapshot: Extract<WorkbenchTranscriptObservation, { kind: "canonicalSnapshot" }>,
+  #settleCanonicalWindow(
+    window: Extract<WorkbenchTranscriptObservation, { kind: "canonicalWindow" }>,
   ) {
-    if (snapshot.contentVersion !== CURRENT_TRANSCRIPT_CONTENT_VERSION) {
-      throw new Error(`Unsupported transcript content version: ${snapshot.contentVersion}`);
+    if (window.contentVersion !== CURRENT_TRANSCRIPT_CONTENT_VERSION) {
+      throw new Error(`Unsupported transcript content version: ${window.contentVersion}`);
     }
-    if (!snapshot.observations.length || snapshot.observations[0]?.kind !== "thread") {
-      throw new Error("Canonical transcript snapshot must begin with its thread");
+    if (!window.observations.length || window.observations[0]?.kind !== "thread") {
+      throw new Error("Canonical transcript window must begin with its thread");
     }
-    for (const observation of snapshot.observations) {
+    if (new Set(window.materializedTurnIds).size !== window.materializedTurnIds.length) {
+      throw new Error("Canonical transcript window contains duplicate materialized turn ids");
+    }
+    for (const observation of window.observations) {
       const observationThreadId = observation.kind === "questionnaire" || observation.kind === "steer"
         ? observation.entry.threadId
         : observation.kind === "browse"
           ? observation.entry.threadId
           : observation.threadId;
-      if (observationThreadId !== snapshot.threadId) {
-        throw new Error(`Canonical transcript snapshot crossed thread ownership: ${observationThreadId}`);
+      if (observationThreadId !== window.threadId) {
+        throw new Error(`Canonical transcript window crossed thread ownership: ${observationThreadId}`);
       }
     }
-    const existing = this.#one(selectRows(coreTables.workbenchThreads, { where: { id: snapshot.threadId } }));
-    if (existing && existing.transcript_content_version < CURRENT_TRANSCRIPT_CONTENT_VERSION) {
-      this.#run(deleteRows(coreTables.workbenchThreads, { id: snapshot.threadId }));
+    const turnObservations = window.observations.filter((
+      observation,
+    ): observation is Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }> => observation.kind === "turn");
+    const turnsById = new Map(turnObservations.map((observation) => [observation.turnId, observation]));
+    for (const turnId of window.materializedTurnIds) {
+      if (!turnsById.has(turnId)) {
+        throw new Error(`Canonical transcript window materializes unknown turn ${turnId}`);
+      }
     }
-    for (const observation of snapshot.observations) this.#settleObservation(observation);
+    const materializedTurnIds = new Set(window.materializedTurnIds);
+    for (const observation of window.observations) {
+      const turnId = this.#itemObservationTurnId(observation);
+      if (turnId && !materializedTurnIds.has(turnId)) {
+        throw new Error(`Canonical transcript window item references unloaded turn ${turnId}`);
+      }
+    }
+
+    const existing = this.#one(selectRows(coreTables.workbenchThreads, { where: { id: window.threadId } }));
+    if (existing && existing.transcript_content_version < CURRENT_TRANSCRIPT_CONTENT_VERSION) {
+      this.#run(deleteRows(coreTables.workbenchThreads, { id: window.threadId }));
+    }
+    this.#settleObservation(window.observations[0]!);
+    for (const observation of turnObservations) this.#settleObservation(observation);
+
+    for (const turnId of window.materializedTurnIds) {
+      const itemObservations = window.observations.filter((observation) => (
+        this.#itemObservationTurnId(observation) === turnId
+      ));
+      const identifiedItems = itemObservations.flatMap((observation) => {
+        const itemId = this.#itemObservationId(observation);
+        return itemId ? [{ itemId, observation }] : [];
+      });
+      const desiredItemIds = identifiedItems.map(({ itemId }) => itemId);
+      if (new Set(desiredItemIds).size !== desiredItemIds.length) {
+        throw new Error(`Canonical transcript turn ${turnId} contains duplicate item ids`);
+      }
+      const desiredItemIdSet = new Set(desiredItemIds);
+      const existingItems = this.#all(selectRows(itemTables.threadItems, { where: { turn_id: turnId } }));
+      for (const existingItem of existingItems) {
+        if (!desiredItemIdSet.has(existingItem.id)) {
+          this.#run(deleteRows(itemTables.threadItems, { id: existingItem.id }));
+        }
+      }
+      const temporaryPositionBase = Math.max(
+        desiredItemIds.length,
+        ...existingItems.map(({ item_position }) => item_position + 1),
+      );
+      for (const [offset, existingItem] of existingItems
+        .filter(({ id }) => desiredItemIdSet.has(id))
+        .entries()) {
+        this.#run(updateRows(itemTables.threadItems, {
+          item_position: temporaryPositionBase + offset,
+        }, { id: existingItem.id }));
+      }
+      for (const [itemPosition, { observation }] of identifiedItems.entries()) {
+        this.#settleObservation(this.#withItemPosition(observation, itemPosition));
+      }
+      this.#run(upsertRow(coreTables.threadTurnMaterializations, {
+        turn_id: turnId,
+        thread_id: window.threadId,
+        materialized_at: Date.now(),
+      }, {
+        conflictColumns: ["turn_id"],
+        updateColumns: ["materialized_at"],
+      }));
+    }
+
+    for (const observation of window.observations) {
+      if (
+        observation.kind !== "thread"
+        && observation.kind !== "turn"
+        && !this.#itemObservationTurnId(observation)
+      ) {
+        this.#settleObservation(observation);
+      }
+    }
     this.#run(updateRows(coreTables.workbenchThreads, {
       transcript_content_version: CURRENT_TRANSCRIPT_CONTENT_VERSION,
-    }, { id: snapshot.threadId }));
-    return snapshot.threadId;
+    }, { id: window.threadId }));
+    return window.threadId;
   }
 
   #settleObservation(observation: WorkbenchTranscriptAtomicObservation) {
@@ -203,7 +287,7 @@ export default class WorkbenchTranscriptRepository {
       });
       this.#writeItem({
         itemId: observation.item.id,
-        itemIndex: observation.itemIndex,
+        itemPosition: observation.itemPosition,
         observedAt: observation.observedAt,
         timeline: observation.timeline,
         threadId: observation.threadId,
@@ -216,7 +300,7 @@ export default class WorkbenchTranscriptRepository {
       const transform = transformQuestionnaireEntry(observation.entry);
       this.#writeItem({
         itemId: transform.itemId,
-        itemIndex: observation.itemIndex,
+        itemPosition: observation.itemPosition,
         observedAt: observation.observedAt,
         threadId: observation.entry.threadId,
         turnId: observation.entry.turnId,
@@ -229,7 +313,7 @@ export default class WorkbenchTranscriptRepository {
       if (!transform) return null;
       this.#writeItem({
         itemId: transform.itemId,
-        itemIndex: observation.itemIndex,
+        itemPosition: observation.itemPosition,
         observedAt: observation.observedAt,
         threadId: observation.entry.threadId,
         turnId: observation.entry.turnId,
@@ -247,7 +331,7 @@ export default class WorkbenchTranscriptRepository {
 
   #writeItem({
     itemId,
-    itemIndex,
+    itemPosition,
     observedAt,
     timeline,
     threadId,
@@ -255,7 +339,7 @@ export default class WorkbenchTranscriptRepository {
     transform,
   }: {
     itemId: string;
-    itemIndex?: number;
+    itemPosition?: number;
     observedAt: number;
     timeline?: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }>["timeline"];
     threadId: string;
@@ -273,11 +357,16 @@ export default class WorkbenchTranscriptRepository {
     if (existing && existing.type !== transform.itemType) {
       throw new Error(`Transcript item ${itemId} changed type from ${existing.type} to ${transform.itemType}`);
     }
-    const thread = this.#requiredThread(threadId);
-    const stableItemIndex = existing?.item_index ?? itemIndex ?? thread.next_item_index;
+    const stableItemPosition = itemPosition ?? existing?.item_position ?? (() => {
+      const turnItems = this.#all(selectRows(itemTables.threadItems, {
+        where: { turn_id: turnId },
+        orderBy: [{ column: "item_position" }],
+      }));
+      return (turnItems.at(-1)?.item_position ?? -1) + 1;
+    })();
     if (!existing) {
+      const thread = this.#requiredThread(threadId);
       this.#run(updateRows(coreTables.workbenchThreads, {
-        next_item_index: Math.max(thread.next_item_index, stableItemIndex + 1),
         updated_at: Math.max(thread.updated_at, observedAt),
         activity_at: Math.max(thread.activity_at, observedAt),
       }, { id: threadId }));
@@ -286,13 +375,13 @@ export default class WorkbenchTranscriptRepository {
       id: itemId,
       thread_id: threadId,
       turn_id: turnId,
-      item_index: stableItemIndex,
+      item_position: stableItemPosition,
       type: transform.itemType,
       created_at: existing?.created_at ?? observedAt,
       updated_at: observedAt,
     }, {
       conflictColumns: ["id"],
-      updateColumns: ["updated_at"],
+      updateColumns: ["item_position", "updated_at"],
     }));
     this.#run(deleteRows(itemTables.threadItemTimelines, { item_id: itemId }));
     if (timeline) {
@@ -484,6 +573,39 @@ export default class WorkbenchTranscriptRepository {
     const thread = this.#one(selectRows(coreTables.workbenchThreads, { where: { id: threadId } }));
     if (!thread) throw new Error(`Unknown Workbench transcript thread: ${threadId}`);
     return thread;
+  }
+
+  #requiredTurn(turnId: string) {
+    const turn = this.#one(selectRows(coreTables.threadTurns, { where: { id: turnId } }));
+    if (!turn) throw new Error(`Unknown Workbench transcript turn: ${turnId}`);
+    return turn;
+  }
+
+  #itemObservationId(observation: WorkbenchTranscriptAtomicObservation) {
+    if (observation.kind === "item") return observation.item.id;
+    if (observation.kind === "questionnaire") return transformQuestionnaireEntry(observation.entry).itemId;
+    if (observation.kind === "steer") return transformSteerEntry(observation.entry)?.itemId ?? null;
+    return null;
+  }
+
+  #itemObservationTurnId(observation: WorkbenchTranscriptAtomicObservation) {
+    if (observation.kind === "item") return observation.turnId;
+    if (observation.kind === "questionnaire" || observation.kind === "steer") return observation.entry.turnId;
+    return null;
+  }
+
+  #withItemPosition(
+    observation: WorkbenchTranscriptAtomicObservation,
+    itemPosition: number,
+  ): WorkbenchTranscriptAtomicObservation {
+    if (
+      observation.kind === "item"
+      || observation.kind === "questionnaire"
+      || observation.kind === "steer"
+    ) {
+      return { ...observation, itemPosition };
+    }
+    throw new Error(`Transcript observation ${observation.kind} is not an item`);
   }
 
   #runAll(statements: readonly WorkbenchDatabaseMutation[]) {
