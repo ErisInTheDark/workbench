@@ -9,6 +9,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
+import GitCheckpointStore from "./GitCheckpointStore";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -118,13 +119,20 @@ historyTest("a descendant conflict leaves branch, worktree, index, refs, and sel
   assert.deepEqual((await owner.add(["later.txt"])).selectedPaths, ["later.txt", "selected.txt"]);
 });
 
-historyTest("arc proposal amend remaps a sibling plan and every completed proposal SHA", async (context) => {
+historyTest("arc proposal amend remaps sibling state, completed proposals, and a pending deep amend", async (context) => {
   const { repository, root, state } = await arcRepository(context);
   const controller = new WorkbenchGitCheckpointController();
   const { firstProposalId, oldHead, originalParent, siblingPlanCheckpoint } = state;
-  await write(root, "selected.txt", "amended proposal\n");
+  await write(root, "descendant.txt", "later descendant\n");
+  await git(root, ["add", "descendant.txt"]);
+  await git(root, ["commit", "--quiet", "-m", "later descendant"]);
+  const originalDescendant = await repository.currentHead();
+  const originalDescendantPatch = await git(root, ["show", "--format=", "--binary", "--no-renames", originalDescendant]);
+
+  await write(root, "selected.txt", "first proposal\nfirst amendment\n");
   const amendment = await controller.createProposal({
     amend: true,
+    amendProposalId: firstProposalId,
     cwd: root,
     description: "",
     harness: "codex",
@@ -140,6 +148,27 @@ historyTest("arc proposal amend remaps a sibling plan and every completed propos
   });
   assert.equal(amendmentPreview.title, "Original title");
   assert.equal(amendmentPreview.description, "Original description");
+  await write(root, "selected.txt", "first proposal\nfirst amendment\nsecond amendment\n");
+  const second = await controller.createProposal({
+    amend: true,
+    amendProposalId: firstProposalId,
+    cwd: root,
+    description: "",
+    harness: "codex",
+    threadId: "amend-thread",
+    title: "second pending amend",
+  });
+  const secondBefore = await controller.getProposal({
+    cwd: root,
+    harness: "codex",
+    includeNewer: false,
+    proposalId: second.proposalId,
+    threadId: "amend-thread",
+  });
+  assert.equal(secondBefore.status, "proposed");
+  assert.equal(secondBefore.amendTargetSha, oldHead);
+  const store = new GitCheckpointStore(repository);
+  const secondStoredBefore = await store.readProposal("codex", "amend-thread", second.proposalId);
 
   const amended = await controller.commitProposal({
     cwd: root,
@@ -152,7 +181,15 @@ historyTest("arc proposal amend remaps a sibling plan and every completed propos
   });
   assert.notEqual(amended.committedSha, oldHead);
   assert.equal(await repository.resolveParent(amended.committedSha!), originalParent);
-  assert.equal(await fs.readFile(path.join(root, "selected.txt"), "utf8"), "amended proposal\n");
+  assert.equal(
+    await fs.readFile(path.join(root, "selected.txt"), "utf8"),
+    "first proposal\nfirst amendment\nsecond amendment\n",
+  );
+  const firstRewrittenDescendant = await repository.currentHead();
+  assert.equal(
+    await git(root, ["show", "--format=", "--binary", "--no-renames", firstRewrittenDescendant]),
+    originalDescendantPatch,
+  );
   const superseded = await controller.getProposal({
     cwd: root,
     harness: "codex",
@@ -176,19 +213,72 @@ historyTest("arc proposal amend remaps a sibling plan and every completed propos
   assert.equal(amendedOutcome.committedSha, amended.committedSha);
   assert.notEqual(amendedOutcome.sourceCheckpoint, amendment.sourceCheckpoint);
   assert.equal(amendedOutcomeRef, outcomeRef("codex", "amend-thread", amendedOutcome.sourceCheckpoint));
-  assert.equal(amendedOutcome.successorCheckpoint, null);
+
+  const activeClaimsAfterFirst = await controller.listActiveClaims({ cwd: root });
+  const amendAfterFirst = activeClaimsAfterFirst.find(({ threadId }) => threadId === "amend-thread");
+  assert.ok(amendAfterFirst);
+  assert.equal(amendedOutcome.successorCheckpoint, amendAfterFirst.checkpointCommit);
+  const siblingAfterFirst = activeClaimsAfterFirst
+    .find(({ threadId }) => threadId === "sibling-thread");
+  assert.ok(siblingAfterFirst);
+  assert.notEqual(siblingAfterFirst.checkpointCommit, siblingPlanCheckpoint);
+
+  const secondAfterFirst = await controller.getProposal({
+    cwd: root,
+    harness: "codex",
+    includeNewer: false,
+    proposalId: second.proposalId,
+    threadId: "amend-thread",
+  });
+  const secondStoredAfterFirst = await store.readProposal("codex", "amend-thread", second.proposalId);
+  assert.equal(secondAfterFirst.status, "proposed");
+  assert.equal(secondAfterFirst.amendTargetSha, amended.committedSha);
+  assert.equal(secondStoredAfterFirst.metadata.liveBaseCommit, firstRewrittenDescendant);
+  assert.notEqual(secondStoredAfterFirst.metadata.sourceCheckpoint, secondStoredBefore.metadata.sourceCheckpoint);
+  assert.notEqual(secondStoredAfterFirst.proposalCommit, secondStoredBefore.proposalCommit);
+
+  const secondCommitted = await controller.commitProposal({
+    cwd: root,
+    description: secondAfterFirst.description,
+    harness: "codex",
+    includeNewer: false,
+    proposalId: second.proposalId,
+    threadId: "amend-thread",
+    title: secondAfterFirst.title,
+  });
+  assert.ok(secondCommitted.committedSha);
+  assert.notEqual(secondCommitted.committedSha, amended.committedSha);
+  assert.equal(
+    await git(root, ["show", `${secondCommitted.committedSha}:selected.txt`]),
+    "first proposal\nfirst amendment\nsecond amendment\n",
+  );
+  const finalDescendant = await repository.currentHead();
+  assert.equal((await git(root, ["show", "-s", "--format=%s", finalDescendant])).trim(), "later descendant");
+  assert.equal(
+    await git(root, ["show", "--format=", "--binary", "--no-renames", finalDescendant]),
+    originalDescendantPatch,
+  );
+  const firstAfterSecond = await controller.getProposal({
+    cwd: root,
+    harness: "codex",
+    includeNewer: false,
+    proposalId: amendment.proposalId,
+    threadId: "amend-thread",
+  });
+  assert.equal(firstAfterSecond.status, "superseded");
+  assert.equal(firstAfterSecond.supersededByProposalId, second.proposalId);
+  assert.equal(firstAfterSecond.supersededBySha, secondCommitted.committedSha);
 
   const activeSibling = (await controller.listActiveClaims({ cwd: root }))
     .find(({ threadId }) => threadId === "sibling-thread");
   assert.ok(activeSibling);
-  assert.notEqual(activeSibling.checkpointCommit, siblingPlanCheckpoint);
+  assert.notEqual(activeSibling.checkpointCommit, siblingAfterFirst.checkpointCommit);
   const remappedRefs = await repository.refsPointingAt(
     activeSibling.checkpointCommit,
     "refs/worktree/agents/codex/sibling-thread/checkpoints",
   );
   assert.equal(remappedRefs.length, 1);
   assert.equal(await repository.readRef(remappedRefs[0]!), activeSibling.checkpointCommit);
-
   const startedSibling = await controller.continueArc({
     checkpointCommit: siblingPlanCheckpoint,
     cwd: root,
@@ -196,7 +286,11 @@ historyTest("arc proposal amend remaps a sibling plan and every completed propos
     threadId: "sibling-thread",
   });
   assert.notEqual(startedSibling.checkpointCommit, siblingPlanCheckpoint);
-  assert.equal(await repository.resolveParent(startedSibling.checkpointCommit), amended.committedSha);
+  assert.equal(await repository.resolveParent(startedSibling.checkpointCommit), finalDescendant);
+  assert.equal(
+    (await controller.listActiveClaims({ cwd: root })).some(({ threadId }) => threadId === "amend-thread"),
+    false,
+  );
 });
 
 historyTest("index locks leave targeted amendments unpublished and retryable", async (context) => {

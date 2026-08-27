@@ -851,7 +851,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(CHECKPOINT_RELEASE_READY_FIXTURE, 1),
   ], nested: true }],
   ["WorkbenchGitRepository.test.ts", { fixtures: [
-    demand(THREAD_GIT_BASE_FIXTURE, 2),
+    demand(THREAD_GIT_BASE_FIXTURE, 3),
   ], nested: false }],
   ["WorkbenchGitHistoryRewriter.test.ts", { fixtures: [
     demand(HISTORY_LINEAR_FIXTURE, 3),

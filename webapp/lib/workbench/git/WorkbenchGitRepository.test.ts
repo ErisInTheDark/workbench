@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 
 import GitTestFixtureCache from "./GitTestFixtureCache";
-import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import WorkbenchGitRepository, { GIT_STATE_GENERATION_REF } from "./WorkbenchGitRepository";
 import { THREAD_GIT_BASE_FIXTURE } from "./WorkbenchGitTestFixtures";
 
 const fixtureCache = new GitTestFixtureCache();
@@ -86,6 +86,33 @@ test("new-file index locks block ref publication until the same operation retrie
   await repository.publishRefsAfterIndexNormalization(request);
   assert.equal(await repository.currentHead(), commit);
   assert.equal(await repository.run(["status", "--short", "--", "new-file.ts"]), "");
+});
+
+test("every ref transaction advances generation even when ref values repeat", async (context) => {
+  const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const head = await repository.currentHead();
+  const missing = "0".repeat(40);
+  const firstRef = "refs/worktree/workbench/generation-first";
+  const secondRef = "refs/worktree/workbench/generation-second";
+  const blockedRef = "refs/worktree/workbench/generation-blocked";
+
+  await repository.updateRefs([{ newValue: head, oldValue: missing, ref: firstRef }]);
+  const firstGeneration = await repository.readRef(GIT_STATE_GENERATION_REF);
+  assert.ok(firstGeneration);
+  await repository.updateRefs([{ newValue: head, oldValue: missing, ref: secondRef }]);
+  const secondGeneration = await repository.readRef(GIT_STATE_GENERATION_REF);
+  assert.ok(secondGeneration);
+  assert.notEqual(secondGeneration, firstGeneration);
+
+  await assert.rejects(repository.updateRefs(
+    [{ newValue: head, oldValue: missing, ref: blockedRef }],
+    [],
+    { expectedStateGeneration: firstGeneration },
+  ), /state-generation/u);
+  assert.equal(await repository.readRef(blockedRef), null);
+  assert.equal(await repository.readRef(GIT_STATE_GENERATION_REF), secondGeneration);
 });
 
 test("reads ref objects and inspects text, binary, and literal-path changes with real Git", async (context) => {

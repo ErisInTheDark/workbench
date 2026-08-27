@@ -39,6 +39,7 @@ function threadGitTest(name: string, run: (context: TestContext) => Promise<void
 }
 
 class RacingGitRepository extends WorkbenchGitRepository {
+  readonly competingRef = "refs/worktree/agents/codex/concurrent-thread/race-witness";
   raced = false;
 
   override async updateRefs(
@@ -48,8 +49,11 @@ class RacingGitRepository extends WorkbenchGitRepository {
   ) {
     if (options.expectedStateGeneration !== undefined && !this.raced) {
       this.raced = true;
-      const competingGeneration = await this.writeBlob("concurrent Workbench ref writer\n");
-      await this.updateRef(GIT_STATE_GENERATION_REF, competingGeneration);
+      await super.updateRefs([{
+        newValue: await this.currentHead(),
+        oldValue: "0".repeat(40),
+        ref: this.competingRef,
+      }]);
     }
     await super.updateRefs(updates, deletes, options);
   }
@@ -307,13 +311,15 @@ threadGitTest("older amendment preserves selected/index state and remaps every W
 });
 
 threadGitTest("a concurrent Workbench ref writer rejects the entire older-amend publication transaction", async (context) => {
-  const { repoRoot } = await createRepositoryFrom(context, THREAD_GIT_LINEAR_FIXTURE);
+  const { repoRoot, storageRootPath } = await createRepositoryFrom(context, THREAD_GIT_LINEAR_FIXTURE);
   const target = (await git(repoRoot, ["rev-parse", "HEAD^"])).trim();
   const racingRepository = new RacingGitRepository(repoRoot);
   const headBefore = await racingRepository.currentHead();
   await write(repoRoot, "selected.txt", "amend blocked by race\n");
   const worktreeBefore = await fs.readFile(path.join(repoRoot, "selected.txt"));
   const indexBefore = await git(repoRoot, ["diff", "--cached", "--binary"]);
+  const owner = await WorkbenchThreadGit.create({ cwd: repoRoot, storageRootPath, threadId: "race-thread" });
+  await owner.add(["selected.txt"]);
 
   await assert.rejects(new WorkbenchGitHistoryRewriter(racingRepository).amend({
     message: "must not publish",
@@ -326,7 +332,14 @@ threadGitTest("a concurrent Workbench ref writer rejects the entire older-amend 
   assert.deepEqual(await fs.readFile(path.join(repoRoot, "selected.txt")), worktreeBefore);
   assert.equal(await git(repoRoot, ["diff", "--cached", "--binary"]), indexBefore);
   assert.equal(await racingRepository.readRef("refs/worktree/workbench/commit-rewrites"), null);
+  assert.equal(await racingRepository.readRef(racingRepository.competingRef), headBefore);
   assert.notEqual(await racingRepository.readRef(GIT_STATE_GENERATION_REF), null);
+  assert.deepEqual((await owner.add(["selected.txt"])).selectedPaths, ["selected.txt"]);
+
+  const committed = await owner.commit("retry after concurrent ref publication", target);
+  assert.notEqual(committed.amendedCommit, target);
+  assert.equal(await git(repoRoot, ["show", `${committed.amendedCommit}:selected.txt`]), "amend blocked by race\n");
+  await assert.rejects(owner.commit("selection was released", target), /no selected files/u);
 });
 
 threadGitTest("older amendment rejects pushed targets and merge-containing descendant ranges without publication", async (context) => {

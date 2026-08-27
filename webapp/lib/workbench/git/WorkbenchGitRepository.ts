@@ -4,6 +4,7 @@
  * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit: typed Git history, ancestry, object-read, and atomic ref-update inputs. Keywords: git, commit, paths, head, object, ref, transaction.
  */
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -397,9 +398,7 @@ export default class WorkbenchGitRepository {
     const deletesGeneration = deletes.some(({ ref }) => ref === GIT_STATE_GENERATION_REF);
     const advancesGeneration = !updatesGeneration && !deletesGeneration && (updates.length > 0 || deletes.length > 0);
     const generationValue = advancesGeneration
-      ? updates.find(({ ref }) => ref !== GIT_STATE_GENERATION_REF)?.newValue
-        ?? deletes.find(({ ref }) => ref !== GIT_STATE_GENERATION_REF)?.oldValue
-        ?? null
+      ? await this.writeBlob(`workbench-git-state-generation-v1 ${randomUUID()}\n`)
       : null;
     const lines = ["start"];
     for (const update of updates) {
