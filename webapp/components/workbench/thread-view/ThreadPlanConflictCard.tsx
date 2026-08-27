@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadPlanConflictCard: subscribe to and render active and planned sibling work intersecting the current inactive plan. Keywords: thread, plan, claim, intersection, sidebar.
+ * - default ThreadPlanConflictCard: subscribe to and render full or compact sibling work intersecting the current inactive plan. Keywords: thread, plan, claim, intersection, sidebar, tooltip.
  */
 "use client";
 
@@ -25,12 +25,14 @@ function formatThreadCount(count: number, state: "active" | "snoozed") {
 export default function ThreadPlanConflictCard({
   harness,
   onOpenThread,
+  presentation = "full",
   projectId,
   store,
   threadId,
 }: {
   harness: WorkbenchHarnessId;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
+  presentation?: "compact" | "full";
   projectId: string;
   store: WorkbenchThreadSidebarStore | null;
   threadId: string;
@@ -40,8 +42,10 @@ export default function ThreadPlanConflictCard({
   const getSelection = useCallback(() => selector(store?.getSnapshot() ?? null), [selector, store]);
   const intersections = useSyncExternalStore(subscribe, getSelection, getSelection);
   if (!intersections.hasPlannedClaims) return null;
+  const compact = presentation === "compact";
   const activeThreadCount = intersections.activeEntries.length;
   const plannedThreadCount = intersections.plannedEntries.length;
+  const visibleThreadCount = activeThreadCount + (compact ? 0 : plannedThreadCount);
   const snoozedPlannedThreadCount = intersections.plannedEntries.filter((entry) => entry.metadata.snoozed).length;
   const activePlannedThreadCount = plannedThreadCount - snoozedPlannedThreadCount;
   const plannedThreadSummary = [
@@ -50,15 +54,18 @@ export default function ThreadPlanConflictCard({
   ].filter(Boolean).join(" and ");
 
   return (
-    <section className="my-2 w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)]" data-thread-plan-conflict-card="true">
-      <h2 className={`m-0 flex min-w-0 items-center gap-2 px-3 pt-2 text-[0.82em] leading-[1.45]${activeThreadCount || plannedThreadCount ? "" : " pb-2"}`}>
+    <section
+      className="my-2 w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)]"
+      data-thread-plan-conflict-card="true"
+    >
+      <h2 className={`m-0 flex min-w-0 items-center gap-2 px-3 pt-2 text-[0.82em] leading-[1.45]${visibleThreadCount ? "" : " pb-2"}`}>
         <GitArcConflictIcon className="size-4 shrink-0" />
         <span className="min-w-0 flex-1 truncate font-medium text-text">
           {activeThreadCount ? "Planned changes overlap active threads" : "No active work intersects this plan."}
         </span>
       </h2>
       <ThreadGitArcConflictList entries={intersections.activeEntries} onOpenThread={onOpenThread} projectId={projectId} />
-      {plannedThreadCount ? (
+      {!compact && plannedThreadCount ? (
         <ThreadDisclosure
           contentClassName="pb-1"
           summary={`Also intersecting planned work in ${plannedThreadSummary}`}

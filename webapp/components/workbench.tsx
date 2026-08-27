@@ -1935,7 +1935,8 @@ export default function Workbench () {
         turnId: entry.pendingQuestionnaire.turnId ?? null,
       } satisfies WorkbenchPendingUserInputRequest : null);
     const proposalId = entry.gitArc?.proposals.find(({ status }) => status === "proposed")?.proposalId ?? null;
-    if (!pendingRequest && !proposalId) return null;
+    const hasPlannedWork = Boolean(entry.gitArcPlan?.scopePaths.length);
+    if (!pendingRequest && !proposalId && !hasPlannedWork) return null;
     const rootThreadId = entry.entryKind === "subagent" ? entry.parentThreadId : threadId;
     const cwd = entry.entryKind === "subagent"
       ? entry.cwd
@@ -1950,6 +1951,7 @@ export default function Workbench () {
         materialized={materializedThreadRootIds.has(rootThreadId)}
         onDraftChange={(draft) => handleThreadQuestionnaireDraftChange(threadId, pendingRequest?.requestKey ?? "", draft)}
         onDraftClear={() => handleThreadQuestionnaireDraftClear(threadId, pendingRequest?.requestKey ?? "")}
+        onOpenThread={openThreadFromExplorer}
         onReadThread={controls ? readThread : null}
         onSubmitUserInputRequest={submitUserInputRequest}
         pendingRequest={pendingRequest}
@@ -1960,6 +1962,7 @@ export default function Workbench () {
         questionnaireDraft={questionnaireDraft}
         spellCheck={resolvedSettings.composerSpellCheck}
         threadId={threadId}
+        threadSidebarStore={threadSidebarStore}
         workspaceRoots={projectFileLinkRoots}
       />
     );
@@ -1971,11 +1974,13 @@ export default function Workbench () {
     handleThreadQuestionnaireDraftChange,
     handleThreadQuestionnaireDraftClear,
     materializedThreadRootIds,
+    openThreadFromExplorer,
     projectFileLinkRoots,
     readThread,
     resolvedSettings.composerSpellCheck,
     submitUserInputRequest,
     threadQuestionnaireDraftsByKey,
+    threadSidebarStore,
     threadSummariesById,
     visibleUserInputRequestsByThreadId,
   ]);

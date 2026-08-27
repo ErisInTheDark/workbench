@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadTooltipDetails: select compact preview or live questionnaire and proposal presentation for one sidebar thread. Keywords: sidebar, tooltip, questionnaire, proposal, ownership.
+ * - default WorkbenchThreadTooltipDetails: select compact plan, questionnaire, and proposal presentation for one sidebar thread. Keywords: sidebar, tooltip, plan, questionnaire, proposal, ownership.
  */
 "use client";
 
@@ -10,11 +10,14 @@ import type {
   WorkbenchPendingUserInputRequest,
   WorkbenchQuestionnaireDraft,
   WorkbenchSubmitUserInputRequestOptions,
+  WorkbenchThreadSidebarStore,
   WorkbenchUserInputResponse,
 } from "../../lib/types";
 import type { UserInput } from "../../lib/codex/generated/app-server/v2/UserInput";
 import type { WorkspaceFileLinkRoot } from "../../lib/workbench/markdown/markdown-links";
+import type { WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
 import ThreadCheckpointCommitItem from "./thread-view/ThreadCheckpointCommitItem";
+import ThreadPlanConflictCard from "./thread-view/ThreadPlanConflictCard";
 import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-view/thread-user-input-request-submission";
 
@@ -24,6 +27,7 @@ export default function WorkbenchThreadTooltipDetails({
   materialized,
   onDraftChange,
   onDraftClear,
+  onOpenThread,
   onReadThread,
   onSubmitUserInputRequest,
   pendingRequest,
@@ -34,6 +38,7 @@ export default function WorkbenchThreadTooltipDetails({
   questionnaireDraft,
   spellCheck,
   threadId,
+  threadSidebarStore,
   workspaceRoots,
 }: {
   cwd: string | null;
@@ -41,6 +46,7 @@ export default function WorkbenchThreadTooltipDetails({
   materialized: boolean;
   onDraftChange: (draft: WorkbenchQuestionnaireDraft) => void;
   onDraftClear: () => void;
+  onOpenThread: (target: WorkbenchThreadTarget) => void;
   onReadThread: WorkbenchControls["readThread"] | null;
   onSubmitUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse, options?: WorkbenchSubmitUserInputRequestOptions) => Promise<void>;
   pendingRequest: WorkbenchPendingUserInputRequest | null;
@@ -51,6 +57,7 @@ export default function WorkbenchThreadTooltipDetails({
   questionnaireDraft: WorkbenchQuestionnaireDraft | null;
   spellCheck: boolean;
   threadId: string;
+  threadSidebarStore: WorkbenchThreadSidebarStore | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const questionnaireIsLive = Boolean(pendingRequest && !materialized && onReadThread);
@@ -120,6 +127,14 @@ export default function WorkbenchThreadTooltipDetails({
           />
         </section>
       ) : null}
+      <ThreadPlanConflictCard
+        harness={harness}
+        onOpenThread={onOpenThread}
+        presentation="compact"
+        projectId={projectId}
+        store={threadSidebarStore}
+        threadId={threadId}
+      />
     </div>
   );
 }
