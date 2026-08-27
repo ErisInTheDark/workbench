@@ -1614,6 +1614,7 @@ export default memo(function ThreadView ({
   const terminalGitArc = activeGitArcSelection && currentTurn?.status !== "inProgress"
     ? activeGitArcSelection.gitArc
     : null;
+  const showPlanConflicts = currentTurn?.status !== "inProgress" || Boolean(activePendingUserInputRequest);
   const terminalGitArcProposalIds = useMemo(() => terminalGitArc
     ? new Set(terminalGitArc.proposals.map(({ proposalId }) => proposalId))
     : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS, [terminalGitArc]);
@@ -1784,7 +1785,7 @@ export default memo(function ThreadView ({
             ) : null}
           </div>
         ) : null}
-        {activeThread && !isDraftThreadView ? (
+        {activeThread && !isDraftThreadView && showPlanConflicts ? (
           <ThreadPlanConflictCard
             harness={activeThread.harness}
             onOpenThread={onOpenThread}
