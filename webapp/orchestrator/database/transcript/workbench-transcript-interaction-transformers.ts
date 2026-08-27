@@ -4,6 +4,7 @@
  * transformSteerEntry: convert one settled Workbench steer to a canonical user-message row. Keywords: transcript, steer, user message.
  */
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem.ts";
+import { resolveQuestionnaireHistoryItemId } from "../../../lib/workbench/thread/thread-questionnaire-identity.ts";
 import { createSyntheticSteerHistoryItemId } from "../../../lib/workbench/thread/thread-steer-history.ts";
 import type {
   WorkbenchQuestionnaireHistoryEntry,
@@ -90,7 +91,7 @@ export function transformInteractionTranscriptItem(
 export function transformQuestionnaireEntry(
   entry: WorkbenchQuestionnaireHistoryEntry,
 ): WorkbenchInteractionTransform {
-  const itemId = entry.itemId ?? `workbench-questionnaire:${entry.threadId}:${entry.requestKey}`;
+  const itemId = resolveQuestionnaireHistoryItemId(entry);
   const command = entry.request.approval?.command;
   const itemType = command ? "approval" : "questionnaire";
   const mutations: WorkbenchDatabaseMutation[] = [
@@ -110,6 +111,7 @@ export function transformQuestionnaireEntry(
       conflictColumns: ["item_id"],
       updateColumns: [
         "item_type",
+        "request_key",
         "request_id",
         "title",
         "summary",

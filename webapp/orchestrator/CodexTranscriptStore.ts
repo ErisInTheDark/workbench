@@ -14,6 +14,7 @@ import { appendCommandOutputDelta, compactCommandOutputPayload } from "../lib/co
 import { areUserInputsEquivalentForUserMessageDedupe, normalizeThreadItems } from "../lib/codex/thread-item-normalization";
 import type { WorkbenchThreadHydrationRequest } from "../lib/codex/server-orchestrator";
 import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadContextReadResponse, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
+import { mergeQuestionnaireHistoryEntries } from "../lib/workbench/thread/thread-questionnaire-identity";
 import { normalizeWorkbenchThreadItemTimeline } from "../lib/workbench/thread/thread-item-timeline";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { hydrateThreadWithStoredTurns } from "./codex-transcript-hydration";
@@ -1380,10 +1381,9 @@ export default class CodexTranscriptStore {
     await this.updateTurnFile(entry.threadId, entry.turnId, (file) => ({
       ...file,
       lastTouchedAt: now(),
-      questionnaireEntries: sortQuestionnaireEntries([
-        ...file.questionnaireEntries.filter((existingEntry) => existingEntry.requestKey !== entry.requestKey),
-        entry,
-      ]),
+      questionnaireEntries: sortQuestionnaireEntries(
+        mergeQuestionnaireHistoryEntries(file.questionnaireEntries, [entry]),
+      ),
     }));
     await this.appendTurnEvent(entry.threadId, entry.turnId, event);
     await this.touchThread(entry.threadId, null);

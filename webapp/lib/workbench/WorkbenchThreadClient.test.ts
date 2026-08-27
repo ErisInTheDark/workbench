@@ -8,7 +8,7 @@ import { test } from "node:test";
 
 import type { Thread } from "../codex/generated/app-server/v2/Thread.ts";
 import type { ThreadItem } from "../codex/generated/app-server/v2/ThreadItem.ts";
-import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "../types.ts";
+import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "../types.ts";
 import { workbenchTranscriptNotifications } from "./database/transcript/workbench-transcript-contract.ts";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./WorkbenchThreadClient.ts";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission.ts";
@@ -280,6 +280,20 @@ function browseEntry(entryKey: string, turnId: string): WorkbenchBrowseResultEnt
     recordedAt: turnId === "older" ? 1 : 2,
     session: "research",
     state: "completed",
+    threadId: "thread",
+    turnId,
+  };
+}
+
+function questionnaireEntry(turnId: string, itemId: string): WorkbenchQuestionnaireHistoryEntry {
+  return {
+    insertAfterItemId: `anchor-${turnId}`,
+    insertAfterItemIndex: 0,
+    itemId,
+    request: { id: itemId, questions: [], submitLabel: "Submit", summary: "", title: itemId },
+    requestKey: "reused",
+    resolvedAt: turnId === "older" ? 1 : 2,
+    response: { answers: {} },
     threadId: "thread",
     turnId,
   };
@@ -1908,6 +1922,95 @@ test("questionnaire and Browse history reads are latest-wins within one project"
   const current = client.getSnapshot().currentThread;
   assert.equal(current?.turns.flatMap((turn) => turn.items).some((item) => item.id.startsWith("workbench:questionnaire-history:")), false);
   assert.deepEqual(current?.browseResultEntries, []);
+}));
+
+test("sidebar history preserves questionnaires with reused request keys", async () => withClient(async (client) => {
+  const source = activeThread();
+  source.turns = ["older", "newer"].map((turnId) => ({
+    completedAt: 2,
+    durationMs: 1,
+    error: null,
+    id: turnId,
+    items: [{
+      id: `anchor-${turnId}`,
+      memoryCitation: null,
+      phase: "commentary",
+      text: turnId,
+      type: "agentMessage",
+    }],
+    itemsView: "full",
+    startedAt: 1,
+    status: "completed",
+  }));
+  client.installSidebarSnapshot({
+    entries: [{
+      activityAt: 2,
+      entryKind: "thread",
+      identity: { harness: "codex", threadId: "thread" },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      questionnaireHistory: [
+        questionnaireEntry("older", "question-older"),
+        questionnaireEntry("newer", "question-newer"),
+      ],
+      title: "Thread",
+    }],
+    error: null,
+    freshness: "fresh",
+    projectId: "project",
+    revision: 1,
+  });
+  client.selectThreadPayload(source);
+
+  assert.deepEqual(
+    client.getSnapshot().currentThread?.turns.map((turn) => turn.items[1]?.id),
+    [
+      "workbench:questionnaire-history:question-older",
+      "workbench:questionnaire-history:question-newer",
+    ],
+  );
+}));
+
+test("local questionnaire history preserves a later item with a reused request key", async () => withClient(async (client, socket) => {
+  const source = activeThread("opencode");
+  source.turns[0]!.items = [{
+    id: "anchor",
+    memoryCitation: null,
+    phase: "commentary",
+    text: "Ask",
+    type: "agentMessage",
+  }];
+  client.selectThreadPayload(source);
+  const request = (itemId: string) => ({
+    hidden: false,
+    itemId,
+    request: { id: itemId, questions: [], submitLabel: "Submit", summary: "", title: itemId },
+    requestKey: "reused",
+    threadId: "thread",
+    turnId: "turn",
+  });
+
+  socket.notify("questionnaire/requested", request("question-one"), "opencode");
+  await client.submitPendingUserInputRequest("thread", { answers: {} }, {
+    insertAfterItemId: "anchor",
+    turnId: "turn",
+  });
+  socket.notify("questionnaire/requested", request("question-two"), "opencode");
+  await client.submitPendingUserInputRequest("thread", { answers: {} }, {
+    insertAfterItemId: "anchor",
+    turnId: "turn",
+  });
+
+  assert.deepEqual(
+    client.getSnapshot().currentThread?.turns[0]?.items
+      .filter((item) => item.id.startsWith("workbench:questionnaire-history:"))
+      .map((item) => item.id)
+      .sort(),
+    [
+      "workbench:questionnaire-history:question-one",
+      "workbench:questionnaire-history:question-two",
+    ],
+  );
 }));
 
 test("draft harness migration selects the new exact document and deletes the old key", async () => withClient(async (client) => {

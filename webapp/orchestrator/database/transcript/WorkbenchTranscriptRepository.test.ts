@@ -272,6 +272,74 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
   }
 });
 
+test("settled questionnaires may reuse one provider request key across turns", () => {
+  const { database, repository } = createRepository();
+  const questionnaire = (
+    turnId: string,
+    itemId: string,
+    resolvedAt: number,
+  ): WorkbenchTranscriptAtomicObservation => ({
+    kind: "questionnaire",
+    entry: {
+      insertAfterItemId: null,
+      insertAfterItemIndex: null,
+      itemId,
+      request: {
+        id: `request-${turnId}`,
+        questions: [{
+          allowOther: false,
+          header: "Choice",
+          id: "choice",
+          isSecret: false,
+          options: [],
+          question: "Pick one",
+        }],
+        submitLabel: "Submit",
+        summary: "Choose",
+        title: "Questionnaire",
+      },
+      requestKey: "reused",
+      resolvedAt,
+      response: { answers: { choice: { answers: [turnId] } } },
+      threadId: "thread",
+      turnId,
+    },
+    observedAt: resolvedAt,
+  });
+  try {
+    repository.settle([canonicalWindow([
+      threadObservation(),
+      turnObservation("older", 0),
+      turnObservation("newer", 1),
+      questionnaire("older", "question-older", 3),
+      questionnaire("newer", "question-newer", 5),
+    ], ["older", "newer"])]);
+
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 2 });
+    assert.ok(snapshot);
+    assert.deepEqual(
+      snapshot.rows.threadItemInteractions
+        .map(({ item_id, request_key }) => [item_id, request_key])
+        .sort(([left], [right]) => left.localeCompare(right)),
+      [
+        ["question-newer", "reused"],
+        ["question-older", "reused"],
+      ],
+    );
+    assert.deepEqual(
+      snapshot.rows.threadItems
+        .map(({ id, turn_id }) => [id, turn_id])
+        .sort(([left], [right]) => left.localeCompare(right)),
+      [
+        ["question-newer", "newer"],
+        ["question-older", "older"],
+      ],
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test("hydration pages keep full turn metadata and load only the requested immutable item window", () => {
   const { database, repository } = createRepository();
   try {

@@ -230,7 +230,7 @@ test("real SQLite rows project the renderer facts used by current command, file,
       itemIds: items.map(({ id }) => id),
       turnId,
     })), [
-      { itemIds: ["user", "reasoning", "command", "mcp", "file", "workbench-questionnaire:thread:request-key", "opaque"], turnId: "turn-1" },
+      { itemIds: ["user", "reasoning", "command", "mcp", "file", "workbench-questionnaire:thread:turn-1:request-key", "opaque"], turnId: "turn-1" },
     ]);
     assert.deepEqual(result.data.turns[0]?.itemTimeline, [{
       aliases: ["user-alias"],
@@ -292,6 +292,64 @@ test("real SQLite rows project the renderer facts used by current command, file,
     assert.ok(interaction?.type === "questionnaire");
     assert.deepEqual(interaction.request, questionnaire.request);
     assert.deepEqual(interaction.response, questionnaire.response);
+  } finally {
+    database.close();
+  }
+});
+
+test("projection preserves distinct questionnaire items with one reused provider request key", () => {
+  const { database, repository } = createRepository();
+  const questionnaire = (
+    turnId: string,
+    itemId: string,
+    resolvedAt: number,
+  ): WorkbenchQuestionnaireHistoryEntry => ({
+    insertAfterItemId: null,
+    insertAfterItemIndex: null,
+    itemId,
+    request: {
+      id: `request-${turnId}`,
+      questions: [{
+        allowOther: false,
+        header: "Choice",
+        id: "choice",
+        isSecret: false,
+        options: [],
+        question: "Pick one",
+      }],
+      submitLabel: "Submit",
+      summary: "Choose",
+      title: "Questionnaire",
+    },
+    requestKey: "reused",
+    resolvedAt,
+    response: { answers: { choice: { answers: [turnId] } } },
+    threadId: "thread",
+    turnId,
+  });
+  try {
+    repository.settle([canonicalWindow([
+      thread(),
+      turn("older", 0),
+      turn("newer", 1),
+      { entry: questionnaire("older", "question-older", 2_000), kind: "questionnaire", observedAt: 2_000 },
+      { entry: questionnaire("newer", "question-newer", 4_000), kind: "questionnaire", observedAt: 4_000 },
+    ], ["older", "newer"])]);
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 2 });
+    assert.ok(snapshot);
+    const result = projectWorkbenchTranscript(snapshot);
+    assert.equal(result.success, true);
+    if (!result.success) return;
+
+    assert.deepEqual(
+      result.data.turns.flatMap(({ items }) => items).map(({ id }) => id),
+      ["question-older", "question-newer"],
+    );
+    assert.deepEqual(
+      result.data.turns.flatMap(({ items }) => items)
+        .flatMap((item) => item.type === "questionnaire" ? [item.requestKey] : []),
+      ["reused", "reused"],
+    );
   } finally {
     database.close();
   }

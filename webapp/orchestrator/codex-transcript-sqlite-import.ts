@@ -7,10 +7,8 @@
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem.ts";
 import { toThreadPayload } from "../lib/codex/thread-adapter.ts";
-import {
-  SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX,
-  applyQuestionnaireHistoryToThread,
-} from "../lib/workbench/thread/thread-questionnaire-history.ts";
+import { applyQuestionnaireHistoryToThread } from "../lib/workbench/thread/thread-questionnaire-history.ts";
+import { createSyntheticQuestionnaireHistoryItemId } from "../lib/workbench/thread/thread-questionnaire-identity.ts";
 import {
   applySteerHistoryToThread,
   createSyntheticSteerHistoryItemId,
@@ -103,7 +101,7 @@ export function createCodexTranscriptSqliteImport({
     steerEntries,
   );
   const questionnaireBySyntheticId = new Map(questionnaireEntries.map((entry) => [
-    `${SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX}${entry.threadId}:${entry.requestKey}`,
+    createSyntheticQuestionnaireHistoryItemId(entry),
     entry,
   ]));
   const steerBySyntheticId = new Map(steerEntries.map((entry) => [createSyntheticSteerHistoryItemId(entry), entry]));

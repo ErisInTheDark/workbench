@@ -7,7 +7,7 @@ import test from "node:test";
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../codex/generated/app-server/v2/Turn";
 import type { ThreadPayload } from "../../types";
-import { SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX } from "../thread/thread-questionnaire-history";
+import { createSyntheticQuestionnaireHistoryItemId } from "../thread/thread-questionnaire-identity";
 import { planCanonicalTranscriptDisplay } from "./thread-transcript-display-planner";
 import {
   compareWorkbenchTranscriptParity,
@@ -154,7 +154,12 @@ test("settled questionnaire projection equals the current synthetic renderer ite
     arguments: request,
     contentItems: [{ text: JSON.stringify(response, null, 2), type: "inputText" }],
     durationMs: null,
-    id: `${SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX}thread:${requestKey}`,
+    id: createSyntheticQuestionnaireHistoryItemId({
+      itemId: "durable-questionnaire",
+      requestKey,
+      threadId: "thread",
+      turnId: "turn",
+    }),
     namespace: null,
     status: "completed",
     success: true,
@@ -176,6 +181,50 @@ test("settled questionnaire projection equals the current synthetic renderer ite
     jsonBrowseResultEntries: [],
     jsonThread: thread([jsonItem]),
     sqliteProjection: projection([sqliteItem]),
+  }), { equal: true });
+});
+
+test("parity keeps distinct questionnaire items when provider request keys repeat", () => {
+  const request = {
+    id: "request",
+    questions: [{ allowOther: false, header: "Pick", id: "choice", isSecret: false, options: [], question: "Which?" }],
+    submitLabel: "Submit",
+    summary: "Choose",
+    title: "Question",
+  };
+  const response = { answers: { choice: { answers: ["one"] } } };
+  const requestKey = "reused";
+  const jsonItems: ThreadItem[] = ["question-one", "question-two"].map((itemId) => ({
+    arguments: request,
+    contentItems: [{ text: JSON.stringify(response, null, 2), type: "inputText" }],
+    durationMs: null,
+    id: createSyntheticQuestionnaireHistoryItemId({
+      itemId,
+      requestKey,
+      threadId: "thread",
+      turnId: "turn",
+    }),
+    namespace: null,
+    status: "completed",
+    success: true,
+    tool: "workbench_request_user_input",
+    type: "dynamicToolCall",
+  }));
+  const sqliteItems: WorkbenchProjectedTranscriptItem[] = ["question-one", "question-two"].map((id) => ({
+    errorText: null,
+    id,
+    request,
+    requestKey,
+    resolvedAt: 3_000,
+    response,
+    state: "answered",
+    type: "questionnaire",
+  }));
+
+  assert.deepEqual(compareWorkbenchTranscriptParity({
+    jsonBrowseResultEntries: [],
+    jsonThread: thread(jsonItems),
+    sqliteProjection: projection(sqliteItems),
   }), { equal: true });
 });
 

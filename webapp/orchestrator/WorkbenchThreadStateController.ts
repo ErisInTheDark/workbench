@@ -9,6 +9,7 @@ import path from "node:path";
 import type { WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot } from "../lib/types";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
+import { mergeQuestionnaireHistoryEntries } from "../lib/workbench/thread/thread-questionnaire-identity";
 import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
 import {
   createWorkbenchThreadFolder,
@@ -1224,10 +1225,10 @@ export default class WorkbenchThreadStateController {
         next = {
           ...entry,
           pendingQuestionnaire: null,
-          questionnaireHistory: [
-            ...(entry.questionnaireHistory ?? []).filter((candidate) => candidate.requestKey !== request.entry.requestKey),
-            request.entry,
-          ],
+          questionnaireHistory: mergeQuestionnaireHistoryEntries(
+            entry.questionnaireHistory ?? [],
+            [request.entry],
+          ),
         };
       }
       const parsed = safeParseWorkbenchThreadStateEntry(next);

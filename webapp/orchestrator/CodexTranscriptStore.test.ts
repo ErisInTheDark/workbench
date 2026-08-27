@@ -445,6 +445,30 @@ test("scoped thread context collection reads each sidecar kind for only the sele
   assert.deepEqual(full.steerEntries.map((entry) => entry.turnId), ["turn-a", "turn-b"]);
 }));
 
+test("questionnaire history preserves reused request keys within one turn", async () => withStore(async (store) => {
+  const questionnaire = (itemId: string, answer: string): WorkbenchQuestionnaireHistoryEntry => ({
+    insertAfterItemId: null,
+    insertAfterItemIndex: null,
+    itemId,
+    request: { id: itemId, questions: [], submitLabel: "Submit", summary: "", title: itemId },
+    requestKey: "reused",
+    resolvedAt: itemId === "question-one" ? 1 : 2,
+    response: { answers: { choice: { answers: [answer] } } },
+    threadId: "thread",
+    turnId: "turn",
+  });
+
+  await store.recordQuestionnaireResolved(questionnaire("question-one", "one"));
+  await store.recordQuestionnaireResolved(questionnaire("question-two", "two"));
+  await store.recordQuestionnaireResolved(questionnaire("question-one", "updated"));
+
+  const entries = await store.listQuestionnaireHistory("thread");
+  assert.deepEqual(entries.map((entry) => entry.itemId), ["question-one", "question-two"]);
+  assert.deepEqual(entries.find((entry) => entry.itemId === "question-one")?.response, {
+    answers: { choice: { answers: ["updated"] } },
+  });
+}));
+
 test("canonical client identity wins over delayed acknowledgement and failure", async () => withStore(async (store) => {
   const original = request(21, "native", "expected-turn");
   await store.recordClientRequest(original);

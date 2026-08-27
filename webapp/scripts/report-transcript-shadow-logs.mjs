@@ -1,5 +1,6 @@
 /*
  * formatAgentValue: render JSON-like diagnostics with minimal repeated syntax. Keywords: transcript, shadow, log, agent, format.
+ * formatTranscriptShadowFields: render summary fields by default and full bounded evidence on request. Keywords: transcript, shadow, log, summary, details.
  * readTranscriptShadowReport: filter and group the dedicated transcript-shadow JSONL. Keywords: transcript, shadow, log, report.
  */
 import { readFile } from "node:fs/promises";
@@ -7,6 +8,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_LIMIT = 100;
+const DEFAULT_IGNORED_SOURCES = new Set(["thread-state-ws"]);
+const SUMMARY_FIELD_KEYS = ["code", "message", "mismatch", "scope"];
+const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/giu;
 
 function scalar(value) {
   if (value === null) return "null";
@@ -57,6 +61,15 @@ export function formatAgentValue(value) {
   return [String(value)];
 }
 
+export function formatTranscriptShadowFields(fields, options = {}) {
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) return [];
+  if (options.details) return formatAgentValue(fields);
+  const summary = Object.fromEntries(
+    SUMMARY_FIELD_KEYS.flatMap((key) => key in fields ? [[key, fields[key]]] : []),
+  );
+  return formatAgentValue(summary);
+}
+
 function parseSince(value, now = new Date()) {
   if (!value) return null;
   if (/^\d{2}:\d{2}:\d{2}(?:\.\d{3})?$/u.test(value)) {
@@ -72,14 +85,33 @@ function parseSince(value, now = new Date()) {
 }
 
 function parseArgs(args) {
-  const result = { all: false, limit: DEFAULT_LIMIT, since: null, threadId: null };
+  const result = {
+    all: false,
+    details: false,
+    events: [],
+    limit: DEFAULT_LIMIT,
+    since: null,
+    sources: [],
+    threadId: null,
+  };
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     const value = args[index + 1];
     if (argument === "--all") {
       result.all = true;
+    } else if (argument === "--details") {
+      result.details = true;
+    } else if (argument === "--event" && value) {
+      result.events.push(value);
+      index += 1;
+    } else if (argument === "--limit" && value && /^\d+$/u.test(value) && Number(value) > 0) {
+      result.limit = Number(value);
+      index += 1;
     } else if (argument === "--since" && value) {
       result.since = parseSince(value);
+      index += 1;
+    } else if (argument === "--source" && value) {
+      result.sources.push(value);
       index += 1;
     } else if (argument === "--thread" && value) {
       result.threadId = value;
@@ -89,6 +121,35 @@ function parseArgs(args) {
     }
   }
   return result;
+}
+
+function stableFailureClass(record) {
+  const message = record.fields?.message;
+  if (typeof message !== "string") return null;
+  return message.replace(UUID_PATTERN, "<id>");
+}
+
+function recordSignature(record) {
+  if (record.event === "parity-mismatch") {
+    return JSON.stringify({
+      event: record.event,
+      level: record.level,
+      mismatch: record.fields?.mismatch,
+      scope: record.fields?.scope,
+      source: record.source,
+      threadId: record.threadId,
+    });
+  }
+  const failureClass = stableFailureClass(record);
+  return failureClass
+    ? JSON.stringify({
+        event: record.event,
+        failureClass,
+        level: record.level,
+        source: record.source,
+        threadId: record.threadId,
+      })
+    : JSON.stringify({ ...record, at: undefined });
 }
 
 export async function readTranscriptShadowReport(filePath, options = {}) {
@@ -111,21 +172,19 @@ export async function readTranscriptShadowReport(filePath, options = {}) {
   }).filter((record) => (
     (options.since === null || options.since === undefined || record.at >= options.since)
     && (!options.threadId || record.threadId === options.threadId)
+    && (!options.events?.length || options.events.includes(record.event))
+    && (!options.sources?.length || options.sources.includes(record.source))
+    && (
+      options.all
+      || options.sources?.length
+      || !DEFAULT_IGNORED_SOURCES.has(record.source)
+    )
     && (options.all || record.level === "error" || record.level === "warning")
   ));
 
   const groupedBySignature = new Map();
   for (const record of records) {
-    const signature = record.event === "parity-mismatch"
-      ? JSON.stringify({
-        event: record.event,
-        level: record.level,
-        mismatch: record.fields?.mismatch,
-        scope: record.fields?.scope,
-        source: record.source,
-        threadId: record.threadId,
-      })
-      : JSON.stringify({ ...record, at: undefined });
+    const signature = recordSignature(record);
     const group = groupedBySignature.get(signature);
     if (group) {
       group.count += 1;
@@ -161,7 +220,7 @@ async function main() {
       `event ${event}`,
       ...(threadId ? [`threadId ${threadId}`] : []),
       ...(count > 1 ? [`count ${count}`] : []),
-      ...(fields ? formatAgentValue(fields) : []),
+      ...formatTranscriptShadowFields(fields, { details: options.details }),
       "",
     ];
   });

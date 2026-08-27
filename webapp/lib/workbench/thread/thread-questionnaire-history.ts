@@ -1,7 +1,6 @@
 /*
  * Exports:
  * - WORKBENCH_QUESTIONNAIRE_TOOL_NAME: stable dynamic-tool name used for rendered questionnaire history entries. Keywords: questionnaire, dynamic tool, thread history.
- * - SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX: item id prefix reserved for workbench-injected questionnaire history items. Keywords: synthetic, questionnaire, history.
  * - isSyntheticQuestionnaireHistoryItem: detect workbench-injected questionnaire history items in a turn. Keywords: synthetic, questionnaire, history, guard.
  * - applyQuestionnaireHistoryToThread: strip duplicate questionnaire items and reinsert persisted questionnaire history into thread turns. Keywords: questionnaire, thread, overlay, persisted history.
  */
@@ -9,10 +8,13 @@
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
 import type { ThreadPayload, WorkbenchQuestionnaireHistoryEntry } from "../../types";
 import { areDeeplyEqual } from "../deep-equality";
+import {
+  SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX,
+  createSyntheticQuestionnaireHistoryItemId,
+} from "./thread-questionnaire-identity";
 import { isWorkbenchSyntheticSteerUserMessage } from "./thread-steer-history";
 
 export const WORKBENCH_QUESTIONNAIRE_TOOL_NAME = "workbench_request_user_input";
-export const SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX = "workbench:questionnaire-history:";
 const OPENCODE_QUESTION_TOOL_NAMESPACE = "opencode";
 const OPENCODE_QUESTION_TOOL_NAME = "question";
 
@@ -22,10 +24,6 @@ type QuestionnaireHistoryAnchorResolution =
   | { index: number; type: "resolved" }
   | { type: "defer" }
   | { type: "fallback" };
-
-function createSyntheticQuestionnaireHistoryItemId(threadId: string, requestKey: string) {
-  return `${SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX}${threadId}:${requestKey}`;
-}
 
 export function isSyntheticQuestionnaireHistoryItem(item: ThreadItem): item is DynamicToolCallItem {
   return item.type === "dynamicToolCall"
@@ -109,7 +107,7 @@ function isEquivalentSyntheticQuestionnaireHistoryItem(
 ) {
   const firstContentItem = item.contentItems?.[0];
   return item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME
-    && item.id === createSyntheticQuestionnaireHistoryItemId(entry.threadId, entry.requestKey)
+    && item.id === createSyntheticQuestionnaireHistoryItemId(entry)
     && item.status === "completed"
     && item.success === true
     && item.namespace === null
@@ -135,7 +133,7 @@ function createSyntheticQuestionnaireHistoryItem(
       type: "inputText",
     }],
     durationMs: null,
-    id: createSyntheticQuestionnaireHistoryItemId(entry.threadId, entry.requestKey),
+    id: createSyntheticQuestionnaireHistoryItemId(entry),
     namespace: null,
     status: "completed",
     success: true,
@@ -267,7 +265,7 @@ function applyQuestionnaireHistoryToItems(
   for (const entry of sortQuestionnaireHistoryEntries(entries)) {
     const syntheticItem = createSyntheticQuestionnaireHistoryItem(
       entry,
-      syntheticItemsById.get(createSyntheticQuestionnaireHistoryItemId(entry.threadId, entry.requestKey)) ?? null,
+      syntheticItemsById.get(createSyntheticQuestionnaireHistoryItemId(entry)) ?? null,
     );
     const anchorResolution = resolveQuestionnaireHistoryAnchor(nextItems, baseItems, entry, itemsView);
 

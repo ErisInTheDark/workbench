@@ -112,6 +112,7 @@ import { getTurnRenderSignature } from "./thread/thread-item-signature";
 import { upsertWorkbenchThreadItemTimelineEntry } from "./thread/thread-item-timeline";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission";
 import { applyQuestionnaireHistoryToThread, isSyntheticQuestionnaireHistoryItem } from "./thread/thread-questionnaire-history";
+import { mergeQuestionnaireHistoryEntries } from "./thread/thread-questionnaire-identity";
 import {
     createWorkbenchQuestionnaireResponseInput,
     createWorkbenchThreadRecoveryId,
@@ -1353,10 +1354,7 @@ function WorkbenchThreadClient(
       if (entry.entryKind === "draft") continue;
       const durableHistory = entry.questionnaireHistory ?? [];
       if (durableHistory.length) {
-        const entriesByRequestKey = new Map(
-          (state.questionnaireHistoryByThreadId.get(entry.identity.threadId) ?? []).map((historyEntry) => [historyEntry.requestKey, historyEntry]),
-        );
-        for (const historyEntry of durableHistory) entriesByRequestKey.set(historyEntry.requestKey, {
+        const normalizedHistory = durableHistory.map((historyEntry) => ({
           insertAfterItemId: historyEntry.insertAfterItemId ?? null,
           insertAfterItemIndex: historyEntry.insertAfterItemIndex ?? null,
           itemId: historyEntry.itemId ?? null,
@@ -1366,8 +1364,14 @@ function WorkbenchThreadClient(
           response: historyEntry.response,
           threadId: historyEntry.threadId,
           turnId: historyEntry.turnId,
-        });
-        setQuestionnaireHistoryEntries(entry.identity.threadId, [...entriesByRequestKey.values()]);
+        }));
+        setQuestionnaireHistoryEntries(
+          entry.identity.threadId,
+          mergeQuestionnaireHistoryEntries(
+            state.questionnaireHistoryByThreadId.get(entry.identity.threadId) ?? [],
+            normalizedHistory,
+          ),
+        );
       }
     }
     for (const harness of ["codex", "copilot", "opencode"] as const) {
@@ -2873,10 +2877,7 @@ function WorkbenchThreadClient(
     };
     return setQuestionnaireHistoryEntries(
       pendingRequest.threadId,
-      [
-        ...existingEntries.filter((existingEntry) => existingEntry.requestKey !== pendingRequest.requestKey),
-        entry,
-      ],
+      mergeQuestionnaireHistoryEntries(existingEntries, [entry]),
     );
   }
 

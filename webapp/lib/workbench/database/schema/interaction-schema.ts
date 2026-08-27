@@ -91,7 +91,6 @@ const threadItemInteractionsV1 = defineTable("thread_item_interactions", {
   resolved_at: integer().notNull(),
 }, (table) => ({
   constraints: [
-    unique([table.thread_id, table.request_key]),
     foreignKey([table.item_id, table.thread_id, table.item_type], {
       table: "thread_items",
       columns: ["id", "thread_id", "type"],

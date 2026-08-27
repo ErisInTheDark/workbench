@@ -13,8 +13,8 @@ import type {
 } from "../database/transcript/workbench-transcript-contract";
 import { areDeeplyEqual } from "../deep-equality";
 import {
-  SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX,
-} from "../thread/thread-questionnaire-history";
+  readSyntheticQuestionnaireHistoryItemId,
+} from "../thread/thread-questionnaire-identity";
 import type { WorkbenchFileChangeItem } from "../thread/workbench-file-change";
 import {
   planCanonicalTranscriptDisplay,
@@ -204,13 +204,14 @@ function parseQuestionnaireResponse(item: Extract<ThreadItem, { type: "dynamicTo
   }
 }
 
-function normalizeJsonItem(item: ThreadItem, threadId: string): SemanticItem {
-  const questionnairePrefix = `${SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX}${threadId}:`;
-  if (item.type === "dynamicToolCall" && item.id.startsWith(questionnairePrefix)) {
-    const requestKey = item.id.slice(questionnairePrefix.length);
+function normalizeJsonItem(item: ThreadItem): SemanticItem {
+  const questionnaireItemId = item.type === "dynamicToolCall"
+    ? readSyntheticQuestionnaireHistoryItemId(item.id)
+    : null;
+  if (item.type === "dynamicToolCall" && questionnaireItemId) {
     const approval = isRecord(item.arguments) && item.arguments.approval !== undefined;
     return {
-      id: `interaction:${requestKey}`,
+      id: questionnaireItemId,
       payload: {
         errorText: null,
         request: item.arguments,
@@ -230,7 +231,7 @@ function normalizeJsonItem(item: ThreadItem, threadId: string): SemanticItem {
 
 function normalizeInteraction(item: WorkbenchProjectedInteractionItem): SemanticItem {
   return {
-    id: `interaction:${item.requestKey}`,
+    id: item.id,
     payload: {
       errorText: item.errorText,
       request: item.request,
@@ -277,7 +278,7 @@ function jsonDisplay(thread: ThreadPayload) {
   let itemIndex = 0;
   const semanticByOriginalId = new Map<string, SemanticItem>();
   const items = turns.flatMap((turn) => turn.items.map((item) => {
-    const semantic = normalizeJsonItem(item, thread.id);
+    const semantic = normalizeJsonItem(item);
     semanticByOriginalId.set(item.id, semantic);
     return { itemId: semantic.id, itemIndex: itemIndex++, payload: semantic, turnId: turn.id };
   }));

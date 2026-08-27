@@ -1485,6 +1485,40 @@ test("proper questionnaires and late-response history survive controller restart
   const completed = (await third.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
   assert.equal(completed?.entryKind === "thread" ? completed.pendingQuestionnaire ?? null : null, null);
   assert.equal(completed?.entryKind === "thread" ? completed.questionnaireHistory?.[0]?.requestKey : null, "request-key");
+
+  const repeatedKeyQuestionnaire = {
+    ...questionnaire,
+    itemId: "item-2",
+    request: { ...questionnaire.request, id: "request-2", title: "Questionnaire 2" },
+  };
+  await third.observeLifecycle("codex", "thread", {
+    kind: "pendingInput",
+    questionnaire: repeatedKeyQuestionnaire,
+    requestKey: repeatedKeyQuestionnaire.requestKey,
+    turnId: repeatedKeyQuestionnaire.turnId,
+  });
+  const repeatedKeyResolution = await third.handleRequest("third", {
+    entry: {
+      ...repeatedKeyQuestionnaire,
+      insertAfterItemId: "item-2",
+      insertAfterItemIndex: 1,
+      resolvedAt: 4,
+      response: { answers: { route: { answers: ["Continue"] } } },
+      threadId: "thread",
+      turnId: "turn",
+    },
+    identity: { harness: "codex", threadId: "thread" },
+    method: "workbench/thread-state/questionnaire/resolve",
+    projectId: "project",
+  });
+  assert.equal("result" in repeatedKeyResolution && (repeatedKeyResolution.result as { accepted?: boolean }).accepted, true);
+  const repeatedKeyHistory = (await third.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
+  assert.deepEqual(
+    repeatedKeyHistory?.entryKind === "thread"
+      ? repeatedKeyHistory.questionnaireHistory?.map((entry) => entry.itemId)
+      : null,
+    ["item", "item-2"],
+  );
   await third.dispose();
 
   const fourth = createController();
@@ -1496,6 +1530,12 @@ test("proper questionnaires and late-response history survive controller restart
   const reloaded = (await fourth.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread");
   assert.equal(reloaded?.entryKind === "thread" ? reloaded.pendingQuestionnaire ?? null : null, null);
   assert.equal(reloaded?.entryKind === "thread" ? reloaded.questionnaireHistory?.[0]?.response.answers.route?.answers[0] : null, "Approve");
+  assert.deepEqual(
+    reloaded?.entryKind === "thread"
+      ? reloaded.questionnaireHistory?.map((entry) => entry.itemId)
+      : null,
+    ["item", "item-2"],
+  );
   await fourth.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });

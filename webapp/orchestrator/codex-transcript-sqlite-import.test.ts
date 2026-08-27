@@ -150,6 +150,61 @@ test("complete import uses full history order, exact timeline facts, and durable
   }
 });
 
+test("reused provider request keys keep questionnaire observations in their owning turns", () => {
+  const questionnaire = (
+    turnId: string,
+    itemId: string,
+    insertAfterItemId: string,
+  ): WorkbenchQuestionnaireHistoryEntry => ({
+    insertAfterItemId,
+    insertAfterItemIndex: 0,
+    itemId,
+    request: {
+      id: `request-${turnId}`,
+      questions: [{ allowOther: false, header: "Pick", id: "choice", isSecret: false, options: [], question: "Which?" }],
+      submitLabel: "Submit",
+      summary: "Choose",
+      title: "Question",
+    },
+    requestKey: "reused",
+    resolvedAt: turnId === "older" ? 2_000 : 5_000,
+    response: { answers: { choice: { answers: [turnId] } } },
+    threadId: "thread",
+    turnId,
+  });
+  const questionnaires = [
+    questionnaire("older", "question-older", "older-message"),
+    questionnaire("newer", "question-newer", "prompt"),
+  ];
+  const snapshot = createCodexTranscriptSqliteImport({
+    browseResultEntries: [],
+    context: {
+      activityAt: 6_000,
+      createdAt: 1_000,
+      nativeLocation: "C:/repo",
+      projectId: "project",
+      projectRoot: "C:/repo",
+      title: "Thread",
+      updatedAt: 6_000,
+    },
+    questionnaireEntries: questionnaires,
+    steerEntries: [],
+    thread: thread(),
+  });
+  assert.equal(snapshot.kind, "canonicalWindow");
+  if (snapshot.kind !== "canonicalWindow") return;
+
+  assert.deepEqual(
+    snapshot.observations
+      .filter((observation) => observation.kind === "questionnaire")
+      .map(({ entry }) => [entry.turnId, entry.itemId, entry.requestKey]),
+    [
+      ["older", "question-older", "reused"],
+      ["newer", "question-newer", "reused"],
+    ],
+  );
+});
+
 test("one Codex item lifecycle update becomes one atomic observation without a turn snapshot", () => {
   const item = { id: "answer", memoryCitation: null, phase: "commentary" as const, text: "streaming", type: "agentMessage" as const };
   assert.deepEqual(createCodexTranscriptSqliteItemObservation({
