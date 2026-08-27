@@ -10,12 +10,14 @@ import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem"
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn } from "../../codex/thread-state";
 import type { ThreadPayload, WorkbenchUserInputResponse } from "../../types";
+import { defineTagWrapper } from "./tag-wrapper.ts";
 import type { WorkbenchThreadLifecycle } from "./thread-state";
 
-export const WORKBENCH_THREAD_RECOVERY_MESSAGE = "<workbench:resume />";
+export const WORKBENCH_THREAD_RECOVERY_MESSAGE = "<wb:resume />";
 export const WORKBENCH_THREAD_RECOVERY_ID_PREFIX = "workbench:thread-recovery:";
-const WORKBENCH_QUESTIONNAIRE_RESPONSE_OPEN = "<workbench:questionnaire-response>";
-const WORKBENCH_QUESTIONNAIRE_RESPONSE_CLOSE = "</workbench:questionnaire-response>";
+const WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER = defineTagWrapper("wb:questionnaire-response", {
+  attributes: [],
+});
 
 function hashSeed(seed: string) {
   let left = 0x811c9dc5;
@@ -43,7 +45,7 @@ export function createWorkbenchThreadRecoveryInput(): UserInput[] {
 
 export function createWorkbenchQuestionnaireResponseInput(response: WorkbenchUserInputResponse): UserInput[] {
   return [{
-    text: `${WORKBENCH_QUESTIONNAIRE_RESPONSE_OPEN}\n${JSON.stringify(response, null, 2)}\n${WORKBENCH_QUESTIONNAIRE_RESPONSE_CLOSE}`,
+    text: WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER.wrap(JSON.stringify(response, null, 2), {}),
     text_elements: [],
     type: "text",
   }];
@@ -57,10 +59,10 @@ export function isWorkbenchThreadRecoveryInput(input: readonly UserInput[]) {
 
 export function isWorkbenchQuestionnaireResponseInput(input: readonly UserInput[]) {
   if (input.length !== 1 || input[0]?.type !== "text") return false;
-  const text = input[0].text;
-  if (!text.startsWith(`${WORKBENCH_QUESTIONNAIRE_RESPONSE_OPEN}\n`) || !text.endsWith(`\n${WORKBENCH_QUESTIONNAIRE_RESPONSE_CLOSE}`)) return false;
+  const parsed = WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER.read(input[0].text);
+  if (!parsed) return false;
   try {
-    const response = JSON.parse(text.slice(WORKBENCH_QUESTIONNAIRE_RESPONSE_OPEN.length, -WORKBENCH_QUESTIONNAIRE_RESPONSE_CLOSE.length).trim()) as { answers?: unknown };
+    const response = JSON.parse(parsed.body) as { answers?: unknown };
     return Boolean(response) && typeof response === "object" && response.answers !== null && typeof response.answers === "object";
   } catch {
     return false;

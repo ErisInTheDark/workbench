@@ -20,7 +20,7 @@ import {
   createWorkbenchThreadContextSortKey,
   type WorkbenchThreadContextPiece,
 } from "./thread-context-projection.ts";
-import { readWorkbenchSubagentMessageInput } from "./thread-subagent-message.ts";
+import { readWorkbenchAgentMessageInput } from "./thread-agent-message.ts";
 
 const SEARCH_SNIPPET_CHARACTERS = 500;
 const CURSOR_PREFIX = "recall-v1:";
@@ -70,10 +70,10 @@ function stripOuterPlanTag(value: string) {
 function contextPieceKind(piece: WorkbenchThreadContextPiece): WorkbenchThreadRecallKind {
   switch (piece.kind) {
     case "userMessage":
-      if (readWorkbenchSubagentMessageInput(piece.input)) return "agent-message";
+      if (readWorkbenchAgentMessageInput(piece.input)) return "agent-message";
       return "user-message";
     case "userSteer":
-      if (readWorkbenchSubagentMessageInput(piece.input)) return "agent-message";
+      if (readWorkbenchAgentMessageInput(piece.input)) return "agent-message";
       return "user-steer";
     case "questionnaire":
       return "questionnaire";
@@ -84,8 +84,8 @@ function contextPieceKind(piece: WorkbenchThreadContextPiece): WorkbenchThreadRe
 
 function contextPieceLabel(piece: WorkbenchThreadContextPiece) {
   if (piece.kind === "userMessage" || piece.kind === "userSteer") {
-    const subagentMessage = readWorkbenchSubagentMessageInput(piece.input);
-    if (subagentMessage) return `Subagent message from ${subagentMessage.name}`;
+    const agentMessage = readWorkbenchAgentMessageInput(piece.input);
+    if (agentMessage) return `Agent message from ${agentMessage.senderName}`;
   }
   switch (piece.kind) {
     case "userMessage":

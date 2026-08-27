@@ -32,8 +32,9 @@ import {
   isAgentScreenshotSteerUserMessage,
 } from "../../../lib/workbench/thread/thread-steer-markers";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
-import { readWorkbenchSubagentMessageInput } from "../../../lib/workbench/thread/thread-subagent-message";
+import { readWorkbenchAgentMessageInput } from "../../../lib/workbench/thread/thread-agent-message";
 import { isWorkbenchHiddenSystemSteerInput } from "../../../lib/workbench/thread/thread-recovery-message";
+import { unwrapWorkbenchSteerDisplayInput } from "../../../lib/workbench/thread/thread-steer-display";
 import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
@@ -95,7 +96,7 @@ import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
-import ThreadSubagentIncomingMessage from "./ThreadSubagentIncomingMessage";
+import ThreadAgentIncomingMessage from "./ThreadAgentIncomingMessage";
 import ThreadSubagentMessageItem from "./ThreadSubagentMessageItem";
 import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
@@ -780,26 +781,26 @@ function ThreadUserMessageItem ({
   subagents?: readonly WorkbenchSubagentSummary[];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const subagentMessage = readWorkbenchSubagentMessageInput(item.content);
-  if (subagentMessage) {
+  const agentMessage = readWorkbenchAgentMessageInput(item.content);
+  if (agentMessage) {
     const steerState = getSteerUserMessageState(item);
     return (
-      <ThreadSubagentIncomingMessage
-        name={subagentMessage.name}
+      <ThreadAgentIncomingMessage
+        name={agentMessage.senderName}
         steerState={steerState}
-        subagent={getSubagentSummary(subagents, subagentMessage.threadId)}
+        subagent={getSubagentSummary(subagents, agentMessage.senderThreadId)}
         timestamp={showStartedAt ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} /> : undefined}
       >
         <ThreadMarkdown
           inlineMentionSources={inlineMentionSources}
-          markdown={subagentMessage.message}
+          markdown={agentMessage.message}
           threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
           workspaceRoots={workspaceRoots}
         />
-      </ThreadSubagentIncomingMessage>
+      </ThreadAgentIncomingMessage>
     );
   }
 
@@ -815,7 +816,8 @@ function ThreadUserMessageItem ({
 
   const steerState = getSteerUserMessageState(item);
   const isDecoratedSteer = steerState !== null;
-  const copyMarkdown = getUserMessageCopyMarkdown(item.content);
+  const displayContent = unwrapWorkbenchSteerDisplayInput(item.content);
+  const copyMarkdown = getUserMessageCopyMarkdown(displayContent);
   const steerMessageClass = steerState === "pending"
     ? " relative isolate overflow-hidden rounded-[1.4rem]"
     : steerState === "unsent"
@@ -832,7 +834,7 @@ function ThreadUserMessageItem ({
         <div className={isDecoratedSteer ? steerMessageClass : undefined}>
           {steerState === "pending" ? <WorkbenchSpinningBorder radius="1.4rem" /> : null}
           <div className={`space-y-2 text-left${decoratedSteerSurfaceClass}`}>
-            {item.content.length ? item.content.map((content, index) => (
+            {displayContent.length ? displayContent.map((content, index) => (
               <ThreadUserInputLine
                 key={`${item.id}:content:${index}:${content.type}`}
                 input={content}

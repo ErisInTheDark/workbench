@@ -12,7 +12,7 @@ import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type { CodexJsonRpcResponse } from "../lib/codex/protocol";
 import type { WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "../lib/types";
-import { readWorkbenchSubagentMessageInput } from "../lib/workbench/thread/thread-subagent-message";
+import { readWorkbenchAgentMessageInput } from "../lib/workbench/thread/thread-agent-message";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 
@@ -57,11 +57,18 @@ class FakeHarnessClient {
   closeCount = 0;
   connectCount = 0;
   private readonly cwd: string;
+  private readonly childStatus: "completed" | "inProgress";
   private readonly failTurnStart: boolean;
   private readonly parentStatus: "completed" | "inProgress";
 
-  constructor(cwd: string, failTurnStart = false, parentStatus: "completed" | "inProgress" = "completed") {
+  constructor(
+    cwd: string,
+    failTurnStart = false,
+    parentStatus: "completed" | "inProgress" = "completed",
+    childStatus: "completed" | "inProgress" = "inProgress",
+  ) {
     this.cwd = cwd;
+    this.childStatus = childStatus;
     this.failTurnStart = failTurnStart;
     this.parentStatus = parentStatus;
   }
@@ -79,7 +86,7 @@ class FakeHarnessClient {
     if (message.method === "thread/read") {
       if (harness !== "codex") return { error: { code: -32000, message: "Thread not found." }, id: 1 };
       const threadId = String(params.threadId ?? "");
-      const result = { thread: thread(threadId, this.cwd, threadId === childThreadId ? "inProgress" : this.parentStatus) };
+      const result = { thread: thread(threadId, this.cwd, threadId === childThreadId ? this.childStatus : this.parentStatus) };
       return { id: 1, result: result as T };
     }
     if (message.method === "thread/start") return { id: 1, result: { thread: thread(childThreadId, this.cwd) } as T };
@@ -190,6 +197,11 @@ test("creates with one client and delivers a steer before empty questionnaire re
   assert.equal(threadStart?.params.effort, "medium");
   assert.equal(turnStart?.params.effort, "medium");
   assert.equal((turnStart?.params.collaborationMode as { settings?: { reasoning_effort?: string } })?.settings?.reasoning_effort, "medium");
+  assert.deepEqual(readWorkbenchAgentMessageInput(turnStart?.params.input as UserInput[]), {
+    message: "Inspect the code.",
+    senderName: "parent agent",
+    senderThreadId: callerThreadId,
+  });
   const listedAfterCreate = await controller.handleRequest({
     id: 4,
     method: "workbench/subagent/list",
@@ -208,6 +220,11 @@ test("creates with one client and delivers a steer before empty questionnaire re
   assert.equal(clients[1].closeCount, 1);
   const lifecycleCalls = clients[1].calls.filter(({ method }) => method === "turn/steer" || method === "questionnaire/respond");
   assert.deepEqual(lifecycleCalls.map(({ method }) => method), ["turn/steer", "questionnaire/respond"]);
+  assert.deepEqual(readWorkbenchAgentMessageInput(lifecycleCalls[0].params.input as UserInput[]), {
+    message: "Take the safer route.",
+    senderName: "parent agent",
+    senderThreadId: callerThreadId,
+  });
   assert.deepEqual(lifecycleCalls[1].params.response, { answers: { direction: { answers: [] } } });
 
   const stopped = await controller.handleRequest({
@@ -277,12 +294,51 @@ test("starts an idle direct parent through the pre-reload store surface", async 
   );
   const parentTurnStart = clients[1].calls.find(({ method, params }) => method === "turn/start" && params.threadId === callerThreadId);
   assert(parentTurnStart);
-  assert.deepEqual(readWorkbenchSubagentMessageInput(parentTurnStart.params.input as UserInput[]), {
+  assert.deepEqual(readWorkbenchAgentMessageInput(parentTurnStart.params.input as UserInput[]), {
     message: "The safe route is ready.",
-    name: "Mimi",
-    threadId: childThreadId,
+    senderName: "Mimi",
+    senderThreadId: childThreadId,
   });
   assert.equal(clients[1].calls.some(({ method }) => method === "questionnaire/respond"), false);
+});
+
+test("starts an idle child with attributed parent-agent input", async (context) => {
+  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-idle-child-message-"));
+  context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
+  const cwd = process.cwd();
+  const clients: FakeHarnessClient[] = [];
+  const controller = new WorkbenchSubagentController({
+    bridgeUrl: "ws://unused",
+    createHarnessClient: () => {
+      const client = new FakeHarnessClient(cwd, false, "completed", "completed");
+      clients.push(client);
+      return client;
+    },
+    onRelationshipCommitted: async () => undefined,
+    resolveProjectFromCwd: createProjectResolver(cwd),
+    storageRoot,
+    subagentStore: new WorkbenchSubagentStore(storageRoot),
+  });
+
+  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
+  assert.deepEqual(await controller.handleRequest({
+    id: 2,
+    method: "workbench/subagent/create",
+    params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
+  }), { id: 2, result: { threadId: childThreadId } });
+
+  assert.deepEqual(await controller.handleRequest({
+    id: 3,
+    method: "workbench/subagent/message",
+    params: { callerThreadId, cwd, message: "Continue with the safe route.", threadId: childThreadId },
+  }), { id: 3, result: {} });
+  const childTurnStart = clients[1].calls.find(({ method, params }) => method === "turn/start" && params.threadId === childThreadId);
+  assert(childTurnStart);
+  assert.deepEqual(readWorkbenchAgentMessageInput(childTurnStart.params.input as UserInput[]), {
+    message: "Continue with the safe route.",
+    senderName: "parent agent",
+    senderThreadId: callerThreadId,
+  });
 });
 
 test("steers an active direct parent and rejects callers without a relationship", async (context) => {
@@ -317,10 +373,10 @@ test("steers an active direct parent and rejects callers without a relationship"
   }), { id: 3, result: {} });
   const parentSteer = clients[1].calls.find(({ method, params }) => method === "turn/steer" && params.threadId === callerThreadId);
   assert(parentSteer);
-  assert.deepEqual(readWorkbenchSubagentMessageInput(parentSteer.params.input as UserInput[]), {
+  assert.deepEqual(readWorkbenchAgentMessageInput(parentSteer.params.input as UserInput[]), {
     message: "Active parent note.",
-    name: "Mimi",
-    threadId: childThreadId,
+    senderName: "Mimi",
+    senderThreadId: childThreadId,
   });
   assert.equal(clients[1].calls.some(({ method }) => method === "questionnaire/respond"), false);
 

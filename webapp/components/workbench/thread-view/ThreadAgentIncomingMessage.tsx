@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadSubagentIncomingMessage: render a direct child-to-parent message with sender heading, shared steer decoration, and left alignment. Keywords: subagent, parent, incoming, message, steer, bubble.
+ * - default ThreadAgentIncomingMessage: render an attributed cross-agent message with shared steer decoration and left alignment. Keywords: agent, incoming, message, steer, bubble.
  */
 "use client";
 
@@ -10,7 +10,7 @@ import type { WorkbenchSubagentSummary } from "../../../lib/types";
 
 import ThreadAgentName from "./ThreadAgentName";
 
-export default function ThreadSubagentIncomingMessage ({
+export default function ThreadAgentIncomingMessage ({
   children,
   name,
   subagent,
@@ -28,7 +28,7 @@ export default function ThreadSubagentIncomingMessage ({
   return (
     <section
       className="flex flex-col items-start py-2"
-      data-thread-user-message-state={steerState ? `${steerState}-subagent-message` : "subagent-message"}
+      data-thread-user-message-state={steerState ? `${steerState}-agent-message` : "agent-message"}
     >
       <div className={`w-full max-w-[42rem]${decorated ? steerMessageClass : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3"}`}>
         <div className={`space-y-2 text-left${decorated ? " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-4 py-3" : ""}`}>

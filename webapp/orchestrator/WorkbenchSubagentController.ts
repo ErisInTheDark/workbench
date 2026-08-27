@@ -27,8 +27,8 @@ import {
   renderSubagentTurnOutput,
   renderSubagentWaitResultOutput,
 } from "../lib/workbench/subagent/subagent-output";
+import { createWorkbenchAgentMessageText } from "../lib/workbench/thread/thread-agent-message";
 import { getWorkbenchThreadHarnessCandidates } from "../lib/workbench/thread/thread-harness-candidates";
-import { createWorkbenchSubagentMessageText } from "../lib/workbench/thread/thread-subagent-message";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "../lib/workbench/thread/thread-state";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
@@ -51,6 +51,7 @@ interface ResolvedSubagentCaller {
 }
 
 const POLL_INTERVAL_MS = 1_000;
+const PARENT_AGENT_NAME = "parent agent";
 const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
 
 type WorkbenchSubagentHarnessClient = Pick<CodexAppServerClient, "close" | "connect" | "sendRequest">;
@@ -93,6 +94,10 @@ function requiredThreadIds(record: Record<string, unknown>) {
 
 function textInput(message: string): UserInput[] {
   return [{ text: message, text_elements: [], type: "text" }];
+}
+
+function agentMessageInput(message: string, senderName: string, senderThreadId: string) {
+  return textInput(createWorkbenchAgentMessageText({ message, senderName, senderThreadId }));
 }
 
 function currentTurn(thread: Thread) {
@@ -362,7 +367,9 @@ export default class WorkbenchSubagentController {
           [WORKBENCH_PROMPT_CONTEXT_FIELD]: turnContext,
           params: {
             ...(profile.harness === "codex" ? { collaborationMode: createQuestionnaireCollaborationMode(profile.model, profile.reasoningEffort) } : {}),
-            cwd: caller.cwd, effort: profile.reasoningEffort, input: textInput(userMessage), model: profile.model,
+            cwd: caller.cwd, effort: profile.reasoningEffort,
+            input: agentMessageInput(userMessage, PARENT_AGENT_NAME, caller.callerThreadId),
+            model: profile.model,
             serviceTier: profile.serviceTier, summary: "detailed", threadId: childId,
           },
         });
@@ -570,11 +577,15 @@ export default class WorkbenchSubagentController {
     const { caller, record } = await this.ownedRecord(params);
     await this.assertUnlocked(record.projectId, [record]);
     const message = requiredString(params, "message");
+    const input = agentMessageInput(message, PARENT_AGENT_NAME, caller.callerThreadId);
     const thread = await this.readThread(client, record.harness, record.threadId, record.cwd);
     const turn = currentTurn(thread);
     const pending = await this.pendingQuestionnaire(client, record);
     if (turn?.status === "inProgress") {
-      await this.requestHarness(client, record.harness, { method: "turn/steer", params: { cwd: record.cwd, expectedTurnId: turn.id, input: textInput(message), threadId: record.threadId } });
+      await this.requestHarness(client, record.harness, {
+        method: "turn/steer",
+        params: { cwd: record.cwd, expectedTurnId: turn.id, input, threadId: record.threadId },
+      });
       if (pending) await this.requestHarness(client, record.harness, {
         method: "questionnaire/respond",
         params: { requestKey: pending.requestKey, response: createEmptySubagentQuestionnaireResponse(pending.request), threadId: record.threadId, turnId: pending.turnId },
@@ -588,7 +599,7 @@ export default class WorkbenchSubagentController {
       [WORKBENCH_PROMPT_CONTEXT_FIELD]: this.buildPromptContext(caller, profile, record.threadId, record.name, typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : undefined, record.harness === "codex" ? "threadUtilities" : undefined),
       params: {
         ...(record.harness === "codex" ? { collaborationMode: createQuestionnaireCollaborationMode(profile.model, profile.reasoningEffort) } : {}),
-        cwd: record.cwd, effort: profile.reasoningEffort, input: textInput(message), model: profile.model,
+        cwd: record.cwd, effort: profile.reasoningEffort, input, model: profile.model,
         serviceTier: profile.serviceTier, summary: "detailed", threadId: record.threadId,
       },
     });
@@ -612,11 +623,11 @@ export default class WorkbenchSubagentController {
       caller.project,
       "Workbench subagent parent",
     );
-    const input = textInput(createWorkbenchSubagentMessageText({
-      message: requiredString(params, "message"),
-      name: relationship.name,
-      threadId: relationship.threadId,
-    }));
+    const input = agentMessageInput(
+      requiredString(params, "message"),
+      relationship.name,
+      relationship.threadId,
+    );
     const turn = currentTurn(parent.thread);
     if (turn?.status === "inProgress") {
       await this.requestHarness(client, parent.harness, {

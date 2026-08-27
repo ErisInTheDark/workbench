@@ -46,7 +46,7 @@ test("manual recovery follows inactive Workbench lifecycle without competing wit
 });
 
 test("only the exact single recovery text is recognized", () => {
-  assert.equal(WORKBENCH_THREAD_RECOVERY_MESSAGE, "<workbench:resume />");
+  assert.equal(WORKBENCH_THREAD_RECOVERY_MESSAGE, "<wb:resume />");
   assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchThreadRecoveryInput()), true);
   assert.equal(isWorkbenchThreadRecoveryInput([{ text: `${WORKBENCH_THREAD_RECOVERY_MESSAGE} extra`, text_elements: [], type: "text" }]), false);
 });

@@ -1859,7 +1859,7 @@ test("durable detached questionnaire responses resolve after admission even when
   });
   const start = socket.requests.find((candidate) => candidate.method === "turn/start");
   const input = start?.params?.input as Array<{ text?: string; type?: string }> | undefined;
-  assert.match(input?.[0]?.text ?? "", /^<workbench:questionnaire-response>/u);
+  assert.match(input?.[0]?.text ?? "", /^<wb:questionnaire-response>/u);
   assert.equal(socket.requests.some((candidate) => candidate.method === "questionnaire/respond"), false);
   assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/thread-state/questionnaire/resolve"), true);
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);

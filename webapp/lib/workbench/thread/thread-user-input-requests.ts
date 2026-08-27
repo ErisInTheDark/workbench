@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_APPROVAL_DECISION_QUESTION_ID: stable approval decision question id. Keywords: questionnaire, approval, decision.
+ * - WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER: UI-hidden accepted/declined context around custom approval notes. Keywords: approval, note, tag, wrapper.
  * - isWorkbenchApprovalDecisionQuestion: detect Workbench approval option questions. Keywords: questionnaire, approval, options.
  * - isWorkbenchApprovalRequest: detect fixed-option Workbench approval requests. Keywords: questionnaire, approval, guard.
  * - hasWorkbenchApprovalDecisionSelection: confirm an approval response chose an approval option. Keywords: questionnaire, approval, validation.
@@ -12,10 +13,19 @@ import type {
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
 } from "../../types";
+import { defineTagWrapper } from "./tag-wrapper.ts";
 
 export const WORKBENCH_APPROVAL_DECISION_QUESTION_ID = "decision";
+export const WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER = defineTagWrapper("wb:run-outside-sandbox:note", {
+  attributes: ["type"] as const,
+});
 
-const WORKBENCH_APPROVAL_OPTION_LABELS = new Set(["Allow once", "Allow for session", "Decline"]);
+const WORKBENCH_APPROVAL_ACCEPT_LABELS = new Set(["Allow once", "Allow for session"]);
+const WORKBENCH_APPROVAL_DECLINE_LABEL = "Decline";
+const WORKBENCH_APPROVAL_OPTION_LABELS = new Set([
+  ...WORKBENCH_APPROVAL_ACCEPT_LABELS,
+  WORKBENCH_APPROVAL_DECLINE_LABEL,
+]);
 
 function isWorkbenchApprovalOptionLabel(value: string) {
   return WORKBENCH_APPROVAL_OPTION_LABELS.has(value);
@@ -65,5 +75,16 @@ export function getWorkbenchApprovalSupplementalSteerText(
   }
 
   const customAnswers = request.questions.flatMap((question) => getCustomAnswerValues(question, response));
-  return customAnswers.length ? customAnswers.join("\n\n") : null;
+  if (!customAnswers.length) return null;
+  const decisionAnswers = request.questions
+    .filter(isWorkbenchApprovalDecisionQuestion)
+    .flatMap((question) => getAnswerValues(response, question.id));
+  const type = decisionAnswers.includes(WORKBENCH_APPROVAL_DECLINE_LABEL)
+    ? "declined"
+    : decisionAnswers.some((answer) => WORKBENCH_APPROVAL_ACCEPT_LABELS.has(answer))
+      ? "accepted"
+      : null;
+  return type
+    ? WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER.wrap(customAnswers.join("\n\n"), { type })
+    : null;
 }

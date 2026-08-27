@@ -9,6 +9,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
+import { unwrapWorkbenchSteerDisplayInput } from "../../../lib/workbench/thread/thread-steer-display";
+import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "../../../lib/workbench/thread/thread-user-input-requests";
 import {
   createBubbleCopyFeedbackController,
   getUserMessageCopyMarkdown,
@@ -78,6 +80,20 @@ test("ordinary user messages and pending steers render source-Markdown copy acti
 
   assert.equal(html.match(/data-thread-bubble-copy-button="true"/gu)?.length, 2, html);
   assert.match(html, /data-thread-user-message-state="pending-steer"/u);
+});
+
+test("approval-note metadata stays hidden from steer rendering and copy Markdown", () => {
+  const wrapped = WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER.wrap(
+    "The requested cwd is wrong.",
+    { type: "declined" },
+  );
+  const item = createUserMessage("approval-note", wrapped);
+  const html = renderUserItems([item]);
+  const displayInput = unwrapWorkbenchSteerDisplayInput(item.content);
+
+  assert.match(html, /The requested cwd is wrong\./u);
+  assert.doesNotMatch(html, /wb:run-outside-sandbox:note|type=&quot;declined&quot;/u);
+  assert.equal(getUserMessageCopyMarkdown(displayInput), "The requested cwd is wrong.");
 });
 
 test("image-only user messages do not render a copy action", () => {

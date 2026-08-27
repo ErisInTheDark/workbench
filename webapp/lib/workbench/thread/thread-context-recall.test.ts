@@ -27,7 +27,8 @@ import {
   type WorkbenchThreadRecallRecord,
 } from "./thread-context-recall.ts";
 import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput } from "./thread-recovery-message.ts";
-import { createWorkbenchSubagentMessageText } from "./thread-subagent-message.ts";
+import { createWorkbenchAgentMessageText } from "./thread-agent-message.ts";
+import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "./thread-user-input-requests.ts";
 
 const ALL_KINDS: WorkbenchThreadRecallKind[] = [
   "agent-message",
@@ -121,7 +122,11 @@ function createBundle(): WorkbenchThreadContextBundle {
       entryKey: "turn-steer:139",
       error: null,
       input: [{
-        text: createWorkbenchSubagentMessageText({ message: "active parent progress", name: "Mimi", threadId: "child-active" }),
+        text: createWorkbenchAgentMessageText({
+          message: "active parent progress",
+          senderName: "Mimi",
+          senderThreadId: "child-active",
+        }),
         text_elements: [],
         type: "text",
       }],
@@ -138,6 +143,21 @@ function createBundle(): WorkbenchThreadContextBundle {
       input: createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["approved"] } } }),
       requestId: "questionnaire-response-request",
       resolvedAt: 12,
+      status: "sent",
+      threadId: "thread-1",
+      turnId: "turn-new",
+    }, {
+      attemptedAt: 13,
+      canonicalItemId: null,
+      entryKey: "turn-steer:approval-note",
+      error: null,
+      input: [{
+        text: WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER.wrap("The cwd is wrong.", { type: "declined" }),
+        text_elements: [],
+        type: "text",
+      }],
+      requestId: "approval-note-request",
+      resolvedAt: 14,
       status: "sent",
       threadId: "thread-1",
       turnId: "turn-new",
@@ -191,7 +211,11 @@ function createBundle(): WorkbenchThreadContextBundle {
           {
             clientId: null,
             content: [{
-              text: createWorkbenchSubagentMessageText({ message: "idle parent progress", name: "Nell", threadId: "child-idle" }),
+              text: createWorkbenchAgentMessageText({
+                message: "idle parent progress",
+                senderName: "Nell",
+                senderThreadId: "child-idle",
+              }),
               text_elements: [],
               type: "text",
             }],
@@ -221,9 +245,14 @@ test("builds one rich narrative projection and suppresses embedded plans with th
     records.filter((record) => record.kind === "user-steer").map((record) => record.ref),
     [
       "steer:turn-old:turn-steer:139",
+      "steer:turn-new:turn-steer:approval-note",
     ],
   );
   assert(records.some((record) => record.ref === "steer:turn-new:turn-steer:139" && record.kind === "agent-message"));
+  assert.match(
+    records.find((record) => record.ref === "steer:turn-new:turn-steer:approval-note")?.text ?? "",
+    /^<wb:run-outside-sandbox:note type="declined">\nThe cwd is wrong\.\n<\/wb:run-outside-sandbox:note>$/u,
+  );
   assert.deepEqual(
     selectWorkbenchThreadRecallRecords(records, ALL_KINDS)
       .filter((record) => record.ref === "agent:plan-new" || record.ref === "plan-block:plan-new:0")
