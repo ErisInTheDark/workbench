@@ -4,88 +4,47 @@
  */
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 
-import type { WorkbenchReloadDirtScope, WorkbenchThreadSidebarStore } from "../../lib/types";
+import type { OrchestratorReloadResponse, OrchestratorReloadScope, WorkbenchReloadDirtScope, WorkbenchThreadSidebarStore } from "../../lib/types";
 import ChevronIcon from "./ChevronIcon";
 import PrimaryButton from "./PrimaryButton";
 import {
   getReloadAllHoldMs,
   getReloadScopeHoldMs,
-  readReloadResponse,
-  waitForReloadCompletion,
 } from "./reload-necessary-state";
 
 const EMPTY_SUBSCRIBE = () => () => undefined;
 
 export default function ReloadNecessary({
   order,
+  reloadScopes,
   store,
 }: {
   order?: number;
+  reloadScopes: ((scopes: OrchestratorReloadScope[]) => Promise<OrchestratorReloadResponse>) | null;
   store: WorkbenchThreadSidebarStore | null;
 }) {
-  const activeReloadRef = useRef<AbortController | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [requestError, setRequestError] = useState("");
   const [requesting, setRequesting] = useState<string[]>([]);
   const snapshot = useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, store?.getSnapshot ?? (() => null), () => null);
   const dirt = snapshot?.reloadDirt;
 
-  useEffect(() => () => {
-    activeReloadRef.current?.abort(new Error("Reload status wait was cancelled."));
-    activeReloadRef.current = null;
-  }, []);
-
   if (!dirt?.dirtyScopes.length) return null;
 
   const pending = new Set(dirt.pendingScopes);
   const reload = async (scopes: readonly WorkbenchReloadDirtScope[]) => {
-    const controller = new AbortController();
-    activeReloadRef.current?.abort(new Error("Reload status wait was replaced."));
-    activeReloadRef.current = controller;
     const selected = scopes.map(({ scope }) => scope);
     setRequestError("");
     setRequesting(selected);
     try {
-      const response = await fetch("/api/orchestrator/reload", {
-        body: JSON.stringify({ scopes: selected }),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-        signal: controller.signal,
-      });
-      const payload = await readReloadResponse(response);
-      if (!response.ok || !("ok" in payload && payload.ok)) {
-        throw new Error("error" in payload && typeof payload.error === "string" ? payload.error : "Unable to reload the selected scopes.");
-      }
-      const terminal = await waitForReloadCompletion({
-        admission: payload,
-        readStatus: async (signal) => {
-          const statusResponse = await fetch("/api/orchestrator/reload", {
-            cache: "no-store",
-            method: "GET",
-            signal,
-          });
-          const status = await readReloadResponse(statusResponse);
-          if (!statusResponse.ok || !("ok" in status)) {
-            throw new Error("error" in status && typeof status.error === "string" ? status.error : "Unable to read reload status.");
-          }
-          return status;
-        },
-        signal: controller.signal,
-      });
-      if (terminal.state === "failed") {
-        throw new Error(terminal.error || "Unable to reload the selected scopes.");
-      }
+      if (!reloadScopes) throw new Error("Workbench reload controls are not ready.");
+      await reloadScopes(selected);
     } catch (error) {
-      if (!controller.signal.aborted) {
-        setRequestError(error instanceof Error ? error.message : "Unable to reload the selected scopes.");
-      }
+      setRequestError(error instanceof Error ? error.message : "Unable to reload the selected scopes.");
     } finally {
-      if (activeReloadRef.current === controller) {
-        activeReloadRef.current = null;
-        setRequesting([]);
-      }
+      setRequesting([]);
     }
   };
   const allBusy = Boolean(dirt.pendingScopes.length || requesting.length);

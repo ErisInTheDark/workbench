@@ -4,6 +4,7 @@
  */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,7 @@ import { after, before, test } from "node:test";
 
 import type CodexAppServer from "./CodexAppServer";
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
+import type { WorkbenchBrowseResultEntry } from "../lib/types";
 import {
   createWorkbenchFileChangeFailureSystemMessage,
   type WorkbenchFileChangeItem,
@@ -80,6 +82,225 @@ function bridgeThread(items: ThreadItem[] = []) {
     updatedAt: 1,
   };
 }
+
+test("the transcript queue preserves ready state for the same database and reseeds a replacement database", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-sqlite-transcript-"));
+  const batches: object[][] = [];
+  let activeRecords = 0;
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const firstDatabase = {};
+  const replacementDatabase = {};
+  const createBridge = (
+    sqliteTranscriptIdentity: object,
+    initialState?: import("./CodexStdioBridge").CodexStdioBridgeReloadState,
+  ) => new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    initialState,
+    onNotification() {},
+    recordSqliteTranscript: async (observations) => {
+      activeRecords += 1;
+      assert.equal(activeRecords, 1);
+      batches.push([...observations]);
+      await Promise.resolve();
+      activeRecords -= 1;
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {},
+    sqliteTranscriptIdentity,
+    storageRoot: root,
+  });
+  const item: ThreadItem = {
+    type: "agentMessage",
+    id: "message",
+    text: "hello",
+    phase: "commentary",
+    memoryCitation: null,
+  };
+  try {
+    bridge = createBridge(firstDatabase);
+    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: bridgeThread([]) } });
+    await bridge.handleUpstreamMessage({
+      method: "item/completed",
+      params: { completedAtMs: 2_000, item, threadId: "thread", turnId: "turn" },
+    });
+    await bridge.waitForIdle();
+    assert.deepEqual(batches.flatMap((batch) => batch.map((observation) => (
+      (observation as { kind: string }).kind
+    ))), ["canonicalSnapshot", "turn", "item"]);
+    const bootstrap = batches[0]?.[0] as {
+      observations?: Array<{ kind: string; turnIndex?: number }>;
+    };
+    assert.deepEqual(
+      bootstrap.observations?.map(({ kind, turnIndex }) => ({ kind, turnIndex })),
+      [{ kind: "thread", turnIndex: undefined }, { kind: "turn", turnIndex: 0 }],
+    );
+
+    const state = await bridge.detachForReload();
+    bridge = createBridge(firstDatabase, state);
+    await bridge.handleUpstreamMessage({
+      method: "turn/completed",
+      params: {
+        threadId: "thread",
+        turn: {
+          ...bridgeThread([]).turns[0],
+          completedAt: null,
+          durationMs: null,
+          startedAt: null,
+          status: "completed",
+        },
+      },
+    });
+    await bridge.waitForIdle();
+    const finalBatch = batches.at(-1) as Array<{
+      endedAt?: number | null;
+      kind: string;
+      nativeLocation?: string;
+      startedAt?: number | null;
+    }>;
+    assert.deepEqual(finalBatch.map(({ endedAt, kind, nativeLocation, startedAt }) => ({
+      endedAt,
+      kind,
+      nativeLocation,
+      startedAt,
+    })), [
+      {
+        endedAt: null,
+        kind: "turn",
+        nativeLocation: "C:/repo",
+        startedAt: null,
+      },
+      {
+        endedAt: undefined,
+        kind: "item",
+        nativeLocation: undefined,
+        startedAt: undefined,
+      },
+    ]);
+
+    const replacementState = await bridge.detachForReload();
+    bridge = createBridge(replacementDatabase, replacementState);
+    await bridge.handleUpstreamMessage({
+      method: "turn/completed",
+      params: {
+        threadId: "thread",
+        turn: {
+          ...bridgeThread([]).turns[0],
+          completedAt: 3,
+          durationMs: 2_000,
+          status: "completed",
+        },
+      },
+    });
+    await bridge.waitForIdle();
+    assert.deepEqual(
+      batches.slice(-2).map((batch) => batch.map((observation) => (
+        (observation as { kind: string }).kind
+      ))),
+      [["canonicalSnapshot"], ["turn", "item"]],
+    );
+    const reseed = batches.at(-2)?.[0] as {
+      observations?: Array<{ kind: string }>;
+    };
+    assert.deepEqual(
+      reseed.observations?.map(({ kind }) => kind),
+      ["thread", "turn", "item"],
+    );
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("Browse settlement verifies Workbench transcript assets before forwarding their SQLite observation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-browse-asset-"));
+  const observations: object[] = [];
+  const notifications: object[] = [];
+  const bytes = Buffer.from("verified browse image");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const encodedThreadId = Buffer.from("thread", "utf8").toString("base64url");
+  const assetUrl = `/api/transcript-assets/codex/${encodedThreadId}/${digest}.png`;
+  const assetDirectory = path.join(
+    root,
+    ".workbench",
+    "transcripts",
+    "codex",
+    "threads",
+    encodedThreadId,
+    "assets",
+  );
+  await fs.mkdir(assetDirectory, { recursive: true });
+  await fs.writeFile(path.join(assetDirectory, `${digest}.png`), bytes);
+
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification(notification) { notifications.push(notification); },
+    recordSqliteTranscript: async (batch) => { observations.push(...batch); },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const entry: WorkbenchBrowseResultEntry = {
+    action: "screenshot",
+    actionIndex: 0,
+    assetUrl,
+    commandItemId: "command",
+    detailKind: "result",
+    detailLabel: "Screenshot",
+    detailText: null,
+    durationMs: 12,
+    entryKey: "browse-entry",
+    recordedAt: 100,
+    session: "research",
+    state: "completed",
+    threadId: "thread",
+    turnId: "turn",
+  };
+
+  try {
+    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: bridgeThread([]) } });
+    await bridge.waitForIdle();
+    observations.length = 0;
+    notifications.length = 0;
+    await bridge.recordBrowseResultForBrowse(entry);
+    assert.deepEqual(observations, [{
+      kind: "browse",
+      entry,
+      asset: {
+        byteLength: bytes.byteLength,
+        digest,
+        mimeType: "image/png",
+        storageKey: assetUrl,
+      },
+    }]);
+    assert.deepEqual(notifications, [{
+      method: "browse/result/recorded",
+      params: { threadId: "thread", turnId: "turn" },
+    }]);
+
+    await fs.writeFile(path.join(assetDirectory, `${digest}.png`), "tampered");
+    await assert.rejects(
+      bridge.recordBrowseResultForBrowse({ ...entry, entryKey: "tampered" }),
+      /contents do not match its digest/u,
+    );
+    assert.equal(observations.length, 1);
+    assert.equal(notifications.length, 1);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
 
 test("ordered claim-hook denials synthesize live failures and thread reads across bridge reload", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-file-change-test-"));

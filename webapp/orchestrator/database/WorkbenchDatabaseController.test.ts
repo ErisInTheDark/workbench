@@ -2,19 +2,21 @@
  * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, and relational discriminator constraints. Keywords: database, worker, schema, test.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import Database from "better-sqlite3";
 
-import WorkbenchDatabaseController from "./WorkbenchDatabaseController";
+import WorkbenchDatabaseController, { WorkbenchDatabaseRequestFailure } from "./WorkbenchDatabaseController";
 import {
+  coreTables,
   installWorkbenchDatabaseSchema,
   WORKBENCH_DATABASE_SCHEMA_VERSION,
   WORKBENCH_DATABASE_TABLE_NAMES,
 } from "./workbench-database-schema";
+import { insertRow, selectRows, upsertRow } from "./workbench-database-statements";
 
 test("the database worker opens, proves readiness, reports all tables, and closes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-"));
@@ -36,6 +38,9 @@ test("the database worker opens, proves readiness, reports all tables, and close
     assert.equal(controller.state, "closed");
     await assert.rejects(controller.start(), /closed/);
     await assert.rejects(controller.getInventory(), /closed/);
+    const releasedDatabasePath = `${databasePath}.released`;
+    await rename(databasePath, releasedDatabasePath);
+    await rename(releasedDatabasePath, databasePath);
 
     const inspection = new Database(databasePath);
     try {
@@ -83,6 +88,11 @@ test("schema constraints reject invalid thread state and mismatched item augment
       ) VALUES ('turn','thread',0,'codex','C:/project','native','inProgress',1,1)
     `).run();
     database.prepare(`
+      INSERT INTO thread_turns(
+        id,thread_id,turn_index,harness_id,native_location,native_thread_id,state,created_at
+      ) VALUES ('terminal-without-provider-times','thread',1,'codex','C:/project','native','completed',1)
+    `).run();
+    database.prepare(`
       INSERT INTO thread_items(id,thread_id,turn_id,item_index,type,created_at,updated_at)
       VALUES ('item','thread','turn',0,'plan',1,1)
     `).run();
@@ -97,9 +107,8 @@ test("schema constraints reject invalid thread state and mismatched item augment
     `).run();
     database.prepare("INSERT INTO thread_item_operations(item_id,source_kind,source_revision) VALUES ('operation','tool',2)").run();
     assert.throws(() => database.prepare(`
-      INSERT INTO thread_operation_presentations(
-        item_id,source_revision,presentation_type,presentation_revision,projector_id,projection_digest,projected_at
-      ) VALUES ('operation',1,'hidden',1,'test','digest',1)
+      INSERT INTO thread_operation_tool_sources(item_id,source_revision,tool_kind,state,tool_name)
+      VALUES ('operation',1,'callable','completed','test')
     `).run(), /FOREIGN KEY constraint failed/);
 
     database.prepare(`
@@ -110,6 +119,20 @@ test("schema constraints reject invalid thread state and mismatched item augment
       INSERT INTO thread_operation_callable_tool_sources(
         item_id,source_revision,state,tool_name,callable_kind,server_name,arguments_json
       ) VALUES ('operation',2,'completed','test','dynamic','mcp-only','{}')
+    `).run(), /CHECK constraint failed/);
+
+    database.prepare(`
+      INSERT INTO thread_items(id,thread_id,turn_id,item_index,type,created_at,updated_at)
+      VALUES ('process','thread','turn',2,'operation',1,1)
+    `).run();
+    database.prepare("INSERT INTO thread_item_operations(item_id,source_kind,source_revision) VALUES ('process','process',0)").run();
+    database.prepare(`
+      INSERT INTO thread_operation_process_sources(item_id,source_revision,state,command,cwd)
+      VALUES ('process',0,'completed','cat file','C:/project')
+    `).run();
+    assert.throws(() => database.prepare(`
+      INSERT INTO thread_process_command_actions(item_id,action_index,action_kind,command,name,path,query)
+      VALUES ('process',0,'read','cat file',NULL,NULL,'illegal')
     `).run(), /CHECK constraint failed/);
   } finally {
     database.close();
@@ -124,4 +147,145 @@ test("startup failure is permanent until the controller is replaced", async () =
   await assert.rejects(controller.start(), /directory does not exist|unable to open database/i);
   await controller.close();
   assert.equal(controller.state, "closed");
+});
+
+test("an unstarted database controller closes without initializing its worker", async () => {
+  const controller = new WorkbenchDatabaseController({
+    databasePath: join(tmpdir(), `workbench-database-never-opened-${process.pid}-${Date.now()}.sqlite3`),
+  });
+  await controller.close();
+  assert.equal(controller.state, "closed");
+  await assert.rejects(controller.start(), /closed/u);
+});
+
+test("typed statement transactions preserve stable rows and roll back incomplete domain writes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-database-statements-"));
+  const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
+  try {
+    await controller.executeTransaction([
+      insertRow(coreTables.workbenchHarnesses, { id: "codex" }),
+      insertRow(coreTables.workbenchHarnesses, { id: "opencode2" }),
+    ]);
+    assert.deepEqual(
+      await controller.query(selectRows(coreTables.workbenchHarnesses, {
+        orderBy: [{ column: "id" }],
+      })),
+      [{ id: "codex" }, { id: "opencode2" }],
+    );
+
+    const thread = {
+      id: "thread",
+      project_id: "project",
+      project_root: "C:/project",
+      title: "first",
+      transcript_content_version: 1,
+      created_at: 1,
+      updated_at: 1,
+      activity_at: 1,
+    } as const;
+    await controller.executeTransaction([insertRow(coreTables.workbenchThreads, thread)]);
+    await controller.executeTransaction([
+      upsertRow(coreTables.workbenchThreads, {
+        ...thread,
+        title: "renamed",
+        updated_at: 2,
+      }, {
+        conflictColumns: ["id"],
+        updateColumns: ["title", "updated_at"],
+      }),
+    ]);
+    assert.deepEqual(
+      await controller.query(selectRows(coreTables.workbenchThreads, { where: { id: "thread" } })),
+      [{
+        id: "thread",
+        project_id: "project",
+        project_root: "C:/project",
+        title: "renamed",
+        archived: 0,
+        pinned: 0,
+        snoozed: 0,
+        transcript_content_version: 1,
+        next_turn_index: 0,
+        next_item_index: 0,
+        created_at: 1,
+        updated_at: 2,
+        activity_at: 1,
+      }],
+    );
+
+    await assert.rejects(controller.executeTransaction([
+      insertRow(coreTables.workbenchPendingImportThreads, {
+        thread_id: "thread",
+        harness_id: "codex",
+        native_location: "C:/project",
+        native_thread_id: "native",
+        discovered_at: 2,
+        last_seen_at: 2,
+      }),
+      insertRow(coreTables.workbenchPendingImportThreads, {
+        thread_id: "missing-thread",
+        harness_id: "codex",
+        native_location: "C:/project",
+        native_thread_id: "other-native",
+        discovered_at: 2,
+        last_seen_at: 2,
+      }),
+    ]), (error) => error instanceof WorkbenchDatabaseRequestFailure && /FOREIGN KEY constraint failed/.test(error.message));
+    assert.equal(controller.state, "ready");
+    assert.doesNotThrow(() => controller.assertReady());
+    assert.deepEqual(
+      await controller.query(selectRows(coreTables.workbenchPendingImportThreads)),
+      [],
+    );
+    assert.deepEqual((await controller.getInventory()).tableNames, [...WORKBENCH_DATABASE_TABLE_NAMES].sort());
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("terminal transcript turns may preserve missing native timestamps without poisoning readiness", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-database-native-turns-"));
+  const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
+  try {
+    await controller.settleTranscript([
+      {
+        kind: "thread",
+        threadId: "thread",
+        projectId: "project",
+        projectRoot: "C:/project",
+        title: "Thread",
+        createdAt: 1,
+        updatedAt: 1,
+        activityAt: 1,
+      },
+      {
+        kind: "turn",
+        threadId: "thread",
+        turnId: "turn",
+        turnIndex: 0,
+        harnessId: "codex",
+        nativeLocation: "C:/project",
+        nativeThreadId: "thread",
+        nativeTurnId: "turn",
+        state: "completed",
+        createdAt: 1,
+        startedAt: null,
+        endedAt: null,
+        durationMs: null,
+      },
+    ]);
+    assert.equal(controller.state, "ready");
+    assert.deepEqual(
+      (await controller.readTranscript({ threadId: "thread", turnLimit: 1 }))?.turns.map((turn) => ({
+        state: turn.state,
+        started_at: turn.started_at,
+        ended_at: turn.ended_at,
+      })),
+      [{ state: "completed", started_at: null, ended_at: null }],
+    );
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });

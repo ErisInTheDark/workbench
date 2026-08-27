@@ -12,6 +12,7 @@ import WorkbenchCodexMcpGenerationController, { type WorkbenchCodexMcpGeneration
 import WorkbenchCoreNode from "./WorkbenchCoreNode";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
+import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchOrchestratorReloadController, { type WorkbenchOrchestratorReloadControllerState } from "./WorkbenchOrchestratorReloadController";
 import WorkbenchReloadDirtController, { type WorkbenchReloadDirtControllerState } from "./WorkbenchReloadDirtController";
 import WorkbenchTurnRecoveryController, { type WorkbenchTurnRecoveryControllerState } from "./WorkbenchTurnRecoveryController";
@@ -35,13 +36,17 @@ function record(value: unknown) {
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "agent",
-  children: [WorkbenchCoreNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode],
+  children: [WorkbenchCoreNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchWebSocketNode],
   create: (context, build) => {
     const state = build.handoffState as WorkbenchTurnLifecycleState | undefined;
     const codexMcpGeneration = new WorkbenchCodexMcpGenerationController(state?.mcpGeneration);
     const reloadDirt = new WorkbenchReloadDirtController({
       activateSourceState: activateReloadNodeSourceState,
       cancelSourceState: cancelReloadNodeSourceState,
+      externalDirtSources: [{
+        path: ".workbench/reset-workbench-sqlite",
+        scope: "server:database",
+      }],
       getSourceState: readReloadNodeSourceState,
       repoRoot: context.legacyMigrationProjectRoot,
     }, state?.reloadDirt);

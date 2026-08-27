@@ -34,7 +34,14 @@ function flattenParents(roots: readonly Node[]) {
 }
 
 test("the root knows only direct roots and parents declare every dependant", () => {
-  assert.deepEqual(graph.roots.map(({ scope }) => scope), ["server:turns", "harness:codex", "harness:opencode", "client:all", "server:instructions"]);
+  assert.deepEqual(graph.roots.map(({ scope }) => scope), [
+    "server:turns",
+    "server:database",
+    "harness:codex",
+    "harness:opencode",
+    "client:all",
+    "server:instructions",
+  ]);
   const { nodes, parents } = flattenParents(graph.roots);
 
   assert.deepEqual([...nodes.keys()].sort(), [
@@ -45,6 +52,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:codex",
     "server:commands",
     "server:core",
+    "server:database",
     "server:instructions",
     "server:mcp",
     "server:opencode",
@@ -52,13 +60,13 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:turns",
     "server:websocket",
   ]);
-  assert.deepEqual([...parents.get("server:core")!], ["server:turns"]);
+  assert.deepEqual([...parents.get("server:core")!].sort(), ["server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:commands")!].sort(), ["server:core", "server:turns"]);
   assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:commands", "server:core", "server:topology", "server:turns"]);
-  assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:core", "server:turns"]);
+  assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:opencode")!].sort(), ["harness:opencode", "server:core", "server:turns"]);
   assert.deepEqual([...parents.get("server:browse")!], ["server:core"]);
-  assert.deepEqual([...parents.get("server:websocket")!], ["server:core"]);
+  assert.deepEqual([...parents.get("server:websocket")!].sort(), ["server:core", "server:database", "server:turns"]);
   assert.equal(parents.has("harness:codex"), false);
   assert.equal(parents.has("harness:opencode"), false);
   assert.deepEqual({
@@ -67,6 +75,13 @@ test("the root knows only direct roots and parents declare every dependant", () 
   }, {
     lifecycle: "handoff",
     provides: ["codexMcpGeneration", "reloadController", "reloadDirt", "turnRecovery"],
+  });
+  assert.deepEqual({
+    lifecycle: nodes.get("server:database")!.lifecycle,
+    provides: nodes.get("server:database")!.provides,
+  }, {
+    lifecycle: "atomic",
+    provides: ["database", "transcript"],
   });
 });
 
@@ -105,7 +120,7 @@ test("loaded modules generate narrow source ownership without mapping test files
 test("server branch and topology closures never acquire harness roots", () => {
   const { dependantClosure, descriptors } = readReloadNodeSourceState();
   const catalog = new Map(descriptors.map((descriptor) => [descriptor.scope, descriptor]));
-  for (const scope of ["server:turns", "server:core", "server:topology"] as const) {
+  for (const scope of ["server:turns", "server:database", "server:core", "server:topology"] as const) {
     const closure = dependantClosure([scope]);
     assert.equal(closure.includes("harness:codex"), false, `${scope} must preserve the Codex harness root`);
     assert.equal(closure.includes("harness:opencode"), false, `${scope} must preserve the OpenCode harness root`);

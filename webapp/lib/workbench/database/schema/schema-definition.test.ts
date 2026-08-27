@@ -33,7 +33,6 @@ import * as coreSchemaModule from "./core-schema";
 import * as evidenceSchemaModule from "./evidence-schema";
 import * as interactionSchemaModule from "./interaction-schema";
 import * as itemSchemaModule from "./item-schema";
-import * as operationPresentationSchemaModule from "./operation-presentation-schema";
 import * as operationSourceSchemaModule from "./operation-source-schema";
 
 const parentsV1 = defineTable("schema_test_parents", {
@@ -230,7 +229,6 @@ test("subsystem modules do not export versioned table descriptors", () => {
     coreSchemaModule,
     itemSchemaModule,
     operationSourceSchemaModule,
-    operationPresentationSchemaModule,
     interactionSchemaModule,
     evidenceSchemaModule,
   ];

@@ -1,10 +1,12 @@
 /*
  * Exports:
  * - WorkbenchReloadDirtControllerState: transferable snapshot, baseline, generated-path, and refresh-generation state. Keywords: reload, dirt, handoff, queue.
+ * - WorkbenchReloadExternalDirtSource: map a file-presence request to its owning reload scope. Keywords: external, marker, scope.
  * - WorkbenchReloadDirtControllerOptions: workspace, graph, Git repository, and publication ports. Keywords: reload, ports, Git.
  * - default WorkbenchReloadDirtController: own reload dirt, full-worktree snapshots, source generations, and watcher lifecycle. Keywords: reload, dirt, snapshot, watcher.
  */
 import { watch, type FSWatcher } from "node:fs";
+import { access } from "node:fs/promises";
 import path from "node:path";
 
 import type { OrchestratorReloadScope, WorkbenchReloadDirtSnapshot } from "../lib/types";
@@ -25,9 +27,15 @@ export interface WorkbenchReloadDirtControllerState {
   tail: Promise<void>;
 }
 
+export interface WorkbenchReloadExternalDirtSource {
+  path: string;
+  scope: OrchestratorReloadScope;
+}
+
 export interface WorkbenchReloadDirtControllerOptions {
   activateSourceState?(): ReloadNodeSourceState;
   cancelSourceState?(): void;
+  externalDirtSources?: readonly WorkbenchReloadExternalDirtSource[];
   getSourceState(): ReloadNodeSourceState;
   onChange?(): void;
   repository?: WorkbenchGitRepository;
@@ -36,6 +44,16 @@ export interface WorkbenchReloadDirtControllerOptions {
 
 function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).slice(0, MAX_ERROR_LENGTH);
+}
+
+async function pathExists(filename: string) {
+  try {
+    await access(filename);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function sameSnapshot(left: WorkbenchReloadDirtSnapshot, right: WorkbenchReloadDirtSnapshot) {
@@ -190,9 +208,10 @@ export default class WorkbenchReloadDirtController {
     try {
       if (signal?.aborted) throw signal.reason;
       const dirtyScopes = [] as WorkbenchReloadDirtSnapshot["dirtyScopes"];
-      const descriptors = [...state.descriptors.values()].filter(({ paths }) => paths.length);
+      const descriptors = [...state.descriptors.values()];
+      const gitDescriptors = descriptors.filter(({ paths }) => paths.length);
       const pathsByBaseline = new Map<string, Set<string>>();
-      for (const descriptor of descriptors) {
+      for (const descriptor of gitDescriptors) {
         const baseline = state.baselines.get(descriptor.scope) ?? state.snapshotCommit;
         const paths = pathsByBaseline.get(baseline) ?? new Set<string>();
         for (const sourcePath of descriptor.paths) paths.add(sourcePath);
@@ -209,10 +228,21 @@ export default class WorkbenchReloadDirtController {
         );
         if (signal?.aborted) throw signal.reason;
       }
-      for (const descriptor of descriptors) {
+      const dirtyScopeNames = new Set<OrchestratorReloadScope>();
+      for (const descriptor of gitDescriptors) {
         const baseline = state.baselines.get(descriptor.scope) ?? state.snapshotCommit;
         const changed = changedByBaseline.get(baseline) ?? new Set<string>();
-        if (descriptor.paths.some((sourcePath) => changed.has(sourcePath))) {
+        if (descriptor.paths.some((sourcePath) => changed.has(sourcePath))) dirtyScopeNames.add(descriptor.scope);
+      }
+      for (const source of this.options.externalDirtSources ?? []) {
+        if (!state.descriptors.has(source.scope)) {
+          throw new Error(`External reload dirt source ${source.path} names unknown scope ${source.scope}.`);
+        }
+        if (await pathExists(path.join(this.options.repoRoot, source.path))) dirtyScopeNames.add(source.scope);
+        if (signal?.aborted) throw signal.reason;
+      }
+      for (const descriptor of descriptors) {
+        if (dirtyScopeNames.has(descriptor.scope)) {
           dirtyScopes.push({ description: descriptor.description, destructive: descriptor.destructive, scope: descriptor.scope });
         }
       }
@@ -257,7 +287,8 @@ export default class WorkbenchReloadDirtController {
 
   private isObservedPath(filename: string) {
     const sourcePath = filename.replace(/\\/gu, "/");
-    return [...this.requireState().descriptors.values()].some(({ paths }) => paths.includes(sourcePath));
+    return [...this.requireState().descriptors.values()].some(({ paths }) => paths.includes(sourcePath))
+      || (this.options.externalDirtSources ?? []).some(({ path: externalPath }) => externalPath === sourcePath);
   }
 
   private toWorkspacePath(absolutePath: string) {

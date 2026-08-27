@@ -74,6 +74,52 @@ test("successful and failed user reloads advance dirt through one lifecycle owne
   await assert.rejects(controller.request(), /user's decision/u);
 });
 
+test("browser admission reserves a batch and starts only after its response is sent", async () => {
+  const events: string[] = [];
+  const scheduled: Array<() => void> = [];
+  const controller = new WorkbenchOrchestratorReloadController({
+    dirt: dirtStub({ events }),
+    executeBatch: async (scopes) => { events.push(`execute:${scopes.join(",")}`); },
+    now: () => 42,
+    schedule: (callback) => { scheduled.push(callback); },
+  });
+
+  const admission = controller.admitUserReload({ scopes: ["server:core"] });
+  assert.deepEqual(admission.response, {
+    appliedScopes: [],
+    completedAt: null,
+    error: null,
+    ok: true,
+    queuedScopes: ["server:core"],
+    requestedScopes: ["server:core"],
+    startedAt: 42,
+    state: "running",
+  });
+  assert.deepEqual(events, []);
+  assert.throws(() => controller.admitUserReload({ scopes: ["server:mcp"] }), /already active/u);
+
+  const completion = admission.start();
+  assert.deepEqual(events, []);
+  assert.equal(scheduled.length, 1);
+  scheduled.shift()!();
+  await completion;
+  assert.deepEqual(events, ["begin:server:core", "execute:server:core", "complete:server:core"]);
+});
+
+test("failed browser response delivery cancels its reserved reload", async () => {
+  const scheduled: Array<() => void> = [];
+  const controller = new WorkbenchOrchestratorReloadController({
+    dirt: dirtStub({}),
+    executeBatch: async () => undefined,
+    schedule: (callback) => { scheduled.push(callback); },
+  });
+  const admission = controller.admitUserReload({ scopes: ["server:core"] });
+  admission.cancel();
+  await assert.rejects(admission.start(), /no longer active/u);
+  assert.equal(scheduled.length, 0);
+  controller.admitUserReload({ scopes: ["server:mcp"] }).cancel();
+});
+
 test("a replacement controller completes an in-flight batch without executing it twice", async () => {
   const events: string[] = [];
   const execution = deferred<void>();

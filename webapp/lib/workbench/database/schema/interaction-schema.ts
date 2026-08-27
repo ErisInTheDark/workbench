@@ -14,12 +14,15 @@
  */
 import {
   booleanInteger,
+  check,
   defineTable,
   enumText,
   foreignKey,
   integer,
   jsonText,
+  literal,
   primaryKey,
+  sql,
   text,
   unique,
   type SelectRow,
@@ -170,14 +173,22 @@ export const threadApprovalCommandContexts = threadApprovalCommandContextsHistor
 
 const threadApprovalCommandActionsV1 = defineTable("thread_approval_command_actions", {
   item_id: text().notNull().references("thread_approval_command_contexts", "item_id", { onDelete: "CASCADE" }),
-  action_index: integer().notNull(),
+  action_index: integer().notNull().nonNegative(),
   action_kind: enumText("read", "listFiles", "search", "unknown").notNull(),
   command: text().notNull(),
   name: text(),
   path: text(),
   query: text(),
 }, (table) => ({
-  constraints: [primaryKey([table.item_id, table.action_index])],
+  constraints: [
+    primaryKey([table.item_id, table.action_index]),
+    check(sql`
+      (${table.action_kind} = ${literal("read")} AND ${table.name} IS NOT NULL AND ${table.path} IS NOT NULL AND ${table.query} IS NULL)
+      OR (${table.action_kind} = ${literal("listFiles")} AND ${table.name} IS NULL AND ${table.query} IS NULL)
+      OR (${table.action_kind} = ${literal("search")} AND ${table.name} IS NULL)
+      OR (${table.action_kind} = ${literal("unknown")} AND ${table.name} IS NULL AND ${table.path} IS NULL AND ${table.query} IS NULL)
+    `),
+  ],
 }));
 const threadApprovalCommandActionsHistory = initialHistory(threadApprovalCommandActionsV1);
 export const threadApprovalCommandActions = threadApprovalCommandActionsHistory.current;

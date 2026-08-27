@@ -71,6 +71,7 @@ import type {
     WorkbenchUserInputResponse,
 } from "../types";
 import { normalizeWorkbenchAgentPath } from "./agent-paths";
+import WorkbenchTranscriptClient from "./database/transcript/WorkbenchTranscriptClient";
 import { areDeeplyEqual } from "./deep-equality";
 import { getWorkbenchThreadHarnessCandidates } from "./thread/thread-harness-candidates";
 import {
@@ -115,6 +116,12 @@ import {
 import ThreadCanonicalLayer from "./thread/ThreadCanonicalLayer";
 import ThreadRenderPipeline from "./thread/ThreadRenderPipeline";
 import ThreadStreamingReconciler from "./thread/ThreadStreamingReconciler";
+import ThreadTranscriptParityController from "./transcript/ThreadTranscriptParityController";
+import { planCanonicalTranscriptDisplay } from "./transcript/thread-transcript-display-planner";
+import type {
+  WorkbenchProjectedTranscriptItem,
+  WorkbenchTranscriptProjection,
+} from "./transcript/workbench-transcript-projection";
 import ThreadVisibleLayer from "./thread/ThreadVisibleLayer";
 import ThreadWorkbenchOverlayLayer from "./thread/ThreadWorkbenchOverlayLayer";
 import ThreadOptimisticInputStore from "./thread/ThreadOptimisticInputStore";
@@ -233,6 +240,7 @@ interface WorkbenchThreadClient {
   compactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   threadGoals: WorkbenchThreadGoalControls;
+  transcripts: WorkbenchTranscriptClient;
   submitPendingUserInputRequest: (
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -754,6 +762,16 @@ function WorkbenchThreadClient(
   function onWorkbenchNotification(listener: (notification: { method: "workbench/thread-state/reset" | "workbench/thread-state/updated"; params: unknown }) => void) {
     return codexClient.onWorkbenchNotification(listener);
   }
+  const transcripts = new WorkbenchTranscriptClient({
+    reportConformance: (report) => {
+      console.error("Workbench transcript conformance mismatch.", report);
+    },
+    transport: {
+      onDisconnect: (listener) => codexClient.onConnectionClose(listener),
+      onNotification: (listener) => codexClient.onWorkbenchNotification(listener),
+      request: async (method, params) => await requestWorkbench<unknown>(method, params),
+    },
+  });
   const threadGoals = new ThreadGoalController({
     clear: (params) => sendBridgeRequest<ThreadGoalClearResponse>("codex", { method: "thread/goal/clear", params }),
     get: (params) => sendBridgeRequest<ThreadGoalGetResponse>("codex", { method: "thread/goal/get", params }),
@@ -770,6 +788,15 @@ function WorkbenchThreadClient(
   const stablePreferencesByKey = new Map<string, ThreadStablePreferenceRecord>();
   const statusRecordsByKey = new Map<string, ThreadStatusRecord>();
   const streamingReconciler = new ThreadStreamingReconciler();
+  const transcriptParity = new ThreadTranscriptParityController({
+    onError: (error) => console.error("Workbench transcript parity lifecycle failed.", error),
+    reconcileProjection: reconcileTranscriptProjectionWithLiveThread,
+    transcripts,
+    turnLimit: 4,
+  });
+  lifecycle.addUnsubscribe(transcripts.onAvailabilityChange((available) => {
+    transcriptParity.setAvailable(available);
+  }));
   async function publishAcceptedIntent({
     draftId,
     harness,
@@ -926,6 +953,7 @@ function WorkbenchThreadClient(
     state.threads = [];
     state.currentThread = null;
     state.currentThreadId = "";
+    transcriptParity.select(null);
     state.threadsError = "";
     state.hasLoadedThreads = false;
     state.isLoading = Boolean(getProjectRootPaths(state).length);
@@ -1578,6 +1606,10 @@ function WorkbenchThreadClient(
   }
 
   function setProjectedCurrentThread(nextThread: ThreadPayload | null) {
+    transcriptParity.select(nextThread && nextThread.harness === "codex" && !nextThread.isDraft ? {
+      browseResultEntries: state.browseResultEntriesByThreadId.get(nextThread.id) ?? nextThread.browseResultEntries ?? [],
+      thread: nextThread,
+    } : null);
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
       return;
     }
@@ -1997,7 +2029,13 @@ function WorkbenchThreadClient(
     }
   }
 
-  function forgetReplacedStreamingItem(turnId: string, clientItemId: string, canonicalItemId: string) {
+  function forgetReplacedStreamingItem(
+    turnId: string,
+    clientItemId: string,
+    canonicalItemId: string,
+    options: { settleStreamingKeys?: boolean } = {},
+  ) {
+    if (options.settleStreamingKeys === false) return;
     const clientKey = getThreadItemKey(turnId, clientItemId);
     const canonicalKey = getThreadItemKey(turnId, canonicalItemId);
     if (clientKey === canonicalKey) {
@@ -2008,7 +2046,12 @@ function WorkbenchThreadClient(
     streamingReconciler.forgetStreamingItemKey(clientKey);
   }
 
-  function forgetStreamingItemKey(turnId: string, itemId: string) {
+  function forgetStreamingItemKey(
+    turnId: string,
+    itemId: string,
+    options: { settleStreamingKeys?: boolean } = {},
+  ) {
+    if (options.settleStreamingKeys === false) return;
     const itemKey = getThreadItemKey(turnId, itemId);
     streamingReconciler.forgetStreamingItemKey(itemKey);
   }
@@ -2045,7 +2088,11 @@ function WorkbenchThreadClient(
     return isStructurallyMatchingStreamingItem(item, candidate);
   }
 
-  function pruneDuplicateStreamingItems(turnId: string, items: ThreadItem[]) {
+  function pruneDuplicateStreamingItems(
+    turnId: string,
+    items: ThreadItem[],
+    options: { settleStreamingKeys?: boolean } = {},
+  ) {
     const nextItems: ThreadItem[] = [];
     let changed = false;
 
@@ -2070,10 +2117,10 @@ function WorkbenchThreadClient(
       changed = true;
       const existingItem = nextItems[existingIndex];
       if (shouldPreferIncomingStreamingItem(turnId, item, existingItem)) {
-        forgetReplacedStreamingItem(turnId, existingItem.id, item.id);
+        forgetReplacedStreamingItem(turnId, existingItem.id, item.id, options);
         nextItems[existingIndex] = mergeLiveStreamingItem(item, existingItem);
       } else {
-        forgetReplacedStreamingItem(turnId, item.id, existingItem.id);
+        forgetReplacedStreamingItem(turnId, item.id, existingItem.id, options);
       }
     }
 
@@ -2215,7 +2262,11 @@ function WorkbenchThreadClient(
       && (liveItem.type === "agentMessage" || liveItem.type === "reasoning" || liveItem.type === "plan");
   }
 
-  function mergeLiveStreamingTurn(incomingTurn: Turn, liveTurn: Turn | undefined) {
+  function mergeLiveStreamingTurn(
+    incomingTurn: Turn,
+    liveTurn: Turn | undefined,
+    options: { settleStreamingKeys?: boolean } = {},
+  ) {
     if (!liveTurn) {
       return incomingTurn;
     }
@@ -2244,7 +2295,7 @@ function WorkbenchThreadClient(
           ) {
             matchedLiveItem = candidateLiveItem;
             liveItemsById.delete(liveItemId);
-            forgetReplacedStreamingItem(incomingTurn.id, liveItemId, item.id);
+            forgetReplacedStreamingItem(incomingTurn.id, liveItemId, item.id, options);
             break;
           }
         }
@@ -2252,7 +2303,7 @@ function WorkbenchThreadClient(
       }
 
       liveItemsById.delete(item.id);
-      forgetStreamingItemKey(incomingTurn.id, item.id);
+      forgetStreamingItemKey(incomingTurn.id, item.id, options);
       return mergeLiveStreamingItem(item, liveItem);
     });
 
@@ -2264,7 +2315,7 @@ function WorkbenchThreadClient(
 
     return {
       ...incomingTurn,
-      items: pruneDuplicateStreamingItems(incomingTurn.id, nextItems),
+      items: pruneDuplicateStreamingItems(incomingTurn.id, nextItems, options),
     };
   }
 
@@ -2290,6 +2341,76 @@ function WorkbenchThreadClient(
       turnHistory,
       turns: mergeWorkbenchThreadTurnBodies(incomingThread.harness, incomingTurns, liveThread.turns, turnHistory),
     };
+  }
+
+  function isProjectedProviderItem(item: WorkbenchProjectedTranscriptItem): item is ThreadItem {
+    return item.type !== "questionnaire" && item.type !== "approval" && item.type !== "unknown";
+  }
+
+  function reconcileTranscriptProjectionWithLiveThread(
+    projection: WorkbenchTranscriptProjection,
+    selection: { thread: ThreadPayload },
+  ): WorkbenchTranscriptProjection {
+    const liveTurnsById = new Map(selection.thread.turns.map((turn) => [turn.id, turn]));
+    const liveHistoryByTurnId = new Map(selection.thread.turnHistory.map((entry) => [entry.turnId, entry]));
+    const canonicalItemIds = new Set(projection.display.orderedItems.map(({ itemId }) => itemId));
+    const replacementsById = new Map<string, ThreadItem>();
+    const virtualItemsByTurnId = new Map<string, ThreadItem[]>();
+
+    for (const turn of projection.turns) {
+      const incomingItems = turn.items.filter(isProjectedProviderItem);
+      const incomingIds = new Set(incomingItems.map(({ id }) => id));
+      const merged = mergeLiveStreamingTurn(
+        { ...turn, items: incomingItems },
+        liveTurnsById.get(turn.id),
+        { settleStreamingKeys: false },
+      );
+      for (const item of merged.items) {
+        if (incomingIds.has(item.id)) {
+          replacementsById.set(item.id, item);
+        } else if (!canonicalItemIds.has(item.id)) {
+          const virtualItems = virtualItemsByTurnId.get(turn.id) ?? [];
+          virtualItems.push(item);
+          virtualItemsByTurnId.set(turn.id, virtualItems);
+        }
+      }
+    }
+
+    const turns = projection.turns.map((turn) => {
+      const virtualItems = virtualItemsByTurnId.get(turn.id) ?? [];
+      const items = [
+        ...turn.items.map((item) => replacementsById.get(item.id) ?? item),
+        ...virtualItems,
+      ];
+      const virtualIds = new Set(virtualItems.map(({ id }) => id));
+      const liveTimeline = liveHistoryByTurnId.get(turn.id)?.itemTimeline ?? [];
+      const itemTimeline = [
+        ...turn.itemTimeline,
+        ...liveTimeline.filter(({ itemId }) => virtualIds.has(itemId)),
+      ];
+      return { ...turn, itemTimeline, items };
+    });
+    const turnsById = new Map(turns.map((turn) => [turn.id, turn]));
+    const display = planCanonicalTranscriptDisplay({
+      items: projection.display.orderedItems.map((entry) => ({
+        ...entry,
+        payload: replacementsById.get(entry.itemId) ?? entry.payload,
+      })),
+      turns: turns.map(({ id, turnIndex }) => ({ turnId: id, turnIndex })),
+      virtualTail: turns.flatMap((turn) => (
+        (virtualItemsByTurnId.get(turn.id) ?? []).map((payload) => ({ payload, turnId: turn.id }))
+      )),
+    });
+    const turnHistory = projection.turnHistory.map((entry) => {
+      const turn = turnsById.get(entry.turnId);
+      return turn ? {
+        ...entry,
+        itemCount: turn.items.length,
+        itemIds: turn.items.map(({ id }) => id),
+        itemTimeline: turn.itemTimeline,
+      } : entry;
+    });
+    return { ...projection, display, turnHistory, turns };
   }
 
   async function sendBridgeRequest<TResponse>(
@@ -5191,6 +5312,7 @@ function WorkbenchThreadClient(
     messageAdmissionIntentRevision += 1;
     state.currentThreadId = "";
     state.currentThread = null;
+    transcriptParity.select(null);
     setRateLimits(null);
     emit();
   }
@@ -5350,6 +5472,8 @@ function WorkbenchThreadClient(
     disposed = true;
     resetProjectThreadState({ emitChange: false });
     listeners.clear();
+    transcriptParity.dispose();
+    transcripts.dispose();
     threadGoals.dispose();
     lifecycle.dispose();
   }
@@ -5377,6 +5501,7 @@ function WorkbenchThreadClient(
     compactThread,
     stopThread,
     threadGoals,
+    transcripts,
     submitPendingUserInputRequest,
     setCurrentThreadAgent,
     setCurrentThreadComposerSettings,

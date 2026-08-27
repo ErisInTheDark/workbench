@@ -14,7 +14,11 @@ import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry } f
 import CodexTranscriptStore from "./CodexTranscriptStore";
 import type { JsonRpcRequest } from "./bridge-types";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
-import type { CodexTranscriptRawEvent, CodexTranscriptThreadFile } from "./codex-transcript-types";
+import type {
+  CodexTranscriptRawEvent,
+  CodexTranscriptThreadFile,
+  CodexTranscriptTurnFile,
+} from "./codex-transcript-types";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
 
 function captureProcessStderr(context: TestContext) {
@@ -72,6 +76,19 @@ function transcriptTurn(id: string, itemIds: string[]): Thread["turns"][number] 
 
 function threadFilePath(root: string) {
   return path.join(root, ".workbench", "transcripts", "codex", "threads", encodeTranscriptPathSegment("thread"), "thread.json");
+}
+
+function turnFilePath(root: string, turnId: string) {
+  return path.join(
+    root,
+    ".workbench",
+    "transcripts",
+    "codex",
+    "threads",
+    encodeTranscriptPathSegment("thread"),
+    "turns",
+    `${encodeTranscriptPathSegment(turnId)}.json`,
+  );
 }
 
 async function readThreadFile(root: string) {
@@ -194,6 +211,42 @@ test("selected hydration replaces stale projected ids with canonical turn ids", 
   assert.deepEqual(hydrated.turns[0]?.items.map((item) => item.id), ["user", "commentary"]);
   const repairedThreadFile = await readThreadFile(root);
   assert.deepEqual(repairedThreadFile.turnIndex[0]?.itemIds, ["user", "commentary"]);
+}));
+
+test("stored turn snapshots expose the normalized durable item timeline", async () => withStore(async (store, root) => {
+  const turn = transcriptTurn("active", ["user"]);
+  await store.recordHydratedThreadSnapshot({ id: 87, result: { thread: snapshot([turn]) } });
+  const filePath = turnFilePath(root, "active");
+  const stored = JSON.parse(await fs.readFile(filePath, "utf8")) as CodexTranscriptTurnFile;
+  await fs.writeFile(filePath, JSON.stringify({
+    ...stored,
+    itemTimeline: [
+      {
+        aliases: ["provider-user", "provider-user", ""],
+        anchorItemId: "user",
+        completedAt: 2_000,
+        firstSeenAt: 1_000,
+        itemId: "user",
+        lastSeenAt: 2_000,
+        sequence: 1,
+        startedAt: 1_100,
+      },
+      { anchorItemId: null, itemId: "", sequence: 2 },
+    ],
+  }), "utf8");
+
+  assert.deepEqual(await store.readStoredTurnSnapshot("thread", "active"), {
+    itemTimeline: [{
+      aliases: ["provider-user"],
+      completedAt: 2_000,
+      firstSeenAt: 1_000,
+      itemId: "user",
+      lastSeenAt: 2_000,
+      startedAt: 1_100,
+    }],
+    turn,
+  });
+  assert.equal(await store.readStoredTurnSnapshot("thread", "missing"), null);
 }));
 
 test("a new empty transcript store completes every migration", async () => {

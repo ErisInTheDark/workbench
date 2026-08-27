@@ -23,7 +23,12 @@ import {
   type SelectRow,
   type TableDefinition,
 } from "./schema-definition.ts";
-import { createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "./schema-history.ts";
+import {
+  createTable,
+  defineSubsystemHistory,
+  defineTableHistory,
+  tableVersion,
+} from "./schema-history.ts";
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
@@ -91,11 +96,6 @@ const threadTurnsV1 = defineTable("thread_turns", {
     unique([table.thread_id, table.turn_index]),
     unique([table.id, table.thread_id]),
     unique([table.id, table.thread_id, table.harness_id, table.native_location, table.native_thread_id]),
-    check(sql`
-      (${table.state} = ${literal("admitted")} AND ${table.started_at} IS NULL AND ${table.ended_at} IS NULL)
-      OR (${table.state} = ${literal("inProgress")} AND ${table.started_at} IS NOT NULL AND ${table.ended_at} IS NULL)
-      OR (${table.state} IN (${literal("completed")}, ${literal("interrupted")}, ${literal("failed")}) AND ${table.started_at} IS NOT NULL AND ${table.ended_at} IS NOT NULL)
-    `),
   ],
   indexes: [
     index("thread_turns_native_thread_idx", [table.harness_id, table.native_location, table.native_thread_id]),

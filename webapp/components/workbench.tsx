@@ -3035,6 +3035,7 @@ export default function Workbench () {
                     </DropTarget>
                     <ReloadNecessary
                       order={sidebarSectionOrder.length + 1}
+                      reloadScopes={controls?.reloadScopes ?? null}
                       store={threadSidebarStore}
                     />
                 </DropTargetBoundary>

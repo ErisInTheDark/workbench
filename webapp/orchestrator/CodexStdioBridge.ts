@@ -3,6 +3,10 @@
  * - CodexStdioBridgeReloadState: transferable bridge state preserved across code-only reload. Keywords: codex, reload, state.
  * - default CodexStdioBridge: translate websocket requests and Codex app-server messages around a stable app-server process. Keywords: codex, stdio, websocket, bridge.
  */
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
 import type { ApplyPatchApprovalParams } from "../lib/codex/generated/app-server/ApplyPatchApprovalParams";
 import type { ExecCommandApprovalParams } from "../lib/codex/generated/app-server/ExecCommandApprovalParams";
 import type { ReviewDecision } from "../lib/codex/generated/app-server/ReviewDecision";
@@ -16,6 +20,7 @@ import type { PermissionsRequestApprovalParams } from "../lib/codex/generated/ap
 import type { RequestPermissionProfile } from "../lib/codex/generated/app-server/v2/RequestPermissionProfile";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
+import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { ToolRequestUserInputParams } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputParams";
 import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
@@ -41,8 +46,15 @@ import {
   type WorkbenchFileChangeFailureMarker,
 } from "../lib/workbench/thread/workbench-file-change";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type {
+  WorkbenchTranscriptAtomicObservation,
+  WorkbenchTranscriptObservation,
+} from "./database/transcript/workbench-transcript-types.ts";
+import { findWorkbenchThreadItemTimelineEntry } from "../lib/workbench/thread/thread-item-timeline.ts";
+import { createCodexTranscriptSqliteImport } from "./codex-transcript-sqlite-import.ts";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import { CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS, createCodexTranscriptDiagnostic } from "./codex-transcript-diagnostics";
+import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import type CodexAppServer from "./CodexAppServer";
 import { log, logError } from "./process-helpers";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
@@ -88,8 +100,10 @@ export type CodexStdioBridgeOptions = {
   onAcceptedTurnSteer?: (threadId: string) => void;
   onNotification: (notification: JsonRpcNotification) => void;
   prepareTurnStart?: (message: JsonRpcRequest) => Promise<void>;
+  recordSqliteTranscript?: (observations: readonly WorkbenchTranscriptObservation[]) => Promise<void>;
   resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
   sendToClient: (client: BridgeClient, message: unknown) => void;
+  sqliteTranscriptIdentity?: object;
   storageRoot: string;
 };
 
@@ -104,8 +118,23 @@ export type CodexStdioBridgeReloadState = {
   pendingResponses: Map<number, PendingResponse>;
   pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
   requestIdAllocator: RequestIdAllocator;
+  sqliteTranscriptIdentity?: object;
+  sqliteTranscriptReadyThreadIds?: Set<string>;
+  transcriptThreadContexts?: Map<string, CodexTranscriptThreadContext>;
   upstreamInitialized: boolean;
 };
+
+interface CodexTranscriptThreadContext {
+  activityAt: number;
+  createdAt: number;
+  nativeLocation: string;
+  projectId: string;
+  projectRoot: string;
+  title: string;
+  updatedAt: number;
+}
+
+type CodexSqliteTranscriptObservation = WorkbenchTranscriptObservation;
 
 const MAX_FILE_CHANGE_FAILURE_MARKERS = 2_048;
 const MAX_FILE_CHANGE_TURN_CURSORS = 2_048;
@@ -965,6 +994,10 @@ export default class CodexStdioBridge {
   private readonly onAcceptedTurnSteer: NonNullable<CodexStdioBridgeOptions["onAcceptedTurnSteer"]>;
   private readonly onNotification: CodexStdioBridgeOptions["onNotification"];
   private readonly prepareTurnStart: NonNullable<CodexStdioBridgeOptions["prepareTurnStart"]>;
+  private readonly recordSqliteTranscript: NonNullable<CodexStdioBridgeOptions["recordSqliteTranscript"]>;
+  private readonly sqliteTranscriptEnabled: boolean;
+  private readonly sqliteTranscriptIdentity: object | null;
+  private readonly sqliteTranscriptReadyThreadIds: Set<string>;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
   private readonly storageRoot: string;
   private transcriptStore: CodexTranscriptStoreInstance | null = null;
@@ -985,17 +1018,24 @@ export default class CodexStdioBridge {
   private coalescedTranscriptByteEstimate = 0;
   private nextTranscriptTaskId = 1;
   private transcriptLastLogAt: number | null = null;
+  private readonly transcriptThreadContexts: Map<string, CodexTranscriptThreadContext>;
   private upstreamInitialized: boolean;
   private upstreamInitializePromise: Promise<void> | null = null;
   private readonly resolveProjectFromCwd: CodexStdioBridgeOptions["resolveProjectFromCwd"];
   private readonly handleWorkbenchRequest: CodexStdioBridgeOptions["handleWorkbenchRequest"];
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, resolveProjectFromCwd, sendToClient, storageRoot }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, recordSqliteTranscript, resolveProjectFromCwd, sendToClient, sqliteTranscriptIdentity, storageRoot }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onAcceptedTurnSteer = onAcceptedTurnSteer;
     this.onNotification = onNotification;
     this.prepareTurnStart = prepareTurnStart;
+    this.sqliteTranscriptEnabled = Boolean(recordSqliteTranscript);
+    this.recordSqliteTranscript = recordSqliteTranscript ?? (async () => undefined);
+    this.sqliteTranscriptIdentity = sqliteTranscriptIdentity ?? recordSqliteTranscript ?? null;
+    this.sqliteTranscriptReadyThreadIds = initialState?.sqliteTranscriptIdentity === this.sqliteTranscriptIdentity
+      ? initialState.sqliteTranscriptReadyThreadIds ?? new Set()
+      : new Set();
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.handleWorkbenchRequest = handleWorkbenchRequest;
     this.sendToClient = sendToClient;
@@ -1006,6 +1046,7 @@ export default class CodexStdioBridge {
     this.pendingResponses = initialState?.pendingResponses ?? new Map();
     this.pendingUserInputRequests = initialState?.pendingUserInputRequests ?? new Map();
     this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
+    this.transcriptThreadContexts = initialState?.transcriptThreadContexts ?? new Map();
     this.upstreamInitialized = initialState?.upstreamInitialized ?? false;
     this.transcriptInstrumentationTimer = setInterval(() => {
       this.logTranscriptInstrumentation();
@@ -1090,6 +1131,9 @@ export default class CodexStdioBridge {
       pendingResponses: this.pendingResponses,
       pendingUserInputRequests: this.pendingUserInputRequests,
       requestIdAllocator: this.requestIdAllocator,
+      sqliteTranscriptIdentity: this.sqliteTranscriptIdentity ?? undefined,
+      sqliteTranscriptReadyThreadIds: this.sqliteTranscriptReadyThreadIds,
+      transcriptThreadContexts: this.transcriptThreadContexts,
       upstreamInitialized: this.upstreamInitialized,
     };
   }
@@ -1689,6 +1733,7 @@ export default class CodexStdioBridge {
         if (responseToRecord !== hydratedMessage && shouldRecordHydratedThreadSnapshot(pending.upstreamRequest, message, hydratedMessage)) {
           await transcriptStore.recordHydratedThreadSnapshot(hydratedMessage);
         }
+        await this.recordSqliteResponse(pending.upstreamRequest, message, transcriptStore);
       });
     }
     const presentedMessage = this.withFileChangeFailurePresentation(hydratedMessage);
@@ -1763,7 +1808,14 @@ export default class CodexStdioBridge {
       }
 
       void this.flushCoalescedTranscriptNotifications().then(() => (
-        this.captureTranscript(`upstream-notification:${message.method}`, () => this.ensureTranscriptStore().recordUpstreamNotification(message))
+        this.captureTranscript(`upstream-notification:${message.method}`, async () => {
+          const transcriptStore = this.ensureTranscriptStore();
+          await transcriptStore.recordUpstreamNotification(message);
+          await this.recordSqliteNotification(message, transcriptStore);
+          if (syntheticFileChangeNotification) {
+            await this.recordSqliteNotification(syntheticFileChangeNotification, transcriptStore);
+          }
+        })
       ));
     }
   }
@@ -2238,7 +2290,15 @@ export default class CodexStdioBridge {
       threadId,
       turnId,
     };
-    await this.ensureTranscriptStore().recordBrowseResultEntry(entry);
+    const asset = await this.readSqliteBrowseAsset(threadId, assetUrl);
+    const transcriptStore = this.ensureTranscriptStore();
+    await transcriptStore.recordBrowseResultEntry(entry);
+    await this.ensureSqliteThreadReady(threadId, transcriptStore);
+    await this.recordSqliteTranscript([{
+      kind: "browse",
+      entry,
+      ...(asset ? { asset } : {}),
+    }]);
     this.onNotification({
       method: "browse/result/recorded",
       params: {
@@ -2247,6 +2307,45 @@ export default class CodexStdioBridge {
       },
     });
     return { ok: true };
+  }
+
+  private async readSqliteBrowseAsset(threadId: string, assetUrl: string | null) {
+    if (!assetUrl) return undefined;
+
+    const match = /^\/api\/transcript-assets\/codex\/([^/?#]+)\/([^/?#]+)$/u.exec(assetUrl);
+    if (!match) throw new Error("Browse asset URL is not a Workbench Codex transcript asset.");
+
+    const encodedThreadId = decodeURIComponent(match[1]!);
+    const fileName = decodeURIComponent(match[2]!);
+    if (encodedThreadId !== encodeTranscriptPathSegment(threadId)) {
+      throw new Error("Browse asset URL belongs to another thread.");
+    }
+
+    const fileMatch = /^([a-f0-9]{64})\.(png|jpg|webp|gif)$/u.exec(fileName);
+    if (!fileMatch) throw new Error("Browse asset URL has an invalid content-addressed filename.");
+    const [, digest, extension] = fileMatch;
+    const threadsRoot = path.resolve(
+      this.storageRoot,
+      ".workbench",
+      "transcripts",
+      "codex",
+      "threads",
+    );
+    const assetPath = path.resolve(threadsRoot, encodedThreadId, "assets", fileName);
+    if (!assetPath.startsWith(`${threadsRoot}${path.sep}`)) {
+      throw new Error("Browse asset URL resolves outside the transcript store.");
+    }
+
+    const bytes = await readFile(assetPath);
+    const actualDigest = createHash("sha256").update(bytes).digest("hex");
+    if (actualDigest !== digest) throw new Error("Browse asset contents do not match its digest.");
+
+    return {
+      byteLength: bytes.byteLength,
+      digest,
+      mimeType: extension === "jpg" ? "image/jpeg" : `image/${extension}`,
+      storageKey: assetUrl,
+    };
   }
 
   private readQuestionnaireResponse(params: unknown) {
@@ -2362,10 +2461,21 @@ export default class CodexStdioBridge {
       result: toToolRequestUserInputResponse(resolvedResponse.response),
     });
     let warning: string | null = null;
-    await this.ensureTranscriptStore().recordQuestionnaireResolved(historyEntry).catch((error) => {
+    const transcriptStore = this.ensureTranscriptStore();
+    await transcriptStore.recordQuestionnaireResolved(historyEntry).catch((error) => {
       warning = "Your response was sent, but Workbench could not save it to local transcript history.";
       logError("codex-transcript", `failed to persist questionnaire response: ${error instanceof Error ? error.message : String(error)}`);
     });
+    await this.ensureSqliteThreadReady(historyEntry.threadId, transcriptStore)
+      .then(() => this.recordSqliteTranscript([{
+        kind: "questionnaire",
+        entry: historyEntry,
+        observedAt: historyEntry.resolvedAt,
+      }]))
+      .catch((error) => {
+      warning = "Your response was sent, but Workbench could not save it to SQLite transcript history.";
+      logError("workbench-transcript", `failed to persist questionnaire response: ${error instanceof Error ? error.message : String(error)}`);
+      });
 
     this.pendingUserInputRequests.delete(pendingRequest.requestKey);
     this.onNotification({
@@ -2377,5 +2487,128 @@ export default class CodexStdioBridge {
     });
 
     return warning ? { ok: true, warning } : { ok: true };
+  }
+
+  private async recordSqliteResponse(
+    request: JsonRpcRequest,
+    response: JsonRpcResponse,
+    transcriptStore: CodexTranscriptStoreInstance,
+  ) {
+    if (!this.sqliteTranscriptEnabled) return;
+    if (response.error || !["thread/fork", "thread/read", "thread/resume", "thread/start"].includes(request.method ?? "")) return;
+    const fullResponse = await transcriptStore.hydrateThreadResponse(request, response, {
+      hydration: { mode: "legacyFull" },
+      touchThread: false,
+    });
+    const thread = asRecord(fullResponse.result)?.thread as Thread | undefined;
+    if (!thread?.id || !Array.isArray(thread.turns)) return;
+    await this.recordSqliteThreadSnapshot(thread, transcriptStore);
+  }
+
+  private async recordSqliteNotification(
+    notification: JsonRpcNotification,
+    transcriptStore: CodexTranscriptStoreInstance,
+  ) {
+    if (!this.sqliteTranscriptEnabled) return;
+    if (notification.method === "thread/started") {
+      const thread = asRecord(notification.params)?.thread as Thread | undefined;
+      if (thread?.id) await this.recordSqliteThreadSnapshot(thread, transcriptStore);
+      return;
+    }
+    if (!["turn/started", "turn/completed", "item/started", "item/completed"].includes(notification.method ?? "")) return;
+    const params = asRecord(notification.params);
+    const threadId = asString(params?.threadId);
+    const turnId = asString(params?.turnId) ?? asString(asRecord(params?.turn)?.id);
+    if (!threadId || !turnId) return;
+    await this.ensureSqliteThreadReady(threadId, transcriptStore);
+    const stored = await transcriptStore.readStoredTurnSnapshot(threadId, turnId);
+    const context = this.transcriptThreadContexts.get(threadId);
+    if (!stored || !context) {
+      throw new Error(`Codex transcript turn ${turnId} has no stored snapshot or validated thread location`);
+    }
+    const observations: CodexSqliteTranscriptObservation[] = [
+      this.createSqliteTurnObservation(threadId, stored.turn, context),
+    ];
+    for (const item of stored.turn.items) {
+      const timeline = findWorkbenchThreadItemTimelineEntry(item.id, stored.itemTimeline);
+      observations.push({
+        kind: "item",
+        threadId,
+        turnId,
+        item,
+        lifecycle: stored.turn.status === "inProgress" ? "streaming" : "completed",
+        observedAt: timeline?.lastSeenAt
+          ?? Math.round((stored.turn.completedAt ?? stored.turn.startedAt ?? context.updatedAt / 1_000) * 1_000),
+        ...(timeline ? { timeline } : {}),
+      });
+    }
+    await this.recordSqliteTranscript(observations);
+  }
+
+  private async ensureSqliteThreadReady(
+    threadId: string,
+    transcriptStore: CodexTranscriptStoreInstance,
+  ) {
+    if (!this.sqliteTranscriptEnabled || this.sqliteTranscriptReadyThreadIds.has(threadId)) return;
+    const thread = await transcriptStore.readStoredThreadSnapshot(threadId);
+    if (!thread) throw new Error(`Codex transcript thread ${threadId} has no durable snapshot for SQLite recovery`);
+    await this.recordSqliteThreadSnapshot(thread, transcriptStore);
+  }
+
+  private async recordSqliteThreadSnapshot(
+    thread: Thread,
+    transcriptStore: CodexTranscriptStoreInstance,
+  ) {
+    const resolution = await this.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex transcript" });
+    const context: CodexTranscriptThreadContext = {
+      activityAt: Math.round((thread.recencyAt ?? thread.updatedAt) * 1_000),
+      createdAt: Math.round(thread.createdAt * 1_000),
+      nativeLocation: thread.cwd,
+      projectId: resolution.project.id,
+      projectRoot: resolution.root.rootPath,
+      title: thread.name?.trim() || thread.preview.trim() || "Untitled thread",
+      updatedAt: Math.round(thread.updatedAt * 1_000),
+    };
+    this.transcriptThreadContexts.set(thread.id, context);
+    const entries = await transcriptStore.readThreadContextEntries(thread.id);
+    const browseAssets = new Map<string, Extract<WorkbenchTranscriptAtomicObservation, { kind: "browse" }>["asset"]>();
+    for (const entry of entries.browseResultEntries) {
+      const asset = await this.readSqliteBrowseAsset(thread.id, entry.assetUrl);
+      if (asset) browseAssets.set(entry.entryKey, asset);
+    }
+    await this.recordSqliteTranscript([createCodexTranscriptSqliteImport({
+      browseAssets,
+      browseResultEntries: entries.browseResultEntries,
+      context,
+      questionnaireEntries: entries.questionnaireEntries,
+      steerEntries: entries.steerEntries,
+      thread,
+    })]);
+    this.sqliteTranscriptReadyThreadIds.add(thread.id);
+  }
+
+  private createSqliteTurnObservation(
+    threadId: string,
+    turn: Turn,
+    context: CodexTranscriptThreadContext,
+    turnIndex?: number,
+  ): Extract<CodexSqliteTranscriptObservation, { kind: "turn" }> {
+    const startedAt = turn.startedAt === null ? null : Math.round(turn.startedAt * 1_000);
+    const endedAt = turn.completedAt === null ? null : Math.round(turn.completedAt * 1_000);
+    return {
+      kind: "turn",
+      threadId,
+      turnId: turn.id,
+      ...(turnIndex === undefined ? {} : { turnIndex }),
+      harnessId: "codex",
+      nativeLocation: context.nativeLocation,
+      nativeThreadId: threadId,
+      nativeTurnId: turn.id,
+      state: turn.status,
+      createdAt: startedAt ?? context.createdAt,
+      startedAt,
+      endedAt,
+      durationMs: turn.durationMs,
+    };
   }
 }

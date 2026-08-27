@@ -23,6 +23,7 @@ import {
 import type { WorkbenchThreadRecallOutputRecord } from "../../../lib/workbench/thread/thread-recall-output";
 import { getThreadItemsRenderChunkSignature } from "../../../lib/workbench/thread/thread-item-signature";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
+import type { WorkbenchProjectedUnknownItem } from "../../../lib/workbench/transcript/workbench-transcript-projection";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
 
@@ -2458,16 +2459,17 @@ function ThreadCommandSequence ({
   );
 }
 
-function ThreadFallbackItem ({ item }: { item: NonGroupedItem }) {
+function ThreadFallbackItem ({ item }: { item: NonGroupedItem | WorkbenchProjectedUnknownItem }) {
+  const isUnknownProjection = item.type === "unknown";
   return (
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
-      summary={<ThreadSummaryText text={item.type} />}
+      summary={<ThreadSummaryText text={isUnknownProjection ? "Unknown thread item" : item.type} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
       <pre className="m-0 max-w-full overflow-x-auto whitespace-pre rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
-        {JSON.stringify(item, null, 2)}
+        {JSON.stringify(isUnknownProjection ? item.safeValue : item, null, 2)}
       </pre>
     </ThreadDisclosure>
   );

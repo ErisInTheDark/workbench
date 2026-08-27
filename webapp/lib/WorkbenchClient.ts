@@ -3,6 +3,7 @@
  * - initWorkbench: wire the workbench DOM, one bridge transport, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket.
  * - areExplorerSnapshotsEquivalent: compare root-visible explorer semantics while excluding sidebar-only activity ordering. Keywords: explorer, equality, render boundary.
  * - openWorkbenchThreadStateObservation: negotiate atomic v3 bootstrap with v2/versionless reload-window fallback and browser-only schema conformance. Keywords: thread state, protocol, compatibility, conformance.
+ * - requestWorkbenchReload: send and conform one typed socket reload admission. Keywords: reload, WebSocket, Zod, boundary.
  */
 
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
@@ -10,6 +11,7 @@ import { getCurrentTurn } from "./codex/thread-state";
 import type {
     ExplorerSnapshot,
     DeleteFileResponse,
+    OrchestratorReloadScope,
     WorkbenchPendingUserInputRequest,
     ThreadPayload,
     WorkbenchBindings,
@@ -24,6 +26,10 @@ import type {
     ThreadSummary,
 } from "./types";
 import { areDeeplyEqual } from "./workbench/deep-equality";
+import {
+    OrchestratorReloadResponseSchema,
+    WORKBENCH_RELOAD_METHOD,
+} from "./workbench/orchestrator-reload";
 import {
     createProjectRoute,
     isWorkbenchRouteOwnerOfThread,
@@ -198,6 +204,19 @@ export async function openWorkbenchThreadStateObservation({
 
   const composite = acceptComposite(response).data;
   return { projectThreads: composite.projectThreads, sidebar: composite.sidebar };
+}
+
+export async function requestWorkbenchReload(
+  scopes: OrchestratorReloadScope[],
+  request: (method: string, params: unknown) => Promise<unknown>,
+) {
+  const response = await request(WORKBENCH_RELOAD_METHOD, { scopes });
+  const parsed = OrchestratorReloadResponseSchema.safeParse(response);
+  if (!parsed.success) {
+    reportClientSchemaError("Rejected Workbench reload admission response", parsed.error);
+    throw new Error("The Workbench reload admission response was invalid.");
+  }
+  return parsed.data;
 }
 
 export async function WorkbenchClient(
@@ -906,6 +925,7 @@ export async function WorkbenchClient(
     editThreadDraft: (draft, options) => threadSidebarClient.edit(draft, options),
     listModels: threadClient.listModels,
     readThread,
+    reloadScopes: async (scopes) => await requestWorkbenchReload(scopes, threadClient.requestWorkbench),
     refreshRateLimits,
     sendThreadMessage,
     setThreadTitle: async (request) => {

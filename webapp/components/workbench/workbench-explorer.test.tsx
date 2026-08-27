@@ -114,7 +114,8 @@ test("reload dirt stays inside the sidebar scroll owner without idle browser pol
   assert.match(reloadSource, /holdToConfirmMs=\{getReloadScopeHoldMs\(scope\)\}/u);
   assert.match(reloadSource, /holdToConfirmMs=\{getReloadAllHoldMs\(dirt\.dirtyScopes\)\}/u);
   assert.doesNotMatch(reloadSource, /scope\.description/u);
-  assert.doesNotMatch(reloadSource, /setInterval|orchestrator\/dirt/u);
+  assert.doesNotMatch(reloadSource, /fetch\(|setInterval|waitForReloadCompletion|api\/orchestrator/u);
+  assert.match(reloadSource, /reloadScopes\(selected\)/u);
   assert.doesNotMatch(workbenchSource, /\/api\/orchestrator\/dirt/u);
 });
 

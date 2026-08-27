@@ -17,6 +17,7 @@ const graph = (() => {
   try {
     const graph = defineReloadableNodeGraph<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>([
       require("./WorkbenchTurnLifecycleNode").default,
+      require("./WorkbenchDatabaseNode").default,
       require("./CodexAppServerNode").default,
       require("./OpenCodeAppServerNode").default,
       require("./WorkbenchClientNode").default,

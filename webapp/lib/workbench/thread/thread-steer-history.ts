@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX: item id prefix reserved for workbench-injected steer history items. Keywords: synthetic, steer, history.
+ * - SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX/createSyntheticSteerHistoryItemId: stable identity for Workbench-injected steer history items. Keywords: synthetic, steer, history.
  * - isSyntheticSteerHistoryItem: detect Workbench-injected steer history user messages. Keywords: synthetic, steer, guard.
  * - isWorkbenchSyntheticSteerUserMessage: detect Workbench-only steer user messages that must not become durable anchors. Keywords: optimistic, synthetic, steer, anchor.
  * - isWorkbenchPendingSteerUserMessage: detect Workbench-only steer messages still queued for the active turn. Keywords: optimistic, synthetic, steer, pending.
@@ -9,14 +9,14 @@
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput";
-import { areUserInputsEquivalentForUserMessageDedupe } from "../../codex/thread-item-normalization";
+import { areUserInputsEquivalentForUserMessageDedupe } from "../../codex/thread-item-normalization.ts";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "../../types";
 
 export const SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX = "workbench:steer-history:";
 
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 
-function createSyntheticSteerHistoryItemId(entry: WorkbenchSteerHistoryEntry) {
+export function createSyntheticSteerHistoryItemId(entry: WorkbenchSteerHistoryEntry) {
   return `${SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX}${entry.status}:${entry.threadId}:${entry.entryKey}`;
 }
 

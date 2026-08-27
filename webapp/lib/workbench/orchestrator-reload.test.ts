@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  OrchestratorReloadRequestSchema,
+  OrchestratorReloadResponseSchema,
   expandOrchestratorReloadScopes,
   normalizeOrchestratorReloadScopes,
   resolveOrchestratorReloadSelections,
@@ -33,4 +35,21 @@ test("the active catalog owns scope access and destructive all expansion", () =>
 test("full orchestrator process restart is exclusive", () => {
   assert.equal(validateOrchestratorReloadScopeCombination(["server:process"]), null);
   assert.match(validateOrchestratorReloadScopeCombination(["server:process", "server:core"]) ?? "", /by itself/u);
+});
+
+test("browser reload protocol rejects malformed and surplus transport fields", () => {
+  assert.equal(OrchestratorReloadRequestSchema.safeParse({ scopes: ["server:core"] }).success, true);
+  assert.equal(OrchestratorReloadRequestSchema.safeParse({ scopes: ["bad"] }).success, false);
+  assert.equal(OrchestratorReloadRequestSchema.safeParse({ scopes: ["server:core"], surprise: true }).success, false);
+  assert.equal(OrchestratorReloadResponseSchema.safeParse({
+    appliedScopes: [],
+    completedAt: null,
+    error: null,
+    ok: true,
+    queuedScopes: ["server:core"],
+    requestedScopes: ["server:core"],
+    startedAt: 1,
+    state: "running",
+  }).success, true);
+  assert.equal(OrchestratorReloadResponseSchema.safeParse({ ok: true, state: "running" }).success, false);
 });

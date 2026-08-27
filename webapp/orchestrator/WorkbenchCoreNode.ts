@@ -17,7 +17,11 @@ import * as opencodeLiveThreadState from "./opencode-live-thread-state";
 import * as opencodeThreadState from "./opencode-thread-state";
 import * as opencodeWorkbenchInstructions from "./opencode-workbench-instructions";
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
-import type { OrchestratorReloadableModules, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
+import type {
+  OrchestratorDatabaseRegistration,
+  OrchestratorReloadableModules,
+  OrchestratorRuntimeObjects,
+} from "./orchestrator-runtime-objects";
 import { log } from "./process-helpers";
 import ReloadableNode, { type ReloadableNodeLease } from "./ReloadableNode";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
@@ -98,6 +102,7 @@ function createWorkbenchCoreFeature(
   lease: ReloadableNodeLease,
   reloadDirt: WorkbenchReloadDirtController,
   turnRecovery: WorkbenchTurnRecoveryController,
+  database: OrchestratorDatabaseRegistration,
 ) {
   const modules = createModules();
   const projectCatalog = new WorkbenchProjectCatalogController();
@@ -108,7 +113,9 @@ function createWorkbenchCoreFeature(
     if (!threadState) throw new Error("Thread state is not ready for subagent lifecycle projection.");
     return threadState;
   };
-  const harnesses = new WorkbenchHarnessController(createHarnessAdapters(context, turnRecovery));
+  const harnesses = new WorkbenchHarnessController(createHarnessAdapters(context, turnRecovery), {
+    admitTurnStart: () => database.assertReady(),
+  });
   const gitArc = new WorkbenchGitArcFeature({
     getThreadClaimContext: async (projectId, harness, threadId) => {
       if (!threadState) throw new Error("Thread state is not ready for Git arc ownership.");
@@ -223,11 +230,17 @@ function createWorkbenchCoreFeature(
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, import("./orchestrator-runtime-objects").OrchestratorProviderNotification>({
   access: "agent",
   children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
-  create: (context, { get, lease }) => createWorkbenchCoreFeature(context, lease, get("reloadDirt"), get("turnRecovery")),
+  create: (context, { get, lease }) => createWorkbenchCoreFeature(
+    context,
+    lease,
+    get("reloadDirt"),
+    get("turnRecovery"),
+    get("database"),
+  ),
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: ["reloadDirt", "turnRecovery"],
+  requires: ["database", "reloadDirt", "turnRecovery", "transcript"],
   safeAll: true,
   scope: "server:core",
   sources: [

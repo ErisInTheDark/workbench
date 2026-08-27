@@ -10,6 +10,7 @@
  * threadFileChanges: current ordered file change table. Keywords: database, schema, file-change.
  * threadItemContextCompactions: current context-compaction augmentation table. Keywords: database, schema, compaction.
  * threadItemUnknown: current opaque unknown-item augmentation table. Keywords: database, schema, unknown.
+ * threadItemTimelines/threadItemTimelineAliases: optional semantic item timing and alias augmentations. Keywords: database, schema, timeline, alias.
  * itemTables: current item table inventory. Keywords: database, schema, item.
  * ItemSchemaRows: selected row types for current item tables. Keywords: database, schema, types.
  * itemSchemaHistory: private item table histories. Keywords: database, schema, history.
@@ -247,8 +248,29 @@ const threadItemUnknownV1 = defineTable("thread_item_unknown", {
 const threadItemUnknownHistory = initialHistory(threadItemUnknownV1);
 export const threadItemUnknown = threadItemUnknownHistory.current;
 
+const threadItemTimelinesV1 = defineTable("thread_item_timelines", {
+  item_id: text().primaryKey().references("thread_items", "id", { onDelete: "CASCADE" }),
+  first_seen_at: integer(),
+  last_seen_at: integer(),
+  started_at: integer(),
+  completed_at: integer(),
+});
+const threadItemTimelinesHistory = initialHistory(threadItemTimelinesV1);
+export const threadItemTimelines = threadItemTimelinesHistory.current;
+
+const threadItemTimelineAliasesV1 = defineTable("thread_item_timeline_aliases", {
+  item_id: text().notNull().references("thread_item_timelines", "item_id", { onDelete: "CASCADE" }),
+  alias: text().primaryKey(),
+}, (table) => ({
+  constraints: [unique([table.item_id, table.alias])],
+}));
+const threadItemTimelineAliasesHistory = initialHistory(threadItemTimelineAliasesV1);
+export const threadItemTimelineAliases = threadItemTimelineAliasesHistory.current;
+
 export const itemTables = Object.freeze({
   threadItems,
+  threadItemTimelines,
+  threadItemTimelineAliases,
   threadItemUserMessages,
   threadUserMessageParts,
   threadItemAssistantMessages,
@@ -267,6 +289,8 @@ export type ItemSchemaRows = {
 
 export const itemSchemaHistory = defineSubsystemHistory([
   threadItemsHistory,
+  threadItemTimelinesHistory,
+  threadItemTimelineAliasesHistory,
   threadItemUserMessagesHistory,
   threadUserMessagePartsHistory,
   threadItemAssistantMessagesHistory,

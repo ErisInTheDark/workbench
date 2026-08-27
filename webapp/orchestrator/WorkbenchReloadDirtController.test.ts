@@ -202,6 +202,55 @@ test("shared source dirt remains for scopes whose reload baseline did not advanc
   }
 });
 
+test("external reset dirt stays owned by its scope until successful replacement removes the marker", async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-reload-external-dirt-"));
+  const git = async (...args: string[]) => await run("git", args, { cwd: repoRoot });
+  let controller: WorkbenchReloadDirtController | null = null;
+  try {
+    await git("init");
+    await git("config", "user.email", "workbench@example.invalid");
+    await git("config", "user.name", "Workbench test");
+    await fs.writeFile(path.join(repoRoot, "tracked.txt"), "baseline\n", "utf8");
+    await git("add", ".");
+    await git("commit", "-m", "initial");
+
+    const descriptor = {
+      access: "agent" as const,
+      description: "Database",
+      destructive: false,
+      paths: [] as string[],
+      safeAll: true,
+      scope: "server:database" as const,
+    };
+    const sourceState: ReloadNodeSourceState = {
+      dependantClosure: (scopes) => [...scopes],
+      descriptors: [descriptor],
+    };
+    const markerPath = path.join(repoRoot, ".workbench", "reset-workbench-sqlite");
+    controller = new WorkbenchReloadDirtController({
+      externalDirtSources: [{ path: ".workbench/reset-workbench-sqlite", scope: "server:database" }],
+      getSourceState: () => sourceState,
+      repoRoot,
+    });
+    await controller.start();
+    assert.deepEqual(controller.getSnapshot().dirtyScopes, []);
+
+    await fs.mkdir(path.dirname(markerPath), { recursive: true });
+    await fs.writeFile(markerPath, "workbench-sqlite-shadow-reset-v1\n", "utf8");
+    assert.deepEqual((await controller.refresh()).dirtyScopes.map(({ scope }) => scope), ["server:database"]);
+
+    await controller.completeReload(["server:database"]);
+    assert.deepEqual(controller.getSnapshot().dirtyScopes.map(({ scope }) => scope), ["server:database"]);
+
+    await fs.rm(markerPath);
+    await controller.completeReload(["server:database"]);
+    assert.deepEqual(controller.getSnapshot().dirtyScopes, []);
+  } finally {
+    await controller?.dispose();
+    await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
 test("scoped refresh detects loaded source deletion and recreation across its reload baseline", async () => {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-reload-dirt-scoped-"));
   const git = async (...args: string[]) => await run("git", args, { cwd: repoRoot });

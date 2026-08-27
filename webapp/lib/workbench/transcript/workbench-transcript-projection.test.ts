@@ -1,0 +1,302 @@
+/*
+ * No production exports. Real SQLite fixtures protect relational-to-browser projection, hydration, renderer facts, opaque values, and malformed augmentation refusal. Keywords: transcript, projection, sqlite, parity.
+ */
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import Database from "better-sqlite3";
+
+import type { WorkbenchQuestionnaireHistoryEntry } from "../../types";
+import type { WorkbenchFileChangeItem } from "../thread/workbench-file-change";
+import { installWorkbenchDatabaseSchema } from "../../../orchestrator/database/workbench-database-schema";
+import WorkbenchTranscriptRepository from "../../../orchestrator/database/transcript/WorkbenchTranscriptRepository";
+import type { WorkbenchTranscriptObservation } from "../../../orchestrator/database/transcript/workbench-transcript-types";
+import { projectWorkbenchTranscript } from "./workbench-transcript-projection";
+
+function createRepository() {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  return {
+    database,
+    repository: new WorkbenchTranscriptRepository(database),
+  };
+}
+
+function thread(): WorkbenchTranscriptObservation {
+  return {
+    activityAt: 7_000,
+    createdAt: 1_000,
+    kind: "thread",
+    projectId: "project",
+    projectRoot: "C:/project",
+    threadId: "thread",
+    title: "Projected thread",
+    updatedAt: 7_000,
+  };
+}
+
+function turn(turnId: string, turnIndex: number): WorkbenchTranscriptObservation {
+  return {
+    createdAt: (turnIndex + 1) * 1_000,
+    durationMs: 1_000,
+    endedAt: (turnIndex + 2) * 1_000,
+    harnessId: "codex",
+    kind: "turn",
+    nativeLocation: "C:/project",
+    nativeThreadId: "native-thread",
+    nativeTurnId: `native-${turnId}`,
+    startedAt: (turnIndex + 1) * 1_000,
+    state: "completed",
+    threadId: "thread",
+    turnId,
+    turnIndex,
+  };
+}
+
+function item(
+  turnId: string,
+  value: Extract<WorkbenchTranscriptObservation, { kind: "item" }>["item"],
+  observedAt: number,
+  timeline?: Extract<WorkbenchTranscriptObservation, { kind: "item" }>["timeline"],
+): WorkbenchTranscriptObservation {
+  return {
+    item: value,
+    kind: "item",
+    lifecycle: "completed",
+    observedAt,
+    ...(timeline ? { timeline } : {}),
+    threadId: "thread",
+    turnId,
+  };
+}
+
+test("real SQLite rows project the renderer facts used by current command, file, interaction, and unknown displays", () => {
+  const { database, repository } = createRepository();
+  try {
+    const fileChange: WorkbenchFileChangeItem = {
+      changes: [{
+        diff: "@@\n+sparkle",
+        kind: { move_path: null, type: "update" },
+        path: "src/sparkle.ts",
+        workbenchAdditions: 1,
+        workbenchDeletions: 0,
+      }],
+      id: "file",
+      status: "completed",
+      type: "fileChange",
+    };
+    const questionnaire: WorkbenchQuestionnaireHistoryEntry = {
+      insertAfterItemId: null,
+      insertAfterItemIndex: null,
+      itemId: null,
+      request: {
+        id: "request",
+        questions: [{
+          allowOther: true,
+          header: "Choice",
+          id: "choice",
+          isSecret: false,
+          options: [{ description: "First option", label: "One" }],
+          question: "Pick one",
+        }],
+        submitLabel: "Submit",
+        summary: "Choose",
+        title: "Questionnaire",
+      },
+      requestKey: "request-key",
+      resolvedAt: 6_000,
+      response: { answers: { choice: { answers: ["One"] } } },
+      threadId: "thread",
+      turnId: "turn-1",
+    };
+    repository.settle([
+      thread(),
+      turn("turn-0", 0),
+      turn("turn-1", 1),
+      item("turn-1", {
+        clientId: "client",
+        content: [{ text: "hello", text_elements: [], type: "text" }],
+        id: "user",
+        type: "userMessage",
+      }, 2_000, {
+        aliases: ["user-alias"],
+        completedAt: 2_000,
+        firstSeenAt: 1_900,
+        itemId: "user",
+        lastSeenAt: 2_000,
+        startedAt: 1_950,
+      }),
+      item("turn-1", {
+        content: ["hidden"],
+        id: "reasoning",
+        summary: ["visible"],
+        type: "reasoning",
+      }, 3_000),
+      item("turn-1", {
+        aggregatedOutput: "match",
+        command: "rg sparkle src",
+        commandActions: [{ command: "rg sparkle src", path: "src", query: "sparkle", type: "search" }],
+        cwd: "C:/project",
+        durationMs: 20,
+        exitCode: 0,
+        id: "command",
+        pluginId: null,
+        processId: "process",
+        scriptPath: null,
+        source: "agent",
+        status: "completed",
+        type: "commandExecution",
+      }, 4_000),
+      {
+        entry: {
+          action: "snapshot",
+          actionIndex: 0,
+          assetUrl: "/api/transcript-assets/codex/dGhyZWFk/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+          commandItemId: "command",
+          detailKind: "result",
+          detailLabel: "Snapshot",
+          detailText: "Captured",
+          durationMs: 10,
+          entryKey: "browse",
+          recordedAt: 4_100,
+          session: "research",
+          state: "completed",
+          threadId: "thread",
+          turnId: "turn-1",
+        },
+        kind: "browse",
+        asset: {
+          byteLength: 12,
+          digest: "a".repeat(64),
+          mimeType: "image/png",
+          storageKey: "/api/transcript-assets/codex/dGhyZWFk/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+        },
+      },
+      item("turn-1", {
+        appContext: null,
+        arguments: { path: "src" },
+        durationMs: 30,
+        error: null,
+        id: "mcp",
+        pluginId: null,
+        readOnlyHint: true,
+        result: {
+          _meta: { source: "test" },
+          content: [{ text: "done", type: "text" }],
+          structuredContent: { ok: true },
+        },
+        server: "wb",
+        status: "completed",
+        tool: "shell",
+        type: "mcpToolCall",
+      }, 5_000),
+      item("turn-1", fileChange, 5_500),
+      { entry: questionnaire, kind: "questionnaire", observedAt: 6_000 },
+      item("turn-1", { id: "opaque", path: "C:/project/image.png", type: "imageView" }, 7_000),
+    ]);
+
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
+    assert.ok(snapshot);
+    const result = projectWorkbenchTranscript(snapshot);
+    assert.equal(result.success, true);
+    if (!result.success) return;
+
+    assert.deepEqual(result.data.turnHistory.map(({ itemCount, loadState, turnId }) => ({
+      itemCount,
+      loadState,
+      turnId,
+    })), [
+      { itemCount: 0, loadState: "unloaded", turnId: "turn-0" },
+      { itemCount: 7, loadState: "loaded", turnId: "turn-1" },
+    ]);
+    assert.deepEqual(result.data.display.segments.map(({ items, turnId }) => ({
+      itemIds: items.map(({ id }) => id),
+      turnId,
+    })), [
+      { itemIds: ["user", "reasoning", "command", "mcp", "file", "workbench-questionnaire:thread:request-key", "opaque"], turnId: "turn-1" },
+    ]);
+    assert.deepEqual(result.data.turns[0]?.itemTimeline, [{
+      aliases: ["user-alias"],
+      completedAt: 2_000,
+      firstSeenAt: 1_900,
+      itemId: "user",
+      lastSeenAt: 2_000,
+      startedAt: 1_950,
+    }]);
+    assert.deepEqual(result.data.browseResultEntries, [{
+      action: "snapshot",
+      actionIndex: 0,
+      assetUrl: "/api/transcript-assets/codex/dGhyZWFk/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+      commandItemId: "command",
+      detailKind: "result",
+      detailLabel: "Snapshot",
+      detailText: "Captured",
+      durationMs: 10,
+      entryKey: "browse",
+      recordedAt: 4_100,
+      session: "research",
+      state: "completed",
+      threadId: "thread",
+      turnId: "turn-1",
+    }]);
+    const projected = result.data.turns[0]!.items;
+    assert.deepEqual(projected.find(({ id }) => id === "reasoning"), {
+      content: [],
+      id: "reasoning",
+      summary: ["visible"],
+      type: "reasoning",
+    });
+    assert.deepEqual(projected.find(({ id }) => id === "mcp"), {
+      appContext: null,
+      arguments: { path: "src" },
+      durationMs: 30,
+      error: null,
+      id: "mcp",
+      pluginId: null,
+      readOnlyHint: true,
+      result: {
+        _meta: { source: "test" },
+        content: [{ text: "done", type: "text" }],
+        structuredContent: { ok: true },
+      },
+      server: "wb",
+      status: "completed",
+      tool: "shell",
+      type: "mcpToolCall",
+    });
+    assert.deepEqual(projected.find(({ id }) => id === "file"), fileChange);
+    assert.deepEqual(projected.at(-1), {
+      id: "opaque",
+      nativeType: "imageView",
+      safeValue: { id: "opaque", path: "C:/project/image.png", type: "imageView" },
+      type: "unknown",
+    });
+    const interaction = projected.find(({ type }) => type === "questionnaire");
+    assert.ok(interaction?.type === "questionnaire");
+    assert.deepEqual(interaction.request, questionnaire.request);
+    assert.deepEqual(interaction.response, questionnaire.response);
+  } finally {
+    database.close();
+  }
+});
+
+test("projection fails closed when a canonical root loses its required augmentation", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([
+      thread(),
+      turn("turn-0", 0),
+      item("turn-0", { id: "plan", text: "planned", type: "plan" }, 2_000),
+    ]);
+    database.prepare("DELETE FROM thread_item_plans WHERE item_id = 'plan'").run();
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
+    assert.ok(snapshot);
+    assert.deepEqual(projectWorkbenchTranscript(snapshot), {
+      issues: [{ code: "missingRow", itemId: "plan", table: "threadItemPlans" }],
+      success: false,
+    });
+  } finally {
+    database.close();
+  }
+});

@@ -1,11 +1,12 @@
 /*
  * Exports:
  * - WorkbenchOrchestratorReloadControllerState: transferable active-batch and hard-reload state. Keywords: reload, handoff, state.
+ * - WorkbenchUserReloadAdmission: browser admission response plus post-send execution controls. Keywords: WebSocket, admission, scheduling.
  * - WorkbenchHardReloadNotification/WorkbenchHardReloadOptions: impending-restart notification and force-exit ports. Keywords: hard reload, notification, deadline.
  * - WorkbenchOrchestratorReloadControllerOptions: dirt selection and low-level execution ports. Keywords: reload, dirt, ports.
  * - default WorkbenchOrchestratorReloadController: own user-requested reload execution, handoff completion, and hard reload. Keywords: reload, user, lifecycle.
  */
-import type { OrchestratorReloadResponse, OrchestratorReloadScope } from "../lib/types";
+import type { OrchestratorReloadRequest, OrchestratorReloadResponse, OrchestratorReloadScope } from "../lib/types";
 import {
   expandOrchestratorReloadScopes,
   resolveOrchestratorReloadSelections,
@@ -22,6 +23,12 @@ export interface WorkbenchReloadScopeClaim {
 }
 
 interface ReloadBatch { scopes: OrchestratorReloadScope[] }
+
+export interface WorkbenchUserReloadAdmission {
+  cancel(): void;
+  response: OrchestratorReloadResponse;
+  start(): Promise<void>;
+}
 
 export interface WorkbenchOrchestratorReloadControllerState {
   activeBatch: ReloadBatch | null;
@@ -55,6 +62,7 @@ export interface WorkbenchOrchestratorReloadControllerOptions {
   listClaims?: (cwd: string) => Promise<WorkbenchReloadScopeClaim[]>;
   listScopes?: () => readonly OrchestratorReloadScope[];
   now?: () => number;
+  schedule?: (callback: () => void) => void;
 }
 
 const DEFAULT_HARD_RELOAD_TIMEOUT_MS = 5_000;
@@ -77,10 +85,13 @@ export default class WorkbenchOrchestratorReloadController {
   private executionTail = Promise.resolve();
   private hardReloadExitRequested = false;
   private readonly now: () => number;
+  private reservedBatch: ReloadBatch | null = null;
+  private readonly schedule: (callback: () => void) => void;
   private readonly state: WorkbenchOrchestratorReloadControllerState;
 
   constructor(private readonly options: WorkbenchOrchestratorReloadControllerOptions) {
     this.now = options.now ?? Date.now;
+    this.schedule = options.schedule ?? setImmediate;
     this.state = options.initialState ?? { activeBatch: null, hardReloadPhase: "idle" };
   }
 
@@ -116,6 +127,63 @@ export default class WorkbenchOrchestratorReloadController {
     throw new Error("Agent-managed reload admission is no longer available. Reloading is the user's decision.");
   }
 
+  admitUserReload(input: OrchestratorReloadRequest): WorkbenchUserReloadAdmission {
+    const scopes = this.resolveSelections(input, "operator");
+    if (!scopes.length) throw new Error("At least one supported reload scope is required.");
+    const combinationError = this.validateCombination(scopes);
+    if (combinationError) throw new Error(combinationError);
+    if (scopes[0] === "server:process") {
+      const response = this.admitHardReload();
+      let active = true;
+      return {
+        cancel: () => {
+          if (!active) return;
+          active = false;
+          this.cancelHardReloadAdmission();
+        },
+        response,
+        start: () => {
+          if (!active) return Promise.reject(new Error("The hard reload admission is no longer active."));
+          active = false;
+          return this.scheduleCompletion(async () => await this.beginHardReload());
+        },
+      };
+    }
+    if (this.reservedBatch || this.state.activeBatch) throw new Error("A reload batch is already active.");
+    const batch = { scopes };
+    this.reservedBatch = batch;
+    const startedAt = this.now();
+    let active = true;
+    return {
+      cancel: () => {
+        if (!active) return;
+        active = false;
+        if (this.reservedBatch === batch) this.reservedBatch = null;
+      },
+      response: {
+        appliedScopes: [],
+        completedAt: null,
+        error: null,
+        ok: true,
+        queuedScopes: [...scopes],
+        requestedScopes: [...scopes],
+        startedAt,
+        state: "running",
+      },
+      start: () => {
+        if (!active || this.reservedBatch !== batch) return Promise.reject(new Error("The reload admission is no longer active."));
+        active = false;
+        return this.scheduleCompletion(async () => {
+          await this.runExclusive(async () => {
+            if (this.reservedBatch !== batch) throw new Error("The reload admission was replaced before execution.");
+            this.reservedBatch = null;
+            await this.executeBatch(batch);
+          });
+        });
+      },
+    };
+  }
+
   detachForReload() {
     this.attached = false;
     return this.state;
@@ -142,27 +210,14 @@ export default class WorkbenchOrchestratorReloadController {
 
   async executeUnmanaged(scopes: OrchestratorReloadScope[]) {
     await this.runExclusive(async () => {
-      if (this.state.activeBatch) throw new Error("A reload batch is already active.");
-      const batch = { scopes: [...new Set(scopes)] };
-      this.state.activeBatch = batch;
-      this.options.dirt?.beginReload(batch.scopes);
-      try {
-        await this.options.executeBatch(batch.scopes);
-        if (!this.attached) return;
-        this.state.activeBatch = null;
-        await this.options.dirt?.completeReload(batch.scopes);
-      } catch (error) {
-        if (this.attached) {
-          this.state.activeBatch = null;
-          this.options.dirt?.failReload(error);
-        }
-        throw error;
-      }
+      if (this.reservedBatch || this.state.activeBatch) throw new Error("A reload batch is already active.");
+      await this.executeBatch({ scopes: [...new Set(scopes)] });
     });
   }
 
   dispose() {
     this.attached = false;
+    this.reservedBatch = null;
     this.state.activeBatch = null;
   }
 
@@ -216,5 +271,30 @@ export default class WorkbenchOrchestratorReloadController {
     const run = this.executionTail.then(operation);
     this.executionTail = run.catch(() => undefined);
     await run;
+  }
+
+  private async executeBatch(batch: ReloadBatch) {
+    this.state.activeBatch = batch;
+    this.options.dirt?.beginReload(batch.scopes);
+    try {
+      await this.options.executeBatch(batch.scopes);
+      if (!this.attached) return;
+      this.state.activeBatch = null;
+      await this.options.dirt?.completeReload(batch.scopes);
+    } catch (error) {
+      if (this.attached) {
+        this.state.activeBatch = null;
+        this.options.dirt?.failReload(error);
+      }
+      throw error;
+    }
+  }
+
+  private scheduleCompletion(operation: () => Promise<void>) {
+    return new Promise<void>((resolve, reject) => {
+      this.schedule(() => {
+        void operation().then(resolve, reject);
+      });
+    });
   }
 }

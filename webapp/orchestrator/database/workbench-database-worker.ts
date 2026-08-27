@@ -6,11 +6,17 @@ import { parentPort } from "node:worker_threads";
 import Database from "better-sqlite3";
 
 import type { WorkbenchDatabaseInventory, WorkbenchDatabaseRequest, WorkbenchDatabaseResponse } from "./workbench-database-protocol.ts";
-import { installWorkbenchDatabaseSchema } from "./workbench-database-schema.ts";
+import { installWorkbenchDatabaseSchema, workbenchDatabaseTables } from "./workbench-database-schema.ts";
+import {
+  compileWorkbenchDatabaseStatement,
+  type WorkbenchDatabaseRow,
+} from "./workbench-database-statements.ts";
+import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository.ts";
 
 if (!parentPort) throw new Error("Workbench database worker requires a parent port");
 
 let database: Database.Database | null = null;
+let transcriptRepository: WorkbenchTranscriptRepository | null = null;
 
 function boundedError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -43,31 +49,117 @@ function post(response: WorkbenchDatabaseResponse) {
   parentPort!.postMessage(response);
 }
 
-parentPort.on("message", (request: WorkbenchDatabaseRequest) => {
+function closeDatabase() {
+  transcriptRepository = null;
+  const activeDatabase = database;
+  database = null;
+  if (!activeDatabase) return null;
   try {
-    if (request.type === "initialize") {
+    activeDatabase.close();
+    return null;
+  } catch (error) {
+    return boundedError(error);
+  }
+}
+
+function postFatalFailure(request: WorkbenchDatabaseRequest, error: unknown, context?: string) {
+  const closeFailure = closeDatabase();
+  const parts = [
+    context,
+    boundedError(error),
+    closeFailure ? `Database close also failed: ${closeFailure}` : null,
+  ].filter((part): part is string => Boolean(part));
+  post({ id: request.id, type: "fatalFailure", message: parts.join(" ").slice(0, 1_000) });
+}
+
+function postRequestFailure(request: WorkbenchDatabaseRequest, error: unknown) {
+  const requestMessage = boundedError(error);
+  try {
+    proveReadWrite();
+    post({ id: request.id, type: "requestFailure", message: requestMessage });
+  } catch (readinessError) {
+    postFatalFailure(
+      request,
+      readinessError,
+      `Database request failed (${requestMessage}) and the connection readiness proof also failed.`,
+    );
+  }
+}
+
+function executeTransaction(request: Extract<WorkbenchDatabaseRequest, { type: "executeTransaction" }>) {
+  if (!database) throw new Error("Workbench database is not initialized");
+  return database.transaction(() => {
+    let changes = 0;
+    for (const statement of request.statements) {
+      const compiled = compileWorkbenchDatabaseStatement(workbenchDatabaseTables, statement);
+      changes += database!.prepare(compiled.sql).run(...compiled.parameters).changes;
+    }
+    return { changes };
+  })();
+}
+
+function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { type: "initialize" }>) {
+  if (request.type === "getInventory") {
+    post({ id: request.id, type: "inventory", inventory: inventory() });
+    return;
+  }
+  if (request.type === "executeTransaction") {
+    post({ id: request.id, type: "mutationResult", result: executeTransaction(request) });
+    return;
+  }
+  if (request.type === "query") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    const compiled = compileWorkbenchDatabaseStatement(workbenchDatabaseTables, request.statement);
+    const rows = database.prepare(compiled.sql).all(...compiled.parameters) as WorkbenchDatabaseRow[];
+    post({ id: request.id, type: "queryResult", rows });
+    return;
+  }
+  if (request.type === "settleTranscript") {
+    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
+    post({
+      id: request.id,
+      type: "transcriptSettlement",
+      settlement: transcriptRepository.settle(request.observations),
+    });
+    return;
+  }
+  if (request.type === "readTranscript") {
+    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
+    post({
+      id: request.id,
+      type: "transcriptSnapshot",
+      snapshot: transcriptRepository.read(request.request),
+    });
+    return;
+  }
+  if (!database) throw new Error("Workbench database is not initialized");
+  database.close();
+  transcriptRepository = null;
+  database = null;
+  post({ id: request.id, type: "closed" });
+  parentPort!.close();
+}
+
+parentPort.on("message", (request: WorkbenchDatabaseRequest) => {
+  if (request.type === "initialize") {
+    try {
       if (database) throw new Error("Workbench database is already initialized");
       database = new Database(request.databasePath);
       database.pragma("foreign_keys = ON");
       database.pragma("journal_mode = WAL");
       installWorkbenchDatabaseSchema(database);
       proveReadWrite();
+      transcriptRepository = new WorkbenchTranscriptRepository(database);
       post({ id: request.id, type: "ready", inventory: inventory() });
-      return;
+    } catch (error) {
+      postFatalFailure(request, error, "Workbench database initialization failed.");
     }
-    if (request.type === "getInventory") {
-      post({ id: request.id, type: "inventory", inventory: inventory() });
-      return;
-    }
-    if (request.type === "close") {
-      database?.close();
-      database = null;
-      post({ id: request.id, type: "closed" });
-      parentPort!.close();
-    }
+    return;
+  }
+  try {
+    handleInitializedRequest(request);
   } catch (error) {
-    database?.close();
-    database = null;
-    post({ id: request.id, type: "failure", message: boundedError(error) });
+    if (request.type === "close") postFatalFailure(request, error, "Workbench database close failed.");
+    else postRequestFailure(request, error);
   }
 });

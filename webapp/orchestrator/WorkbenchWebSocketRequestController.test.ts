@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
+import type WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReloadController";
 import WorkbenchWebSocketRequestController, { type WorkbenchWebSocketRequestControllerOptions } from "./WorkbenchWebSocketRequestController";
 
 class FakeClock {
@@ -55,6 +56,8 @@ function createController(options: {
   lines?: string[];
   onDisconnect?: (connectionId: string) => void;
   onHarnessMessage?: (message: JsonRpcRequest, client: BridgeClient) => Promise<void> | void;
+  reload?: Pick<WorkbenchOrchestratorReloadController, "admitUserReload">;
+  transcript?: WorkbenchWebSocketRequestControllerOptions["transcript"];
 }) {
   const lines = options.lines ?? [];
   const controller = new WorkbenchWebSocketRequestController({
@@ -69,16 +72,71 @@ function createController(options: {
     },
     initialState: options.initialState,
     now: () => options.clock.nowMs,
+    reload: options.reload ?? {
+      admitUserReload: () => { throw new Error("Unexpected reload request."); },
+    },
     setTimeout: options.clock.setTimeout,
     threadState: {
       acceptIntent: async () => ({ accepted: true, revision: 1 }),
       disconnect: async (connectionId) => { options.onDisconnect?.(connectionId); },
       handleRequest: async () => ({ result: { accepted: true, revision: 1 } }),
     },
+    transcript: options.transcript ?? {
+      read: async () => { throw new Error("Unexpected transcript read."); },
+      subscribe: async () => undefined,
+      unsubscribe: () => undefined,
+    },
     writeLine: (line) => { lines.push(line); },
   });
   return { controller, lines };
 }
+
+test("browser reload admission responds before starting the reserved batch", async () => {
+  const clock = new FakeClock();
+  const events: string[] = [];
+  let finishSend: (() => void) | null = null;
+  let signalResponseStarted!: () => void;
+  const responseStarted = new Promise<void>((resolve) => { signalResponseStarted = resolve; });
+  const client = createClient((data, callback) => {
+    const message = JSON.parse(data) as Record<string, unknown>;
+    if (message.id !== 9) {
+      callback?.();
+      return;
+    }
+    events.push("send");
+    finishSend = () => callback?.();
+    signalResponseStarted();
+  });
+  const { controller } = createController({
+    clock,
+    reload: {
+      admitUserReload: () => {
+        events.push("admit");
+        return {
+          cancel: () => { events.push("cancel"); },
+          response: {
+            appliedScopes: [], completedAt: null, error: null, ok: true,
+            queuedScopes: ["server:database"], requestedScopes: ["server:database"],
+            startedAt: 1, state: "running",
+          },
+          start: async () => { events.push("start"); },
+        };
+      },
+    },
+  });
+
+  const handling = controller.handleMessage(client, "connection-reload", frame(
+    "workbench/orchestrator/reload",
+    9,
+    { params: { scopes: ["server:database"] } },
+  ), false);
+  await responseStarted;
+  assert.deepEqual(events, ["admit", "send"]);
+  finishSend!();
+  await handling;
+  assert.deepEqual(events, ["admit", "send", "start"]);
+  controller.dispose();
+});
 
 function frame(method: string, id: number, extra: Record<string, unknown> = {}) {
   return Buffer.from(JSON.stringify({ id, method, ...extra }));
@@ -203,11 +261,160 @@ test("disconnect and send failure terminate their request lifecycles", async () 
   assert.deepEqual(disconnects, ["connection-1"]);
   assert.match(lines[0] ?? "", /closed/u);
 
-  const failedClient = createClient((_data, callback) => callback?.(new Error("socket write failed")));
+  let sends = 0;
+  const failedClient = createClient((_data, callback) => {
+    sends += 1;
+    callback?.(sends === 1 ? undefined : new Error("socket write failed"));
+  });
   await controller.handleMessage(failedClient, "connection-2", frame("thread/read", 2), false);
   await assert.rejects(controller.sendJsonToClient(failedClient, { id: 2, result: {} }), /socket write failed/u);
   assert.match(lines[1] ?? "", /send-error/u);
   clock.advance(10_000);
   assert.equal(lines.length, 2);
   controller.dispose();
+});
+
+test("transcript dispatch decodes the exact shared operation before calling the repository", async () => {
+  const clock = new FakeClock();
+  const reads: unknown[] = [];
+  const sent: unknown[] = [];
+  const { controller } = createController({
+    clock,
+    transcript: {
+      read: async (request) => {
+        reads.push(request);
+        return {} as never;
+      },
+      subscribe: async () => undefined,
+      unsubscribe: () => undefined,
+    },
+  });
+  const client = createClient((data, callback) => {
+    sent.push(JSON.parse(String(data)));
+    callback?.();
+  });
+
+  await controller.handleMessage(client, "connection-1", frame("workbench/transcript/read", 1, {
+    params: { threadId: " thread ", turnLimit: 20, futureOption: true },
+  }), false);
+  assert.deepEqual(reads, [{ threadId: "thread", turnLimit: 20 }]);
+
+  await controller.handleMessage(client, "connection-1", frame("workbench/transcript/read", 2, {
+    params: { threadId: "thread", turnLimit: "20" },
+  }), false);
+  assert.equal(reads.length, 1);
+  assert.ok(sent.some((message) => typeof message === "object" && message !== null && "error" in message));
+});
+
+test("parity dispatch logs only a decoded bounded diagnostic and acknowledges it", async () => {
+  const clock = new FakeClock();
+  const sent: unknown[] = [];
+  const { controller, lines } = createController({ clock });
+  const client = createClient((data, callback) => {
+    sent.push(JSON.parse(String(data)));
+    callback?.();
+  });
+  const diagnostic = {
+    threadId: "thread",
+    scope: "item",
+    mismatch: "payload",
+    jsonContext: [{
+      id: "item",
+      index: 0,
+      kind: "item",
+      payloadSignature: "abc123",
+      turnId: "turn",
+      type: "agentMessage",
+    }],
+    sqliteContext: [],
+  };
+
+  await controller.handleMessage(client, "connection-1", frame("workbench/transcript/parity/report", 1, {
+    params: diagnostic,
+  }), false);
+  assert.deepEqual(
+    sent.find((message) => typeof message === "object" && message !== null && "id" in message),
+    { id: 1, result: { reported: true } },
+  );
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith("[workbench-transcript-parity]")),
+    [`[workbench-transcript-parity] ${JSON.stringify(diagnostic)}`],
+  );
+
+  await controller.handleMessage(client, "connection-1", frame("workbench/transcript/parity/report", 2, {
+    params: { ...diagnostic, threadId: "thread\nsecret" },
+  }), false);
+  assert.equal(lines.filter((line) => line.startsWith("[workbench-transcript-parity]")).length, 1);
+  assert.ok(sent.some((message) => typeof message === "object" && message !== null && "error" in message));
+  controller.dispose();
+});
+
+test("controller reload drops transcript subscriptions and advertises a fresh capability generation", async () => {
+  const clock = new FakeClock();
+  const sent: Array<Record<string, unknown>> = [];
+  const subscriptions: unknown[] = [];
+  const unsubscriptions: string[] = [];
+  const client = createClient((data, callback) => {
+    sent.push(JSON.parse(String(data)) as Record<string, unknown>);
+    callback?.();
+  });
+  const transcript = {
+    read: async () => { throw new Error("Unexpected transcript read."); },
+    subscribe: async ({ id, request }: {
+      id: string;
+      request: { threadId: string; turnIds?: string[]; turnLimit: number };
+    }) => { subscriptions.push({ id, request }); },
+    unsubscribe: (id: string) => { unsubscriptions.push(id); },
+  };
+  const first = createController({ clock, transcript });
+  await first.controller.handleMessage(client, "connection-1", frame("thread/read", 1), false);
+  await first.controller.handleMessage(client, "connection-1", frame("workbench/transcript/subscribe", 2, {
+    params: {
+      subscriptionId: "selected-thread",
+      threadId: "thread",
+      turnIds: ["turn-2", "turn-4"],
+      turnLimit: 4,
+    },
+  }), false);
+  assert.equal(
+    sent.filter((message) => message.method === "workbench/transcript/capabilities").length,
+    1,
+  );
+  assert.deepEqual(subscriptions, [{
+    id: "connection-1\0selected-thread",
+    request: {
+      threadId: "thread",
+      turnIds: ["turn-2", "turn-4"],
+      turnLimit: 4,
+    },
+  }]);
+
+  const state = first.controller.detachForReload();
+  assert.deepEqual(unsubscriptions, ["connection-1\0selected-thread"]);
+  const replacement = createController({ clock, initialState: state, transcript });
+  await replacement.controller.start();
+  assert.equal(subscriptions.length, 1);
+  await replacement.controller.handleMessage(client, "connection-1", frame("account/read", 3), false);
+  assert.equal(
+    sent.filter((message) => message.method === "workbench/transcript/capabilities").length,
+    2,
+  );
+  replacement.controller.dispose();
+});
+
+test("an unregistered transcript-like method receives no Workbench routing privilege", async () => {
+  const clock = new FakeClock();
+  const harnessMethods: string[] = [];
+  const { controller } = createController({
+    clock,
+    onHarnessMessage: (message) => { harnessMethods.push(message.method); },
+  });
+
+  await controller.handleMessage(
+    createClient(),
+    "connection-1",
+    frame("workbench/transcript/read/fake", 1, { params: {} }),
+    false,
+  );
+  assert.deepEqual(harnessMethods, ["workbench/transcript/read/fake"]);
 });

@@ -86,3 +86,27 @@ test("dispatches internal, server, Browse, and recovery work through the registe
     "resume:opencode:thread-one",
   ]);
 });
+
+test("database admission gates only newly started turns", async () => {
+  const calls: string[] = [];
+  const controller = new WorkbenchHarnessController([
+    createAdapter("codex", calls),
+  ], {
+    admitTurnStart: () => {
+      calls.push("database:admit");
+      throw new Error("database unavailable");
+    },
+  });
+  await controller.request("codex", { id: 1, method: "turn/steer" });
+  await assert.rejects(controller.request("codex", { id: 2, method: "turn/start" }), /database unavailable/);
+  await assert.rejects(
+    controller.handleBrowserMessage("codex", { id: 3, method: "turn/start" }, {} as never),
+    /database unavailable/,
+  );
+  assert.deepEqual(calls, [
+    "recovery:codex:turn/steer",
+    "request:codex:turn/steer",
+    "database:admit",
+    "database:admit",
+  ]);
+});

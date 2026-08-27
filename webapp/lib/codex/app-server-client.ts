@@ -3,6 +3,7 @@
  * - CodexAppServerClient: persistent typed WebSocket client for the local stdio bridge and app-server notifications. Keywords: codex, websocket, stdio, notifications.
  */
 import type { WorkbenchHarness } from "../types";
+import { workbenchTranscriptNotifications } from "../workbench/database/transcript/workbench-transcript-contract";
 import {
   WORKBENCH_EVENT_STREAM_ACK_METHOD,
   WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD,
@@ -37,7 +38,14 @@ type PendingResponseHandler = {
 };
 
 type CodexIncomingMessage = CodexJsonRpcResponse<unknown> | CodexAppServerNotification;
-type WorkbenchNotification = { method: "workbench/thread-state/reset" | "workbench/thread-state/updated"; params: unknown };
+type WorkbenchNotification = {
+  method:
+    | "workbench/thread-state/reset"
+    | "workbench/thread-state/updated"
+    | typeof workbenchTranscriptNotifications.capabilities.method
+    | typeof workbenchTranscriptNotifications.updated.method;
+  params: unknown;
+};
 type Timer = ReturnType<typeof setTimeout>;
 
 const EVENT_STREAM_ACK_BATCH_MS = 50;
@@ -55,6 +63,7 @@ export class CodexAppServerClient {
   ) => void>();
   private readonly pendingResponses = new Map<number, PendingResponseHandler>();
   private readonly workbenchNotificationListeners = new Set<(notification: WorkbenchNotification) => void>();
+  private readonly connectionCloseListeners = new Set<() => void>();
   private readonly nextRequestId = createRequestIdGenerator();
   private connectPromise: Promise<void> | null = null;
   private socketPromise: Promise<void> | null = null;
@@ -137,6 +146,7 @@ export class CodexAppServerClient {
       if (this.socket === socket) {
         this.clearEventStreamReceiptState();
         this.socket = null;
+        for (const listener of this.connectionCloseListeners) listener();
       }
       if (!this.disposed) this.scheduleReconnect();
     });
@@ -186,6 +196,11 @@ export class CodexAppServerClient {
   onWorkbenchNotification(listener: (notification: WorkbenchNotification) => void) {
     this.workbenchNotificationListeners.add(listener);
     return () => this.workbenchNotificationListeners.delete(listener);
+  }
+
+  onConnectionClose(listener: () => void) {
+    this.connectionCloseListeners.add(listener);
+    return () => this.connectionCloseListeners.delete(listener);
   }
 
   onNotification(listener: (
@@ -243,7 +258,10 @@ export class CodexAppServerClient {
     const parsed = JSON.parse(payload) as CodexIncomingMessage;
 
     const workbenchMessage = parsed as unknown as { method?: string };
-    if (workbenchMessage.method === "workbench/thread-state/updated" || workbenchMessage.method === "workbench/thread-state/reset") {
+    if (workbenchMessage.method === "workbench/thread-state/updated"
+      || workbenchMessage.method === "workbench/thread-state/reset"
+      || workbenchMessage.method === workbenchTranscriptNotifications.capabilities.method
+      || workbenchMessage.method === workbenchTranscriptNotifications.updated.method) {
       for (const listener of this.workbenchNotificationListeners) listener(parsed as unknown as WorkbenchNotification);
       return;
     }

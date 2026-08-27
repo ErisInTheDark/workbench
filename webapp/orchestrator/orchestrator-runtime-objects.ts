@@ -71,6 +71,28 @@ export interface OrchestratorBrowseExecution {
   initialize(): Promise<void>;
 }
 
+export interface OrchestratorDatabaseRegistration {
+  assertReady(): void;
+  close(): Promise<void>;
+  readonly failure: Error | null;
+  start(): Promise<object>;
+  readonly state: "starting" | "ready" | "failed" | "closed";
+}
+
+export interface OrchestratorTranscriptRegistration {
+  dispose(): void;
+  readonly failure: Error | null;
+  read(request: { threadId: string; beforeTurnIndex?: number; turnIds?: string[]; turnLimit: number }): Promise<object | null>;
+  record(observations: readonly object[]): Promise<{ changedThreadIds: string[] }>;
+  start(): Promise<void>;
+  subscribe(subscription: {
+    id: string;
+    request: { threadId: string; turnIds?: string[]; turnLimit: number };
+    publish(snapshot: object | null): void | Promise<void>;
+  }): Promise<void>;
+  unsubscribe(id: string): void;
+}
+
 export interface OrchestratorRuntimeObjects {
   agentCommand: WorkbenchAgentCommandController;
   bridgeRequest: WorkbenchBridgeRequestController;
@@ -80,6 +102,7 @@ export interface OrchestratorRuntimeObjects {
   codexBridge: CodexStdioBridge;
   codexHealth: CodexHealthMonitor;
   codexMcpGeneration: WorkbenchCodexMcpGenerationController;
+  database: OrchestratorDatabaseRegistration;
   gitArc: WorkbenchGitArcFeature;
   harnesses: WorkbenchHarnessController;
   legacyMigrationSource: WorkbenchLegacyMigrationSourceController;
@@ -96,6 +119,7 @@ export interface OrchestratorRuntimeObjects {
   subagents: WorkbenchSubagentFeature;
   threadGit: WorkbenchThreadGitFeature;
   threadState: WorkbenchThreadStateFeature;
+  transcript: OrchestratorTranscriptRegistration;
   turnRecovery: WorkbenchTurnRecoveryController;
   webSocketRequests: WorkbenchWebSocketRequestController;
 }

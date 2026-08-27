@@ -1,5 +1,7 @@
 /*
  * Exports:
+ * - WORKBENCH_RELOAD_METHOD/OrchestratorReloadRequestSchema/OrchestratorReloadResponseSchema: one typed browser reload protocol. Keywords: WebSocket, Zod, contract.
+ * - OrchestratorReloadScope/OrchestratorReloadState/OrchestratorReloadRequest/OrchestratorReloadResponse: inferred reload protocol types. Keywords: reload, types.
  * - ORCHESTRATOR_RELOAD_SCOPE_PATTERN: canonical namespace:name scope syntax. Keywords: reload, scope, validation.
  * - OrchestratorReloadScopeDescriptor: active node catalog projection shared by CLI and reload admission. Keywords: catalog, access, destructive.
  * - normalizeOrchestratorReloadScopes/expandOrchestratorReloadScopes: validate atomic or grouped scope strings without owning topology. Keywords: normalize, group.
@@ -7,12 +9,34 @@
  * - validateOrchestratorReloadScopeCombination: keep hard process reload exclusive. Keywords: process, restart.
  */
 
-import type { OrchestratorReloadScope } from "../types";
+import { z } from "zod";
 
 export const ORCHESTRATOR_RELOAD_SCOPE_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$/u;
 const RELOAD_SCOPE_GROUP_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\+[a-z][a-z0-9-]*)*$/u;
 const MAX_RELOAD_SCOPES = 64;
 const MAX_RELOAD_SCOPE_LENGTH = 64;
+const OrchestratorReloadScopeSchema = z.string().max(MAX_RELOAD_SCOPE_LENGTH).regex(ORCHESTRATOR_RELOAD_SCOPE_PATTERN);
+
+export const WORKBENCH_RELOAD_METHOD = "workbench/orchestrator/reload";
+export const OrchestratorReloadRequestSchema = z.object({
+  all: z.boolean().optional(),
+  scopes: z.array(OrchestratorReloadScopeSchema).max(MAX_RELOAD_SCOPES).optional(),
+}).strict();
+export const OrchestratorReloadResponseSchema = z.object({
+  appliedScopes: z.array(OrchestratorReloadScopeSchema).max(MAX_RELOAD_SCOPES),
+  completedAt: z.number().nullable(),
+  error: z.string().nullable(),
+  ok: z.literal(true),
+  queuedScopes: z.array(OrchestratorReloadScopeSchema).max(MAX_RELOAD_SCOPES),
+  requestedScopes: z.array(OrchestratorReloadScopeSchema).max(MAX_RELOAD_SCOPES),
+  startedAt: z.number().nullable(),
+  state: z.enum(["idle", "running", "succeeded", "failed"]),
+}).strict();
+
+export type OrchestratorReloadScope = z.infer<typeof OrchestratorReloadScopeSchema>;
+export type OrchestratorReloadState = z.infer<typeof OrchestratorReloadResponseSchema>["state"];
+export type OrchestratorReloadRequest = z.infer<typeof OrchestratorReloadRequestSchema>;
+export type OrchestratorReloadResponse = z.infer<typeof OrchestratorReloadResponseSchema>;
 
 export interface OrchestratorReloadScopeDescriptor {
   access: "agent" | "cli" | "operator";

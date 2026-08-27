@@ -7,7 +7,7 @@ import test from "node:test";
 
 import type { ExplorerSnapshot, ThreadSummary, WorkbenchSubagentSummary } from "./types.ts";
 import type { WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state.ts";
-import { areExplorerSnapshotsEquivalent, openWorkbenchThreadStateObservation } from "./WorkbenchClient.ts";
+import { areExplorerSnapshotsEquivalent, openWorkbenchThreadStateObservation, requestWorkbenchReload } from "./WorkbenchClient.ts";
 
 const thread = (id: string, updatedAt: number): ThreadSummary => ({
   agentNickname: null,
@@ -88,6 +88,23 @@ test("thread-state open installs the version-3 composite bootstrap", async () =>
   assert.deepEqual(requests, [{ projectId: "project", version: 3 }]);
   assert.equal(result.sidebar.projectId, "project");
   assert.equal(catalogs.length, 1);
+});
+
+test("browser reload uses the shared socket method and conforms its admission", async () => {
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const result = await requestWorkbenchReload(["server:database"], async (method, params) => {
+    requests.push({ method, params });
+    return {
+      appliedScopes: [], completedAt: null, error: null, ok: true,
+      queuedScopes: ["server:database"], requestedScopes: ["server:database"],
+      startedAt: 1, state: "running",
+    };
+  });
+  assert.deepEqual(requests, [{
+    method: "workbench/orchestrator/reload",
+    params: { scopes: ["server:database"] },
+  }]);
+  assert.equal(result.state, "running");
 });
 
 test("thread-state open negotiates back to version 2 while the server is still old", async () => {

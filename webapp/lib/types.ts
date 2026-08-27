@@ -155,18 +155,18 @@ import type { ThreadTokenUsage } from "./codex/generated/app-server/v2/ThreadTok
 import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
+import type { OrchestratorReloadResponse, OrchestratorReloadScope } from "./workbench/orchestrator-reload";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline";
 import type { WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
-export type OrchestratorReloadScope = string;
-export type OrchestratorReloadState = "idle" | "running" | "succeeded" | "failed";
-
-export interface OrchestratorReloadRequest {
-  all?: boolean;
-  scopes?: OrchestratorReloadScope[];
-}
+export type {
+  OrchestratorReloadRequest,
+  OrchestratorReloadResponse,
+  OrchestratorReloadScope,
+  OrchestratorReloadState,
+} from "./workbench/orchestrator-reload";
 
 export interface WorkbenchReloadDirtScope {
   description: string;
@@ -178,17 +178,6 @@ export interface WorkbenchReloadDirtSnapshot {
   dirtyScopes: WorkbenchReloadDirtScope[];
   error: string | null;
   pendingScopes: OrchestratorReloadScope[];
-}
-
-export interface OrchestratorReloadResponse {
-  ok: true;
-  state: OrchestratorReloadState;
-  requestedScopes: OrchestratorReloadScope[];
-  appliedScopes: OrchestratorReloadScope[];
-  queuedScopes: OrchestratorReloadScope[];
-  startedAt: number | null;
-  completedAt: number | null;
-  error: string | null;
 }
 
 export interface WorkbenchLocalCapabilitySettings {
@@ -1089,6 +1078,7 @@ export interface WorkbenchControls {
   applyRoute: (route: WorkbenchRoute) => Promise<WorkbenchRouteLoadResult>;
   createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: string }) => ThreadPayload;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
+  reloadScopes: (scopes: OrchestratorReloadScope[]) => Promise<OrchestratorReloadResponse>;
   refreshRateLimits: () => Promise<void>;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   sendThreadMessage: (

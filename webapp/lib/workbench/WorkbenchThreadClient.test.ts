@@ -8,6 +8,7 @@ import { test } from "node:test";
 
 import type { Thread } from "../codex/generated/app-server/v2/Thread.ts";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "../types.ts";
+import { workbenchTranscriptNotifications } from "./database/transcript/workbench-transcript-contract.ts";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./WorkbenchThreadClient.ts";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission.ts";
 
@@ -109,6 +110,12 @@ class FakeWebSocket {
     } else if (request.method === "turn/start") {
       const threadId = String(request.params?.threadId ?? "thread");
       queueMicrotask(() => this.respond(request.id, { turn: wireThread(threadId, `${threadId}-started`).turns[0] }));
+    } else if (request.method === "workbench/transcript/subscribe") {
+      queueMicrotask(() => this.respond(request.id, { subscribed: true }));
+    } else if (request.method === "workbench/transcript/unsubscribe") {
+      queueMicrotask(() => this.respond(request.id, { unsubscribed: true }));
+    } else if (request.method === "workbench/transcript/parity/report") {
+      queueMicrotask(() => this.respond(request.id, { reported: true }));
     } else if (request.method === "workbench/thread-state/intent/accept" || request.method === "workbench/thread-state/questionnaire/dismiss" || request.method === "workbench/thread-state/questionnaire/resolve") {
       queueMicrotask(() => this.respond(request.id, { accepted: true, revision: 1 }));
     } else {
@@ -246,6 +253,30 @@ function browseEntry(entryKey: string, turnId: string): WorkbenchBrowseResultEnt
     turnId,
   };
 }
+
+test("normal message admission stays independent until transcript capability is advertised", async () => withClient(async (client, socket) => {
+  const source = activeThread("codex", "idle", "completed");
+  client.selectThreadPayload(source);
+  FakeWebSocket.intercept = (target, request) => {
+    if (request.method !== "thread/resume" || request.params?.threadId !== "idle") return false;
+    queueMicrotask(() => target.respond(request.id, {
+      model: "model",
+      reasoningEffort: null,
+      serviceTier: null,
+      thread: wireThread("idle", "idle-turn", "completed"),
+    }));
+    return true;
+  };
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(socket.requests.some((request) => request.method.startsWith("workbench/transcript/")), false);
+
+  await client.sendThreadMessage(source, [{ text: "hello", text_elements: [], type: "text" }]);
+  assert.equal(socket.requests.some((request) => request.method === "turn/start"), true);
+  assert.equal(socket.requests.some((request) => request.method.startsWith("workbench/transcript/")), false);
+
+  socket.notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 1 });
+  await waitForRequest(socket, "workbench/transcript/subscribe");
+}));
 
 test("accepted thread titles update only the matching canonical source name", async () => withClient(async (client) => {
   const original = activeThread("codex", "original");

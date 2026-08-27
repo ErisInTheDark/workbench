@@ -37,6 +37,10 @@ export interface WorkbenchHarnessAdapter {
   serverMethods: readonly string[];
 }
 
+export interface WorkbenchHarnessControllerOptions {
+  admitTurnStart?: () => void;
+}
+
 function requireNonEmptyUniqueValues(values: readonly string[], label: string) {
   const normalized = values.map((value) => value.trim());
   if (normalized.some((value) => !value)) throw new Error(`${label} cannot contain an empty value.`);
@@ -48,8 +52,9 @@ function requireNonEmptyUniqueValues(values: readonly string[], label: string) {
 export default class WorkbenchHarnessController {
   private readonly adapters: readonly WorkbenchHarnessAdapter[];
   private readonly adaptersById: ReadonlyMap<WorkbenchHarness, WorkbenchHarnessAdapter>;
+  private readonly admitTurnStart: () => void;
 
-  constructor(adapters: readonly WorkbenchHarnessAdapter[]) {
+  constructor(adapters: readonly WorkbenchHarnessAdapter[], options: WorkbenchHarnessControllerOptions = {}) {
     if (!adapters.length) throw new Error("At least one Workbench harness adapter is required.");
     const adaptersById = new Map<WorkbenchHarness, WorkbenchHarnessAdapter>();
     for (const adapter of adapters) {
@@ -60,6 +65,7 @@ export default class WorkbenchHarnessController {
     if (!adaptersById.has("codex")) throw new Error("The default Codex harness adapter is required.");
     this.adapters = [...adapters];
     this.adaptersById = adaptersById;
+    this.admitTurnStart = options.admitTurnStart ?? (() => undefined);
   }
 
   listHarnesses() {
@@ -76,12 +82,14 @@ export default class WorkbenchHarnessController {
 
   async handleBrowserMessage(value: unknown, message: JsonRpcRequest, client: BridgeClient) {
     const adapter = this.getAdapter(this.resolveHarness(value, { defaultToCodex: true }));
+    if (message.method === "turn/start") this.admitTurnStart();
     if (adapter.recovery.kind === "turn" && "id" in message) adapter.recovery.observeRequest(message);
     await adapter.browser.handleBrowserMessage(message, client);
   }
 
   async request(harness: WorkbenchHarness, request: JsonRpcRequest) {
     const adapter = this.getAdapter(harness);
+    if (request.method === "turn/start") this.admitTurnStart();
     if (adapter.recovery.kind === "turn") adapter.recovery.observeRequest(request);
     return await adapter.internal.request(request);
   }

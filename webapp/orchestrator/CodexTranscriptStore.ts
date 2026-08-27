@@ -1542,6 +1542,24 @@ export default class CodexTranscriptStore {
     return (await this.readThreadContextEntries(threadId)).browseResultEntries;
   }
 
+  async readStoredTurnSnapshot(threadId: string, turnId: string) {
+    await this.ready();
+    const file = await this.readTurnFile(threadId, turnId, { repair: false });
+    return file?.turn
+      ? {
+        itemTimeline: normalizeWorkbenchThreadItemTimeline(file.itemTimeline),
+        turn: file.turn,
+      }
+      : null;
+  }
+
+  async readStoredThreadSnapshot(threadId: string) {
+    await this.ready();
+    const threadFile = await this.json.read<CodexTranscriptThreadFile | null>(this.threadFilePath(threadId), null);
+    if (!threadFile?.thread) return null;
+    return await this.hydrateSelectedThread(threadFile.thread, null, { repair: false, threadFile });
+  }
+
   async hydrateThreadResponse(
     originalRequest: JsonRpcRequest,
     response: JsonRpcResponse,

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { CodexAppServerClient } from "./app-server-client.ts";
+import { workbenchTranscriptNotifications } from "../workbench/database/transcript/workbench-transcript-contract.ts";
 import { WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD } from "../workbench/websocket-stream.ts";
 
 type Listener = (event: { data?: string }) => void;
@@ -152,6 +153,48 @@ test("a normal request resolves once by response id", async () => {
     socket?.respond(42, { ok: true });
     assert.deepEqual(await response, { id: 42, result: { ok: true } });
     client.close();
+  } finally {
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
+test("shared transcript notifications and connection closure reach their Workbench owners", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  let socket: FakeWebSocket | null = null;
+  globalThis.WebSocket = class extends FakeWebSocket {
+    constructor(url: string) {
+      super(url);
+      socket = this;
+    }
+  } as unknown as typeof WebSocket;
+  try {
+    const client = new CodexAppServerClient();
+    await client.connect("ws://test");
+    const notifications: unknown[] = [];
+    let closes = 0;
+    client.onWorkbenchNotification((notification) => notifications.push(notification));
+    client.onConnectionClose(() => { closes += 1; });
+    assert.ok(socket);
+    socket.notify({
+      method: workbenchTranscriptNotifications.capabilities.method,
+      params: { protocolVersion: 1 },
+    });
+    socket.notify({
+      method: workbenchTranscriptNotifications.updated.method,
+      params: { matchingMethodIsNotProof: true },
+    });
+    assert.deepEqual(notifications, [
+      {
+        method: workbenchTranscriptNotifications.capabilities.method,
+        params: { protocolVersion: 1 },
+      },
+      {
+        method: workbenchTranscriptNotifications.updated.method,
+        params: { matchingMethodIsNotProof: true },
+      },
+    ]);
+    client.close();
+    assert.equal(closes, 1);
   } finally {
     globalThis.WebSocket = originalWebSocket;
   }
