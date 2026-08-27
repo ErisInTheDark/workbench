@@ -173,13 +173,15 @@ export function adaptWorkbenchAgentCliResponse({
       ], createArcReceipt(action, payload, request)).join("\n"));
     }
     case "git-arc-start":
+    case "git-arc-wait":
     case "git-arc-compare": {
-      const action = request.responseKind === "git-arc-start" ? "start" : "compare";
+      const action = request.responseKind === "git-arc-compare" ? "compare" : "start";
+      const waited = request.responseKind === "git-arc-wait";
       const changes = Array.isArray(payload?.changes) ? payload.changes.filter(isRecord) : [];
       const releasedClaims = readStringArray(payload, "releasedClaims");
       const acquiredClaims = readStringArray(payload, "acquiredClaims");
       return succeeded(appendArcReceipt([
-        "Workbench arc comparison",
+        waited ? "Waited for claims and started Git arc" : "Workbench arc comparison",
         ...memberRefLines(payload),
         ...(action === "start" ? [
           `Released claims: ${releasedClaims.length ? releasedClaims.join(", ") : "none"}`,
@@ -193,11 +195,6 @@ export function adaptWorkbenchAgentCliResponse({
         }),
       ], createArcReceipt(action, payload, request)).join("\n"));
     }
-    case "git-arc-wait":
-      return succeeded([
-        `Intersecting Git arc claims released for plan ${readString(payload, "checkpointCommit") || "(unknown commit)"}.`,
-        ...memberRefLines(payload),
-      ].join("\n"));
     case "git-arc-mv": {
       const mappings = readMappings(payload);
       const additionalClaims = readStringArray(payload, "additionalClaims");

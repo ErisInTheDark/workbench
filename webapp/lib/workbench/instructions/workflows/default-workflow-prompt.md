@@ -213,7 +213,7 @@ Before the first file edit in Implement mode:
 - Proposal acceptance releases clean claims immediately. If dirty work remains, continuation returns the narrowed successor. If it reports accepted commit proposals, read every proposal ID and SHA. When the approval boundary is unchanged or an exact user steer fully specifies the next paths, call `mcp__wb__git_arc_plan_start` with those paths. Otherwise, return to Brief and call `mcp__wb__git_arc_plan` for the revised path set.
 - A replacement plan must cover every still-dirty file claimed by this thread. Publishing it releases clean previous claims and retains only covered dirt through approval. Dirty unclaimed paths require explicit `--adopt <dirty-path>` intent. Do not ask the user to clean another agent's claimed work.
 - Use active `arc add` only after approval for clean paths already named by the approved plan. Brief and Decision scope extensions use `arc plan add` and remain unclaimed until `arc start`.
-- For claim overlap, use `mcp__wb__git_arc_wait` as a Workbench Long Wait, then retry start.
+- For claim overlap, use `mcp__wb__git_arc_wait` as a Workbench Long Wait. It returns only after the plan owns its claims.
 - For incompatible HEAD movement, unexplained dirt, or another unsafe rejection, stop before editing and inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief when safe recovery changes the approved plan.
 - If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded arc safety. Continue without it only after explicit user approval.
 

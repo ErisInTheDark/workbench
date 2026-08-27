@@ -1112,14 +1112,31 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     version: 1,
   });
   const waitResponse = adapt("git-arc-wait", {
+    acquiredClaims: ["api:src/api.ts", "web:src/web.ts"],
+    changes: [],
     checkpointCommit: planRef,
+    intentName: "Wait and start",
     members: [
       { checkpointCommit: planRef, rootId: "api" },
       { checkpointCommit: successorRef, rootId: "web" },
     ],
+    releasedClaims: [],
+    scopePaths: ["api:src/api.ts", "web:src/web.ts"],
   }, { action: "arcWait" });
-  assert.match(waitResponse.stdout, new RegExp(`^Intersecting Git arc claims released for plan ${planRef}`, "u"));
+  assert.match(waitResponse.stdout, /^Waited for claims and started Git arc/u);
+  assert.match(waitResponse.stdout, /Acquired claims: api:src\/api\.ts, web:src\/web\.ts/u);
   assert.match(waitResponse.stdout, new RegExp(`api: ${planRef}[\\s\\S]*web: ${successorRef}`, "u"));
+  assert.deepEqual(parseGitArcReceipt(waitResponse.stdout), {
+    action: "start",
+    claimedPaths: ["api:src/api.ts", "web:src/web.ts"],
+    intentName: "Wait and start",
+    memberRefs: [
+      { ref: planRef, rootId: "api" },
+      { ref: successorRef, rootId: "web" },
+    ],
+    ref: planRef,
+    version: 1,
+  });
   const movePreview = adapt("git-arc-mv", {
     additionalClaims: ["src/old.ts", "tests/old.ts"],
     checkpointCommit: planRef,

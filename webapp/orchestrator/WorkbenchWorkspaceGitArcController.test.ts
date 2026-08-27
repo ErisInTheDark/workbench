@@ -16,12 +16,14 @@ import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcContro
 const execFileAsync = promisify(execFile);
 
 class FakeLocalGitArcController {
+  readonly blockedRoots = new Set<string>();
   readonly collisionCalls: Array<{ checkpointCommit?: string; cwd: string }> = [];
   readonly dirtyRoots = new Set<string>();
   readonly lifecycleFindCalls: string[] = [];
   readonly lifecycleListCalls: string[] = [];
   readonly proposalDetailCalls: string[] = [];
   readonly proposalPathCalls: string[] = [];
+  readonly startCalls: string[] = [];
   private nextProposal = 0;
   private readonly plans = new Map<string, { checkpointCommit: string; harness: string; intentDescription: string; intentName: string; scopePaths: string[]; threadId: string; updatedAt: string }>();
   private readonly proposals = new Map<string, { cwd: string; paths: string[]; proposalId: string }>();
@@ -43,6 +45,7 @@ class FakeLocalGitArcController {
   }
 
   async startArc(input: { cwd: string }) {
+    this.startCalls.push(input.cwd);
     const plan = this.plans.get(input.cwd)!;
     this.states.set(input.cwd, {
       checkpointCommit: plan.checkpointCommit,
@@ -104,7 +107,14 @@ class FakeLocalGitArcController {
     const plan = this.plans.get(input.cwd)!;
     return {
       checkpointCommit: input.checkpointCommit ?? plan.checkpointCommit,
-      collisions: [],
+      collisions: this.blockedRoots.has(input.cwd) ? [{
+        entry: {
+          checkpointCommit: "f".repeat(40), claimedPaths: plan.scopePaths, harness: "opencode",
+          intentDescription: "", intentName: "Blocking arc", threadId: "blocking-thread",
+          updatedAt: "2026-08-24T00:00:00.000Z",
+        },
+        overlaps: [{ claimedPath: plan.scopePaths[0]!, requestedPath: plan.scopePaths[0]! }],
+      }] : [],
       repoRoot: input.cwd,
       scopePaths: plan.scopePaths,
     };
@@ -195,6 +205,52 @@ test("workspace claim waits resolve current and explicit refs for every inactive
     { checkpointCommit: plan.members[0]!.checkpointCommit, cwd: "C:/repo/api" },
     { checkpointCommit: plan.members[1]!.checkpointCommit, cwd: "C:/repo/web" },
   ]);
+});
+
+test("workspace wait start changes zero members when any planned repository is claimed", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async (rootPath) => rootPath,
+  );
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "thread-one" };
+  const plan = await controller.execute(project, {
+    action: "plan",
+    adoptPaths: [],
+    intentDescription: "",
+    intentName: "Wait plan",
+    paths: [],
+    roots: [
+      { adoptPaths: [], paths: ["src/api.ts"], rootId: "api" },
+      { adoptPaths: [], paths: ["src/web.ts"], rootId: "web" },
+    ],
+    ...identity,
+  }) as { members: Array<{ checkpointCommit: string; rootId: string }> };
+  const request = {
+    action: "arcWait" as const,
+    refs: plan.members.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })),
+    ...identity,
+  };
+  let starts = 0;
+  local.blockedRoots.add("C:/repo/web");
+  const blocked = await controller.tryStartWaitingArc(project, request, {
+    beforeStart: () => { starts += 1; },
+    throwIfAborted: () => undefined,
+  });
+  assert.equal(blocked.kind, "blocked");
+  assert.equal(starts, 0);
+  assert.deepEqual(local.startCalls, []);
+
+  local.blockedRoots.clear();
+  const started = await controller.tryStartWaitingArc(project, request, {
+    beforeStart: () => { starts += 1; },
+    throwIfAborted: () => undefined,
+  });
+  assert.equal(started.kind, "started");
+  assert.equal(starts, 1);
+  assert.deepEqual(new Set(local.startCalls), new Set(["C:/repo/api", "C:/repo/web"]));
 });
 
 test("active claims and Git ignore rules cover patch paths across workspace roots", async (context) => {

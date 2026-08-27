@@ -29,27 +29,35 @@ function waitFeature() {
   });
 }
 
-test("Git arc wait returns when clear and rechecks after an event-driven claim mutation", async () => {
-  const feature = waitFeature();
+test("competing Git arc waits return one active owner and keep the loser waiting until release", async () => {
+  const transitions = new WorkbenchThreadTransitionCoordinator();
+  const feature = new WorkbenchGitArcFeature({
+    getThreadClaimContext: async (_projectId, _harness, threadId) => ({
+      lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+      title: threadId,
+    }),
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
+    transitions,
+  });
   const internal = feature as unknown as {
     controller: {
-      addToPlan: () => Promise<object>;
-      findPlanClaimCollisions: () => Promise<object>;
+      findPlanClaimCollisions: (input: { checkpointCommit?: string; threadId: string }) => Promise<object>;
+      releaseArc: (input: { threadId: string }) => Promise<object>;
+      startArc: (input: { checkpointCommit?: string; threadId: string }) => Promise<object>;
     };
   };
-  let blocked = false;
-  let reads = 0;
-  let reportBlockedRead!: () => void;
-  const blockedRead = new Promise<void>((resolve) => { reportBlockedRead = resolve; });
-  internal.controller.findPlanClaimCollisions = async () => {
-    reads += 1;
-    if (blocked) reportBlockedRead();
+  let owner: string | null = null;
+  let reportSecondBlocked!: () => void;
+  const secondBlocked = new Promise<void>((resolve) => { reportSecondBlocked = resolve; });
+  internal.controller.findPlanClaimCollisions = async ({ checkpointCommit, threadId }) => {
+    if (owner && owner !== threadId && threadId === "thread-two") reportSecondBlocked();
     return {
-      checkpointCommit: "a".repeat(40),
-      collisions: blocked ? [{
+      checkpointCommit: checkpointCommit ?? "a".repeat(40),
+      collisions: owner && owner !== threadId ? [{
         entry: {
-          checkpointCommit: "b".repeat(40), claimedPaths: ["src/a.ts"], harness: "codex", intentDescription: "",
-          intentName: "Sibling", threadId: "sibling", updatedAt: "2026-08-27T00:00:00.000Z",
+          checkpointCommit: "f".repeat(40), claimedPaths: ["src/a.ts"], harness: "codex", intentDescription: "",
+          intentName: "Competing wait", threadId: owner, updatedAt: "2026-08-27T00:00:00.000Z",
         },
         overlaps: [{ claimedPath: "src/a.ts", requestedPath: "src/a.ts" }],
       }] : [],
@@ -57,23 +65,46 @@ test("Git arc wait returns when clear and rechecks after an event-driven claim m
       scopePaths: ["src/a.ts"],
     };
   };
-  internal.controller.addToPlan = async () => ({
-    checkpointCommit: "a".repeat(40), intentName: "Plan", kind: "plan", repoRoot: "C:/Git/Project", scopePaths: ["src/a.ts"],
-  });
-  const request = {
-    action: "arcWait", checkpointCommit: "a".repeat(40), cwd: "C:/Git/Project",
-    harness: "codex" as const, threadId: "thread-one",
+  internal.controller.startArc = async ({ checkpointCommit, threadId }) => {
+    owner = threadId;
+    return {
+      acquiredClaims: ["src/a.ts"],
+      changes: [],
+      checkpointCommit: checkpointCommit ?? "a".repeat(40),
+      intentName: threadId,
+      releasedClaims: [],
+      repoRoot: "C:/Git/Project",
+      scopePaths: ["src/a.ts"],
+    };
   };
-  assert.equal((await feature.executeRequest(request)).status, 200);
-  blocked = true;
-  const pending = feature.executeRequest(request);
-  await blockedRead;
-  blocked = false;
+  internal.controller.releaseArc = async ({ threadId }) => {
+    if (owner === threadId) owner = null;
+    return {
+      checkpointCommit: "a".repeat(40), intentName: threadId, kind: "arc",
+      releasedClaims: ["src/a.ts"], repoRoot: "C:/Git/Project", scopePaths: [],
+    };
+  };
+  const request = (threadId: string, checkpointCommit: string) => ({
+    action: "arcWait" as const, checkpointCommit, cwd: "C:/Git/Project",
+    harness: "codex" as const, threadId,
+  });
+  const first = feature.executeRequest(request("thread-one", "a".repeat(40)));
+  const second = feature.executeRequest(request("thread-two", "b".repeat(40)));
+  assert.equal((await first).status, 200);
+  await secondBlocked;
+  let secondFinished = false;
+  void second.then(() => { secondFinished = true; });
+  await Promise.resolve();
+  assert.equal(secondFinished, false);
+  assert.equal(owner, "thread-one");
+
   assert.equal((await feature.executeRequest({
-    action: "planAdd", cwd: "C:/Git/Project", harness: "codex", paths: ["src/a.ts"], threadId: "thread-one",
+    action: "arcRelease", cwd: "C:/Git/Project", disown: false, harness: "codex", threadId: "thread-one",
   })).status, 200);
-  assert.equal((await pending).status, 200);
-  assert.equal(reads, 3);
+  const secondResponse = await second;
+  assert.equal(secondResponse.status, 200);
+  assert.equal((await secondResponse.json() as { checkpointCommit: string }).checkpointCommit, "b".repeat(40));
+  assert.equal(owner, "thread-two");
 });
 
 test("Git arc wait stops on caller cancellation and feature disposal", async () => {

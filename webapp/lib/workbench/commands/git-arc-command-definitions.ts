@@ -138,7 +138,7 @@ const start = defineWorkbenchAgentCommand({
 });
 
 const wait = defineWorkbenchAgentCommand({
-  description: "Wait until sibling claims no longer intersect the current or selected inactive plan.",
+  description: "Wait until sibling claims no longer intersect the current or selected inactive plan, then start it.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "wait"],
   usage: "wb git arc wait [--ref <ref>]",
@@ -153,7 +153,6 @@ const wait = defineWorkbenchAgentCommand({
       ...(input.refs.length ? { refs: input.refs } : {}), ...baseBody(callerHarness, callerThreadId, cwd),
     }, "git-arc-wait");
   },
-  effects: { idempotent: true, readOnly: true },
   mcpRuntimeDrainPolicy: "abort-immediately",
   mcpSteerInterruptible: true,
 });

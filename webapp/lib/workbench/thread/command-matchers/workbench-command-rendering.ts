@@ -485,7 +485,7 @@ export function getWorkbenchCommandRoute(
   if (name.startsWith("browse_")) return renderBrowse(name, args);
   switch (name) {
     case "git_arc_wait":
-      return simple("git-arc.wait", actionTarget("Waiting for ", "Git arc claims"), actionTarget("Cleared ", "Git arc claims"));
+      return simple("git-arc.wait", actionTarget("Waiting for ", "Git arc claims"), actionTarget("Started ", "Git arc"));
     case "rg":
       return {
         kind: "simple",

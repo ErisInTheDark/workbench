@@ -197,7 +197,7 @@ export default class WorkbenchGitArcFeature {
       const project = await this.resolveProject(parsed.data.cwd);
       const request = { ...parsed.data, cwd: project.cwd };
       if (request.action === "arcWait") {
-        return Response.json(await this.waitForPlanClaims(project, request, signal));
+        return Response.json(await this.waitForPlanAndStart(project, request, signal));
       }
       if (mutatesGitArcState(request)) this.fencePendingCardReads(project.cwd);
       const execute = async () => {
@@ -245,7 +245,7 @@ export default class WorkbenchGitArcFeature {
     }
   }
 
-  private async waitForPlanClaims(
+  private async waitForPlanAndStart(
     project: AgentEndpointProjectResolution,
     request: Extract<GitCheckpointRequest, { action: "arcWait" }>,
     callerSignal?: AbortSignal,
@@ -256,17 +256,74 @@ export default class WorkbenchGitArcFeature {
     while (true) {
       signal.throwIfAborted();
       const revision = this.claimRevision;
-      const result = usesWorkspaceController(project, request)
-        ? await this.workspaceController.findPlanClaimCollisions(project, request)
-        : await this.controller.findPlanClaimCollisions({
-          checkpointCommit: request.checkpointCommit,
-          cwd: project.cwd,
-          harness: request.harness,
-          threadId: request.threadId,
-        });
-      signal.throwIfAborted();
-      if (!result.collisions.length) return result;
+      const attempt = await this.tryStartWaitingPlan(project, request, signal);
+      if (attempt.kind === "started") return attempt.result;
       await this.waitForClaimMutation(revision, signal);
+    }
+  }
+
+  private async tryStartWaitingPlan(
+    project: AgentEndpointProjectResolution,
+    request: Extract<GitCheckpointRequest, { action: "arcWait" }>,
+    signal: AbortSignal,
+  ) {
+    const before = await this.options.getThreadClaimContext(project.project.id, request.harness, request.threadId);
+    if (!before) throw new Error("The managed thread is not available for Git arc ownership.");
+    if (before.lifecycle.settled) throw new Error("A settled thread cannot start or continue a Git arc.");
+
+    let mutationStarted = false;
+    const beforeStart = () => {
+      mutationStarted = true;
+      this.fencePendingCardReads(project.cwd);
+    };
+    try {
+      const attempt = usesWorkspaceController(project, request)
+        ? await this.workspaceController.tryStartWaitingArc(project, request, {
+          beforeStart,
+          throwIfAborted: () => signal.throwIfAborted(),
+        })
+        : await this.options.transitions.run(project.cwd, async () => {
+          signal.throwIfAborted();
+          const collisions = await this.controller.findPlanClaimCollisions({
+            checkpointCommit: request.checkpointCommit,
+            cwd: project.cwd,
+            harness: request.harness,
+            threadId: request.threadId,
+          });
+          if (collisions.collisions.length) return { kind: "blocked" as const };
+          signal.throwIfAborted();
+          beforeStart();
+          try {
+            return {
+              kind: "started" as const,
+              result: await this.controller.startArc({
+                checkpointCommit: request.checkpointCommit,
+                cwd: project.cwd,
+                harness: request.harness,
+                threadId: request.threadId,
+              }),
+            };
+          } catch (error) {
+            if (error instanceof GitArcCollisionError) {
+              mutationStarted = false;
+              return { kind: "blocked" as const };
+            }
+            throw error;
+          }
+        });
+      if (attempt.kind === "blocked") return attempt;
+
+      const after = await this.options.getThreadClaimContext(project.project.id, request.harness, request.threadId);
+      if (after?.lifecycle.settled) {
+        await this.workspaceController.releaseActiveClaim(project, request.harness, request.threadId);
+        throw new Error("The thread settled while its Git arc claim was starting. The new claim was released.");
+      }
+      return attempt;
+    } finally {
+      if (mutationStarted) {
+        this.notifyClaimMutation();
+        await this.refreshThreadGitArcState(project.project.id, request.harness, request.threadId);
+      }
     }
   }
 

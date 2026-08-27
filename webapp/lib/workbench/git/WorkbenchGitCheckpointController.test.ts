@@ -116,37 +116,52 @@ sharedControllerTest("active arc registry rejects sibling overlap and releases c
   await resetSharedRepository();
   const { repository, source } = await createRepository(context);
   const registry = new GitArcRegistry(repository);
-  await registry.claim({
-    checkpointCommit: await repository.currentHead(),
-    claimedPaths: ["one.txt"],
-    harness: "codex",
-    intentDescription: "",
-    intentName: "change one",
-    proposalId: null,
-    threadId: "thread-one",
-  });
+  const checkpointCommit = await repository.currentHead();
+  const contenders = await Promise.allSettled([
+    registry.claim({
+      checkpointCommit,
+      claimedPaths: ["one.txt"],
+      harness: "codex",
+      intentDescription: "",
+      intentName: "change one",
+      proposalId: null,
+      threadId: "thread-one",
+    }),
+    new GitArcRegistry(repository).claim({
+      checkpointCommit,
+      claimedPaths: ["one.txt"],
+      harness: "opencode",
+      intentDescription: "",
+      intentName: "change one too",
+      proposalId: null,
+      threadId: "thread-two",
+    }),
+  ]);
+  assert.equal(contenders.filter(({ status }) => status === "fulfilled").length, 1);
+  assert.equal(contenders.filter(({ status }) => status === "rejected").length, 1);
+  const owner = (await registry.list())[0]!;
   await assert.rejects(registry.claim({
-    checkpointCommit: await repository.currentHead(),
+    checkpointCommit,
     claimedPaths: ["one.txt", "two.txt"],
-    harness: "opencode",
+    harness: "codex",
     intentDescription: "inspect overlap",
     intentName: "change both",
     proposalId: null,
-    threadId: "thread-two",
-  }), /overlap active sibling work.*opencode\/thread-two|codex\/thread-one.*change one.*one\.txt/u);
+    threadId: "thread-three",
+  }), /overlap active sibling work.*one\.txt/u);
 
   await registry.claim({
-    checkpointCommit: await repository.currentHead(),
+    checkpointCommit,
     claimedPaths: ["two.txt"],
-    harness: "opencode",
+    harness: "codex",
     intentDescription: "change the independent file",
     intentName: "change two",
     proposalId: null,
-    threadId: "thread-two",
+    threadId: "thread-three",
   });
   assert.equal((await registry.read()).state.entries.length, 2);
-  await registry.release({ harness: "codex", threadId: "thread-one" });
-  assert.equal(await registry.find({ harness: "codex", threadId: "thread-one" }), null);
+  await registry.release({ harness: owner.harness, threadId: owner.threadId });
+  assert.equal(await registry.find({ harness: owner.harness, threadId: owner.threadId }), null);
   assert.equal(await fs.readFile(path.join(source, "one.txt"), "utf8"), "one\n");
 });
 

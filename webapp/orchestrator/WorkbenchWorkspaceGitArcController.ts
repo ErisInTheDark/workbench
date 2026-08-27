@@ -38,6 +38,24 @@ interface RootPathInput {
   rootId: string;
 }
 
+class WorkspaceGitArcWaitBlockedError extends Error {
+  constructor() {
+    super("Sibling claims still intersect this workspace Git arc plan.");
+    this.name = "WorkspaceGitArcWaitBlockedError";
+  }
+}
+
+function findWorkspaceGitArcWaitBlockedError(error: unknown) {
+  const seen = new Set<Error>();
+  let current = error;
+  while (current instanceof Error && !seen.has(current)) {
+    if (current instanceof WorkspaceGitArcWaitBlockedError) return current;
+    seen.add(current);
+    current = current.cause;
+  }
+  return null;
+}
+
 export interface WorkspaceGitArcMemberState extends GitArcLifecycleState {
   repoRoot: string;
   rootId: string;
@@ -215,6 +233,31 @@ export default class WorkbenchWorkspaceGitArcController {
       members: decorated,
       scopePaths: decorated.flatMap(({ scopePaths }) => scopePaths),
     };
+  }
+
+  async tryStartWaitingArc(
+    project: AgentEndpointProjectResolution,
+    request: Extract<GitCheckpointRequest, { action: "arcWait" }>,
+    options: { beforeStart(): void; throwIfAborted(): void },
+  ) {
+    const members = await this.resolveRepoMembers(project);
+    const startRequest = {
+      ...request,
+      action: "arcStart" as const,
+    };
+    try {
+      return {
+        kind: "started" as const,
+        result: await this.executeRefOperation(project, members, startRequest, {
+          beforeStart: options.beforeStart,
+          preflightClaims: true,
+          throwIfAborted: options.throwIfAborted,
+        }),
+      };
+    } catch (error) {
+      if (findWorkspaceGitArcWaitBlockedError(error)) return { kind: "blocked" as const };
+      throw error;
+    }
   }
 
   private async listIgnoredPatchPaths(
@@ -540,6 +583,11 @@ export default class WorkbenchWorkspaceGitArcController {
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "arcContinue" | "arcStart" }>,
+    options: {
+      beforeStart?: () => void;
+      preflightClaims?: boolean;
+      throwIfAborted?: () => void;
+    } = {},
   ) {
     const refs = this.refsByRepo(project, members, request.refs);
     if (request.checkpointCommit) refs.set(this.memberForRoot(members, project.root).repoRoot, request.checkpointCommit);
@@ -550,12 +598,36 @@ export default class WorkbenchWorkspaceGitArcController {
       }
     }
     const selected = members.filter((member) => refs.has(member.repoRoot));
-    const values = await this.runMembers(selected, async (member) => {
-      const checkpointCommit = refs.get(member.repoRoot)!;
-      return request.action === "arcStart"
-        ? await this.local.startArc({ checkpointCommit, cwd: member.repoRoot, harness: request.harness, threadId: request.threadId })
-        : await this.local.continueArc({ checkpointCommit, cwd: member.repoRoot, harness: request.harness, threadId: request.threadId });
-    });
+    let started = false;
+    const values = await this.runMembers(
+      selected,
+      async (member) => {
+        const checkpointCommit = refs.get(member.repoRoot)!;
+        if (request.action === "arcStart") {
+          if (!started) {
+            options.throwIfAborted?.();
+            options.beforeStart?.();
+            started = true;
+          }
+          return await this.local.startArc({
+            checkpointCommit, cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
+          });
+        }
+        return await this.local.continueArc({
+          checkpointCommit, cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
+        });
+      },
+      options.preflightClaims ? async (member) => {
+        options.throwIfAborted?.();
+        const result = await this.local.findPlanClaimCollisions({
+          checkpointCommit: refs.get(member.repoRoot),
+          cwd: member.repoRoot,
+          harness: request.harness,
+          threadId: request.threadId,
+        });
+        if (result.collisions.length) throw new WorkspaceGitArcWaitBlockedError();
+      } : undefined,
+    );
     return this.aggregateResults(project, values);
   }
 

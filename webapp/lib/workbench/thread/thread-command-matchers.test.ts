@@ -117,7 +117,7 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
     }), tool);
   }
   const wait = commands.find((definition) => definition.words.join("_") === "git_arc_wait");
-  assert.deepEqual(wait?.effects, { idempotent: true, readOnly: true });
+  assert.deepEqual(wait?.effects, {});
   assert.equal(wait?.mcpRuntimeDrainPolicy, "abort-immediately");
   assert.equal(wait?.mcpSteerInterruptible, true);
 });
