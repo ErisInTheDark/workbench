@@ -21,7 +21,7 @@ export default function ThreadGitArcConflictList({
 }) {
   if (!entries.length) return null;
   return (
-    <ul className="m-0 flex flex-col gap-1 py-1" data-thread-git-arc-conflict-list="true">
+    <ul className="m-0 flex flex-col gap-1 px-1 py-1" data-thread-git-arc-conflict-list="true">
       {entries.map((entry) => (
         <WorkbenchThreadListItem
           className="pb-px"

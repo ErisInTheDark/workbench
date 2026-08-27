@@ -1,7 +1,7 @@
 /* No production exports. Tests protect strict lifecycle, grouping, folder mutation, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanConflictSelector, getThreadSidebarGroup, getWorkbenchThreadPlanConflictEntries, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
 test("live claims and proposed commit proposals prevent thread settlement", () => {
   const resolved = {
@@ -213,7 +213,7 @@ test("durable questionnaire state accepts proper questions and rejects approvals
   }).success, false);
 });
 
-test("planned conflicts share sidebar grouping, exclude subagents, and stabilize irrelevant snapshots", () => {
+test("plan intersections classify active and planned siblings while stabilizing irrelevant snapshots", () => {
   const thread = (
     threadId: string,
     lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>["lifecycle"],
@@ -250,6 +250,20 @@ test("planned conflicts share sidebar grouping, exclude subagents, and stabilize
   const working = thread("working", { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false }, ["src"]);
   const settled = thread("settled", { kind: "completed", reason: "providerInactive", settled: true }, ["src/feature/deep/file.ts"]);
   const unrelated = thread("unrelated", { kind: "completed", reason: "providerInactive", settled: false }, ["docs"]);
+  const planned = {
+    ...thread("planned", { kind: "completed", reason: "providerInactive", settled: false }),
+    gitArcPlan: {
+      checkpointCommit: "d".repeat(40), intentDescription: "", intentName: "planned",
+      scopePaths: ["src/feature/planned.ts"], updatedAt: "2026-08-21T00:00:00.000Z",
+    },
+  };
+  const unrelatedPlan = {
+    ...thread("unrelated-plan", { kind: "completed", reason: "providerInactive", settled: false }),
+    gitArcPlan: {
+      checkpointCommit: "e".repeat(40), intentDescription: "", intentName: "unrelated",
+      scopePaths: ["docs"], updatedAt: "2026-08-21T00:00:00.000Z",
+    },
+  };
   const snoozedAttention = {
     ...thread("snoozed-attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }),
     metadata: { archived: false as const, pinned: false, snoozed: true },
@@ -260,24 +274,32 @@ test("planned conflicts share sidebar grouping, exclude subagents, and stabilize
     name: "child", parentThreadId: "owner", pinned: false, profileId: "default", profileName: "Default",
     projectId: "project", title: "child", updatedAt: 10,
   };
-  const entries = [owner, settled, working, pendingAttention, completed, attention, unrelated, resolvedAttention, snoozedAttention, child];
+  const entries = [owner, settled, working, pendingAttention, completed, attention, unrelated, planned, unrelatedPlan, resolvedAttention, snoozedAttention, child];
   assert.equal(getThreadSidebarGroup(attention), "main");
   assert.equal(getThreadSidebarGroup(pendingAttention), "main");
   assert.equal(getThreadSidebarGroup(resolvedAttention), "main");
   assert.equal(getThreadSidebarGroup(snoozedAttention), "snoozed");
   const grouped = groupWorkbenchThreadSidebarEntries(entries);
-  assert.deepEqual(grouped.mainEntries.map((entry) => entry.title), ["owner", "working", "pending-attention", "completed", "attention", "unrelated", "resolved-attention"]);
+  assert.deepEqual(grouped.mainEntries.map((entry) => entry.title), ["owner", "working", "pending-attention", "completed", "attention", "unrelated", "planned", "unrelated-plan", "resolved-attention"]);
   assert.deepEqual(grouped.snoozedEntries.map((entry) => entry.title), ["snoozed-attention"]);
   assert.deepEqual(grouped.settledEntries.map((entry) => entry.title), ["settled"]);
-  assert.deepEqual(getWorkbenchThreadPlanConflictEntries(entries, owner.identity).map((entry) => entry.title), ["working", "completed", "attention", "settled"]);
+  assert.deepEqual(getWorkbenchThreadPlanIntersections([owner], owner.identity), {
+    activeEntries: [],
+    hasPlannedClaims: true,
+    plannedEntries: [],
+  });
+  const intersections = getWorkbenchThreadPlanIntersections(entries, owner.identity);
+  assert.deepEqual(intersections.activeEntries.map((entry) => entry.title), ["working", "completed", "attention", "settled"]);
+  assert.deepEqual(intersections.plannedEntries.map((entry) => entry.title), ["planned"]);
+  assert.equal(getWorkbenchThreadPlanIntersections(entries, { harness: "codex", threadId: "missing" }).hasPlannedClaims, false);
 
-  const select = createWorkbenchThreadPlanConflictSelector(owner.identity);
+  const select = createWorkbenchThreadPlanIntersectionSelector(owner.identity);
   const snapshot = { entries, error: null, freshness: "fresh" as const, projectId: "project", revision: 1 };
   const first = select(snapshot);
   assert.equal(select({ ...snapshot, error: "unrelated", revision: 2 }), first);
   const changed = select({ ...snapshot, entries: entries.map((entry) => entry === working ? { ...working, title: "working changed" } : entry), revision: 3 });
   assert.notEqual(changed, first);
-  assert.equal(changed[0]?.title, "working changed");
+  assert.equal(changed.activeEntries[0]?.title, "working changed");
 });
 
 test("lifecycle parsing preserves two attention variants and normalizes legacy reasons", () => {

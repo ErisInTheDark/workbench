@@ -8,7 +8,7 @@
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, project-summary, mutation, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
  * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness. Keywords: git, arc, settlement, proposal, wake.
  * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition already-ordered entries into hidden, pinned, main, snoozed, and settled render sections. Keywords: grouping, pin, sidebar.
- * - getWorkbenchThreadPlanConflictEntries/createWorkbenchThreadPlanConflictSelector: derive and identity-stabilize visible sibling claim conflicts from one inactive plan and the live sidebar snapshot. Keywords: plan, claim, conflict, sidebar, selector.
+ * - WorkbenchThreadPlanIntersections/getWorkbenchThreadPlanIntersections/createWorkbenchThreadPlanIntersectionSelector: describe, derive, and identity-stabilize visible sibling active and planned claim intersections from one inactive plan and the live sidebar snapshot. Keywords: plan, claim, intersection, sidebar, selector.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback. Keywords: title, preview, uuid.
  * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: manual-status eligibility, exact-turn transitions, and direct-child status projection. Keywords: working, attention, completed, stopped, parent.
@@ -492,32 +492,52 @@ export function groupWorkbenchThreadSidebarEntries(entries: readonly WorkbenchTh
   };
 }
 
-export function getWorkbenchThreadPlanConflictEntries(
+export interface WorkbenchThreadPlanIntersections {
+  activeEntries: WorkbenchTopLevelThreadSidebarEntry[];
+  hasPlannedClaims: boolean;
+  plannedEntries: WorkbenchTopLevelThreadSidebarEntry[];
+}
+
+const EMPTY_WORKBENCH_THREAD_PLAN_INTERSECTIONS: WorkbenchThreadPlanIntersections = {
+  activeEntries: [],
+  hasPlannedClaims: false,
+  plannedEntries: [],
+};
+
+function orderWorkbenchTopLevelThreadEntries(entries: readonly WorkbenchTopLevelThreadSidebarEntry[]) {
+  const grouped = groupWorkbenchThreadSidebarEntries(entries);
+  return [...grouped.pinnedEntries, ...grouped.mainEntries, ...grouped.snoozedEntries, ...grouped.settledEntries] as WorkbenchTopLevelThreadSidebarEntry[];
+}
+
+export function getWorkbenchThreadPlanIntersections(
   entries: readonly WorkbenchThreadSidebarEntry[],
   identity: { harness: WorkbenchHarnessId; threadId: string },
-) {
+): WorkbenchThreadPlanIntersections {
   const owner = entries.find((entry): entry is WorkbenchTopLevelThreadSidebarEntry => (
     entry.entryKind === "thread"
     && entry.identity.harness === identity.harness
     && entry.identity.threadId === identity.threadId
   ));
   const scopePaths = owner?.gitArcPlan?.scopePaths ?? [];
-  if (!scopePaths.length) return [];
-  const conflicts = entries.filter((entry): entry is WorkbenchTopLevelThreadSidebarEntry => (
+  if (!scopePaths.length) return EMPTY_WORKBENCH_THREAD_PLAN_INTERSECTIONS;
+  const candidates = entries.filter((entry): entry is WorkbenchTopLevelThreadSidebarEntry => (
     entry.entryKind === "thread"
     && (entry.identity.harness !== identity.harness || entry.identity.threadId !== identity.threadId)
-    && Boolean(entry.gitArc?.claimedPaths.some((claimedPath) => (
-      scopePaths.some((scopePath) => gitArcPathsOverlap(claimedPath, scopePath))
-    )))
   ));
-  const grouped = groupWorkbenchThreadSidebarEntries(conflicts);
-  return [...grouped.pinnedEntries, ...grouped.mainEntries, ...grouped.snoozedEntries, ...grouped.settledEntries] as WorkbenchTopLevelThreadSidebarEntry[];
+  const overlapsPlan = (candidatePaths: readonly string[]) => candidatePaths.some((candidatePath) => (
+    scopePaths.some((scopePath) => gitArcPathsOverlap(candidatePath, scopePath))
+  ));
+  return {
+    activeEntries: orderWorkbenchTopLevelThreadEntries(candidates.filter((entry) => overlapsPlan(entry.gitArc?.claimedPaths ?? []))),
+    hasPlannedClaims: true,
+    plannedEntries: orderWorkbenchTopLevelThreadEntries(candidates.filter((entry) => overlapsPlan(entry.gitArcPlan?.scopePaths ?? []))),
+  };
 }
 
-export function createWorkbenchThreadPlanConflictSelector(identity: { harness: WorkbenchHarnessId; threadId: string }) {
-  let selected: WorkbenchTopLevelThreadSidebarEntry[] = [];
+export function createWorkbenchThreadPlanIntersectionSelector(identity: { harness: WorkbenchHarnessId; threadId: string }) {
+  let selected = EMPTY_WORKBENCH_THREAD_PLAN_INTERSECTIONS;
   return (snapshot: WorkbenchThreadSidebarSnapshot | null) => {
-    const next = snapshot ? getWorkbenchThreadPlanConflictEntries(snapshot.entries, identity) : [];
+    const next = snapshot ? getWorkbenchThreadPlanIntersections(snapshot.entries, identity) : EMPTY_WORKBENCH_THREAD_PLAN_INTERSECTIONS;
     if (areDeeplyEqual(selected, next)) return selected;
     selected = next;
     return selected;
