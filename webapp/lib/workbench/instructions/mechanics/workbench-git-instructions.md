@@ -7,7 +7,7 @@ When the workflow or user explicitly authorizes a commit, use the typed wb MCP c
 - `mcp__wb__git_commit` commits the selected files and clears the selection after success. Use `amendTarget` only for the exact supported unpushed linear commit.
 - Use `targetWorktree` when the control-plane project owns the thread but the files belong to another registered worktree of the same repository.
 
-Selections are isolated by managed thread and worktree. Selection does not snapshot file contents. Later edits to a selected file are included when the commit tool reads it. Unrelated ordinary staged files remain excluded.
+Selections are thread- and worktree-isolated but do not snapshot contents. The commit reads later edits while excluding unrelated ordinary staged files.
 
 ## Workbench Git Plans and Arcs
 
@@ -27,15 +27,15 @@ In Review, inspect the whole logical arc. Then call `mcp__wb__git_arc_propose` o
 The terminal lifecycle card aggregates every project proposal and every live claim. If the user chooses restore or unclaim instead of committing, use the aggregate card so all remaining repo members stay visible and recoverable.
 </available:multi-root>
 
-Plan and arc refs are convenience state, not a security boundary. Never store secrets there unless the repository state already permits them.
+Plan and arc refs are not security boundaries. Store no secrets there unless the repository already permits them.
 
-When an arc tool is the required workflow step, call it directly. Do not preflight it with raw `git status`, raw `git diff`, or an equivalent command. The arc operation owns safety checks and its rejection is the stop signal.
+Call required arc tools directly. Do not preflight with raw `git status`, raw `git diff`, or equivalents. The arc owns safety checks. Rejection is the stop signal.
 
 ### create or revise an inactive plan
 
 Use `mcp__wb__git_arc_plan` after entering Brief mode when the exact edit paths are known. Provide `intentName`, optional `intentDescription`, `paths`, and only intentional dirty unclaimed `adoptPaths`.
 
-The plan snapshots the full Git-visible worktree through structurally shared objects. Its path list selects arc operations. It does not limit snapshot storage.
+The plan snapshots the Git-visible worktree through shared objects. Its paths select arc operations, not snapshot storage.
 
 Dirty active-claimed paths can remain ordinary plan paths. A replacement plan must cover every dirty path retained from this thread's previous claim set. Dirty unclaimed paths require explicit adoption.
 
@@ -83,13 +83,13 @@ In Review, choose one initial arc-scoped inspection. Do not run compare first wh
 
 ### propose, replace, rescind, or amend
 
-After validation and Review inspection, call `mcp__wb__git_arc_propose` with a fresh main message line. Omit `paths` to use all changed claimed files. A proposal opens the proposal UI and does not commit.
-
-Derive the proposal's main message line and optional message continuation from the full selected diff, not from the last edit or the order of implementation. Make the main message line describe the commit's overall outcome. Use a message continuation only for distinct or unrelated bundled work that the main message line does not cover. Do not use a message continuation to list implementation steps or expected parts of the main change. Do not say that the same commit also fixes, changes, or adds its own constituent work. Fold that work into the overall commit message.
+<!-- Failure: long arcs forget outcomes; titles hide changes; bodies hide work. -->
+Track all arc outcomes. Reconcile the list with the full selected diff. New proposals call `mcp__wb__git_arc_propose` with a main line and omit `paths` for all changed claims. It opens the UI without committing. Make the main line a simple symptom or outcome that encompasses the full changeset whenever possible. Use continuation to explain concrete work behind that summary. Separately identify every distinctly special or unrelated bundled item, why included, and its additional technical changes. Do not repeat the main line or present expected constituent work as an unrelated "also."
 
 Set `replaceProposalId` to replace exactly one pending proposal. Use `mcp__wb__git_arc_rescind` to rescind exactly one pending proposal.
 
-Set `amend: true` and, when needed, `amendProposalId` to amend an exact committed proposal supported by the linear unpushed-history rewriter. Targeted amend remaps affected proposal metadata and arc refs atomically.
+<!-- Failure: corrective amends rewrite history; additive amends hide scope. -->
+Compare the amended commit with its existing main line and continuation. When changes only make the stated outcome work correctly, omit both fields to inherit them unchanged. Update them to cover added functionality, scope, and all distinct or unrelated fixes. Set `amend: true` and, when needed, `amendProposalId`. Targeted amend supports linear unpushed history and atomically remaps proposal metadata and arc refs.
 
 Proposal acceptance atomically changes branch history, proposal metadata, the accepted receipt ledger, and live claims. It preserves excluded newer work.
 
