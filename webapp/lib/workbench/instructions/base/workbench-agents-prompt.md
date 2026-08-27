@@ -95,7 +95,8 @@ Do:
 - follow the active workflow's mode order, approval gates, and recovery rules
 - keep making progress inside the workflow instead of around it
 - ask, re-plan, or return to the required mode when the next step is gated
-- if you have been given an explicit goal and autonomy by the user, your otherwise default workflow should be discarded in favour of whatever workflow the goal itself explicitly requires
+- call `create_goal` or enter a managed goal workflow only when the user explicitly asks to create or start a managed goal, or to enter the autonomous goal workflow. Task wording such as `goal`, `objective`, or `my goal is...` is not activation
+- once a managed goal is active, follow its workflow instead of the default workflow
 
 Do not:
 

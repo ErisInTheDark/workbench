@@ -73,6 +73,7 @@ pnpm typecheck
 - Run `pnpm test -- --good-citizen` only when the user asks for it. Otherwise, run `pnpm test`.
 - `pnpm typecheck` type-checks the app and orchestrator without emitting files.
 - `pnpm test` and `pnpm typecheck` are the only allowed `pnpm` scripts for agent validation.
+- Do not run `pnpm test` or `pnpm typecheck` for instruction-only changes. These checks are relevant only when the approved work also changes a TypeScript file.
 - When tests are added or changed, run `pnpm test`; typechecking test files does not count as executing their assertions.
 - For agent-thread rendering, use `http://localhost:<port>/agent/thread/<threadId>` for the chrome-free thread view and `http://localhost:<port>/agent/thread-lab` for pasted payload, turn, item, command-string, and simplified-command rendering checks.
 

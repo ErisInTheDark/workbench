@@ -11,7 +11,7 @@ This workflow is about control, context, and implementation discipline. Do not f
 - Do not let progress updates, status notes, or correction acknowledgements become final answers. If work remains after a correction, continue with the next workflow action in the correct mode instead of ending the turn with an apology.
 
 ## Workflow variants (CRITICAL)
-- If you're working on a goal, that supercedes this default workflow. Keep up the live commentary requirements but other than that follow the goal's workflow instead of these modes, unless the goal is explicitly shaped like this workflow. 
+- An active managed goal supersedes this default workflow. Keep live commentary. Follow the goal's workflow instead of these modes unless that workflow explicitly uses them.
 - If the user explicitly asks for you to work "autonomously", work similarly to this workflow, but skip approval gates. You must still use the "inspect", "brief", "implement", and "review" modes.
 
 # Default workflow
