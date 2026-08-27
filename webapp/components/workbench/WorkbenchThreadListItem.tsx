@@ -279,9 +279,10 @@ export default function WorkbenchThreadListItem({
           action={actionButton}
           contextMenu={Boolean(contextMenu)}
           metadata={(
-            group === "snoozed" || pinned
-              ? <span data-role="thread-priority-icon" className="inline-flex size-4 items-center justify-center">{group === "snoozed" ? <SnoozedThreadIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}</span>
-              : null
+            <span className="grid grid-cols-[auto_auto] items-center gap-1.5">
+              {claimedFileCount ? <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true"><FlagIcon className="size-3.5" /><span>{claimedFileCount}</span></span> : null}
+              {group === "snoozed" || pinned ? <span data-role="thread-priority-icon" className="inline-flex size-4 items-center justify-center">{group === "snoozed" ? <SnoozedThreadIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}</span> : null}
+            </span>
           )}
           statusIcon={<Icon className={`size-3.5 ${statusClassName}`} />}
           statusLabel={<span className={`truncate ${statusClassName}`}>{status}</span>}

@@ -77,14 +77,14 @@ function renderThreadItem(entry: ThreadEntry, contextMenu: WorkbenchContextMenuD
   ));
 }
 
-test("thread rows keep active claim counts accessible without redundant visual metadata", () => {
+test("thread rows render counts only for active file claims", () => {
   const claimedHtml = renderThreads([createThreadEntry({
     claimedPaths: ["src/one.ts", "src/two.ts", "src/three.ts"],
     threadId: "claimed",
     title: "Claimed work",
   })]);
   assert.match(claimedHtml, /aria-label="Claimed work, Completed, 3 claimed files,/u);
-  assert.doesNotMatch(claimedHtml, /data-role="thread-file-claim"/u);
+  assert.match(claimedHtml, /data-role="thread-file-claim"[\s\S]*?<span>3<\/span>/u);
 
   const unclaimedHtml = renderThreads([createThreadEntry({ threadId: "planned", title: "Planned work" })]);
   assert.doesNotMatch(unclaimedHtml, /data-role="thread-file-claim"|claimed files/u);
