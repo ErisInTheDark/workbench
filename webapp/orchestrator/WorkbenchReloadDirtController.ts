@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchReloadDirtControllerState: transferable snapshot, baseline, generated-path, and serialized-refresh state. Keywords: reload, dirt, handoff, queue.
- * - WorkbenchReloadDirtControllerOptions: workspace, graph, and publication ports. Keywords: reload, ports, Git.
+ * - WorkbenchReloadDirtControllerState: transferable snapshot, baseline, generated-path, and refresh-generation state. Keywords: reload, dirt, handoff, queue.
+ * - WorkbenchReloadDirtControllerOptions: workspace, graph, Git repository, and publication ports. Keywords: reload, ports, Git.
  * - default WorkbenchReloadDirtController: own reload dirt, full-worktree snapshots, source generations, and watcher lifecycle. Keywords: reload, dirt, snapshot, watcher.
  */
 import { watch, type FSWatcher } from "node:fs";
@@ -20,6 +20,7 @@ export interface WorkbenchReloadDirtControllerState {
   descriptors: Map<OrchestratorReloadScope, ReloadNodeSourceDescriptor>;
   error: string | null;
   pendingScopes: OrchestratorReloadScope[];
+  refreshAbort?: AbortController;
   snapshotCommit: string;
   tail: Promise<void>;
 }
@@ -29,6 +30,7 @@ export interface WorkbenchReloadDirtControllerOptions {
   cancelSourceState?(): void;
   getSourceState(): ReloadNodeSourceState;
   onChange?(): void;
+  repository?: WorkbenchGitRepository;
   repoRoot: string;
 }
 
@@ -52,6 +54,7 @@ function sameSnapshot(left: WorkbenchReloadDirtSnapshot, right: WorkbenchReloadD
 export default class WorkbenchReloadDirtController {
   private attached = true;
   private clearInstructionObserver: (() => void) | null = null;
+  private refreshAbort: AbortController;
   private refreshQueued = false;
   private repository: WorkbenchGitRepository;
   private readonly listeners = new Set<() => void>();
@@ -60,7 +63,8 @@ export default class WorkbenchReloadDirtController {
   private watcher: FSWatcher | null = null;
 
   constructor(private readonly options: WorkbenchReloadDirtControllerOptions, private state: WorkbenchReloadDirtControllerState | null = null) {
-    this.repository = new WorkbenchGitRepository(options.repoRoot);
+    this.repository = options.repository ?? new WorkbenchGitRepository(options.repoRoot);
+    this.refreshAbort = state?.refreshAbort ?? new AbortController();
     this.tail = state?.tail ?? Promise.resolve();
   }
 
@@ -73,16 +77,23 @@ export default class WorkbenchReloadDirtController {
         descriptors: new Map(sourceState.descriptors.map((descriptor) => [descriptor.scope, descriptor])),
         error: null,
         pendingScopes: [],
+        refreshAbort: this.refreshAbort,
         snapshotCommit,
         tail: this.tail,
       };
     }
+    const state = this.requireState();
+    state.refreshAbort = this.refreshAbort;
     this.connectInstructionObserver();
     this.watcher = watch(this.options.repoRoot, { recursive: true }, (_event, filename) => {
       if (!filename || this.isObservedPath(String(filename))) this.queueRefresh();
     });
     this.watcher.on("error", (error) => this.publishError(error));
-    await this.refresh();
+    if (state.pendingScopes.length) {
+      this.publish({ dirtyScopes: [], error: state.error, pendingScopes: state.pendingScopes });
+    } else {
+      await this.refresh();
+    }
   }
 
   getSnapshot() {
@@ -100,6 +111,7 @@ export default class WorkbenchReloadDirtController {
 
   beginReload(scopes: readonly OrchestratorReloadScope[]) {
     const state = this.requireState();
+    this.supersedeRefreshes();
     state.pendingScopes = [...new Set(scopes)];
     state.error = null;
     this.publish({ ...this.snapshot, error: null, pendingScopes: state.pendingScopes });
@@ -136,7 +148,11 @@ export default class WorkbenchReloadDirtController {
   }
 
   async refresh(signal?: AbortSignal) {
-    await this.enqueue(async () => await this.refreshNow(signal));
+    if (signal?.aborted) throw signal.reason;
+    if (this.requireState().pendingScopes.length) return this.snapshot;
+    const lifecycleSignal = this.refreshAbort.signal;
+    const refreshSignal = signal ? AbortSignal.any([signal, lifecycleSignal]) : lifecycleSignal;
+    await this.enqueue(async () => await this.refreshNow(refreshSignal));
     return this.snapshot;
   }
 
@@ -144,6 +160,7 @@ export default class WorkbenchReloadDirtController {
     this.attached = false;
     this.disconnectRuntimeOwners();
     const state = this.requireState();
+    state.refreshAbort = this.refreshAbort;
     state.tail = this.tail;
     return state;
   }
@@ -185,10 +202,12 @@ export default class WorkbenchReloadDirtController {
       for (const [baseline, paths] of pathsByBaseline) {
         const sourcePaths = [...paths];
         const currentTree = await this.repository.writeScopedWorktreeTree(sourcePaths, baseline, signal);
+        if (signal?.aborted) throw signal.reason;
         changedByBaseline.set(
           baseline,
           new Set(await this.repository.listChangedPaths(baseline, currentTree, sourcePaths, signal)),
         );
+        if (signal?.aborted) throw signal.reason;
       }
       for (const descriptor of descriptors) {
         const baseline = state.baselines.get(descriptor.scope) ?? state.snapshotCommit;
@@ -197,6 +216,7 @@ export default class WorkbenchReloadDirtController {
           dirtyScopes.push({ description: descriptor.description, destructive: descriptor.destructive, scope: descriptor.scope });
         }
       }
+      if (signal?.aborted) throw signal.reason;
       state.error = null;
       this.publish({ dirtyScopes, error: null, pendingScopes: state.pendingScopes });
     } catch (error) {
@@ -246,13 +266,26 @@ export default class WorkbenchReloadDirtController {
   }
 
   private queueRefresh() {
-    if (!this.attached || this.refreshQueued) return;
+    if (!this.attached || this.refreshQueued || this.requireState().pendingScopes.length) return;
     this.refreshQueued = true;
     setImmediate(() => {
       this.refreshQueued = false;
-      if (!this.attached) return;
-      void this.refresh();
+      if (!this.attached || this.requireState().pendingScopes.length) return;
+      const expectedSignal = this.refreshAbort.signal;
+      void this.refresh().catch((error: unknown) => {
+        if (expectedSignal.aborted && error === expectedSignal.reason) return;
+        this.publishError(error);
+      });
     });
+  }
+
+  private supersedeRefreshes() {
+    this.refreshAbort.abort(new Error("Reload dirt refresh was superseded by a user reload."));
+    this.refreshAbort = new AbortController();
+    this.tail = Promise.resolve();
+    const state = this.requireState();
+    state.refreshAbort = this.refreshAbort;
+    state.tail = this.tail;
   }
 
   private publishError(error: unknown) {
