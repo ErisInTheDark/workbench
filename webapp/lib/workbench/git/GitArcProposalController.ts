@@ -347,38 +347,32 @@ async function resolveProposalState(repository: WorkbenchGitRepository, harness:
   let proposal = await store.readProposal(harness, threadId, proposalId);
   let currentTree: string | null = null;
   if (proposal.metadata.status === "proposed") {
-    if (proposal.metadata.messageOnly) {
-      if (await repository.currentHead() !== proposal.metadata.liveBaseCommit) {
-        proposal = await transitionProposal(repository, proposal, {
-          ...proposal.metadata,
-          status: "unavailable",
-          unavailableReason: "Repository HEAD changed after this amend proposal was created.",
-        });
-      }
-      return { currentTree: null, includeNewerAvailable: false, proposal };
-    }
     const headMovement = await repository.classifyHeadMovement(proposal.metadata.liveBaseCommit, proposal.metadata.livePaths);
     let unavailableReason: string | null = headMovement.kind === "incompatible"
       ? "The repository HEAD moved incompatibly after this proposal was created."
       : headMovement.changedPaths.length
         ? `Proposed paths changed in committed history: ${headMovement.changedPaths.join(", ")}`
         : null;
-    if (!unavailableReason && proposal.metadata.mode === "amend" && headMovement.kind !== "same") {
-      unavailableReason = "Repository HEAD changed after this amend proposal was created.";
+    if (!unavailableReason && headMovement.kind === "fast-forward") {
+      if (proposal.metadata.mode === "commit") {
+        const rebasedTree = await repository.writeTreeWithPathsFromSource(
+          headMovement.currentHead,
+          proposal.proposalCommit,
+          proposal.metadata.paths,
+        );
+        proposal = await transitionProposal(repository, proposal, {
+          ...proposal.metadata,
+          baseCommit: headMovement.currentHead,
+          liveBaseCommit: headMovement.currentHead,
+        }, rebasedTree);
+      } else {
+        proposal = await transitionProposal(repository, proposal, {
+          ...proposal.metadata,
+          liveBaseCommit: headMovement.currentHead,
+        });
+      }
     }
-    if (!unavailableReason && proposal.metadata.mode === "commit" && headMovement.kind === "fast-forward") {
-      const rebasedTree = await repository.writeTreeWithPathsFromSource(
-        headMovement.currentHead,
-        proposal.proposalCommit,
-        proposal.metadata.paths,
-      );
-      proposal = await transitionProposal(repository, proposal, {
-        ...proposal.metadata,
-        baseCommit: headMovement.currentHead,
-        liveBaseCommit: headMovement.currentHead,
-      }, rebasedTree);
-    }
-    if (!unavailableReason) {
+    if (!unavailableReason && !proposal.metadata.messageOnly) {
       currentTree = await repository.writeScopedWorktreeTree(proposal.metadata.livePaths, proposal.metadata.liveBaseCommit);
       const changedNow = new Set(await repository.listChangedPaths(
         proposal.metadata.liveBaseCommit,
@@ -570,7 +564,7 @@ export default class GitArcProposalController {
     replaceProposalId?: string;
     title: string;
   }): Promise<GitCheckpointProposalReceipt> {
-    if (amendProposalId && !rawPaths?.length) {
+    if (amendProposalId && !amend && !rawPaths?.length) {
       return await this.createMessageOnlyProposal({
         amendProposalId,
         cwd,
@@ -630,7 +624,7 @@ export default class GitArcProposalController {
     const livePaths = await repository.listChangedPaths(liveBaseCommit, proposalTree, requestedPaths);
     if (!livePaths.length) throw new Error("The selected arc paths do not contain any working-tree changes to propose.");
     const paths = amendTargetSha
-      ? await repository.listChangedPaths(baseCommit, proposalTree, ["."])
+      ? await repository.listAllChangedPaths(baseCommit, proposalTree)
       : livePaths;
     const inheritedMessage = amendTargetSha ? parseCommitMessage(await repository.readCommitMessage(amendTargetSha)) : null;
     const proposalTitle = title.trim() || inheritedMessage?.title || "";

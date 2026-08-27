@@ -538,6 +538,12 @@ export default class WorkbenchGitRepository {
     ], process.env, signal)).sort((left, right) => left.localeCompare(right));
   }
 
+  async listAllChangedPaths(from: string, to: string, signal?: AbortSignal) {
+    return parseNullPaths(await this.run([
+      "diff", "--name-only", "-z", "--no-renames", from, to,
+    ], process.env, signal)).sort((left, right) => left.localeCompare(right));
+  }
+
   async listFirstParentCommitPathChanges(fromExclusive: string, toInclusive: string, paths: string[]): Promise<GitCommitPathChange[]> {
     if (fromExclusive === toInclusive || !paths.length) return [];
     const commits = (await this.run([

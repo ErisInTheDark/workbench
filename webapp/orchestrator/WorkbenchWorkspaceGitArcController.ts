@@ -684,8 +684,9 @@ export default class WorkbenchWorkspaceGitArcController {
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "proposalCreate" }>,
   ) {
-    const messageOnlyAmend = Boolean(request.amendProposalId && !request.paths?.length);
-    const inferredMember = messageOnlyAmend && !request.rootId
+    const targetedAmend = Boolean(request.amendProposalId);
+    const messageOnlyAmend = Boolean(targetedAmend && !request.amend && !request.paths?.length);
+    const inferredMember = targetedAmend && !request.rootId
       ? await this.findProposalMember(members, { harness: request.harness, proposalId: request.amendProposalId, threadId: request.threadId })
       : null;
     if (project.project.roots.length > 1 && !request.rootId && !inferredMember) {

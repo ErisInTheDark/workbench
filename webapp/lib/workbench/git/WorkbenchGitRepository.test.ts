@@ -123,6 +123,7 @@ test("reads ref objects and inspects text, binary, and literal-path changes with
   await fs.writeFile(path.join(fixture.root, "binary.bin"), Buffer.from([0, 1, 2, 3, 0, 255]));
   const paths = ["binary.bin", "literal[1].txt", "ordinary.txt", "selected.txt"];
   const tree = await repository.writeScopedWorktreeTree(paths);
+  assert.deepEqual(await repository.listAllChangedPaths("HEAD", tree), paths);
   const changes = await repository.buildFileChanges("HEAD", tree, paths);
 
   assert.deepEqual(changes.map(({ additions, deletions, kind, path: filePath }) => ({

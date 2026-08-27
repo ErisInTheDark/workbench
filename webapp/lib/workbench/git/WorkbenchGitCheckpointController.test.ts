@@ -73,6 +73,15 @@ async function git(cwd: string, args: string[]) {
   })).stdout;
 }
 
+async function advanceHead(repository: WorkbenchGitRepository, message: string) {
+  const head = await repository.currentHead();
+  const headRef = await repository.symbolicHead();
+  assert.ok(headRef);
+  const commit = await repository.createCommitFromTree(await repository.resolveTree(head), head, message);
+  await repository.updateRefs([{ newValue: commit, oldValue: head, ref: headRef }]);
+  return commit;
+}
+
 async function createRepository(_context: TestContext) {
   return { repository: sharedRepository, root: sharedRoot, source: sharedSource };
 }
@@ -701,12 +710,6 @@ isolatedControllerTest("targeted message amendments need no active arc and prese
     proposalId: state.commitTargetProposalId, threadId: "partial-thread",
   });
   assert.deepEqual(original.amendability, { status: "available" });
-  await fs.writeFile(path.join(source, "one.txt"), "unrelated unstaged\n");
-  await fs.writeFile(path.join(source, "two.txt"), "unrelated staged\n");
-  await git(source, ["add", "two.txt"]);
-  const worktreeBefore = await git(source, ["diff", "--binary"]);
-  const indexBefore = await git(source, ["diff", "--cached", "--binary"]);
-
   const amendment = await controller.createProposal({
     amendProposalId: original.proposalId,
     cwd: source,
@@ -716,6 +719,12 @@ isolatedControllerTest("targeted message amendments need no active arc and prese
     title: "Replacement title",
   });
   assert.notEqual(amendment.proposalId, original.proposalId);
+  const laterHead = await advanceHead(repository, "advance after message proposal");
+  await fs.writeFile(path.join(source, "one.txt"), "unrelated unstaged\n");
+  await fs.writeFile(path.join(source, "two.txt"), "unrelated staged\n");
+  await git(source, ["add", "two.txt"]);
+  const worktreeBefore = await git(source, ["diff", "--binary"]);
+  const indexBefore = await git(source, ["diff", "--cached", "--binary"]);
   const pending = await controller.getProposal({
     cwd: source, harness: "codex", includeNewer: false, proposalId: amendment.proposalId, threadId: "partial-thread",
   });
@@ -732,6 +741,8 @@ isolatedControllerTest("targeted message amendments need no active arc and prese
     title: amendment.title,
   });
   assert.equal(accepted.status, "committed");
+  assert.notEqual(await repository.currentHead(), laterHead);
+  assert.equal((await git(source, ["show", "-s", "--format=%s", "HEAD"])).trim(), "advance after message proposal");
   assert.equal((await controller.getProposal({
     cwd: source, harness: "codex", includeNewer: false, proposalId: original.proposalId, threadId: "partial-thread",
   })).status, "superseded");
@@ -755,7 +766,7 @@ isolatedControllerTest("targeted message amendments need no active arc and prese
 });
 
 isolatedControllerTest("replacement plans target prior pending and committed proposals through the thread namespace", async (context) => {
-  const { source, state } = await copyRepository(context, CONTROLLER_REPLACEMENT_READY_FIXTURE);
+  const { repository, source, state } = await copyRepository(context, CONTROLLER_REPLACEMENT_READY_FIXTURE);
   const controller = new WorkbenchGitCheckpointController();
   const replaceTarget = { proposalId: state.replaceTargetProposalId };
   const rescindTarget = { proposalId: state.rescindTargetProposalId };
@@ -847,20 +858,24 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
     cwd: source, harness: "codex", proposalId: commitTarget.proposalId, threadId: "partial-thread",
   }), assertCommittedTarget);
   const amendment = await controller.createProposal({
+    amend: true,
     amendProposalId: commitTarget.proposalId,
     cwd: source,
     description: "",
     harness: "codex",
-    paths: ["two.txt"],
     threadId: "partial-thread",
     title: "amend committed target",
   });
+  await advanceHead(repository, "advance after content proposal");
   const proposed = await controller.getProposal({
     cwd: source, harness: "codex", includeNewer: false, proposalId: amendment.proposalId, threadId: "partial-thread",
   });
   assert.equal(proposed.mode, "amend");
   assert.equal(proposed.amendTargetSha, state.committedSha);
   assert.equal(proposed.status, "proposed");
+  assert.deepEqual(proposed.changes.map(({ path: filePath }) => filePath), ["one.txt", "three.txt", "two.txt"]);
+  assert.match(proposed.changes.find(({ path: filePath }) => filePath === "one.txt")?.diff ?? "", /replace one/u);
+  assert.match(proposed.changes.find(({ path: filePath }) => filePath === "two.txt")?.diff ?? "", /rescind two/u);
   assert.deepEqual(
     (await new GitArcRegistry(await WorkbenchGitRepository.open(source)).find({ harness: "codex", threadId: "partial-thread" }))?.proposalIds,
     [continuedReplacement.proposalId, amendment.proposalId],

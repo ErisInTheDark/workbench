@@ -399,6 +399,19 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
     receivedPaths: undefined,
     rootId: "web",
   });
+  const contentAmendment = await controller.execute(project, {
+    action: "proposalCreate", amend: true, amendProposalId: webProposal.proposalId,
+    description: "Content amendment", title: "Amend web content", ...identity,
+  }) as { paths: string[]; proposalId: string; receivedPaths?: string[]; rootId: string };
+  assert.deepEqual({
+    paths: contentAmendment.paths,
+    receivedPaths: contentAmendment.receivedPaths,
+    rootId: contentAmendment.rootId,
+  }, {
+    paths: ["two.txt"],
+    receivedPaths: ["two.txt"],
+    rootId: "web",
+  });
 
   const findCallsBefore = local.lifecycleFindCalls.length;
   const listCallsBefore = local.lifecycleListCalls.length;
@@ -412,6 +425,7 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
     apiProposal.proposalId,
     webProposal.proposalId,
     messageAmendment.proposalId,
+    contentAmendment.proposalId,
   ]);
   assert.ok(lifecycle);
   const { harness: _arcHarness, threadId: _arcThreadId, ...sidebarLifecycle } = lifecycle;
@@ -421,6 +435,7 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
     { proposalId: apiProposal.proposalId, rootId: "api" },
     { proposalId: webProposal.proposalId, rootId: "web" },
     { proposalId: messageAmendment.proposalId, rootId: "web" },
+    { proposalId: contentAmendment.proposalId, rootId: "web" },
   ]);
 
   local.dirtyRoots.add(webRoot);
