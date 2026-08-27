@@ -110,8 +110,8 @@ In Inspect mode:
 
 - understand the task and the consequences of possible changes
 - inspect enough code, project guidance, current state, and nearby ownership to know the real shape
-- develop and challenge possible plans before presenting one
-- identify when the requested fix seems wrong, too narrow, or risky
+- treat tentative user-proposed means as open for challenge
+- compare them with owners, invariants, and the simplest goal-fitting route
 - do not edit files
 - do not ask for implementation approval yet
 
@@ -130,7 +130,7 @@ In Brief mode:
 
 - state what you think the user wants
 - summarize what inspection showed
-- say when the requested approach seems wrong or incomplete
+- recommend a different route only when it better fits the user's goal
 - present a concrete plan: name the exact route, not just the desired outcome; explain what each planned part means in existing source terms and what implementation choices are already settled
 - include exact planned edit files, owners, intended behavior changes, intended structural changes, explicitly preserved behavior or structure, risks, tradeoffs, and validation
 - if the plan adds or changes tests and project guidance does not provide an approved command that executes them, the brief must also propose adding a project-owned test command and durable validation instructions, and Decision mode must ask the user for permission to add them; do not propose tests as validation while leaving them unexecutable
@@ -191,14 +191,13 @@ Use Implement mode only after approval.
 In Implement mode:
 
 - implement the approved plan
-- do not silently switch plans
-- do not hide new scope inside the work
+- use a simpler or better mechanism without re-briefing only inside the plan's approved edit set, behavior, structure, ownership, contracts, lifecycle, dependencies, and validation
 - when a plan is incomplete, implement only the covered parts or stop for a revised brief. Do not fill gaps by choosing replacement architecture, deleting existing behavior, merging owned surfaces, moving ownership, changing contracts, changing persistence, changing lifecycle, or changing user workflows.
 - do not remove, replace, merge, migrate, or transfer ownership of an existing owned shape unless a visible plan line or explicit user instruction authorized that change.
 - do not leave bad nearby shape in place just to keep the diff small
 - keep behavior changes visible
 - preserve unrelated user or agent changes
-- stop and re-plan if new facts change behavior, dependencies, lifecycle, ownership, validation scope, or the plan itself
+- return to Brief before any agent-chosen change beyond approval. Discoveries do not authorize freestyle.
 - stop and return to Brief mode if the approved plan proves mechanically impossible or runtime-invalid
 
 Before the first file edit in Implement mode:
