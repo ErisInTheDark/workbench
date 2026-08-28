@@ -525,6 +525,19 @@ isolatedControllerTest("arc start reports only causal commits, sibling claims, a
     paths: ["claimed-dirty.txt"],
     threadId: "target-thread",
   }), assertSiblingCollision);
+  await controller.createAndStartPlan({
+    cwd: source,
+    harness: "codex",
+    intentName: "extend active claim",
+    paths: ["unrelated.txt"],
+    threadId: "add-thread",
+  });
+  await assert.rejects(controller.addToArc({
+    cwd: source,
+    harness: "codex",
+    paths: ["claimed-dirty.txt"],
+    threadId: "add-thread",
+  }), assertSiblingCollision);
 });
 
 isolatedControllerTest("arc adopt claims dirty workspace paths from HEAD without changing worktree or index state", async (context) => {

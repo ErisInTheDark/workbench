@@ -18,7 +18,7 @@ import type {
   GitCheckpointProposal,
 } from "./checkpoint-contracts";
 import { GitArcMissingClaimSetError } from "./git-arc-failures";
-import GitArcRegistry, { findGitArcCollisions, type GitArcCollision, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcRegistry, { findGitArcCollisions, GitArcCollisionError, type GitArcCollision, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
 import GitArcPlanController, {
   GitCheckpointDirtyPathsError,
@@ -882,6 +882,9 @@ export default class WorkbenchGitCheckpointController {
       pathIsCoveredBy(candidate, scopePath) || pathIsCoveredBy(scopePath, candidate)
     )));
     if (overlapping.length) throw new Error(`Arc paths are already covered by the claimed set: ${overlapping.join(", ")}`);
+
+    const collisions = findGitArcCollisions(await registry.list(), { harness, threadId }, paths);
+    if (collisions.length) throw new GitArcCollisionError(collisions);
 
     if (paths.length) {
       const currentTree = await repository.writeScopedWorktreeTree(paths);
