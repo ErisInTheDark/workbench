@@ -55,6 +55,7 @@ import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { getThreadComposerStopControlState } from "./thread-composer-controls";
 import { getThreadUserInputRequestPreviewText } from "./thread-user-input-request-preview";
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-user-input-request-submission";
+import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 
 const PICKER_REFRESH_COOLDOWN_MS = 1500;
@@ -201,6 +202,7 @@ export default function ThreadComposer ({
   threadLifecycle: WorkbenchThreadLifecycle | null;
 }) {
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
+  const { reportComposerArmed } = useThreadScrollViewportContext();
   const [value, setValue] = useState(threadComposerDraft?.text ?? "");
   const [attachments, setAttachments] = useState<ComposerImageAttachment[]>(threadComposerDraft?.attachments ?? []);
   const [availableModels, setAvailableModels] = useState<WorkbenchModelOption[]>([]);
@@ -1215,6 +1217,7 @@ export default function ThreadComposer ({
       collapsedContent={stickyPreviewText}
       collapsedLabel="Expand composer"
       collapsedPreviewKind={stickyPreviewKind}
+      onArmedChange={reportComposerArmed}
       onCollapsedChange={setIsStickyComposerCollapsed}
       scrollTargetSelector='[data-thread-scroll-target="true"]'
     >

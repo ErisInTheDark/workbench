@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default ThreadView: render the main thread, subthread tabs, live activity, and polled turn history. Keywords: thread view, subthread, polling, workbench.
+ * - Local helpers: merge thread history, derive render state, delegate thread interactions, and locate stable lazy-history turn markers. Keywords: thread, history, rendering, interaction.
  */
 "use client";
 
@@ -122,8 +123,25 @@ type LiveThreadActivity =
 
 type RelatedThreadRecord = Record<string, ThreadPayload | undefined>;
 
+interface PendingPreviousTurnScrollRestore {
+  readonly anchorTop: number;
+  readonly beforeTurnId: string;
+  readonly scrollTop: number;
+  readonly target: HTMLDivElement;
+}
+
+const THREAD_HISTORY_TURN_MARKER_SELECTOR = "[data-thread-history-turn-id]";
+
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
+}
+
+function findHistoryTurnMarker (root: HTMLElement | null, turnId: string) {
+  if (!root) return null;
+  for (const marker of root.querySelectorAll<HTMLElement>(THREAD_HISTORY_TURN_MARKER_SELECTOR)) {
+    if (marker.dataset.threadHistoryTurnId === turnId) return marker;
+  }
+  return null;
 }
 
 function areRelatedThreadRecordsShallowEqual (left: RelatedThreadRecord, right: RelatedThreadRecord) {
@@ -664,6 +682,8 @@ export default memo(function ThreadView ({
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const historySentinelRef = useRef<HTMLDivElement>(null);
+  const historyBoundaryArmedRef = useRef(true);
+  const pendingPreviousTurnScrollRestoreRef = useRef<PendingPreviousTurnScrollRestore | null>(null);
   const codeBlockCopyResetTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map());
   const subthreadLoadGenerationRef = useRef(0);
   useEffect(() => {
@@ -750,6 +770,7 @@ export default memo(function ThreadView ({
   const currentTurn = activeThread?.turns.at(-1) ?? null;
   const visibleHistoryEntries = useMemo(() => activeThread ? getThreadVisibleHistoryEntries(activeThread) : [], [activeThread]);
   const loadedTurnsById = useMemo(() => new Map(activeThread?.turns.map((turn) => [turn.id, turn]) ?? []), [activeThread?.turns]);
+  const firstVisibleLoadedEntry = visibleHistoryEntries.find((entry) => loadedTurnsById.has(entry.turnId)) ?? null;
   const pageBoundaryIndex = activeThread?.nextPageCursor
     ? visibleHistoryEntries.findIndex((entry) => entry.turnId === activeThread.nextPageCursor)
     : -1;
@@ -909,6 +930,23 @@ export default memo(function ThreadView ({
     const loadGeneration = subthreadLoadGenerationRef.current;
     const targetThreadId = activeThread.id;
     const targetHarness = activeThread.harness;
+    const scrollTarget = scrollViewportRef.current;
+    const historyTurnMarker = firstVisibleLoadedEntry
+      ? findHistoryTurnMarker(threadViewRef.current, firstVisibleLoadedEntry.turnId)
+      : null;
+    if (
+      scrollTarget
+      && scrollTarget.dataset.threadScrollMode === "reading"
+      && firstVisibleLoadedEntry
+      && historyTurnMarker
+    ) {
+      pendingPreviousTurnScrollRestoreRef.current = {
+        anchorTop: historyTurnMarker.getBoundingClientRect().top,
+        beforeTurnId: firstVisibleLoadedEntry.turnId,
+        scrollTop: scrollTarget.scrollTop,
+        target: scrollTarget,
+      };
+    }
     dispatchPreviousTurnLoad({ type: "start", key: previousTurnLoadKey });
 
     try {
@@ -921,6 +959,7 @@ export default memo(function ThreadView ({
         return;
       }
       if (!payload) {
+        pendingPreviousTurnScrollRestoreRef.current = null;
         dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
         return;
       }
@@ -944,13 +983,16 @@ export default memo(function ThreadView ({
       if (loadGeneration !== subthreadLoadGenerationRef.current) {
         return;
       }
+      pendingPreviousTurnScrollRestoreRef.current = null;
       dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
       console.error("Previous thread turn load failed.", error);
     }
-  }, [activeThread, onReadThread, previousTurnLoadKey, previousTurnLoadStatus, subagents, thread.id]);
+  }, [activeThread, firstVisibleLoadedEntry, onReadThread, previousTurnLoadKey, previousTurnLoadStatus, scrollViewportRef, subagents, thread.id]);
 
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;
+    historyBoundaryArmedRef.current = true;
+    pendingPreviousTurnScrollRestoreRef.current = null;
     setActiveThreadId(selectedThreadId ?? thread.id);
     setSubthreadsById({});
     setLoadingThreadIds({});
@@ -1019,7 +1061,18 @@ export default memo(function ThreadView ({
     }
 
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
+      let shouldLoadPreviousTurn = false;
+      for (const entry of entries) {
+        if (!entry.isIntersecting) {
+          historyBoundaryArmedRef.current = true;
+          continue;
+        }
+        if (historyBoundaryArmedRef.current) {
+          historyBoundaryArmedRef.current = false;
+          shouldLoadPreviousTurn = true;
+        }
+      }
+      if (shouldLoadPreviousTurn) {
         void loadPreviousTurn();
       }
     }, {
@@ -1032,6 +1085,26 @@ export default memo(function ThreadView ({
       observer.disconnect();
     };
   }, [canLoadPreviousTurn, loadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus, scrollViewportRef]);
+
+  useLayoutEffect(() => {
+    const pendingRestore = pendingPreviousTurnScrollRestoreRef.current;
+    if (!pendingRestore || firstVisibleLoadedEntry?.turnId === pendingRestore.beforeTurnId) return;
+
+    pendingPreviousTurnScrollRestoreRef.current = null;
+    const scrollTarget = scrollViewportRef.current;
+    if (
+      !scrollTarget
+      || scrollTarget !== pendingRestore.target
+      || scrollTarget.dataset.threadScrollMode !== "reading"
+      || Math.abs(scrollTarget.scrollTop - pendingRestore.scrollTop) > 1
+    ) {
+      return;
+    }
+
+    const historyTurnMarker = findHistoryTurnMarker(threadViewRef.current, pendingRestore.beforeTurnId);
+    if (!historyTurnMarker) return;
+    scrollTarget.scrollTop += historyTurnMarker.getBoundingClientRect().top - pendingRestore.anchorTop;
+  }, [firstVisibleLoadedEntry?.turnId, scrollViewportRef]);
 
   useEffect(() => () => {
     codeBlockCopyResetTimersRef.current.forEach((timeoutId) => {
@@ -1472,7 +1545,14 @@ export default memo(function ThreadView ({
                 {visibleHistoryEntries.map((entry) => {
                   const turn = loadedTurnsById.get(entry.turnId);
                   const isPreviousTurnBoundary = entry === previousTurnEntry;
-                  return turn ? (
+                  return [
+                    <div
+                      key={`${entry.turnId}:history-marker`}
+                      aria-hidden="true"
+                      className="h-0 w-full"
+                      data-thread-history-turn-id={entry.turnId}
+                    />,
+                    turn ? (
                     <ThreadTurnDetails
                       key={entry.turnId}
                       browseResultEntries={activeThreadBrowseResultEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES}
@@ -1510,7 +1590,8 @@ export default memo(function ThreadView ({
                       entry={entry}
                       onRetry={() => void loadPreviousTurn({ retry: true })}
                     />
-                  ) : null;
+                    ) : null,
+                  ];
                 })}
               </>
             ) : (

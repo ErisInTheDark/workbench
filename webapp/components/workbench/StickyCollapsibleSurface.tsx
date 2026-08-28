@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default StickyCollapsibleSurface: own composer-style sentinel arming, sticky overlay, height preservation, and collapse interaction. Keywords: sticky, collapsible, surface, scrollport.
+ * - Local helpers: classify interactive targets and report geometry-derived armed-state edges. Keywords: sticky, sentinel, armed state, interaction.
  */
 "use client";
 
@@ -8,6 +9,7 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -43,6 +45,7 @@ export default function StickyCollapsibleSurface({
   collapsedContent,
   collapsedLabel,
   collapsedPreviewKind,
+  onArmedChange,
   onCollapsedChange,
   order,
   scrollTargetSelector,
@@ -54,6 +57,7 @@ export default function StickyCollapsibleSurface({
   collapsedContent: ReactNode;
   collapsedLabel: string;
   collapsedPreviewKind?: string;
+  onArmedChange?: (armed: boolean) => void;
   onCollapsedChange(collapsed: boolean): void;
   order?: number;
   scrollTargetSelector: string;
@@ -62,14 +66,22 @@ export default function StickyCollapsibleSurface({
   const [isArmed, setIsArmed] = useState(false);
   const [motionState, setMotionState] = useState<"idle" | "entering" | "leaving">("idle");
   const expandedRef = useRef<HTMLDivElement>(null);
+  const isArmedRef = useRef(false);
   const previousArmedRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
 
+  const commitArmedState = useCallback((nextArmed: boolean) => {
+    if (isArmedRef.current === nextArmed) return;
+    isArmedRef.current = nextArmed;
+    setIsArmed(nextArmed);
+    onArmedChange?.(nextArmed);
+  }, [onArmedChange]);
+
   useEffect(() => {
     const sentinelElement = sentinelRef.current;
     if (!sentinelElement) {
-      setIsArmed(true);
+      commitArmedState(true);
       return;
     }
 
@@ -77,7 +89,7 @@ export default function StickyCollapsibleSurface({
     let frameId: number | null = null;
     const updateArmedState = () => {
       frameId = null;
-      setIsArmed(isArmedForElement(sentinelElement, scrollTargetSelector));
+      commitArmedState(isArmedForElement(sentinelElement, scrollTargetSelector));
     };
     const requestUpdateArmedState = () => {
       if (frameId === null) frameId = window.requestAnimationFrame(updateArmedState);
@@ -101,11 +113,11 @@ export default function StickyCollapsibleSurface({
       window.visualViewport?.removeEventListener("resize", requestUpdateArmedState);
       window.visualViewport?.removeEventListener("scroll", requestUpdateArmedState);
     };
-  }, [scrollTargetSelector]);
+  }, [commitArmedState, scrollTargetSelector]);
 
   useEffect(() => {
     const sentinelElement = sentinelRef.current;
-    if (sentinelElement) setIsArmed(isArmedForElement(sentinelElement, scrollTargetSelector));
+    if (sentinelElement) commitArmedState(isArmedForElement(sentinelElement, scrollTargetSelector));
   });
 
   useEffect(() => {
