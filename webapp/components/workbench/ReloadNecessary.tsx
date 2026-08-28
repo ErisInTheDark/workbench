@@ -13,6 +13,7 @@ import {
   getReloadAllHoldMs,
   getReloadScopeHoldMs,
 } from "./reload-necessary-state";
+import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 
 const EMPTY_SUBSCRIBE = () => () => undefined;
 
@@ -23,9 +24,10 @@ export default function ReloadNecessary({
   reloadScopes: ((scopes: OrchestratorReloadScope[]) => Promise<OrchestratorReloadResponse>) | null;
   store: WorkbenchThreadSidebarStore | null;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
   const [requestError, setRequestError] = useState("");
   const [requesting, setRequesting] = useState<string[]>([]);
+  const { preferences, setReloadNecessaryOpen } = useWorkbenchSidebarPreferences();
+  const collapsed = !preferences.reloadNecessaryOpen;
   const snapshot = useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, store?.getSnapshot ?? (() => null), () => null);
   const dirt = snapshot?.reloadDirt;
 
@@ -62,7 +64,7 @@ export default function ReloadNecessary({
             aria-expanded={!collapsed}
             aria-label={collapsed ? "Expand reload controls" : "Collapse reload controls"}
             className="inline-flex size-8 items-center justify-center rounded-full text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-            onClick={() => setCollapsed((current) => !current)}
+            onClick={() => setReloadNecessaryOpen(collapsed)}
             title={collapsed ? "Expand reload controls" : "Collapse reload controls"}
             type="button"
           >

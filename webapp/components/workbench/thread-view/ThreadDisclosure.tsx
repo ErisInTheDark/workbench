@@ -17,6 +17,7 @@ function joinClasses (...values: Array<string | undefined>) {
 type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children"> & {
   chevronClassName?: string;
   children?: ReactNode;
+  compactSummary?: boolean;
   contentClassName?: string;
   defaultOpen?: boolean;
   initialOpen?: boolean;
@@ -44,6 +45,7 @@ export default function ThreadDisclosure ({
   chevronClassName,
   children,
   className,
+  compactSummary = false,
   contentClassName,
   defaultOpen,
   initialOpen = false,
@@ -130,7 +132,8 @@ export default function ThreadDisclosure ({
     >
       <summary
         className={joinClasses(
-          "flex min-w-0 max-w-full items-center cursor-pointer list-none gap-2 text-muted transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none",
+          "flex min-w-0 items-center cursor-pointer list-none text-muted transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none",
+          compactSummary ? "gap-1" : "max-w-full gap-2",
           summaryClassName,
         )}
         onClick={handleSummaryClick}

@@ -15,6 +15,7 @@ import {
   type WorkbenchThreadSidebarEntry,
 } from "../../lib/workbench/thread/thread-state";
 import WorkbenchPinnedThreadList from "./WorkbenchPinnedThreadList";
+import WorkbenchSidebarPreferencesProvider from "./WorkbenchSidebarPreferencesProvider";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchContextMenuContext, { type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
@@ -59,42 +60,54 @@ function renderThreads(
   entries: ThreadEntry[],
 ) {
   return renderToStaticMarkup(createElement(
-    WorkbenchContextMenuContext.Provider,
-    { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
-    createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
-        currentTarget: null,
-        entries,
-        getThreadHref: () => "/agent/thread/thread-one",
-        nowMs: 1_723_456_790_000,
-        onCreateThread: () => undefined,
-        onOpenThread: () => undefined,
-        projectId: "project",
-      })),
+    WorkbenchSidebarPreferencesProvider,
+    {
+      children: () => createElement(
+        WorkbenchContextMenuContext.Provider,
+        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+        createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
+            currentTarget: null,
+            entries,
+            getThreadHref: () => "/agent/thread/thread-one",
+            nowMs: 1_723_456_790_000,
+            onCreateThread: () => undefined,
+            onOpenThread: () => undefined,
+            projectId: "project",
+          })),
+      ),
+      projectId: "project",
+    },
   ));
 }
 
 function renderPinnedThreads(projects: WorkbenchProjectOption[], projectThreadSummaries: WorkbenchProjectThreadSummaries) {
   return renderToStaticMarkup(createElement(
-    WorkbenchContextMenuContext.Provider,
-    { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
-    createElement(WorkbenchDragProvider, null, createElement(WorkbenchPinnedThreadList, {
-      actions: {
-        autoFocusFolderId: null,
-        getThreadContextMenu: () => ({ id: "test-thread-menu", items: [], label: "Thread actions" }),
-        nowMs: 1_723_456_790_000,
-        onAction: () => undefined,
-        onAutoFocusFolderComplete: () => undefined,
-        onPinnedMove: () => undefined,
-        onRenamePinnedFolder: async (_folderId, title) => title,
-        pinnedDisplayOrder: {},
-        projectThreadSummaries,
-      },
-      currentTarget: null,
-      onOpenThread: () => undefined,
+    WorkbenchSidebarPreferencesProvider,
+    {
+      children: () => createElement(
+        WorkbenchContextMenuContext.Provider,
+        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+        createElement(WorkbenchDragProvider, null, createElement(WorkbenchPinnedThreadList, {
+          actions: {
+            autoFocusFolderId: null,
+            getThreadContextMenu: () => ({ id: "test-thread-menu", items: [], label: "Thread actions" }),
+            nowMs: 1_723_456_790_000,
+            onAction: () => undefined,
+            onAutoFocusFolderComplete: () => undefined,
+            onPinnedMove: () => undefined,
+            onRenamePinnedFolder: async (_folderId, title) => title,
+            pinnedDisplayOrder: {},
+            projectThreadSummaries,
+          },
+          currentTarget: null,
+          onOpenThread: () => undefined,
+          projectId: "project",
+          projects,
+          selectedOwnerProjectId: "project",
+        })),
+      ),
       projectId: "project",
-      projects,
-      selectedOwnerProjectId: "project",
-    })),
+    },
   ));
 }
 

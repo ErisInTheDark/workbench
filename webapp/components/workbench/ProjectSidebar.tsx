@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useMemo, useState, useSyncExternalStore, type MouseEvent } from "react";
+import { useMemo, useSyncExternalStore, type MouseEvent } from "react";
 
 import type { WorkbenchProjectOption, WorkbenchThreadSidebarStore } from "../../lib/types";
 import { createProjectHref } from "../../lib/workbench/navigation/workbench-route";
@@ -14,6 +14,7 @@ import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import { getWorkbenchThreadStatusClassName } from "./workbench-thread-status-colors";
 import { ProjectIcon } from "./workbench-icons";
+import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
@@ -162,8 +163,7 @@ export default function ProjectSidebar({
   projects: readonly WorkbenchProjectOption[];
   store: WorkbenchThreadSidebarStore | null;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [visibleTimeGroupCount, setVisibleTimeGroupCount] = useState(1);
+  const { preferences, setProjectTimeGroupCount } = useWorkbenchSidebarPreferences();
   const summaries = useSyncExternalStore(
     store?.subscribe ?? (() => () => undefined),
     store?.getProjectThreadSummaries ?? (() => EMPTY_PROJECT_THREAD_SUMMARIES),
@@ -190,23 +190,18 @@ export default function ProjectSidebar({
   ), [activeProjectId, entriesByProjectId, projects]);
   const visibleProjects = [
     ...grouped.alwaysVisibleProjects,
-    ...grouped.timeGroups.slice(0, visibleTimeGroupCount).flatMap(({ projects: entries }) => entries),
+    ...grouped.timeGroups.slice(0, preferences.projectTimeGroupCount).flatMap(({ projects: entries }) => entries),
   ];
-  const hasMoreTimeGroups = visibleTimeGroupCount < grouped.timeGroups.length;
+  const hasMoreTimeGroups = preferences.projectTimeGroupCount < grouped.timeGroups.length;
   const nowMs = Date.now();
 
   return (
     <section className="shrink-0 pb-5">
       <WorkbenchSidebarSectionDisclosure
-        actions={<WorkbenchThreadStatusCountsButton counts={otherCounts} label="other project" />}
+        actions={<WorkbenchThreadStatusCountsButton counts={otherCounts} label="other project" scope="project" />}
         contentClassName="pb-3"
         icon={ProjectIcon}
-        onToggle={(event) => {
-          const nextOpen = event.currentTarget.open;
-          setIsOpen(nextOpen);
-          if (!nextOpen) setVisibleTimeGroupCount(1);
-        }}
-        open={isOpen}
+        preferenceKey="projectsOpen"
         title="Projects"
       >
         <nav aria-label="Projects" className="flex flex-col gap-1">
@@ -222,10 +217,10 @@ export default function ProjectSidebar({
           {hasMoreTimeGroups ? (
             <button
               className="w-full rounded-lg px-2 py-1.5 text-left text-[0.78rem] font-medium text-muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              onClick={() => setVisibleTimeGroupCount((current) => current + 1)}
+              onClick={() => setProjectTimeGroupCount(preferences.projectTimeGroupCount + 1)}
               type="button"
             >
-              Show {grouped.timeGroups[visibleTimeGroupCount]?.label ?? "older projects"}
+              Show {grouped.timeGroups[preferences.projectTimeGroupCount]?.label ?? "older projects"}
             </button>
           ) : null}
           {!projects.length ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-muted">No projects were found.</p> : null}

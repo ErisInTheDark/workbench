@@ -32,6 +32,7 @@ import ThreadDisclosure from "./thread-view/ThreadDisclosure";
 import { workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
 import { SparkleIcon } from "./workbench-icons";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
+import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import Draggable from "./drag/Draggable";
@@ -102,10 +103,13 @@ export default function WorkbenchThreadList({
   const { mainEntries } = groupWorkbenchThreadSidebarEntries(entries);
   const snoozedItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "snoozed");
   const settledItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "settled");
-  const [isOlderThreadsOpen, setIsOlderThreadsOpen] = useState(false);
-  const [settledItemLimit, setSettledItemLimit] = useState(SETTLED_THREAD_PAGE_SIZE);
   const [isShiftPressed, setIsShiftPressed] = useState(false);
-  const [openFolderIds, setOpenFolderIds] = useState<Set<string>>(() => new Set());
+  const {
+    preferences,
+    setDisclosureOpen,
+    setFolderOpen,
+    setSettledThreadItemLimit,
+  } = useWorkbenchSidebarPreferences();
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => { if (event.key === "Shift") setIsShiftPressed(true); };
     const handleKeyUp = (event: KeyboardEvent) => { if (event.key === "Shift") setIsShiftPressed(false); };
@@ -119,15 +123,18 @@ export default function WorkbenchThreadList({
       window.removeEventListener("blur", handleBlur);
     };
   }, []);
-  const displayedSettledItems = settledItems.slice(0, settledItemLimit);
-  const remainingSettledThreadCount = settledItems.slice(settledItemLimit).reduce((total, item) => total + itemThreadCount(item), 0);
+  const displayedSettledItems = settledItems.slice(0, preferences.settledThreadItemLimit);
+  const remainingSettledThreadCount = settledItems.slice(preferences.settledThreadItemLimit).reduce((total, item) => total + itemThreadCount(item), 0);
   const nextSettledItemCount = Math.min(SETTLED_THREAD_PAGE_SIZE, settledItems.length - displayedSettledItems.length);
-  const nextSettledThreadCount = settledItems.slice(settledItemLimit, settledItemLimit + nextSettledItemCount).reduce((total, item) => total + itemThreadCount(item), 0);
+  const nextSettledThreadCount = settledItems.slice(
+    preferences.settledThreadItemLimit,
+    preferences.settledThreadItemLimit + nextSettledItemCount,
+  ).reduce((total, item) => total + itemThreadCount(item), 0);
   const visibleEntriesForItems = (items: WorkbenchThreadDisplayItem[]) => items.flatMap((item) => item.itemKind === "folder"
-    ? openFolderIds.has(item.folder.folderId) ? item.entries : []
+    ? preferences.threadFolderIds.includes(item.folder.folderId) ? item.entries : []
     : [item.entry]);
   const primaryEntries = [...mainEntries, ...visibleEntriesForItems(snoozedItems)];
-  const navigableEntries = isOlderThreadsOpen ? [...primaryEntries, ...visibleEntriesForItems(displayedSettledItems)] : primaryEntries;
+  const navigableEntries = preferences.settledThreadsOpen ? [...primaryEntries, ...visibleEntriesForItems(displayedSettledItems)] : primaryEntries;
   const hasSelectedEntry = navigableEntries.some((entry) => isWorkbenchThreadTargetSelected(targetForEntry(entry), currentTarget));
   const moveFocus = (event: ReactKeyboardEvent<HTMLAnchorElement>, index: number) => {
     let next = index;
@@ -313,13 +320,9 @@ export default function WorkbenchThreadList({
                 nowMs={nowMs}
                 onAutoFocusComplete={onAutoFocusFolderComplete}
                 onMoveThread={(sourceKey, destinationFolderId, beforeKey) => onMove?.(sourceKey, section, destinationFolderId, beforeKey)}
-                onOpenChange={(nextOpen) => setOpenFolderIds((current) => {
-                  const next = new Set(current);
-                  if (nextOpen) next.add(item.folder.folderId); else next.delete(item.folder.folderId);
-                  return next;
-                })}
+                onOpenChange={(nextOpen) => setFolderOpen("threads", item.folder.folderId, nextOpen)}
                 onRename={(title) => onRenameFolder ? onRenameFolder(item.folder.folderId, title) : Promise.resolve(item.folder.title)}
-                open={openFolderIds.has(item.folder.folderId)}
+                open={preferences.threadFolderIds.includes(item.folder.folderId)}
                 tooltip={renderFolderTooltip(item)}
               >
                 {section === "settled" ? null : renderFolderCreateThread(item.folder.folderId)}
@@ -362,14 +365,14 @@ export default function WorkbenchThreadList({
           <ThreadDisclosure
             className="mt-4"
             contentClassName="mt-1"
-            open={isOlderThreadsOpen}
-            onToggle={(event) => setIsOlderThreadsOpen(event.currentTarget.open)}
+            open={preferences.settledThreadsOpen}
+            onToggle={(event) => setDisclosureOpen("settledThreadsOpen", event.currentTarget.open)}
             summary="Settled threads"
             summaryClassName="text-[0.72rem] font-medium leading-[1.5] text-muted"
           >
             {renderReorderableSection(displayedSettledItems, "settled")}
             {remainingSettledThreadCount > 0 ? (
-              <button type="button" aria-label={`Load ${nextSettledThreadCount} more settled threads`} className={`${workbenchThreadListButtonClassName} mt-1 justify-center text-center text-[0.72rem] font-medium text-muted`} onClick={() => setSettledItemLimit((current) => current + nextSettledItemCount)}>
+              <button type="button" aria-label={`Load ${nextSettledThreadCount} more settled threads`} className={`${workbenchThreadListButtonClassName} mt-1 justify-center text-center text-[0.72rem] font-medium text-muted`} onClick={() => setSettledThreadItemLimit(preferences.settledThreadItemLimit + nextSettledItemCount)}>
                 Load {nextSettledThreadCount} more
               </button>
             ) : null}

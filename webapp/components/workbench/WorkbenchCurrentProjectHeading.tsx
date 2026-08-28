@@ -14,7 +14,7 @@ export default function WorkbenchCurrentProjectHeading({
   return (
     <div className="min-w-0 shrink-0">
       <hr className="mx-4 my-3 border-0 border-t border-[color-mix(in_srgb,var(--text)_12%,transparent)]" />
-      <div className="min-w-0 px-2 pb-3">
+      <div className="min-w-0 pl-5 pb-3">
         <WorkbenchProjectLabel project={project} variant="heading" />
       </div>
     </div>

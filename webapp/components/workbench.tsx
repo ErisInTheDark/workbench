@@ -175,6 +175,7 @@ import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfi
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
+import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
@@ -563,7 +564,6 @@ export default function Workbench () {
   const [createEntryName, setCreateEntryName] = useState("");
   const [isCreatingEntry, setIsCreatingEntry] = useState(false);
   const [createDialogError, setCreateDialogError] = useState("");
-  const [isDesktopSidebarCollapsed, setIsDesktopSidebarCollapsed] = useState(false);
   const [quickOpenUpdatedAtByPath, setQuickOpenUpdatedAtByPath] = useState<Record<string, string>>({});
   const [mainLayout, setMainLayout] = useState<WorkbenchMainLayoutState>(() => WorkbenchMainLayout.fromTarget({ kind: "empty" }));
   const [mosaicDraftThreadsById, setMosaicDraftThreadsById] = useState<Record<string, ThreadPayload | undefined>>({});
@@ -833,14 +833,6 @@ export default function Workbench () {
       }
     };
   }, [route]);
-
-  useEffect(() => {
-    if (!isMobile || !isDesktopSidebarCollapsed) {
-      return;
-    }
-
-    setIsDesktopSidebarCollapsed(false);
-  }, [isDesktopSidebarCollapsed, isMobile]);
 
   const routeMosaicNodeForControls = isMobile && route.view === "mosaic" ? route.mosaicNode : null;
   const routeToApplyToControls = useMemo(() => {
@@ -1857,7 +1849,6 @@ export default function Workbench () {
     navigateToRoute(createThreadRoute(currentRoute.projectId, { kind: "new" }));
   }, [navigateToRoute]);
   const usesDesktopSidebarCollapse = !isMobile;
-  const isEffectiveDesktopSidebarCollapsed = usesDesktopSidebarCollapse && isDesktopSidebarCollapsed;
   const effectiveThreadTarget = mobileMosaicFallbackTarget?.kind === "thread" ? mobileMosaicFallbackTarget.target : route.threadTarget;
   const effectiveThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetRootId(effectiveThreadTarget) : route.threadId;
   const effectiveSelectedThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetSelectedId(effectiveThreadTarget) : effectiveThreadId;
@@ -2759,6 +2750,12 @@ export default function Workbench () {
 
   return (
     <WorkbenchComposerProfileProvider controller={composerProfileController}>
+      <WorkbenchSidebarPreferencesProvider
+        projectId={explorer.currentProjectId || route.projectId}
+      >
+        {({ preferences: sidebarPreferences, setSidebarCollapsed }) => {
+          const isEffectiveDesktopSidebarCollapsed = usesDesktopSidebarCollapse && sidebarPreferences.sidebarCollapsed;
+          return (
       <WorkbenchDragProvider controller={workbenchDragController}>
         <WorkbenchContextMenuProvider>
         <div
@@ -2778,7 +2775,7 @@ export default function Workbench () {
                 title="Show sidebar"
                 className={`${workbenchIconButtonClassName} fixed left-3 top-3 z-40 hidden text-muted md:inline-flex`}
                 onClick={() => {
-                  setIsDesktopSidebarCollapsed(false);
+                  setSidebarCollapsed(false);
                 }}
               >
                 <SidebarExpandIcon />
@@ -2810,11 +2807,11 @@ export default function Workbench () {
             className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
             style={mobileTrackStyle}
           >
-            <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden px-5 py-3 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
-              <div className="-ml-3 flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
+            <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden py-3 pr-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:pr-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
                 <DropTargetBoundary className="explorer-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto pr-2">
-                <header className="grid shrink-0 grid-cols-[1fr_auto_auto] items-center gap-1 pb-5 md:pr-2.5">
-                  <span className="min-w-0 truncate px-2 text-xl font-semibold leading-tight text-text">workbench</span>
+                <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto] items-center gap-1 pb-5">
+                  <span className="min-w-0 truncate pl-5 text-xl font-semibold leading-tight text-text">workbench</span>
                   <a
                     aria-label="Open settings"
                     className={`${workbenchIconButtonClassName} shrink-0 text-muted`}
@@ -2829,7 +2826,7 @@ export default function Workbench () {
                     <button
                       aria-label="Hide sidebar"
                       className={`${workbenchIconButtonClassName} hidden shrink-0 text-muted md:inline-flex`}
-                      onClick={() => setIsDesktopSidebarCollapsed(true)}
+                      onClick={() => setSidebarCollapsed(true)}
                       title="Hide sidebar"
                       type="button"
                     >
@@ -2863,8 +2860,8 @@ export default function Workbench () {
                   <section className="shrink-0 pb-5">
                     <WorkbenchSidebarSectionDisclosure
                       contentClassName="space-y-2"
-                      defaultOpen
                       icon={DraftThreadIcon}
+                      preferenceKey="threadsOpen"
                       title="Threads"
                     >
                       <WorkbenchThreadSidebar
@@ -2919,8 +2916,8 @@ export default function Workbench () {
                         </div>
                       )}
                       contentClassName="space-y-2"
-                      defaultOpen
                       icon={FolderOpenIcon}
+                      preferenceKey="explorerOpen"
                       title="Explorer"
                     >
                       {!explorer.projects.length && !isProjectIdentityLoading ? (
@@ -2967,8 +2964,8 @@ export default function Workbench () {
                     <section className="shrink-0 pb-5">
                       <WorkbenchSidebarSectionDisclosure
                         contentClassName="space-y-2"
-                        defaultOpen
                         icon={BrowserSessionIcon}
+                        preferenceKey="browseSessionsOpen"
                         title="Browse sessions"
                       >
                         <BrowseSessionsList
@@ -3802,6 +3799,9 @@ export default function Workbench () {
         </div>
         </WorkbenchContextMenuProvider>
       </WorkbenchDragProvider>
+          );
+        }}
+      </WorkbenchSidebarPreferencesProvider>
     </WorkbenchComposerProfileProvider>
   );
 }

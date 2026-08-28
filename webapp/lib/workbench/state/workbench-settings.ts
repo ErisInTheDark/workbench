@@ -3,13 +3,19 @@
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor zoom defaults and bounds. Keywords: settings, editor, zoom.
  * - WorkbenchTheme, WorkbenchEditorFontFamily, WorkbenchFileOpenBehavior, WorkbenchSettingKey: setting value contracts for Workbench preferences. Keywords: settings, theme, editor, composer, file open, thread code.
  * - WorkbenchGlobalSettings, WorkbenchProjectSettings, WorkbenchResolvedSettings: stored and resolved settings shapes. Keywords: settings, global, project override.
+ * - WorkbenchProjectSidebarPreferences: project-local sidebar display state. Keywords: settings, project, sidebar, disclosure, folders.
  * - WORKBENCH_SETTING_DEFINITIONS: labels and option metadata for settings UI rendering. Keywords: settings, registry, UI.
- * - createDefaultGlobalWorkbenchSettings: create agentic global defaults. Keywords: settings, defaults, agentic.
+ * - createDefaultGlobalWorkbenchSettings/createDefaultWorkbenchProjectSidebarPreferences: create agentic global and sidebar defaults. Keywords: settings, defaults, sidebar, agentic.
  * - readGlobalWorkbenchSettings/writeGlobalWorkbenchSettings: persist global Workbench preferences in localStorage. Keywords: settings, localStorage, global.
  * - readProjectWorkbenchSettings/writeProjectWorkbenchSettings: persist explicit project override slots in localStorage. Keywords: settings, localStorage, project.
+ * - readWorkbenchProjectSidebarPreferences/writeWorkbenchProjectSidebarPreferences: repair and persist project-local sidebar preferences beside project setting overrides. Keywords: settings, localStorage, project, sidebar, conformance.
  * - resolveWorkbenchSettings: merge project overrides over global settings. Keywords: settings, inheritance, overrides.
  * - readStoredEditorFontSize/writeStoredEditorFontSize/readStoredTheme/writeStoredTheme: compatibility helpers for older callers. Keywords: settings, legacy, bridge.
  */
+
+import { z } from "zod";
+
+import { conformToZodSchema } from "../zod-schema-conformer";
 
 export const DEFAULT_EDITOR_FONT_SIZE = 1.08;
 export const MIN_EDITOR_FONT_SIZE = 0.84;
@@ -54,6 +60,40 @@ export type WorkbenchProjectSettingOverride<K extends WorkbenchSettingKey = Work
 export type WorkbenchProjectSettings = {
   [K in WorkbenchSettingKey]: WorkbenchProjectSettingOverride<K>;
 };
+
+export interface WorkbenchProjectSidebarPreferences {
+  readonly browseSessionsOpen: boolean;
+  readonly explorerOpen: boolean;
+  readonly pinnedFolderIds: readonly string[];
+  readonly pinnedStatusCountsExpanded: boolean;
+  readonly pinnedThreadsOpen: boolean;
+  readonly projectStatusCountsExpanded: boolean;
+  readonly projectsOpen: boolean;
+  readonly projectTimeGroupCount: number;
+  readonly reloadNecessaryOpen: boolean;
+  readonly settledThreadItemLimit: number;
+  readonly settledThreadsOpen: boolean;
+  readonly sidebarCollapsed: boolean;
+  readonly threadFolderIds: readonly string[];
+  readonly threadsOpen: boolean;
+}
+
+const WorkbenchProjectSidebarPreferencesSchema: z.ZodType<WorkbenchProjectSidebarPreferences> = z.object({
+  browseSessionsOpen: z.boolean(),
+  explorerOpen: z.boolean(),
+  pinnedFolderIds: z.array(z.string()).max(500),
+  pinnedStatusCountsExpanded: z.boolean(),
+  pinnedThreadsOpen: z.boolean(),
+  projectStatusCountsExpanded: z.boolean(),
+  projectsOpen: z.boolean(),
+  projectTimeGroupCount: z.number().int().min(1).max(100),
+  reloadNecessaryOpen: z.boolean(),
+  settledThreadItemLimit: z.number().int().min(50).max(5_000),
+  settledThreadsOpen: z.boolean(),
+  sidebarCollapsed: z.boolean(),
+  threadFolderIds: z.array(z.string()).max(500),
+  threadsOpen: z.boolean(),
+}).strict();
 
 export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = WorkbenchSettingKey> = {
   description: string;
@@ -296,6 +336,25 @@ export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSetting
   };
 }
 
+export function createDefaultWorkbenchProjectSidebarPreferences(): WorkbenchProjectSidebarPreferences {
+  return {
+    browseSessionsOpen: true,
+    explorerOpen: true,
+    pinnedFolderIds: [],
+    pinnedStatusCountsExpanded: true,
+    pinnedThreadsOpen: true,
+    projectStatusCountsExpanded: true,
+    projectsOpen: false,
+    projectTimeGroupCount: 1,
+    reloadNecessaryOpen: true,
+    settledThreadItemLimit: 50,
+    settledThreadsOpen: false,
+    sidebarCollapsed: false,
+    threadFolderIds: [],
+    threadsOpen: true,
+  };
+}
+
 export function readGlobalWorkbenchSettings() {
   return normalizeGlobalWorkbenchSettings(readJsonStorageValue(GLOBAL_SETTINGS_STORAGE_KEY));
 }
@@ -330,7 +389,9 @@ export function readProjectWorkbenchSettings(projectId: string) {
 export function writeProjectWorkbenchSettings(projectId: string, settings: WorkbenchProjectSettings) {
   const allProjectSettings = readJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY);
   const nextProjectSettings = isRecord(allProjectSettings) ? { ...allProjectSettings } : {};
+  const currentProjectSettings = isRecord(nextProjectSettings[projectId]) ? nextProjectSettings[projectId] : {};
   nextProjectSettings[projectId] = {
+    ...currentProjectSettings,
     composerSpellCheck: normalizeProjectOverride("composerSpellCheck", settings.composerSpellCheck),
     editorFontFamily: normalizeProjectOverride("editorFontFamily", settings.editorFontFamily),
     editorFontSize: normalizeProjectOverride("editorFontSize", settings.editorFontSize),
@@ -339,6 +400,32 @@ export function writeProjectWorkbenchSettings(projectId: string, settings: Workb
     showUnopenableFiles: normalizeProjectOverride("showUnopenableFiles", settings.showUnopenableFiles),
     theme: normalizeProjectOverride("theme", settings.theme),
     threadCodeBlockWrap: normalizeProjectOverride("threadCodeBlockWrap", settings.threadCodeBlockWrap),
+  };
+  writeJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY, nextProjectSettings);
+}
+
+export function readWorkbenchProjectSidebarPreferences(projectId: string): WorkbenchProjectSidebarPreferences {
+  const allProjectSettings = readJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY);
+  const projectSettings = isRecord(allProjectSettings) ? allProjectSettings[projectId] : null;
+  const candidate = isRecord(projectSettings) ? projectSettings.sidebarPreferences : null;
+  const defaults = createDefaultWorkbenchProjectSidebarPreferences();
+  return conformToZodSchema(WorkbenchProjectSidebarPreferencesSchema, candidate, defaults).data;
+}
+
+export function writeWorkbenchProjectSidebarPreferences(
+  projectId: string,
+  preferences: WorkbenchProjectSidebarPreferences,
+) {
+  const allProjectSettings = readJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY);
+  const nextProjectSettings = isRecord(allProjectSettings) ? { ...allProjectSettings } : {};
+  const currentProjectSettings = isRecord(nextProjectSettings[projectId]) ? nextProjectSettings[projectId] : {};
+  nextProjectSettings[projectId] = {
+    ...currentProjectSettings,
+    sidebarPreferences: conformToZodSchema(
+      WorkbenchProjectSidebarPreferencesSchema,
+      preferences,
+      createDefaultWorkbenchProjectSidebarPreferences(),
+    ).data,
   };
   writeJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY, nextProjectSettings);
 }

@@ -24,6 +24,7 @@ import { PinIcon } from "./workbench-icons";
 import Draggable from "./drag/Draggable";
 import DropTarget from "./drag/DropTarget";
 import DropTargetBoundary from "./drag/DropTargetBoundary";
+import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
@@ -72,9 +73,8 @@ export default function WorkbenchPinnedThreadList({
   projects: readonly WorkbenchProjectOption[];
   selectedOwnerProjectId: string;
 }) {
-  const [isOpen, setIsOpen] = useState(true);
   const [isShiftPressed, setIsShiftPressed] = useState(false);
-  const [openFolderIds, setOpenFolderIds] = useState<Set<string>>(() => new Set());
+  const { preferences, setFolderOpen } = useWorkbenchSidebarPreferences();
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => { if (event.key === "Shift") setIsShiftPressed(true); };
     const handleKeyUp = (event: KeyboardEvent) => { if (event.key === "Shift") setIsShiftPressed(false); };
@@ -113,11 +113,6 @@ export default function WorkbenchPinnedThreadList({
   const threadHref = (target: WorkbenchThreadTarget, ownerProjectId: string) => ownerProjectId === projectId
     ? createThreadHref(projectId, target)
     : createPinnedThreadHref(projectId, ownerProjectId, target);
-  const updateFolderOpen = (folderId: string, open: boolean) => setOpenFolderIds((current) => {
-    const next = new Set(current);
-    if (open) next.add(folderId); else next.delete(folderId);
-    return next;
-  });
   const renderEntry = ({ entry, project }: GlobalPinnedEntry) => {
     const target = targetForEntry(entry);
     const key = getProjectQualifiedThreadDisplayKey(project.id, displayKeyForEntry(entry));
@@ -177,9 +172,9 @@ export default function WorkbenchPinnedThreadList({
         nowMs={actions.nowMs}
         onAutoFocusComplete={actions.onAutoFocusFolderComplete}
         onMoveThread={(sourceKey, destinationFolderId, beforeKey) => actions.onPinnedMove(sourceKey, destinationFolderId, beforeKey)}
-        onOpenChange={(open) => updateFolderOpen(item.folder.folderId, open)}
+        onOpenChange={(open) => setFolderOpen("pinned", item.folder.folderId, open)}
         onRename={(title) => actions.onRenamePinnedFolder(item.folder.folderId, title)}
-        open={openFolderIds.has(item.folder.folderId)}
+        open={preferences.pinnedFolderIds.includes(item.folder.folderId)}
         tooltip={(
           <ul className="m-0 flex w-[min(28rem,calc(100vw-2rem))] max-w-full list-none flex-col gap-0.5 p-0">
             {item.entries.map(({ entry, project }) => (
@@ -215,11 +210,10 @@ export default function WorkbenchPinnedThreadList({
   return (
     <DropTargetBoundary className="pb-5">
       <WorkbenchSidebarSectionDisclosure
-        actions={<WorkbenchThreadStatusCountsButton counts={statusCounts} label="pinned thread" />}
+        actions={<WorkbenchThreadStatusCountsButton counts={statusCounts} label="pinned thread" scope="pinned" />}
         contentClassName="mt-1"
         icon={PinIcon}
-        open={isOpen}
-        onToggle={(event) => setIsOpen(event.currentTarget.open)}
+        preferenceKey="pinnedThreadsOpen"
         title="Pinned threads"
       >
         <ul className="m-0 flex flex-col gap-0.5 p-0">
