@@ -46,8 +46,12 @@ export default class WorkbenchTokenCountController {
   async execute(input: object, signal: AbortSignal) {
     const parsed = WorkbenchTokenCountExecutionRequestSchema.safeParse(input);
     if (!parsed.success) return new Response("A valid token count request is required.\n", { status: 400 });
-    if (parsed.data.kind === "instructions" && !pathsEqual(parsed.data.cwd, this.projectRoot)) {
-      return new Response("Workbench instruction token counting is available only from the Workbench repository root.\n", { status: 403 });
+    if (
+      parsed.data.kind === "instructions"
+      && parsed.data.callerThreadId !== null
+      && !pathsEqual(parsed.data.cwd, this.projectRoot)
+    ) {
+      return new Response("Managed threads can count Workbench instructions only from the running Workbench repository root.\n", { status: 403 });
     }
     if (signal.aborted) throw signal.reason;
     const apiKey = this.apiKey()?.trim();

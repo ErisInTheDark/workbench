@@ -75,7 +75,7 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
 ].join("\n");
 
 const COMMAND_DESCRIPTORS: readonly WorkbenchAgentCliCommandDescriptor[] = Object.freeze(
-  listWorkbenchAgentCommands().filter((command) => !command.hideFromRootHelp && !command.projectLocal).map(({ description, usage, words }) => Object.freeze({
+  listWorkbenchAgentCommands().filter((command) => !command.hideFromRootHelp).map(({ description, usage, words }) => Object.freeze({
     description,
     usage,
     words: Object.freeze([...words]),
@@ -84,7 +84,7 @@ const COMMAND_DESCRIPTORS: readonly WorkbenchAgentCliCommandDescriptor[] = Objec
 
 export function listWorkbenchAgentCliCommandDescriptors(catalog: readonly OrchestratorReloadScopeDescriptor[] = []) {
   return catalog.length
-    ? listWorkbenchAgentCommands(catalog, "cli").filter((command) => !command.hideFromRootHelp && !command.projectLocal).map(({ description, usage, words }) => ({ description, usage, words }))
+    ? listWorkbenchAgentCommands(catalog, "cli").filter((command) => !command.hideFromRootHelp).map(({ description, usage, words }) => ({ description, usage, words }))
     : COMMAND_DESCRIPTORS;
 }
 
@@ -101,7 +101,7 @@ const ROOT_HELP_COMMAND_ORDER = [
 const HELP_GROUPS: readonly HelpGroupDefinition[] = [
   {
     commandOrder: ["tokens", "tokens instructions"],
-    footer: "Pass one exact text value after --. Instruction counting is available only from the Workbench repository root.",
+    footer: "Pass one exact text value after --. Managed threads can count instructions only from the running Workbench repository root.",
     key: "tokens", usage: "wb tokens [instructions] [options]", words: ["tokens"],
   },
   {
@@ -250,12 +250,14 @@ export async function parseWorkbenchAgentCliCommand(
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
   const resolvedCwd = path.resolve(cwd);
-  const isProjectLocal = projectRoot !== null && (
+  const isWorkbenchRoot = projectRoot !== null && (
     process.platform === "win32"
       ? resolvedCwd.toLocaleLowerCase() === path.resolve(projectRoot).toLocaleLowerCase()
       : resolvedCwd === path.resolve(projectRoot)
   );
-  const commands = listWorkbenchAgentCommands(reloadCatalog, "cli").filter((command) => !command.projectLocal || isProjectLocal);
+  const commands = listWorkbenchAgentCommands(reloadCatalog, "cli").filter((command) => (
+    !command.managedThreadRootOnly || callerThreadId === null || isWorkbenchRoot
+  ));
   const isLegacyCheckpointCommand = (argv[0] === "git" && argv[1] === "checkpoint") || argv[0] === "checkpoint" || (argv[0] === "git" && argv[1] === "plan");
   if (isLegacyCheckpointCommand) return { help: LEGACY_CHECKPOINT_MIGRATION_GUIDE, kind: "help" };
   const workbenchArgs = argsBeforeTrailingSeparator(argv);

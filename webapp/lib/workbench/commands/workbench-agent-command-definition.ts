@@ -73,9 +73,9 @@ export interface WorkbenchAgentCommandDefinition {
   hideFromRootHelp?: boolean;
   helpGroups: readonly string[];
   inputSchema: z.ZodType;
+  managedThreadRootOnly?: boolean;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
-  projectLocal?: boolean;
   usage: string;
   words: readonly string[];
 }
@@ -89,9 +89,9 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   hideFromRootHelp?: boolean;
   helpGroups: readonly string[];
   inputSchema: TSchema;
+  managedThreadRootOnly?: boolean;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
-  projectLocal?: boolean;
   parseCliArgs(args: string[]): z.input<TSchema>;
   usage: string;
   words: readonly string[];
@@ -113,9 +113,9 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     hideFromRootHelp: definition.hideFromRootHelp,
     helpGroups: definition.helpGroups,
     inputSchema: definition.inputSchema,
+    managedThreadRootOnly: definition.managedThreadRootOnly,
     mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,
     mcpSteerInterruptible: definition.mcpSteerInterruptible,
-    projectLocal: definition.projectLocal,
     usage: definition.usage,
     words: definition.words,
   };

@@ -236,7 +236,7 @@ export default class WorkbenchAgentMcpController {
       AbortSignal.any([requestSignal, extra.signal]),
     ));
     for (const definition of listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent")) {
-      if (definition.hideFromMcp || (definition.projectLocal && !projectLocal)) continue;
+      if (definition.hideFromMcp || (definition.managedThreadRootOnly && !projectLocal)) continue;
       const name = getWorkbenchAgentCommandToolName(definition);
       if (names.has(name)) throw new Error(`Duplicate Workbench MCP tool name: ${name}`);
       names.add(name);

@@ -73,7 +73,7 @@ function createBrowsePort(executeBrowseRequest: (body: Buffer, signal: AbortSign
   };
 }
 
-test("dispatches token counting and keeps project-local help cwd-aware", async () => {
+test("dispatches token counting and scopes only managed-thread help by cwd", async () => {
   const requests: object[] = [];
   const controller = new WorkbenchAgentCommandController(
     "http://127.0.0.1:3002",
@@ -98,13 +98,27 @@ test("dispatches token counting and keeps project-local help cwd-aware", async (
 
   const server = await startController(controller);
   try {
-    const help = async (cwd: string) => await fetch(`${server.origin}/orchestrator/agent-command`, {
-      body: agentCommandBody(["--help"], cwd),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      method: "POST",
-    }).then(async (response) => await response.text());
-    assert.doesNotMatch(await help("C:/other"), /wb tokens instructions/u);
-    assert.match(await help("C:/workbench"), /wb tokens instructions/u);
+    const request = async (args: string[], cwd: string, callerThreadId: string | null = null) => {
+      const body = new URLSearchParams(agentCommandBody(args, cwd));
+      if (callerThreadId) body.set("callerThreadId", callerThreadId);
+      return await fetch(`${server.origin}/orchestrator/agent-command`, {
+        body,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        method: "POST",
+      });
+    };
+    const userCount = await request(["tokens", "instructions"], "C:/other");
+    assert.equal(userCount.status, 200);
+    assert.deepEqual(requests.at(-1), {
+      callerThreadId: null,
+      cwd: "C:/other",
+      kind: "instructions",
+      model: "gpt-5.6",
+    });
+    const help = async (cwd: string, callerThreadId: string | null = null) => await request(["--help"], cwd, callerThreadId).then(async (response) => await response.text());
+    assert.match(await help("C:/other"), /wb tokens instructions/u);
+    assert.doesNotMatch(await help("C:/other", "thread"), /wb tokens instructions/u);
+    assert.match(await help("C:/workbench", "thread"), /wb tokens instructions/u);
   } finally {
     await server.close();
   }

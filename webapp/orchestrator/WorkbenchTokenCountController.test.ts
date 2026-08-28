@@ -30,10 +30,16 @@ test("counts exact text and stripped Workbench instructions through the official
   try {
     const text = await controller.execute({ cwd: "C:/elsewhere", kind: "text", model: "gpt-test", text: "exact  text" }, signal);
     assert.equal(await text.text(), "10 tokens for gpt-test\n");
-    const instructions = await controller.execute({ cwd: root, kind: "instructions", model: "gpt-test" }, signal);
+    const instructions = await controller.execute({ callerThreadId: null, cwd: "C:/elsewhere", kind: "instructions", model: "gpt-test" }, signal);
     assert.equal(await instructions.text(), "20 tokens across 1 instruction file for gpt-test\n");
+    const managedInstructions = await controller.execute({ callerThreadId: "thread", cwd: root, kind: "instructions", model: "gpt-test" }, signal);
+    assert.equal(await managedInstructions.text(), "30 tokens across 1 instruction file for gpt-test\n");
     assert.deepEqual(requests, [{
       body: { input: "exact  text", model: "gpt-test" },
+      signal,
+      url: "https://api.openai.com/v1/responses/input_tokens",
+    }, {
+      body: { input: "", instructions: "Keep this.  Keep that.", model: "gpt-test" },
       signal,
       url: "https://api.openai.com/v1/responses/input_tokens",
     }, {
@@ -46,7 +52,7 @@ test("counts exact text and stripped Workbench instructions through the official
   }
 });
 
-test("rejects non-Workbench instruction callers and surfaces bounded boundary failures", async () => {
+test("rejects managed threads outside the Workbench root and surfaces bounded boundary failures", async () => {
   let fetchCount = 0;
   const controller = new WorkbenchTokenCountController({
     apiKey: () => "secret",
@@ -56,8 +62,9 @@ test("rejects non-Workbench instruction callers and surfaces bounded boundary fa
     },
     projectRoot: "C:/workbench",
   });
-  const outside = await controller.execute({ cwd: "C:/other", kind: "instructions", model: "gpt-test" }, new AbortController().signal);
+  const outside = await controller.execute({ callerThreadId: "thread", cwd: "C:/other", kind: "instructions", model: "gpt-test" }, new AbortController().signal);
   assert.equal(outside.status, 403);
+  assert.equal(await outside.text(), "Managed threads can count Workbench instructions only from the running Workbench repository root.\n");
   assert.equal(fetchCount, 0);
   const failed = await controller.execute({ cwd: "C:/other", kind: "text", model: "gpt-test", text: "hello" }, new AbortController().signal);
   assert.equal(failed.status, 502);

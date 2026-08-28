@@ -66,7 +66,7 @@ test("canonical command descriptors are immutable and unique", () => {
   const descriptors = listWorkbenchAgentCliCommandDescriptors();
   const definitions = listWorkbenchAgentCommands();
   assert.ok(descriptors.length > 0);
-  assert.equal(descriptors.length, definitions.filter(({ hideFromRootHelp, projectLocal }) => !hideFromRootHelp && !projectLocal).length);
+  assert.equal(descriptors.length, definitions.filter(({ hideFromRootHelp }) => !hideFromRootHelp).length);
   assert.equal(new Set(descriptors.map(({ words }) => words.join(" "))).size, descriptors.length);
   assert.ok(descriptors.every(({ description, usage, words }) => description && usage.startsWith("wb ") && words.length > 0));
   assert.equal(Object.isFrozen(descriptors), true);
@@ -75,10 +75,11 @@ test("canonical command descriptors are immutable and unique", () => {
   assert.equal(definitions.find(({ words }) => words.join(" ") === "browse raw")?.hideFromMcp, true);
 });
 
-test("token commands expose global text counting and project-local instruction counting", async () => {
-  const outside = { cwd: "C:/other", projectRoot: "C:/workbench" };
-  const inside = { cwd: "C:/workbench", projectRoot: "C:/workbench" };
-  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "--model", "gpt-test", "--", "exact  text"], outside), {
+test("token commands restrict managed threads without restricting direct users", async () => {
+  const userOutside = { callerThreadId: null, cwd: "C:/other", projectRoot: "C:/workbench" };
+  const threadOutside = { callerThreadId: "thread", cwd: "C:/other", projectRoot: "C:/workbench" };
+  const threadInside = { callerThreadId: "thread", cwd: "C:/workbench", projectRoot: "C:/workbench" };
+  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "--model", "gpt-test", "--", "exact  text"], userOutside), {
     kind: "request",
     request: {
       body: { cwd: "C:/other", kind: "text", model: "gpt-test", text: "exact  text" },
@@ -87,23 +88,34 @@ test("token commands expose global text counting and project-local instruction c
       responseKind: "native",
     },
   });
-  assert.equal((await parseWorkbenchAgentCliCommand(["tokens", "instructions"], outside)).kind, "error");
-  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "instructions"], inside), {
+  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "instructions"], userOutside), {
     kind: "request",
     request: {
-      body: { cwd: "C:/workbench", kind: "instructions", model: "gpt-5.6" },
+      body: { callerThreadId: null, cwd: "C:/other", kind: "instructions", model: "gpt-5.6" },
       method: "POST",
       path: "/internal/tokens",
       responseKind: "native",
     },
   });
-  const outsideHelp = await parseWorkbenchAgentCliCommand(["--help"], outside);
-  const insideHelp = await parseWorkbenchAgentCliCommand(["--help"], inside);
-  assert.equal(outsideHelp.kind, "help");
-  assert.equal(insideHelp.kind, "help");
-  assert.match(outsideHelp.help, /wb tokens \[--model <model>\] -- <text>/u);
-  assert.doesNotMatch(outsideHelp.help, /wb tokens instructions/u);
-  assert.match(insideHelp.help, /wb tokens instructions/u);
+  assert.equal((await parseWorkbenchAgentCliCommand(["tokens", "instructions"], threadOutside)).kind, "error");
+  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "instructions"], threadInside), {
+    kind: "request",
+    request: {
+      body: { callerThreadId: "thread", cwd: "C:/workbench", kind: "instructions", model: "gpt-5.6" },
+      method: "POST",
+      path: "/internal/tokens",
+      responseKind: "native",
+    },
+  });
+  const userHelp = await parseWorkbenchAgentCliCommand(["--help"], userOutside);
+  const outsideThreadHelp = await parseWorkbenchAgentCliCommand(["--help"], threadOutside);
+  const insideThreadHelp = await parseWorkbenchAgentCliCommand(["--help"], threadInside);
+  assert.equal(userHelp.kind, "help");
+  assert.equal(outsideThreadHelp.kind, "help");
+  assert.equal(insideThreadHelp.kind, "help");
+  assert.match(userHelp.help, /wb tokens instructions/u);
+  assert.doesNotMatch(outsideThreadHelp.help, /wb tokens instructions/u);
+  assert.match(insideThreadHelp.help, /wb tokens instructions/u);
 });
 
 before(async () => {

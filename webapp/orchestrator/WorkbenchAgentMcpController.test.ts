@@ -95,7 +95,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   const projectClient = await connectClient(projectUrl);
   try {
     const inventory = await client.listTools();
-    const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter(({ hideFromMcp, projectLocal }) => !hideFromMcp && !projectLocal);
+    const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter(({ hideFromMcp, managedThreadRootOnly }) => !hideFromMcp && !managedThreadRootOnly);
     assert.equal(inventory.tools.length, eligible.length + 1);
     assert.ok(client.getServerCapabilities()?.experimental?.[WORKBENCH_SHELL_SANDBOX_CAPABILITY]);
     assert.equal(inventory.tools.some(({ name }) => name === "browse_raw"), false);
@@ -197,6 +197,19 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       body: { args: ["-n", "a pattern with 'quotes'", "webapp"], cwd: "C:/authoritative" },
       method: "POST",
       path: "/api/rg",
+      responseKind: "native",
+    });
+
+    const instructionTokens = await projectClient.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: { model: "gpt-test" },
+      name: "tokens_instructions",
+    });
+    assert.equal(instructionTokens.isError, false);
+    assert.deepEqual(executed.at(-1), {
+      body: { callerThreadId: "thread-1", cwd: "C:/authoritative", kind: "instructions", model: "gpt-test" },
+      method: "POST",
+      path: "/internal/tokens",
       responseKind: "native",
     });
 
