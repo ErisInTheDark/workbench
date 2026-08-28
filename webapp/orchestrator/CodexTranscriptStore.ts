@@ -8,10 +8,9 @@ import path from "node:path";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/JsonValue";
 import { appendCommandOutputDelta, compactCommandOutputPayload } from "../lib/codex/thread-command-output";
-import { areUserInputsEquivalentForUserMessageDedupe, normalizeThreadItems } from "../lib/codex/thread-item-normalization";
+import { normalizeThreadItems } from "../lib/codex/thread-item-normalization";
 import type { WorkbenchThreadHydrationRequest } from "../lib/codex/server-orchestrator";
 import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadContextReadResponse, WorkbenchThreadTurnHistoryEntry } from "../lib/types";
 import { mergeQuestionnaireHistoryEntries } from "../lib/workbench/thread/thread-questionnaire-identity";
@@ -52,6 +51,18 @@ import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bri
 import externalizeCodexTranscriptInlineImages from "./codex-transcript-image-assets";
 import { runCodexTranscriptMigrations } from "./codex-transcript-migrations";
 import { queueCodexTranscriptRequestSidecarCleanup } from "./codex-transcript-migrations/v3";
+import {
+  createSteerHistoryEntryFromRequest,
+  getJsonRpcErrorMessage,
+  getNextSteerDispatchSequence,
+  hasNativeSteerReconciliationEvidence,
+  reconcileNativeSteerEntriesForTurns,
+  sortSteerEntries,
+  updateMatchingPendingSteerEntriesForUserMessage,
+  updateNativeSteerEntriesForUserMessage,
+  updatePendingSteerEntriesForInterruptedTurn,
+  updateSteerEntryStatus,
+} from "./codex-transcript-steer-history";
 import { CODEX_TRANSCRIPT_SCHEMA_VERSION } from "./codex-transcript-version";
 import { logError } from "./process-helpers";
 import type { OrchestratorTranscriptShadowLog } from "./orchestrator-runtime-objects";
@@ -97,22 +108,6 @@ function sortQuestionnaireEntries(entries: WorkbenchQuestionnaireHistoryEntry[])
   });
 }
 
-function sortSteerEntries(entries: WorkbenchSteerHistoryEntry[]) {
-  return [...entries].sort((left, right) => {
-    if (left.dispatchSequence !== null && left.dispatchSequence !== undefined
-      && right.dispatchSequence !== null && right.dispatchSequence !== undefined
-      && left.dispatchSequence !== right.dispatchSequence) {
-      return left.dispatchSequence - right.dispatchSequence;
-    }
-
-    if (left.attemptedAt !== right.attemptedAt) {
-      return left.attemptedAt - right.attemptedAt;
-    }
-
-    return left.entryKey.localeCompare(right.entryKey);
-  });
-}
-
 function sortBrowseResultEntries(entries: WorkbenchBrowseResultEntry[]) {
   return [...entries].sort((left, right) => {
     if (left.recordedAt !== right.recordedAt) {
@@ -125,314 +120,6 @@ function sortBrowseResultEntries(entries: WorkbenchBrowseResultEntry[]) {
 
     return left.entryKey.localeCompare(right.entryKey);
   });
-}
-
-function readTextElements(value: unknown): Extract<UserInput, { type: "text" }>["text_elements"] | null {
-  if (!Array.isArray(value)) {
-    return null;
-  }
-
-  const elements: Extract<UserInput, { type: "text" }>["text_elements"] = [];
-  for (const entry of value) {
-    const record = asRecord(entry);
-    const byteRange = asRecord(record?.byteRange);
-    const start = asNumber(byteRange?.start);
-    const end = asNumber(byteRange?.end);
-    if (!record || start === null || end === null) {
-      return null;
-    }
-
-    elements.push({
-      byteRange: { end, start },
-      placeholder: asString(record.placeholder) ?? "",
-    });
-  }
-
-  return elements;
-}
-
-function readUserInput(value: unknown): UserInput | null {
-  const record = asRecord(value);
-  const type = asString(record?.type);
-  if (!record || !type) {
-    return null;
-  }
-
-  switch (type) {
-    case "text": {
-      const text = asString(record.text);
-      const textElements = readTextElements(record.text_elements);
-      return text !== null && textElements
-        ? { text, text_elements: textElements, type }
-        : null;
-    }
-    case "image": {
-      const url = asString(record.url);
-      return url !== null ? { type, url } : null;
-    }
-    case "localImage": {
-      const path = asString(record.path);
-      return path !== null ? { path, type } : null;
-    }
-    case "skill": {
-      const name = asString(record.name);
-      const path = asString(record.path);
-      return name !== null && path !== null ? { name, path, type } : null;
-    }
-    case "mention": {
-      const name = asString(record.name);
-      const path = asString(record.path);
-      return name !== null && path !== null ? { name, path, type } : null;
-    }
-    default:
-      return null;
-  }
-}
-
-function readUserInputArray(value: unknown): UserInput[] | null {
-  if (!Array.isArray(value)) {
-    return null;
-  }
-
-  const inputs: UserInput[] = [];
-  for (const entry of value) {
-    const input = readUserInput(entry);
-    if (!input) {
-      return null;
-    }
-
-    inputs.push(input);
-  }
-
-  return inputs;
-}
-
-function cloneUserInput(input: UserInput): UserInput {
-  switch (input.type) {
-    case "text":
-      return {
-        text: input.text,
-        text_elements: input.text_elements.map((element) => ({
-          byteRange: { ...element.byteRange },
-          placeholder: element.placeholder,
-        })),
-        type: input.type,
-      };
-    case "image":
-      return { type: input.type, url: input.url };
-    case "localImage":
-      return { path: input.path, type: input.type };
-    case "skill":
-      return { name: input.name, path: input.path, type: input.type };
-    case "mention":
-      return { name: input.name, path: input.path, type: input.type };
-  }
-}
-
-function createSteerHistoryEntryFromRequest(request: JsonRpcRequest): WorkbenchSteerHistoryEntry | null {
-  if (request.method !== "turn/steer") {
-    return null;
-  }
-
-  const params = asRecord(request.params);
-  const threadId = asString(params?.threadId)?.trim() ?? "";
-  const turnId = asString(params?.expectedTurnId)?.trim() || asString(params?.turnId)?.trim() || "";
-  const input = readUserInputArray(params?.input);
-  if (!threadId || !turnId || !input?.length) {
-    return null;
-  }
-
-  const requestId = typeof request.id === "number" || typeof request.id === "string"
-    ? String(request.id)
-    : null;
-  const clientUserMessageId = asString(params?.clientUserMessageId)?.trim() || null;
-  const attemptedAt = now();
-  return {
-    attemptedAt,
-    canonicalItemId: null,
-    clientUserMessageId,
-    dispatchSequence: null,
-    entryKey: clientUserMessageId
-      ? `turn-steer-client:${clientUserMessageId}`
-      : requestId
-        ? `turn-steer:${requestId}`
-        : `turn-steer:${attemptedAt}:${Math.random().toString(36).slice(2)}`,
-    error: null,
-    input: input.map(cloneUserInput),
-    requestId,
-    resolvedAt: null,
-    status: "pending",
-    threadId,
-    turnId,
-  };
-}
-
-function getJsonRpcErrorMessage(response: JsonRpcResponse) {
-  const error = asRecord(response.error);
-  return asString(error?.message) ?? (error ? "turn/steer failed." : null);
-}
-
-function updateSteerEntryStatus(
-  entry: WorkbenchSteerHistoryEntry,
-  status: WorkbenchSteerHistoryEntry["status"],
-  resolvedAt: number,
-  options: { canonicalItemId?: string | null; error?: string | null } = {},
-): WorkbenchSteerHistoryEntry {
-  if (entry.status === "sent" && status !== "sent") {
-    return entry;
-  }
-  const hasCanonicalItemId = Object.prototype.hasOwnProperty.call(options, "canonicalItemId");
-  const hasError = Object.prototype.hasOwnProperty.call(options, "error");
-  return {
-    ...entry,
-    canonicalItemId: hasCanonicalItemId ? options.canonicalItemId ?? null : entry.canonicalItemId,
-    error: hasError ? options.error ?? null : entry.error,
-    resolvedAt,
-    status,
-  };
-}
-
-function getNextSteerDispatchSequence(file: CodexTranscriptThreadFile) {
-  if (file.nextSteerDispatchSequence !== undefined) {
-    return file.nextSteerDispatchSequence;
-  }
-
-  return (file.steerEntries ?? []).reduce(
-    (next, entry) => Math.max(next, (entry.dispatchSequence ?? -1) + 1),
-    0,
-  );
-}
-
-function updateNativeSteerEntriesForUserMessage(
-  entries: WorkbenchSteerHistoryEntry[],
-  turnId: string,
-  item: ThreadItem,
-  resolvedAt: number,
-) {
-  if (item.type !== "userMessage" || !item.clientId) {
-    return entries;
-  }
-
-  let changed = false;
-  const nextEntries = entries.map((entry) => {
-    if (entry.clientUserMessageId !== item.clientId) {
-      return entry;
-    }
-
-    if (entry.status === "sent" && entry.turnId === turnId && entry.canonicalItemId === item.id && entry.error === null) {
-      return entry;
-    }
-
-    changed = true;
-    return {
-      ...updateSteerEntryStatus(entry, "sent", resolvedAt, { canonicalItemId: item.id, error: null }),
-      turnId,
-    };
-  });
-  return changed ? sortSteerEntries(nextEntries) : entries;
-}
-
-function updateNativeSteerEntriesForInterruptedTurn(
-  entries: WorkbenchSteerHistoryEntry[],
-  turn: Turn,
-  resolvedAt: number,
-) {
-  if (turn.status !== "interrupted") {
-    return entries;
-  }
-
-  let nextEntries = entries;
-  for (const item of turn.items) {
-    nextEntries = updateNativeSteerEntriesForUserMessage(nextEntries, turn.id, item, resolvedAt);
-  }
-
-  let changed = nextEntries !== entries;
-  const interruptedEntries = nextEntries.map((entry) => {
-    if (entry.status !== "pending" || entry.turnId !== turn.id) {
-      return entry;
-    }
-
-    changed = true;
-    return updateSteerEntryStatus(entry, "interrupted", resolvedAt, {
-      error: "The turn stopped before this steer was delivered.",
-    });
-  });
-  return changed ? sortSteerEntries(interruptedEntries) : entries;
-}
-
-function hasNativeSteerReconciliationEvidence(turn: Turn) {
-  return turn.status === "interrupted"
-    || turn.items.some((item) => item.type === "userMessage" && Boolean(item.clientId?.trim()));
-}
-
-function reconcileNativeSteerEntriesForTurns(
-  entries: WorkbenchSteerHistoryEntry[],
-  turns: Turn[],
-  resolvedAt: number,
-) {
-  let nextEntries = entries;
-  for (const turn of turns) {
-    for (const item of turn.items) {
-      nextEntries = updateNativeSteerEntriesForUserMessage(nextEntries, turn.id, item, resolvedAt);
-    }
-    nextEntries = updateNativeSteerEntriesForInterruptedTurn(nextEntries, turn, resolvedAt);
-  }
-  return nextEntries;
-}
-
-function updateMatchingPendingSteerEntriesForUserMessage(
-  entries: WorkbenchSteerHistoryEntry[],
-  item: ThreadItem,
-  resolvedAt: number,
-) {
-  if (item.type !== "userMessage") {
-    return entries;
-  }
-
-  let changed = false;
-  const nextEntries = entries.map((entry) => {
-    if (
-      entry.status !== "pending"
-      || Boolean(entry.clientUserMessageId?.trim())
-      || !areUserInputsEquivalentForUserMessageDedupe(entry.input, item.content)
-    ) {
-      return entry;
-    }
-
-    changed = true;
-    return updateSteerEntryStatus(entry, "sent", resolvedAt, { canonicalItemId: item.id, error: null });
-  });
-
-  return changed ? sortSteerEntries(nextEntries) : entries;
-}
-
-function updatePendingSteerEntriesForInterruptedTurn(
-  entries: WorkbenchSteerHistoryEntry[],
-  turn: Turn,
-  resolvedAt: number,
-) {
-  if (turn.status !== "interrupted") {
-    return entries;
-  }
-
-  const canonicalUserMessages = turn.items.filter((item): item is Extract<ThreadItem, { type: "userMessage" }> => item.type === "userMessage");
-  let changed = false;
-  const nextEntries = entries.map((entry) => {
-    if (entry.status !== "pending" || Boolean(entry.clientUserMessageId?.trim())) {
-      return entry;
-    }
-
-    const canonicalMatch = canonicalUserMessages.find((item) => areUserInputsEquivalentForUserMessageDedupe(entry.input, item.content));
-    if (canonicalMatch) {
-      changed = true;
-      return updateSteerEntryStatus(entry, "sent", resolvedAt, { canonicalItemId: canonicalMatch.id, error: null });
-    }
-
-    changed = true;
-    return updateSteerEntryStatus(entry, "interrupted", resolvedAt, { error: "The turn stopped before this steer was delivered." });
-  });
-
-  return changed ? sortSteerEntries(nextEntries) : entries;
 }
 
 function getThreadTimestamp(thread: Thread | null) {
@@ -1217,9 +904,14 @@ export default class CodexTranscriptStore {
     await this.json.waitForIdle();
   }
 
-  async recordClientRequest(request: JsonRpcRequest) {
+  async recordClientRequest(
+    request: JsonRpcRequest,
+    admittedSteer: WorkbenchSteerHistoryEntry | null | undefined = undefined,
+  ) {
     await this.ready();
-    const steerEntry = createSteerHistoryEntryFromRequest(request);
+    const steerEntry = admittedSteer === undefined
+      ? createSteerHistoryEntryFromRequest(request)
+      : admittedSteer;
     if (steerEntry) {
       const event = createRawEvent("client-request", request, request.method, request.id ?? null);
       if (steerEntry.clientUserMessageId) {
@@ -1518,6 +1210,38 @@ export default class CodexTranscriptStore {
     });
     await this.appendTurnEvent(threadId, turnId, event);
     await this.touchThread(threadId, null);
+  }
+
+  async recordSteerSettlements(entries: readonly WorkbenchSteerHistoryEntry[]) {
+    await this.ready();
+    for (const entry of entries) {
+      const event = createRawEvent("workbench", entry, "steer/settled", entry.requestId);
+      if (!entry.clientUserMessageId) {
+        await this.recordSteerHistoryEntry(entry, event);
+        continue;
+      }
+      await this.updateThreadFile(entry.threadId, (file) => {
+        const existing = (file.steerEntries ?? []).find((candidate) => candidate.entryKey === entry.entryKey);
+        const dispatchSequence = entry.dispatchSequence
+          ?? existing?.dispatchSequence
+          ?? getNextSteerDispatchSequence(file);
+        const nextEntry = { ...entry, dispatchSequence };
+        return {
+          ...file,
+          lastTouchedAt: now(),
+          nextSteerDispatchSequence: Math.max(
+            file.nextSteerDispatchSequence ?? 0,
+            dispatchSequence + 1,
+          ),
+          steerEntries: sortSteerEntries([
+            ...(file.steerEntries ?? []).filter((candidate) => candidate.entryKey !== entry.entryKey),
+            nextEntry,
+          ]),
+        };
+      });
+      await this.appendTurnEvent(entry.threadId, entry.turnId, event);
+      await this.touchThread(entry.threadId, null);
+    }
   }
 
   async readThreadContextEntries(

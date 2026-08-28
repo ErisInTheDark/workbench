@@ -1,0 +1,144 @@
+/*
+ * No production exports. Tests protect direct provider thread, turn, and item projection without storage reads. Keywords: codex, transcript, provider, test.
+ */
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
+import {
+  createCodexTranscriptProviderDynamicToolObservation,
+  createCodexTranscriptProviderItemObservation,
+  createCodexTranscriptProviderThreadObservation,
+  createCodexTranscriptProviderThreadObservations,
+} from "./codex-transcript-provider-observations.ts";
+
+const context = {
+  activityAt: 6_000,
+  createdAt: 1_000,
+  nativeLocation: "C:/repo",
+  projectId: "project",
+  projectRoot: "C:/repo",
+  title: "Thread",
+  updatedAt: 6_000,
+};
+
+function providerThread(): Thread {
+  return {
+    agentNickname: null,
+    agentRole: null,
+    canAcceptDirectInput: null,
+    cliVersion: "test",
+    createdAt: 1,
+    cwd: "C:/repo",
+    ephemeral: false,
+    extra: null,
+    forkedFromId: null,
+    gitInfo: null,
+    historyMode: "legacy",
+    id: "thread",
+    modelProvider: "openai",
+    name: "Thread",
+    parentThreadId: null,
+    path: null,
+    preview: "",
+    recencyAt: null,
+    section: null,
+    sectionEnteredAt: null,
+    sessionId: "session",
+    source: "appServer",
+    status: { type: "idle" },
+    threadSource: null,
+    turns: [{
+      completedAt: 6,
+      durationMs: 5_000,
+      error: null,
+      id: "turn",
+      items: [{
+        id: "answer",
+        memoryCitation: null,
+        phase: "final_answer",
+        text: "done",
+        type: "agentMessage",
+      }],
+      itemsView: "full",
+      startedAt: 1,
+      status: "completed",
+    }],
+    updatedAt: 6,
+  };
+}
+
+test("routine provider metadata projects without importing turns", () => {
+  assert.deepEqual(createCodexTranscriptProviderThreadObservation("thread", context), {
+    activityAt: 6_000,
+    createdAt: 1_000,
+    kind: "thread",
+    projectId: "project",
+    projectRoot: "C:/repo",
+    threadId: "thread",
+    title: "Thread",
+    updatedAt: 6_000,
+  });
+});
+
+test("one provider snapshot becomes direct ordered thread, turn, and item facts", () => {
+  const observations = createCodexTranscriptProviderThreadObservations(providerThread(), context);
+  assert.deepEqual(observations.map(({ kind }) => kind), ["thread", "turn", "item"]);
+  assert.deepEqual(observations[1], {
+    createdAt: 1_000,
+    durationMs: 5_000,
+    endedAt: 6_000,
+    harnessId: "codex",
+    kind: "turn",
+    nativeLocation: "C:/repo",
+    nativeThreadId: "thread",
+    nativeTurnId: "turn",
+    startedAt: 1_000,
+    state: "completed",
+    threadId: "thread",
+    turnId: "turn",
+    turnIndex: 0,
+  });
+});
+
+test("one provider item lifecycle becomes one atomic observation", () => {
+  const item = {
+    id: "answer",
+    memoryCitation: null,
+    phase: "commentary" as const,
+    text: "streaming",
+    type: "agentMessage" as const,
+  };
+  assert.deepEqual(createCodexTranscriptProviderItemObservation({
+    item,
+    lifecycle: "streaming",
+    observedAt: 2_000,
+    threadId: "thread",
+    turnId: "turn",
+  }), {
+    item,
+    kind: "item",
+    lifecycle: "streaming",
+    observedAt: 2_000,
+    threadId: "thread",
+    turnId: "turn",
+  });
+});
+
+test("one provider dynamic-tool request becomes one direct operation item", () => {
+  const observation = createCodexTranscriptProviderDynamicToolObservation({
+    id: 10,
+    method: "item/tool/call",
+    params: {
+      arguments: { query: "hello" },
+      callId: "call",
+      namespace: "demo",
+      threadId: "thread",
+      tool: "search",
+      turnId: "turn",
+    },
+  }, 3_000);
+  assert.equal(observation?.kind, "item");
+  assert.equal(observation?.item.id, "call");
+  assert.equal(observation?.item.type, "dynamicToolCall");
+});

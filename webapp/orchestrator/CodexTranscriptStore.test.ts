@@ -10,7 +10,11 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry } from "../lib/types";
+import type {
+  WorkbenchBrowseResultEntry,
+  WorkbenchQuestionnaireHistoryEntry,
+  WorkbenchSteerHistoryEntry,
+} from "../lib/types";
 import CodexTranscriptStore from "./CodexTranscriptStore";
 import type { JsonRpcRequest } from "./bridge-types";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
@@ -385,6 +389,37 @@ test("native steer admissions are thread-global and sequence ordered", async () 
     ["native-z", 0, "9"],
     ["native-a", 1, "10"],
   ]);
+}));
+
+test("source-owned steer admission and settlement persist the exact shared mutation", async () => withStore(async (store) => {
+  const admitted: WorkbenchSteerHistoryEntry = {
+    attemptedAt: 100,
+    canonicalItemId: null,
+    clientUserMessageId: "native",
+    dispatchSequence: 7,
+    entryKey: "native:native",
+    error: null,
+    input: [{ text: "same", text_elements: [], type: "text" }],
+    requestId: "9",
+    resolvedAt: null,
+    status: "pending",
+    threadId: "thread",
+    turnId: "turn-a",
+  };
+  await store.recordClientRequest(request(9, "native", "turn-a"), admitted);
+  await store.recordSteerSettlements([{
+    ...admitted,
+    error: "rejected",
+    resolvedAt: 200,
+    status: "failed",
+  }]);
+
+  assert.deepEqual(await store.listSteerHistory("thread"), [{
+    ...admitted,
+    error: "rejected",
+    resolvedAt: 200,
+    status: "failed",
+  }]);
 }));
 
 test("scoped thread context collection reads each sidecar kind for only the selected turns", async () => withStore(async (store) => {

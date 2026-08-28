@@ -44,7 +44,10 @@ You may propose new invariants or changes to existing invariants, but you must m
 
 - Build a replacement beside the working system.
 - Keep the working system authoritative while the replacement is unproven.
-- Feed both systems equivalent observations when comparison requires it.
+<!-- Prevent replacement recorders from using legacy persistence as their live source. -->
+- Seed complete replacement state before mirroring its mutations.
+- After that boundary, feed both systems from the fact owner: provider observations or Workbench mutations.
+- Do not populate live replacement state by rereading legacy storage.
 - Compare semantic results, not storage or implementation shape.
 - Exercise comparisons during normal use.
 - Move one coherent consumer after it has no unexplained mismatch.

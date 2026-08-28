@@ -6,10 +6,7 @@ import test from "node:test";
 
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
 import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "../lib/types.ts";
-import {
-  createCodexTranscriptSqliteImport,
-  createCodexTranscriptSqliteItemObservation,
-} from "./codex-transcript-sqlite-import.ts";
+import { createCodexTranscriptSqliteImport } from "./codex-transcript-sqlite-import.ts";
 
 function thread() {
   return {
@@ -203,22 +200,4 @@ test("reused provider request keys keep questionnaire observations in their owni
       ["newer", "question-newer", "reused"],
     ],
   );
-});
-
-test("one Codex item lifecycle update becomes one atomic observation without a turn snapshot", () => {
-  const item = { id: "answer", memoryCitation: null, phase: "commentary" as const, text: "streaming", type: "agentMessage" as const };
-  assert.deepEqual(createCodexTranscriptSqliteItemObservation({
-    item,
-    lifecycle: "streaming",
-    observedAt: 2_000,
-    threadId: "thread",
-    turnId: "turn",
-  }), {
-    item,
-    kind: "item",
-    lifecycle: "streaming",
-    observedAt: 2_000,
-    threadId: "thread",
-    turnId: "turn",
-  });
 });

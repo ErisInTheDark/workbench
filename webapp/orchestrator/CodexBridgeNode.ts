@@ -92,7 +92,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/orchestrator/workbench-agent-mcp-request-registry.ts",
     "webapp/orchestrator/CodexBridgeTransitionController.ts",
     "webapp/orchestrator/CodexRecoverySupervisor.ts",
-    "webapp/orchestrator/CodexTranscriptShadowController.ts",
+    "webapp/orchestrator/CodexTranscriptRecordingController.ts",
     "webapp/orchestrator/CodexTranscriptStore.ts",
     "webapp/orchestrator/codex-transcript-*.ts",
     "webapp/orchestrator/copilot-bridge.ts",

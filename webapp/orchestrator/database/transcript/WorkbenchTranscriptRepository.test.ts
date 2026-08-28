@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect stable transcript identity, source replacement, enrichment survival, bounded hydration, and atomic settlement. Keywords: transcript, repository, test.
+ * No production exports. Tests protect stable transcript identity, live materialization, source replacement, enrichment survival, bounded hydration, and atomic settlement. Keywords: transcript, repository, test.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -73,6 +73,141 @@ function canonicalWindow(
     threadId,
   };
 }
+
+test("standalone provider turns establish a readable live materialization", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([
+      threadObservation(),
+      turnObservation("live", 0),
+    ]);
+    assert.deepEqual(
+      repository.read({ threadId: "thread", turnIds: ["live"], turnLimit: 1 })?.loadedTurnIds,
+      ["live"],
+    );
+
+    repository.settle([{
+      kind: "item",
+      threadId: "thread",
+      turnId: "live",
+      lifecycle: "completed",
+      observedAt: 4,
+      item: {
+        id: "message",
+        memoryCitation: null,
+        phase: "commentary",
+        text: "recorded directly",
+        type: "agentMessage",
+      },
+    }]);
+    assert.deepEqual(
+      repository.read({ threadId: "thread", turnIds: ["live"], turnLimit: 1 })?.rows.threadItems
+        .map(({ id }) => id),
+      ["message"],
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("top-level mutations reject a metadata-only compatibility turn", () => {
+  const { database, repository } = createRepository();
+  const steer: WorkbenchSteerHistoryEntry = {
+    attemptedAt: 3,
+    canonicalItemId: null,
+    clientUserMessageId: "client",
+    entryKey: "steer",
+    error: "delivery failed",
+    input: [{ text: "hello", text_elements: [], type: "text" }],
+    requestId: "1",
+    resolvedAt: 4,
+    status: "failed",
+    threadId: "thread",
+    turnId: "metadata",
+  };
+  try {
+    repository.settle([canonicalWindow([
+      threadObservation(),
+      turnObservation("metadata", 0),
+    ], [])]);
+    assert.equal(
+      repository.read({ threadId: "thread", turnIds: ["metadata"], turnLimit: 1 }),
+      null,
+    );
+
+    const observations: WorkbenchTranscriptAtomicObservation[] = [{
+      kind: "item",
+      threadId: "thread",
+      turnId: "metadata",
+      lifecycle: "completed",
+      observedAt: 4,
+      item: {
+        id: "message",
+        memoryCitation: null,
+        phase: "commentary",
+        text: "not initialized",
+        type: "agentMessage",
+      },
+    }, {
+      kind: "questionnaire",
+      entry: {
+        insertAfterItemId: null,
+        insertAfterItemIndex: null,
+        itemId: "questionnaire",
+        request: {
+          id: "request",
+          questions: [{
+            allowOther: false,
+            header: "Choice",
+            id: "choice",
+            isSecret: false,
+            options: [],
+            question: "Pick one",
+          }],
+          submitLabel: "Submit",
+          summary: "Choose",
+          title: "Questionnaire",
+        },
+        requestKey: "request",
+        resolvedAt: 4,
+        response: { answers: { choice: { answers: ["one"] } } },
+        threadId: "thread",
+        turnId: "metadata",
+      },
+      observedAt: 4,
+    }, {
+      kind: "steer",
+      entry: steer,
+      observedAt: 4,
+    }, {
+      kind: "browse",
+      entry: {
+        action: "snapshot",
+        actionIndex: 0,
+        assetUrl: null,
+        commandItemId: null,
+        detailKind: "text",
+        detailLabel: "snapshot",
+        detailText: "not initialized",
+        durationMs: 1,
+        entryKey: "browse",
+        recordedAt: 4,
+        session: "session",
+        state: "completed",
+        threadId: "thread",
+        turnId: "metadata",
+      },
+    }];
+    for (const observation of observations) {
+      assert.throws(
+        () => repository.settle([observation]),
+        /unmaterialized turn/u,
+      );
+    }
+  } finally {
+    database.close();
+  }
+});
 
 test("source replacement keeps canonical identity and Browse enrichment while replacing stale children", () => {
   const { database, repository } = createRepository();

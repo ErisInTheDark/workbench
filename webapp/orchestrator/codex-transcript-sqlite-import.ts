@@ -1,11 +1,8 @@
 /*
  * CodexTranscriptSqliteImportInput: one hydrated Codex turn window plus its scoped Workbench facts. Keywords: codex, transcript, import, window.
- * CodexTranscriptSqliteItemInput: one native Codex item lifecycle update ready for atomic shadow settlement. Keywords: codex, transcript, item, streaming.
- * createCodexTranscriptSqliteItemObservation: convert one native Codex item without rereading its turn. Keywords: codex, sqlite, transcript, item.
  * createCodexTranscriptSqliteImport: convert one hydrated Codex turn window into stable Workbench observations. Keywords: codex, sqlite, transcript, import, window.
  */
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem.ts";
 import { toThreadPayload } from "../lib/codex/thread-adapter.ts";
 import { applyQuestionnaireHistoryToThread } from "../lib/workbench/thread/thread-questionnaire-history.ts";
 import { createSyntheticQuestionnaireHistoryItemId } from "../lib/workbench/thread/thread-questionnaire-identity.ts";
@@ -21,35 +18,20 @@ import type {
 } from "../lib/types.ts";
 import type {
   WorkbenchTranscriptAtomicObservation,
-  WorkbenchTranscriptItemLifecycle,
   WorkbenchTranscriptObservation,
 } from "./database/transcript/workbench-transcript-types.ts";
-
-interface CodexTranscriptImportContext {
-  activityAt: number;
-  createdAt: number;
-  nativeLocation: string;
-  projectId: string;
-  projectRoot: string;
-  title: string;
-  updatedAt: number;
-}
+import {
+  createCodexTranscriptProviderItemObservation,
+  type CodexTranscriptProviderContext,
+} from "./codex-transcript-provider-observations.ts";
 
 export interface CodexTranscriptSqliteImportInput {
   browseAssets?: ReadonlyMap<string, Extract<WorkbenchTranscriptAtomicObservation, { kind: "browse" }>["asset"]>;
   browseResultEntries: WorkbenchBrowseResultEntry[];
-  context: CodexTranscriptImportContext;
+  context: CodexTranscriptProviderContext;
   questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
   steerEntries: WorkbenchSteerHistoryEntry[];
   thread: Thread;
-}
-
-export interface CodexTranscriptSqliteItemInput {
-  item: ThreadItem;
-  lifecycle: WorkbenchTranscriptItemLifecycle;
-  observedAt: number;
-  threadId: string;
-  turnId: string;
 }
 
 function itemTimeline(
@@ -68,23 +50,6 @@ function itemTimeline(
     itemId,
     lastSeenAt: timeline.lastSeenAt,
     startedAt: timeline.startedAt,
-  };
-}
-
-export function createCodexTranscriptSqliteItemObservation({
-  item,
-  lifecycle,
-  observedAt,
-  threadId,
-  turnId,
-}: CodexTranscriptSqliteItemInput): WorkbenchTranscriptAtomicObservation {
-  return {
-    item,
-    kind: "item",
-    lifecycle,
-    observedAt,
-    threadId,
-    turnId,
   };
 }
 
@@ -154,7 +119,7 @@ export function createCodexTranscriptSqliteImport({
         findWorkbenchThreadItemTimelineEntry(item.id, history.itemTimeline),
       );
       observations.push({
-        ...createCodexTranscriptSqliteItemObservation({
+        ...createCodexTranscriptProviderItemObservation({
           item,
           lifecycle: turn.status === "inProgress" ? "streaming" : "completed",
           observedAt: timeline?.lastSeenAt
