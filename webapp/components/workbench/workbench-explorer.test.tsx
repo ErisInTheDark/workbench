@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; static regression checks cover thread accessibility, grouped context actions, accepted settlement routing, lifecycle ownership, and agent tabs. Keywords: explorer, sidebar, context menu, tablist, keyboard, settlement.
+ * - No production exports; static regression checks cover sidebar hierarchy, thread accessibility, grouped context actions, accepted settlement routing, lifecycle ownership, and agent tabs. Keywords: explorer, sidebar, disclosure, context menu, tablist, keyboard, settlement.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -195,11 +195,81 @@ test("global pins render above projects with a default-open chevron and nested o
   assert.ok(workbenchSource.indexOf("<WorkbenchPinnedThreadSidebar") < workbenchSource.indexOf("<ProjectSidebar"));
   assert.match(pinnedListSource, /useState\(true\)/u);
   assert.doesNotMatch(pinnedListSource, /chevronClassName="hidden"[\s\S]*?Pinned threads/u);
-  assert.match(pinnedListSource, /!isOpen && WorkbenchThreadStatusCounts\.hasCounts/u);
+  assert.match(pinnedListSource, /<WorkbenchThreadStatusCountsButton counts=\{statusCounts\} label="pinned thread" \/>/u);
   assert.match(pinnedSource, /<WorkbenchPinnedThreadList/u);
   assert.match(pinnedListSource, /createPinnedThreadHref\(projectId, ownerProjectId, target\)/u);
   assert.match(projectSource, /subtractCounts\([\s\S]*?countPinnedStatuses\(summary\.pinnedThreads\)/u);
   assert.match(workbenchSource, /createPinnedThreadRoute\(viewedProjectId, targetProjectId, target\)/u);
+});
+
+test("ordinary sidebar sections share one fixed disclosure hierarchy and status-count control", async () => {
+  const [
+    workbenchSource,
+    disclosureSource,
+    currentProjectSource,
+    projectLabelSource,
+    pinnedSource,
+    projectSource,
+    reloadSource,
+    statusButtonSource,
+    threadListSource,
+    dragSource,
+    storageSource,
+  ] = await Promise.all([
+    readFile(new URL("../workbench.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchSidebarSectionDisclosure.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchCurrentProjectHeading.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchProjectLabel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchPinnedThreadList.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./ProjectSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./ReloadNecessary.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchThreadStatusCountsButton.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../lib/workbench/layout/workbench-drag.ts", import.meta.url), "utf8"),
+    readFile(new URL("../../lib/workbench/layout/workbench-layout-storage.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(disclosureSource, /leading=\{<Icon className="size-4" \/>\}/u);
+  assert.match(disclosureSource, /text-base font-semibold leading-tight/u);
+  assert.match(disclosureSource, /h-11 text-muted md:h-8/u);
+  assert.doesNotMatch(disclosureSource, /py-1\.5|md:pr-2\.5/u);
+  assert.match(pinnedSource, /<WorkbenchSidebarSectionDisclosure[\s\S]*?icon=\{PinIcon\}[\s\S]*?title="Pinned threads"/u);
+  assert.match(projectSource, /<section className="shrink-0 pb-5">[\s\S]*?<WorkbenchSidebarSectionDisclosure[\s\S]*?actions=\{<WorkbenchThreadStatusCountsButton counts=\{otherCounts\} label="other project" \/>\}[\s\S]*?icon=\{ProjectIcon\}[\s\S]*?title="Projects"/u);
+  assert.match(statusButtonSource, /showStatuses[\s\S]*?<WorkbenchThreadStatusCounts counts=\{counts\} \/>[\s\S]*?<WorkingThreadIcon className="size-3\.5 text-muted" \/>/u);
+  assert.match(reloadSource, /useState\(false\)[\s\S]*?<ChevronIcon/u);
+  assert.doesNotMatch(reloadSource, /WorkbenchSidebarSectionDisclosure|ReloadIcon/u);
+
+  const pinnedIndex = workbenchSource.indexOf("<WorkbenchPinnedThreadSidebar");
+  const projectsIndex = workbenchSource.indexOf("<ProjectSidebar");
+  const currentProjectIndex = workbenchSource.indexOf("<WorkbenchCurrentProjectHeading");
+  const threadsIndex = workbenchSource.indexOf('title="Threads"');
+  const explorerIndex = workbenchSource.indexOf('title="Explorer"');
+  const browseIndex = workbenchSource.indexOf('title="Browse sessions"');
+  const reloadIndex = workbenchSource.indexOf("<ReloadNecessary");
+  assert.ok(
+    pinnedIndex >= 0
+    && projectsIndex > pinnedIndex
+    && currentProjectIndex > projectsIndex
+    && threadsIndex > currentProjectIndex
+    && explorerIndex > threadsIndex
+    && browseIndex > explorerIndex
+    && reloadIndex > browseIndex,
+  );
+  assert.match(workbenchSource, /<header className="[^"]*\bpb-5\b/u);
+  assert.match(workbenchSource, /defaultOpen[\s\S]*?icon=\{DraftThreadIcon\}[\s\S]*?title="Threads"/u);
+  assert.match(workbenchSource, /defaultOpen[\s\S]*?icon=\{FolderOpenIcon\}[\s\S]*?title="Explorer"/u);
+  assert.match(workbenchSource, /defaultOpen[\s\S]*?icon=\{BrowserSessionIcon\}[\s\S]*?title="Browse sessions"/u);
+  assert.doesNotMatch(workbenchSource, /sidebarSectionOrder|sidebar-section|WORKBENCH_SIDEBAR_SECTION/u);
+  assert.doesNotMatch(dragSource, /sidebar-section|SIDEBAR_SECTION/u);
+  assert.doesNotMatch(storageSource, /SidebarSection|sidebar-section-order/u);
+
+  assert.match(currentProjectSource, /<hr className="mx-4/u);
+  assert.match(currentProjectSource, /px-2 pb-3/u);
+  assert.match(currentProjectSource, /variant="heading"/u);
+  assert.doesNotMatch(currentProjectSource, /<a|<button/u);
+  assert.match(projectLabelSource, /variant === "heading"[\s\S]*?text-\[1\.05rem\][\s\S]*?text-\[0\.78rem\]/u);
+  assert.doesNotMatch(projectSource, /activeEntry|Other projects|showOtherSummary/u);
+  assert.match(threadListSource, /workbenchThreadListButtonClassName\} mt-1/u);
 });
 
 test("blank thread routes render their private draft and preserve one view instance through promotion", async () => {

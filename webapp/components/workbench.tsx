@@ -35,17 +35,12 @@ import { installBrowserRandomUuidPolyfill } from "../lib/workbench/browser-rando
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { writeTextToClipboard } from "../lib/workbench/dom/clipboard";
 import WorkbenchDragController from "../lib/workbench/layout/WorkbenchDragController";
-import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID, type WorkbenchDragPayload } from "../lib/workbench/layout/workbench-drag";
+import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../lib/workbench/layout/workbench-drag";
 import WorkbenchMainLayout, {
   type WorkbenchDropPlacement,
   type WorkbenchMainLayout as WorkbenchMainLayoutState,
   type WorkbenchPanelTarget,
 } from "../lib/workbench/layout/workbench-layout";
-import {
-  readStoredWorkbenchSidebarSectionOrder,
-  writeStoredWorkbenchSidebarSectionOrder,
-  type WorkbenchSidebarSectionId,
-} from "../lib/workbench/layout/workbench-layout-storage";
 import {
   applyWorkbenchMosaicDrop,
   applyWorkbenchMosaicResize,
@@ -130,6 +125,7 @@ import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
 import PrimaryButton from "./workbench/PrimaryButton";
 import ReloadNecessary from "./workbench/ReloadNecessary";
 import ProjectSidebar from "./workbench/ProjectSidebar";
+import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
 import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
@@ -159,8 +155,11 @@ import {
   ArchiveIcon,
   BackArrowIcon,
   BinIcon,
+  BrowserSessionIcon,
   CopyIcon,
+  DraftThreadIcon,
   FileMoveIcon,
+  FolderOpenIcon,
   GearIcon,
   ReloadIcon,
   SaveIcon,
@@ -176,6 +175,7 @@ import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfi
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
+import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
 import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
@@ -567,13 +567,6 @@ export default function Workbench () {
   const [quickOpenUpdatedAtByPath, setQuickOpenUpdatedAtByPath] = useState<Record<string, string>>({});
   const [mainLayout, setMainLayout] = useState<WorkbenchMainLayoutState>(() => WorkbenchMainLayout.fromTarget({ kind: "empty" }));
   const [mosaicDraftThreadsById, setMosaicDraftThreadsById] = useState<Record<string, ThreadPayload | undefined>>({});
-  const [sidebarSectionOrder, setSidebarSectionOrder] = useState<WorkbenchSidebarSectionId[]>(() => {
-    if (typeof window === "undefined") {
-      return ["threads", "files"];
-    }
-
-    return readStoredWorkbenchSidebarSectionOrder();
-  });
   const [threadComposerDraftsByThreadId, setThreadComposerDraftsByThreadId] = useState<Record<string, WorkbenchComposerInputDraft | undefined>>({});
   const [threadQuestionnaireDraftsByKey, setThreadQuestionnaireDraftsByKey] = useState<Record<string, WorkbenchQuestionnaireDraft | undefined>>({});
   const editorRef = useRef<HTMLDivElement>(null);
@@ -2345,69 +2338,21 @@ export default function Workbench () {
     label: `${node.type === "file" ? "File" : "Folder"} actions for ${node.name}`,
   }), [deleteProjectFile, revealProjectEntry]);
 
-  const sidebarSectionOrderIndex = useMemo(() => (
-    Object.fromEntries(sidebarSectionOrder.map((sectionId, index) => [sectionId, index])) as Record<WorkbenchSidebarSectionId, number>
-  ), [sidebarSectionOrder]);
-
-  const moveSidebarSection = useCallback((sourceId: WorkbenchSidebarSectionId, targetId: WorkbenchSidebarSectionId) => {
-    setSidebarSectionOrder((current) => {
-      if (sourceId === targetId) {
-        return current;
-      }
-
-      const withoutSource = current.filter((sectionId) => sectionId !== sourceId);
-      const targetIndex = withoutSource.indexOf(targetId);
-      const nextOrder = targetIndex < 0
-        ? [...withoutSource, sourceId]
-        : [
-          ...withoutSource.slice(0, targetIndex),
-          sourceId,
-          ...withoutSource.slice(targetIndex),
-        ];
-      writeStoredWorkbenchSidebarSectionOrder(nextOrder);
-      return nextOrder;
-    });
-  }, []);
-
-  const moveSidebarSectionToEnd = useCallback((sourceId: WorkbenchSidebarSectionId) => {
-    setSidebarSectionOrder((current) => {
-      const withoutSource = current.filter((sectionId) => sectionId !== sourceId);
-      const nextOrder = [...withoutSource, sourceId];
-      writeStoredWorkbenchSidebarSectionOrder(nextOrder);
-      return nextOrder;
-    });
-  }, []);
-
-  const getSidebarSectionDragProps = useCallback((sectionId: WorkbenchSidebarSectionId) => ({
-    style: { order: sidebarSectionOrderIndex[sectionId] ?? 0 },
-  }), [sidebarSectionOrderIndex]);
-
   const endWorkbenchPointerDrag = useCallback(() => {
     workbenchDragController.cancel();
   }, [workbenchDragController]);
 
   const beginWorkbenchPointerDrag = useCallback((event: ReactPointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => {
     if (isMobile || event.button !== 0 || payload.type === "thread-folder") return;
-    if (
-      payload.type === "sidebar-section"
-      && event.target instanceof HTMLElement
-      && event.target !== event.currentTarget
-      && event.target.closest("button,a,input,textarea,select,[contenteditable='true']")
-    ) {
-      return;
-    }
-
-    const label = payload.type === "sidebar-section"
-      ? payload.sectionId
-      : payload.type === "new-thread"
-        ? "New thread"
-        : payload.target.kind === "file"
-          ? payload.target.filePath
-          : payload.target.kind === "thread" && (payload.target.target.kind === "provider" || payload.target.target.kind === "subagent")
-            ? payload.target.target.threadId
-            : payload.target.kind;
+    const label = payload.type === "new-thread"
+      ? "New thread"
+      : payload.target.kind === "file"
+        ? payload.target.filePath
+        : payload.target.kind === "thread" && (payload.target.target.kind === "provider" || payload.target.target.kind === "subagent")
+          ? payload.target.target.threadId
+          : payload.target.kind;
     workbenchDragController.begin(event, {
-      dropTargetIds: payload.type === "sidebar-section" ? [WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID] : [WORKBENCH_MAIN_PANEL_DROP_TARGET_ID],
+      dropTargetIds: [WORKBENCH_MAIN_PANEL_DROP_TARGET_ID],
       label,
       payload,
     });
@@ -2791,21 +2736,6 @@ export default function Workbench () {
     controls?.setDraftThreadHarness(nextHarness);
   };
 
-  const clearSelectionFromUi = useCallback(() => {
-    navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId));
-    if (!controls) {
-      startTransition(() => {
-        setCurrentThread(null);
-        setRateLimits(null);
-        setExplorer((current) => ({
-          ...current,
-          currentPath: "",
-          currentThreadId: "",
-        }));
-      });
-    }
-  }, [controls, explorer.currentProjectId, navigateToRoute, route.projectId]);
-
   const handleCreateEntry = async (type: "directory" | "file") => {
     if (!controls || isCreatingEntry) {
       return;
@@ -2883,7 +2813,7 @@ export default function Workbench () {
             <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden px-5 py-3 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:px-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
               <div className="-ml-3 flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
                 <DropTargetBoundary className="explorer-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto pr-2">
-                <header className="grid shrink-0 grid-cols-[1fr_auto_auto] items-center gap-1 md:pr-2.5">
+                <header className="grid shrink-0 grid-cols-[1fr_auto_auto] items-center gap-1 pb-5 md:pr-2.5">
                   <span className="min-w-0 truncate px-2 text-xl font-semibold leading-tight text-text">workbench</span>
                   <a
                     aria-label="Open settings"
@@ -2929,25 +2859,14 @@ export default function Workbench () {
                     projects={explorer.projects}
                     store={threadSidebarStore}
                   />
-                    <DropTarget
-                      dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
-                      enabled={(payload) => payload.type === "sidebar-section" && payload.sectionId !== "threads"}
-                      onDrop={(payload) => {
-                        if (payload.type === "sidebar-section") moveSidebarSection(payload.sectionId, "threads");
-                      }}
-                      range={{ x: 24, y: 18 }}
-                      {...getSidebarSectionDragProps("threads")}
+                  {currentProject ? <WorkbenchCurrentProjectHeading project={currentProject} /> : null}
+                  <section className="shrink-0 pb-5">
+                    <WorkbenchSidebarSectionDisclosure
+                      contentClassName="space-y-2"
+                      defaultOpen
+                      icon={DraftThreadIcon}
+                      title="Threads"
                     >
-                      {({ selected }) => <section
-                        className={`relative space-y-2 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "threads" ? " opacity-45" : ""}`}
-                        onPointerDown={(event) => {
-                          beginWorkbenchPointerDrag(event, { sectionId: "threads", type: "sidebar-section" });
-                        }}
-                      >
-                      {selected ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                      <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
-                        <p className="m-0 text-base font-semibold leading-tight">Threads</p>
-                      </div>
                       <WorkbenchThreadSidebar
                         attentionLabelsByThreadId={threadAttentionLabelsById}
                         currentTarget={route.view === "thread" ? route.threadTarget : null}
@@ -2960,36 +2879,13 @@ export default function Workbench () {
                         renderThreadTooltipDetails={renderThreadTooltipDetails}
                         showMosaicView={showMosaicView}
                       />
-                      </section>}
-                    </DropTarget>
+                    </WorkbenchSidebarSectionDisclosure>
+                  </section>
                 </WorkbenchThreadSidebarActionsProvider>
 
-                    <DropTarget
-                      dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
-                      enabled={(payload) => payload.type === "sidebar-section" && payload.sectionId !== "files"}
-                      onDrop={(payload) => {
-                        if (payload.type === "sidebar-section") moveSidebarSection(payload.sectionId, "files");
-                      }}
-                      range={{ x: 24, y: 18 }}
-                      {...getSidebarSectionDragProps("files")}
-                    >
-                      {({ selected }) => <section
-                        className={`relative space-y-2 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "files" ? " opacity-45" : ""}`}
-                        onPointerDown={(event) => {
-                          beginWorkbenchPointerDrag(event, { sectionId: "files", type: "sidebar-section" });
-                        }}
-                      >
-                      {selected ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                      <div className="group/entry-row flex items-center justify-between gap-3 pr-2 md:pr-4.5">
-                        <button
-                          type="button"
-                          className="m-0 rounded-lg px-2 py-1.5 text-left text-base font-semibold leading-tight transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none md:-ml-2 md:py-0.5"
-                          onClick={() => {
-                            clearSelectionFromUi();
-                          }}
-                        >
-                          Explorer
-                        </button>
+                  <section className="shrink-0 pb-5">
+                    <WorkbenchSidebarSectionDisclosure
+                      actions={(
                         <div className="flex items-center gap-1">
                           <button
                             type="button"
@@ -3021,7 +2917,12 @@ export default function Workbench () {
                             <span className="sr-only">Create in project</span>
                           </button>
                         </div>
-                      </div>
+                      )}
+                      contentClassName="space-y-2"
+                      defaultOpen
+                      icon={FolderOpenIcon}
+                      title="Explorer"
+                    >
                       {!explorer.projects.length && !isProjectIdentityLoading ? (
                         <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted md:pr-4.5">
                           No projects were found.
@@ -3060,28 +2961,16 @@ export default function Workbench () {
                       {projectActionError ? (
                         <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger md:pr-4.5">{projectActionError}</p>
                       ) : null}
-                      </section>}
-                    </DropTarget>
-                    {browseSessions.length ? (
-                      <DropTarget
-                        dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
-                        enabled={(payload) => payload.type === "sidebar-section" && payload.sectionId !== "browseSessions"}
-                        onDrop={(payload) => {
-                          if (payload.type === "sidebar-section") moveSidebarSection(payload.sectionId, "browseSessions");
-                        }}
-                        range={{ x: 24, y: 18 }}
-                        {...getSidebarSectionDragProps("browseSessions")}
+                    </WorkbenchSidebarSectionDisclosure>
+                  </section>
+                  {browseSessions.length ? (
+                    <section className="shrink-0 pb-5">
+                      <WorkbenchSidebarSectionDisclosure
+                        contentClassName="space-y-2"
+                        defaultOpen
+                        icon={BrowserSessionIcon}
+                        title="Browse sessions"
                       >
-                        {({ selected }) => <section
-                          className={`relative space-y-2 pt-6 pb-6 transition-opacity${activeWorkbenchDrag?.payload.type === "sidebar-section" && activeWorkbenchDrag.payload.sectionId === "browseSessions" ? " opacity-45" : ""}`}
-                          onPointerDown={(event) => {
-                            beginWorkbenchPointerDrag(event, { sectionId: "browseSessions", type: "sidebar-section" });
-                          }}
-                        >
-                        {selected ? <div className="pointer-events-none absolute -top-1 left-2 right-6 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                        <div className="flex items-center justify-between gap-3 pr-2 md:pr-4.5">
-                          <p className="m-0 text-base font-semibold leading-tight">Browse sessions</p>
-                        </div>
                         <BrowseSessionsList
                           getSessionContextMenu={getBrowseSessionContextMenu}
                           isLoading={isBrowseSessionsLoading}
@@ -3092,27 +2981,13 @@ export default function Workbench () {
                             {browseSessionsError}
                           </p>
                         ) : null}
-                        </section>}
-                      </DropTarget>
-                    ) : null}
-                    <DropTarget
-                      dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
-                      enabled={(payload) => payload.type === "sidebar-section"}
-                      onDrop={(payload) => {
-                        if (payload.type === "sidebar-section") moveSidebarSectionToEnd(payload.sectionId);
-                      }}
-                      range={{ x: 24, y: 18 }}
-                      style={{ order: sidebarSectionOrder.length }}
-                    >
-                      {({ selected }) => <div className="relative h-5 shrink-0">
-                        {selected ? <div className="pointer-events-none absolute left-2 right-6 top-2 z-10 h-1 rounded-full bg-accent" aria-hidden="true" /> : null}
-                      </div>}
-                    </DropTarget>
-                    <ReloadNecessary
-                      order={sidebarSectionOrder.length + 1}
-                      reloadScopes={controls?.reloadScopes ?? null}
-                      store={threadSidebarStore}
-                    />
+                      </WorkbenchSidebarSectionDisclosure>
+                    </section>
+                  ) : null}
+                  <ReloadNecessary
+                    reloadScopes={controls?.reloadScopes ?? null}
+                    store={threadSidebarStore}
+                  />
                 </DropTargetBoundary>
               </div>
             </aside>

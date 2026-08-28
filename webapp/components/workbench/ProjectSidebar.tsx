@@ -9,16 +9,15 @@ import { useMemo, useState, useSyncExternalStore, type MouseEvent } from "react"
 
 import type { WorkbenchProjectOption, WorkbenchThreadSidebarStore } from "../../lib/types";
 import { createProjectHref } from "../../lib/workbench/navigation/workbench-route";
-import ChevronIcon from "./ChevronIcon";
 import { groupSidebarProjects, type ProjectSidebarProject } from "./project-sidebar-groups";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
-import ThreadDisclosure from "./thread-view/ThreadDisclosure";
-import { workbenchIconButtonClassName, workbenchNewEntryButtonClassName } from "./workbench-class-names";
 import { getWorkbenchThreadStatusClassName } from "./workbench-thread-status-colors";
-import { ProjectStatusSummaryIcon } from "./workbench-icons";
+import { ProjectIcon } from "./workbench-icons";
+import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
+import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButton";
 
 const EMPTY_PROJECT_THREAD_SUMMARIES = { projects: [] };
 
@@ -164,7 +163,6 @@ export default function ProjectSidebar({
   store: WorkbenchThreadSidebarStore | null;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [showOtherSummary, setShowOtherSummary] = useState(true);
   const [visibleTimeGroupCount, setVisibleTimeGroupCount] = useState(1);
   const summaries = useSyncExternalStore(
     store?.subscribe ?? (() => () => undefined),
@@ -176,7 +174,6 @@ export default function ProjectSidebar({
     [...grouped.alwaysVisibleProjects, ...grouped.timeGroups.flatMap(({ projects: entries }) => entries)]
       .map((entry) => [entry.project.id, entry]),
   ), [grouped]);
-  const activeEntry = entriesByProjectId.get(activeProjectId) ?? null;
   const otherCounts = useMemo(() => projects.reduce(
     (counts, project) => {
       if (project.id === activeProjectId) return counts;
@@ -198,51 +195,19 @@ export default function ProjectSidebar({
   const hasMoreTimeGroups = visibleTimeGroupCount < grouped.timeGroups.length;
   const nowMs = Date.now();
 
-  const summary = (
-    <div className="space-y-1.5">
-      <div className="group/entry-row flex min-w-0 items-center justify-between gap-2 py-1.5">
-        <span className="flex min-w-0 items-center gap-2 text-base font-semibold leading-tight text-text">
-          <ChevronIcon className="size-[1.1rem] transition-transform" data-thread-chevron />
-          <span>Projects</span>
-        </span>
-        <button
-          aria-label={showOtherSummary ? "Hide other project status summary" : "Show other project status summary"}
-          aria-pressed={showOtherSummary}
-          className={`${workbenchIconButtonClassName} ${workbenchNewEntryButtonClassName}${showOtherSummary ? " bg-accent-soft text-accent" : ""}${isOpen ? " invisible pointer-events-none" : ""}`}
-          data-thread-summary-action="true"
-          onClick={() => setShowOtherSummary((current) => !current)}
-          tabIndex={isOpen ? -1 : undefined}
-          title={showOtherSummary ? "Hide other project status summary" : "Show other project status summary"}
-          type="button"
-        >
-          <ProjectStatusSummaryIcon className="size-4" />
-        </button>
-      </div>
-      {!isOpen && activeEntry ? (
-        <ProjectCard active entry={activeEntry} nowMs={nowMs} onProjectLinkClick={onProjectLinkClick} />
-      ) : null}
-      {!isOpen && showOtherSummary && WorkbenchThreadStatusCounts.hasCounts(otherCounts) ? (
-        <div className="flex min-w-0 items-center justify-between gap-2 px-2 py-1 text-[0.72rem] text-muted">
-          <span className="truncate">Other projects</span>
-          <WorkbenchThreadStatusCounts counts={otherCounts} />
-        </div>
-      ) : null}
-    </div>
-  );
-
   return (
-    <section className="shrink-0 pb-6 md:pr-2.5">
-      <ThreadDisclosure
-        chevronClassName="hidden"
+    <section className="shrink-0 pb-5">
+      <WorkbenchSidebarSectionDisclosure
+        actions={<WorkbenchThreadStatusCountsButton counts={otherCounts} label="other project" />}
         contentClassName="pb-3"
+        icon={ProjectIcon}
         onToggle={(event) => {
           const nextOpen = event.currentTarget.open;
           setIsOpen(nextOpen);
           if (!nextOpen) setVisibleTimeGroupCount(1);
         }}
         open={isOpen}
-        summary={summary}
-        summaryClassName="min-h-11 items-start text-muted md:min-h-0"
+        title="Projects"
       >
         <nav aria-label="Projects" className="flex flex-col gap-1">
           {visibleProjects.map((entry) => (
@@ -265,7 +230,7 @@ export default function ProjectSidebar({
           ) : null}
           {!projects.length ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-muted">No projects were found.</p> : null}
         </nav>
-      </ThreadDisclosure>
+      </WorkbenchSidebarSectionDisclosure>
     </section>
   );
 }

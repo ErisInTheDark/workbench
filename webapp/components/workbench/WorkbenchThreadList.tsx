@@ -339,7 +339,7 @@ export default function WorkbenchThreadList({
       <a
         href={getThreadHref({ kind: "new" })}
         title={createThreadLabel}
-        className={`${workbenchThreadListButtonClassName}${blankThreadSelected ? " text-accent" : " text-muted"}`}
+        className={`${workbenchThreadListButtonClassName} mt-1${blankThreadSelected ? " text-accent" : " text-muted"}`}
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
           event.preventDefault();

@@ -17,11 +17,9 @@ import {
 const EMPTY_SUBSCRIBE = () => () => undefined;
 
 export default function ReloadNecessary({
-  order,
   reloadScopes,
   store,
 }: {
-  order?: number;
   reloadScopes: ((scopes: OrchestratorReloadScope[]) => Promise<OrchestratorReloadResponse>) | null;
   store: WorkbenchThreadSidebarStore | null;
 }) {
@@ -53,7 +51,6 @@ export default function ReloadNecessary({
     <section
       className="sticky bottom-0 z-20 mt-auto"
       data-reload-necessary="true"
-      style={order === undefined ? undefined : { order }}
     >
       <div className="rounded-[1.15rem] border border-[color-mix(in_srgb,var(--text)_20%,transparent)] bg-[color:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] p-2.5 backdrop-blur-md">
         <div

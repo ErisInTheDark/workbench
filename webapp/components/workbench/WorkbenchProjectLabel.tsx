@@ -26,7 +26,7 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
 }: {
   active?: boolean;
   project: WorkbenchProjectOption;
-  variant?: "card" | "thread";
+  variant?: "card" | "heading" | "thread";
 }) {
   const projectName = `${project.name || project.id}${project.kind === "workspace" ? " workspace" : ""}`;
   if (variant === "thread") {
@@ -34,6 +34,14 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
       <span className="flex min-w-0 items-baseline gap-1.5 leading-tight" title={getWorkbenchProjectFullPath(project)}>
         <span className="shrink-0 text-[0.68rem] font-medium text-[color-mix(in_srgb,var(--text)_72%,transparent)]">{projectName}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-[0.64rem] font-normal text-muted">{getWorkbenchProjectDisplayPath(project)}</span>
+      </span>
+    );
+  }
+  if (variant === "heading") {
+    return (
+      <span className="flex min-w-0 items-baseline gap-2 leading-tight" title={getWorkbenchProjectFullPath(project)}>
+        <span className="shrink-0 truncate text-[1.05rem] font-semibold text-text">{projectName}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[0.78rem] font-normal text-muted">{getWorkbenchProjectDisplayPath(project)}</span>
       </span>
     );
   }

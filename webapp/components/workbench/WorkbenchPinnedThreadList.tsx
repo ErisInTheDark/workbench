@@ -20,15 +20,16 @@ import {
   type WorkbenchPinnedThreadSummaryEntry,
   type WorkbenchThreadTarget,
 } from "../../lib/workbench/thread/thread-state";
-import ThreadDisclosure from "./thread-view/ThreadDisclosure";
 import { PinIcon } from "./workbench-icons";
 import Draggable from "./drag/Draggable";
 import DropTarget from "./drag/DropTarget";
 import DropTargetBoundary from "./drag/DropTargetBoundary";
+import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
+import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButton";
 
 const THREAD_ORDER_DROP_RANGE = { x: 24, y: 100_000 } as const;
 type GlobalPinnedEntry = { entry: WorkbenchPinnedThreadSummaryEntry; project: WorkbenchProjectOption };
@@ -211,25 +212,15 @@ export default function WorkbenchPinnedThreadList({
       </WorkbenchThreadFolder>
     </li>
   );
-  const summary = (
-    <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 py-1.5">
-      <PinIcon className="size-4 shrink-0" />
-      <span className="truncate text-[0.78rem] font-medium text-text">Pinned threads</span>
-      {!isOpen && WorkbenchThreadStatusCounts.hasCounts(statusCounts)
-        ? <WorkbenchThreadStatusCounts counts={statusCounts} />
-        : <span />}
-    </div>
-  );
-
   return (
-    <DropTargetBoundary className="space-y-1">
-      <ThreadDisclosure
-        className="mb-1"
+    <DropTargetBoundary className="pb-5">
+      <WorkbenchSidebarSectionDisclosure
+        actions={<WorkbenchThreadStatusCountsButton counts={statusCounts} label="pinned thread" />}
         contentClassName="mt-1"
+        icon={PinIcon}
         open={isOpen}
         onToggle={(event) => setIsOpen(event.currentTarget.open)}
-        summary={summary}
-        summaryClassName="min-h-11 text-muted md:min-h-0"
+        title="Pinned threads"
       >
         <ul className="m-0 flex flex-col gap-0.5 p-0">
           {items.flatMap((item) => {
@@ -240,7 +231,7 @@ export default function WorkbenchPinnedThreadList({
           })}
           {renderDropMarker("", null)}
         </ul>
-      </ThreadDisclosure>
+      </WorkbenchSidebarSectionDisclosure>
     </DropTargetBoundary>
   );
 }
