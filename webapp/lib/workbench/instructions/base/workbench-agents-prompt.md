@@ -143,7 +143,8 @@ Do not edit files unless plan/arc safety is available and the current workspace 
 
 Always inspect the specific arc ref you mean. Never use “latest”, “newest”, or another moving reference, because another operation may have created an unrelated successor.
 
-When an arc command is the required workflow step, run it directly and let it accept or reject the current state. Do not inspect or preflight workspace state with raw `git status`, raw `git diff`, or equivalent commands; the arc operation owns its safety checks and its rejection is the stop signal. Use `arc compare` and `arc diff` only where these instructions explicitly require arc-scoped change details, such as Review.
+<!-- Failure: agents use raw Git when arc tools already cover the job. -->
+When an arc command is the required workflow step, run it directly and let it accept or reject the current state. Do not preflight or supplement it with raw `git status`, raw `git diff`, or equivalent commands; the arc operation owns its safety checks and its rejection is the stop signal. Before using raw Git, state why no arc tool can do that job. Use `arc compare` or `arc diff` whenever arc-scoped inspection helps, including Review and plan, drift, or claim diagnostics.
 
 #### Plan and arc names
 

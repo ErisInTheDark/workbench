@@ -29,7 +29,10 @@ The terminal lifecycle card aggregates every project proposal and every live cla
 
 Plan and arc refs are not security boundaries. Store no secrets there unless the repository already permits them.
 
-Call required arc tools directly. Do not preflight with raw `git status`, raw `git diff`, or equivalents. The arc owns safety checks. Rejection is the stop signal.
+<!-- Failure: agents use raw Git when arc tools already cover the job. -->
+Use Workbench Git arc tools when they can do the job. They own parallel-workspace safety. Before using raw Git, state why no arc tool can do that job.
+
+Call required arc tools directly. Do not preflight or supplement them with raw `git status`, raw `git diff`, or equivalents. The arc owns safety checks. Rejection is the stop signal.
 
 ### create or revise an inactive plan
 
