@@ -1781,7 +1781,7 @@ test("proper questionnaires and late-response history survive controller restart
   await fs.rm(root, { force: true, recursive: true });
 });
 
-test("wake waits for every unsnoozed row to become settlement-ready, then wakes only the highest projected snoozed thread", async () => {
+test("wake waits for every unsnoozed row to become settlement-ready, then wakes only the highest projected root snoozed thread", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-one-wake-"));
   const snoozed = (threadId: string, orderAt: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
     activityAt: orderAt,
@@ -1823,7 +1823,7 @@ test("wake waits for every unsnoozed row to become settlement-ready, then wakes 
   });
   const controller = createController();
   await controller.open("observer", "project");
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitFor(async () => (await controller.getSnapshot("project")).entries.length === providerEntries.length, "Threads were not discovered.");
   const reordered = await controller.handleRequest("observer", {
     beforeKey: "codex:a",
     destinationFolderId: null,
@@ -1833,6 +1833,15 @@ test("wake waits for every unsnoozed row to become settlement-ready, then wakes 
     sourceKey: "codex:c",
   });
   assert.equal("result" in reordered && (reordered.result as { accepted?: boolean }).accepted, true);
+  const folderId = "00000000-0000-4000-8000-000000000042";
+  const foldered = await controller.handleRequest("observer", {
+    folderId,
+    method: "workbench/thread-state/display-order/folder/create",
+    projectId: "project",
+    sourceKey: "codex:c",
+    title: "Keep asleep",
+  });
+  assert.equal("result" in foldered && (foldered.result as { accepted?: boolean }).accepted, true);
   const afterReorder = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { displayOrder?: unknown };
   assert.ok(afterReorder.displayOrder);
   await controller.observeLifecycle("codex", "child", { kind: "turnCompleted", status: "completed", turnId: "child-turn" });
@@ -1842,20 +1851,22 @@ test("wake waits for every unsnoozed row to become settlement-ready, then wakes 
   assert.equal(blockedSnoozeState.get("c"), true);
   await controller.observeLifecycle("codex", "attention", { kind: "userCompleted" });
   const snoozeState = new Map((await controller.getSnapshot("project")).entries.flatMap((entry) => entry.entryKind === "thread" ? [[entry.identity.threadId, entry.metadata.snoozed] as const] : []));
-  assert.equal(snoozeState.get("c"), false);
-  assert.equal(snoozeState.get("a"), true);
+  assert.equal(snoozeState.get("c"), true);
+  assert.equal(snoozeState.get("a"), false);
   assert.equal(snoozeState.get("b"), true);
-  const afterWake = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { displayOrder?: unknown };
-  assert.equal("displayOrder" in afterWake, false);
+  const afterWake = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { displayOrder?: { folders?: Array<{ threadKeys: string[] }> } };
+  assert.deepEqual(afterWake.displayOrder?.folders?.[0]?.threadKeys, ["codex:c"]);
   await controller.dispose();
 
   const reopened = createController();
   await reopened.open("reopened", "project");
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const reopenedSnoozeState = new Map((await reopened.getSnapshot("project")).entries.flatMap((entry) => entry.entryKind === "thread" ? [[entry.identity.threadId, entry.metadata.snoozed] as const] : []));
-  assert.equal(reopenedSnoozeState.get("c"), false);
-  assert.equal(reopenedSnoozeState.get("a"), true);
+  await waitFor(async () => (await reopened.getSnapshot("project")).entries.length === providerEntries.length, "Reopened threads were not discovered.");
+  const reopenedSnapshot = await reopened.getSnapshot("project");
+  const reopenedSnoozeState = new Map(reopenedSnapshot.entries.flatMap((entry) => entry.entryKind === "thread" ? [[entry.identity.threadId, entry.metadata.snoozed] as const] : []));
+  assert.equal(reopenedSnoozeState.get("c"), true);
+  assert.equal(reopenedSnoozeState.get("a"), false);
   assert.equal(reopenedSnoozeState.get("b"), true);
+  assert.deepEqual(reopenedSnapshot.displayOrder.folders?.[0]?.threadKeys, ["codex:c"]);
   await reopened.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });

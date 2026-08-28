@@ -18,6 +18,7 @@ import {
 } from "../lib/workbench/thread/thread-display-layout";
 import {
   createWorkbenchThreadFolder,
+  findWorkbenchThreadFolder,
   getWorkbenchThreadDisplayKey,
   isWorkbenchThreadDisplayOrderEmpty,
   moveWorkbenchThreadDisplayItem,
@@ -581,7 +582,11 @@ export default class WorkbenchThreadStateController {
       if (parsedNext.entryKind === "draft") throw new Error("Lifecycle transitions cannot produce draft entries.");
       state.entries.set(key, parsedNext);
       if (!wakeReadyBefore && areAllUnsnoozedThreadEntriesSettlementReady(this.naturallyOrderedEntries(state))) {
-        const highestSnoozed = this.snapshot(projectId, state).entries.find((candidate) => getThreadSidebarGroup(candidate) === "snoozed");
+        const snapshot = this.snapshot(projectId, state);
+        const highestSnoozed = snapshot.entries.find((candidate) => (
+          getThreadSidebarGroup(candidate) === "snoozed"
+          && !findWorkbenchThreadFolder(snapshot.displayOrder, getWorkbenchThreadDisplayKey(candidate))
+        ));
         if (highestSnoozed) {
           const candidateKey = getWorkbenchThreadDisplayKey(highestSnoozed);
           const candidate = state.entries.get(candidateKey);
