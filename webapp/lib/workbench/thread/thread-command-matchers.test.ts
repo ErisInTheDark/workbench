@@ -154,7 +154,7 @@ test("every valid simple typed wb MCP route emphasizes its important target", ()
     ["thread_resume", {}, ["plain", "primary"]],
     ["git_add", { paths: ["src/a.ts"] }, ["plain", "primary"]],
     ["git_unstage", { paths: ["src/a.ts"] }, ["plain", "primary"]],
-    ["git_commit", { message: "Commit" }, ["plain", "primary"]],
+    ["git_commit", { description: "Details", title: "Commit" }, ["plain", "primary"]],
     ["subagent_list", {}, ["plain", "primary"]],
     ["subagent_profiles", {}, ["plain", "primary"]],
     ["browse_run", { commands: ["snapshot --compact"] }, ["plain", "primary"]],
@@ -664,7 +664,7 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
   assert.equal(selection.claimedBy, "workbench-git.selection");
 
   const commit = getThreadCommandDisplay({
-    command: 'wb git commit --worktree C:/workspace/.worktrees/lab --message "A bounded commit"',
+    command: 'wb git commit --worktree C:/workspace/.worktrees/lab --title "A bounded commit"',
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -780,7 +780,7 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
   assertRouteOnlyDisplay(compare, "git-arc.compare");
 
   const proposal = getThreadCommandDisplay({
-    command: "wb git arc propose -m Title -- src/file.ts",
+    command: "wb git arc propose --title Title -- src/file.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -793,7 +793,7 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
   ].join("\n")), [{ additions: 4, deletions: 2, path: "src/file.ts", status: "M" }]);
   assert.equal(parseGitCheckpointProposalId("Workbench arc proposal: proposal-one\n"), "proposal-one");
   assert.deepEqual(parseGitCheckpointCommitCommand(
-    'wb git arc propose -m "Polish checkpoint cards" -m "Keep quoted context useful." -- src/one.ts "src/two words.ts"',
+    'wb git arc propose --title "Polish checkpoint cards" --description "Keep quoted context useful." -- src/one.ts "src/two words.ts"',
   ), {
     amend: false,
     description: "Keep quoted context useful.",
@@ -801,20 +801,20 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
     title: "Polish checkpoint cards",
   });
   assert.deepEqual(parseGitCheckpointCommitCommand(
-    "wb git arc propose -m Title",
-  ), {
-    amend: false,
-    description: "",
-    paths: [],
-    title: "Title",
-  });
-  assert.deepEqual(parseGitCheckpointCommitCommand(
-    "wb git arc propose --root web -m Title -- src/client.ts",
+    "wb git arc propose --root web --title Title -- src/client.ts",
   ), {
     amend: false,
     description: "",
     paths: ["src/client.ts"],
     rootId: "web",
+    title: "Title",
+  });
+  assert.deepEqual(parseGitCheckpointCommitCommand(
+    "wb git arc propose -m Title",
+  ), {
+    amend: false,
+    description: "",
+    paths: [],
     title: "Title",
   });
   assert.equal(parseGitCheckpointCommitCommand("wb git arc propose -- src/one.ts"), null);
@@ -869,9 +869,9 @@ test("current-plan and proposal-lifecycle commands expose route-only matcher cla
   assert.equal(getGitArcMatcherAction(wrappedPlanRemove.claimedBy), "planRemove");
 });
 
-test("PowerShell-wrapped arc proposals preserve escaped messages and apostrophes", () => {
+test("PowerShell-wrapped arc proposals preserve escaped titles, descriptions, and apostrophes", () => {
   const display = getThreadCommandDisplay({
-    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "wb git arc propose -m \"Group thread context menu controls\" -m \"Add grouped controls and preserve Chiri's lifecycle status.\""`,
+    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "wb git arc propose --title \"Group thread context menu controls\" --description \"Add grouped controls and preserve Chiri's lifecycle status.\""`,
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -895,7 +895,7 @@ test("PowerShell literal here-string proposal setup renders and preserves Markdo
     command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "$description = @'
 ${description}
 '@
-wb git arc propose --replace proposal-one -m \"make arc Git transactions consistent\" -m $description"`,
+wb git arc propose --replace proposal-one --title \"make arc Git transactions consistent\" --description $description"`,
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -921,7 +921,7 @@ test("PowerShell interpolated here-string proposal setup remains raw", () => {
     command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "$description = @\"
 - include $dynamicValue
 \"@
-wb git arc propose -m \"dynamic proposal\" -m $description"`,
+wb git arc propose --title \"dynamic proposal\" --description $description"`,
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,

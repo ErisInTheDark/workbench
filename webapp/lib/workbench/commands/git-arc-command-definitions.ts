@@ -288,10 +288,10 @@ function inspectionCommand(action: "compare" | "diff") {
 }
 
 const propose = defineWorkbenchAgentCommand({
-  description: "Create a durable editable commit proposal from claimed changes, or change an accepted proposal's message by exact id.",
+  description: "Create a durable editable commit proposal from claimed changes, or change an accepted proposal's title and description by exact id.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "propose"],
-  usage: "wb git arc propose [--root <root-id>] [--amend [<proposal-id>]] [--replace <proposal-id>] [-m <title> [-m <description>]] [-- <claimed-path>...]",
+  usage: "wb git arc propose [--root <root-id>] [--amend [<proposal-id>]] [--replace <proposal-id>] [--title <title>] [--description <description>] [-- <claimed-path>...]",
   inputSchema: z.object({
     amend: z.boolean().default(false),
     amendProposalId: requiredText.optional(),
@@ -312,14 +312,23 @@ const propose = defineWorkbenchAgentCommand({
       amendProposalId = normalizedArgs[amendIndex + 1];
       normalizedArgs.splice(amendIndex + 1, 1);
     }
-    const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(normalizedArgs, { boolean: ["--amend"], values: ["-m", "--replace", "--root"] }), {
-      boolean: ["--amend"], leadingDashValues: ["-m"], repeatable: ["-m"], values: ["--replace", "--root"], trailing: true,
+    const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(normalizedArgs, {
+      boolean: ["--amend"],
+      values: ["--description", "--replace", "--root", "--title"],
+    }), {
+      boolean: ["--amend"],
+      leadingDashValues: ["--description", "--title"],
+      values: ["--description", "--replace", "--root", "--title"],
+      trailing: true,
     });
-    const messages = flags.repeated("-m").map((value) => value.trim());
-    if (messages.length > 2) throw new Error("Arc proposal accepts at most two -m values.");
     return {
-      amend: flags.has("--amend"), amendProposalId, description: messages[1] ?? "", paths: flags.trailing,
-      replaceProposalId: flags.optional("--replace") ?? undefined, rootId: flags.optional("--root") ?? undefined, title: messages[0] ?? "",
+      amend: flags.has("--amend"),
+      amendProposalId,
+      description: flags.optional("--description") ?? "",
+      paths: flags.trailing,
+      replaceProposalId: flags.optional("--replace") ?? undefined,
+      rootId: flags.optional("--root") ?? undefined,
+      title: flags.optional("--title") ?? "",
     };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {

@@ -9,7 +9,7 @@ import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 function proposalCommandItem(): Extract<ThreadItem, { type: "commandExecution" }> {
   return {
     aggregatedOutput: "Workbench arc proposal: proposal-one\n",
-    command: "wb git arc propose -m \"Clean finished thread tail\" -- src/one.ts",
+    command: "wb git arc propose --title \"Clean finished thread tail\" -- src/one.ts",
     commandActions: [],
     cwd: "C:/workspace",
     durationMs: 10,

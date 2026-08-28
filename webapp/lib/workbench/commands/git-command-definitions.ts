@@ -39,25 +39,35 @@ function selectionCommand(action: "add" | "unstage") {
 }
 
 const commit = defineWorkbenchAgentCommand({
-  description: "Commit selected files, or amend them into one linear unpushed ancestor, then clear the selection on success.",
+  description: "Commit selected files with a title and optional description, or amend them into one linear unpushed ancestor, then clear the selection on success.",
   helpGroups: ["git"],
   words: ["git", "commit"],
-  usage: "wb git commit [--worktree <absolute-path>] [--amend <commit-sha>] --message <message>",
-  inputSchema: z.object({ amendTarget: requiredText.optional(), message: requiredText, targetWorktree: requiredText.optional() }).strict(),
+  usage: "wb git commit [--worktree <absolute-path>] [--amend <commit-sha>] --title <title> [--description <description>]",
+  inputSchema: z.object({
+    amendTarget: requiredText.optional(),
+    description: z.string().default(""),
+    targetWorktree: requiredText.optional(),
+    title: requiredText,
+  }).strict(),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--amend", "--message", "--worktree"] });
+    const flags = new WorkbenchAgentCommandFlags(args, {
+      leadingDashValues: ["--description", "--title"],
+      values: ["--amend", "--description", "--title", "--worktree"],
+    });
     return {
       amendTarget: flags.optional("--amend") ?? undefined,
-      message: flags.required("--message"),
+      description: flags.optional("--description") ?? "",
       targetWorktree: flags.optional("--worktree") ?? undefined,
+      title: flags.required("--title"),
     };
   },
   buildRequest(input, { callerThreadId, cwd }) {
+    const description = input.description.trim();
     return postWorkbenchAgentCommand("/api/git", {
       action: "commit",
       ...(input.amendTarget ? { amendTarget: input.amendTarget } : {}),
       cwd,
-      message: input.message,
+      message: description ? `${input.title}\n\n${description}` : input.title,
       ...(input.targetWorktree ? { targetWorktree: input.targetWorktree } : {}),
       threadId: requireCallerThreadId(callerThreadId),
     });

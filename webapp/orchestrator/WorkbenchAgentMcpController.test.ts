@@ -114,6 +114,16 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.match(planProperties.paths?.description ?? "", /sibling-claimed files.*does not claim/u);
     assert.match(planProperties.adoptPaths?.description ?? "", /dirty unclaimed work.*Never use for sibling-owned changes/u);
     assert.match(planProperties.adoptPaths?.description ?? "", /may overlap ordinary scope.*minimal claim/u);
+    const commit = inventory.tools.find(({ name }) => name === "git_commit");
+    assert.ok(commit);
+    assert.deepEqual(Object.keys(commit.inputSchema.properties ?? {}).sort(), ["amendTarget", "description", "targetWorktree", "title"]);
+    assert.equal(commit.inputSchema.required?.includes("title") ?? false, true);
+    assert.equal(commit.inputSchema.required?.includes("description") ?? false, false);
+    const proposal = inventory.tools.find(({ name }) => name === "git_arc_propose");
+    assert.ok(proposal);
+    assert.deepEqual(Object.keys(proposal.inputSchema.properties ?? {}).sort(), [
+      "amend", "amendProposalId", "description", "paths", "replaceProposalId", "rootId", "title",
+    ]);
     assert.equal(inventory.tools.some(({ name }) => name === "orchestrator_reload" || name === "reload" || name === "dirt"), false);
     const resume = inventory.tools.find(({ name }) => name === "thread_resume");
     assert.ok(resume);

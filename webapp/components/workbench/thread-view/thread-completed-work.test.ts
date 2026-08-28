@@ -82,7 +82,7 @@ test("the last successful task status starts always-mounted terminal output", ()
     command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'wb thread status --status blocked'`,
     id: "last-status",
   });
-  const proposal = commandItem({ command: "wb git arc propose -m Done", id: "proposal" });
+  const proposal = commandItem({ command: "wb git arc propose --title Done", id: "proposal" });
   const partition = partitionCompletedThreadWork({
     finalAgentMessageId: finalItem.id,
     itemTimeline: [
@@ -105,7 +105,7 @@ test("a successful wb MCP task status starts always-mounted terminal output", ()
   for (const agentStatus of ["completed", "blocked"] as const) {
     const work = commandItem({ command: "pnpm test", id: "work" });
     const status = mcpStatusItem({ agentStatus, id: `mcp-status-${agentStatus}` });
-    const proposal = commandItem({ command: "wb git arc propose -m Done", id: "proposal" });
+    const proposal = commandItem({ command: "wb git arc propose --title Done", id: "proposal" });
     const partition = partitionCompletedThreadWork({
       finalAgentMessageId: finalItem.id,
       items: [userItem, work, status, proposal, finalItem],

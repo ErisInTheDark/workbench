@@ -312,9 +312,16 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
   cursor += 2;
 
   let amend = false;
+  let description: string | null = null;
   let replacementProposalId: string | null = null;
   let rootId: string | null = null;
-  const messages: string[] = [];
+  let title: string | null = null;
+  const legacyMessages: string[] = [];
+  const resolveLiteralValue = (value: string) => (
+    literalAssignment && value.toLowerCase() === `$${literalAssignment.variableName.toLowerCase()}`
+      ? literalAssignment.value
+      : value
+  );
   for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
     const flag = tokens[cursor];
     if (flag === "--amend") {
@@ -335,22 +342,33 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
       cursor += 1;
       continue;
     }
-    if (flag !== "-m" || !value) return null;
-    messages.push(
-      literalAssignment && value.toLowerCase() === `$${literalAssignment.variableName.toLowerCase()}`
-        ? literalAssignment.value
-        : value,
-    );
+    if (flag === "--title") {
+      if (title !== null || !value) return null;
+      title = resolveLiteralValue(value);
+      cursor += 1;
+      continue;
+    }
+    if (flag === "--description") {
+      if (description !== null || !value) return null;
+      description = resolveLiteralValue(value);
+      cursor += 1;
+      continue;
+    }
+    if (flag !== "-m" || !value || title !== null || description !== null) return null;
+    legacyMessages.push(resolveLiteralValue(value));
     cursor += 1;
   }
   const paths = tokens[cursor] === "--" ? tokens.slice(cursor + 1) : [];
-  if ((!amend && messages.length < 1) || messages.length > 2) return null;
+  if (legacyMessages.length > 2) return null;
+  title ??= legacyMessages[0] ?? "";
+  description ??= legacyMessages[1] ?? "";
+  if (!amend && !title) return null;
   return {
     amend,
-    description: messages[1] ?? "",
+    description,
     paths,
     ...(rootId ? { rootId } : {}),
-    title: messages[0],
+    title,
   };
 }
 

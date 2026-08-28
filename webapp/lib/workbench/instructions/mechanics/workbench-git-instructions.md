@@ -4,7 +4,7 @@ When the workflow or user explicitly authorizes a commit, use the typed wb MCP c
 
 - `mcp__wb__git_add` selects the exact currently changed files beneath `paths` for this thread.
 - `mcp__wb__git_unstage` removes exact files or descendants from this thread's selection. Pass `paths: ["."]` to clear it.
-- `mcp__wb__git_commit` commits the selected files and clears the selection after success. Use `amendTarget` only for the exact supported unpushed linear commit.
+- `mcp__wb__git_commit` commits selected files using `title` and optional `description`, then clears the selection. Use `amendTarget` only for a supported unpushed linear commit.
 - Use `targetWorktree` when the control-plane project owns the thread but the files belong to another registered worktree of the same repository.
 
 Selections are thread- and worktree-isolated but do not snapshot contents. The commit reads later edits while excluding unrelated ordinary staged files.
@@ -83,13 +83,13 @@ In Review, choose one initial arc-scoped inspection. Do not run compare first wh
 
 ### propose, replace, rescind, or amend
 
-<!-- Failure: long arcs forget outcomes; titles hide changes; bodies hide work. -->
-Track all arc outcomes. Reconcile the list with the full selected diff. New proposals call `mcp__wb__git_arc_propose` with a main line and omit `paths` for all changed claims. It opens the UI without committing. Make the main line a simple symptom or outcome that encompasses the full changeset whenever possible. Use continuation to explain concrete work behind that summary. Separately identify every distinctly special or unrelated bundled item, why included, and its additional technical changes. Do not repeat the main line or present expected constituent work as an unrelated "also."
+<!-- Failure: long arcs forget outcomes; titles hide changes; descriptions hide work. -->
+Track all arc outcomes. Reconcile the list with the full selected diff. New proposals call `mcp__wb__git_arc_propose` with `title`, optional `description`, and no `paths` for all changed claims. It opens the UI without committing. Make `title` a simple symptom or outcome encompassing the full changeset. Use `description` for concrete work beyond that summary. Identify every distinct or unrelated bundled item, why included, and its additional technical changes. Do not repeat `title` or present expected constituent work as an unrelated "also."
 
 Set `replaceProposalId` to replace exactly one pending proposal. Use `mcp__wb__git_arc_rescind` to rescind exactly one pending proposal.
 
 <!-- Failure: corrective amends rewrite history; additive amends hide scope. -->
-Compare the amended commit with its existing main line and continuation. When changes only make the stated outcome work correctly, omit both fields to inherit them unchanged. Update them to cover added functionality, scope, and all distinct or unrelated fixes. Set `amend: true` and, when needed, `amendProposalId`. Targeted amend supports linear unpushed history and atomically remaps proposal metadata and arc refs.
+Compare the amended commit with its `title` and `description`. When changes only make the stated outcome work, omit both fields to inherit them. Update both fields for added functionality, scope, and all distinct or unrelated fixes. Set `amend: true` and, when needed, `amendProposalId`. Targeted amend supports linear unpushed history and atomically remaps proposal metadata and arc refs.
 
 Proposal acceptance atomically changes branch history, proposal metadata, the accepted receipt ledger, and live claims. It preserves excluded newer work.
 

@@ -49,7 +49,7 @@ test("visible proposal intents associate title and description with the proposal
       commandItem("ordinary", "pnpm typecheck", null),
       commandItem(
         "proposal",
-        "wb git arc propose -m \"Preview hoisted proposal\" -m \"Show both messages immediately.\" -- src/one.ts",
+        "wb git arc propose --title \"Preview hoisted proposal\" --description \"Show both fields immediately.\" -- src/one.ts",
         "Workbench arc proposal: proposal-one\n",
       ),
     ])],
@@ -57,7 +57,7 @@ test("visible proposal intents associate title and description with the proposal
 
   assert.deepEqual(intents.get("proposal-one"), {
     amend: false,
-    description: "Show both messages immediately.",
+    description: "Show both fields immediately.",
     paths: ["src/one.ts"],
     title: "Preview hoisted proposal",
   });
@@ -69,12 +69,12 @@ test("later loaded transcript entries replace an earlier intent for the same pro
     turns: [
       turn("turn-one", [commandItem(
         "proposal-one",
-        "wb git arc propose -m \"Earlier title\"",
+        "wb git arc propose --title \"Earlier title\"",
         "Workbench arc proposal: shared-proposal\n",
       )]),
       turn("turn-two", [commandItem(
         "proposal-two",
-        "wb git arc propose -m \"Later title\" -m \"Latest visible description\"",
+        "wb git arc propose --title \"Later title\" --description \"Latest visible description\"",
         "Workbench arc proposal: shared-proposal\n",
       )]),
     ],
@@ -89,7 +89,7 @@ test("visible proposal intents resolve a preceding literal PowerShell here-strin
   const command = String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "$description = @'
 ${description}
 '@
-wb git arc propose --replace proposal-one -m \"keep proposal recovery ordinary\" -m $description"`;
+wb git arc propose --replace proposal-one --title \"keep proposal recovery ordinary\" --description $description"`;
   const intents = getThreadGitArcProposalIntents({
     projectRootPath: "C:/workspace",
     turns: [turn("turn-one", [commandItem(
