@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests verify linked project aliases resolve to canonical Git and workspace roots. Keywords: project, discovery, junction, symlink, realpath, test.
+ * - No production exports; Node tests verify external aliases remain selectable while indirect duplicates collapse onto directly discovered Git roots. Keywords: project, discovery, duplicate, junction, symlink, realpath, test.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -12,11 +12,14 @@ function normalizePath(filePath: string) {
   return filePath.replace(/\\/gu, "/");
 }
 
-test("discovers a linked Git project by alias and resolves canonical harness roots", async (context) => {
+test("preserves external Git aliases while suppressing indirect duplicates of direct roots", async (context) => {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-junction-"));
   const projectsRoot = path.join(temporaryRoot, "projects");
+  const configuredProjectsRoot = path.join(temporaryRoot, "projects-link");
   const canonicalProjectRoot = path.join(temporaryRoot, "external", "canonical-target");
   const linkedProjectRoot = path.join(projectsRoot, "manyworld");
+  const directProjectRoot = path.join(projectsRoot, "stories", "notekeeper+kaia");
+  const indirectProjectRoot = path.join(projectsRoot, ".machine-cache", "v3", "projects", "opaque-hash");
   const workbenchLibraryRoot = path.join(temporaryRoot, "library");
   const originalProjectsRoot = process.env.WORKBENCH_PROJECTS_ROOT;
   const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
@@ -36,18 +39,24 @@ test("discovers a linked Git project by alias and resolves canonical harness roo
   });
 
   await fs.mkdir(path.join(canonicalProjectRoot, ".git"), { recursive: true });
+  await fs.mkdir(path.join(directProjectRoot, ".git"), { recursive: true });
+  await fs.mkdir(path.dirname(indirectProjectRoot), { recursive: true });
   await fs.mkdir(projectsRoot, { recursive: true });
   await fs.writeFile(path.join(canonicalProjectRoot, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+  await fs.writeFile(path.join(directProjectRoot, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
   await fs.writeFile(
     path.join(projectsRoot, "manyworld.code-workspace"),
     JSON.stringify({ folders: [{ path: "manyworld" }] }),
     "utf8",
   );
   await fs.symlink(canonicalProjectRoot, linkedProjectRoot, process.platform === "win32" ? "junction" : "dir");
+  await fs.symlink(directProjectRoot, indirectProjectRoot, process.platform === "win32" ? "junction" : "dir");
+  await fs.symlink(projectsRoot, configuredProjectsRoot, process.platform === "win32" ? "junction" : "dir");
 
-  process.env.WORKBENCH_PROJECTS_ROOT = projectsRoot;
+  process.env.WORKBENCH_PROJECTS_ROOT = configuredProjectsRoot;
   process.env.WORKBENCH_LIBRARY_ROOT = workbenchLibraryRoot;
   const { discoverProjects, resolveDiscoveredProject, resolveProjectRoot } = await import("./project");
+  const { resolveAgentEndpointProjectFromProjects } = await import("./workbench/project/agent-endpoint-project");
   const canonicalRootPath = normalizePath(await fs.realpath(canonicalProjectRoot));
   const projects = await discoverProjects();
 
@@ -75,4 +84,16 @@ test("discovers a linked Git project by alias and resolves canonical harness roo
   const resolvedWorkspaceProject = await resolveDiscoveredProject(workspaceProject);
   assert.equal(normalizePath(resolvedWorkspaceProject.root), canonicalRootPath);
   assert.equal(normalizePath(resolvedWorkspaceProject.roots[0]?.root ?? ""), canonicalRootPath);
+
+  const directProject = projects.find((project) => project.kind === "git" && project.id === "stories/notekeeper+kaia");
+  assert.ok(directProject);
+  assert.equal(normalizePath(directProject.rootPath), normalizePath(await fs.realpath(directProjectRoot)));
+  assert.equal(
+    projects.some((project) => project.kind === "git" && project.id === ".machine-cache/v3/projects/opaque-hash"),
+    false,
+  );
+
+  const agentProject = await resolveAgentEndpointProjectFromProjects(projects, indirectProjectRoot);
+  assert.equal(agentProject.project.id, directProject.id);
+  assert.equal(normalizePath(agentProject.project.rootPath), normalizePath(await fs.realpath(directProjectRoot)));
 });

@@ -609,12 +609,42 @@ async function walkProjects(currentDir: string, projects: WorkbenchProjectOption
   }
 }
 
+function filterIndirectGitProjectDuplicates(
+  projects: readonly WorkbenchProjectOption[],
+  canonicalProjectsRoot: string,
+) {
+  const directGitRootPaths = new Set<string>();
+  for (const project of projects) {
+    if (project.kind !== "git") {
+      continue;
+    }
+
+    const discoveryPath = path.resolve(canonicalProjectsRoot, project.relativePath);
+    const canonicalRootPath = normalizePathForComparison(project.rootPath);
+    if (normalizePathForComparison(discoveryPath) === canonicalRootPath) {
+      directGitRootPaths.add(canonicalRootPath);
+    }
+  }
+
+  return projects.filter((project) => {
+    if (project.kind !== "git") {
+      return true;
+    }
+
+    const canonicalRootPath = normalizePathForComparison(project.rootPath);
+    const discoveryPath = path.resolve(canonicalProjectsRoot, project.relativePath);
+    return normalizePathForComparison(discoveryPath) === canonicalRootPath
+      || !directGitRootPaths.has(canonicalRootPath);
+  });
+}
+
 export async function discoverProjects() {
   const projects: WorkbenchProjectOption[] = [];
   const libraryProject = await createWorkbenchLibraryProjectOption();
   await walkProjects(projectsRoot, projects);
+  const canonicalProjectsRoot = await resolveCanonicalPath(projectsRoot);
   const normalizedLibraryRoot = normalizePathForComparison(workbenchLibraryRoot);
-  const discoveredProjects = projects
+  const discoveredProjects = filterIndirectGitProjectDuplicates(projects, canonicalProjectsRoot)
     .filter((project) => normalizePathForComparison(project.rootPath) !== normalizedLibraryRoot)
     .sort((left, right) => {
       const leftTime = left.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
