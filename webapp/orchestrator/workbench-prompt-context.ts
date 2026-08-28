@@ -39,6 +39,20 @@ function readInstructionScope(value: unknown): WorkbenchPromptContext["instructi
   return value === "threadUtilities" ? value : undefined;
 }
 
+function readMentionedSkillPaths(value: unknown) {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const paths = Array.from(new Set(
+    value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  ));
+  return paths.length ? paths : undefined;
+}
+
 function readWorkbenchProjectRoot(value: unknown): WorkbenchProjectRoot | null {
   const record = asRecord(value);
   return typeof record?.id === "string"
@@ -74,6 +88,7 @@ export function readWorkbenchPromptContext(message: JsonRpcRequest): WorkbenchPr
     cwd: asString(value.cwd),
     instructionScope: readInstructionScope(value.instructionScope),
     instructionInjections: readInstructionInjections(value.instructionInjections),
+    mentionedSkillPaths: readMentionedSkillPaths(value.mentionedSkillPaths),
     projectId: asString(value.projectId),
     roots,
     subagentName: asString(value.subagentName),

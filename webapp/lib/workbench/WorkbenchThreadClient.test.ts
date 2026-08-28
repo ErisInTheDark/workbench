@@ -20,6 +20,7 @@ type SocketRequest = {
   method: string;
   params?: Record<string, unknown>;
   workbenchHarness?: string;
+  workbenchPromptContext?: Record<string, unknown>;
   workbenchThreadContextEntries?: { mode: string };
   workbenchThreadHydration?: Record<string, unknown>;
 };
@@ -556,6 +557,10 @@ test("differing acknowledgement runs the preserved tail once and tail failure st
   };
   assert.equal((await client.sendThreadMessage(source, [{ text: "one", text_elements: [], type: "text" }]))?.id, "thread");
   assert.equal(socket.requests.filter((request) => request.method === "turn/steer").length, 1);
+  assert.equal(
+    socket.requests.find((request) => request.method === "turn/steer")?.workbenchPromptContext?.instructionScope,
+    "threadUtilities",
+  );
   assert.equal(socket.requests.filter((request) => request.method === "thread/resume").length, 1);
   assert.equal(socket.requests.filter((request) => request.method === "steer/history/list").length, 1);
 
@@ -575,6 +580,45 @@ test("differing acknowledgement runs the preserved tail once and tail failure st
   assert.equal(await client.sendThreadMessage(second, [{ text: "two", text_elements: [], type: "text" }]), null);
 }));
 
+test("Codex slash mentions travel outside plain user input on steer and start", async () => withClient(async (client, socket) => {
+  const skillPath = "C:/skills/iterate/SKILL.md";
+  const input = [{ text: "/iterate do the work", text_elements: [], type: "text" as const }];
+  const active = activeThread();
+  client.selectThreadPayload(active);
+
+  assert.equal(await client.sendThreadMessage(active, input, {
+    mentionedSkillPaths: [skillPath],
+  }), null);
+  const steer = socket.requests.find((request) => request.method === "turn/steer");
+  assert.deepEqual(steer?.params?.input, input);
+  assert.deepEqual(steer?.workbenchPromptContext?.mentionedSkillPaths, [skillPath]);
+  assert.equal((steer?.params?.input as Array<{ type?: string }>).some((item) => item.type === "skill"), false);
+
+  const idle = activeThread("codex", "idle", "completed");
+  client.selectThreadPayload(idle);
+  FakeWebSocket.intercept = (target, request) => {
+    if (request.method === "thread/resume" && request.params?.threadId === "idle") {
+      queueMicrotask(() => target.respond(request.id, {
+        model: "model",
+        reasoningEffort: null,
+        serviceTier: null,
+        thread: wireThread("idle", "idle-turn", "completed"),
+      }));
+      return true;
+    }
+    return false;
+  };
+  assert.equal(await client.sendThreadMessage(idle, input, {
+    mentionedSkillPaths: [skillPath],
+  }), null);
+  const start = socket.requests.find((request) => (
+    request.method === "turn/start" && request.params?.threadId === "idle"
+  ));
+  assert.deepEqual(start?.params?.input, input);
+  assert.deepEqual(start?.workbenchPromptContext?.mentionedSkillPaths, [skillPath]);
+  assert.equal((start?.params?.input as Array<{ type?: string }>).some((item) => item.type === "skill"), false);
+}));
+
 test("idle selected Codex resumes once and starts with native identity while providers preserve their routes", async () => withClient(async (client, socket) => {
   const idle = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(idle);
@@ -589,6 +633,7 @@ test("idle selected Codex resumes once and starts with native identity while pro
   assert.equal(result, null);
   const codexStart = socket.requests.find((request) => request.method === "turn/start" && request.params?.threadId === "idle");
   assert.equal(typeof codexStart?.params?.clientUserMessageId, "string");
+  assert.equal(codexStart?.workbenchPromptContext?.instructionScope, "threadUtilities");
   const codexResume = socket.requests.find((request) => request.method === "thread/resume" && request.params?.threadId === "idle");
   assert.equal(codexResume?.params?.excludeTurns, true);
   assert.equal(codexResume?.workbenchThreadHydration, undefined);
@@ -1001,6 +1046,9 @@ test("previous Codex pages preserve live state and merge only their scoped sidec
   const latestRead = client.readThread("thread", "codex", { cursor: null });
   const latestRequest = await waitForRequest(socket, "workbench/thread/page/read");
   assert.equal(latestRequest.params?.cursor, null);
+  assert.equal(latestRequest.workbenchPromptContext?.cwd, "C:/repo");
+  assert.equal(latestRequest.workbenchPromptContext?.harness, "codex");
+  assert.equal(latestRequest.workbenchPromptContext?.threadId, "thread");
   socket.respond(latestRequest.id, {
     browseResultEntries: [browseEntry("browse:turn", "turn")],
     nextCursor: "turn",
@@ -1015,6 +1063,7 @@ test("previous Codex pages preserve live state and merge only their scoped sidec
   });
   const previousRequest = await waitForRequest(socket, "workbench/thread/page/read", 1);
   assert.equal(previousRequest.params?.cursor, "turn");
+  assert.equal(previousRequest.workbenchPromptContext, undefined);
   socket.notify("item/started", {
     item: { clientId: null, content: [{ text: "live", text_elements: [], type: "text" }], id: "live-item", type: "userMessage" },
     threadId: "thread",

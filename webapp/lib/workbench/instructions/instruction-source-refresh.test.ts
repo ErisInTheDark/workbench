@@ -67,7 +67,59 @@ user-owned agent prompt
 
     assert.match(promptInstructions.baseInstructions ?? "", /user override/u);
     assert.match(promptInstructions.baseInstructions ?? "", /user-owned agent prompt/u);
-    assert.match(promptInstructions.baseInstructions ?? "", /skill precedence revision two/u);
+    assert.doesNotMatch(promptInstructions.baseInstructions ?? "", /skill precedence revision two/u);
+    assert.doesNotMatch(promptInstructions.baseInstructions ?? "", /builtin skill revision two/u);
+    assert.doesNotMatch(promptInstructions.developerInstructions ?? "", /builtin skill revision two/u);
+    const builtinSkillPath = path.join(temporaryLibraryRoot, "skills", "builtin", "browse", "SKILL.md");
+    const compactSkillCatalog = await promptFiles.buildWorkbenchSkillCatalogDeveloperInstructions({
+      harness: "codex",
+      threadId: "freshness-thread",
+      workbenchOrigin: "http://workbench.test",
+      workflowIds: ["default"],
+    });
+    assert.match(compactSkillCatalog ?? "", /skill precedence revision two/u);
+    assert.ok((compactSkillCatalog ?? "").includes(
+      `<skill filename="${builtinSkillPath.replaceAll("\\", "/")}" trigger="" />`,
+    ));
+    assert.doesNotMatch(compactSkillCatalog ?? "", /builtin skill revision two/u);
+    const mentionedSkillCatalog = await promptFiles.buildWorkbenchSkillCatalogDeveloperInstructions({
+      mentionedSkillPaths: [builtinSkillPath],
+      harness: "codex",
+      threadId: "freshness-thread",
+      workbenchOrigin: "http://workbench.test",
+      workflowIds: ["default"],
+    });
+    assert.match(mentionedSkillCatalog ?? "", /builtin skill revision two/u);
+    assert.doesNotMatch(mentionedSkillCatalog ?? "", /\nname: browse\n/u);
+    const projectSkillPath = path.join(temporaryProjectRoot, ".agents", "skills", "browse", "SKILL.md");
+    await fs.mkdir(path.dirname(projectSkillPath), { recursive: true });
+    await fs.writeFile(projectSkillPath, "---\nname: browse\n---\nproject browse skill\n", "utf8");
+    const projectRoots = [{
+      id: "project",
+      isPrimary: true,
+      name: "project",
+      relativePath: "project",
+      rootPath: temporaryProjectRoot,
+    }];
+    const shadowedBuiltin = await promptFiles.buildWorkbenchSkillCatalogDeveloperInstructions({
+      mentionedSkillPaths: [builtinSkillPath],
+      harness: "codex",
+      roots: projectRoots,
+      threadId: "freshness-thread",
+    });
+    assert.doesNotMatch(shadowedBuiltin ?? "", /builtin skill revision two/u);
+    assert.doesNotMatch(shadowedBuiltin ?? "", /project browse skill/u);
+    assert.ok((shadowedBuiltin ?? "").includes(
+      `<skill filename="${projectSkillPath.replaceAll("\\", "/")}" trigger="" />`,
+    ));
+    const mentionedProjectSkill = await promptFiles.buildWorkbenchSkillCatalogDeveloperInstructions({
+      mentionedSkillPaths: [projectSkillPath],
+      harness: "codex",
+      roots: projectRoots,
+      threadId: "freshness-thread",
+    });
+    assert.match(mentionedProjectSkill ?? "", /project browse skill/u);
+    assert.doesNotMatch(mentionedProjectSkill ?? "", /\nname: browse\n/u);
     assert.match(collaborationInstructions ?? "", /tools revision two/u);
     assert.equal(
       promptFiles.buildWorkbenchGitInstructions({
@@ -86,6 +138,6 @@ user-owned agent prompt
     process.chdir(originalCwd);
     if (originalLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
     else process.env.WORKBENCH_LIBRARY_ROOT = originalLibraryRoot;
-    await fs.rm(temporaryRoot, { recursive: true, force: true });
+    await fs.rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

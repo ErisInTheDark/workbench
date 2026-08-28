@@ -1150,12 +1150,17 @@ export default memo(function ThreadView ({
     });
   }, [onUpdateThreadState, projectId, subagents]);
 
-  const handleSendMessage = useCallback(async (_threadId: string, input: UserInput[]) => {
+  const handleSendMessage = useCallback(async (
+    _threadId: string,
+    input: UserInput[],
+    options?: { mentionedSkillPaths?: string[] },
+  ) => {
     if (!resolvedActiveThread || !activeProfileSlot) {
       throw new ThreadMessageNotSentError();
     }
 
     const payload = await onSendMessage(resolvedActiveThread, input, {
+      ...options,
       composerProfileSlot: activeProfileSlot,
       selectThread: resolvedActiveThread.id === thread.id,
     });

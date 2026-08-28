@@ -32,6 +32,7 @@ import { readClipboardImageDataUrls } from "../../../lib/workbench/dom/clipboard
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import {
   buildInlineMentionHighlights,
+  type InlineMentionHighlight,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { runThreadComposerSubmission } from "../../../lib/workbench/thread/thread-message-submission";
@@ -60,6 +61,16 @@ import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext
 
 const PICKER_REFRESH_COOLDOWN_MS = 1500;
 const PICKER_REFRESH_MIN_SPIN_MS = 500;
+
+function getMentionedWorkbenchSkillPaths(highlights: readonly InlineMentionHighlight[]) {
+  return Array.from(new Set(
+    highlights
+      .filter((highlight) => highlight.kind === "skill")
+      .map((highlight) => highlight.path.trim())
+      .filter(Boolean),
+  ));
+}
+
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
@@ -167,7 +178,11 @@ export default function ThreadComposer ({
   layout?: "thread" | "inline";
   onListModels: (harness: ThreadPayload["harness"], options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   onHarnessToggle?: () => void;
-  onSendMessage: (threadId: string, input: UserInput[]) => Promise<void>;
+  onSendMessage: (
+    threadId: string,
+    input: UserInput[],
+    options?: { mentionedSkillPaths?: string[] },
+  ) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
   onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft, reason?: "autosave" | "submission") => void;
   onThreadComposerDraftClear: (threadId: string) => void;
@@ -658,6 +673,7 @@ export default function ThreadComposer ({
 
     const submittedValue = value;
     const submittedAttachments = attachments;
+    const mentionedSkillPaths = getMentionedWorkbenchSkillPaths(composerHighlights);
     setIsSending(true);
     setError("");
     setValue("");
@@ -674,7 +690,9 @@ export default function ThreadComposer ({
           setValue(submittedValue);
           setAttachments(submittedAttachments);
         },
-        send: () => onSendMessage(thread.id, input),
+        send: () => onSendMessage(thread.id, input, {
+          ...(mentionedSkillPaths.length ? { mentionedSkillPaths } : {}),
+        }),
         showError: setError,
       });
     } finally {

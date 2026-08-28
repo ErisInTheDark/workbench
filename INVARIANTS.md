@@ -11,6 +11,11 @@ You may propose new invariants or changes to existing invariants, but you must m
 - Convert external data into shared Workbench types before core code uses it.
 - Do not replace an existing owner as part of an additive change.
 
+## Managed instructions
+
+- Every Workbench-managed Codex start or resume must inherit Workbench prompt context and rebuild current Workbench instructions.
+- Keep one precedence-resolved Workbench skill catalog. Slash matches can preload fresh bodies in that catalog; they do not activate skills or create native Codex skill input.
+
 ## Relational data shapes
 
 - Store each Workbench-owned semantic shape in typed columns and tables.

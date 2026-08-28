@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchCodexInstructionSource: explicit request-inherited or cwd-owned context for internal Codex resume configuration. Keywords: Codex, context, cwd, request.
  * - WorkbenchCodexInstructionPort: narrow Codex request-augmentation boundary consumed by the bridge. Keywords: Codex, instructions, MCP, adapter.
- * - default WorkbenchCodexInstructionAdapter: adapt fresh Workbench instructions and project-local MCP config into Codex requests. Keywords: Codex, instructions, prompt, MCP.
+ * - default WorkbenchCodexInstructionAdapter: adapt fresh Workbench instructions, skill catalogs, and project-local MCP config into Codex requests. Keywords: Codex, instructions, skills, prompt, MCP.
  */
 import path from "node:path";
 
@@ -27,7 +27,7 @@ function isPromptAugmentedThreadMethod(method: string | null) {
 }
 
 function isPromptAugmentedTurnMethod(method: string | null) {
-  return method === "turn/start";
+  return method === "turn/start" || method === "turn/steer";
 }
 
 function asRecord(value: unknown) {
@@ -82,6 +82,8 @@ function buildWorkbenchOwnedCollaborationParams(params: Record<string, unknown>,
   };
 }
 
+const WORKBENCH_SKILL_CONTEXT_KEY = "workbench_skills";
+
 function pathsEqual(left: string, right: string) {
   const normalizedLeft = path.resolve(left);
   const normalizedRight = path.resolve(right);
@@ -108,9 +110,12 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
 
   createThreadResume(params: Record<string, unknown>, source: WorkbenchCodexInstructionSource): JsonRpcRequest {
     const promptContext = source.kind === "request" ? readWorkbenchPromptContext(source.request) : null;
+    const sourceCwd = source.kind === "request"
+      ? promptContext?.cwd ?? (typeof params.cwd === "string" ? params.cwd : null)
+      : source.cwd;
     return {
       method: "thread/resume",
-      params: this.withMcpConfig(params, source.kind === "request" ? promptContext?.cwd : source.cwd),
+      params: this.withMcpConfig(params, sourceCwd),
       ...(promptContext ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: promptContext } : {}),
     };
   }
@@ -131,12 +136,35 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     const context = { ...promptContext, harness: "codex" as const };
 
     if (isPromptAugmentedTurnMethod(method)) {
+      const skillCatalog = filter(
+        await workbenchPromptFiles.buildWorkbenchSkillCatalogDeveloperInstructions(context),
+        `additionalContext.${WORKBENCH_SKILL_CONTEXT_KEY}`,
+      );
+      const turnParams = skillCatalog
+        ? {
+          ...params,
+          additionalContext: {
+            ...asRecord(params.additionalContext),
+            [WORKBENCH_SKILL_CONTEXT_KEY]: {
+              kind: "application",
+              value: skillCatalog,
+            },
+          },
+        }
+        : params;
+      if (method === "turn/steer") {
+        return {
+          ...message,
+          params: turnParams,
+        };
+      }
+
       const developerInstructions = context.instructionScope === "threadUtilities"
         ? await workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(context)
         : await workbenchPromptFiles.buildWorkbenchCollaborationDeveloperInstructions(context);
       return {
         ...message,
-        params: buildWorkbenchOwnedCollaborationParams(params, filter(developerInstructions, "collaborationMode.settings.developer_instructions")),
+        params: buildWorkbenchOwnedCollaborationParams(turnParams, filter(developerInstructions, "collaborationMode.settings.developer_instructions")),
       };
     }
 

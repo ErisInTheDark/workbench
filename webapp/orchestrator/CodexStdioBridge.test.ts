@@ -11,7 +11,6 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 
 import type CodexAppServer from "./CodexAppServer";
-import WorkbenchCodexInstructionAdapter from "./WorkbenchCodexInstructionAdapter";
 import type CodexTranscriptStore from "./CodexTranscriptStore";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
@@ -25,12 +24,23 @@ import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
 let testWorkbenchLibraryRoot = "";
 let CodexStdioBridge: typeof import("./CodexStdioBridge.js").default;
+let WorkbenchCodexInstructionAdapter: (typeof import("./WorkbenchCodexInstructionAdapter.js"))["default"];
 
 before(async () => {
   testWorkbenchLibraryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-library-test-"));
   process.env.WORKBENCH_LIBRARY_ROOT = testWorkbenchLibraryRoot;
-  const bridgeModule = await import("./CodexStdioBridge.js");
+  await fs.mkdir(path.join(testWorkbenchLibraryRoot, "instructions"), { recursive: true });
+  await fs.writeFile(
+    path.join(testWorkbenchLibraryRoot, "instructions", "universal.md"),
+    "COLD RESUME UNIVERSAL INSTRUCTION",
+    "utf8",
+  );
+  const [bridgeModule, instructionModule] = await Promise.all([
+    import("./CodexStdioBridge.js"),
+    import("./WorkbenchCodexInstructionAdapter.js"),
+  ]);
   CodexStdioBridge = bridgeModule.default as unknown as typeof CodexStdioBridge;
+  WorkbenchCodexInstructionAdapter = instructionModule.default as unknown as typeof WorkbenchCodexInstructionAdapter;
 });
 
 after(async () => {
@@ -179,18 +189,28 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
       id: 1,
       method: "workbench/thread/page/read",
       params: { cursor: null, cwd: "C:/repo", threadId: "thread" },
+      workbenchPromptContext: {
+        cwd: "C:/repo",
+        harness: "codex",
+        threadId: "thread",
+        workflowIds: ["default"],
+      },
     });
     assert.equal(upstreamRequests.length, 1);
     assert.equal(upstreamRequests[0]?.method, "thread/resume");
     const resumeParams = upstreamRequests[0]?.params as {
       config?: { mcp_servers?: { wb?: Record<string, unknown> } };
       cwd?: string;
+      baseInstructions?: string | null;
+      developerInstructions?: string | null;
       excludeTurns?: boolean;
       threadId?: string;
     };
     assert.equal(resumeParams.cwd, "C:/repo");
     assert.equal(resumeParams.excludeTurns, true);
     assert.equal(resumeParams.threadId, "thread");
+    assert.ok(resumeParams.baseInstructions?.trim());
+    assert.match(resumeParams.developerInstructions ?? "", /COLD RESUME UNIVERSAL INSTRUCTION/u);
     assert.equal(resumeParams.config?.mcp_servers?.wb?.required, true);
     assert.match(String(resumeParams.config?.mcp_servers?.wb?.url), /^http:\/\/127\.0\.0\.1:1\/orchestrator\/mcp\?/u);
     assert.deepEqual(contextRequests[0], {
@@ -211,6 +231,13 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
       beforeTurnId: "turn",
       mode: "previous",
     });
+
+    await bridge.handleBridgeRequest({
+      id: 3,
+      method: "workbench/thread/page/read",
+      params: { cursor: null, cwd: "C:/repo", readScope: "subagentBackground", threadId: "thread" },
+    });
+    assert.equal(upstreamRequests.length, 1);
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });

@@ -846,6 +846,7 @@ export interface WorkbenchSendThreadMessageOptions {
   additionalWritableRoots?: string[];
   composerProfileSlot?: WorkbenchComposerProfileSlot;
   instructionInjections?: Record<string, string>;
+  mentionedSkillPaths?: string[];
   onThreadCreated?: (thread: ThreadPayload) => void;
   onThreadMaterialized?: (thread: ThreadPayload) => void;
   onTurnAdmitted?: (turnId: string) => void;

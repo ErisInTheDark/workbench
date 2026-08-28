@@ -2,7 +2,7 @@
  * Exports:
  * - CodexMessageRequestClient: minimal transport used by selected Codex message admission. Keywords: codex, message, transport.
  * - ThreadMessageAdmissionLifecycleState: client lifecycle values that fence message preparation. Keywords: message, lifecycle, fence.
- * - ThreadMessageAdmissionRequest: resume/start adapters for one selected Codex admission. Keywords: resume, start, adapter.
+ * - ThreadMessageAdmissionRequest: resume/start/steer adapters for one selected Codex admission. Keywords: resume, start, steer, adapter.
  * - ThreadMessageAdmissionResult: admitted steer or started-turn result. Keywords: message, admission, result.
  * - ThreadMessageAdmissionController: selected existing Codex message admission owner. Keywords: codex, message, admission, controller.
  * - default ThreadMessageAdmissionController: create the message admission owner. Keywords: codex, message, create.
@@ -13,6 +13,7 @@ import type { ThreadResumeResponse } from "../../codex/generated/app-server/v2/T
 import type { Turn } from "../../codex/generated/app-server/v2/Turn";
 import type { TurnStartParams } from "../../codex/generated/app-server/v2/TurnStartParams";
 import type { TurnStartResponse } from "../../codex/generated/app-server/v2/TurnStartResponse";
+import type { TurnSteerParams } from "../../codex/generated/app-server/v2/TurnSteerParams";
 import type { TurnSteerResponse } from "../../codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput";
 import type { CodexJsonRpcResponse } from "../../codex/protocol";
@@ -53,6 +54,10 @@ export interface ThreadMessageAdmissionRequest {
   startRequest: CodexRequest & {
     method: "turn/start";
     params: Omit<TurnStartParams, "clientUserMessageId" | "input" | "threadId">;
+  };
+  steerRequest: CodexRequest & {
+    method: "turn/steer";
+    params: Omit<TurnSteerParams, "clientUserMessageId" | "expectedTurnId" | "input" | "threadId">;
   };
   toResumedThread: (response: ThreadResumeResponse) => ThreadPayload;
 }
@@ -145,7 +150,12 @@ function ThreadMessageAdmissionController({
     }
   }
 
-  async function dispatchSteer(capture: AdmissionCapture, thread: ThreadPayload, input: UserInput[]): Promise<ThreadMessageAdmissionResult> {
+  async function dispatchSteer(
+    capture: AdmissionCapture,
+    thread: ThreadPayload,
+    input: UserInput[],
+    request: ThreadMessageAdmissionRequest,
+  ): Promise<ThreadMessageAdmissionResult> {
     const activeTurn = getCurrentInProgressTurn(thread);
     if (!activeTurn) {
       throw new ThreadMessageNotSentError();
@@ -157,8 +167,9 @@ function ThreadMessageAdmissionController({
     let response: CodexJsonRpcResponse<TurnSteerResponse>;
     try {
       response = await client.sendRequest<TurnSteerResponse>({
-        method: "turn/steer",
+        ...request.steerRequest,
         params: {
+          ...request.steerRequest.params,
           clientUserMessageId: entry.handle,
           expectedTurnId: activeTurn.id,
           input,
@@ -284,7 +295,7 @@ function ThreadMessageAdmissionController({
       throw new ThreadMessageNotSentError();
     }
     if (isThreadStatusActive(getThreadStatus(connectedThread)) && getCurrentInProgressTurn(connectedThread)) {
-      return await dispatchSteer(connected, connectedThread, input);
+      return await dispatchSteer(connected, connectedThread, input, request);
     }
 
     const connectedInProgressTurnId = getCurrentInProgressTurn(connectedThread)?.id ?? null;
@@ -326,7 +337,7 @@ function ThreadMessageAdmissionController({
       candidateInProgressTurn
       && (sourceIntroducedDifferentInProgressTurn || isThreadStatusActive(status))
     ) {
-      return await dispatchSteer(resumedOwner, candidate, input);
+      return await dispatchSteer(resumedOwner, candidate, input, request);
     }
     if (isThreadStatusActive(status)) {
       throw new ThreadMessageNotSentError();

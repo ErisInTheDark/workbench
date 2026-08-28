@@ -2268,7 +2268,7 @@ export default class CodexStdioBridge {
           ...(params.cwd ? { cwd: params.cwd } : {}),
           excludeTurns: true,
           threadId: params.threadId,
-        }, { cwd: params.cwd, kind: "cwd" }),
+        }, { kind: "request", request: message }),
         { internal: true },
       );
       if (!resumeDispatch.response) {

@@ -11,6 +11,7 @@ export interface WorkbenchPromptContext {
   readonly harness?: WorkbenchHarness | null;
   readonly instructionScope?: "full" | "threadUtilities";
   readonly instructionInjections?: Readonly<Record<string, string>>;
+  readonly mentionedSkillPaths?: readonly string[];
   readonly projectId?: string | null;
   readonly roots?: readonly WorkbenchProjectRoot[];
   readonly subagentName?: string | null;

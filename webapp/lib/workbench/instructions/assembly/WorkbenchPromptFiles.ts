@@ -3,6 +3,7 @@
  * - WorkbenchPromptContext/WorkbenchPromptInstructions: public prompt assembly contracts. Keywords: prompt, context, instructions.
  * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders. Keywords: AGENTS, workflows, default agent.
  * - buildWorkbenchPromptInstructions: resolve fresh prompt files and expand Workbench injections. Keywords: prompt, injections, app-server.
+ * - buildWorkbenchSkillCatalogDeveloperInstructions: resolve one catalog with full bodies for validated slash mentions. Keywords: skills, slash, catalog.
  * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free typed Workbench instructions. Keywords: thread, utilities, MCP.
  * - buildWorkbenchCollaborationDeveloperInstructions: build Workbench-owned questionnaire collaboration instructions. Keywords: collaboration, plan mode.
  * - buildWorkbenchGitInstructions: re-export managed Git instruction rendering. Keywords: git, arc, checkpoint.
@@ -21,6 +22,7 @@ import type {
   WorkbenchProjectRoot,
 } from "../../../types";
 import {
+  buildWorkbenchSkillCatalog,
   buildWorkbenchSkillManifestInstructions,
   listWorkbenchLibraryInstructions,
   parseFrontmatterBlock,
@@ -446,13 +448,17 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     listWorkbenchLibraryInstructions(),
     buildWorkbenchBrowseInstructions(context),
   ]);
-  const skillManifest = await buildWorkbenchSkillManifestInstructions(projectSkills);
+  const skillManifest = context.harness === "codex"
+    ? null
+    : await buildWorkbenchSkillManifestInstructions(projectSkills);
 
   const injections: Record<string, string> = {
     "agent.definition": buildAgentDefinitionInjection(agentDefinition),
     "subagent.identity": buildSubagentIdentityInjection(context),
     "workbench.rendering": WORKBENCH_INJECTION_TEMPLATES["workbench.rendering"].injection,
-    "workbench.skills": buildWorkbenchSkillsInjection(skillManifest),
+    "workbench.skills": context.harness === "codex"
+      ? ""
+      : buildWorkbenchSkillsInjection(skillManifest),
     "workbench.tools": WORKBENCH_INJECTION_TEMPLATES["workbench.tools"].injection,
     "workflow.active": workflowInjection,
     "workspace.roots": buildWorkspaceRootsInjection(context),
@@ -476,6 +482,21 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     baseInstructions: baseInstructions || null,
     developerInstructions,
   };
+}
+
+export async function buildWorkbenchSkillCatalogDeveloperInstructions(
+  context: WorkbenchPromptContext = {},
+): Promise<string | null> {
+  await ensureWorkbenchPromptFiles();
+
+  const projectSkills = await listProjectSkillDefinitionsForPrompt(context);
+  const skillCatalog = await buildWorkbenchSkillCatalog(
+    projectSkills,
+    context.mentionedSkillPaths,
+  );
+  return skillCatalog?.trim()
+    ? buildWorkbenchSkillsInjection(skillCatalog)
+    : null;
 }
 
 export async function buildWorkbenchThreadUtilityDeveloperInstructions(
@@ -530,6 +551,7 @@ const WorkbenchPromptFiles = {
   buildWorkbenchCollaborationDeveloperInstructions,
   buildWorkbenchGitInstructions,
   buildWorkbenchPromptInstructions,
+  buildWorkbenchSkillCatalogDeveloperInstructions,
   buildWorkbenchThreadUtilityDeveloperInstructions,
   ensureWorkbenchPromptFiles,
   listWorkbenchInstructionMechanics,

@@ -30,6 +30,7 @@ function setup(
     createClientUserMessageId?: () => string;
     renderSource?: (key: string) => void;
     resumedThread?: ThreadPayload;
+    steerContext?: Record<string, unknown>;
   } = {},
 ) {
   const documents = ThreadDocumentStore();
@@ -67,6 +68,11 @@ function setup(
     },
     resumeRequest: { method: "thread/resume", params: { threadId: "thread" } },
     startRequest: { method: "turn/start", params: {} },
+    steerRequest: {
+      method: "turn/steer",
+      params: {},
+      ...(options.steerContext ? { workbenchPromptContext: options.steerContext } : {}),
+    },
     toResumedThread: () => options.resumedThread ?? { ...thread(), status: "idle", turns: [] },
   });
   return { admit, controller, documents, events, lifecycle, optimisticInputs, sources };
@@ -86,6 +92,24 @@ test("admission connects, enqueues, sends exact native identity, and settles pen
     input: [{ text: "one", text_elements: [], type: "text" }], threadId: "thread",
   });
   assert.deepEqual(setupResult.events, ["connect", "render"]);
+});
+
+test("admission preserves Workbench context outside native steer input", async () => {
+  const requests: Array<{ method: string; params?: unknown; workbenchPromptContext?: unknown }> = [];
+  const workbenchPromptContext = {
+    mentionedSkillPaths: ["C:/skills/iterate/SKILL.md"],
+    threadId: "thread",
+  };
+  const result = setup(async <TResponse>(message) => {
+    requests.push(message);
+    return { id: 1, result: { turnId: "turn" } } as CodexJsonRpcResponse<TResponse>;
+  }, { steerContext: workbenchPromptContext });
+
+  await result.admit([{ text: "/iterate do the work", text_elements: [], type: "text" }]);
+  assert.deepEqual(requests[0]?.workbenchPromptContext, workbenchPromptContext);
+  const input = (requests[0]?.params as { input?: Array<{ type?: string }> }).input ?? [];
+  assert.deepEqual(input, [{ text: "/iterate do the work", text_elements: [], type: "text" }]);
+  assert.equal(input.some((item) => item.type === "skill"), false);
 });
 
 test("active waiting source admits an ordinary steer", async () => {
