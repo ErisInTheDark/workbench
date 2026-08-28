@@ -4770,8 +4770,60 @@ function WorkbenchThreadClient(
         });
       } catch (error) {
         if (pendingInitialOptimisticHandle) {
+          const threadKey = getThreadStateKey(harness, resolvedThreadId);
+          const currentSource = threadSources.get(threadKey);
+          const bootstrapTurnIds = new Set(bootstrapThread?.turns.map((turn) => turn.id) ?? []);
+          const admittedTurn = currentSource?.turns.find((turn) => (
+            turn.id !== connectingTurnId
+            && !bootstrapTurnIds.has(turn.id)
+          ));
+          if (admittedTurn) {
+            optimisticInputs.movePending(pendingInitialOptimisticHandle, admittedTurn.id);
+            optimisticInputs.transition(pendingInitialOptimisticHandle, "sent");
+            bumpOverlayRevisionForKey(threadKey, "optimisticRevision");
+            const admittedSource = {
+              ...currentSource,
+              turnHistory: currentSource.turnHistory.filter((entry) => entry.turnId !== connectingTurnId),
+              turns: currentSource.turns.filter((turn) => turn.id !== connectingTurnId),
+            };
+            commitCanonicalThreadSource(admittedSource);
+            const projectedSource = projectThreadSource(threadKey) ?? admittedSource;
+            sendOptions.onTurnAdmitted?.(admittedTurn.id);
+            void publishAcceptedIntent({
+              ...(materializingDraftId ? { draftId: materializingDraftId } : {}),
+              harness,
+              projectId: state.projectId,
+              threadId: resolvedThreadId,
+              title: firstMessagePreview || "New thread",
+              turnId: admittedTurn.id,
+            });
+            if (isDraftThread) {
+              sendOptions.onThreadMaterialized?.(projectedSource);
+            }
+            if (threadDocuments.getSelectedThreadKey() === threadKey) {
+              flushSelectedThreadRendering();
+              options.onThreadStarted?.(projectedSource);
+            }
+            return null;
+          }
+
           optimisticInputs.transition(pendingInitialOptimisticHandle, "failed");
-          bumpOverlayRevisionForKey(getThreadStateKey(harness, resolvedThreadId), "optimisticRevision");
+          optimisticInputs.deleteThread(threadKey);
+          bumpOverlayRevisionForKey(threadKey, "optimisticRevision");
+          if (bootstrapThread) {
+            const settledSource = currentSource
+              ? {
+                ...currentSource,
+                status: bootstrapThread.status,
+                turnHistory: currentSource.turnHistory.filter((entry) => entry.turnId !== connectingTurnId),
+                turns: currentSource.turns.filter((turn) => turn.id !== connectingTurnId),
+              }
+              : bootstrapThread;
+            installAuthoritativeThreadSource(settledSource);
+            if (threadDocuments.getSelectedThreadKey() === threadKey) {
+              flushSelectedThreadRendering();
+            }
+          }
         }
         throw error;
       }

@@ -896,7 +896,7 @@ test("turn-start preflight completes before upstream delivery and blocks deliver
   const events: string[] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
   let rejectPreflight = false;
-  let rejectResume = false;
+  let resumeErrorMessage: string | null = null;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
     send(message: JsonRpcRequest) {
@@ -904,8 +904,8 @@ test("turn-start preflight completes before upstream delivery and blocks deliver
       upstreamRequests.push(message);
       if (message.method === "thread/resume") {
         queueMicrotask(() => {
-          void bridge.handleUpstreamMessage(rejectResume
-            ? { error: { code: -32000, message: "resume failed" }, id: message.id ?? null }
+          void bridge.handleUpstreamMessage(resumeErrorMessage
+            ? { error: { code: resumeErrorMessage.startsWith("no rollout found") ? -32600 : -32000, message: resumeErrorMessage }, id: message.id ?? null }
             : { id: message.id ?? null, result: { thread: { ...bridgeThread(), turns: [] } } });
         });
       }
@@ -965,13 +965,26 @@ test("turn-start preflight completes before upstream delivery and blocks deliver
     ]);
 
     rejectPreflight = false;
-    rejectResume = true;
+    resumeErrorMessage = "resume failed";
     await assert.rejects(bridge.forwardRequest(request(3), client, 3), /resume failed/u);
     assert.deepEqual(upstreamRequests.map((candidate) => candidate.method), [
       "thread/resume",
       "turn/start",
       "thread/resume",
       "thread/resume",
+    ]);
+
+    resumeErrorMessage = "no rollout found for thread id thread";
+    await bridge.forwardRequest(request(4), client, 4);
+    assert.deepEqual(upstreamRequests.slice(-2).map((candidate) => candidate.method), [
+      "thread/resume",
+      "turn/start",
+    ]);
+    assert.deepEqual(events.slice(-4), [
+      "send:thread/resume",
+      "prepare:start",
+      "prepare:complete",
+      "send:turn/start",
     ]);
   } finally {
     await bridge.disposeImmediately();

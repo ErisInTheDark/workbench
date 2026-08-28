@@ -935,6 +935,14 @@ function loadCodexTranscriptStore({ reload = false }: { reload?: boolean } = {})
   return (require("./CodexTranscriptStore") as { default: CodexTranscriptStoreConstructor }).default;
 }
 
+function isUnmaterializedThreadResumeError(
+  error: { code: number; message: string },
+  threadId: string,
+) {
+  return error.code === -32600
+    && error.message === `no rollout found for thread id ${threadId}`;
+}
+
 export default class CodexStdioBridge {
   private readonly appServer: CodexAppServer;
   private readonly bridgeUrl: string;
@@ -1601,7 +1609,9 @@ export default class CodexStdioBridge {
         threadId,
       }, { kind: "request", request: message }),
     );
-    if (resumeResponse.error) {
+    // Codex deliberately rejects resume between thread/start and the first
+    // turn/start because that first turn is what materializes rollout storage.
+    if (resumeResponse.error && !isUnmaterializedThreadResumeError(resumeResponse.error, threadId)) {
       throw new Error(resumeResponse.error.message);
     }
 

@@ -1716,6 +1716,50 @@ test("project changes after draft turn dispatch prevent acceptance and materiali
   });
 });
 
+test("native turn admission settles a draft when the turn-start response is lost", async () => {
+  const acceptedIntents: WorkbenchAcceptedIntent[] = [];
+  await withClient(async (client, socket) => {
+    const draft = { ...activeThread("codex", "draft:00000000-0000-4000-8000-000000000003", "completed"), isDraft: true, source: "draft" };
+    const materialized: string[] = [];
+    let startRequest: SocketRequest | null = null;
+    client.selectThreadPayload(draft);
+    FakeWebSocket.intercept = (target, request) => {
+      if (request.method === "thread/start") {
+        queueMicrotask(() => target.respond(request.id, { thread: wireThread("materialized-after-response-loss", "bootstrap", "completed") }));
+        return true;
+      }
+      if (request.method === "turn/start") {
+        startRequest = request;
+        return true;
+      }
+      return false;
+    };
+
+    const send = client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }], {
+      onThreadMaterialized: (thread) => materialized.push(thread.id),
+    });
+    await waitForRequest(socket, "turn/start");
+    const admittedTurn = wireThread("materialized-after-response-loss", "native-turn", "inProgress").turns[0]!;
+    socket.notify("turn/started", { threadId: "materialized-after-response-loss", turn: admittedTurn });
+    socket.fail(startRequest!.id, "response lost after admission");
+
+    assert.equal(await send, null);
+    assert.deepEqual(materialized, ["materialized-after-response-loss"]);
+    assert.deepEqual(acceptedIntents, [{
+      draftId: "00000000-0000-4000-8000-000000000003",
+      harness: "codex",
+      projectId: "project",
+      threadId: "materialized-after-response-loss",
+      title: "draft",
+      turnId: "native-turn",
+    }]);
+    assert.deepEqual(client.getSnapshot().currentThread?.turns.map((turn) => turn.id), ["native-turn"]);
+    assert.equal(client.getSnapshot().currentThread?.turns.some((turn) => turn.id.startsWith("workbench:connecting:")), false);
+  }, {
+    publishAcceptedIntent: async (event) => { acceptedIntents.push(event); },
+  });
+});
+
 test("draft projection precedes admission and materialization is skipped on start failure", async () => {
   const acceptedIntents: WorkbenchAcceptedIntent[] = [];
   let markAcceptedIntentObserved!: () => void;
@@ -1760,6 +1804,8 @@ test("draft projection precedes admission and materialization is skipped on star
   socket.fail(startRequest!.id, "start failed");
   await assert.rejects(send, /start failed/u);
   assert.deepEqual(materialized, []);
+  assert.equal(client.getSnapshot().currentThread?.turns.some((turn) => turn.id.startsWith("workbench:connecting:")), false);
+  assert.equal(client.getSnapshot().currentThread?.turns.flatMap((turn) => turn.items).some((item) => item.id.startsWith("optimistic-user-message:")), false);
 
   client.selectThreadPayload(draft);
   let admittedStartRequest: SocketRequest | null = null;
