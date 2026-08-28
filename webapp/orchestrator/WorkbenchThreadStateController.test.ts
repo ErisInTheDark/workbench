@@ -8,7 +8,8 @@ import WorkbenchThreadStateControllerOwner, { type WorkbenchThreadStateControlle
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import type { WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import type { WorkbenchReloadDirtSnapshot } from "../lib/types";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import { getProjectQualifiedThreadDisplayKey } from "../lib/workbench/thread/thread-display-layout";
+import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 
 type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcTransition">
   & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcTransition">>;
@@ -72,6 +73,18 @@ function threadStatePath(root: string, projectId: string) {
   return path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`);
 }
 
+function pinnedRecord(threadId: string, title: string) {
+  return {
+    activityAt: 1,
+    entryKind: "thread" as const,
+    identity: { harness: "codex" as const, threadId },
+    lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false },
+    metadata: { archived: false as const, pinned: true, snoozed: false },
+    providerObserved: true,
+    title,
+  };
+}
+
 async function waitFor(predicate: () => boolean | Promise<boolean>, message: string) {
   const deadline = Date.now() + 1_000;
   while (!await predicate()) {
@@ -132,6 +145,95 @@ test("UI subscribers share headless observation and warm snapshots without ownin
   assert.equal(projectObservationStops, 0);
   await controller.dispose();
   assert.equal(projectObservationStops, 1);
+});
+
+test("global pinned folders import project layout, accept mixed-project members, broadcast, and remove snoozed members", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-global-pinned-layout-"));
+  const folderId = "00000000-0000-4000-8000-000000000041";
+  const projects = ["project-a", "project-b"];
+  await fs.mkdir(path.dirname(threadStatePath(root, "project-a")), { recursive: true });
+  await fs.writeFile(threadStatePath(root, "project-a"), JSON.stringify({
+    displayOrder: { folders: [{ folderId, section: "pinned", threadKeys: ["codex:a"], title: "Everywhere" }] },
+    drafts: [],
+    records: [pinnedRecord("a", "A")],
+    version: 3,
+  }), "utf8");
+  await fs.writeFile(threadStatePath(root, "project-b"), JSON.stringify({
+    drafts: [],
+    records: [pinnedRecord("b", "B")],
+    version: 3,
+  }), "utf8");
+  const published: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({ data: projects.map((id) => projectOption(id, path.join(root, id))), rootPath: root }),
+    projectState: projectState(),
+    publish: (connectionId, snapshot) => { published.push({ connectionId, snapshot }); },
+    reconcileProject: async () => [],
+    resolveProjectRoot: async (projectId) => path.join(root, projectId),
+    storageRoot: root,
+  });
+  const opened = await controller.open("observer-a", "project-a", 3);
+  await controller.open("observer-b", "project-b", 3);
+  await waitFor(
+    () => published.some(({ snapshot }) => "updateKind" in snapshot && snapshot.updateKind === "projectThreadSummary" && snapshot.summary.projectId === "project-b"),
+    "The cold project summary did not hydrate.",
+  );
+  assert.equal(opened.pinnedThreadLayout.displayOrder.folders?.[0]?.title, "Everywhere");
+  const keyA = getProjectQualifiedThreadDisplayKey("project-a", "codex:a");
+  const keyB = getProjectQualifiedThreadDisplayKey("project-b", "codex:b");
+  const moved = await controller.handleRequest("observer-a", {
+    beforeKey: null,
+    destinationFolderId: folderId,
+    method: "workbench/thread-state/pinned-display-order/move",
+    sourceKey: keyB,
+  });
+  assert.equal("result" in moved ? WorkbenchThreadStateMutationResultSchema.parse(moved.result).accepted : false, true);
+  const stored = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "pinned-thread-layout.json"), "utf8")) as { displayOrder: { folders?: Array<{ threadKeys: string[] }> } };
+  assert.deepEqual(stored.displayOrder.folders?.[0]?.threadKeys, [keyA, keyB]);
+  const layoutObservers = new Set(published.filter(({ snapshot }) => "updateKind" in snapshot && snapshot.updateKind === "pinnedThreadLayout").map(({ connectionId }) => connectionId));
+  assert.deepEqual(layoutObservers, new Set(["observer-a", "observer-b"]));
+  await controller.handleRequest("observer-a", {
+    identity: { harness: "codex", threadId: "b" },
+    method: "workbench/thread-state/snooze/set",
+    projectId: "project-b",
+    snoozed: true,
+  });
+  const afterSnooze = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "pinned-thread-layout.json"), "utf8")) as { displayOrder: { folders?: Array<{ threadKeys: string[] }> } };
+  assert.deepEqual(afterSnooze.displayOrder.folders?.[0]?.threadKeys, [keyA]);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("repairable global pinned layout drift cannot block thread-state open", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-global-pinned-layout-repair-"));
+  const layoutPath = path.join(root, ".workbench", "runtime", "pinned-thread-layout.json");
+  await fs.mkdir(path.dirname(layoutPath), { recursive: true });
+  await fs.writeFile(layoutPath, JSON.stringify({
+    displayOrder: {},
+    importedProjectIds: ["project"],
+    revision: "old",
+    secretField: "must-not-be-logged",
+    version: 1,
+  }), "utf8");
+  const logs: string[] = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({ data: [projectOption("project", root)], rootPath: root }),
+    log: (message) => { logs.push(message); },
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+
+  const opened = await controller.open("observer", "project", 3);
+
+  assert.equal(opened.pinnedThreadLayout.revision, 0);
+  assert.match(logs.join("\n"), /Conformed stored pinned thread layout/u);
+  assert.match(logs.join("\n"), /revision/u);
+  assert.doesNotMatch(logs.join("\n"), /must-not-be-logged/u);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
 });
 
 test("managed wait state is projected live and never persisted", async () => {
@@ -243,6 +345,145 @@ test("version 3 bootstraps every project summary and publishes cross-project cha
     threadStatuses: ["needsAttention"],
   });
   await controller.dispose();
+});
+
+test("version 3 returns loaded summaries before cold projects and fences progressive pushes to the live observation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-progressive-summaries-"));
+  let releaseBeta = (_value: string) => undefined;
+  let releaseGamma = (_value: string) => undefined;
+  const betaRoot = new Promise<string>((resolve) => { releaseBeta = resolve; });
+  const gammaRoot = new Promise<string>((resolve) => { releaseGamma = resolve; });
+  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [
+        projectOption("alpha", path.join(root, "alpha")),
+        projectOption("beta", path.join(root, "beta")),
+        projectOption("gamma", path.join(root, "gamma")),
+      ],
+      rootPath: root,
+    }),
+    projectState: projectState(),
+    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
+    reconcileProject: async () => [],
+    resolveProjectRoot: async (projectId) => projectId === "beta"
+      ? await betaRoot
+      : projectId === "gamma"
+        ? await gammaRoot
+        : root,
+    storageRoot: root,
+  });
+
+  const opened = await controller.open("progressive", "alpha", 3);
+  assert.deepEqual(opened.projectThreads.projects.map(({ projectId }) => projectId), ["alpha"]);
+
+  releaseBeta(root);
+  await waitFor(() => publications.some(({ snapshot }) => (
+    "updateKind" in snapshot
+    && snapshot.updateKind === "projectThreadSummary"
+    && snapshot.summary.projectId === "beta"
+  )), "The first cold project summary was not pushed progressively.");
+
+  await controller.close("progressive");
+  releaseGamma(root);
+  await controller.dispose();
+  assert.equal(publications.some(({ snapshot }) => (
+    "updateKind" in snapshot
+    && snapshot.updateKind === "projectThreadSummary"
+    && snapshot.summary.projectId === "gamma"
+  )), false);
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("pinned context admits only an unsnoozed root and its direct subagents, then fences foreign mutations to that observation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-pinned-context-"));
+  const pinnedRoot: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 3,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "root-thread" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: true, snoozed: false },
+    title: "Pinned root",
+  };
+  const directSubagent: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
+    activityAt: 2,
+    createdAt: 1,
+    cwd: path.join(root, "owner"),
+    directSubagentIndex: 0,
+    entryKind: "subagent",
+    identity: { harness: "codex", threadId: "child-thread" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    name: "Child",
+    parentThreadId: "root-thread",
+    pinned: false,
+    profileId: "default",
+    profileName: "Default",
+    projectId: "owner",
+    title: "Child",
+    updatedAt: 2,
+  };
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [projectOption("viewed", path.join(root, "viewed")), projectOption("owner", path.join(root, "owner"))],
+      rootPath: root,
+    }),
+    projectState: projectState(),
+    publish: () => undefined,
+    renameThread: async (_projectId, _harness, _threadId, title) => title,
+    reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
+      if (projectId === "owner") acceptProviderSnapshot("codex", [pinnedRoot, directSubagent], { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async (projectId) => path.join(root, projectId),
+    storageRoot: root,
+  });
+  await controller.open("owner-loader", "owner");
+  await waitFor(async () => (await controller.getSnapshot("owner")).entries.length === 2, "Pinned owner did not load.");
+  await controller.open("viewer", "viewed");
+
+  const opened = await controller.handleRequest("viewer", {
+    method: "workbench/thread-state/pin/open",
+    projectId: "owner",
+    target: { harness: "codex", kind: "subagent", parentThreadId: "root-thread", threadId: "child-thread" },
+  });
+  const openedContext = WorkbenchPinnedThreadContextResultSchema.parse(opened.result);
+  assert.deepEqual(openedContext.context
+    ? openedContext.context.entries.map((entry) => entry.entryKind === "draft" ? entry.draft.draftId : entry.identity.threadId)
+    : null, ["root-thread", "child-thread"]);
+
+  const renamed = await controller.handleRequest("viewer", {
+    identity: { harness: "codex", threadId: "root-thread" },
+    method: "workbench/thread-state/title/set",
+    projectId: "owner",
+    title: "Renamed while open",
+  });
+  assert.equal(WorkbenchThreadTitleMutationResultSchema.parse(renamed.result).title, "Renamed while open");
+
+  await controller.handleRequest("owner-loader", {
+    identity: { harness: "codex", threadId: "root-thread" },
+    method: "workbench/thread-state/snooze/set",
+    projectId: "owner",
+    snoozed: true,
+  });
+  await controller.open("new-viewer", "viewed");
+  const snoozed = await controller.handleRequest("new-viewer", {
+    method: "workbench/thread-state/pin/open",
+    projectId: "owner",
+    target: { kind: "provider", threadId: "root-thread" },
+  });
+  assert.equal(WorkbenchPinnedThreadContextResultSchema.parse(snoozed.result).context, null);
+
+  await controller.close("viewer");
+  await controller.open("viewer", "viewed");
+  const rejectedAfterReopen = await controller.handleRequest("viewer", {
+    identity: { harness: "codex", threadId: "root-thread" },
+    method: "workbench/thread-state/title/set",
+    projectId: "owner",
+    title: "Must not rename",
+  });
+  assert.equal(rejectedAfterReopen.error?.code, "invalidProjectObservation");
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
 });
 
 test("incomplete provider snapshots retain unseen rows until an authoritative snapshot arrives", async () => {

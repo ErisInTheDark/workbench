@@ -5,6 +5,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createThreadDisplayFolder,
+  getProjectQualifiedThreadDisplayKey,
+  moveThreadDisplayLayoutItem,
+  parseProjectQualifiedThreadDisplayKey,
+  projectThreadDisplayLayoutSection,
+  reconcileThreadDisplayLayout,
+} from "./thread-display-layout";
+import {
   createWorkbenchThreadFolder,
   getWorkbenchThreadDisplayKey,
   getWorkbenchThreadDisplaySection,
@@ -121,6 +129,35 @@ test("a complete user snapshot becomes a total comparator rank and refreshes aro
   assert.deepEqual(ids(refreshed.entries), ["codex:arrival", "codex:moved", "codex:claimed", "codex:attention"]);
 });
 
+test("project layout keys stay aligned when non-layout rows precede reorderable rows", () => {
+  const child: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
+    activityAt: 4,
+    createdAt: 4,
+    cwd: "C:/project",
+    directSubagentIndex: 0,
+    entryKind: "subagent",
+    identity: { harness: "codex", threadId: "child" },
+    lifecycle: working("child-turn"),
+    name: "child",
+    parentThreadId: "parent",
+    pinned: false,
+    profileId: "default",
+    profileName: "Default",
+    projectId: "project",
+    title: "child",
+    updatedAt: 4,
+  };
+  const first = thread("first", 3, { snoozed: true });
+  const second = thread("second", 2, { snoozed: true });
+  const moved = moveWorkbenchThreadDisplayOrder([child, first, second], {}, "snoozed", "codex:second", "codex:first");
+  assert.ok(moved);
+  const resolved = resolveWorkbenchThreadDisplayOrder([child, first, second], moved);
+  assert.deepEqual(
+    resolved.entries.filter((entry) => getWorkbenchThreadDisplaySection(entry) === "snoozed").map(getWorkbenchThreadDisplayKey),
+    ["codex:second", "codex:first"],
+  );
+});
+
 test("leaving a reorderable section clears the row and every touching relation", () => {
   const first = thread("first", 2, { pinned: true });
   const second = thread("second", 1, { pinned: true });
@@ -209,4 +246,35 @@ test("invalid stored ordering safely becomes empty ordering", () => {
   const resolved = resolveWorkbenchThreadDisplayOrder([first, second], { pinned: "nope" });
   assert.deepEqual(ids(resolved.entries), ["codex:first", "codex:second"]);
   assert.deepEqual(resolved.displayOrder, {});
+});
+
+test("global pinned keys keep equal provider identities distinct across projects", () => {
+  const left = getProjectQualifiedThreadDisplayKey("project/a", "codex:thread");
+  const right = getProjectQualifiedThreadDisplayKey("project/b", "codex:thread");
+  assert.notEqual(left, right);
+  assert.deepEqual(parseProjectQualifiedThreadDisplayKey(left), { projectId: "project/a", threadKey: "codex:thread" });
+});
+
+test("global pinned folders accept mixed projects without pruning a cold project member", () => {
+  const left = getProjectQualifiedThreadDisplayKey("project/a", "codex:left");
+  const right = getProjectQualifiedThreadDisplayKey("project/b", "codex:right");
+  const folderId = "00000000-0000-4000-8000-000000000030";
+  const entries = [{ key: left, section: "pinned" as const }, { key: right, section: "pinned" as const }];
+  const created = createThreadDisplayFolder(entries, {}, folderId, left, "Everywhere", { preserveMissing: true });
+  assert.ok(created);
+  const filled = moveThreadDisplayLayoutItem(entries, created, "pinned", right, folderId, null, { preserveMissing: true });
+  assert.deepEqual(filled?.folders?.[0]?.threadKeys, [left, right]);
+  const sparse = reconcileThreadDisplayLayout([entries[0]!], filled, { preserveMissing: true });
+  assert.deepEqual(sparse.folders?.[0]?.threadKeys, [left, right]);
+  assert.deepEqual(projectThreadDisplayLayoutSection(
+    [{ title: "left" }],
+    [entries[0]!],
+    sparse,
+    "pinned",
+    { preserveMissing: true },
+  )[0], {
+    entries: [{ title: "left" }],
+    folder: { folderId, section: "pinned", threadKeys: [left, right], title: "Everywhere" },
+    itemKind: "folder",
+  });
 });

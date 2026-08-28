@@ -1,7 +1,7 @@
 /* No production exports. Tests protect blank, draft, provider, and materialized mosaic route identity. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createThreadHref, getWorkbenchDraftIdFromThreadId, getWorkbenchMosaicThreadRootIds, isWorkbenchRouteOwnerOfThread, isWorkbenchThreadTargetSelected, parseWorkbenchRouteFromPath } from "./workbench-route";
+import { createPinnedThreadHref, createThreadHref, getWorkbenchDraftIdFromThreadId, getWorkbenchMosaicThreadRootIds, isWorkbenchRouteOwnerOfThread, isWorkbenchThreadTargetSelected, parseWorkbenchRouteFromPath } from "./workbench-route";
 import { createWorkbenchMosaicSplit, createWorkbenchMosaicTarget, parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route";
 
 test("thread routes discriminate blank drafts and provider ids", () => {
@@ -15,6 +15,23 @@ test("thread routes discriminate blank drafts and provider ids", () => {
   assert.equal(createThreadHref("p", { kind: "subagent", parentThreadId: "parent", threadId: "child" }), "/p/@/thread/parent/sub/child");
   assert.equal(createThreadHref("p", { draftId, kind: "draft" }), `/p/@/thread/new/${draftId}`);
   assert.equal(createThreadHref("p", { folderId, kind: "new" }), `/p/@/folder/${folderId}/thread/new`);
+});
+
+test("pinned routes preserve viewed and owning projects through the existing thread grammar", () => {
+  const draftId = "123e4567-e89b-42d3-a456-426614174000";
+  const providerHref = createPinnedThreadHref("viewed/project", "owner/project", { kind: "provider", threadId: "provider" });
+  assert.equal(providerHref, "/viewed/project/@/pin/owner/project/@/thread/provider");
+  assert.deepEqual(parseWorkbenchRouteFromPath(providerHref), {
+    ...parseWorkbenchRouteFromPath("/owner/project/@/thread/provider"),
+    projectId: "viewed/project",
+    threadOwnerProjectId: "owner/project",
+  });
+  const draftHref = createPinnedThreadHref("viewed", "owner", { draftId, kind: "draft" });
+  assert.equal(draftHref, `/viewed/@/pin/owner/@/thread/new/${draftId}`);
+  assert.equal(parseWorkbenchRouteFromPath(draftHref).threadTarget?.kind, "draft");
+  const subagentHref = createPinnedThreadHref("viewed", "owner", { kind: "subagent", parentThreadId: "parent", threadId: "child" });
+  assert.equal(subagentHref, "/viewed/@/pin/owner/@/thread/parent/sub/child");
+  assert.equal(parseWorkbenchRouteFromPath("/viewed/@/pin/owner").view, "invalid");
 });
 
 test("blank routes own their private future draft identity without owning unrelated drafts", () => {

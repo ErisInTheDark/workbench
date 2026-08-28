@@ -47,6 +47,7 @@ function summary(
       working: 1,
     },
     lastThreadUpdateAt: activityAt,
+    pinnedThreads: [],
     projectId,
     revision: 1,
     unsettledThreads: snoozed ? [] : [{

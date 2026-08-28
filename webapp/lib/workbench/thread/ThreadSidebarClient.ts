@@ -1,14 +1,15 @@
 /*
  * Exports:
  * - ThreadSidebarTransport/ThreadSidebarClientOptions/ThreadSidebarAcceptedIntent: pushed snapshot, mutation ports, and provider-confirmed local admission. Keywords: browser, websocket, drafts, intent.
- * - default ThreadSidebarClient: subscribable browser observation, cross-project summary projection, revision, optimistic draft, and leave-safe queue owner. Keywords: sidebar, project, status, external store, debounce, flush.
+ * - default ThreadSidebarClient: subscribable browser observation, cross-project status and pin projection, revision, optimistic draft, and leave-safe queue owner. Keywords: sidebar, project, pinned, status, external store, debounce, flush.
  */
 import type { WorkbenchThreadSidebarStore } from "../../types";
 import { areDeeplyEqual } from "../deep-equality";
 import { findWorkbenchThreadFolder, moveWorkbenchThreadDisplayItem, replaceWorkbenchThreadFolderMember, resolveWorkbenchThreadDisplayOrder, sortThreadSidebarEntries } from "./thread-display-order";
-import { createDraftTitle, createWorkbenchProjectThreadSummary, type WorkbenchHarnessId, type WorkbenchProjectThreadSummaries, type WorkbenchProjectThreadSummary, type WorkbenchProjectThreadSummaryUpdate, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
+import { createDraftTitle, createWorkbenchProjectThreadSummary, type WorkbenchHarnessId, type WorkbenchPinnedThreadLayoutSnapshot, type WorkbenchProjectThreadSummaries, type WorkbenchProjectThreadSummary, type WorkbenchProjectThreadSummaryUpdate, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
 
 export interface ThreadSidebarOpenResult {
+  pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot;
   projectThreads: WorkbenchProjectThreadSummaries;
   sidebar: WorkbenchThreadSidebarSnapshot;
 }
@@ -41,6 +42,7 @@ interface DraftQueue {
 
 export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore {
   private isOpen = false;
+  private pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot = { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" };
   private projectId: string | null = null;
   private projectThreadSummaries: WorkbenchProjectThreadSummaries = { projects: [] };
   private revision = -1;
@@ -50,6 +52,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   constructor(private readonly options: ThreadSidebarClientOptions) {}
 
   readonly getSnapshot = () => this.snapshot;
+  readonly getPinnedThreadLayout = () => this.pinnedThreadLayout;
   readonly getProjectThreadSummaries = () => this.projectThreadSummaries;
   readonly subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -64,6 +67,8 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.projectId = projectId;
     this.isOpen = false;
     this.revision = -1;
+    this.projectThreadSummaries = { projects: [] };
+    this.publish();
     try {
       this.installOpenResult(await this.options.transport.open(projectId));
       this.isOpen = true;
@@ -76,11 +81,16 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   }
   accept(snapshot: WorkbenchThreadSidebarSnapshot) { if (snapshot.projectId === this.projectId && snapshot.revision > this.revision) this.install(snapshot); }
   acceptProjectThreadSummaries(snapshot: WorkbenchProjectThreadSummaries) {
-    this.projectThreadSummaries = snapshot;
-    this.publish();
+    const changed = snapshot.projects.reduce((didChange, summary) => this.setProjectThreadSummary(summary) || didChange, false);
+    if (changed) this.publish();
   }
   acceptProjectThreadSummary(update: WorkbenchProjectThreadSummaryUpdate) {
     if (this.setProjectThreadSummary(update.summary)) this.publish();
+  }
+  acceptPinnedThreadLayout(update: WorkbenchPinnedThreadLayoutSnapshot) {
+    if (update.revision <= this.pinnedThreadLayout.revision) return;
+    this.pinnedThreadLayout = update;
+    this.publish();
   }
   acceptActivity(update: WorkbenchThreadActivityUpdate) {
     if (update.projectId !== this.projectId || update.revision <= this.revision || !this.snapshot) return;
@@ -193,7 +203,10 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.publish();
   }
   private installOpenResult(result: ThreadSidebarOpenResult | WorkbenchThreadSidebarSnapshot) {
-    if ("sidebar" in result) this.projectThreadSummaries = result.projectThreads;
+    if ("sidebar" in result) {
+      if (result.pinnedThreadLayout.revision > this.pinnedThreadLayout.revision) this.pinnedThreadLayout = result.pinnedThreadLayout;
+      for (const summary of result.projectThreads.projects) this.setProjectThreadSummary(summary);
+    }
     this.install("sidebar" in result ? result.sidebar : result);
   }
   private setProjectThreadSummary(summary: WorkbenchProjectThreadSummary) {
@@ -213,6 +226,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       this.snapshot.projectId,
       this.snapshot.entries,
       this.snapshot.revision,
+      this.snapshot.displayOrder,
     ));
   }
   private installOptimisticDraft(draft: WorkbenchThreadDraft, folderId: string | null) {

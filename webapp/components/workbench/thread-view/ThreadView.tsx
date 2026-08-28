@@ -570,6 +570,7 @@ export default memo(function ThreadView ({
   contained = false,
   mobileFullBleed = false,
   fontSizeRem,
+  getThreadHref,
   hideFinalAgentMessage = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = true,
@@ -619,6 +620,7 @@ export default memo(function ThreadView ({
   contained?: boolean;
   mobileFullBleed?: boolean;
   fontSizeRem: number;
+  getThreadHref?: (target: WorkbenchThreadTarget) => string;
   hideFinalAgentMessage?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
@@ -1120,9 +1122,12 @@ export default memo(function ThreadView ({
       void loadSubthread(threadId, getSubagentHarness(subagents, threadId, thread.harness));
     }
   }, [loadSubthread, onSelectedThreadChange, subagents, thread.harness, thread.id]);
-  const getSubthreadHref = useCallback((threadId: string) => createThreadHref(projectId, threadId === thread.id
-    ? { harness: thread.harness, kind: "provider", threadId: thread.id }
-    : { harness: getSubagentHarness(subagents, threadId, thread.harness), kind: "subagent", parentThreadId: thread.id, threadId }), [projectId, subagents, thread.harness, thread.id]);
+  const getSubthreadHref = useCallback((threadId: string) => {
+    const target: WorkbenchThreadTarget = threadId === thread.id
+      ? { harness: thread.harness, kind: "provider", threadId: thread.id }
+      : { harness: getSubagentHarness(subagents, threadId, thread.harness), kind: "subagent", parentThreadId: thread.id, threadId };
+    return getThreadHref?.(target) ?? createThreadHref(projectId, target);
+  }, [getThreadHref, projectId, subagents, thread.harness, thread.id]);
 
   const handleSubagentPinToggle = useCallback((threadId: string) => {
     const subagent = getSubagentSummary(subagents, threadId);

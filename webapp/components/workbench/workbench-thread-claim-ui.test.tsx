@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; rendered regression checks protect active claim counts, proposed-commit presentation, and settlement suppression. Keywords: sidebar, thread, claim, proposal, commit, settlement.
+ * - No production exports; rendered regression checks protect active claim counts, proposed-commit presentation, settlement suppression, and global pinned project context. Keywords: sidebar, thread, pinned, project, claim, proposal, commit, settlement.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -8,10 +8,18 @@ import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { WorkbenchThreadSidebarEntrySchema, type WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
+import type { WorkbenchProjectOption } from "../../lib/types";
+import {
+  WorkbenchThreadSidebarEntrySchema,
+  type WorkbenchProjectThreadSummaries,
+  type WorkbenchThreadSidebarEntry,
+} from "../../lib/workbench/thread/thread-state";
+import WorkbenchPinnedThreadList from "./WorkbenchPinnedThreadList";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchContextMenuContext, { type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
+import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
+import WorkbenchDragProvider from "./drag/WorkbenchDragProvider";
 
 type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
 
@@ -47,23 +55,54 @@ function createThreadEntry({
   };
 }
 
-function renderThreads(entries: ThreadEntry[]) {
+function renderThreads(
+  entries: ThreadEntry[],
+) {
   return renderToStaticMarkup(createElement(
     WorkbenchContextMenuContext.Provider,
     { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
-    createElement(WorkbenchThreadList, {
-      currentTarget: null,
-      entries,
-      getThreadHref: () => "/agent/thread/thread-one",
-      nowMs: 1_723_456_790_000,
-      onCreateThread: () => undefined,
-      onOpenThread: () => undefined,
-      projectId: "project",
-    }),
+    createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
+        currentTarget: null,
+        entries,
+        getThreadHref: () => "/agent/thread/thread-one",
+        nowMs: 1_723_456_790_000,
+        onCreateThread: () => undefined,
+        onOpenThread: () => undefined,
+        projectId: "project",
+      })),
   ));
 }
 
-function renderThreadItem(entry: ThreadEntry, contextMenu: WorkbenchContextMenuDefinition | null = null) {
+function renderPinnedThreads(projects: WorkbenchProjectOption[], projectThreadSummaries: WorkbenchProjectThreadSummaries) {
+  return renderToStaticMarkup(createElement(
+    WorkbenchContextMenuContext.Provider,
+    { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+    createElement(WorkbenchDragProvider, null, createElement(WorkbenchPinnedThreadList, {
+      actions: {
+        autoFocusFolderId: null,
+        getThreadContextMenu: () => ({ id: "test-thread-menu", items: [], label: "Thread actions" }),
+        nowMs: 1_723_456_790_000,
+        onAction: () => undefined,
+        onAutoFocusFolderComplete: () => undefined,
+        onPinnedMove: () => undefined,
+        onRenamePinnedFolder: async (_folderId, title) => title,
+        pinnedDisplayOrder: {},
+        projectThreadSummaries,
+      },
+      currentTarget: null,
+      onOpenThread: () => undefined,
+      projectId: "project",
+      projects,
+      selectedOwnerProjectId: "project",
+    })),
+  ));
+}
+
+function renderThreadItem(
+  entry: ThreadEntry,
+  contextMenu: WorkbenchContextMenuDefinition | null = null,
+  project?: WorkbenchProjectOption,
+) {
   return renderToStaticMarkup(createElement(
     WorkbenchContextMenuContext.Provider,
     { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
@@ -71,6 +110,7 @@ function renderThreadItem(entry: ThreadEntry, contextMenu: WorkbenchContextMenuD
       contextMenu,
       entry,
       href: "/agent/thread/thread-one",
+      ...(project ? { project } : {}),
       projectId: "project",
       showActions: true,
     }),
@@ -247,4 +287,80 @@ test("thread rows expose explicit context-menu access alongside interactive tool
   assert.match(source, /<WorkbenchTooltip[\s\S]*?enabled=\{showTooltip && !isDragActive\}[\s\S]*?interactive[\s\S]*?<a/u);
   assert.match(source, /data-thread-project-file-link-boundary="true"/u);
   assert.match(source, /claimedPaths\.map\(\(filePath\)[\s\S]*?<ProjectFilePath/u);
+});
+
+test("global pinned disclosure starts open, omits thread creation, and identifies each project", () => {
+  const localPinned = {
+    ...createThreadEntry({ threadId: "local-pin", title: "Local pin" }),
+    lifecycle: { agent: { agentStatus: "working" as const, turnId: "turn-local" }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const },
+    metadata: { archived: false as const, pinned: true, snoozed: false },
+  };
+  const projects: WorkbenchProjectOption[] = [{
+    id: "project", kind: "git", lastCommitTimeMs: null, name: "Workbench", relativePath: "web/workbench",
+    rootPath: "C:/git/web/workbench", roots: [{ id: "workbench", isPrimary: true, name: "workbench", relativePath: "web/workbench", rootPath: "C:/git/web/workbench" }],
+  }, {
+    id: "other", kind: "git", lastCommitTimeMs: null, name: "Other", relativePath: "web/other",
+    rootPath: "C:/git/web/other", roots: [{ id: "other", isPrimary: true, name: "other", relativePath: "web/other", rootPath: "C:/git/web/other" }],
+  }];
+  const projectThreadSummaries: WorkbenchProjectThreadSummaries = {
+    projects: [{
+      counts: { completed: 0, needsAttention: 0, needsAttentionActive: 0, proposedCommit: 0, stopped: 0, working: 1 },
+      lastThreadUpdateAt: localPinned.activityAt,
+      pinnedThreads: [{
+        activityAt: localPinned.activityAt,
+        entryKind: "thread",
+        identity: localPinned.identity,
+        lifecycle: localPinned.lifecycle,
+        metadata: { archived: false, pinned: true, snoozed: false },
+        status: "working",
+        title: localPinned.title,
+      }],
+      projectId: "project",
+      revision: 1,
+      unsettledThreads: [{ activityAt: localPinned.activityAt, identity: localPinned.identity, status: "working", title: localPinned.title }],
+    }, {
+      counts: { completed: 0, needsAttention: 0, needsAttentionActive: 0, proposedCommit: 0, stopped: 1, working: 0 },
+      lastThreadUpdateAt: localPinned.activityAt,
+      pinnedThreads: [{
+        activityAt: localPinned.activityAt,
+        entryKind: "thread",
+        identity: { harness: "codex", threadId: "remote-pin" },
+        lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn-remote" },
+        metadata: { archived: false, pinned: true, snoozed: false },
+        status: "stopped",
+        title: "Remote pin",
+      }],
+      projectId: "other",
+      revision: 1,
+      unsettledThreads: [{ activityAt: localPinned.activityAt, identity: { harness: "codex", threadId: "remote-pin" }, status: "stopped", title: "Remote pin" }],
+    }],
+  };
+  const html = renderPinnedThreads(projects, projectThreadSummaries);
+
+  assert.match(html, /<details[^>]*open=""/u);
+  assert.doesNotMatch(html, /Create new thread/u);
+  const localRowHtml = renderThreadItem(localPinned, null, projects[0]);
+  const remoteRowHtml = renderThreadItem({
+    ...createThreadEntry({ threadId: "remote-pin", title: "Remote pin" }),
+    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn-remote" },
+    metadata: { archived: false, pinned: true, snoozed: false },
+  }, null, projects[1]);
+  assert.match(localRowHtml, /Workbench[\s\S]*?web\/workbench[\s\S]*?Local pin/u);
+  assert.match(remoteRowHtml, /Other[\s\S]*?web\/other[\s\S]*?Remote pin/u);
+  assert.doesNotMatch(`${localRowHtml}${remoteRowHtml}`, /data-role="thread-priority-icon"/u);
+});
+
+test("other-project status subtraction removes pins and clamps mixed-version underflow", () => {
+  assert.deepEqual(WorkbenchThreadStatusCounts.subtractCounts(
+    { completed: 1, needsAttention: 0, needsAttentionActive: 0, proposedCommit: 0, stopped: 0, waiting: 1, working: 1 },
+    { completed: 2, needsAttention: 0, needsAttentionActive: 0, proposedCommit: 0, stopped: 0, waiting: 1, working: 1 },
+  ), {
+    completed: 0,
+    needsAttention: 0,
+    needsAttentionActive: 0,
+    proposedCommit: 0,
+    stopped: 0,
+    waiting: 0,
+    working: 0,
+  });
 });

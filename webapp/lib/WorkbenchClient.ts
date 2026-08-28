@@ -13,6 +13,7 @@ import type {
     DeleteFileResponse,
     OrchestratorReloadScope,
     WorkbenchPendingUserInputRequest,
+    WorkbenchProjectOption,
     ThreadPayload,
     WorkbenchBindings,
     WorkbenchControls,
@@ -32,6 +33,8 @@ import {
 } from "./workbench/orchestrator-reload";
 import {
     createProjectRoute,
+    getWorkbenchThreadTargetRootId,
+    getWorkbenchThreadTargetSelectedId,
     isWorkbenchRouteOwnerOfThread,
     type WorkbenchRoute,
 } from "./workbench/navigation/workbench-route";
@@ -54,7 +57,7 @@ import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema, type WorkbenchProjectStateUpdate } from "./workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
 import conformWorkbenchThreadStateOpenResult from "./workbench/thread/browser-thread-state-conformance";
-import { WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateOpenResultSchema, WorkbenchThreadStateSnapshotSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
+import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateOpenResultSchema, WorkbenchThreadStateSnapshotSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
 import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
 import reportClientSchemaError from "./workbench/report-client-schema-error";
 
@@ -192,18 +195,18 @@ export async function openWorkbenchThreadStateObservation({
     }
     if (isCompositeThreadStateOpenResponse(fallbackResponse)) {
       const composite = acceptComposite(fallbackResponse).data;
-      return { projectThreads: composite.projectThreads, sidebar: composite.sidebar };
+      return { pinnedThreadLayout: composite.pinnedThreadLayout, projectThreads: composite.projectThreads, sidebar: composite.sidebar };
     }
     const legacy = WorkbenchThreadSidebarSnapshotSchema.safeParse(fallbackResponse);
     if (!legacy.success) {
       reportClientSchemaError("Rejected legacy Workbench thread-state open response", legacy.error);
       throw new Error("The legacy thread-state open response was invalid.");
     }
-    return { projectThreads: { projects: [] }, sidebar: legacy.data };
+    return { pinnedThreadLayout: { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" as const }, projectThreads: { projects: [] }, sidebar: legacy.data };
   }
 
   const composite = acceptComposite(response).data;
-  return { projectThreads: composite.projectThreads, sidebar: composite.sidebar };
+  return { pinnedThreadLayout: composite.pinnedThreadLayout, projectThreads: composite.projectThreads, sidebar: composite.sidebar };
 }
 
 export async function requestWorkbenchReload(
@@ -254,6 +257,7 @@ export async function WorkbenchClient(
     },
   });
   let threadSidebarSnapshot: WorkbenchThreadSidebarSnapshot | null = null;
+  let selectedPinnedThreadDraft: WorkbenchThreadDraft | null = null;
   const threadSidebarClient = new ThreadSidebarClient({
     onChange: (snapshot) => {
       threadSidebarSnapshot = snapshot;
@@ -305,6 +309,7 @@ export async function WorkbenchClient(
       if ("updateKind" in parsed.data) {
         if (parsed.data.updateKind === "project") projectClient.accept(parsed.data);
         else if (parsed.data.updateKind === "projectThreadSummary") threadSidebarClient.acceptProjectThreadSummary(parsed.data);
+        else if (parsed.data.updateKind === "pinnedThreadLayout") threadSidebarClient.acceptPinnedThreadLayout(parsed.data);
         else threadSidebarClient.acceptActivity(parsed.data);
       } else {
         threadSidebarClient.accept(parsed.data);
@@ -435,24 +440,7 @@ export async function WorkbenchClient(
       projectFileIndexId: projectSnapshot.projectFileIndexId,
       projectFileIndexKey: projectSnapshot.projectFileIndexKey,
       projectFilePaths: projectSnapshot.projectFilePaths,
-      subagents: (threadSidebarSnapshot?.entries ?? []).filter((entry): entry is Extract<typeof entry, { entryKind: "subagent" }> => entry.entryKind === "subagent").map((entry) => ({
-        activityStatus: entry.lifecycle.kind === "working" ? "active" : "inactive",
-        createdAt: entry.createdAt,
-        cwd: entry.cwd,
-        directSubagentIndex: entry.directSubagentIndex,
-        harness: entry.identity.harness,
-        lastActivityAt: entry.activityAt,
-        lifecycle: entry.lifecycle,
-        name: entry.name,
-        parentThreadId: entry.parentThreadId,
-        pinned: entry.pinned,
-        profileId: entry.profileId,
-        profileName: entry.profileName,
-        projectId: entry.projectId,
-        threadId: entry.identity.threadId,
-        title: entry.title,
-        updatedAt: entry.updatedAt,
-      })),
+      subagents: threadSnapshot.subagents,
       threads: threadSnapshot.threads,
       isProjectLoading: projectSnapshot.isLoading,
       isThreadsLoading: threadSnapshot.isLoading,
@@ -620,22 +608,60 @@ export async function WorkbenchClient(
     reportStatusMessage(statusMessage || payload.name || payload.preview || payload.id);
   }
 
+  function applyDraftEntryToCurrentView(
+    entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>,
+    options: { entries?: readonly WorkbenchThreadSidebarEntry[]; project?: WorkbenchProjectOption } = {},
+  ) {
+    const draft = {
+      ...threadClient.createThread(entry.draft.harness, `draft:${entry.draft.draftId}`, options),
+      agentPath: entry.draft.agent,
+      model: entry.draft.model,
+      reasoningEffort: entry.draft.reasoningEffort,
+      serviceTier: entry.draft.serviceTier,
+    };
+    applyThreadPayloadToCurrentView(draft);
+    emitExplorerStateChange();
+  }
+
+  function cloneThreadDraft(draft: WorkbenchThreadDraft) {
+    return structuredClone(draft);
+  }
+
+  function isPinnedContextTargetMatch(
+    requested: NonNullable<WorkbenchRoute["threadTarget"]>,
+    admitted: NonNullable<WorkbenchRoute["threadTarget"]>,
+  ) {
+    return requested.kind === admitted.kind
+      && getWorkbenchThreadTargetRootId(requested) === getWorkbenchThreadTargetRootId(admitted)
+      && getWorkbenchThreadTargetSelectedId(requested) === getWorkbenchThreadTargetSelectedId(admitted);
+  }
+
   async function openThread(
     threadId: string,
-    { harness, source = "open" }: { harness?: WorkbenchHarness; source?: "open" | "reload" } = {},
+    {
+      entries = [],
+      harness,
+      project,
+      source = "open",
+    }: {
+      entries?: readonly WorkbenchThreadSidebarEntry[];
+      harness?: WorkbenchHarness;
+      project?: WorkbenchProjectOption;
+      source?: "open" | "reload";
+    } = {},
   ) {
-    if (source === "open" && threadId === sessionState.currentThreadId) {
+    if (source === "open" && threadId === sessionState.currentThreadId && !project) {
       return true;
     }
 
     if (threadClient.isDraftThreadId(threadId)) {
-      const draftThread = threadClient.createThread(harness ?? readStoredHarness(), threadId);
+      const draftThread = threadClient.createThread(harness ?? readStoredHarness(), threadId, { entries, project });
       applyThreadPayloadToCurrentView(draftThread);
       emitExplorerStateChange();
       return true;
     }
 
-    await threadClient.openThread(threadId, { harness, source });
+    await threadClient.openThread(threadId, { entries, harness, project, source });
     const payload = threadClient.getSnapshot().currentThread;
     if (!payload) {
       return false;
@@ -790,6 +816,7 @@ export async function WorkbenchClient(
 
   async function applyRouteOwned(route: WorkbenchRoute): Promise<WorkbenchRouteLoadResult> {
     activeRoute = route;
+    selectedPinnedThreadDraft = null;
     const routeGeneration = ++activeRouteGeneration;
 
     if (route.view === "invalid") {
@@ -838,32 +865,67 @@ export async function WorkbenchClient(
     if (route.view === "thread") {
       void hydrateProjectSidebarData(route, routeGeneration);
       const target = route.threadTarget ?? { kind: "provider" as const, threadId: route.threadId };
+      const ownerProjectId = route.threadOwnerProjectId || route.projectId;
+      const isForeignPin = ownerProjectId !== route.projectId;
+      let ownerProject: WorkbenchProjectOption | undefined;
+      let pinnedEntries: readonly WorkbenchThreadSidebarEntry[] = [];
+      if (isForeignPin) {
+        ownerProject = projectClient.getSnapshot().projects.find((project) => project.id === ownerProjectId);
+        if (!ownerProject) {
+          threadClient.clearThreadSelection();
+          applyCurrentThreadSelection(null);
+          return { error: `Pinned thread project not found: ${ownerProjectId}`, ok: false };
+        }
+        const parsedContext = WorkbenchPinnedThreadContextResultSchema.safeParse(
+          await threadClient.requestWorkbench("workbench/thread-state/pin/open", {
+            projectId: ownerProjectId,
+            target,
+          }),
+        );
+        if (!parsedContext.success) {
+          reportClientSchemaError("Rejected Workbench pinned thread context response", parsedContext.error);
+          threadClient.clearThreadSelection();
+          applyCurrentThreadSelection(null);
+          return { error: "The pinned thread context response was invalid.", ok: false };
+        }
+        if (
+          !parsedContext.data.context
+          || parsedContext.data.context.projectId !== ownerProjectId
+          || !isPinnedContextTargetMatch(target, parsedContext.data.context.target)
+        ) {
+          threadClient.clearThreadSelection();
+          applyCurrentThreadSelection(null);
+          return { error: "This pinned thread is missing, snoozed, or no longer pinned.", ok: false };
+        }
+        pinnedEntries = parsedContext.data.context.entries;
+      }
       if (target.kind === "new") {
+        if (isForeignPin) {
+          return { error: "Pinned routes cannot open a new thread.", ok: false };
+        }
         const draft = threadClient.createThread("codex", `draft:${crypto.randomUUID()}`);
         applyThreadPayloadToCurrentView(draft);
         emitExplorerStateChange();
         return { ok: true };
       }
       if (target.kind === "draft") {
-        const entry = threadSidebarSnapshot?.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === target.draftId);
+        const entries = isForeignPin ? pinnedEntries : threadSidebarSnapshot?.entries ?? [];
+        const entry = entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === target.draftId);
         if (!entry || entry.entryKind !== "draft") {
           threadClient.clearThreadSelection();
           applyCurrentThreadSelection(null);
           return { error: "This draft is missing or belongs to another project.", ok: false };
         }
-        const draft = {
-          ...threadClient.createThread(entry.draft.harness, `draft:${entry.draft.draftId}`),
-          agentPath: entry.draft.agent,
-          model: entry.draft.model,
-          reasoningEffort: entry.draft.reasoningEffort,
-          serviceTier: entry.draft.serviceTier,
-        };
-        applyThreadPayloadToCurrentView(draft);
-        emitExplorerStateChange();
+        selectedPinnedThreadDraft = isForeignPin ? cloneThreadDraft(entry.draft) : null;
+        applyDraftEntryToCurrentView(entry, { entries: pinnedEntries, project: ownerProject });
         return { ok: true };
       }
       const rootThreadId = target.kind === "subagent" ? target.parentThreadId : target.threadId;
-      const didOpen = await openThread(rootThreadId, { harness: target.harness });
+      const didOpen = await openThread(rootThreadId, {
+        entries: pinnedEntries,
+        harness: target.harness,
+        project: ownerProject,
+      });
       reapplyActiveRouteAfterStaleLoad(route, routeGeneration);
       if (!isRouteGenerationActive(route, routeGeneration)) {
         return { ok: false };
@@ -921,15 +983,55 @@ export async function WorkbenchClient(
     },
     createEntry,
     deleteFile,
-    deleteThreadDraft: (draftId) => threadSidebarClient.delete(draftId),
-    editThreadDraft: (draft, options) => threadSidebarClient.edit(draft, options),
+    deleteThreadDraft: async (draftId) => {
+      const selectedDraft = selectedPinnedThreadDraft;
+      if (!selectedDraft || selectedDraft.draftId !== draftId) {
+        await threadSidebarClient.delete(draftId);
+        return;
+      }
+      const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(await threadClient.requestWorkbench("workbench/thread-state/draft/delete", {
+        clientUpdatedAt: selectedDraft.clientUpdatedAt,
+        draftId,
+        projectId: selectedDraft.projectId,
+      }));
+      if (!parsed.success) {
+        reportClientSchemaError("Rejected Workbench pinned draft deletion response", parsed.error);
+        throw new Error("The pinned draft deletion response was invalid.");
+      }
+      if (!parsed.data.accepted) throw new Error("The pinned draft could not be deleted.");
+      selectedPinnedThreadDraft = null;
+    },
+    editThreadDraft: (draft, options) => {
+      if (!selectedPinnedThreadDraft || selectedPinnedThreadDraft.draftId !== draft.draftId || selectedPinnedThreadDraft.projectId !== draft.projectId) {
+        threadSidebarClient.edit(draft, options);
+        return;
+      }
+      selectedPinnedThreadDraft = cloneThreadDraft(draft);
+      void threadClient.requestWorkbench("workbench/thread-state/draft/upsert", {
+        draft,
+        ...(options?.folderId ? { folderId: options.folderId } : {}),
+        projectId: draft.projectId,
+      }).then((response) => {
+        const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(response);
+        if (!parsed.success) {
+          reportClientSchemaError("Rejected Workbench pinned draft update response", parsed.error);
+          throw new Error("The pinned draft update response was invalid.");
+        }
+        if (!parsed.data.accepted) throw new Error("The pinned draft could not be updated.");
+      }).catch((error: unknown) => {
+        console.error("Unable to update the pinned draft.", error instanceof Error ? error.message.slice(0, 500) : "Unknown pinned draft update failure.");
+      });
+    },
+    getSelectedThreadDraft: () => selectedPinnedThreadDraft ? cloneThreadDraft(selectedPinnedThreadDraft) : null,
     listModels: threadClient.listModels,
     readThread,
     reloadScopes: async (scopes) => await requestWorkbenchReload(scopes, threadClient.requestWorkbench),
     refreshRateLimits,
     sendThreadMessage,
     setThreadTitle: async (request) => {
-      const projectId = projectClient.getSnapshot().currentProjectId;
+      const projectId = activeRoute.view === "thread"
+        ? activeRoute.threadOwnerProjectId || activeRoute.projectId
+        : projectClient.getSnapshot().currentProjectId;
       if (!projectId) throw new Error("A project must be selected before renaming a thread.");
       const parsed = WorkbenchThreadTitleMutationResultSchema.safeParse(await threadClient.requestWorkbench("workbench/thread-state/title/set", {
         identity: { harness: request.harness, threadId: request.threadId },

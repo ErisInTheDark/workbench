@@ -73,7 +73,7 @@ const sidebar = (): WorkbenchThreadSidebarSnapshot => ({
   entries: [], error: null, freshness: "fresh", projectId: "project", revision: 1,
 });
 
-test("thread-state open installs the version-3 composite bootstrap", async () => {
+test("thread-state open keeps an old version-3 response available during a mixed reload", async () => {
   const requests: Array<{ projectId: string; version?: 2 | 3 }> = [];
   const catalogs: unknown[] = [];
   const result = await openWorkbenchThreadStateObservation({
@@ -87,6 +87,12 @@ test("thread-state open installs the version-3 composite bootstrap", async () =>
   });
   assert.deepEqual(requests, [{ projectId: "project", version: 3 }]);
   assert.equal(result.sidebar.projectId, "project");
+  assert.deepEqual(result.pinnedThreadLayout, {
+    displayOrder: {},
+    revision: 0,
+    updateKind: "pinnedThreadLayout",
+  });
+  assert.deepEqual(result.projectThreads, { projects: [] });
   assert.equal(catalogs.length, 1);
 });
 

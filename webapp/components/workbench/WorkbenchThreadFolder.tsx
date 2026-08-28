@@ -12,7 +12,7 @@ import {
   getWorkbenchThreadFolderKey,
   type WorkbenchThreadFolder,
 } from "../../lib/workbench/thread/thread-display-order";
-import type { WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
+import type { WorkbenchPinnedThreadSummaryEntry, WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
@@ -33,7 +33,7 @@ function boundedFolderError(error: unknown) {
   return (error instanceof Error ? error.message : "Unable to update the folder name.").slice(0, 160);
 }
 
-type FolderEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>;
+type FolderEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> | WorkbenchPinnedThreadSummaryEntry;
 type FolderStatusIcon = ComponentType<{ className?: string }>;
 
 function folderStatusRank(entry: FolderEntry) {

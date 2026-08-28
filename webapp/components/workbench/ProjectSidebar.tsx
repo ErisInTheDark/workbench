@@ -1,121 +1,26 @@
 /*
  * Exports:
  * - default ProjectSidebar: render a flush project disclosure with thread-style cards, progressive activity groups, and live cross-project status summaries. Keywords: project, sidebar, disclosure, status, activity.
- * - Local components: render dominant-status project borders, compact status counts, and detailed unsettled-thread tooltips from the shared summary store. Keywords: project, card, tooltip, browser.
+ * - Local components: render dominant-status project borders and detailed unsettled-thread tooltips from the shared summary store. Keywords: project, card, tooltip, browser.
  */
 "use client";
 
-import { useMemo, useState, useSyncExternalStore, type ComponentType, type MouseEvent } from "react";
+import { useMemo, useState, useSyncExternalStore, type MouseEvent } from "react";
 
 import type { WorkbenchProjectOption, WorkbenchThreadSidebarStore } from "../../lib/types";
 import { createProjectHref } from "../../lib/workbench/navigation/workbench-route";
-import type {
-  WorkbenchProjectThreadSummary,
-  WorkbenchProjectThreadSummaryCounts,
-  WorkbenchProjectThreadSummaryEntry,
-} from "../../lib/workbench/thread/thread-state";
 import ChevronIcon from "./ChevronIcon";
 import { groupSidebarProjects, type ProjectSidebarProject } from "./project-sidebar-groups";
+import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
-import { workbenchIconButtonClassName, workbenchNewEntryButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
-import { getWorkbenchThreadStatusClassName, type WorkbenchThreadStatusTone } from "./workbench-thread-status-colors";
-import {
-  CompletedThreadIcon,
-  NeedsAttentionThreadIcon,
-  ProjectStatusSummaryIcon,
-  ProposedCommitThreadIcon,
-  StoppedThreadIcon,
-  WorkingThreadIcon,
-} from "./workbench-icons";
+import { workbenchIconButtonClassName, workbenchNewEntryButtonClassName } from "./workbench-class-names";
+import { getWorkbenchThreadStatusClassName } from "./workbench-thread-status-colors";
+import { ProjectStatusSummaryIcon } from "./workbench-icons";
 import WorkbenchTooltip from "./WorkbenchTooltip";
+import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 
 const EMPTY_PROJECT_THREAD_SUMMARIES = { projects: [] };
-const EMPTY_COUNTS: WorkbenchProjectThreadSummaryCounts = {
-  completed: 0,
-  needsAttention: 0,
-  needsAttentionActive: 0,
-  proposedCommit: 0,
-  stopped: 0,
-  waiting: 0,
-  working: 0,
-};
-
-type StatusIcon = ComponentType<{ className?: string }>;
-interface ProjectStatusItem {
-  dashed: boolean;
-  Icon: StatusIcon;
-  key: WorkbenchProjectThreadSummaryEntry["status"];
-  label: string;
-  tone: WorkbenchThreadStatusTone;
-}
-
-const STATUS_ITEMS: ProjectStatusItem[] = [
-  { dashed: true, Icon: NeedsAttentionThreadIcon, key: "needsAttentionActive", label: "Needs attention with active work", tone: "needs-attention-active" },
-  { dashed: true, Icon: NeedsAttentionThreadIcon, key: "needsAttention", label: "Needs attention", tone: "needs-attention" },
-  { dashed: false, Icon: WorkingThreadIcon, key: "working", label: "Working", tone: "working" },
-  { dashed: false, Icon: WorkingThreadIcon, key: "waiting", label: "Waiting", tone: "waiting" },
-  { dashed: true, Icon: StoppedThreadIcon, key: "stopped", label: "Stopped", tone: "stopped" },
-  { dashed: false, Icon: ProposedCommitThreadIcon, key: "proposedCommit", label: "Proposed commit", tone: "completed" },
-  { dashed: false, Icon: CompletedThreadIcon, key: "completed", label: "Completed", tone: "completed" },
-];
-const STATUS_ITEMS_BY_KEY = new Map(STATUS_ITEMS.map((item) => [item.key, item]));
-
-function getProjectDisplayPath(project: WorkbenchProjectOption) {
-  const relativePath = project.relativePath || project.id || ".";
-  return project.kind === "workspace"
-    ? `${relativePath} · ${project.roots.length} roots`
-    : relativePath;
-}
-
-function getProjectFullPath(project: WorkbenchProjectOption) {
-  return project.kind === "workspace"
-    ? project.roots.map((root) => `${root.id}: ${root.rootPath}`).join("\n")
-    : project.rootPath;
-}
-
-function addCounts(
-  left: WorkbenchProjectThreadSummaryCounts,
-  right: WorkbenchProjectThreadSummaryCounts,
-): WorkbenchProjectThreadSummaryCounts {
-  return {
-    completed: left.completed + right.completed,
-    needsAttention: left.needsAttention + right.needsAttention,
-    needsAttentionActive: left.needsAttentionActive + right.needsAttentionActive,
-    proposedCommit: left.proposedCommit + right.proposedCommit,
-    stopped: left.stopped + right.stopped,
-    waiting: (left.waiting ?? 0) + (right.waiting ?? 0),
-    working: left.working + right.working,
-  };
-}
-
-function hasStatusCounts(counts: WorkbenchProjectThreadSummaryCounts) {
-  return STATUS_ITEMS.some(({ key }) => (counts[key] ?? 0) > 0);
-}
-
-function ProjectStatusCounts({
-  counts,
-  excludeKey,
-}: {
-  counts: WorkbenchProjectThreadSummaryCounts;
-  excludeKey?: ProjectStatusItem["key"];
-}) {
-  return (
-    <span className="flex min-w-0 shrink-0 items-center gap-1.5">
-      {STATUS_ITEMS.flatMap(({ Icon, key, label, tone }) => key !== excludeKey && counts[key] ? [(
-        <span
-          aria-label={`${label}: ${counts[key]}`}
-          className={`inline-flex min-w-0 items-center gap-0.5 text-[0.72rem] font-semibold ${getWorkbenchThreadStatusClassName(tone)}`}
-          key={key}
-          title={`${label}: ${counts[key]}`}
-        >
-          <Icon className="size-3.5 shrink-0" />
-          <span>{counts[key]}</span>
-        </span>
-      )] : [])}
-    </span>
-  );
-}
 
 function getProjectActivityLabel(activityAt: number | null, nowMs: number) {
   return activityAt === null ? "" : formatThreadRelativeTimestamp(activityAt / 1000, nowMs);
@@ -134,11 +39,11 @@ function ProjectTooltipContent({
     <div className="flex max-h-full min-w-0 max-w-[min(30rem,calc(100vw-2rem))] flex-col gap-2">
       <div className="min-w-0">
         <p className="m-0 break-words text-[0.9rem] font-medium leading-[1.45] text-text">{project.name || project.id}</p>
-        <p className="m-0 whitespace-pre-wrap break-all font-mono text-[0.72rem] leading-[1.45] text-muted">{getProjectFullPath(project)}</p>
+        <p className="m-0 whitespace-pre-wrap break-all font-mono text-[0.72rem] leading-[1.45] text-muted">{WorkbenchProjectLabel.getFullPath(project)}</p>
       </div>
       <div className="explorer-scrollbar flex max-h-64 min-h-0 flex-col gap-1 overflow-y-auto">
         {unsettledThreads.map((thread) => {
-          const status = STATUS_ITEMS_BY_KEY.get(thread.status) ?? STATUS_ITEMS.at(-1)!;
+          const status = WorkbenchThreadStatusCounts.itemsByKey.get(thread.status) ?? WorkbenchThreadStatusCounts.items.at(-1)!;
           const threadTimestamp = new Date(thread.activityAt);
           return (
             <div className="flex min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1 text-[0.76rem]" key={`${thread.identity.harness}:${thread.identity.threadId}`}>
@@ -170,21 +75,12 @@ function ProjectCard({
   onProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, projectId: string): void;
 }) {
   const { activityAt, project, summary } = entry;
-  const counts = summary?.counts ?? EMPTY_COUNTS;
-  const dominantStatus = STATUS_ITEMS.find(({ key }) => counts[key] > 0) ?? null;
+  const counts = summary?.counts ?? WorkbenchThreadStatusCounts.emptyCounts;
+  const dominantStatus = WorkbenchThreadStatusCounts.items.find(({ key }) => counts[key] > 0) ?? null;
   const statusClassName = dominantStatus ? getWorkbenchThreadStatusClassName(dominantStatus.tone) : "text-muted";
   const timestamp = activityAt === null ? null : new Date(activityAt);
   const compact = project.kind === "workbench-library" || !dominantStatus;
-  const projectTitle = (
-    <span className="flex min-w-0 items-baseline gap-2">
-      <span className={`${workbenchThreadListLabelClassName} shrink-0 text-text${active ? " font-semibold" : ""}`}>
-        {project.name || project.id}{project.kind === "workspace" ? " workspace" : ""}
-      </span>
-      {project.kind === "workbench-library" ? null : (
-        <span className="min-w-0 flex-1 truncate font-mono text-[0.72rem] font-normal text-muted">{getProjectDisplayPath(project)}</span>
-      )}
-    </span>
-  );
+  const projectTitle = <WorkbenchProjectLabel active={active} project={project} />;
   const content = compact ? (
     <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0">
       {dominantStatus ? <dominantStatus.Icon className={`mr-1.5 size-3.5 ${statusClassName}`} /> : null}
@@ -211,7 +107,7 @@ function ProjectCard({
               {dominantStatus.key === "needsAttentionActive" ? "Needs attention" : dominantStatus.label}
             </span>
           </span>
-          <ProjectStatusCounts counts={counts} excludeKey={dominantStatus.key} />
+          <WorkbenchThreadStatusCounts counts={counts} excludeKey={dominantStatus.key} />
         </span>
         {timestamp ? (
           <time dateTime={timestamp.toISOString()} title={timestamp.toLocaleString()}>
@@ -282,10 +178,18 @@ export default function ProjectSidebar({
   ), [grouped]);
   const activeEntry = entriesByProjectId.get(activeProjectId) ?? null;
   const otherCounts = useMemo(() => projects.reduce(
-    (counts, project) => project.id === activeProjectId
-      ? counts
-      : addCounts(counts, entriesByProjectId.get(project.id)?.summary?.counts ?? EMPTY_COUNTS),
-    EMPTY_COUNTS,
+    (counts, project) => {
+      if (project.id === activeProjectId) return counts;
+      const summary = entriesByProjectId.get(project.id)?.summary;
+      const unpinnedCounts = summary
+        ? WorkbenchThreadStatusCounts.subtractCounts(
+          summary.counts,
+          WorkbenchThreadStatusCounts.countPinnedStatuses(summary.pinnedThreads),
+        )
+        : WorkbenchThreadStatusCounts.emptyCounts;
+      return WorkbenchThreadStatusCounts.addCounts(counts, unpinnedCounts);
+    },
+    WorkbenchThreadStatusCounts.emptyCounts,
   ), [activeProjectId, entriesByProjectId, projects]);
   const visibleProjects = [
     ...grouped.alwaysVisibleProjects,
@@ -317,10 +221,10 @@ export default function ProjectSidebar({
       {!isOpen && activeEntry ? (
         <ProjectCard active entry={activeEntry} nowMs={nowMs} onProjectLinkClick={onProjectLinkClick} />
       ) : null}
-      {!isOpen && showOtherSummary && hasStatusCounts(otherCounts) ? (
+      {!isOpen && showOtherSummary && WorkbenchThreadStatusCounts.hasCounts(otherCounts) ? (
         <div className="flex min-w-0 items-center justify-between gap-2 px-2 py-1 text-[0.72rem] text-muted">
           <span className="truncate">Other projects</span>
-          <ProjectStatusCounts counts={otherCounts} />
+          <WorkbenchThreadStatusCounts counts={otherCounts} />
         </div>
       ) : null}
     </div>

@@ -1,8 +1,8 @@
-/* No production exports. Tests protect subscriptions, optimistic draft queues, revisions, and leave-safe flushing. */
+/* No production exports. Tests protect subscriptions, cross-project pin summaries, optimistic draft queues, revisions, and leave-safe flushing. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import ThreadSidebarClient from "./ThreadSidebarClient.ts";
-import type { WorkbenchProjectThreadSummary, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot } from "./thread-state.ts";
+import type { WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSummary, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot } from "./thread-state.ts";
 
 const draft = (prompt: string, clientUpdatedAt: number): WorkbenchThreadDraft => ({
   agent: null, attachments: [], clientUpdatedAt, composerSettings: {}, createdAt: 1,
@@ -10,6 +10,7 @@ const draft = (prompt: string, clientUpdatedAt: number): WorkbenchThreadDraft =>
   profileId: null, projectId: "project", prompt, reasoningEffort: null, serviceTier: null, updatedAt: clientUpdatedAt,
 });
 const snapshot = (revision: number): WorkbenchThreadSidebarSnapshot => ({ entries: [], error: null, freshness: "fresh", projectId: "project", revision });
+const pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot = { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" };
 const counts = (working = 0) => ({
   completed: 0,
   needsAttention: 0,
@@ -25,6 +26,7 @@ const projectSummary = (
 ): WorkbenchProjectThreadSummary => ({
   counts: counts(working),
   lastThreadUpdateAt: null,
+  pinnedThreads: [],
   projectId,
   revision,
   unsettledThreads: [],
@@ -36,7 +38,7 @@ test("project summaries bootstrap together, merge by revision, and follow select
     entryKind: "thread",
     identity: { harness: "codex", threadId: "thread" },
     lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "old-turn" },
-    metadata: { archived: false, pinned: false, snoozed: false },
+    metadata: { archived: false, pinned: true, snoozed: false },
     title: "Thread",
   };
   const client = new ThreadSidebarClient({
@@ -45,6 +47,7 @@ test("project summaries bootstrap together, merge by revision, and follow select
       close: async () => undefined,
       deleteDraft: async () => undefined,
       open: async () => ({
+        pinnedThreadLayout,
         projectThreads: {
           projects: [
             projectSummary("project", 0),
@@ -62,6 +65,15 @@ test("project summaries bootstrap together, merge by revision, and follow select
     {
       counts: { ...counts(), stopped: 1 },
       lastThreadUpdateAt: 1,
+      pinnedThreads: [{
+        activityAt: 1,
+        entryKind: "thread",
+        identity: stoppedEntry.identity,
+        lifecycle: stoppedEntry.lifecycle,
+        metadata: { archived: false, pinned: true, snoozed: false },
+        status: "stopped",
+        title: "Thread",
+      }],
       projectId: "project",
       revision: 1,
       unsettledThreads: [{
@@ -88,10 +100,20 @@ test("project summaries bootstrap together, merge by revision, and follow select
   assert.deepEqual({
     ...optimisticSummary,
     lastThreadUpdateAt: 0,
+    pinnedThreads: optimisticSummary.pinnedThreads.map((thread) => ({ ...thread, activityAt: 0 })),
     unsettledThreads: optimisticSummary.unsettledThreads.map((thread) => ({ ...thread, activityAt: 0 })),
   }, {
     counts: counts(1),
     lastThreadUpdateAt: 0,
+    pinnedThreads: [{
+      activityAt: 0,
+      entryKind: "thread",
+      identity: stoppedEntry.identity,
+      lifecycle: { agent: { agentStatus: "working", turnId: "new-turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+      metadata: { archived: false, pinned: true, snoozed: false },
+      status: "working",
+      title: "Thread",
+    }],
     projectId: "project",
     revision: 1,
     unsettledThreads: [{
@@ -103,6 +125,58 @@ test("project summaries bootstrap together, merge by revision, and follow select
   });
   assert.equal(optimisticSummary.lastThreadUpdateAt, optimisticSummary.unsettledThreads[0]?.activityAt);
   assert.equal((optimisticSummary.lastThreadUpdateAt ?? 0) > stoppedEntry.activityAt, true);
+});
+
+test("a pushed project summary received before open resolves survives the bootstrap response", async () => {
+  let resolveOpen: ((result: { pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot; projectThreads: { projects: WorkbenchProjectThreadSummary[] }; sidebar: WorkbenchThreadSidebarSnapshot }) => void) | null = null;
+  const openResult = new Promise<{ pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot; projectThreads: { projects: WorkbenchProjectThreadSummary[] }; sidebar: WorkbenchThreadSidebarSnapshot }>((resolve) => {
+    resolveOpen = resolve;
+  });
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => await openResult,
+      upsertDraft: async () => undefined,
+    },
+  });
+
+  const opening = client.open("project");
+  client.acceptProjectThreadSummary({ summary: projectSummary("other", 2, 4), updateKind: "projectThreadSummary" });
+  resolveOpen?.({
+    pinnedThreadLayout,
+    projectThreads: { projects: [projectSummary("project", 1), projectSummary("other", 1, 1)] },
+    sidebar: snapshot(1),
+  });
+  await opening;
+
+  assert.deepEqual(client.getProjectThreadSummaries().projects, [
+    projectSummary("other", 2, 4),
+    projectSummary("project", 1),
+  ]);
+});
+
+test("a pushed global pinned layout received before open resolves survives an older bootstrap layout", async () => {
+  let resolveOpen: ((result: { pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot; projectThreads: { projects: WorkbenchProjectThreadSummary[] }; sidebar: WorkbenchThreadSidebarSnapshot }) => void) | null = null;
+  const openResult = new Promise<{ pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot; projectThreads: { projects: WorkbenchProjectThreadSummary[] }; sidebar: WorkbenchThreadSidebarSnapshot }>((resolve) => {
+    resolveOpen = resolve;
+  });
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => await openResult,
+      upsertDraft: async () => undefined,
+    },
+  });
+  const opening = client.open("project");
+  const pushed = { displayOrder: { folders: [{ folderId: "00000000-0000-4000-8000-000000000031", section: "pinned" as const, threadKeys: ["project/codex%3Athread"], title: "Global" }] }, revision: 2, updateKind: "pinnedThreadLayout" as const };
+  client.acceptPinnedThreadLayout(pushed);
+  resolveOpen?.({ pinnedThreadLayout: { displayOrder: {}, revision: 1, updateKind: "pinnedThreadLayout" }, projectThreads: { projects: [] }, sidebar: snapshot(1) });
+  await opening;
+  assert.deepEqual(client.getPinnedThreadLayout(), pushed);
 });
 
 test("optimistic edits keep the newest value through one single-flight flush", async () => {
@@ -194,7 +268,7 @@ test("newer pushed revisions win and foreign project revisions are ignored", asy
   client.accept(snapshot(1));
   client.accept({ ...snapshot(3), projectId: "other" });
   client.accept(snapshot(3));
-  assert.deepEqual(installed.map((value) => value?.revision), [2, 3]);
+  assert.deepEqual(installed.map((value) => value?.revision), [undefined, 2, 3]);
 });
 
 test("activity updates preserve turn order until a new turn-start order arrives", async () => {

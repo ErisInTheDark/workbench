@@ -1,22 +1,25 @@
 /*
  * Exports:
- * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with direct navigation, tooltip detail, and explicit context-menu access. Keywords: thread, sidebar, navigation, tooltip, context menu, claim.
- * - Local helpers: derive row targets and render bounded thread tooltip details. Keywords: thread, target, tooltip, status.
+ * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, direct navigation, tooltip detail, and explicit context-menu access. Keywords: thread, project, sidebar, navigation, tooltip, context menu, claim.
+ * - Local helpers: derive full or compact pinned-draft row targets and render bounded thread tooltip details. Keywords: thread, draft, target, tooltip, status.
  */
 "use client";
 
 import type { ComponentType, DragEventHandler, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent, ReactNode, Ref } from "react";
 
+import type { WorkbenchProjectOption } from "../../lib/types";
 import {
   getThreadSidebarGroup,
   gitArcPreventsThreadSettlement,
   isWorkbenchThreadSettlementAvailable,
   isWorkbenchThreadStatusProviderOwned,
+  type WorkbenchPinnedThreadSummaryEntry,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadTarget,
 } from "../../lib/workbench/thread/thread-state";
 import ContextMenuCapability from "./ContextMenuCapability";
 import ProjectFilePath from "./ProjectFilePath";
+import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import {
@@ -31,7 +34,6 @@ import {
   FlagIcon,
   MoreVerticalIcon,
   NeedsAttentionThreadIcon,
-  PinIcon,
   ProposedCommitThreadIcon,
   RestoreThreadIcon,
   SettleThreadIcon,
@@ -46,10 +48,16 @@ import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowConte
 
 type ThreadAction = "complete" | "discard" | "restore" | "settle" | "wake";
 type ThreadStatusIcon = ComponentType<{ className?: string }>;
+type ThreadListEntry = WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry;
+type PinnedDraftSummaryEntry = Extract<WorkbenchPinnedThreadSummaryEntry, { entryKind: "draft" }>;
 
-function targetForEntry(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadTarget {
+function isPinnedDraftSummaryEntry(entry: ThreadListEntry): entry is PinnedDraftSummaryEntry {
+  return entry.entryKind === "draft" && "draftId" in entry;
+}
+
+function targetForEntry(entry: ThreadListEntry): WorkbenchThreadTarget {
   return entry.entryKind === "draft"
-    ? { draftId: entry.draft.draftId, kind: "draft" }
+    ? { draftId: isPinnedDraftSummaryEntry(entry) ? entry.draftId : entry.draft.draftId, kind: "draft" }
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
 }
 
@@ -59,7 +67,6 @@ function ThreadTooltipContent({
   exactTime,
   extraDetails,
   Icon,
-  pinned,
   projectId,
   relativeTime,
   snoozed,
@@ -72,7 +79,6 @@ function ThreadTooltipContent({
   exactTime: string;
   extraDetails?: ReactNode;
   Icon: ThreadStatusIcon;
-  pinned: boolean;
   projectId: string;
   relativeTime: string;
   snoozed: boolean;
@@ -87,11 +93,7 @@ function ThreadTooltipContent({
         <Icon className={`size-3.5 shrink-0 ${statusClassName}`} />
         <span className={`min-w-0 truncate ${statusClassName}`}>{status}</span>
         <span className="ml-auto" />
-        {snoozed || pinned ? (
-          <span className="inline-flex size-4 shrink-0 items-center justify-center" aria-label={snoozed ? "Snoozed" : "Pinned"}>
-            {snoozed ? <SnoozedThreadIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}
-          </span>
-        ) : null}
+        {snoozed ? <span className="inline-flex size-4 shrink-0 items-center justify-center" aria-label="Snoozed"><SnoozedThreadIcon className="size-3.5" /></span> : null}
         <time className="shrink-0" dateTime={dateTime} title={exactTime}>{relativeTime}</time>
       </div>
       {extraDetails}
@@ -127,6 +129,7 @@ export default function WorkbenchThreadListItem({
   onDragStart,
   onKeyDown,
   onPointerDown,
+  project,
   projectId,
   role,
   selected = false,
@@ -142,7 +145,7 @@ export default function WorkbenchThreadListItem({
   contextMenu?: WorkbenchContextMenuDefinition | null;
   dimmedOverride?: boolean;
   draggable?: boolean;
-  entry: WorkbenchThreadSidebarEntry;
+  entry: ThreadListEntry;
   href: string;
   isDragActive?: boolean;
   isShiftPressed?: boolean;
@@ -152,6 +155,7 @@ export default function WorkbenchThreadListItem({
   onDragStart?: DragEventHandler<HTMLAnchorElement>;
   onKeyDown?: (event: ReactKeyboardEvent<HTMLAnchorElement>) => void;
   onPointerDown?: (event: PointerEvent<HTMLAnchorElement>) => void;
+  project?: WorkbenchProjectOption;
   projectId: string;
   role?: "tab";
   selected?: boolean;
@@ -162,7 +166,7 @@ export default function WorkbenchThreadListItem({
 }) {
   const { openContextMenu } = useWorkbenchContextMenu();
   const target = targetForEntry(entry);
-  const group = getThreadSidebarGroup(entry);
+  const group = isPinnedDraftSummaryEntry(entry) ? "pinned" : getThreadSidebarGroup(entry);
   const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
   const gitArc = entry.entryKind === "draft" ? null : entry.gitArc ?? null;
   const hasActiveGitArc = gitArc?.phase === "active";
@@ -179,14 +183,14 @@ export default function WorkbenchThreadListItem({
       ? "Draft"
       : lifecycle?.kind === "needsAttention" ? attentionLabel.trim() || "Needs attention" : lifecycle?.kind === "working" ? "Working" : lifecycle?.kind === "stopped" ? "Stopped" : "Completed";
   const tooltipStatus = lifecycle?.kind === "needsAttention" && tooltipDetails ? "Needs attention" : status;
-  const pinned = entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
+  const pinned = isPinnedDraftSummaryEntry(entry) ? true : entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
   const timestamp = new Date(entry.activityAt);
   const dateTime = timestamp.toISOString();
   const relativeTime = formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs);
   const exactTime = timestamp.toLocaleString();
   const canComplete = entry.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned(entry.lifecycle) && !waiting && (entry.lifecycle.kind === "needsAttention" || entry.lifecycle.kind === "stopped");
   const settlementBlocked = gitArcPreventsThreadSettlement(gitArc);
-  const settlementAvailable = isWorkbenchThreadSettlementAvailable(entry);
+  const settlementAvailable = isPinnedDraftSummaryEntry(entry) ? false : isWorkbenchThreadSettlementAvailable(entry);
   const baseAction: ThreadAction | null = entry.entryKind === "draft" ? "discard" : group === "settled" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : settlementAvailable ? "settle" : null;
   const canShiftSettle = canComplete && !settlementBlocked;
   const action = canShiftSettle && isShiftPressed ? "settle" : baseAction;
@@ -203,7 +207,8 @@ export default function WorkbenchThreadListItem({
   const statusClassName = entry.entryKind === "draft" ? "text-muted" : getWorkbenchThreadStatusClassName(statusTone);
   const ActionIcon = action === "discard" ? DiscardDraftIcon : action === "restore" ? RestoreThreadIcon : action === "wake" ? UnsnoozeThreadIcon : SettleThreadIcon;
   const actionLabel = action === "complete" ? "Completed" : action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Wake";
-  const rowName = `${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} claimed ${claimedFileCount === 1 ? "file" : "files"}` : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
+  const projectName = project ? `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
+  const rowName = `${projectName}${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} claimed ${claimedFileCount === 1 ? "file" : "files"}` : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
   const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled"));
   const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
@@ -238,7 +243,7 @@ export default function WorkbenchThreadListItem({
       </svg>
       <ContextMenuCapability menu={contextMenu}>
         <WorkbenchTooltip
-          content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} extraDetails={tooltipDetails} Icon={Icon} pinned={pinned} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} title={entry.title} />}
+          content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} extraDetails={tooltipDetails} Icon={Icon} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} title={entry.title} />}
           enabled={showTooltip && !isDragActive}
           interactive
         >
@@ -273,20 +278,18 @@ export default function WorkbenchThreadListItem({
         >
           <Icon className={`mr-1.5 size-3.5 ${statusClassName}`} />
           <span className={`${workbenchThreadListLabelClassName} truncate${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
-          <span className={`col-start-3 row-start-1 inline-flex items-center gap-1.5 text-[0.72rem] text-muted${hideCompactMetadata && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
-            <span className="inline-flex size-4 items-center justify-center">{pinned ? <PinIcon className="size-3.5" /> : null}</span>
-            <time dateTime={dateTime} title={exactTime}>{relativeTime}</time>
-          </span>
+          <time className={`col-start-3 row-start-1 text-[0.72rem] text-muted${hideCompactMetadata && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`} dateTime={dateTime} title={exactTime}>{relativeTime}</time>
           {actionButton}
         </div>
       ) : (
         <WorkbenchThreadListFullRowContent
           action={actionButton}
           contextMenu={Boolean(contextMenu)}
+          eyebrow={project ? <WorkbenchProjectLabel project={project} variant="thread" /> : undefined}
           metadata={(
             <span className="grid grid-cols-[auto_auto] items-center gap-1.5">
               {claimedFileCount ? <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true"><FlagIcon className="size-3.5" /><span>{claimedFileCount}</span></span> : null}
-              {group === "snoozed" || pinned ? <span data-role="thread-priority-icon" className="inline-flex size-4 items-center justify-center">{group === "snoozed" ? <SnoozedThreadIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}</span> : null}
+              {group === "snoozed" ? <span data-role="thread-priority-icon" className="inline-flex size-4 items-center justify-center"><SnoozedThreadIcon className="size-3.5" /></span> : null}
             </span>
           )}
           statusIcon={<Icon className={`size-3.5 ${statusClassName}`} />}

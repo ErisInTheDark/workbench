@@ -1,7 +1,7 @@
-/* No production exports. Tests protect strict lifecycle, grouping, folder mutation, ordering, and draft rules. */
+/* No production exports. Tests protect strict lifecycle, grouping, cross-project pin summaries, folder mutation, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
 test("live claims and proposed commit proposals prevent thread settlement", () => {
   const resolved = {
@@ -143,6 +143,45 @@ test("draft priority requests use draft identity and drive shared grouping and o
   };
   assert.equal(getThreadSidebarGroup(entry), "snoozed");
   assert.equal(entry.metadata.pinned, true);
+});
+
+test("pinned context requests preserve full target identity and responses admit full durable drafts", () => {
+  const draftId = "00000000-0000-4000-8000-000000000019";
+  const request = {
+    method: "workbench/thread-state/pin/open",
+    projectId: "owner",
+    target: { harness: "opencode", kind: "subagent", parentThreadId: "parent", threadId: "child" },
+  };
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse(request).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, target: { kind: "subagent", threadId: "child" } }).success, false);
+  assert.equal(WorkbenchPinnedThreadContextResultSchema.safeParse({
+    context: {
+      entries: [{
+        activityAt: 2,
+        draft: {
+          agent: null,
+          attachments: [{ id: "attachment", url: "data:text/plain,hello" }],
+          clientUpdatedAt: 2,
+          composerSettings: {},
+          createdAt: 1,
+          draftId,
+          harness: "codex",
+          model: null,
+          profileId: null,
+          projectId: "owner",
+          prompt: "Private pinned prompt",
+          reasoningEffort: null,
+          serviceTier: null,
+          updatedAt: 2,
+        },
+        entryKind: "draft",
+        metadata: { archived: false, pinned: true, snoozed: false },
+        title: "Private pinned prompt",
+      }],
+      projectId: "owner",
+      target: { draftId, kind: "draft" },
+    },
+  }).success, true);
 });
 
 test("display-order moves require a reorderable section and explicit insertion key", () => {
@@ -522,6 +561,7 @@ test("project summaries count unsettled top-level status after direct-child proj
       working: 1,
     },
     lastThreadUpdateAt: 4,
+    pinnedThreads: [],
     projectId: "project",
     revision: 7,
     unsettledThreads: [
@@ -562,5 +602,65 @@ test("project summaries count unsettled top-level status after direct-child proj
         title: "proposed",
       },
     ],
+  });
+});
+
+test("project summaries expose ordered unsnoozed pins without draft bodies", () => {
+  const draftId = "00000000-0000-4000-8000-000000000031";
+  const pinnedThread: WorkbenchThreadSidebarEntry = {
+    activityAt: 2,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "pinned" },
+    lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: true, snoozed: false },
+    title: "Pinned provider",
+  };
+  const summary = createWorkbenchProjectThreadSummary("project", [
+    {
+      activityAt: 3,
+      draft: {
+        agent: null,
+        attachments: [{ private: "attachment body" }],
+        clientUpdatedAt: 3,
+        composerSettings: {},
+        createdAt: 1,
+        draftId,
+        harness: "codex",
+        model: null,
+        profileId: null,
+        projectId: "project",
+        prompt: "private draft body",
+        reasoningEffort: null,
+        serviceTier: null,
+        updatedAt: 3,
+      },
+      entryKind: "draft",
+      metadata: { archived: false, pinned: true, snoozed: false },
+      title: "Pinned draft",
+    },
+    pinnedThread,
+    {
+      ...pinnedThread,
+      identity: { harness: "codex", threadId: "snoozed" },
+      metadata: { archived: false, pinned: true, snoozed: true },
+      title: "Snoozed pin",
+    },
+  ], 4, {
+    pinned: {
+      "codex:pinned": { above: [], below: [`draft:${draftId}`] },
+      [`draft:${draftId}`]: { above: ["codex:pinned"], below: [] },
+    },
+  });
+
+  assert.deepEqual(summary.pinnedThreads.map((entry) => entry.title), ["Pinned provider", "Pinned draft"]);
+  assert.equal(summary.pinnedThreads.some((entry) => entry.title === "Snoozed pin"), false);
+  const projectedDraft = summary.pinnedThreads.find((entry) => entry.entryKind === "draft");
+  assert.deepEqual(projectedDraft, {
+    activityAt: 3,
+    draftId,
+    entryKind: "draft",
+    metadata: { archived: false, pinned: true, snoozed: false },
+    status: "draft",
+    title: "Pinned draft",
   });
 });

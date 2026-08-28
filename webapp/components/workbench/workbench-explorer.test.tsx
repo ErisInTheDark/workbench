@@ -32,6 +32,7 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(itemSource, /<a[\s\S]*?draggable=\{draggable\}/u);
   assert.match(workbenchSource, /isDragActive=\{Boolean\(activeWorkbenchDrag\)\}/u);
   assert.match(sidebarSource, /<WorkbenchThreadList[\s\S]*?isDragActive=\{isDragActive\}/u);
+  assert.match(sidebarSource, /<WorkbenchThreadList[\s\S]*?displayOrder=\{actions\.displayOrder\}/u);
   assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?isDragActive=\{isDragActive\}/u);
   assert.match(itemSource, /<WorkbenchTooltip[\s\S]*?enabled=\{showTooltip && !isDragActive\}[\s\S]*?<a/u);
   assert.match(itemSource, /More actions for \$\{entry\.title\}/u);
@@ -47,7 +48,11 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
 });
 
 test("agent tabs keep a persistent settled toggle and durable thread routing", async () => {
-  const source = await readFile(new URL("./thread-view/ThreadAgentTabs.tsx", import.meta.url), "utf8");
+  const [source, threadViewSource, workbenchSource] = await Promise.all([
+    readFile(new URL("./thread-view/ThreadAgentTabs.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./thread-view/ThreadView.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../workbench.tsx", import.meta.url), "utf8"),
+  ]);
   assert.match(source, /aria-expanded=\{isSettledSubagentsVisible\}/u);
   assert.match(source, /\? "Hide" : "Show"\} settled subagents/u);
   assert.match(source, /Restore subagent/u);
@@ -57,6 +62,8 @@ test("agent tabs keep a persistent settled toggle and durable thread routing", a
   assert.match(source, /handleThreadLinkClick/u);
   assert.match(source, /threadSidebarStore\?\.getSnapshot\(\)\?\.entries\.find/u);
   assert.match(source, /candidate\.identity\.harness === mainThreadHarness/u);
+  assert.match(threadViewSource, /getThreadHref\?\.\(target\) \?\? createThreadHref\(projectId, target\)/u);
+  assert.match(workbenchSource, /getThreadHref=\{\(target\) => isForeignThreadProject[\s\S]*?createPinnedThreadHref\(activeProjectId, threadProjectId, target\)/u);
 });
 
 test("existing-thread composer drafts keep their keyed owner through active subagent selection", async () => {
@@ -81,19 +88,19 @@ test("provider child routes canonicalize from durable subagent relationships", a
 
 test("thread views reuse the sidebar's in-app thread navigation owner", async () => {
   const source = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
-  assert.match(source, /<ThreadView[\s\S]*?onOpenThread=\{openThreadFromExplorer\}/u);
+  assert.match(source, /<ThreadView[\s\S]*?onOpenThread=\{\(target\) => \{ void openThreadFromExplorer\(target, threadProjectId\); \}\}/u);
   assert.match(source, /<WorkbenchThreadPanel[\s\S]*?onOpenThread=\{openThreadFromExplorer\}/u);
 });
 
 test("live sidebar state subscribes below the Workbench root", async () => {
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
-  const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");
+  const actionsSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
   const clientSource = await readFile(new URL("../../lib/WorkbenchClient.ts", import.meta.url), "utf8");
   assert.match(workbenchSource, /onThreadSidebarStoreReady/u);
   assert.match(workbenchSource, /<WorkbenchThreadSidebar/u);
   assert.doesNotMatch(workbenchSource, /explorer\.threadSidebar/u);
-  assert.match(sidebarSource, /useSyncExternalStore/u);
-  assert.match(sidebarSource, /store\?\.subscribe/u);
+  assert.match(actionsSource, /useSyncExternalStore/u);
+  assert.match(actionsSource, /store\?\.subscribe/u);
   assert.match(clientSource, /onThreadSidebarStoreReady\?\.\(threadSidebarClient\)/u);
   assert.doesNotMatch(clientSource, /threadSidebar: threadSidebarSnapshot/u);
 });
@@ -120,7 +127,7 @@ test("reload dirt stays inside the sidebar scroll owner without idle browser pol
 });
 
 test("thread context actions group priority checkboxes and canonical status radios", async () => {
-  const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");
+  const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
   const openIndex = sidebarSource.indexOf('id: "open"');
   const settleIndex = sidebarSource.indexOf('id: "settle"');
   const copyIndex = sidebarSource.indexOf('id: "copy-id"');
@@ -155,7 +162,7 @@ test("thread context actions group priority checkboxes and canonical status radi
 
 test("jit project bootstrap exposes available slices before unrelated hydration", async () => {
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
-  const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");
+  const actionsSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
   const clientSource = await readFile(new URL("../../lib/WorkbenchClient.ts", import.meta.url), "utf8");
   const storeReadyIndex = clientSource.indexOf("workbenchBindings.onThreadSidebarStoreReady?.(threadSidebarClient)");
   const initialRouteHydrationIndex = clientSource.indexOf("await applyRoute(activeRoute);");
@@ -169,13 +176,30 @@ test("jit project bootstrap exposes available slices before unrelated hydration"
   assert.notEqual(openObservationIndex, -1);
   assert.ok(beginSelectionIndex < openObservationIndex);
   assert.doesNotMatch(clientSource, /selectProjectStrict\(route\.projectId\)/u);
-  assert.doesNotMatch(sidebarSource, /isProjectLoading|isThreadsLoading|threadsError/u);
-  assert.match(sidebarSource, /snapshot\.freshness === "loading" && snapshot\.entries\.length === 0/u);
+  assert.doesNotMatch(actionsSource, /isProjectLoading|isThreadsLoading|threadsError/u);
+  assert.match(actionsSource, /snapshot\.freshness === "loading" && !entries\.length/u);
   assert.match(workbenchSource, /const isProjectIdentityLoading =/u);
   assert.match(workbenchSource, /const isProjectTreeLoading =/u);
   assert.doesNotMatch(workbenchSource, /isSidebarThreadsLoading|explorer\.threadSidebar/u);
   assert.match(clientSource, /emitRateLimitsChange\(\);\s*await applyRoute\(activeRoute\);/u);
   assert.doesNotMatch(clientSource, /emitRateLimitsChange\(\);\s*await draftStore\.hydratePersistedDrafts\(\);/u);
+});
+
+test("global pins render above projects with a default-open chevron and nested owner routes", async () => {
+  const [workbenchSource, pinnedSource, pinnedListSource, projectSource] = await Promise.all([
+    readFile(new URL("../workbench.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchPinnedThreadSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchPinnedThreadList.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./ProjectSidebar.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.ok(workbenchSource.indexOf("<WorkbenchPinnedThreadSidebar") < workbenchSource.indexOf("<ProjectSidebar"));
+  assert.match(pinnedListSource, /useState\(true\)/u);
+  assert.doesNotMatch(pinnedListSource, /chevronClassName="hidden"[\s\S]*?Pinned threads/u);
+  assert.match(pinnedListSource, /!isOpen && WorkbenchThreadStatusCounts\.hasCounts/u);
+  assert.match(pinnedSource, /<WorkbenchPinnedThreadList/u);
+  assert.match(pinnedListSource, /createPinnedThreadHref\(projectId, ownerProjectId, target\)/u);
+  assert.match(projectSource, /subtractCounts\([\s\S]*?countPinnedStatuses\(summary\.pinnedThreads\)/u);
+  assert.match(workbenchSource, /createPinnedThreadRoute\(viewedProjectId, targetProjectId, target\)/u);
 });
 
 test("blank thread routes render their private draft and preserve one view instance through promotion", async () => {
@@ -185,7 +209,7 @@ test("blank thread routes render their private draft and preserve one view insta
   assert.match(workbenchSource, /isThreadOwnedByEffectiveRoute\(currentThread\)/u);
   assert.match(workbenchSource, /isWorkbenchRouteOwnerOfThread\(effectiveThreadRoute, getThreadViewInstanceKey\(thread\)\)/u);
   assert.doesNotMatch(workbenchSource, /currentThread\?\.id === effectiveThreadId/u);
-  assert.match(workbenchSource, /key=\{`\$\{activeProjectId\}:\$\{threadViewInstanceKey\}`\}/u);
+  assert.match(workbenchSource, /key=\{`\$\{threadProjectId\}:\$\{threadViewInstanceKey\}`\}/u);
   assert.match(workbenchSource, /viewInstanceKey=\{threadViewInstanceKey\}/u);
   assert.match(threadViewSource, /\[projectId, viewInstanceKey\]/u);
   assert.doesNotMatch(threadViewSource, /\[projectId, thread\.id\]/u);
@@ -195,7 +219,7 @@ test("blank thread routes render their private draft and preserve one view insta
 
 test("successful settlement leaves the still-selected thread for a fresh draft", async () => {
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
-  const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8");
+  const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
   assert.match(sidebarSource, /const accepted = await controls\.updateThreadStateWithAcceptance\(request\);[\s\S]*?method === "settle" && accepted[\s\S]*?onThreadSettled/u);
   assert.match(sidebarSource, /entry\.lifecycle\.settled \|\| isWorkbenchThreadSettlementAvailable\(entry\)/u);
   assert.match(workbenchSource, /currentRouteRef\.current[\s\S]*?isWorkbenchThreadTargetSelected\(settledTarget, currentRoute\.threadTarget\)[\s\S]*?createThreadRoute\(currentRoute\.projectId, \{ kind: "new" \}\)/u);
@@ -203,7 +227,13 @@ test("successful settlement leaves the still-selected thread for a fresh draft",
 });
 
 test("active saved drafts hydrate composer input from the subscribed sidebar draft", async () => {
-  const source = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
-  assert.match(source, /route\.threadTarget\?\.kind === "draft"[\s\S]*?getSidebarDraftComposerInput\(activeSidebarDraft\)/u);
+  const [source, clientSource] = await Promise.all([
+    readFile(new URL("../workbench.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../lib/WorkbenchClient.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(source, /route\.threadTarget\?\.kind === "draft"[\s\S]*?controls\?\.getSelectedThreadDraft\(\)[\s\S]*?getSidebarDraftComposerInput\(activeRouteDraft\)/u);
+  assert.match(clientSource, /selectedPinnedThreadDraft = isForeignPin \? cloneThreadDraft\(entry\.draft\) : null/u);
+  assert.match(clientSource, /workbench\/thread-state\/draft\/upsert[\s\S]*?projectId: draft\.projectId/u);
+  assert.match(clientSource, /workbench\/thread-state\/draft\/delete[\s\S]*?projectId: selectedDraft\.projectId/u);
   assert.doesNotMatch(source, /useMemo\(\(\) => getThreadComposerDraftForTarget\(/u);
 });

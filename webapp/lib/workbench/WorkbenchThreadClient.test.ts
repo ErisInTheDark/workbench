@@ -12,6 +12,7 @@ import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchQuestionnaireH
 import { workbenchTranscriptNotifications } from "./database/transcript/workbench-transcript-contract.ts";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./WorkbenchThreadClient.ts";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission.ts";
+import type { WorkbenchThreadSidebarEntry } from "./thread/thread-state.ts";
 
 type Listener = (event: { data?: string }) => void;
 type SocketRequest = {
@@ -868,6 +869,116 @@ test("project reset and a newer canonical notification fence stale reads before 
   assert.equal(await racedRead, null);
   assert.deepEqual(client.getSnapshot().currentThread?.turns[0]?.items.map((item) => item.id), ["new-item"]);
 }));
+
+test("foreign pinned thread context owns provider cwd, subagents, and late-read fencing without replacing the viewed project", async () => withClient(async (client, socket) => {
+  const ownerProject = {
+    id: "owner",
+    kind: "git" as const,
+    lastCommitTimeMs: null,
+    name: "owner",
+    relativePath: "owner",
+    rootPath: "C:/owner",
+    roots: [{ id: "owner", isPrimary: true, name: "owner", relativePath: "owner", rootPath: "C:/owner" }],
+  };
+  const entries: WorkbenchThreadSidebarEntry[] = [{
+    activityAt: 2,
+    createdAt: 1,
+    cwd: "C:/owner",
+    directSubagentIndex: 0,
+    entryKind: "subagent",
+    identity: { harness: "codex", threadId: "child" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    name: "Child",
+    parentThreadId: "root",
+    pinned: false,
+    profileId: "default",
+    profileName: "Default",
+    projectId: "owner",
+    title: "Child",
+    updatedAt: 2,
+  }];
+  let deferredRead: SocketRequest | null = null;
+  FakeWebSocket.intercept = (target, request) => {
+    if (request.method !== "workbench/thread/page/read") return false;
+    if (request.params?.threadId === "late") {
+      deferredRead = request;
+      return true;
+    }
+    const thread = wireThread(String(request.params?.threadId ?? "root"));
+    thread.cwd = "C:/owner";
+    queueMicrotask(() => target.respond(request.id, {
+      browseResultEntries: [],
+      nextCursor: null,
+      questionnaireEntries: [],
+      steerEntries: [],
+      thread,
+    }));
+    return true;
+  };
+
+  await client.openThread("root", { entries, harness: "codex", project: ownerProject });
+  const ownerRead = socket.requests.find((request) => request.method === "workbench/thread/page/read" && request.params?.threadId === "root");
+  assert.equal(ownerRead?.params?.cwd, "C:/owner");
+  assert.equal(client.getSnapshot().subagents[0]?.threadId, "child");
+
+  const lateOpen = client.openThread("late", { entries, harness: "codex", project: ownerProject });
+  await waitForRequest(socket, "workbench/thread/page/read", 1);
+  const replacement = client.createThread("codex", "draft:00000000-0000-4000-8000-000000000090");
+  const lateThread = wireThread("late");
+  lateThread.cwd = "C:/owner";
+  socket.respond(deferredRead!.id, {
+    browseResultEntries: [],
+    nextCursor: null,
+    questionnaireEntries: [],
+    steerEntries: [],
+    thread: lateThread,
+  });
+  await lateOpen;
+  assert.equal(client.getSnapshot().currentThread?.id, replacement.id);
+  assert.equal(client.getSnapshot().subagents.length, 0);
+}));
+
+test("foreign pinned draft admission sends and publishes accepted intent through the owning project", async () => {
+  const acceptedIntents: WorkbenchAcceptedIntent[] = [];
+  await withClient(async (client, socket) => {
+    const ownerProject = {
+      id: "owner",
+      kind: "git" as const,
+      lastCommitTimeMs: null,
+      name: "owner",
+      relativePath: "owner",
+      rootPath: "C:/owner",
+      roots: [{ id: "owner", isPrimary: true, name: "owner", relativePath: "owner", rootPath: "C:/owner" }],
+    };
+    const draft = client.createThread("codex", "draft:00000000-0000-4000-8000-000000000091", { project: ownerProject });
+    FakeWebSocket.intercept = (target, request) => {
+      if (request.method === "thread/start") {
+        const thread = wireThread("foreign-materialized", "bootstrap", "completed");
+        thread.cwd = "C:/owner";
+        queueMicrotask(() => target.respond(request.id, { thread }));
+        return true;
+      }
+      if (request.method === "turn/start") {
+        queueMicrotask(() => target.respond(request.id, { turn: wireThread("foreign-materialized", "started").turns[0] }));
+        return true;
+      }
+      if (request.method === "thread/resume") {
+        const thread = wireThread("foreign-materialized", "started");
+        thread.cwd = "C:/owner";
+        queueMicrotask(() => target.respond(request.id, { model: "model", reasoningEffort: null, serviceTier: null, thread }));
+        return true;
+      }
+      return false;
+    };
+
+    await client.sendThreadMessage(draft, [{ text: "from owner", text_elements: [], type: "text" }]);
+    const start = socket.requests.find((request) => request.method === "thread/start");
+    assert.equal(start?.params?.cwd, "C:/owner");
+    assert.equal(acceptedIntents[0]?.projectId, "owner");
+  }, {
+    publishAcceptedIntent: async (event) => { acceptedIntents.push(event); },
+  });
+});
 
 test("previous Codex pages preserve live state and merge only their scoped sidecars", async () => withClient(async (client, socket) => {
   const olderTimeline = [{ completedAt: 2, firstSeenAt: 1, itemId: "older-item", lastSeenAt: 2, startedAt: 1 }];

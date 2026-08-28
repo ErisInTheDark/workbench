@@ -157,7 +157,7 @@ import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
 import type { OrchestratorReloadResponse, OrchestratorReloadScope } from "./workbench/orchestrator-reload";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline";
-import type { WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
+import type { WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
 export type {
@@ -1058,6 +1058,7 @@ export interface ExplorerSnapshot {
 }
 
 export interface WorkbenchThreadSidebarStore {
+  getPinnedThreadLayout?: () => WorkbenchPinnedThreadLayoutSnapshot;
   getProjectThreadSummaries?: () => WorkbenchProjectThreadSummaries;
   getSnapshot: () => WorkbenchThreadSidebarSnapshot | null;
   subscribe: (listener: () => void) => () => void;
@@ -1072,6 +1073,7 @@ export interface WorkbenchRouteLoadResult {
 export interface WorkbenchControls {
   applyRoute: (route: WorkbenchRoute) => Promise<WorkbenchRouteLoadResult>;
   createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: string }) => ThreadPayload;
+  getSelectedThreadDraft: () => WorkbenchThreadDraft | null;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   reloadScopes: (scopes: OrchestratorReloadScope[]) => Promise<OrchestratorReloadResponse>;
   refreshRateLimits: () => Promise<void>;

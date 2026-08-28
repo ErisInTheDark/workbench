@@ -2,7 +2,7 @@
 
 /*
  * Exports:
- * - default Workbench: client shell for project browsing, editing, and thread interaction. Keywords: workbench, project, editor, thread.
+ * - default Workbench: client shell for project browsing, editing, project-aware pinned navigation, and thread interaction. Keywords: workbench, project, pinned, editor, thread.
  */
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -66,9 +66,12 @@ import {
 import {
   createFileRoute,
   createMosaicRoute,
+  createPinnedThreadHref,
+  createPinnedThreadRoute,
   createProjectRoute,
   createSettingsHref,
   createSettingsRoute,
+  createThreadHref,
   createThreadRoute,
   getWorkbenchMosaicThreadRootIds,
   getWorkbenchThreadTargetRootId,
@@ -127,6 +130,7 @@ import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
 import PrimaryButton from "./workbench/PrimaryButton";
 import ReloadNecessary from "./workbench/ReloadNecessary";
 import ProjectSidebar from "./workbench/ProjectSidebar";
+import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
@@ -175,6 +179,7 @@ import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/Workbench
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
 import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
+import WorkbenchThreadSidebarActionsProvider from "./workbench/WorkbenchThreadSidebarActions";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
 
 installBrowserRandomUuidPolyfill();
@@ -768,8 +773,11 @@ export default function Workbench () {
     };
   }, []);
 
+  const selectedThreadProjectId = route.view === "thread"
+    ? route.threadOwnerProjectId || explorer.currentProjectId || route.projectId
+    : explorer.currentProjectId;
   useEffect(() => {
-    if (!explorer.currentProjectId) {
+    if (!selectedThreadProjectId) {
       setThreadComposerDraftsByThreadId({});
       setThreadQuestionnaireDraftsByKey({});
       return;
@@ -777,8 +785,8 @@ export default function Workbench () {
 
     let cancelled = false;
     void Promise.all([
-      getPersistedThreadComposerDraftRecords(explorer.currentProjectId),
-      getPersistedThreadQuestionnaireDraftRecords(explorer.currentProjectId),
+      getPersistedThreadComposerDraftRecords(selectedThreadProjectId),
+      getPersistedThreadQuestionnaireDraftRecords(selectedThreadProjectId),
     ]).then(([composerRecords, questionnaireRecords]) => {
       if (cancelled) {
         return;
@@ -804,7 +812,7 @@ export default function Workbench () {
     return () => {
       cancelled = true;
     };
-  }, [explorer.currentProjectId]);
+  }, [selectedThreadProjectId]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -859,7 +867,9 @@ export default function Workbench () {
       return createFileRoute(route.projectId, route.filePath);
     }
     if (route.view === "thread") {
-      return createThreadRoute(route.projectId, route.threadTarget ?? route.threadId);
+      return route.threadOwnerProjectId && route.threadOwnerProjectId !== route.projectId
+        ? createPinnedThreadRoute(route.projectId, route.threadOwnerProjectId, route.threadTarget ?? route.threadId)
+        : createThreadRoute(route.projectId, route.threadTarget ?? route.threadId);
     }
     if (route.view === "settings") {
       return createSettingsRoute(route.projectId, route.settingsScope);
@@ -984,13 +994,17 @@ export default function Workbench () {
       && (!providerTarget.harness || entry.harness === providerTarget.harness));
     const parentThreadId = relationship?.parentThreadId;
     if (!parentThreadId) return;
-    navigateToRoute(createThreadRoute(route.projectId, {
+    const ownerProjectId = route.threadOwnerProjectId || route.projectId;
+    const target = {
       harness: relationship.harness,
-      kind: "subagent",
+      kind: "subagent" as const,
       parentThreadId,
       threadId: providerTarget.threadId,
-    }), { replace: true });
-  }, [explorer.subagents, navigateToRoute, route.projectId, route.threadTarget, route.view]);
+    };
+    navigateToRoute(ownerProjectId === route.projectId
+      ? createThreadRoute(route.projectId, target)
+      : createPinnedThreadRoute(route.projectId, ownerProjectId, target), { replace: true });
+  }, [explorer.subagents, navigateToRoute, route.projectId, route.threadOwnerProjectId, route.threadTarget, route.view]);
   const projectFileLinkRoots = useMemo(
     () => createProjectFileLinkRoots(explorer.projects, activeProjectId, explorer.roots),
     [activeProjectId, explorer.projects, explorer.roots],
@@ -1338,12 +1352,16 @@ export default function Workbench () {
     await openFileByPolicy(createFileOpenTarget(path, explorer.currentProjectId || route.projectId))
   ), [explorer.currentProjectId, openFileByPolicy, route.projectId]);
 
-  const openThreadFromExplorer = useCallback(async (target: import("../lib/workbench/thread/thread-state").WorkbenchThreadTarget) => {
-    if (route.view === "thread" && route.threadTarget && areDeeplyEqual(route.threadTarget, target)) {
+  const openThreadFromExplorer = useCallback(async (target: import("../lib/workbench/thread/thread-state").WorkbenchThreadTarget, ownerProjectId?: string) => {
+    const viewedProjectId = explorer.currentProjectId || route.projectId;
+    const targetProjectId = ownerProjectId ?? viewedProjectId;
+    if (route.view === "thread" && route.projectId === viewedProjectId && (route.threadOwnerProjectId || route.projectId) === targetProjectId && route.threadTarget && areDeeplyEqual(route.threadTarget, target)) {
       return true;
     }
 
-    navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, target));
+    navigateToRoute(targetProjectId === viewedProjectId
+      ? createThreadRoute(viewedProjectId, target)
+      : createPinnedThreadRoute(viewedProjectId, targetProjectId, target));
     return true;
   }, [explorer.currentProjectId, navigateToRoute, route]);
   const updateBrowseSession = useCallback(async (session: WorkbenchBrowseSessionSummary, action: "forget" | "stop", options: { force?: boolean } = {}) => {
@@ -1513,7 +1531,10 @@ export default function Workbench () {
         return false;
       }
 
-      navigateToRoute(createThreadRoute(currentRoute.projectId, materializedThread.id), { replace: true });
+      const ownerProjectId = currentRoute.threadOwnerProjectId || currentRoute.projectId;
+      navigateToRoute(ownerProjectId === currentRoute.projectId
+        ? createThreadRoute(currentRoute.projectId, materializedThread.id)
+        : createPinnedThreadRoute(currentRoute.projectId, ownerProjectId, materializedThread.id), { replace: true });
       return true;
     };
 
@@ -1578,6 +1599,13 @@ export default function Workbench () {
     getActiveSidebarDraft,
     getActiveSidebarDraft,
   );
+  const selectedPinnedThreadDraft = route.view === "thread"
+    && route.threadTarget?.kind === "draft"
+    && route.threadOwnerProjectId
+    && route.threadOwnerProjectId !== route.projectId
+    ? controls?.getSelectedThreadDraft() ?? null
+    : null;
+  const activeRouteDraft = selectedPinnedThreadDraft ?? activeSidebarDraft;
 
   const getSidebarDraftComposerInput = useCallback((draft: WorkbenchThreadDraft | null): WorkbenchComposerInputDraft | null => {
     if (!draft) return null;
@@ -1601,17 +1629,17 @@ export default function Workbench () {
   }, [getSidebarDraftComposerInput, threadComposerDraftsByThreadId, threadSidebarStore]);
 
   const activeThreadComposerDraft = route.view === "thread" && route.threadTarget?.kind === "draft"
-    ? getSidebarDraftComposerInput(activeSidebarDraft)
+    ? getSidebarDraftComposerInput(activeRouteDraft)
     : getThreadComposerDraftForTarget(route.view === "thread" ? route.threadTarget : null);
 
   const handleThreadComposerDraftChange = useCallback((threadId: string, draft: WorkbenchComposerInputDraft, reason: "autosave" | "submission" = "autosave") => {
-    if (!explorer.currentProjectId) {
+    if (!selectedThreadProjectId) {
       return;
     }
     const isProviderThread = threadId !== "new" && !threadId.startsWith("draft:");
     if (isProviderThread) {
       setThreadComposerDraftsByThreadId((current) => ({ ...current, [threadId]: draft }));
-      void putPersistedThreadComposerDraft(explorer.currentProjectId, threadId, draft);
+      void putPersistedThreadComposerDraft(selectedThreadProjectId, threadId, draft);
       return;
     }
     if (!controls || route.view !== "thread") return;
@@ -1625,10 +1653,10 @@ export default function Workbench () {
     const now = Date.now();
     const privateDraftId = threadId.startsWith("draft:") ? threadId.slice("draft:".length) : "";
     const draftId = target.kind === "draft" ? target.draftId : privateDraftId || crypto.randomUUID();
-    const existing = target.kind === "draft" ? activeSidebarDraft : null;
+    const existing = target.kind === "draft" ? activeRouteDraft : null;
     const profileSlot = target.kind === "draft"
-      ? { draftId, harness: currentThread?.harness ?? existing?.harness ?? "codex", kind: "draft" as const, projectId: explorer.currentProjectId }
-      : { kind: "new-thread" as const, projectId: explorer.currentProjectId };
+      ? { draftId, harness: currentThread?.harness ?? existing?.harness ?? "codex", kind: "draft" as const, projectId: selectedThreadProjectId }
+      : { kind: "new-thread" as const, projectId: selectedThreadProjectId };
     const profileSelection = composerProfileController.getSelection(profileSlot);
     const harness = currentThread?.harness ?? existing?.harness ?? "codex";
     const model = currentThread?.model ?? existing?.model ?? null;
@@ -1649,7 +1677,7 @@ export default function Workbench () {
       harness,
       model,
       profileId: profileSelection.kind === "profile" ? profileSelection.profileId : existing?.profileId ?? null,
-      projectId: explorer.currentProjectId,
+      projectId: selectedThreadProjectId,
       prompt: draft.text,
       reasoningEffort: currentThread?.reasoningEffort ?? existing?.reasoningEffort ?? null,
       serviceTier: currentThread?.serviceTier ?? existing?.serviceTier ?? null,
@@ -1657,13 +1685,13 @@ export default function Workbench () {
     };
     controls.editThreadDraft(threadDraft, target.kind === "new" && target.folderId ? { folderId: target.folderId } : undefined);
     if (target.kind === "new") {
-      composerProfileController.materializeDraftSelection(profileSlot, draftId, harness, explorer.currentProjectId);
-      navigateToRoute(createThreadRoute(explorer.currentProjectId, { draftId, kind: "draft" }), { replace: true });
+      composerProfileController.materializeDraftSelection(profileSlot, draftId, harness, selectedThreadProjectId);
+      navigateToRoute(createThreadRoute(selectedThreadProjectId, { draftId, kind: "draft" }), { replace: true });
     }
-  }, [activeSidebarDraft, composerProfileController, controls, currentThread, explorer.currentProjectId, navigateToRoute, route]);
+  }, [activeRouteDraft, composerProfileController, controls, currentThread, navigateToRoute, route, selectedThreadProjectId]);
 
   const handleThreadComposerDraftClear = useCallback((threadId: string) => {
-    if (!explorer.currentProjectId) return;
+    if (!selectedThreadProjectId) return;
     const isProviderThread = threadId !== "new" && !threadId.startsWith("draft:");
     if (isProviderThread || threadComposerDraftsByThreadId[threadId]) {
       setThreadComposerDraftsByThreadId((current) => {
@@ -1672,7 +1700,7 @@ export default function Workbench () {
         delete next[threadId];
         return next;
       });
-      void deletePersistedThreadComposerDraft(explorer.currentProjectId, threadId);
+      void deletePersistedThreadComposerDraft(selectedThreadProjectId, threadId);
       return;
     }
     const currentRoute = currentRouteRef.current;
@@ -1680,10 +1708,10 @@ export default function Workbench () {
       return;
     }
     void controls.deleteThreadDraft(currentRoute.threadTarget.draftId);
-  }, [controls, explorer.currentProjectId, threadComposerDraftsByThreadId]);
+  }, [controls, selectedThreadProjectId, threadComposerDraftsByThreadId]);
 
   const handleThreadQuestionnaireDraftChange = useCallback((threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => {
-    if (!explorer.currentProjectId || !requestKey) {
+    if (!selectedThreadProjectId || !requestKey) {
       return;
     }
 
@@ -1691,8 +1719,8 @@ export default function Workbench () {
       ...current,
       [`${threadId}:${requestKey}`]: draft,
     }));
-    void putPersistedThreadQuestionnaireDraft(explorer.currentProjectId, threadId, requestKey, draft);
-  }, [explorer.currentProjectId]);
+    void putPersistedThreadQuestionnaireDraft(selectedThreadProjectId, threadId, requestKey, draft);
+  }, [selectedThreadProjectId]);
 
   const handleThreadQuestionnaireDraftClear = useCallback((threadId: string, requestKey: string) => {
     if (!requestKey) {
@@ -1710,10 +1738,10 @@ export default function Workbench () {
       return next;
     });
 
-    if (explorer.currentProjectId) {
-      void deletePersistedThreadQuestionnaireDraft(explorer.currentProjectId, threadId, requestKey);
+    if (selectedThreadProjectId) {
+      void deletePersistedThreadQuestionnaireDraft(selectedThreadProjectId, threadId, requestKey);
     }
-  }, [explorer.currentProjectId]);
+  }, [selectedThreadProjectId]);
 
   const stopThread = useCallback(async (thread: ThreadPayload) => {
     if (!controls) {
@@ -1825,9 +1853,11 @@ export default function Workbench () {
     if (showMosaicView || !controls) return;
     navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, folderId ? { folderId, kind: "new" } : { kind: "new" }));
   }, [controls, explorer.currentProjectId, navigateToRoute, route.projectId, showMosaicView]);
-  const handleThreadSettled = useCallback((settledTarget: WorkbenchThreadTarget) => {
+  const handleThreadSettled = useCallback((settledTarget: WorkbenchThreadTarget, ownerProjectId?: string) => {
     const currentRoute = currentRouteRef.current;
-    if (currentRoute.view !== "thread" || !isWorkbenchThreadTargetSelected(settledTarget, currentRoute.threadTarget)) {
+    if (currentRoute.view !== "thread"
+      || (ownerProjectId && currentRoute.projectId !== ownerProjectId)
+      || !isWorkbenchThreadTargetSelected(settledTarget, currentRoute.threadTarget)) {
       return;
     }
 
@@ -1846,7 +1876,9 @@ export default function Workbench () {
   }
   const retainedThread = retainedThreadRef.current;
   const effectiveThreadRoute = effectiveThreadTarget
-    ? createThreadRoute(activeProjectId, effectiveThreadTarget)
+    ? route.view === "thread" && route.threadOwnerProjectId && route.threadOwnerProjectId !== route.projectId
+      ? createPinnedThreadRoute(route.projectId, route.threadOwnerProjectId, effectiveThreadTarget)
+      : createThreadRoute(activeProjectId, effectiveThreadTarget)
     : route;
   const getThreadViewInstanceKey = (thread: ThreadPayload) => (
     threadViewInstanceKeysByThreadIdRef.current.get(`${activeProjectId}:${thread.harness}:${thread.id}`) ?? thread.id
@@ -1873,10 +1905,14 @@ export default function Workbench () {
     if (!effectiveThreadTarget || effectiveThreadTarget.kind === "new" || effectiveThreadTarget.kind === "draft") return;
     const rootThreadId = getWorkbenchThreadTargetRootId(effectiveThreadTarget);
     const harness = effectiveThreadTarget.harness ?? threadForThreadView?.harness;
-    navigateToRoute(createThreadRoute(activeProjectId, selectedThreadId === rootThreadId
-      ? { harness, kind: "provider", threadId: rootThreadId }
-      : { harness, kind: "subagent", parentThreadId: rootThreadId, threadId: selectedThreadId }));
-  }, [activeProjectId, effectiveThreadTarget, navigateToRoute, threadForThreadView?.harness]);
+    const target = selectedThreadId === rootThreadId
+      ? { harness, kind: "provider" as const, threadId: rootThreadId }
+      : { harness, kind: "subagent" as const, parentThreadId: rootThreadId, threadId: selectedThreadId };
+    const ownerProjectId = route.view === "thread" ? route.threadOwnerProjectId || route.projectId : activeProjectId;
+    navigateToRoute(ownerProjectId === activeProjectId
+      ? createThreadRoute(activeProjectId, target)
+      : createPinnedThreadRoute(activeProjectId, ownerProjectId, target));
+  }, [activeProjectId, effectiveThreadTarget, navigateToRoute, route, threadForThreadView?.harness]);
   const threadSummaryForThreadView = showThreadView ? threadSummariesById.get(effectiveThreadId) ?? null : null;
   const threadShellSource = threadForThreadView ?? threadSummaryForThreadView;
   const threadShellActivityTimestampMs = resolveThreadActivityTimestampMs(threadShellSource, threadSummaryForThreadView);
@@ -1910,6 +1946,15 @@ export default function Workbench () {
     () => new Set(Object.entries(visibleUserInputRequestsByThreadId)
       .map(([threadId]) => threadId)),
     [visibleUserInputRequestsByThreadId],
+  );
+  const threadProjectId = route.view === "thread" ? route.threadOwnerProjectId || activeProjectId : activeProjectId;
+  const threadProject = explorer.projects.find((project) => project.id === threadProjectId) ?? null;
+  const isForeignThreadProject = Boolean(threadProjectId && threadProjectId !== activeProjectId);
+  const threadProjectRoots = isForeignThreadProject ? threadProject?.roots ?? [] : explorer.roots;
+  const threadProjectRootPath = isForeignThreadProject ? threadProject?.rootPath ?? "" : explorer.rootPath;
+  const threadProjectFileLinkRoots = useMemo(
+    () => createProjectFileLinkRoots(explorer.projects, threadProjectId, threadProjectRoots),
+    [explorer.projects, threadProjectId, threadProjectRoots],
   );
   const materializedThreadRootIds = useMemo(() => {
     if (showMosaicView) return getWorkbenchMosaicThreadRootIds(route.mosaicNode);
@@ -2863,12 +2908,27 @@ export default function Workbench () {
                     </button>
                   ) : null}
                 </header>
-                <ProjectSidebar
-                  activeProjectId={activeProjectId}
-                  onProjectLinkClick={selectProjectFromLink}
-                  projects={explorer.projects}
+                <WorkbenchThreadSidebarActionsProvider
+                  controls={controls}
+                  onOpenThread={openThreadFromExplorer}
+                  onThreadSettled={handleThreadSettled}
+                  projectId={explorer.currentProjectId || route.projectId}
                   store={threadSidebarStore}
-                />
+                  threadSummariesById={threadSummariesById}
+                >
+                  <WorkbenchPinnedThreadSidebar
+                    currentTarget={route.view === "thread" ? route.threadTarget : null}
+                    onOpenThread={openThreadFromExplorer}
+                    projectId={explorer.currentProjectId || route.projectId}
+                    projects={explorer.projects}
+                    selectedOwnerProjectId={route.view === "thread" ? route.threadOwnerProjectId || route.projectId : explorer.currentProjectId || route.projectId}
+                  />
+                  <ProjectSidebar
+                    activeProjectId={activeProjectId}
+                    onProjectLinkClick={selectProjectFromLink}
+                    projects={explorer.projects}
+                    store={threadSidebarStore}
+                  />
                     <DropTarget
                       dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
                       enabled={(payload) => payload.type === "sidebar-section" && payload.sectionId !== "threads"}
@@ -2890,22 +2950,19 @@ export default function Workbench () {
                       </div>
                       <WorkbenchThreadSidebar
                         attentionLabelsByThreadId={threadAttentionLabelsById}
-                        controls={controls}
                         currentTarget={route.view === "thread" ? route.threadTarget : null}
                         harness={harness}
                         isDragActive={Boolean(activeWorkbenchDrag)}
                         onBeginPointerDrag={beginWorkbenchPointerDrag}
                         onCreateThread={createThreadFromSidebar}
                         onOpenThread={openThreadFromExplorer}
-                        onThreadSettled={handleThreadSettled}
                         projectId={explorer.currentProjectId || route.projectId}
                         renderThreadTooltipDetails={renderThreadTooltipDetails}
                         showMosaicView={showMosaicView}
-                        store={threadSidebarStore}
-                        threadSummariesById={threadSummariesById}
                       />
                       </section>}
                     </DropTarget>
+                </WorkbenchThreadSidebarActionsProvider>
 
                     <DropTarget
                       dropTargetId={WORKBENCH_SIDEBAR_SECTION_DROP_TARGET_ID}
@@ -3194,15 +3251,18 @@ export default function Workbench () {
                 {showThreadView && !shouldRenderMainLayout ? (
                   isThreadViewReady && threadForThreadView ? (
                     <ThreadView
-                      key={`${activeProjectId}:${threadViewInstanceKey}`}
+                      key={`${threadProjectId}:${threadViewInstanceKey}`}
                       thread={threadForThreadView}
                       composerSpellCheck={resolvedSettings.composerSpellCheck}
                       fontSizeRem={resolvedSettings.editorFontSize}
+                      getThreadHref={(target) => isForeignThreadProject
+                        ? createPinnedThreadHref(activeProjectId, threadProjectId, target)
+                        : createThreadHref(activeProjectId, target)}
                       mobileFullBleed={isDirectMobileThreadSurface}
                       livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                       onDraftHarnessChange={handleHarnessChange}
                       onListModels={listThreadModels}
-                      onOpenThread={openThreadFromExplorer}
+                      onOpenThread={(target) => { void openThreadFromExplorer(target, threadProjectId); }}
                       onReadThread={readThread}
                       onCompactThread={compactThread}
                       onSendMessage={sendThreadMessage}
@@ -3221,13 +3281,13 @@ export default function Workbench () {
                       selectedThreadId={selectedThreadIdForView}
                       onSelectedThreadChange={handleSelectedThreadChange}
                       onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
-                      projectId={activeProjectId}
-                      projectFileCandidates={explorer.projectFileCandidates}
-                      projectFileIndexId={explorer.projectFileIndexId}
-                      projectFilePaths={explorer.projectFilePaths}
-                      projectFileLinkRoots={projectFileLinkRoots}
-                      projectRootPath={explorer.rootPath}
-                      projectRoots={explorer.roots}
+                      projectId={threadProjectId}
+                      projectFileCandidates={isForeignThreadProject ? [] : explorer.projectFileCandidates}
+                      projectFileIndexId={isForeignThreadProject ? `${threadProjectId}:foreign-pin:no-index` : explorer.projectFileIndexId}
+                      projectFilePaths={isForeignThreadProject ? [] : explorer.projectFilePaths}
+                      projectFileLinkRoots={threadProjectFileLinkRoots}
+                      projectRootPath={threadProjectRootPath}
+                      projectRoots={threadProjectRoots}
                       knownSubagents={explorer.subagents}
                       rateLimits={rateLimits}
                       scrollViewportRef={directThreadScrollViewportRef}

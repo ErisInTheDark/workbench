@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchThreadList: orchestrate mixed thread and folder sidebar navigation, actions, pagination, and drag ordering. Keywords: workbench, threads, folders, sidebar, context menu.
- * - Local helpers: derive thread targets and stable mixed-item keys and counts. Keywords: thread, folder, identity, pagination.
+ * - default WorkbenchThreadList: render project-owned ordinary, snoozed, and settled threads with folder, action, and drag mechanics. Keywords: workbench, project, threads, folders, sidebar, context menu.
+ * - Local helpers: derive thread targets and stable mixed-item keys and counts. Keywords: thread, draft, folder, identity, pagination.
  */
 "use client";
 
@@ -84,23 +84,22 @@ export default function WorkbenchThreadList({
   currentTarget: WorkbenchThreadTarget | null;
   displayOrder?: WorkbenchThreadDisplayOrder;
   entries: WorkbenchThreadSidebarEntry[];
-  getThreadHref: (target: WorkbenchThreadTarget) => string;
-  getThreadContextMenu?: (entry: WorkbenchThreadSidebarEntry) => WorkbenchContextMenuDefinition | null;
+  getThreadHref: (target: WorkbenchThreadTarget, ownerProjectId?: string) => string;
+  getThreadContextMenu?: (entry: WorkbenchThreadSidebarEntry, ownerProjectId: string) => WorkbenchContextMenuDefinition | null;
   isDragActive?: boolean;
   nowMs?: number;
-  onAction?: (entry: WorkbenchThreadSidebarEntry, action: "complete" | "discard" | "restore" | "settle" | "wake") => void;
+  onAction?: (entry: WorkbenchThreadSidebarEntry, action: "complete" | "discard" | "restore" | "settle" | "wake", ownerProjectId: string) => void;
   onAutoFocusFolderComplete?: () => void;
   onCreateThread: (folderId?: string) => void;
   onCreateThreadPointerDragStart?: (event: import("react").PointerEvent<HTMLAnchorElement>) => void;
   onMove?: (sourceKey: string, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null, beforeKey: string | null) => void;
-  onOpenThread: (target: WorkbenchThreadTarget) => void;
+  onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   onRenameFolder?: (folderId: string, title: string) => Promise<string>;
   projectId: string;
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
 }) {
   const rowRefs = useRef(new Map<string, HTMLAnchorElement>());
   const { mainEntries } = groupWorkbenchThreadSidebarEntries(entries);
-  const pinnedItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "pinned");
   const snoozedItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "snoozed");
   const settledItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "settled");
   const [isOlderThreadsOpen, setIsOlderThreadsOpen] = useState(false);
@@ -127,7 +126,7 @@ export default function WorkbenchThreadList({
   const visibleEntriesForItems = (items: WorkbenchThreadDisplayItem[]) => items.flatMap((item) => item.itemKind === "folder"
     ? openFolderIds.has(item.folder.folderId) ? item.entries : []
     : [item.entry]);
-  const primaryEntries = [...visibleEntriesForItems(pinnedItems), ...mainEntries, ...visibleEntriesForItems(snoozedItems)];
+  const primaryEntries = [...mainEntries, ...visibleEntriesForItems(snoozedItems)];
   const navigableEntries = isOlderThreadsOpen ? [...primaryEntries, ...visibleEntriesForItems(displayedSettledItems)] : primaryEntries;
   const hasSelectedEntry = navigableEntries.some((entry) => isWorkbenchThreadTargetSelected(targetForEntry(entry), currentTarget));
   const moveFocus = (event: ReactKeyboardEvent<HTMLAnchorElement>, index: number) => {
@@ -145,6 +144,7 @@ export default function WorkbenchThreadList({
     entry: WorkbenchThreadSidebarEntry,
     reorderSection: WorkbenchThreadDisplaySection | null = null,
     dimmedOverride?: boolean,
+    asTab = true,
   ) => {
     const index = navigableEntries.indexOf(entry);
     const target = targetForEntry(entry);
@@ -154,32 +154,43 @@ export default function WorkbenchThreadList({
       draggable: false;
       onDragStart: import("react").DragEventHandler<HTMLElement>;
       onPointerDown: import("react").PointerEventHandler<HTMLElement>;
-    }) => (
-      <WorkbenchThreadListItem
-        anchorRef={(node) => { if (node) rowRefs.current.set(displayKey, node); else rowRefs.current.delete(displayKey); }}
-        attentionLabel={entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId]}
-        contextMenu={getThreadContextMenu?.(entry) ?? null}
-        dimmedOverride={dimmedOverride}
-        draggable={draggable}
-        entry={entry}
-        href={getThreadHref(target)}
-        isDragActive={isDragActive}
-        isShiftPressed={isShiftPressed}
-        key={displayKey}
-        nowMs={nowMs}
-        onAction={(action) => onAction?.(entry, action)}
-        onActivate={onOpenThread}
-        onDragStart={(event) => onDragStart(event)}
-        onKeyDown={(event) => moveFocus(event, index)}
-        onPointerDown={(event) => onPointerDown(event)}
-        projectId={projectId}
-        role="tab"
-        selected={selected}
-        showActions
-        tabIndex={selected || (!hasSelectedEntry && index === 0) ? 0 : -1}
-        tooltipDetails={renderThreadTooltipDetails?.(entry)}
-      />
-    );
+    }) => {
+      const sharedProps = {
+        anchorRef: (node: HTMLAnchorElement | null) => { if (node) rowRefs.current.set(displayKey, node); else rowRefs.current.delete(displayKey); },
+        attentionLabel: entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId],
+        contextMenu: getThreadContextMenu?.(entry, projectId) ?? null,
+        dimmedOverride,
+        entry,
+        isShiftPressed,
+        nowMs,
+        onAction: (action: "complete" | "discard" | "restore" | "settle" | "wake") => onAction?.(entry, action, projectId),
+        onActivate: (activatedTarget: WorkbenchThreadTarget) => onOpenThread(activatedTarget),
+        onDragStart: (event: import("react").DragEvent<HTMLAnchorElement>) => onDragStart(event),
+        onKeyDown: (event: ReactKeyboardEvent<HTMLAnchorElement>) => moveFocus(event, index),
+        onPointerDown: (event: import("react").PointerEvent<HTMLAnchorElement>) => onPointerDown(event),
+        projectId,
+        selected,
+        showActions: true,
+        tooltipDetails: renderThreadTooltipDetails?.(entry),
+      };
+      return asTab ? (
+        <WorkbenchThreadListItem
+          {...sharedProps}
+          draggable={draggable}
+          href={getThreadHref(target)}
+          isDragActive={isDragActive}
+          role="tab"
+          tabIndex={selected || (!hasSelectedEntry && index === 0) ? 0 : -1}
+        />
+      ) : (
+        <WorkbenchThreadListItem
+          {...sharedProps}
+          draggable={draggable}
+          href={getThreadHref(target)}
+          isDragActive={isDragActive}
+        />
+      );
+    };
     const dropTargetIds = reorderSection
       ? allowMainPanelDrop
         ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID, WORKBENCH_MAIN_PANEL_DROP_TARGET_ID]
@@ -323,7 +334,6 @@ export default function WorkbenchThreadList({
   );
 
   const blankThreadSelected = isWorkbenchThreadTargetSelected({ kind: "new" }, currentTarget);
-
   return (
     <DropTargetBoundary className="space-y-1">
       <a
@@ -346,7 +356,6 @@ export default function WorkbenchThreadList({
         </span>
       </a>
       <div role="tablist" aria-label="Threads" className="min-w-0">
-        {pinnedItems.length ? renderReorderableSection(pinnedItems, "pinned") : null}
         {mainEntries.length ? <ul className="m-0 flex flex-col gap-1 p-0">{mainEntries.map((entry) => renderEntry(entry))}</ul> : null}
         {snoozedItems.length ? renderReorderableSection(snoozedItems, "snoozed") : null}
         {settledItems.length ? (

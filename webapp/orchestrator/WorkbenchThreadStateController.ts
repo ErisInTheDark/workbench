@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadGitArcSnapshot/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state and title ports, Git projection, claim context, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification, title, git.
- * - default WorkbenchThreadStateController: own UI-independent thread records, settlement retention timing, fallback storage reads, durable display order, provider observation, and sidebar projection. Keywords: drafts, project, lifecycle, retention, headless.
+ * - default WorkbenchThreadStateController: own UI-independent thread records, settlement retention timing, fallback storage reads, durable display order, provider observation, and local/cross-project sidebar projection. Keywords: drafts, pinned, project, lifecycle, retention, headless.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,6 +11,11 @@ import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import { mergeQuestionnaireHistoryEntries } from "../lib/workbench/thread/thread-questionnaire-identity";
 import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
+import {
+  getProjectQualifiedThreadDisplayKey,
+  parseProjectQualifiedThreadDisplayKey,
+  type ThreadDisplayLayoutEntry,
+} from "../lib/workbench/thread/thread-display-layout";
 import {
   createWorkbenchThreadFolder,
   getWorkbenchThreadDisplayKey,
@@ -55,6 +60,7 @@ import {
 } from "../lib/workbench/thread/thread-state";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
+import WorkbenchPinnedThreadLayoutStore from "./WorkbenchPinnedThreadLayoutStore";
 import {
   conformStoredWorkbenchThreadStateRecord,
   parseWorkbenchThreadStateEntry,
@@ -66,6 +72,7 @@ import {
 
 interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot" | "opencode"; lifecycle: WorkbenchThreadLifecycle; mcpGeneration?: string | null; orderAt?: number; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null; pinned: boolean; questionnaireHistory?: WorkbenchQuestionnaireHistoryEntryState[]; snoozed: boolean; threadId: string; titleFallback?: string }
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
+type ProjectObservation = { pinnedThreadKeys: Set<string>; projectId: string; version: 1 | 2 | 3 };
 interface StoredProjectStateV1 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
 interface StoredProjectStateV2 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
 interface StoredProjectState { displayOrder?: WorkbenchThreadDisplayOrder; drafts: StoredThreadDraft[]; records: WorkbenchThreadStateRecord[]; version: 3 }
@@ -246,13 +253,16 @@ function describeInvalidRequest(input: object, issue: { code: string; message: s
 export default class WorkbenchThreadStateController {
   private static readonly SETTLED_GIT_RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
   private active = true;
-  private readonly connectionProjects = new Map<string, { projectId: string; version: 1 | 2 | 3 }>();
+  private readonly connectionProjects = new Map<string, ProjectObservation>();
   private readonly json = new AtomicJsonStore();
   private readonly now: () => number;
   private readonly options: WorkbenchThreadStateControllerOptions;
+  private readonly pinnedLayout: WorkbenchPinnedThreadLayoutStore;
   private readonly projects = new Map<string, ProjectState>();
   private readonly operationQueues = new Map<string, Promise<unknown>>();
+  private readonly pinnedEntries = new Map<string, ThreadDisplayLayoutEntry>();
   private readonly reconciliationPromises = new Set<Promise<void>>();
+  private readonly summaryHydrationPromises = new Set<Promise<void>>();
   private readonly stopReloadDirtSubscription: (() => void) | null;
   private readonly subscribers = new Set<(projectId: string, entry: WorkbenchThreadSidebarEntry) => void>();
   private readonly waitingByThreadKey = new Map<string, "subagents" | "other">();
@@ -260,6 +270,10 @@ export default class WorkbenchThreadStateController {
   constructor(options: WorkbenchThreadStateControllerOptions) {
     this.options = options;
     this.now = options.now ?? Date.now;
+    this.pinnedLayout = new WorkbenchPinnedThreadLayoutStore(
+      options.storageRoot,
+      (repairedPaths) => this.logPinnedLayoutRepairs(repairedPaths),
+    );
     this.stopReloadDirtSubscription = options.subscribeReloadDirt?.(() => this.publishReloadDirt()) ?? null;
   }
 
@@ -309,6 +323,11 @@ export default class WorkbenchThreadStateController {
       case "workbench/thread-state/open": return { result: await this.open(connectionId, request.projectId, request.version ?? 1) };
       case "workbench/thread-state/close": await this.close(connectionId, request.projectId); return { result: { accepted: true } };
       case "workbench/thread-state/refresh": return { result: await this.refresh(request.projectId) };
+      case "workbench/thread-state/pin/open": {
+        const context = await this.getPinnedThreadContext(request);
+        if (context) this.authorizePinnedThreadContext(connectionId, context);
+        return { result: { context } };
+      }
       case "workbench/thread-state/intent/accept": return { result: await this.acceptIntent(connectionId, {
         draftId: request.draftId,
         harness: request.identity.harness,
@@ -318,7 +337,10 @@ export default class WorkbenchThreadStateController {
         turnId: request.turnId,
       }) };
       case "workbench/thread-state/title/set": {
-        if (this.connectionProjects.get(connectionId)?.projectId !== request.projectId) {
+        if (
+          this.connectionProjects.get(connectionId)?.projectId !== request.projectId
+          && !this.isPinnedThreadAuthorized(connectionId, request.projectId, request.identity.harness, request.identity.threadId)
+        ) {
           return { error: { code: "invalidProjectObservation", message: "The title request does not belong to this connection's observed project." } };
         }
         try {
@@ -334,6 +356,9 @@ export default class WorkbenchThreadStateController {
       case "workbench/thread-state/display-order/folder/create":
       case "workbench/thread-state/display-order/folder/title/set":
       case "workbench/thread-state/display-order/move": return { result: await this.mutateDisplayOrder(request) };
+      case "workbench/thread-state/pinned-display-order/folder/create":
+      case "workbench/thread-state/pinned-display-order/folder/title/set":
+      case "workbench/thread-state/pinned-display-order/move": return { result: await this.mutatePinnedDisplayOrder(request) };
       default: return { result: await this.mutateThread(request) };
     }
   }
@@ -347,7 +372,8 @@ export default class WorkbenchThreadStateController {
     const priorProjectId = this.connectionProjects.get(connectionId)?.projectId;
     if (priorProjectId && priorProjectId !== projectId) await this.close(connectionId, priorProjectId);
     const state = await this.getProject(projectId);
-    this.connectionProjects.set(connectionId, { projectId, version });
+    const observation: ProjectObservation = { pinnedThreadKeys: new Set(), projectId, version };
+    this.connectionProjects.set(connectionId, observation);
     state.observers.add(connectionId);
     const currentProjectUpdate = this.options.projectState.getCurrentUpdate(projectId);
     if (currentProjectUpdate) {
@@ -363,11 +389,21 @@ export default class WorkbenchThreadStateController {
       sidebar,
     };
     if (version === 2) return composite;
+    const loadedProjectSummaries = catalog.data.flatMap(({ id }) => {
+      const loadedState = this.projects.get(id);
+      return loadedState
+        ? [createWorkbenchProjectThreadSummary(id, this.naturallyOrderedEntries(loadedState), loadedState.revision, loadedState.displayOrder)]
+        : [];
+    });
+    this.hydrateProjectThreadSummaries(
+      connectionId,
+      observation,
+      catalog.data.map(({ id }) => id).filter((id) => !this.projects.has(id)),
+    );
     return {
       ...composite,
-      projectThreads: {
-        projects: await Promise.all(catalog.data.map(({ id }) => this.getProjectThreadSummary(id))),
-      },
+      pinnedThreadLayout: await this.pinnedLayout.getSnapshot(),
+      projectThreads: { projects: loadedProjectSummaries },
     };
   }
 
@@ -412,7 +448,13 @@ export default class WorkbenchThreadStateController {
   async disconnect(connectionId: string) { await this.close(connectionId); }
 
   async acceptIntent(connectionId: string, input: { draftId?: string; harness: "codex" | "copilot" | "opencode"; projectId: string; threadId: string; title?: string; turnId: string }) {
-    if (this.connectionProjects.get(connectionId)?.projectId !== input.projectId) throw new Error("The accepted intent does not belong to this connection's observed project.");
+    const authorizedThreadId = input.draftId ? `draft:${input.draftId}` : input.threadId;
+    if (
+      this.connectionProjects.get(connectionId)?.projectId !== input.projectId
+      && !this.isPinnedThreadAuthorized(connectionId, input.projectId, input.harness, authorizedThreadId)
+    ) {
+      throw new Error("The accepted intent does not belong to this connection's observed or pinned thread project.");
+    }
     let draftPinned = false;
     if (input.draftId) {
       const state = await this.getProject(input.projectId);
@@ -420,6 +462,8 @@ export default class WorkbenchThreadStateController {
       const draftEntry = state.entries.get(draftKey);
       draftPinned = draftEntry?.entryKind === "draft" ? draftEntry.metadata.pinned : false;
       state.displayOrder = replaceWorkbenchThreadFolderMember(state.displayOrder, draftKey, `${input.harness}:${input.threadId}`);
+      const pinnedLayoutUpdate = await this.pinnedLayout.replace(input.projectId, draftKey, `${input.harness}:${input.threadId}`);
+      if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
       state.drafts.delete(input.draftId);
       state.entries.delete(draftKey);
     }
@@ -729,6 +773,8 @@ export default class WorkbenchThreadStateController {
       state.stopProjectObservation = null;
     }
     await Promise.allSettled(this.operationQueues.values());
+    await Promise.allSettled(this.summaryHydrationPromises);
+    await this.pinnedLayout.waitForIdle();
     await this.json.waitForIdle();
   }
 
@@ -752,6 +798,9 @@ export default class WorkbenchThreadStateController {
       const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state);
       state.stopProjectObservation = this.options.projectState.observe(projectId, (update) => this.publishUpdate(state, update));
       this.projects.set(projectId, state);
+      this.updatePinnedLayoutEntries(projectId, this.naturallyOrderedEntries(state));
+      const pinnedLayoutUpdate = await this.pinnedLayout.importProject(projectId, this.naturallyOrderedEntries(state), state.displayOrder);
+      if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
       if (repairedSettlementTimestamps) await this.persist(projectId, state);
       setTimeout(() => {
         if (this.active) void this.reconcile(projectId, state);
@@ -782,14 +831,108 @@ export default class WorkbenchThreadStateController {
   private async getProjectThreadSummary(projectId: string) {
     const state = this.projects.get(projectId);
     if (state) {
-      return createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision);
+      return createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision, state.displayOrder);
     }
     const stored = await this.loadProjectStorage(projectId);
-    const entries = stored.records.flatMap((record) => {
-      const projected = projectWorkbenchThreadStateEntry(record);
-      return projected ? [projected] : [];
+    const entries: WorkbenchThreadSidebarEntry[] = [
+      ...stored.records.flatMap((record) => {
+        const projected = projectWorkbenchThreadStateEntry(record);
+        return projected ? [projected] : [];
+      }),
+      ...stored.drafts.map(({ pinned, snoozed, ...draft }) => this.draftEntry(draft, {
+        archived: false,
+        pinned: pinned === true,
+        snoozed: snoozed === true,
+      })),
+    ];
+    this.updatePinnedLayoutEntries(projectId, entries);
+    const pinnedLayoutUpdate = await this.pinnedLayout.importProject(projectId, entries, stored.displayOrder ?? {});
+    if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
+    return createWorkbenchProjectThreadSummary(projectId, entries, 0, stored.displayOrder);
+  }
+
+  private async getPinnedThreadContext(
+    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/pin/open" }>,
+  ) {
+    const target = request.target;
+    if (!target || target.kind === "new") return null;
+    const state = await this.getProject(request.projectId);
+    const entries = this.naturallyOrderedEntries(state);
+    if (target.kind === "draft") {
+      const draft = entries.find((entry) => (
+        entry.entryKind === "draft"
+        && entry.draft.draftId === target.draftId
+        && getThreadSidebarGroup(entry) === "pinned"
+      ));
+      return draft ? { entries: [draft], projectId: request.projectId, target } : null;
+    }
+
+    const rootThreadId = target.kind === "subagent" ? target.parentThreadId : target.threadId;
+    const root = entries.find((entry) => (
+      entry.entryKind === "thread"
+      && entry.identity.threadId === rootThreadId
+      && (!target.harness || entry.identity.harness === target.harness)
+      && getThreadSidebarGroup(entry) === "pinned"
+    ));
+    if (!root || root.entryKind !== "thread") return null;
+    const subagents = entries.filter((entry) => (
+      entry.entryKind === "subagent"
+      && entry.parentThreadId === root.identity.threadId
+      && entry.identity.harness === root.identity.harness
+    ));
+    if (target.kind === "subagent") {
+      const selectedSubagent = subagents.find((entry) => (
+        entry.entryKind === "subagent"
+        && entry.identity.threadId === target.threadId
+      ));
+      if (!selectedSubagent || selectedSubagent.entryKind !== "subagent") return null;
+      return {
+        entries: [root, ...subagents],
+        projectId: request.projectId,
+        target: { ...target, harness: selectedSubagent.identity.harness },
+      };
+    }
+    return {
+      entries: [root, ...subagents],
+      projectId: request.projectId,
+      target: { ...target, harness: root.identity.harness },
+    };
+  }
+
+  private authorizePinnedThreadContext(
+    connectionId: string,
+    context: { entries: WorkbenchThreadSidebarEntry[]; projectId: string },
+  ) {
+    const observation = this.connectionProjects.get(connectionId);
+    if (!observation) return;
+    for (const entry of context.entries) {
+      const harness = entry.entryKind === "draft" ? entry.draft.harness : entry.identity.harness;
+      const threadId = entry.entryKind === "draft" ? `draft:${entry.draft.draftId}` : entry.identity.threadId;
+      observation.pinnedThreadKeys.add(`${context.projectId}\0${harness}\0${threadId}`);
+    }
+  }
+
+  private isPinnedThreadAuthorized(connectionId: string, projectId: string, harness: WorkbenchHarnessId, threadId: string) {
+    return this.connectionProjects.get(connectionId)?.pinnedThreadKeys.has(`${projectId}\0${harness}\0${threadId}`) === true;
+  }
+
+  private hydrateProjectThreadSummaries(
+    connectionId: string,
+    observation: ProjectObservation,
+    projectIds: readonly string[],
+  ) {
+    const hydrationPromise = Promise.all(projectIds.map(async (projectId) => {
+      try {
+        const summary = await this.getProjectThreadSummary(projectId);
+        if (!this.active || this.connectionProjects.get(connectionId) !== observation) return;
+        this.options.publish(connectionId, { summary, updateKind: "projectThreadSummary" });
+      } catch (error) {
+        this.options.log?.(`project thread summary hydration failed project=${sanitizeLogValue(projectId)} error=${sanitizeError(error)}`);
+      }
+    })).then(() => undefined).finally(() => {
+      this.summaryHydrationPromises.delete(hydrationPromise);
     });
-    return createWorkbenchProjectThreadSummary(projectId, entries, 0);
+    this.summaryHydrationPromises.add(hydrationPromise);
   }
 
   private decodeStoredProjectState(stored: Partial<StoredProjectState | StoredProjectStateV2 | StoredProjectStateV1>, projectId: string): StoredProjectState {
@@ -856,6 +999,14 @@ export default class WorkbenchThreadStateController {
       .join(",");
     this.options.log?.(`Conformed stored thread state: project=${sanitizeLogValue(projectId)} entry=${sanitizeLogValue(entryId)} repairedPaths=${paths || "none"}`);
   }
+  private logPinnedLayoutRepairs(repairedPaths: PropertyKey[][]) {
+    if (!repairedPaths.length) return;
+    const paths = repairedPaths
+      .slice(0, 20)
+      .map((repairPath) => repairPath.length ? repairPath.map(sanitizeLogValue).join(".") : "root")
+      .join(",");
+    this.options.log?.(`Conformed stored pinned thread layout: repairedPaths=${paths || "none"}`);
+  }
   private snapshot(projectId: string, state: ProjectState): WorkbenchThreadSidebarSnapshot {
     const naturallyOrdered = this.naturallyOrderedEntries(state);
     const resolved = resolveWorkbenchThreadDisplayOrder(naturallyOrdered, state.displayOrder);
@@ -875,8 +1026,9 @@ export default class WorkbenchThreadStateController {
   private publish(projectId: string, state: ProjectState, changedEntry?: WorkbenchThreadStateEntry) {
     if (!this.active) return;
     state.revision += 1;
+    this.updatePinnedLayoutEntries(projectId, this.naturallyOrderedEntries(state));
     if (state.observers.size) this.publishUpdate(state, this.snapshot(projectId, state));
-    const summary = createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision);
+    const summary = createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision, state.displayOrder);
     for (const [connectionId, observation] of this.connectionProjects) {
       if (observation.version === 3) {
         this.options.publish(connectionId, { summary, updateKind: "projectThreadSummary" });
@@ -1047,6 +1199,48 @@ export default class WorkbenchThreadStateController {
     return changed;
   }
 
+  private publishPinnedLayout(snapshot: Extract<WorkbenchThreadStateSnapshot, { updateKind: "pinnedThreadLayout" }>) {
+    if (!this.active) return;
+    for (const [connectionId, observation] of this.connectionProjects) {
+      if (observation.version === 3) this.options.publish(connectionId, snapshot);
+    }
+  }
+
+  private updatePinnedLayoutEntries(projectId: string, entries: readonly WorkbenchThreadSidebarEntry[]) {
+    const prefix = `${encodeURIComponent(projectId)}/`;
+    for (const key of this.pinnedEntries.keys()) {
+      if (key.startsWith(prefix)) this.pinnedEntries.delete(key);
+    }
+    for (const entry of entries) {
+      if (getThreadSidebarGroup(entry) !== "pinned") continue;
+      this.pinnedEntries.set(getProjectQualifiedThreadDisplayKey(projectId, getWorkbenchThreadDisplayKey(entry)), {
+        key: getProjectQualifiedThreadDisplayKey(projectId, getWorkbenchThreadDisplayKey(entry)),
+        section: "pinned",
+      });
+    }
+  }
+
+  private async mutatePinnedDisplayOrder(
+    request: Extract<WorkbenchThreadStateRequest, {
+      method:
+        | "workbench/thread-state/pinned-display-order/folder/create"
+        | "workbench/thread-state/pinned-display-order/folder/title/set"
+        | "workbench/thread-state/pinned-display-order/move";
+    }>,
+  ) {
+    if ("sourceKey" in request && !request.sourceKey.startsWith("folder:")) {
+      const identity = parseProjectQualifiedThreadDisplayKey(request.sourceKey);
+      if (!identity) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
+      if (!this.pinnedEntries.has(request.sourceKey)) {
+        const state = await this.getProject(identity.projectId);
+        this.updatePinnedLayoutEntries(identity.projectId, this.naturallyOrderedEntries(state));
+      }
+    }
+    const result = await this.pinnedLayout.mutate([...this.pinnedEntries.values()], request);
+    if (result.snapshot) this.publishPinnedLayout(result.snapshot);
+    return { accepted: result.accepted, revision: result.snapshot?.revision ?? (await this.pinnedLayout.getSnapshot()).revision };
+  }
+
   private installGitArcSnapshot(state: ProjectState, snapshot: WorkbenchThreadGitArcSnapshot) {
     const arcs = new Map(snapshot.arcs.map(({ harness, state: gitArc, threadId }) => [`${harness}:${threadId}`, gitArc]));
     const plans = new Map(snapshot.plans.map(({ harness, state: gitArcPlan, threadId }) => [`${harness}:${threadId}`, gitArcPlan]));
@@ -1114,7 +1308,12 @@ export default class WorkbenchThreadStateController {
     await this.enqueue(`${projectId}:draft:${draftId}`, async () => {
       const current = state.drafts.get(draftId);
       if (current && current.clientUpdatedAt > clientUpdatedAt) return;
+      const deletedEntry = state.entries.get(`draft:${draftId}`);
       state.drafts.delete(draftId); state.entries.delete(`draft:${draftId}`);
+      if (deletedEntry && getThreadSidebarGroup(deletedEntry) === "pinned") {
+        const pinnedLayoutUpdate = await this.pinnedLayout.remove(projectId, `draft:${draftId}`);
+        if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
+      }
       await this.persist(projectId, state); this.publish(projectId, state);
     });
     return { accepted: true, revision: state.revision };
@@ -1135,6 +1334,10 @@ export default class WorkbenchThreadStateController {
       if (next.entryKind !== "draft") return { accepted: false, revision: state.revision };
       if (areDeeplyEqual(entry, next)) return { accepted: true, revision: state.revision };
       state.entries.set(key, next);
+      if (getThreadSidebarGroup(entry) === "pinned" && getThreadSidebarGroup(next) !== "pinned") {
+        const pinnedLayoutUpdate = await this.pinnedLayout.remove(request.projectId, key);
+        if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
+      }
       await this.persist(request.projectId, state);
       this.publish(request.projectId, state, next);
       return { accepted: true, revision: state.revision };
@@ -1159,7 +1362,7 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" | "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" }>) {
+  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/pin/open" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" | "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" | "workbench/thread-state/pinned-display-order/folder/create" | "workbench/thread-state/pinned-display-order/folder/title/set" | "workbench/thread-state/pinned-display-order/move" }>) {
     const state = await this.getProject(request.projectId);
     const key = `${request.identity.harness}:${request.identity.threadId}`;
     const mutate = async () => await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
@@ -1235,6 +1438,10 @@ export default class WorkbenchThreadStateController {
       if (!parsed.success) return { accepted: false, revision: state.revision };
       if (areDeeplyEqual(entry, parsed.data)) return { accepted: true, revision: state.revision };
       state.entries.set(key, parsed.data);
+      if (getThreadSidebarGroup(entry) === "pinned" && getThreadSidebarGroup(parsed.data) !== "pinned") {
+        const pinnedLayoutUpdate = await this.pinnedLayout.remove(request.projectId, key);
+        if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
+      }
       await this.persist(request.projectId, state); this.publish(request.projectId, state, parsed.data);
       return { accepted: true, revision: state.revision };
     });

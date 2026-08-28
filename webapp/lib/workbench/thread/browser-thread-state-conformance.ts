@@ -10,7 +10,6 @@ export default function conformWorkbenchThreadStateOpenResult(value: unknown, pr
   return conformToZodSchema(WorkbenchThreadStateOpenResultSchema, value, {
     catalog: { data: [], rootPath: "" },
     project: null,
-    projectThreads: { projects: [] },
     sidebar: {
       entries: [],
       error: "The thread-state bootstrap response needed compatibility repair.",
