@@ -1,15 +1,19 @@
 /*
  * Exports:
  * - WorkbenchTokenCountExecutionRequestSchema: validate direct text and caller-aware instruction token requests. Keywords: tokens, instructions, command, cwd, thread.
- * - WORKBENCH_TOKEN_COMMANDS: expose exact model token counting through CLI and typed MCP definitions. Keywords: tokens, OpenAI, MCP, CLI.
+ * - WORKBENCH_TOKEN_COMMANDS: expose exact local GPT-5 text token counting through CLI and typed MCP definitions. Keywords: tokens, GPT-5, MCP, CLI.
  */
 import { z } from "zod";
 
+import Gpt5TextTokens from "./gpt-5-text-tokens";
 import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
 const DEFAULT_MODEL = "gpt-5.6";
-const model = z.string().trim().min(1).max(200).default(DEFAULT_MODEL).describe("OpenAI model whose tokenizer must count the text.");
+const model = z.string().trim().min(1).max(200)
+  .refine(Gpt5TextTokens.supports, "A GPT-5-family model is required.")
+  .default(DEFAULT_MODEL)
+  .describe("GPT-5-family model whose o200k_base tokenizer must count the text.");
 const text = z.string().min(1).max(2 * 1024 * 1024).describe("Exact text to count.");
 const cwd = z.string().trim().min(1);
 const callerThreadId = z.string().trim().min(1).max(4096).nullable();
@@ -20,8 +24,8 @@ export const WorkbenchTokenCountExecutionRequestSchema = z.discriminatedUnion("k
 ]);
 
 const countText = defineWorkbenchAgentCommand({
-  description: "Count exact text with OpenAI's model-specific input token counter.",
-  effects: { idempotent: true, openWorld: true, readOnly: true },
+  description: "Count exact text locally with the GPT-5 o200k_base tokenizer.",
+  effects: { idempotent: true, openWorld: false, readOnly: true },
   helpGroups: ["tokens"],
   words: ["tokens"],
   usage: "wb tokens [--model <model>] -- <text>",
@@ -37,8 +41,8 @@ const countText = defineWorkbenchAgentCommand({
 });
 
 const countInstructions = defineWorkbenchAgentCommand({
-  description: "Count stripped Workbench runtime instruction text with OpenAI's model-specific input token counter.",
-  effects: { idempotent: true, openWorld: true, readOnly: true },
+  description: "Count stripped Workbench runtime instruction text locally with the GPT-5 o200k_base tokenizer.",
+  effects: { idempotent: true, openWorld: false, readOnly: true },
   helpGroups: ["tokens"],
   managedThreadRootOnly: true,
   words: ["tokens", "instructions"],

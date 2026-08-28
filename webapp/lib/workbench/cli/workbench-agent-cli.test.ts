@@ -79,10 +79,10 @@ test("token commands restrict managed threads without restricting direct users",
   const userOutside = { callerThreadId: null, cwd: "C:/other", projectRoot: "C:/workbench" };
   const threadOutside = { callerThreadId: "thread", cwd: "C:/other", projectRoot: "C:/workbench" };
   const threadInside = { callerThreadId: "thread", cwd: "C:/workbench", projectRoot: "C:/workbench" };
-  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "--model", "gpt-test", "--", "exact  text"], userOutside), {
+  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "--model", "gpt-5-test", "--", "exact  text"], userOutside), {
     kind: "request",
     request: {
-      body: { cwd: "C:/other", kind: "text", model: "gpt-test", text: "exact  text" },
+      body: { cwd: "C:/other", kind: "text", model: "gpt-5-test", text: "exact  text" },
       method: "POST",
       path: "/internal/tokens",
       responseKind: "native",

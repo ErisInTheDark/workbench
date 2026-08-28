@@ -202,12 +202,12 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
 
     const instructionTokens = await projectClient.callTool({
       _meta: { threadId: "thread-1" },
-      arguments: { model: "gpt-test" },
+      arguments: { model: "gpt-5-test" },
       name: "tokens_instructions",
     });
     assert.equal(instructionTokens.isError, false);
     assert.deepEqual(executed.at(-1), {
-      body: { callerThreadId: "thread-1", cwd: "C:/authoritative", kind: "instructions", model: "gpt-test" },
+      body: { callerThreadId: "thread-1", cwd: "C:/authoritative", kind: "instructions", model: "gpt-5-test" },
       method: "POST",
       path: "/internal/tokens",
       responseKind: "native",

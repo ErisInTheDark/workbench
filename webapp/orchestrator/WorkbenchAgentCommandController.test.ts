@@ -82,19 +82,19 @@ test("dispatches token counting and scopes only managed-thread help by cwd", asy
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
       executeTokenCount: async (body) => {
         requests.push(body);
-        return new Response("7 tokens for gpt-test\n");
+        return new Response("7 tokens for gpt-5-test\n");
       },
       workbenchProjectRoot: "C:/workbench",
     },
   );
   const counted = await controller.executeStructuredRequest({
-    body: { cwd: "C:/other", kind: "text", model: "gpt-test", text: "hello" },
+    body: { cwd: "C:/other", kind: "text", model: "gpt-5-test", text: "hello" },
     method: "POST",
     path: "/internal/tokens",
     responseKind: "native",
   }, new AbortController().signal);
-  assert.equal(await counted.text(), "7 tokens for gpt-test\n");
-  assert.deepEqual(requests, [{ cwd: "C:/other", kind: "text", model: "gpt-test", text: "hello" }]);
+  assert.equal(await counted.text(), "7 tokens for gpt-5-test\n");
+  assert.deepEqual(requests, [{ cwd: "C:/other", kind: "text", model: "gpt-5-test", text: "hello" }]);
 
   const server = await startController(controller);
   try {
