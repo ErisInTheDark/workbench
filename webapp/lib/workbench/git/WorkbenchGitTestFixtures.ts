@@ -5,9 +5,9 @@
  * - prepareWorkbenchGitTestFixtures/WorkbenchPreparedTestFixtures: create every selected disposable repository before tests and clean them after all pools finish. Keywords: test runner, setup, cleanup, manifest.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitArcRegistry from "./GitArcRegistry";
 import GitTestFixtureCache, {
   GIT_TEST_FIXTURE_MANIFEST_ENV,
@@ -895,8 +895,11 @@ async function runBounded<T>(items: readonly T[], concurrency: number, run: (ite
   await Promise.all(workers);
 }
 
-export async function prepareWorkbenchGitTestFixtures(testFiles: readonly string[]): Promise<WorkbenchPreparedTestFixtures> {
-  const cache = new GitTestFixtureCache();
+export async function prepareWorkbenchGitTestFixtures(
+  testFiles: readonly string[],
+  temporaryRootPath = WorkbenchTemporaryDirectory.rootPath,
+): Promise<WorkbenchPreparedTestFixtures> {
+  const cache = new GitTestFixtureCache({ temporaryRootPath });
   const requested = new Set(testFiles.map((file) => path.basename(file)));
   const jobs = [...requested].flatMap((testFile) => (
     specsByGitTestFile.get(testFile)?.fixtures.flatMap(({ copies, spec }) => (
@@ -905,14 +908,15 @@ export async function prepareWorkbenchGitTestFixtures(testFiles: readonly string
   ));
   if (!jobs.length) return { dispose: async () => undefined, environment: {} };
 
-  const manifestRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-git-fixture-manifest-"));
+  const manifestDirectory = await WorkbenchTemporaryDirectory.create("workbench-git-fixture-manifest-", temporaryRootPath);
+  const manifestRoot = manifestDirectory.path;
   const prepared: Array<Awaited<ReturnType<GitTestFixtureCache["prepareCopy"]>> & { testFile: string }> = [];
   let disposed = false;
   const dispose = async () => {
     if (disposed) return;
     disposed = true;
     await runBounded(prepared, 2, async ({ fixture }) => await fixture.dispose());
-    await fs.rm(manifestRoot, { force: true, recursive: true });
+    await manifestDirectory.dispose();
   };
   try {
     await runBounded(jobs, 2, async ({ spec, testFile }) => {

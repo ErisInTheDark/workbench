@@ -8,12 +8,12 @@ import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
 import { isPathWithinRoot, normalizeRelativePath } from "../../project";
 import { workbenchLibraryRoot } from "../../workbench-library-paths";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
@@ -241,7 +241,8 @@ export default class WorkbenchThreadGit {
       }
     }
 
-    const temporaryDirectoryPath = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-git-"));
+    const temporaryDirectory = await WorkbenchTemporaryDirectory.create("workbench-thread-git-");
+    const temporaryDirectoryPath = temporaryDirectory.path;
     const pathspecFilePath = path.join(temporaryDirectoryPath, "pathspecs");
     try {
       await fs.writeFile(
@@ -280,7 +281,7 @@ export default class WorkbenchThreadGit {
       await this.restoreClaimedSelection(claimedDirectoryPath);
       throw error;
     } finally {
-      await fs.rm(temporaryDirectoryPath, { force: true, recursive: true });
+      await temporaryDirectory.dispose();
     }
   }
 

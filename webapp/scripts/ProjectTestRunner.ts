@@ -15,6 +15,8 @@ import {
   prepareWorkbenchGitTestFixtures,
   type WorkbenchPreparedTestFixtures,
 } from "../lib/workbench/git/WorkbenchGitTestFixtures";
+import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../lib/workbench/WorkbenchTemporaryDirectory";
+import ProjectTestRunCoordinator, { type ProjectTestRunLease } from "./ProjectTestRunCoordinator";
 
 const EXCLUDED_DIRECTORY_NAMES = new Set([".next", "build", "coverage", "dist", "generated", "node_modules"]);
 const GIT_TEST_CONCURRENCY = 1;
@@ -31,7 +33,8 @@ type TestProcessResult = {
 };
 
 export interface ProjectTestRunnerOptions {
-  prepareTestFixtures?: (files: readonly string[]) => Promise<PreparedTestFixtures>;
+  acquireTestRun?: () => Promise<ProjectTestRunLease>;
+  prepareTestFixtures?: (files: readonly string[], temporaryRootPath: string) => Promise<PreparedTestFixtures>;
   spawnProcess?: (
     command: string,
     args: readonly string[],
@@ -72,7 +75,8 @@ function comparePaths(left: string, right: string) {
 }
 
 export default class ProjectTestRunner {
-  private readonly prepareTestFixtures: (files: readonly string[]) => Promise<PreparedTestFixtures>;
+  private readonly acquireTestRun: () => Promise<ProjectTestRunLease>;
+  private readonly prepareTestFixtures: (files: readonly string[], temporaryRootPath: string) => Promise<PreparedTestFixtures>;
   private readonly spawnProcess: NonNullable<ProjectTestRunnerOptions["spawnProcess"]>;
   private readonly testConcurrency: number;
   private readonly testTimeoutMs: number;
@@ -81,6 +85,7 @@ export default class ProjectTestRunner {
     private readonly projectRoot = process.cwd(),
     options: ProjectTestRunnerOptions = {},
   ) {
+    this.acquireTestRun = options.acquireTestRun ?? (async () => await new ProjectTestRunCoordinator().acquire());
     this.prepareTestFixtures = options.prepareTestFixtures ?? prepareWorkbenchGitTestFixtures;
     this.spawnProcess = options.spawnProcess ?? spawn;
     const requestedConcurrency = options.testConcurrency ?? TEST_CONCURRENCY;
@@ -105,27 +110,39 @@ export default class ProjectTestRunner {
     const files = await this.discoverTestFiles(inputs);
     if (files.length === 0) throw new Error(`No .test.ts or .test.tsx files found under: ${inputs.join(", ")}`);
 
-    const prepared = await this.prepareTestFixtures(files);
+    const testRun = await this.acquireTestRun();
     try {
-      if (this.testConcurrency === 1) return await this.runTestFiles(files, this.testConcurrency, prepared.environment);
-      const { gitFiles, nestedGitFiles, ordinaryFiles } = partitionWorkbenchGitTestFiles(files);
-      const groups = [
-        ...(nestedGitFiles.length ? [{ concurrency: Math.min(NESTED_GIT_TEST_CONCURRENCY, this.testConcurrency), files: nestedGitFiles }] : []),
-        ...(gitFiles.length ? [{ concurrency: Math.min(GIT_TEST_CONCURRENCY, this.testConcurrency), files: gitFiles }] : []),
-        ...(ordinaryFiles.length ? [{ concurrency: Math.min(ORDINARY_TEST_CONCURRENCY, this.testConcurrency), files: ordinaryFiles }] : []),
-      ];
-      const settled = await Promise.allSettled(groups.map(async ({ concurrency, files: groupFiles }) => (
-        await this.runTestFiles(groupFiles, concurrency, prepared.environment)
-      )));
-      const rejected = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
-      if (rejected) throw rejected.reason;
-      const results = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
-      const signaled = results.find((result) => result.signal !== null);
-      if (signaled) return signaled;
-      const failed = results.find((result) => result.exitCode !== 0);
-      return failed ?? { exitCode: 0, signal: null };
+      const prepared = await this.prepareTestFixtures(files, testRun.temporaryRootPath);
+      const environment = {
+        ...prepared.environment,
+        [WORKBENCH_TEMPORARY_ROOT_ENV]: testRun.temporaryRootPath,
+        TEMP: testRun.temporaryRootPath,
+        TMP: testRun.temporaryRootPath,
+        TMPDIR: testRun.temporaryRootPath,
+      };
+      try {
+        if (this.testConcurrency === 1) return await this.runTestFiles(files, this.testConcurrency, environment);
+        const { gitFiles, nestedGitFiles, ordinaryFiles } = partitionWorkbenchGitTestFiles(files);
+        const groups = [
+          ...(nestedGitFiles.length ? [{ concurrency: Math.min(NESTED_GIT_TEST_CONCURRENCY, this.testConcurrency), files: nestedGitFiles }] : []),
+          ...(gitFiles.length ? [{ concurrency: Math.min(GIT_TEST_CONCURRENCY, this.testConcurrency), files: gitFiles }] : []),
+          ...(ordinaryFiles.length ? [{ concurrency: Math.min(ORDINARY_TEST_CONCURRENCY, this.testConcurrency), files: ordinaryFiles }] : []),
+        ];
+        const settled = await Promise.allSettled(groups.map(async ({ concurrency, files: groupFiles }) => (
+          await this.runTestFiles(groupFiles, concurrency, environment)
+        )));
+        const rejected = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+        if (rejected) throw rejected.reason;
+        const results = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+        const signaled = results.find((result) => result.signal !== null);
+        if (signaled) return signaled;
+        const failed = results.find((result) => result.exitCode !== 0);
+        return failed ?? { exitCode: 0, signal: null };
+      } finally {
+        await prepared.dispose();
+      }
     } finally {
-      await prepared.dispose();
+      await testRun.dispose();
     }
   }
 

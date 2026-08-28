@@ -7,11 +7,11 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
 import { projectRoot } from "../../project";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 
 const execFileAsync = promisify(execFile);
 const CACHE_FORMAT_VERSION = 2;
@@ -135,9 +135,13 @@ async function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv = proc
 }
 
 export default class GitTestFixtureCache {
-  constructor(
-    private readonly root = path.join(projectRoot, ".workbench", "test-fixtures", "git"),
-  ) {}
+  private readonly root: string;
+  private readonly temporaryRootPath: string;
+
+  constructor(options: { root?: string; temporaryRootPath?: string } = {}) {
+    this.root = options.root ?? path.join(projectRoot, ".workbench", "test-fixtures", "git");
+    this.temporaryRootPath = options.temporaryRootPath ?? WorkbenchTemporaryDirectory.rootPath;
+  }
 
   async copy<State extends object = EmptyFixtureState>(spec: GitTestFixtureSpec<State>): Promise<GitTestFixtureCopy<State>> {
     const manifest = await preparedManifest();
@@ -149,21 +153,25 @@ export default class GitTestFixtureCache {
     const templateRepository = await this.template(spec);
     const templateRoot = path.dirname(path.dirname(templateRepository));
     const templateBundle = path.join(templateRoot, "bundle");
-    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-git-fixture-copy-"));
+    const temporaryDirectory = await WorkbenchTemporaryDirectory.create(
+      "workbench-git-fixture-copy-",
+      this.temporaryRootPath,
+    );
+    const temporaryRoot = temporaryDirectory.path;
     const bundleRoot = path.join(temporaryRoot, "bundle");
     try {
       await fs.cp(templateBundle, bundleRoot, { errorOnExist: true, force: false, recursive: true });
       const state = JSON.parse(await fs.readFile(path.join(templateRoot, "state.json"), "utf8")) as State;
       return {
         bundleRoot,
-        dispose: async () => await fs.rm(temporaryRoot, { force: true, recursive: true }),
+        dispose: async () => await temporaryDirectory.dispose(),
         root: path.join(bundleRoot, "repo"),
         state,
         storageRootPath: path.join(bundleRoot, "storage"),
         temporaryRoot,
       };
     } catch (error) {
-      await fs.rm(temporaryRoot, { force: true, recursive: true });
+      await temporaryDirectory.dispose();
       throw error;
     }
   }

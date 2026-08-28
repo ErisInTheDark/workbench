@@ -1,15 +1,14 @@
 /* No production exports. Tests protect per-use instruction-source freshness and Workbench Library override ownership. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
 test("public instruction use refreshes generated files and preserves user-owned library content", async () => {
   const originalCwd = process.cwd();
   const originalLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
-  const projectWorkbenchRoot = path.resolve(originalCwd, "..", ".workbench");
-  await fs.mkdir(projectWorkbenchRoot, { recursive: true });
-  const temporaryRoot = await fs.mkdtemp(path.join(projectWorkbenchRoot, "instruction-loader-test-"));
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "instruction-loader-test-"));
   const temporaryProjectRoot = path.join(temporaryRoot, "project");
   const temporaryInstructionRoot = path.join(temporaryProjectRoot, "lib", "workbench", "instructions");
   const temporaryLibraryRoot = path.join(temporaryRoot, "library");

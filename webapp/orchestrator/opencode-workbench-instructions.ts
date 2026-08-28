@@ -9,6 +9,7 @@ import path from "node:path";
 import type { Dirent } from "node:fs";
 
 import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
+import WorkbenchTemporaryDirectory from "../lib/workbench/WorkbenchTemporaryDirectory";
 
 const WORKBENCH_OPENCODE_SYSTEM_BEGIN = "<<<WORKBENCH_OPENCODE_SYSTEM_REPLACEMENT_BEGIN_V1>>>";
 const WORKBENCH_OPENCODE_SYSTEM_END = "<<<WORKBENCH_OPENCODE_SYSTEM_REPLACEMENT_END_V1>>>";
@@ -256,7 +257,7 @@ async function registerWorkbenchPlugin(configDirectory: string) {
 export async function ensureOpenCodeWorkbenchConfigDirectory(
   options: EnsureOpenCodeWorkbenchConfigDirectoryOptions = {},
 ) {
-  const configDirectory = path.join(os.tmpdir(), WORKBENCH_OPENCODE_CONFIG_DIR_NAME);
+  const configDirectory = WorkbenchTemporaryDirectory.resolve(WORKBENCH_OPENCODE_CONFIG_DIR_NAME);
   const baseConfigDirectory = normalizeOptionalPath(options.baseConfigDirectory) ?? defaultOpenCodeConfigDirectory();
   await fs.rm(configDirectory, { force: true, recursive: true });
   await fs.mkdir(configDirectory, { recursive: true });

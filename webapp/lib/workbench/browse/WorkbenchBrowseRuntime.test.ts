@@ -41,6 +41,7 @@ class FakeBrowseTransport implements WorkbenchBrowseDaemonTransport {
   private researchRequests = 0;
 
   async cleanupRuntimeFiles(session: string) { this.cleaned.push(session); }
+  getRuntimeDirectoryPath() { return "C:\\workbench-test\\browse-driver"; }
   async initialize() {}
   async listRuntimeSessionNames() { return []; }
   async readPid() { return 123; }

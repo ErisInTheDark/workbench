@@ -7,11 +7,11 @@
  */
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
 import { projectRoot } from "../../project";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import type {
   GitArcMoveRequest,
   GitCheckpointFileChange,
@@ -219,11 +219,11 @@ function parseNullPaths(output: string) {
 }
 
 async function withTemporaryIndex<T>(callback: (indexPath: string, directory: string) => Promise<T>) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-checkpoint-index-"));
+  const temporaryDirectory = await WorkbenchTemporaryDirectory.create("workbench-checkpoint-index-");
   try {
-    return await callback(path.join(directory, "index"), directory);
+    return await callback(path.join(temporaryDirectory.path, "index"), temporaryDirectory.path);
   } finally {
-    await fs.rm(directory, { force: true, recursive: true });
+    await temporaryDirectory.dispose();
   }
 }
 
@@ -290,13 +290,13 @@ async function createCommitFromTree(
   parent: string,
   message: string,
 ) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-checkpoint-message-"));
-  const messagePath = path.join(directory, "message.txt");
+  const temporaryDirectory = await WorkbenchTemporaryDirectory.create("workbench-checkpoint-message-");
+  const messagePath = path.join(temporaryDirectory.path, "message.txt");
   try {
     await fs.writeFile(messagePath, message, "utf8");
     return (await runGit(repoRoot, ["commit-tree", tree, "-p", parent, "-F", messagePath])).trim();
   } finally {
-    await fs.rm(directory, { force: true, recursive: true });
+    await temporaryDirectory.dispose();
   }
 }
 

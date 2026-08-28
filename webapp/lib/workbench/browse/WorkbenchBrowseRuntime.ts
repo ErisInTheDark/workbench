@@ -46,6 +46,7 @@ export type WorkbenchBrowseProjectIdResolver = (
 
 export interface WorkbenchBrowseDaemonTransport {
   cleanupRuntimeFiles(session: string): Promise<void>;
+  getRuntimeDirectoryPath(): string;
   initialize(): Promise<void>;
   listRuntimeSessionNames(): Promise<string[]>;
   readPid(session: string): Promise<number | null>;
@@ -293,6 +294,7 @@ export default class WorkbenchBrowseRuntime {
       env: {
         ...process.env,
         BROWSERBASE_TELEMETRY_DISABLED: "1",
+        BROWSE_DAEMON_DIR: this.client.getRuntimeDirectoryPath(),
         BROWSE_DISABLE_UPDATE_CHECK: "1",
         WORKBENCH_BROWSE_DOWNLOADS_PATH: execution.cwd,
         ...(profilePath ? { WORKBENCH_BROWSE_USER_DATA_DIR: profilePath } : {}),

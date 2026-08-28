@@ -6,10 +6,10 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import type { GitCheckpointFileChange } from "./checkpoint-contracts";
 
 const execFileAsync = promisify(execFile);
@@ -418,11 +418,11 @@ export default class WorkbenchGitRepository {
   }
 
   async withTemporaryIndex<T>(callback: (indexPath: string, directory: string) => Promise<T>) {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-git-index-"));
+    const temporaryDirectory = await WorkbenchTemporaryDirectory.create("workbench-git-index-");
     try {
-      return await callback(path.join(directory, "index"), directory);
+      return await callback(path.join(temporaryDirectory.path, "index"), temporaryDirectory.path);
     } finally {
-      await fs.rm(directory, { force: true, recursive: true });
+      await temporaryDirectory.dispose();
     }
   }
 
