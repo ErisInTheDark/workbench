@@ -2,6 +2,7 @@
  * Exports:
  * - ThreadGitArcProposalTranscriptItem: associate one rendered proposal command with its receipt and editable message intent. Keywords: thread, git, arc, proposal, transcript.
  * - readThreadGitArcProposalTranscriptItem/readThreadGitArcMcpProposalTranscriptItem: read CLI or MCP proposal identity and editable message intent. Keywords: thread, command, MCP, proposal, intent.
+ * - proposalIntentOwnsMessage: identify proposal intent that provides an explicit editable message. Keywords: proposal, intent, message, inheritance.
  * - default getThreadGitArcProposalIntents: index proposal message intents from the currently loaded transcript turns. Keywords: thread, git, arc, proposal, visible, intent.
  */
 
@@ -28,6 +29,10 @@ export interface ThreadGitArcProposalTranscriptItem {
   intent: GitCheckpointCommitCommandIntent | null;
   proposalId: string | null;
   receipt: GitArcReceipt | null;
+}
+
+export function proposalIntentOwnsMessage(intent: GitCheckpointCommitCommandIntent | null) {
+  return Boolean(intent?.title.trim());
 }
 
 function readProposalIntent(item: CommandItem, commandDisplay: ThreadCommandDisplay) {

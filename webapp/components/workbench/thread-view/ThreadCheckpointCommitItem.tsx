@@ -27,6 +27,7 @@ import ThreadCheckpointCommitCard, {
   type CheckpointCommitCardState,
 } from "./ThreadCheckpointCommitCard";
 import ThreadGitArcItem from "./ThreadGitArcItem";
+import { proposalIntentOwnsMessage } from "./thread-git-arc-proposal-intents";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 
 async function readProposalResponse(response: Response, action: GitArcFailureAction) {
@@ -91,7 +92,9 @@ function ThreadCheckpointCommitController({
   const [description, setDescription] = useState(intent?.description ?? "");
   const [committing, setCommitting] = useState(false);
   const [state, setState] = useState<CheckpointCommitCardState>({ status: "pending" });
-  const hydratedFallbackIntent = useRef(intent !== null);
+  const intentOwnsMessage = proposalIntentOwnsMessage(intent);
+  const titleHydrated = useRef(intentOwnsMessage);
+  const descriptionHydrated = useRef(intentOwnsMessage);
 
   const loadProposal = useCallback(async (signal?: AbortSignal) => {
     if (!proposalId) return;
@@ -105,11 +108,10 @@ function ThreadCheckpointCommitController({
         signal,
       }), "proposalState");
       if (signal?.aborted) return;
-      if (!hydratedFallbackIntent.current || proposal.status !== "proposed") {
-        setTitle(proposal.title);
-        setDescription(proposal.description);
-      }
-      hydratedFallbackIntent.current = true;
+      if (!titleHydrated.current || proposal.status !== "proposed") setTitle(proposal.title);
+      if (!descriptionHydrated.current || proposal.status !== "proposed") setDescription(proposal.description);
+      titleHydrated.current = true;
+      descriptionHydrated.current = true;
       if (!proposal.includeNewerAvailable && includeNewer) setIncludeNewer(false);
       setState({ proposal, status: "loaded" });
     } catch (error) {
@@ -195,6 +197,15 @@ function ThreadCheckpointCommitController({
     }
   };
 
+  const changeDescription = (value: string) => {
+    descriptionHydrated.current = true;
+    setDescription(value);
+  };
+  const changeTitle = (value: string) => {
+    titleHydrated.current = true;
+    setTitle(value);
+  };
+
   return (
     <ThreadCheckpointCommitCard
       committing={committing}
@@ -202,10 +213,10 @@ function ThreadCheckpointCommitController({
       embedded={embedded}
       includeNewer={includeNewer}
       onCommit={() => void commit()}
-      onDescriptionChange={setDescription}
+      onDescriptionChange={changeDescription}
       onIncludeNewerChange={setIncludeNewer}
       onRetry={() => void loadProposal()}
-      onTitleChange={setTitle}
+      onTitleChange={changeTitle}
       paths={intent?.paths ?? []}
       projectFilePaths={projectFilePaths}
       projectId={projectId}

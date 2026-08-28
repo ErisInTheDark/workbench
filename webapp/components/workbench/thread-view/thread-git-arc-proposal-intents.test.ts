@@ -1,11 +1,13 @@
-/* No production exports. Regression wards cover visible transcript proposal intent indexing. */
+/* No production exports. Regression wards cover visible transcript proposal intent indexing and editable message ownership. */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
-import getThreadGitArcProposalIntents from "./thread-git-arc-proposal-intents";
+import getThreadGitArcProposalIntents, {
+  proposalIntentOwnsMessage,
+} from "./thread-git-arc-proposal-intents";
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
 
@@ -103,4 +105,25 @@ wb git arc propose --replace proposal-one -m \"keep proposal recovery ordinary\"
     paths: [],
     title: "keep proposal recovery ordinary",
   });
+});
+
+test("only proposal intent with an explicit title owns the editable message", () => {
+  assert.equal(proposalIntentOwnsMessage({
+    amend: true,
+    description: "Ignored without a replacement title",
+    paths: [],
+    title: "",
+  }), false);
+  assert.equal(proposalIntentOwnsMessage({
+    amend: true,
+    description: "",
+    paths: [],
+    title: "Replacement title",
+  }), true);
+  assert.equal(proposalIntentOwnsMessage({
+    amend: false,
+    description: "",
+    paths: [],
+    title: "New commit title",
+  }), true);
 });
