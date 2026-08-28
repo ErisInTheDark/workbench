@@ -91,7 +91,7 @@ import ThreadGoalControl from "./ThreadGoalControl";
 import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadMarkdown from "./ThreadMarkdown";
-import ThreadPlanConflictCard from "./ThreadPlanConflictCard";
+import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
 import {
   ThreadWebSearchActionRow,
@@ -1664,7 +1664,7 @@ export default memo(function ThreadView ({
           </div>
         ) : null}
         {activeThread && !isDraftThreadView && showPlanConflicts ? (
-          <ThreadPlanConflictCard
+          <ThreadGitArcIntersectionCard
             harness={activeThread.harness}
             onOpenThread={onOpenThread}
             projectId={projectId}

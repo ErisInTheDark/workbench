@@ -8,7 +8,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
+import type { WorkbenchThreadSidebarStore } from "../../../lib/types";
 import { getWorkbenchMcpCommandRoute } from "../../../lib/workbench/thread/thread-command-matchers";
+import type { WorkbenchThreadSidebarEntry } from "../../../lib/workbench/thread/thread-state";
+import WorkbenchContextMenuProvider from "../WorkbenchContextMenuProvider";
+import ThreadGitArcPresentationContext, { type ThreadGitArcPresentation } from "./ThreadGitArcPresentationContext";
 import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
@@ -30,19 +34,44 @@ function makeItem(tool: string, argumentsValue: McpItem["arguments"], output: st
   };
 }
 
-function renderSpecialized(item: McpItem) {
+function renderSpecialized(item: McpItem, presentation: ThreadGitArcPresentation | null = null) {
   const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
   assert.equal(route?.kind, "specialized");
   if (!route || route.kind !== "specialized") throw new Error("Expected specialized wb route.");
-  return renderToStaticMarkup(createElement(ThreadWorkbenchCommandItem, {
-    item,
-    relatedThreadsById: {},
-    renderRecallRecord: () => null,
-    route,
-    subagents: [],
-    threadCwdPath: "C:/workspace",
-    threadId: "thread-one",
-  }));
+  return renderToStaticMarkup(createElement(
+    WorkbenchContextMenuProvider,
+    null,
+    createElement(
+      ThreadGitArcPresentationContext.Provider,
+      { value: presentation },
+      createElement(ThreadWorkbenchCommandItem, {
+        item,
+        relatedThreadsById: {},
+        renderRecallRecord: () => null,
+        route,
+        subagents: [],
+        threadCwdPath: "C:/workspace",
+        threadId: "thread-one",
+      }),
+    ),
+  ));
+}
+
+function threadEntry(
+  threadId: string,
+  gitArc: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>["gitArc"] = null,
+  gitArcPlan: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>["gitArcPlan"] = null,
+): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> {
+  return {
+    activityAt: 10,
+    entryKind: "thread",
+    gitArc,
+    gitArcPlan,
+    identity: { harness: "codex", threadId },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: threadId,
+  };
 }
 
 test("Git MCP operations use the existing Git arc card instead of a simple label", () => {
@@ -85,6 +114,62 @@ test("historical overlap failures keep exact duplicate paths in adoption-only pr
   assert.match(html, /data-thread-git-arc-failure="adoptedPathOverlap"/u);
   assert.match(html, /Ordinary and adopted plan scopes overlap/u);
   assert.doesNotMatch(html, /Adopted paths already join|Workbench arc failure:/u);
+});
+
+test("Git arc waits use live intersections while running and the start card after completion", () => {
+  const owner = threadEntry("thread-one", null, {
+    checkpointCommit: "a".repeat(40),
+    intentDescription: "",
+    intentName: "wait plan",
+    scopePaths: ["src/feature"],
+    updatedAt: "2026-08-28T00:00:00.000Z",
+  });
+  const blocker = threadEntry("blocking thread", {
+    checkpointCommit: "b".repeat(40),
+    claimedPaths: ["src/feature/card.tsx"],
+    intentDescription: "",
+    intentName: "blocking work",
+    phase: "active",
+    proposals: [],
+    updatedAt: "2026-08-28T00:00:00.000Z",
+  });
+  const store = {
+    getSnapshot: () => ({
+      entries: [owner, blocker],
+      error: null,
+      freshness: "fresh" as const,
+      projectId: "project",
+      revision: 1,
+    }),
+    subscribe: () => () => undefined,
+  } satisfies WorkbenchThreadSidebarStore;
+  const presentation = {
+    harness: "codex" as const,
+    onOpenThread: () => undefined,
+    projectId: "project",
+    threadSidebarStore: store,
+  };
+  const runningHtml = renderSpecialized(
+    makeItem("git_arc_wait", { ref: "a".repeat(40) }, "", "inProgress"),
+    presentation,
+  );
+
+  assert.match(runningHtml, /data-thread-git-arc-intersection-card="wait"/u);
+  assert.match(runningHtml, /blocking%20thread/u);
+
+  const completedHtml = renderSpecialized(makeItem("git_arc_wait", { ref: "a".repeat(40) }, [
+    "Waited for claims and started Git arc",
+    `Workbench arc receipt: ${JSON.stringify({
+      action: "start",
+      claimedPaths: ["src/feature"],
+      intentName: "wait plan",
+      ref: "c".repeat(40),
+      version: 1,
+    })}`,
+  ].join("\n")));
+
+  assert.match(completedHtml, /data-thread-git-arc-card="start"/u);
+  assert.match(completedHtml, /data-thread-git-arc-duration="waited"/u);
 });
 
 test("title and subagent MCP operations use their dedicated renderers", () => {

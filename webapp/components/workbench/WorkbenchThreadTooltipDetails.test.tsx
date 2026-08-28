@@ -10,7 +10,7 @@ import type { WorkbenchPendingUserInputRequest, WorkbenchThreadSidebarStore } fr
 import type { WorkbenchThreadSidebarEntry } from "../../lib/workbench/thread/thread-state";
 import WorkbenchContextMenuProvider from "./WorkbenchContextMenuProvider";
 import WorkbenchThreadTooltipDetails from "./WorkbenchThreadTooltipDetails";
-import ThreadPlanConflictCard from "./thread-view/ThreadPlanConflictCard";
+import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
 
 const pendingRequest = {
   harness: "codex",
@@ -157,7 +157,7 @@ test("planned-work tooltips keep active intersection navigation and omit planned
   const fullHtml = renderToStaticMarkup(createElement(
     WorkbenchContextMenuProvider,
     null,
-    createElement(ThreadPlanConflictCard, {
+    createElement(ThreadGitArcIntersectionCard, {
       harness: "codex",
       onOpenThread: () => undefined,
       projectId: "project",
@@ -166,4 +166,23 @@ test("planned-work tooltips keep active intersection navigation and omit planned
     }),
   ));
   assert.match(fullHtml, /<details/u);
+});
+
+test("Git arc waits show active claim owners without planned-only intersections", () => {
+  const html = renderToStaticMarkup(createElement(
+    WorkbenchContextMenuProvider,
+    null,
+    createElement(ThreadGitArcIntersectionCard, {
+      harness: "codex",
+      mode: "wait",
+      onOpenThread: () => undefined,
+      projectId: "project",
+      store: planStore,
+      threadId: "thread",
+    }),
+  ));
+
+  assert.match(html, /data-thread-git-arc-intersection-card="wait"/u);
+  assert.match(html, /href="\/project\/@\/thread\/active%20intersection"/u);
+  assert.doesNotMatch(html, /planned%20intersection|<details/u);
 });

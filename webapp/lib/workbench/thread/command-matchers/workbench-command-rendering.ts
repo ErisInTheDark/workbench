@@ -100,6 +100,7 @@ export interface WorkbenchSubagentOperation {
 
 export type WorkbenchSpecializedOperation =
   | { kind: "gitArc"; operation: WorkbenchGitArcOperation }
+  | { kind: "gitArcWait"; ref: string | null }
   | { kind: "subagent"; operation: WorkbenchSubagentOperation }
   | { kind: "threadRecall" }
   | { kind: "threadStatus"; status: "blocked" | "completed" }
@@ -487,7 +488,7 @@ export function getWorkbenchCommandRoute(
   if (name.startsWith("browse_")) return renderBrowse(name, args);
   switch (name) {
     case "git_arc_wait":
-      return simple("git-arc.wait", actionTarget("Waiting for ", "Git arc claims"), actionTarget("Started ", "Git arc"));
+      return specialized("git-arc.wait", { kind: "gitArcWait", ref: readString(args.ref) });
     case "rg":
       return {
         kind: "simple",

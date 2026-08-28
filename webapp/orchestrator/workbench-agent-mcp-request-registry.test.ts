@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
+  isWorkbenchAgentMcpSteerInterruption,
   WorkbenchAgentMcpRequestRegistry,
 } from "./workbench-agent-mcp-request-registry";
 
@@ -73,6 +74,7 @@ test("thread steers interrupt only declared waits for the matching thread across
 
   assert.equal(registry.interruptThreadWaits("parent-thread"), 2);
   assert.equal(subagentWait.signal.aborted, true);
+  assert.equal(isWorkbenchAgentMcpSteerInterruption(subagentWait.signal.reason), true);
   assert.equal(secondWait.signal.aborted, true);
   assert.equal(otherThreadWait.signal.aborted, false);
   assert.equal(ordinaryCall.signal.aborted, false);

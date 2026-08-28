@@ -4,7 +4,7 @@
  */
 "use client";
 
-import type { ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { ThreadPayload, WorkbenchSubagentSummary } from "../../../lib/types";
@@ -24,7 +24,9 @@ import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadContextCommandItem from "./ThreadContextCommandItem";
+import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadGitArcItem from "./ThreadGitArcItem";
+import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadStatusCommandItem from "./ThreadStatusCommandItem";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
@@ -83,6 +85,7 @@ export default function ThreadWorkbenchCommandItem({
   const outcome = getMcpOutcome(item);
   const output = getMcpOutput(item);
   const operation = route.operation;
+  const gitArcPresentation = useContext(ThreadGitArcPresentationContext);
 
   if (operation.kind === "threadTitle") {
     return <ThreadTitleCommandItem failureText={output} outcome={outcome} title={operation.title} />;
@@ -103,6 +106,45 @@ export default function ThreadWorkbenchCommandItem({
         workspaceRoots={workspaceRoots}
       />
     );
+  }
+  if (operation.kind === "gitArcWait") {
+    if (outcome === "completed") {
+      return (
+        <ThreadGitArcItem
+          commandIntent={{
+            action: "start",
+            intentName: null,
+            paths: [],
+            ref: operation.ref,
+          }}
+          durationMs={item.durationMs}
+          durationPresentation="waited"
+          outcome={outcome}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          receipt={parseGitArcReceipt(output)}
+          workspaceRoots={workspaceRoots}
+        />
+      );
+    }
+    if (
+      outcome === "inProgress"
+      && gitArcPresentation?.onOpenThread
+      && gitArcPresentation.projectId
+    ) {
+      return (
+        <ThreadGitArcIntersectionCard
+          harness={gitArcPresentation.harness}
+          mode="wait"
+          onOpenThread={gitArcPresentation.onOpenThread}
+          projectId={gitArcPresentation.projectId}
+          store={gitArcPresentation.threadSidebarStore ?? null}
+          threadId={threadId}
+        />
+      );
+    }
+    return null;
   }
   if (operation.kind === "gitArc") {
     const intent = operation.operation;

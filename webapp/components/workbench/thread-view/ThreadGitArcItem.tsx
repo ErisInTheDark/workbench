@@ -99,6 +99,7 @@ function failureClaimPaths(failure: ReturnType<typeof parseGitArcFailureReceipt>
 export default function ThreadGitArcItem({
   commandIntent,
   durationMs,
+  durationPresentation = "default",
   failureReason,
   operationDetails,
   outcome,
@@ -111,6 +112,7 @@ export default function ThreadGitArcItem({
 }: {
   commandIntent: GitArcCommandIntent;
   durationMs: number | null;
+  durationPresentation?: "default" | "waited";
   failureReason?: string | null;
   operationDetails?: ReactNode;
   outcome: ThreadCommandExecutionOutcome;
@@ -257,7 +259,11 @@ export default function ThreadGitArcItem({
             ) : null}
             {ref ? <span className="font-mono text-[0.86em] text-muted">{ref.slice(0, 8)}</span> : null}
             {memberRefs.length > 1 ? <span className="text-[0.86em] text-muted">{memberRefs.length} roots</span> : null}
-            {durationMs !== null ? <ThreadDurationText durationMs={durationMs} /> : null}
+            {durationMs !== null ? durationPresentation === "waited" ? (
+              <span className="text-muted" data-thread-git-arc-duration="waited">
+                (waited <ThreadDurationText className="inline" durationMs={durationMs} />)
+              </span>
+            ) : <ThreadDurationText durationMs={durationMs} /> : null}
           </span>
         )}
         summaryClassName="text-[0.82em] leading-[1.45] text-muted"

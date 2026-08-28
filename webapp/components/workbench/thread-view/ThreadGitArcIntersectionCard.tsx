@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadPlanConflictCard: subscribe to and render full or compact sibling work intersecting the current inactive plan. Keywords: thread, plan, claim, intersection, sidebar, tooltip.
+ * - default ThreadGitArcIntersectionCard: subscribe to and render plan intersections or active claimants blocking a Git arc wait. Keywords: thread, plan, wait, claim, intersection, sidebar, tooltip.
  */
 "use client";
 
@@ -13,7 +13,7 @@ import {
   type WorkbenchThreadTarget,
 } from "../../../lib/workbench/thread/thread-state";
 import ThreadDisclosure from "./ThreadDisclosure";
-import { GitArcConflictIcon } from "./GitArcIcon";
+import { GitArcConflictIcon, GitArcWaitIcon } from "./GitArcIcon";
 import ThreadGitArcConflictList from "./ThreadGitArcConflictList";
 
 const EMPTY_UNSUBSCRIBE = () => undefined;
@@ -22,8 +22,9 @@ function formatThreadCount(count: number, state: "active" | "snoozed") {
   return `${count} ${state} ${count === 1 ? "thread" : "threads"}`;
 }
 
-export default function ThreadPlanConflictCard({
+export default function ThreadGitArcIntersectionCard({
   harness,
+  mode = "plan",
   onOpenThread,
   presentation = "full",
   projectId,
@@ -31,6 +32,7 @@ export default function ThreadPlanConflictCard({
   threadId,
 }: {
   harness: WorkbenchHarnessId;
+  mode?: "plan" | "wait";
   onOpenThread: (target: WorkbenchThreadTarget) => void;
   presentation?: "compact" | "full";
   projectId: string;
@@ -42,7 +44,8 @@ export default function ThreadPlanConflictCard({
   const getSelection = useCallback(() => selector(store?.getSnapshot() ?? null), [selector, store]);
   const intersections = useSyncExternalStore(subscribe, getSelection, getSelection);
   if (!intersections.hasPlannedClaims) return null;
-  const compact = presentation === "compact";
+  const waiting = mode === "wait";
+  const compact = presentation === "compact" || waiting;
   const activeThreadCount = intersections.activeEntries.length;
   const plannedThreadCount = intersections.plannedEntries.length;
   const visibleThreadCount = activeThreadCount + (compact ? 0 : plannedThreadCount);
@@ -56,16 +59,19 @@ export default function ThreadPlanConflictCard({
   return (
     <section
       className="my-2 w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)]"
-      data-thread-plan-conflict-card="true"
+      data-thread-git-arc-intersection-card={mode}
+      data-thread-plan-conflict-card={waiting ? undefined : "true"}
     >
       <h2 className={`m-0 flex min-w-0 items-center gap-2 px-3 pt-2 text-[0.82em] leading-[1.45]${visibleThreadCount ? "" : " pb-2"}`}>
-        <GitArcConflictIcon className="size-4 shrink-0" />
+        {waiting ? <GitArcWaitIcon className="size-4 shrink-0" /> : <GitArcConflictIcon className="size-4 shrink-0" />}
         <span className="min-w-0 flex-1 truncate font-medium text-text">
-          {activeThreadCount ? "Planned changes overlap active threads" : "No active work intersects this plan."}
+          {waiting
+            ? "Waiting for Git arc claims"
+            : activeThreadCount ? "Planned changes overlap active threads" : "No active work intersects this plan."}
         </span>
       </h2>
       <ThreadGitArcConflictList entries={intersections.activeEntries} onOpenThread={onOpenThread} projectId={projectId} />
-      {!compact && plannedThreadCount ? (
+      {!waiting && !compact && plannedThreadCount ? (
         <ThreadDisclosure
           contentClassName="pb-1"
           summary={`Also intersecting planned work in ${plannedThreadSummary}`}

@@ -129,7 +129,6 @@ test("simple typed wb MCP calls share argument-sensitive CLI presentations", () 
     ["wb tokens -- count-me", "tokens", { text: "count-me" }],
     ["wb tokens instructions", "tokens_instructions", {}],
     ["wb git add -- src/a.ts", "git_add", { paths: ["src/a.ts"] }],
-    ["wb git arc wait", "git_arc_wait", {}],
     ["wb thread title get", "thread_title_get", {}],
     ["wb subagent list", "subagent_list", {}],
     ['wb browse run --thread thread-one --session rendering --summary "Check page" --command "snapshot --compact"', "browse_run", { commands: ["snapshot --compact"], session: "rendering", summary: "Check page" }],
@@ -210,6 +209,7 @@ test("specialized typed wb MCP calls share CLI claims without duplicate summarie
     ['wb thread title --title "Render typed wb tools"', "thread_title", { title: "Render typed wb tools" }],
     ["wb subagent wait --name Lumi --name Nova", "subagent_wait", { names: ["Lumi", "Nova"] }],
     ['wb subagent message --parent --message "progress"', "subagent_message", { message: "progress", parent: true }],
+    ["wb git arc wait", "git_arc_wait", {}],
     ["wb git arc mv --regex ^src --replace test -- src", "git_arc_mv", { move: { confirm: false, kind: "regex", pattern: "^src", replacement: "test", roots: ["src"] } }],
     ["wb git arc release --disown", "git_arc_release", { disown: true }],
     ["wb git arc compare", "git_arc_compare", { paths: [] }],
@@ -284,10 +284,12 @@ test("wb shell MCP evidence derives ordinary command execution presentation", ()
 test("failed Recall MCP calls use the generic error renderer", () => {
   const recallRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "thread_recall" });
   const gitRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "git_arc_compare" });
+  const waitRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "git_arc_wait" });
 
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, false), true);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, true), false);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(gitRoute, true), true);
+  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(waitRoute, true), false);
   const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { status: "blocked" }, server: "wb", tool: "thread_status" });
   const subagentRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { message: "progress", parent: true }, server: "wb", tool: "subagent_message" });
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(statusRoute, true), false);

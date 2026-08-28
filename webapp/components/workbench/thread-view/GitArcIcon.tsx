@@ -4,6 +4,7 @@
  * - GitArcClaimIcon: render the flag marker used by claimed-file rows. Keywords: git, arc, icon, claim, file.
  * - GitArcPlannedClaimIcon: render the dashed flag marker used by planned-file rows. Keywords: git, arc, icon, plan, claim, file.
  * - GitArcConflictIcon: render the square-x marker used for conflicting planned and active claims. Keywords: git, arc, icon, conflict, overlap.
+ * - GitArcWaitIcon: render the hourglass marker used while a Git arc waits on active sibling claims. Keywords: git, arc, icon, wait, hourglass.
  */
 import type { ReactNode } from "react";
 
@@ -45,6 +46,17 @@ export function GitArcConflictIcon({ className = "size-4" }: { className?: strin
       <rect height="18" rx="2" ry="2" width="18" x="3" y="3" />
       <path d="m15 9-6 6" />
       <path d="m9 9 6 6" />
+    </SvgFrame>
+  );
+}
+
+export function GitArcWaitIcon({ className = "size-4" }: { className?: string }) {
+  return (
+    <SvgFrame className={className}>
+      <path d="M5 22h14" />
+      <path d="M5 2h14" />
+      <path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22" />
+      <path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2" />
     </SvgFrame>
   );
 }

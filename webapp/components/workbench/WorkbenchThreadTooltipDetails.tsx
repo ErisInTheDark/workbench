@@ -17,7 +17,7 @@ import type { UserInput } from "../../lib/codex/generated/app-server/v2/UserInpu
 import type { WorkspaceFileLinkRoot } from "../../lib/workbench/markdown/markdown-links";
 import type { WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
 import ThreadCheckpointCommitItem from "./thread-view/ThreadCheckpointCommitItem";
-import ThreadPlanConflictCard from "./thread-view/ThreadPlanConflictCard";
+import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
 import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-view/thread-user-input-request-submission";
 
@@ -127,7 +127,7 @@ export default function WorkbenchThreadTooltipDetails({
           />
         </section>
       ) : null}
-      <ThreadPlanConflictCard
+      <ThreadGitArcIntersectionCard
         harness={harness}
         onOpenThread={onOpenThread}
         presentation="compact"

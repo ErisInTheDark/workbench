@@ -3,6 +3,7 @@
  * - WorkbenchAgentMcpPendingRequest: bounded active-request detail for runtime-drain diagnostics. Keywords: workbench, MCP, drain, diagnostics.
  * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation handles, thread-steer interruption, generation drain policy, and duplicate-ID guards. Keywords: workbench, MCP, cancellation, steer, registry.
  * - getProcessWorkbenchAgentMcpRequestRegistry: wrap reload-stable process state without retaining stale module methods. Keywords: workbench, MCP, reload, process.
+ * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across reloadable MCP module generations. Keywords: workbench, MCP, steer, cancellation, error.
  */
 import type { WorkbenchAgentMcpRuntimeDrainPolicy } from "../lib/workbench/commands/workbench-agent-command-definition";
 
@@ -55,6 +56,17 @@ export interface WorkbenchAgentMcpThreadWaitState {
 }
 
 const PROCESS_REGISTRY_KEY = Symbol.for("workbench.agentMcpRequestRegistry.v2");
+const STEER_INTERRUPTION_KEY = Symbol.for("workbench.agentMcpSteerInterruption.v1");
+
+function createWorkbenchAgentMcpSteerInterruption(reason: string) {
+  const error = new Error(reason);
+  Reflect.set(error, STEER_INTERRUPTION_KEY, true);
+  return error;
+}
+
+export function isWorkbenchAgentMcpSteerInterruption(error: unknown) {
+  return error instanceof Error && Reflect.get(error, STEER_INTERRUPTION_KEY) === true;
+}
 
 function createState(): WorkbenchAgentMcpRequestRegistryState {
   return {
@@ -192,7 +204,7 @@ export class WorkbenchAgentMcpRequestRegistry {
     for (const requests of this.state.requestsByClient.values()) {
       for (const entry of requests.values()) {
         if (!entry.steerInterruptible || entry.threadId !== canonicalThreadId || entry.controller.signal.aborted) continue;
-        entry.controller.abort(new Error(reason));
+        entry.controller.abort(createWorkbenchAgentMcpSteerInterruption(reason));
         interrupted += 1;
       }
     }

@@ -401,15 +401,18 @@ test("releases HTTP admission and propagates caller cancellation across controll
   }
 });
 
-test("thread steer interruption reaches declared long waits but preserves ordinary MCP calls", { timeout: 5_000 }, async () => {
+test("thread steer interruption silently ends declared long waits but preserves ordinary MCP calls", { timeout: 5_000 }, async () => {
   const executions = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
   const allStarted = deferred<void>();
   const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
   const controller = new WorkbenchAgentMcpController({
-    executeCommand: async (request, signal) => await new Promise<Response>((resolve, reject) => {
+    executeCommand: async (request, signal) => await new Promise<Response>((resolve) => {
       executions.set(request.responseKind, { resolve, signal });
       if (executions.size === 2) allStarted.resolve();
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      signal.addEventListener("abort", () => resolve(new Response(
+        "This expected steer interruption must not reach MCP output.",
+        { status: 409 },
+      )), { once: true });
     }),
     getReloadScopeCatalog: () => reloadCatalog,
     lifecycleLogError: () => undefined,
@@ -435,7 +438,7 @@ test("thread steer interruption reaches declared long waits but preserves ordina
     assert.equal(requestRegistry.interruptThreadWaits("thread-1"), 1);
     const subagentResult = await subagentCall;
     assert.equal(subagentResult.isError, true);
-    assert.match(responseText(subagentResult), /interrupted by a user steer/u);
+    assert.equal(responseText(subagentResult), "");
     assert.equal(executions.get("thread-title-get")?.signal.aborted, false);
 
     executions.get("thread-title-get")?.resolve(Response.json({ title: "still running" }));

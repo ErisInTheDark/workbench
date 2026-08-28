@@ -26,6 +26,7 @@ import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { logError } from "./process-helpers";
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
+  isWorkbenchAgentMcpSteerInterruption,
   type WorkbenchAgentMcpRequestRegistry,
 } from "./workbench-agent-mcp-request-registry";
 import WorkbenchShellController, {
@@ -333,6 +334,7 @@ export default class WorkbenchAgentMcpController {
       });
       if (request.waitForReload) registration.markDrainIndependent();
       const upstream = await this.executeCommand(request, signal);
+      if (signal.aborted) throw signal.reason;
       const text = await upstream.text();
       const adapted = adaptWorkbenchAgentCliResponse({ httpOk: upstream.ok, request, text });
       const success = adapted.exitCode === 0;
@@ -341,6 +343,9 @@ export default class WorkbenchAgentMcpController {
         isError: !success,
       };
     } catch (error) {
+      if (isWorkbenchAgentMcpSteerInterruption(error)) {
+        return { content: [], isError: true };
+      }
       const message = sanitizeError(error) || "Workbench MCP tool call failed.";
       if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
       return { content: [{ type: "text" as const, text: `Workbench tool call failed: ${message}` }], isError: true };
