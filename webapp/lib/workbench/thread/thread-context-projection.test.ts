@@ -10,7 +10,7 @@ import type { ThreadPayload, WorkbenchThreadContextBundle } from "../../types.ts
 import { createWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
 import { renderWorkbenchThreadContextPieceMarkdown } from "./thread-context-markdown.ts";
 import { buildWorkbenchThreadContextPieces } from "./thread-context-projection.ts";
-import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryInput } from "./thread-recovery-message.ts";
+import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "./thread-recovery-message.ts";
 
 function thread(): ThreadPayload {
   return {
@@ -37,10 +37,11 @@ test("native steer suppresses and positions only its exact canonical message", (
   assert.ok(pieces[0]!.sortKey < pieces[1]!.sortKey);
 });
 
-test("exact Workbench resume and questionnaire-response steers stay out of projected context", () => {
+test("exact Workbench recovery, unfinished-turn, and questionnaire-response steers stay out of projected context", () => {
   const source = thread();
   source.turns[0]!.items.push(
     { clientId: null, content: createWorkbenchThreadRecoveryInput(), id: "resume", type: "userMessage" },
+    { clientId: null, content: createWorkbenchUnfinishedTurnInput(), id: "unfinished", type: "userMessage" },
     { clientId: null, content: createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["approved"] } } }), id: "response", type: "userMessage" },
   );
   const bundle: WorkbenchThreadContextBundle = {

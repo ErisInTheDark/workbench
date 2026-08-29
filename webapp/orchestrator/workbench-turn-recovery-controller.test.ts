@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { WORKBENCH_UNFINISHED_TURN_MESSAGE } from "../lib/workbench/thread/thread-recovery-message";
 import WorkbenchTurnRecoveryController, { MAX_AUTOMATIC_RECOVERY_THREADS } from "./WorkbenchTurnRecoveryController";
 import WorkbenchTurnRecoveryHandoffStore from "./WorkbenchTurnRecoveryHandoffStore";
 
@@ -101,8 +102,129 @@ test("terminal notifications retire the exact candidate", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-recovery-terminal-"));
   const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => undefined);
   controller.observeRequest("opencode", { id: 1, method: "turn/start", params: { input: [], threadId: "thread" } });
-  controller.observeNotification("opencode", { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn" } } });
+  controller.observeNotification("opencode", { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "interrupted" } } });
   assert.deepEqual(controller.capture(["opencode"]), []);
+});
+
+test("normally completed unfinished turns start one exact hidden continuation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-unfinished-turn-"));
+  const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => undefined);
+  const originalRequest = {
+    id: "original",
+    method: "turn/start",
+    params: {
+      approvalPolicy: "never",
+      cwd: "C:/workspace",
+      input: [{ text: "hello", text_elements: [], type: "text" }],
+      model: "gpt",
+      threadId: "thread",
+    },
+    workbenchPromptContext: { agentPath: "agent://lily.md", workflowIds: ["default"] },
+  };
+  controller.observeRequest("copilot", originalRequest);
+  controller.observeNotification("copilot", { method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } });
+  controller.observeNotification("copilot", { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "completed" } } });
+  assert.equal(controller.capture(["codex", "opencode"]).length, 0);
+
+  const starts: Array<{ candidateHarness: string; request: Record<string, unknown> }> = [];
+  const started = await controller.completeObservedTurn(
+    "copilot",
+    { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "completed" } } },
+    { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    async (candidate, request) => { starts.push({ candidateHarness: candidate.harness, request }); },
+  );
+
+  assert.equal(started, true);
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0]?.candidateHarness, "copilot");
+  assert.equal(starts[0]?.request.method, "turn/start");
+  assert.deepEqual(starts[0]?.request.workbenchPromptContext, originalRequest.workbenchPromptContext);
+  assert.deepEqual(starts[0]?.request.params, {
+    ...originalRequest.params,
+    clientUserMessageId: starts[0]?.request.id,
+    input: [{ text: WORKBENCH_UNFINISHED_TURN_MESSAGE, text_elements: [], type: "text" }],
+  });
+});
+
+test("unfinished-turn continuation rejects every legitimate terminal owner", async () => {
+  const lifecycles = [
+    { agent: { agentStatus: "completed", turnId: "turn" }, kind: "completed", reason: "agentCompleted", settled: false } as const,
+    { agent: { agentStatus: "blocked", turnId: "turn" }, kind: "needsAttention", reason: "agentBlocked", settled: false } as const,
+    { kind: "needsAttention", reason: "pendingInput", requestKey: "question", settled: false, turnId: "turn" } as const,
+  ];
+  for (const [index, lifecycle] of lifecycles.entries()) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `workbench-unfinished-gate-${index}-`));
+    const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => undefined);
+    controller.observeRequest("codex", { id: index, method: "turn/start", params: { input: [], threadId: "thread" } });
+    controller.observeNotification("codex", { method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } });
+    controller.observeNotification("codex", { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "completed" } } });
+    let calls = 0;
+    assert.equal(await controller.completeObservedTurn(
+      "codex",
+      { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "completed" } } },
+      lifecycle,
+      async () => { calls += 1; },
+    ), false);
+    assert.equal(calls, 0);
+  }
+});
+
+test("user stops, failures, and goal-owned turns never start unfinished continuations", async () => {
+  for (const status of ["interrupted", "failed"] as const) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `workbench-unfinished-${status}-`));
+    const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => undefined);
+    controller.observeRequest("opencode", { id: status, method: "turn/start", params: { input: [], threadId: "thread" } });
+    controller.observeNotification("opencode", { method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } });
+    const notification = { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status } } };
+    controller.observeNotification("opencode", notification);
+    assert.equal(await controller.completeObservedTurn(
+      "opencode",
+      notification,
+      { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+      async () => { throw new Error("must not run"); },
+    ), false);
+  }
+
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-unfinished-goal-"));
+  const controller = new WorkbenchTurnRecoveryController(new WorkbenchTurnRecoveryHandoffStore(root), () => undefined);
+  controller.observeRequest("codex", { id: "start", method: "turn/start", params: { input: [], threadId: "thread" } });
+  controller.observeNotification("codex", { method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } });
+  controller.observeRequest("codex", { id: "goal", method: "thread/goal/set", params: { threadId: "thread" } });
+  controller.observeRequest("codex", { id: "clear", method: "thread/goal/clear", params: { threadId: "thread" } });
+  const notification = { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "completed" } } };
+  controller.observeNotification("codex", notification);
+  assert.equal(await controller.completeObservedTurn(
+    "codex",
+    notification,
+    { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    async () => { throw new Error("must not run"); },
+  ), false);
+});
+
+test("failed unfinished continuation reports once and retires its registered replacement", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-unfinished-failure-"));
+  const failures: string[] = [];
+  const controller = new WorkbenchTurnRecoveryController(
+    new WorkbenchTurnRecoveryHandoffStore(root),
+    () => undefined,
+    async (candidate) => { failures.push(candidate.threadId); },
+  );
+  controller.observeRequest("copilot", { id: "start", method: "turn/start", params: { input: [], threadId: "thread" } });
+  controller.observeNotification("copilot", { method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } });
+  const notification = { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "completed" } } };
+  controller.observeNotification("copilot", notification);
+  assert.equal(await controller.completeObservedTurn(
+    "copilot",
+    notification,
+    { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    async (candidate, request) => {
+      controller.observeRequest(candidate.harness, request);
+      throw new Error("provider rejected continuation");
+    },
+  ), false);
+  assert.deepEqual(failures, ["thread"]);
+  const state = await controller.detachForReload();
+  assert.deepEqual(state.candidates, []);
 });
 
 test("late completion for an older turn cannot retire a newer candidate", async () => {

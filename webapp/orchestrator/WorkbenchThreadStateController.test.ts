@@ -1376,7 +1376,8 @@ test("accepted intent survives provider discovery lag and releases after its lif
   assert.equal(laggingEntry?.title, "First user message");
   assert.equal(laggingEntry?.entryKind === "thread" ? laggingEntry.orderAt : null, 55);
   providerEntries = [];
-  await controller.observeLifecycle("codex", "provider", { kind: "turnCompleted", status: "completed", turnId: "turn" });
+  const completedLifecycle = await controller.observeLifecycle("codex", "provider", { kind: "turnCompleted", status: "completed", turnId: "turn" });
+  assert.deepEqual(completedLifecycle, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
   await controller.refresh("project");
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal((await controller.getSnapshot("project")).entries.some((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider"), false);

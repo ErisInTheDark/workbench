@@ -95,6 +95,46 @@ test("provider lifecycle notification mapping is exact and bounded", () => {
   assert.equal(mapProviderLifecycleNotification({ method: "turn/completed", params: { threadId: "child", turn: { id: "turn", status: "inProgress" } } }), null);
 });
 
+test("provider notification observation returns the persisted lifecycle result", async () => {
+  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-observation-result-"));
+  const feature = new WorkbenchThreadStateFeature({
+    getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    harnesses: createHarnesses(async (_harness, request) => ({ id: request.id ?? null, result: { data: [], nextCursor: null } })),
+    listSubagents: async () => ({ subagents: [] }),
+    projectState: {
+      getCurrentUpdate: () => null,
+      handleRequest: async () => ({ accepted: true }),
+      observe: () => () => undefined,
+    },
+    publish: () => undefined,
+    resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
+    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
+    storageRoot,
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  await feature.controller.ensureProviderEntry("project", {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "thread" },
+    lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Thread",
+  });
+
+  assert.deepEqual(await feature.observeProviderNotification("codex", {
+    method: "turn/completed",
+    params: { threadId: "thread", turn: { id: "turn", status: "completed" } },
+  }), {
+    event: { kind: "turnCompleted", status: "completed", turnId: "turn" },
+    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    threadId: "thread",
+  });
+
+  await feature.dispose();
+  await fs.rm(storageRoot, { force: true, recursive: true });
+});
+
 test("provider activity mapping observes meaningful cross-provider work without token deltas", () => {
   assert.deepEqual(mapProviderActivityNotification({ method: "turn/started", params: { threadId: "thread", turn: { id: "turn", startedAt: 1_723_456_789 } } }), {
     kind: "turnStarted", startedAt: 1_723_456_789_000, threadId: "thread",

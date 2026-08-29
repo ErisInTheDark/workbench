@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - WorkbenchObservedTurnCandidate: live harness-neutral turn-start state. Keywords: recovery, observation, lifecycle.
  * - WorkbenchTurnRecoveryHandoffCandidate/WorkbenchTurnRecoveryHandoff: versioned provider-neutral manual-resume state. Keywords: recovery, handoff, persistence.
  * - createCodexTurnRecoveryResumeRequest: derive a compatible cold-resume request from a captured turn start. Keywords: codex, resume, compatibility.
  * - WorkbenchRecoveryHarness: supported automatic recovery provider set. Keywords: recovery, harness, provider.
@@ -9,13 +10,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import type { WorkbenchHarness } from "../lib/types";
 import type { JsonRpcRequest } from "./bridge-types";
 import { WORKBENCH_THREAD_RECOVERY_ID_PREFIX } from "../lib/workbench/thread/thread-recovery-message";
 
 export type WorkbenchRecoveryHarness = "codex" | "opencode";
 
-export interface WorkbenchTurnRecoveryHandoffCandidate {
-  harness: WorkbenchRecoveryHarness;
+export interface WorkbenchObservedTurnCandidate {
+  goalOwned?: boolean;
+  harness: WorkbenchHarness;
   key: string;
   lastEventAt: number;
   request: JsonRpcRequest;
@@ -24,6 +27,10 @@ export interface WorkbenchTurnRecoveryHandoffCandidate {
   startedAt: number;
   threadId: string;
   turnId: string | null;
+}
+
+export interface WorkbenchTurnRecoveryHandoffCandidate extends WorkbenchObservedTurnCandidate {
+  harness: WorkbenchRecoveryHarness;
 }
 
 export interface WorkbenchTurnRecoveryHandoff {
@@ -96,7 +103,10 @@ function readCandidate(value: unknown): WorkbenchTurnRecoveryHandoffCandidate | 
   } else if (value.resumeRequest !== null && value.resumeRequest !== undefined) {
     return null;
   }
-  return { ...(value as unknown as WorkbenchTurnRecoveryHandoffCandidate), resumeRequest };
+  return {
+    ...(value as unknown as WorkbenchTurnRecoveryHandoffCandidate),
+    resumeRequest,
+  };
 }
 
 export default class WorkbenchTurnRecoveryHandoffStore {

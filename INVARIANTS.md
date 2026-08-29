@@ -18,6 +18,12 @@ You may propose new invariants or changes to existing invariants, but you must m
 - Codex start, resume, and fork rebuild one compact thread-owned Workbench payload from current sources. Unchanged sources and selections must produce identical payloads.
 - That payload owns one precedence-resolved self-closing skill catalog. Fresh slash-activated bodies travel only in a UI-hidden `<wb:activated-skills>` item on the triggering user input, never through native skill input or turn context.
 
+## Managed turn completion
+
+<!-- Prevent agents from escaping unfinished work through a provider turn boundary. -->
+- A normally completed managed turn without pending input or explicit completed/blocked status continues with the hidden unfinished-turn steer.
+- User stops, provider failures, restart interruptions, and goal-owned turns never trigger unfinished-turn continuation.
+
 ## Relational data shapes
 
 - Store each Workbench-owned semantic shape in typed columns and tables.

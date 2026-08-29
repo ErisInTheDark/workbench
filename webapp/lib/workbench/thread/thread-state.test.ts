@@ -341,15 +341,18 @@ test("plan intersections classify active and planned siblings while stabilizing 
   assert.equal(changed.activeEntries[0]?.title, "working changed");
 });
 
-test("lifecycle parsing preserves two attention variants and normalizes legacy reasons", () => {
+test("lifecycle parsing preserves canonical attention variants and normalizes legacy reasons", () => {
   assert.deepEqual(WorkbenchThreadLifecycleSchema.parse({ kind: "needsAttention", reason: "noActiveTurn", settled: false }), {
     kind: "needsAttention", reason: "noActiveTurn", settled: false,
   });
   assert.deepEqual(WorkbenchThreadLifecycleSchema.parse({ kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: "turn" }), {
     kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: "turn",
   });
-  for (const lifecycle of [
+  assert.deepEqual(
+    WorkbenchThreadLifecycleSchema.parse({ agent: { agentStatus: "blocked", turnId: "turn" }, kind: "needsAttention", reason: "agentBlocked", settled: false }),
     { agent: { agentStatus: "blocked", turnId: "turn" }, kind: "needsAttention", reason: "agentBlocked", settled: false },
+  );
+  for (const lifecycle of [
     { agent: { agentStatus: "working", turnId: "turn" }, kind: "needsAttention", reason: "turnEnded", settled: false },
     { kind: "needsAttention", reason: "restartRecoveryFailed", settled: false },
     { kind: "needsAttention", reason: "providerSystemError", settled: false },
@@ -366,6 +369,14 @@ test("exact-turn transitions reject stale completion and manual settlement becom
   assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "completed", turnId: "old" }), working);
   const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: "new" });
   assert.equal(completed.kind, "completed");
+  const blocked = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "blocked", turnId: "new" });
+  assert.deepEqual(blocked, {
+    agent: { agentStatus: "blocked", turnId: "new" },
+    kind: "needsAttention",
+    reason: "agentBlocked",
+    settled: false,
+  });
+  assert.equal(reduceWorkbenchThreadLifecycle(blocked, { kind: "turnCompleted", status: "completed", turnId: "new" }), blocked);
   const settled = reduceWorkbenchThreadLifecycle(completed, { kind: "settle" });
   assert.equal(settled.settled, true);
   assert.deepEqual(reduceWorkbenchThreadLifecycle(settled, { kind: "restore" }), completed);

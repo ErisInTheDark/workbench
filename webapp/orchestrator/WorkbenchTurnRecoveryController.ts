@@ -1,23 +1,32 @@
 /*
  * Exports:
  * - WorkbenchTurnRecoveryPort/WorkbenchTurnRecoveryResult: provider recovery boundary and terminal outcomes. Keywords: recovery, provider, turn.
- * - WorkbenchTurnRecoveryControllerState: reload-handoff state for active turns and pending recovery. Keywords: recovery, handoff, lifecycle.
+ * - WorkbenchTurnRecoveryControllerState: reload-handoff state for observed turns and pending recovery. Keywords: recovery, handoff, lifecycle.
+ * - WorkbenchUnfinishedTurnPort: admitted hidden continuation boundary. Keywords: unfinished, continuation, provider.
  * - MAX_AUTOMATIC_RECOVERY_THREADS: cross-harness automatic recovery catastrophe fuse. Keywords: recovery, cap, safety.
  * - default WorkbenchTurnRecoveryController: own live multi-harness candidates, explicit resume handoffs, goal exclusion, recency caps, and recovery progress. Keywords: recovery, registry, codex, opencode.
  */
 
-import { createWorkbenchThreadRecoveryId } from "../lib/workbench/thread/thread-recovery-message";
+import type { WorkbenchHarness } from "../lib/types";
+import { createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput } from "../lib/workbench/thread/thread-recovery-message";
+import type { WorkbenchThreadLifecycle } from "../lib/workbench/thread/thread-state";
 import type { JsonRpcNotification, JsonRpcRequest } from "./bridge-types";
 import WorkbenchTurnRecoveryHandoffStore, { createCodexTurnRecoveryResumeRequest } from "./WorkbenchTurnRecoveryHandoffStore";
-import type { WorkbenchRecoveryHarness, WorkbenchTurnRecoveryHandoff, WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
+import type {
+  WorkbenchObservedTurnCandidate,
+  WorkbenchRecoveryHarness,
+  WorkbenchTurnRecoveryHandoff,
+  WorkbenchTurnRecoveryHandoffCandidate,
+} from "./WorkbenchTurnRecoveryHandoffStore";
 
 export type WorkbenchTurnRecoveryResult = "busy" | "completed" | "recovered";
 export type WorkbenchTurnRecoveryPort = (candidate: WorkbenchTurnRecoveryHandoffCandidate) => Promise<WorkbenchTurnRecoveryResult>;
+export type WorkbenchUnfinishedTurnPort = (candidate: WorkbenchObservedTurnCandidate, request: JsonRpcRequest) => Promise<void>;
 
 export const MAX_AUTOMATIC_RECOVERY_THREADS = 10;
 
 export interface WorkbenchTurnRecoveryControllerState {
-  candidates: WorkbenchTurnRecoveryHandoffCandidate[];
+  candidates: WorkbenchObservedTurnCandidate[];
   generationId: string;
   goalOwnedThreads: string[];
   pendingHandoff: WorkbenchTurnRecoveryHandoff | null;
@@ -35,8 +44,12 @@ function threadIdFrom(value: unknown) {
   return typeof params?.threadId === "string" ? params.threadId : typeof turn?.threadId === "string" ? turn.threadId : null;
 }
 
+function isRecoveryCandidate(candidate: WorkbenchObservedTurnCandidate): candidate is WorkbenchTurnRecoveryHandoffCandidate {
+  return candidate.harness === "codex" || candidate.harness === "opencode";
+}
+
 export default class WorkbenchTurnRecoveryController {
-  private readonly candidates = new Map<string, WorkbenchTurnRecoveryHandoffCandidate>();
+  private readonly candidates = new Map<string, WorkbenchObservedTurnCandidate>();
   private readonly generationId: string;
   private readonly goalOwnedThreads = new Set<string>();
   private readonly recoveryTasks = new Map<Promise<void>, { label: string; startedAt: number }>();
@@ -48,7 +61,7 @@ export default class WorkbenchTurnRecoveryController {
   constructor(
     private readonly store: WorkbenchTurnRecoveryHandoffStore,
     private readonly log: (message: string) => void,
-    private readonly reportFailure: (candidate: WorkbenchTurnRecoveryHandoffCandidate, error: unknown) => Promise<void> = async () => undefined,
+    private readonly reportFailure: (candidate: WorkbenchObservedTurnCandidate, error: unknown) => Promise<void> = async () => undefined,
     state?: WorkbenchTurnRecoveryControllerState,
     private readonly recoveryPorts: Partial<Record<WorkbenchRecoveryHarness, WorkbenchTurnRecoveryPort>> = {},
     private readonly runRecoveryTask: (label: string, task: () => Promise<void>) => Promise<void> = async (_label, task) => await task(),
@@ -61,18 +74,23 @@ export default class WorkbenchTurnRecoveryController {
     this.reloadCandidates = structuredClone(state?.reloadCandidates ?? []);
   }
 
-  observeRequest(harness: WorkbenchRecoveryHarness, request: JsonRpcRequest, now = Date.now()) {
+  observeRequest(harness: WorkbenchHarness, request: JsonRpcRequest, now = Date.now()) {
     const params = record(request.params);
     const threadId = typeof params?.threadId === "string" ? params.threadId : null;
     if (harness === "codex" && request.method === "thread/resume" && threadId) {
       this.resumeRequests.set(threadId, structuredClone(request));
       return;
     }
-    if (harness === "codex" && request.method === "thread/goal/set" && threadId) this.goalOwnedThreads.add(threadId);
+    if (harness === "codex" && request.method === "thread/goal/set" && threadId) {
+      this.goalOwnedThreads.add(threadId);
+      const candidate = this.candidates.get(`${harness}:${threadId}`);
+      if (candidate) candidate.goalOwned = true;
+    }
     if (harness === "codex" && request.method === "thread/goal/clear" && threadId) this.goalOwnedThreads.delete(threadId);
     if (request.method !== "turn/start" || !threadId) return;
     const key = `${harness}:${threadId}`;
     this.candidates.set(key, {
+      goalOwned: this.goalOwnedThreads.has(threadId),
       harness,
       key,
       lastEventAt: now,
@@ -88,7 +106,7 @@ export default class WorkbenchTurnRecoveryController {
     this.resumeRequests.delete(threadId);
   }
 
-  observeNotification(harness: WorkbenchRecoveryHarness, notification: JsonRpcNotification, now = Date.now()) {
+  observeNotification(harness: WorkbenchHarness, notification: JsonRpcNotification, now = Date.now()) {
     const params = record(notification.params);
     const threadId = threadIdFrom(notification.params);
     if (!threadId) return;
@@ -103,6 +121,7 @@ export default class WorkbenchTurnRecoveryController {
       notification.method === "turn/completed"
       && candidate
       && (!candidate.turnId || !turn?.id || candidate.turnId === turn.id)
+      && turn?.status !== "completed"
     ) {
       this.candidates.delete(key);
     }
@@ -112,15 +131,64 @@ export default class WorkbenchTurnRecoveryController {
       const status = goal?.status;
       if (status === "active" || status === "paused" || status === "blocked" || status === "usageLimited" || status === "budgetLimited") {
         this.goalOwnedThreads.add(threadId);
+        if (candidate) candidate.goalOwned = true;
       } else {
         this.goalOwnedThreads.delete(threadId);
       }
     }
   }
 
+  async completeObservedTurn(
+    harness: WorkbenchHarness,
+    notification: JsonRpcNotification,
+    lifecycle: WorkbenchThreadLifecycle | null,
+    port: WorkbenchUnfinishedTurnPort,
+  ) {
+    if (notification.method !== "turn/completed") return false;
+    const params = record(notification.params);
+    const threadId = threadIdFrom(notification.params);
+    const turn = record(params?.turn);
+    if (!threadId) return false;
+    const key = `${harness}:${threadId}`;
+    const candidate = this.candidates.get(key);
+    if (!candidate || (candidate.turnId && typeof turn?.id === "string" && candidate.turnId !== turn.id)) return false;
+    this.candidates.delete(key);
+    if (
+      turn?.status !== "completed"
+      || candidate.goalOwned
+      || lifecycle?.kind !== "needsAttention"
+      || lifecycle.reason !== "noActiveTurn"
+    ) return false;
+
+    const continuationId = createWorkbenchThreadRecoveryId(`unfinished:${candidate.recoveryId}`);
+    const paramsRecord = record(candidate.request.params) ?? {};
+    const request: JsonRpcRequest = {
+      ...structuredClone(candidate.request),
+      id: continuationId,
+      method: "turn/start",
+      params: {
+        ...structuredClone(paramsRecord),
+        clientUserMessageId: continuationId,
+        input: createWorkbenchUnfinishedTurnInput(),
+        threadId,
+      },
+    };
+    try {
+      await port(structuredClone(candidate), request);
+      return true;
+    } catch (error) {
+      const replacement = this.candidates.get(key);
+      if (replacement?.request.id === continuationId) this.candidates.delete(key);
+      await this.reportFailure(candidate, error);
+      this.log(`Unfinished-turn continuation failed for ${harness}:${threadId}: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }
+
   capture(harnesses: readonly WorkbenchRecoveryHarness[]) {
     const allowed = new Set(harnesses);
     const eligible = [...this.candidates.values()]
+      .filter(isRecoveryCandidate)
       .filter((candidate) => allowed.has(candidate.harness))
       .filter((candidate) => candidate.harness !== "codex" || !this.goalOwnedThreads.has(candidate.threadId))
       .sort((left, right) => right.lastEventAt - left.lastEventAt);
@@ -201,6 +269,7 @@ export default class WorkbenchTurnRecoveryController {
   async persistManualResume(harness: WorkbenchRecoveryHarness, threadId: string) {
     const candidate = this.candidates.get(`${harness}:${threadId}`);
     if (!candidate) throw new Error("The current managed turn has no captured start request to resume.");
+    if (!isRecoveryCandidate(candidate)) throw new Error(`Manual thread resume is unavailable for ${candidate.harness} threads.`);
     if (!candidate.turnId) throw new Error("The current managed turn has not started yet.");
     const captured = structuredClone(candidate);
     const handoff: WorkbenchTurnRecoveryHandoff = {

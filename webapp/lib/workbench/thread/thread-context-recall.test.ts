@@ -27,7 +27,7 @@ import {
   type WorkbenchThreadRecallRecord,
 } from "./thread-context-recall.ts";
 import { createWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
-import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput } from "./thread-recovery-message.ts";
+import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "./thread-recovery-message.ts";
 import { createWorkbenchAgentMessageText } from "./thread-agent-message.ts";
 import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "./thread-user-input-requests.ts";
 
@@ -221,6 +221,7 @@ function createBundle(): WorkbenchThreadContextBundle {
           { id: "commentary-new", memoryCitation: null, phase: "commentary", text: "Normal commentary remembers the safe route.", type: "agentMessage" },
           { id: "plan-new", memoryCitation: null, phase: "final_answer", text: newestPlan, type: "agentMessage" },
           { clientId: createWorkbenchThreadRecoveryId("recall-hidden"), content: createWorkbenchThreadRecoveryInput(), id: "user-recovery", type: "userMessage" },
+          { clientId: createWorkbenchThreadRecoveryId("recall-unfinished"), content: createWorkbenchUnfinishedTurnInput(), id: "user-unfinished", type: "userMessage" },
           { clientId: null, content: [{ text: "newest user constraint", text_elements: [], type: "text" }], id: "user-new", type: "userMessage" },
           {
             clientId: null,
@@ -246,6 +247,7 @@ function createBundle(): WorkbenchThreadContextBundle {
 test("builds one rich narrative projection and suppresses embedded plans with their selected parent", () => {
   const records = buildWorkbenchThreadRecallRecords(createBundle());
   assert.equal(records.some((record) => record.ref === "user:user-recovery"), false);
+  assert.equal(records.some((record) => record.ref === "user:user-unfinished"), false);
   assert(records.some((record) => record.ref === "agent:commentary-new" && record.kind === "commentary"));
   assert(records.some((record) => record.ref === "plan-block:plan-new:0" && record.parentRef === "agent:plan-new"));
   assert.deepEqual(

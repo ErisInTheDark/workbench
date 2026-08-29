@@ -21,6 +21,11 @@ export interface WorkbenchHarnessRuntimePort {
 type WorkbenchHarnessRecoveryCapability =
   | { kind: "none" }
   | {
+      observeNotification(notification: JsonRpcNotification): void;
+      observeRequest(request: JsonRpcRequest): void;
+      kind: "observe";
+    }
+  | {
       kind: "turn";
       observeNotification(notification: JsonRpcNotification): void;
       observeRequest(request: JsonRpcRequest): void;
@@ -83,14 +88,14 @@ export default class WorkbenchHarnessController {
   async handleBrowserMessage(value: unknown, message: JsonRpcRequest, client: BridgeClient) {
     const adapter = this.getAdapter(this.resolveHarness(value, { defaultToCodex: true }));
     if (message.method === "turn/start") this.admitTurnStart();
-    if (adapter.recovery.kind === "turn" && "id" in message) adapter.recovery.observeRequest(message);
+    if (adapter.recovery.kind !== "none" && "id" in message) adapter.recovery.observeRequest(message);
     await adapter.browser.handleBrowserMessage(message, client);
   }
 
   async request(harness: WorkbenchHarness, request: JsonRpcRequest) {
     const adapter = this.getAdapter(harness);
     if (request.method === "turn/start") this.admitTurnStart();
-    if (adapter.recovery.kind === "turn") adapter.recovery.observeRequest(request);
+    if (adapter.recovery.kind !== "none") adapter.recovery.observeRequest(request);
     return await adapter.internal.request(request);
   }
 
@@ -114,7 +119,7 @@ export default class WorkbenchHarnessController {
 
   observeNotification(harness: WorkbenchHarness, notification: JsonRpcNotification) {
     const recovery = this.getAdapter(harness).recovery;
-    if (recovery.kind === "turn") recovery.observeNotification(notification);
+    if (recovery.kind !== "none") recovery.observeNotification(notification);
   }
 
   async recoverAvailable(harness: WorkbenchHarness) {

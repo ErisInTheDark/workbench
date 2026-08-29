@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WORKBENCH_THREAD_RECOVERY_MESSAGE/WORKBENCH_THREAD_RECOVERY_ID_PREFIX: exact hidden continuation contract. Keywords: thread, recovery, message.
- * - createWorkbenchThreadRecoveryId/createWorkbenchThreadRecoveryInput/createWorkbenchQuestionnaireResponseInput: construct provider-safe hidden Workbench steers. Keywords: thread, recovery, questionnaire, id.
- * - isWorkbenchThreadRecoveryInput/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize exact hidden Workbench content by text. Keywords: thread, recovery, questionnaire, hidden.
+ * - WORKBENCH_THREAD_RECOVERY_MESSAGE/WORKBENCH_UNFINISHED_TURN_MESSAGE/WORKBENCH_THREAD_RECOVERY_ID_PREFIX: exact hidden continuation contracts. Keywords: thread, recovery, unfinished, message.
+ * - createWorkbenchThreadRecoveryId/createWorkbenchThreadRecoveryInput/createWorkbenchUnfinishedTurnInput/createWorkbenchQuestionnaireResponseInput: construct provider-safe hidden Workbench steers. Keywords: thread, recovery, unfinished, questionnaire, id.
+ * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize exact hidden Workbench content by text. Keywords: thread, recovery, unfinished, questionnaire, hidden.
  * - isWorkbenchThreadRecoveryEligible: derive the manual resume boundary from authoritative lifecycle and pending-input state. Keywords: thread, recovery, composer, lifecycle.
  */
 
@@ -14,6 +14,12 @@ import { defineTagWrapper } from "./tag-wrapper.ts";
 import type { WorkbenchThreadLifecycle } from "./thread-state";
 
 export const WORKBENCH_THREAD_RECOVERY_MESSAGE = "<wb:resume />";
+export const WORKBENCH_UNFINISHED_TURN_MESSAGE = `<wb:resume>
+You have inappropriately ended the turn without finishing the task. The correct next action may be one of: 
+1. sending a questionnaire or
+2. setting the thread status to blocked or completed before ending the turn. 
+Determine the correct next action and take it. Do not repeat this mistake.
+</wb:resume>`;
 export const WORKBENCH_THREAD_RECOVERY_ID_PREFIX = "workbench:thread-recovery:";
 const WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER = defineTagWrapper("wb:questionnaire-response", {
   attributes: [],
@@ -43,6 +49,10 @@ export function createWorkbenchThreadRecoveryInput(): UserInput[] {
   return [{ text: WORKBENCH_THREAD_RECOVERY_MESSAGE, text_elements: [], type: "text" }];
 }
 
+export function createWorkbenchUnfinishedTurnInput(): UserInput[] {
+  return [{ text: WORKBENCH_UNFINISHED_TURN_MESSAGE, text_elements: [], type: "text" }];
+}
+
 export function createWorkbenchQuestionnaireResponseInput(response: WorkbenchUserInputResponse): UserInput[] {
   return [{
     text: WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER.wrap(JSON.stringify(response, null, 2), {}),
@@ -54,7 +64,16 @@ export function createWorkbenchQuestionnaireResponseInput(response: WorkbenchUse
 export function isWorkbenchThreadRecoveryInput(input: readonly UserInput[]) {
   return input.length === 1
     && input[0]?.type === "text"
-    && input[0].text === WORKBENCH_THREAD_RECOVERY_MESSAGE;
+    && (
+      input[0].text === WORKBENCH_THREAD_RECOVERY_MESSAGE
+      || input[0].text === WORKBENCH_UNFINISHED_TURN_MESSAGE
+    );
+}
+
+export function isWorkbenchUnfinishedTurnInput(input: readonly UserInput[]) {
+  return input.length === 1
+    && input[0]?.type === "text"
+    && input[0].text === WORKBENCH_UNFINISHED_TURN_MESSAGE;
 }
 
 export function isWorkbenchQuestionnaireResponseInput(input: readonly UserInput[]) {

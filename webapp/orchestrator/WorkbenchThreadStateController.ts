@@ -604,6 +604,7 @@ export default class WorkbenchThreadStateController {
   async observeLifecycle(harness: "codex" | "copilot" | "opencode", threadId: string, event: WorkbenchObservedLifecycleEvent) {
     const key = `${harness}:${threadId}`;
     const projectIds = [...this.projects.entries()].filter(([, state]) => state.entries.has(key)).map(([projectId]) => projectId);
+    let lifecycle: WorkbenchThreadLifecycle | null = null;
     for (const projectId of projectIds) {
       const entry = this.projects.get(projectId)?.entries.get(key);
       if (!entry || entry.entryKind === "draft") continue;
@@ -622,11 +623,14 @@ export default class WorkbenchThreadStateController {
           ? { kind: "clear" as const, requestKey: event.requestKey }
           : undefined;
       if (exactEvent) {
-        await this.applyLifecycle(projectId, harness, threadId, exactEvent, undefined, questionnaireMutation);
+        const next = await this.applyLifecycle(projectId, harness, threadId, exactEvent, undefined, questionnaireMutation);
+        if (next) lifecycle = next.lifecycle;
       } else if (questionnaireMutation) {
-        await this.updateQuestionnaireState(projectId, harness, threadId, questionnaireMutation);
+        const next = await this.updateQuestionnaireState(projectId, harness, threadId, questionnaireMutation);
+        if (next) lifecycle = next.lifecycle;
       }
     }
+    return lifecycle;
   }
 
   private async updateQuestionnaireState(

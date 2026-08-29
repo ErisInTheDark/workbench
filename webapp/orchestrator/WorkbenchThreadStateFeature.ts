@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadStateFeatureContext: stable ports required by the reloadable sidebar, lifecycle, Git retention, and shared project-observation owner. Keywords: dependency injection, thread state, retention, project.
+ * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result. Keywords: lifecycle, observation, persistence.
  * - normalizeProviderSidebarEntry/normalizeSubagentProviderLifecycle/mapProviderLifecycleNotification/mapProviderActivityNotification: normalize provider rows, subagent defaults, lifecycle, and activity notifications. Keywords: timestamp, lifecycle, harness.
  * - default WorkbenchThreadStateFeature: own reconciliation, project observation, provider-backed title and status commands, notification observation, and the current controller. Keywords: sidebar, project, lifecycle, title, reloadable feature.
  */
@@ -178,6 +179,12 @@ export function mapProviderLifecycleNotification(notification: JsonRpcNotificati
   return null;
 }
 
+export interface WorkbenchProviderLifecycleObservation {
+  event: WorkbenchObservedLifecycleEvent;
+  lifecycle: WorkbenchThreadLifecycle | null;
+  threadId: string;
+}
+
 export function mapProviderActivityNotification(notification: JsonRpcNotification):
   | { kind: "activity"; threadId: string }
   | { kind: "turnStarted"; startedAt: number | null; threadId: string }
@@ -244,19 +251,22 @@ export default class WorkbenchThreadStateFeature {
 
   async observeProviderNotification(harness: HarnessKind, notification: JsonRpcNotification) {
     const mapped = mapProviderLifecycleNotification(notification);
+    let observation: WorkbenchProviderLifecycleObservation | null = null;
     if (mapped) {
-      await this.controller.observeLifecycle(harness, mapped.threadId, mapped.event);
-      if (mapped.event.kind !== "userInputDelivered") return;
+      const lifecycle = await this.controller.observeLifecycle(harness, mapped.threadId, mapped.event);
+      observation = { ...mapped, lifecycle };
+      if (mapped.event.kind !== "userInputDelivered") return observation;
     }
     if (notification.method === "thread/name/updated") {
       const params = asRecord(notification.params);
       const threadId = typeof params?.threadId === "string" ? params.threadId.trim() : "";
       const title = normalizeThreadTitle(typeof params?.name === "string" ? params.name : null);
       if (threadId && title) await this.controller.observeTitle(harness, threadId, title);
-      return;
+      return observation;
     }
     const activity = mapProviderActivityNotification(notification);
     if (activity) await this.controller.observeActivity(harness, activity.threadId, activity.kind === "turnStarted" ? activity.startedAt : undefined);
+    return observation;
   }
 
   private async setProviderThreadTitle(harness: WorkbenchHarness, threadId: string, title: string, cwd: string) {

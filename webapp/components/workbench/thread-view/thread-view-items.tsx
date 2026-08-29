@@ -119,6 +119,7 @@ import {
 import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-sections";
 import { partitionCompletedThreadWork } from "./thread-completed-work";
 import getFinishedThreadTailHiddenItemIds from "./thread-finished-tail";
+import projectThreadRenderTurns from "./thread-render-turns";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import { getUserMessageCopyMarkdown } from "./bubble-copy";
 import ThreadBubbleCopyButton from "./ThreadBubbleCopyButton";
@@ -3113,14 +3114,19 @@ export function ThreadThreadContent ({
   subagents?: readonly WorkbenchSubagentSummary[];
   thread: ThreadPayload | null | undefined;
 }) {
-  const browseResultEntriesByTurnId = useStableBrowseResultEntriesByTurn(browseResultEntries);
+  const renderProjection = useMemo(
+    () => thread ? projectThreadRenderTurns(thread, browseResultEntries) : null,
+    [browseResultEntries, thread],
+  );
+  const renderThread = renderProjection?.thread ?? null;
+  const browseResultEntriesByTurnId = useStableBrowseResultEntriesByTurn(renderProjection?.browseResultEntries ?? EMPTY_BROWSE_SCREENSHOT_ENTRIES);
 
-  if (!thread) {
+  if (!renderThread) {
     return <ThreadContentLoadingSkeleton />;
   }
 
-  if (!thread.turns.length) {
-    const unloadedEntry = thread.turnHistory.find((entry) => entry.loadState !== "loaded");
+  if (!renderThread.turns.length) {
+    const unloadedEntry = renderThread.turnHistory.find((entry) => entry.loadState !== "loaded");
     if (unloadedEntry) {
       return <ThreadTurnLoadingSkeleton entry={unloadedEntry} />;
     }
@@ -3132,8 +3138,8 @@ export function ThreadThreadContent ({
     );
   }
 
-  const loadedTurnsById = new Map(thread.turns.map((turn) => [turn.id, turn]));
-  const visibleEntries = (thread.turnHistory.length ? thread.turnHistory : thread.turns.map((turn) => ({
+  const loadedTurnsById = new Map(renderThread.turns.map((turn) => [turn.id, turn]));
+  const visibleEntries = (renderThread.turnHistory.length ? renderThread.turnHistory : renderThread.turns.map((turn) => ({
     completedAt: turn.completedAt,
     durationMs: turn.durationMs,
     itemCount: turn.items.length,
@@ -3165,8 +3171,8 @@ export function ThreadThreadContent ({
             inlineMentionSources={inlineMentionSources}
             itemTimeline={entry.itemTimeline}
             knownSkills={knownSkills}
-            threadCwdPath={threadCwdPath ?? thread.cwd}
-            threadId={thread.id}
+            threadCwdPath={threadCwdPath ?? renderThread.cwd}
+            threadId={renderThread.id}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}

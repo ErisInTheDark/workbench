@@ -8,14 +8,17 @@ import test from "node:test";
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
 import {
   WORKBENCH_THREAD_RECOVERY_MESSAGE,
+  WORKBENCH_UNFINISHED_TURN_MESSAGE,
   createWorkbenchQuestionnaireResponseInput,
   createWorkbenchThreadRecoveryId,
   createWorkbenchThreadRecoveryInput,
+  createWorkbenchUnfinishedTurnInput,
   isWorkbenchHiddenSystemSteerInput,
   isWorkbenchQuestionnaireResponseInput,
   isWorkbenchThreadRecoveryEligible,
   isWorkbenchThreadRecoveryInput,
   isWorkbenchThreadRecoveryUserMessage,
+  isWorkbenchUnfinishedTurnInput,
 } from "./thread-recovery-message";
 
 function userItem(overrides: Partial<Extract<ThreadItem, { type: "userMessage" }>> = {}) {
@@ -45,10 +48,20 @@ test("manual recovery follows inactive Workbench lifecycle without competing wit
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [{ ...interruptedTurn, completedAt: null, status: "inProgress" }] }, attention, false), false);
 });
 
-test("only the exact single recovery text is recognized", () => {
+test("only the exact single recovery texts are recognized", () => {
   assert.equal(WORKBENCH_THREAD_RECOVERY_MESSAGE, "<wb:resume />");
+  assert.equal(WORKBENCH_UNFINISHED_TURN_MESSAGE, `<wb:resume>
+You have inappropriately ended the turn without finishing the task. The correct next action may be one of: 
+1. sending a questionnaire or
+2. setting the thread status to blocked or completed before ending the turn. 
+Determine the correct next action and take it. Do not repeat this mistake.
+</wb:resume>`);
   assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchThreadRecoveryInput()), true);
+  assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchUnfinishedTurnInput()), true);
+  assert.equal(isWorkbenchUnfinishedTurnInput(createWorkbenchUnfinishedTurnInput()), true);
+  assert.equal(isWorkbenchHiddenSystemSteerInput(createWorkbenchUnfinishedTurnInput()), true);
   assert.equal(isWorkbenchThreadRecoveryInput([{ text: `${WORKBENCH_THREAD_RECOVERY_MESSAGE} extra`, text_elements: [], type: "text" }]), false);
+  assert.equal(isWorkbenchUnfinishedTurnInput([{ text: `${WORKBENCH_UNFINISHED_TURN_MESSAGE} extra`, text_elements: [], type: "text" }]), false);
 });
 
 test("user messages hide exact recovery content regardless of provider identity", () => {

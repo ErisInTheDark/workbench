@@ -76,6 +76,7 @@ import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
+import projectThreadRenderTurns from "./thread-render-turns";
 import { ThreadTurnDetails, ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 import getThreadGitArcProposalIntents from "./thread-git-arc-proposal-intents";
 import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
@@ -762,7 +763,12 @@ export default memo(function ThreadView ({
     }
     : profileResolvedActiveThread;
   void composerProfileSnapshot;
-  const activeThreadBrowseResultEntries = activeThread?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;
+  const activeThreadRenderProjection = useMemo(
+    () => activeThread ? projectThreadRenderTurns(activeThread) : null,
+    [activeThread],
+  );
+  const renderActiveThread = activeThreadRenderProjection?.thread ?? null;
+  const activeThreadBrowseResultEntries = activeThreadRenderProjection?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;
   const activeThreadBrowseResultEntriesByTurnId = useStableBrowseResultEntriesByTurn(activeThreadBrowseResultEntries);
   const activeHarnessUserInputRequest = activeThread
     ? livePendingUserInputRequestsByThreadId[activeThread.id] ?? null
@@ -770,11 +776,11 @@ export default memo(function ThreadView ({
   const activePendingUserInputRequest = activeHarnessUserInputRequest;
   const isDraftThreadView = Boolean(activeThread?.isDraft);
   const currentTurn = activeThread?.turns.at(-1) ?? null;
-  const visibleHistoryEntries = useMemo(() => activeThread ? getThreadVisibleHistoryEntries(activeThread) : [], [activeThread]);
-  const loadedTurnsById = useMemo(() => new Map(activeThread?.turns.map((turn) => [turn.id, turn]) ?? []), [activeThread?.turns]);
+  const visibleHistoryEntries = useMemo(() => renderActiveThread ? getThreadVisibleHistoryEntries(renderActiveThread) : [], [renderActiveThread]);
+  const loadedTurnsById = useMemo(() => new Map(renderActiveThread?.turns.map((turn) => [turn.id, turn]) ?? []), [renderActiveThread?.turns]);
   const firstVisibleLoadedEntry = visibleHistoryEntries.find((entry) => loadedTurnsById.has(entry.turnId)) ?? null;
-  const pageBoundaryIndex = activeThread?.nextPageCursor
-    ? visibleHistoryEntries.findIndex((entry) => entry.turnId === activeThread.nextPageCursor)
+  const pageBoundaryIndex = renderActiveThread?.nextPageCursor
+    ? visibleHistoryEntries.findIndex((entry) => entry.turnId === renderActiveThread.nextPageCursor)
     : -1;
   const previousTurnEntry = pageBoundaryIndex > 0
     ? visibleHistoryEntries[pageBoundaryIndex - 1] ?? null

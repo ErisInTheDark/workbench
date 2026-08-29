@@ -60,6 +60,17 @@ function createRecoveryCapability(
   };
 }
 
+function createObservationCapability(
+  harness: "copilot",
+  controller: WorkbenchTurnRecoveryController,
+): WorkbenchHarnessAdapter["recovery"] {
+  return {
+    kind: "observe",
+    observeNotification: (notification) => controller.observeNotification(harness, notification),
+    observeRequest: (request) => controller.observeRequest(harness, request),
+  };
+}
+
 function createHarnessAdapters(context: OrchestratorProcessContext, controller: WorkbenchTurnRecoveryController): WorkbenchHarnessAdapter[] {
   const ports = context.harnessPorts;
   return [
@@ -83,7 +94,7 @@ function createHarnessAdapters(context: OrchestratorProcessContext, controller: 
       browser: ports.copilot,
       id: "copilot",
       internal: ports.copilot,
-      recovery: { kind: "none" },
+      recovery: createObservationCapability("copilot", controller),
       serverMethods: ["thread/name/set"],
     },
     {
@@ -225,7 +236,33 @@ function createWorkbenchCoreFeature(
       projectCatalog.dispose();
     },
     observeProviderNotification: async ({ harness, notification }) => {
-      if (lease.isCurrent()) await threadState!.observeProviderNotification(harness, notification);
+      if (!lease.isCurrent()) {
+        await turnRecovery.completeObservedTurn(harness, notification, null, async () => undefined);
+        return;
+      }
+      let observation;
+      try {
+        observation = await threadState!.observeProviderNotification(harness, notification);
+      } catch (error) {
+        await turnRecovery.completeObservedTurn(harness, notification, null, async () => undefined);
+        throw error;
+      }
+      if (!lease.isCurrent()) {
+        await turnRecovery.completeObservedTurn(harness, notification, null, async () => undefined);
+        return;
+      }
+      await turnRecovery.completeObservedTurn(harness, notification, observation?.lifecycle ?? null, async (candidate, request) => {
+        if (candidate.harness === "codex") {
+          if (!candidate.resumeRequest) throw new Error("The unfinished Codex turn has no captured thread/resume request.");
+          const resumeResponse = await harnesses.request("codex", {
+            ...candidate.resumeRequest,
+            id: `unfinished-resume:${candidate.recoveryId}`,
+          });
+          if (resumeResponse.error) throw new Error(resumeResponse.error.message);
+        }
+        const response = await harnesses.request(candidate.harness, request);
+        if (response.error) throw new Error(response.error.message);
+      });
     },
     registrations,
     start: async () => {

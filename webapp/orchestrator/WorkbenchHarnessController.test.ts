@@ -31,12 +31,14 @@ function createAdapter(id: WorkbenchHarness, calls: string[] = []): WorkbenchHar
         return { id: request.id ?? null, result: { id } };
       },
     },
-    recovery: id === "copilot" ? { kind: "none" } : {
-      kind: "turn",
+    recovery: {
+      kind: id === "copilot" ? "observe" : "turn",
       observeNotification: (notification) => { calls.push(`notification:${id}:${notification.method}`); },
       observeRequest: (request) => { calls.push(`recovery:${id}:${request.method}`); },
-      resumeThread: async (threadId) => { calls.push(`resume:${id}:${threadId}`); },
-    },
+      ...(id === "copilot" ? {} : {
+        resumeThread: async (threadId: string) => { calls.push(`resume:${id}:${threadId}`); },
+      }),
+    } as WorkbenchHarnessAdapter["recovery"],
     serverMethods: id === "codex" ? ["thread/read", "codex/only"] : ["thread/read"],
   };
 }
@@ -75,6 +77,8 @@ test("dispatches internal, server, Browse, and recovery work through the registe
   assert.equal(await controller.steerTurn("opencode", "thread-one", "turn-one", []), "next-turn");
   controller.observeNotification("opencode", { method: "turn/started", params: {} });
   await controller.resumeThread("opencode", "thread-one");
+  await controller.request("copilot", { id: 3, method: "turn/start", params: { input: [], threadId: "thread-two" } });
+  controller.observeNotification("copilot", { method: "turn/started", params: { threadId: "thread-two" } });
   await assert.rejects(() => controller.resumeThread("copilot", "thread-one"), /unavailable for copilot/u);
   await assert.rejects(() => controller.requestServer("copilot", { method: "codex/only" }), /not allowed for copilot/u);
   assert.deepEqual(calls, [
@@ -84,6 +88,9 @@ test("dispatches internal, server, Browse, and recovery work through the registe
     "steer:opencode:thread-one:turn-one",
     "notification:opencode:turn/started",
     "resume:opencode:thread-one",
+    "recovery:copilot:turn/start",
+    "request:copilot:turn/start",
+    "notification:copilot:turn/started",
   ]);
 });
 

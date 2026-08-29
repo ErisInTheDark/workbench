@@ -91,10 +91,10 @@ const WorkingLifecycleSchema = z.object({
 const CanonicalNeedsAttentionLifecycleSchema = z.discriminatedUnion("reason", [
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("pendingInput"), requestKey: z.string().min(1), settled: z.literal(false), turnId: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("noActiveTurn"), settled: z.literal(false) }).strict(),
+  z.object({ agent: AgentTurnSchema.extend({ agentStatus: z.literal("blocked") }), kind: z.literal("needsAttention"), reason: z.literal("agentBlocked"), settled: z.literal(false) }).strict(),
 ]);
 
 const LegacyNeedsAttentionLifecycleSchema = z.discriminatedUnion("reason", [
-  z.object({ agent: AgentTurnSchema.extend({ agentStatus: z.literal("blocked") }), kind: z.literal("needsAttention"), reason: z.literal("agentBlocked"), settled: z.literal(false) }).strict(),
   z.object({ agent: AgentTurnSchema, kind: z.literal("needsAttention"), reason: z.literal("turnEnded"), settled: z.literal(false) }).strict(),
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("restartRecoveryFailed"), settled: z.literal(false) }).strict(),
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("providerSystemError"), settled: z.literal(false) }).strict(),
@@ -117,9 +117,11 @@ export const WorkbenchThreadLifecycleSchema = z.union([
   LegacyNeedsAttentionLifecycleSchema,
   CompletedLifecycleSchema,
   StoppedLifecycleSchema,
-]).transform((lifecycle) => lifecycle.kind === "needsAttention"
-  && lifecycle.reason !== "pendingInput"
-  && lifecycle.reason !== "noActiveTurn"
+]).transform((lifecycle) => lifecycle.kind === "needsAttention" && (
+  lifecycle.reason === "turnEnded"
+  || lifecycle.reason === "restartRecoveryFailed"
+  || lifecycle.reason === "providerSystemError"
+)
   ? { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const }
   : lifecycle);
 export type WorkbenchThreadLifecycle = z.infer<typeof WorkbenchThreadLifecycleSchema>;
@@ -668,11 +670,12 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
       if (currentTurnId !== event.turnId) return current!;
       return event.status === "completed"
         ? { agent: { agentStatus: "completed", turnId: event.turnId }, kind: "completed", reason: "agentCompleted", settled: false }
-        : { kind: "needsAttention", reason: "noActiveTurn", settled: false };
+        : { agent: { agentStatus: "blocked", turnId: event.turnId }, kind: "needsAttention", reason: "agentBlocked", settled: false };
     case "turnCompleted": {
       if (currentTurnId !== event.turnId) return current!;
       if (event.status === "interrupted") return { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: event.turnId };
       if (current?.kind === "completed" && current.reason === "agentCompleted") return current;
+      if (current?.kind === "needsAttention" && current.reason === "agentBlocked") return current;
       return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
     }
     case "recoveryFailed": return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
@@ -694,7 +697,7 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
     }
     case "settle":
       if (current?.kind === "needsAttention") {
-        return current.reason === "noActiveTurn"
+        return current.reason === "noActiveTurn" || current.reason === "agentBlocked"
           ? { kind: "completed", reason: "userCompleted", settled: true }
           : current;
       }
