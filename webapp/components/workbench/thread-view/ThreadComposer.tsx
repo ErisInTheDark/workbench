@@ -208,7 +208,10 @@ export default function ThreadComposer ({
   threadLifecycle: WorkbenchThreadLifecycle | null;
 }) {
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
-  const { reportComposerArmed } = useThreadScrollViewportContext();
+  const {
+    reportComposerArmed,
+    reportComposerGeometryChange,
+  } = useThreadScrollViewportContext();
   const [value, setValue] = useState(threadComposerDraft?.text ?? "");
   const [attachments, setAttachments] = useState<ComposerImageAttachment[]>(threadComposerDraft?.attachments ?? []);
   const [availableModels, setAvailableModels] = useState<WorkbenchModelOption[]>([]);
@@ -1229,6 +1232,7 @@ export default function ThreadComposer ({
       collapsedPreviewKind={stickyPreviewKind}
       onArmedChange={reportComposerArmed}
       onCollapsedChange={setIsStickyComposerCollapsed}
+      onGeometryChange={reportComposerGeometryChange}
       scrollTargetSelector='[data-thread-scroll-target="true"]'
     >
       {composerForm}

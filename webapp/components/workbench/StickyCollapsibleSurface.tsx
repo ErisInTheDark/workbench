@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default StickyCollapsibleSurface: own composer-style sentinel arming, sticky overlay, height preservation, and collapse interaction. Keywords: sticky, collapsible, surface, scrollport.
- * - Local helpers: classify interactive targets and report geometry-derived armed-state edges. Keywords: sticky, sentinel, armed state, interaction.
+ * - Local helpers: classify interactive targets and report measured geometry changes and armed-state edges. Keywords: sticky, sentinel, height, armed state, interaction.
  */
 "use client";
 
@@ -47,6 +47,7 @@ export default function StickyCollapsibleSurface({
   collapsedPreviewKind,
   onArmedChange,
   onCollapsedChange,
+  onGeometryChange,
   order,
   scrollTargetSelector,
 }: {
@@ -59,12 +60,14 @@ export default function StickyCollapsibleSurface({
   collapsedPreviewKind?: string;
   onArmedChange?: (armed: boolean) => void;
   onCollapsedChange(collapsed: boolean): void;
+  onGeometryChange?: () => void;
   order?: number;
   scrollTargetSelector: string;
 }) {
   const [expandedHeightPx, setExpandedHeightPx] = useState(0);
   const [isArmed, setIsArmed] = useState(false);
   const [motionState, setMotionState] = useState<"idle" | "entering" | "leaving">("idle");
+  const expandedHeightPxRef = useRef(0);
   const expandedRef = useRef<HTMLDivElement>(null);
   const isArmedRef = useRef(false);
   const previousArmedRef = useRef(false);
@@ -94,13 +97,15 @@ export default function StickyCollapsibleSurface({
     const requestUpdateArmedState = () => {
       if (frameId === null) frameId = window.requestAnimationFrame(updateArmedState);
     };
-    const resizeObserver = scrollTarget && typeof ResizeObserver !== "undefined"
+    const resizeObserver = typeof ResizeObserver !== "undefined"
       ? new ResizeObserver(requestUpdateArmedState)
       : null;
     const scrollEventTarget: HTMLElement | Window = scrollTarget ?? window;
 
     updateArmedState();
-    resizeObserver?.observe(scrollTarget!);
+    if (scrollTarget) resizeObserver?.observe(scrollTarget);
+    if (expandedRef.current) resizeObserver?.observe(expandedRef.current);
+    if (surfaceRef.current) resizeObserver?.observe(surfaceRef.current);
     scrollEventTarget.addEventListener("scroll", requestUpdateArmedState, { passive: true });
     window.addEventListener("resize", requestUpdateArmedState);
     window.visualViewport?.addEventListener("resize", requestUpdateArmedState);
@@ -142,9 +147,10 @@ export default function StickyCollapsibleSurface({
         + (Number.parseFloat(surfaceStyle.paddingBottom) || 0)
       );
       const nextHeight = expandedElement.getBoundingClientRect().height + verticalPadding;
-      setExpandedHeightPx((currentHeight) => (
-        Math.abs(currentHeight - nextHeight) < 0.5 ? currentHeight : nextHeight
-      ));
+      if (Math.abs(expandedHeightPxRef.current - nextHeight) < 0.5) return;
+      expandedHeightPxRef.current = nextHeight;
+      setExpandedHeightPx(nextHeight);
+      onGeometryChange?.();
     };
     updateHeight();
     const frameId = window.requestAnimationFrame(updateHeight);
@@ -155,7 +161,7 @@ export default function StickyCollapsibleSurface({
       window.cancelAnimationFrame(frameId);
       observer.disconnect();
     };
-  }, [collapsed]);
+  }, [collapsed, onGeometryChange]);
 
   const expand = () => onCollapsedChange(false);
   const handleCollapsedKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {

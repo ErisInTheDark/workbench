@@ -8,10 +8,12 @@ import { createContext, useContext } from "react";
 
 export interface ThreadScrollViewportContextValue {
   readonly reportComposerArmed: (armed: boolean) => void;
+  readonly reportComposerGeometryChange: () => void;
 }
 
 const DEFAULT_THREAD_SCROLL_VIEWPORT_CONTEXT: ThreadScrollViewportContextValue = {
   reportComposerArmed: () => undefined,
+  reportComposerGeometryChange: () => undefined,
 };
 
 export const ThreadScrollViewportContext = createContext<ThreadScrollViewportContextValue>(

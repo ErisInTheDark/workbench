@@ -172,9 +172,31 @@ function ActiveThreadScrollViewport ({
     scheduleReadingTransition,
   ]);
 
+  const reportComposerGeometryChange = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (
+      !viewport
+      || !pendingReadingModeRef.current
+      || !composerArmedRef.current
+      || modeRef.current !== "bottom-following"
+      || pendingTransitionRef.current
+    ) {
+      return;
+    }
+
+    const metrics = readScrollMetrics(viewport);
+    if (ThreadScrollMode.isAtBottom("bottom-following", metrics)) {
+      pendingReadingModeRef.current = false;
+      cancelReadingTransition();
+      return;
+    }
+    scheduleReadingTransition();
+  }, [cancelReadingTransition, scheduleReadingTransition]);
+
   const contextValue = useMemo<ThreadScrollViewportContextValue>(() => ({
     reportComposerArmed,
-  }), [reportComposerArmed]);
+    reportComposerGeometryChange,
+  }), [reportComposerArmed, reportComposerGeometryChange]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
