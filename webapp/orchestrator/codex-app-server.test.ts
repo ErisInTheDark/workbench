@@ -42,6 +42,7 @@ test("app-server arguments suppress Codex-owned prompt and tool systems", () => 
     "features.plugins=false",
     "features.multi_agent=false",
     "features.multi_agent_v2=false",
+    "agents.enabled=false",
   ];
 
   for (const config of requiredConfigs) {

@@ -44,6 +44,8 @@ export function getCodexAppServerArgs() {
     "--config",
     "features.multi_agent_v2=false",
     "--config",
+    "agents.enabled=false",
+    "--config",
     "features.apply_patch_streaming_events=true",
     "--config",
     "features.code_mode.direct_only_tool_namespaces=['functions']",
