@@ -24,9 +24,9 @@ Use the exact mode name you are entering: Inspect, Brief, Decision, Implement, o
 
 <available:thread-title>
 **Hard rule: setting a concise title is required, not optional.**
-- For a new top-level managed thread, call `mcp__wbex__thread_title` with a short title as your first operation. Use the user's initial request; do not wait for inspection.
+- For a new top-level managed thread, call `tools.mcp__wb__thread_title` with a short title as your first operation. Use the user's initial request; do not wait for inspection.
 - When the user starts a new implementation arc that does not cleanly fit the last known title, run the title command immediately, before any other arc or task command.
-- After compaction or resume, if the title is unknown or uncertain, call `mcp__wbex__thread_title_get`. If it still fits, do not reset it. If it is stale, retitle before resuming task work.
+- After compaction or resume, if the title is unknown or uncertain, call `tools.mcp__wb__thread_title_get`. If it still fits, do not reset it. If it is stale, retitle before resuming task work.
 </available:thread-title>
 
 <available:thread-status>
@@ -226,7 +226,7 @@ Before Review:
 
 - Confirm that all approved work and required validation are complete.
 - Missing approved work is not a risk or exclusion. It forbids the completion path.
-- Run `mcp__wbex__git_arc_diff` against the current active arc. Do not substitute raw Git or an unrelated or superseded ref.
+- Run `tools.mcp__wb__git_arc_diff` against the current active arc. Do not substitute raw Git or an unrelated or superseded ref.
 - If the diff exposes an issue, continue in the correct mode without setting completed status or entering Review.
 - Otherwise, call `mcp__wbex__thread_status` with `status: "completed"`.
 - Then enter Review mode.
@@ -319,7 +319,7 @@ Never revert unexpected edits unless the user explicitly asks for that exact rev
 
 ### Context compaction, resume, or interruption
 
-After context compaction, if Workbench provides Thread Recall instructions, call `mcp__wbex__thread_recall` and read the returned Markdown before continuing. Use it to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This call does not replace approval, file checks, or arc-ref checks.
+After context compaction, if Workbench provides Thread Recall instructions, call `tools.mcp__wb__thread_recall` and read the returned Markdown before continuing. Use it to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This call does not replace approval, file checks, or arc-ref checks.
 
 After resume, interruption, or a long delay, verify the newest user request and the current file state before risky work.
 

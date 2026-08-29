@@ -54,13 +54,18 @@ test("unknown MCP calls keep the generic summary with the shared detail surface"
 });
 
 test("failed simple wb MCP calls expose their invocation and error", () => {
-  const item = makeItem({ error: { message: "File selection failed." }, result: null, status: "failed" });
+  const item = makeItem({
+    error: { message: "File selection failed." },
+    result: null,
+    server: "wbex",
+    status: "failed",
+  });
   const html = renderToStaticMarkup(createElement(ThreadMcpToolCallItem, {
     item,
     route: getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool }),
   }));
 
-  assert.match(html, /await tools\.mcp__wb__git_add\(/u);
+  assert.match(html, /await tools\.mcp__wbex__git_add\(/u);
   assert.match(html, /File selection failed\./u);
 });
 

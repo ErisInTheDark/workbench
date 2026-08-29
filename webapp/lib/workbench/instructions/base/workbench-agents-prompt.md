@@ -217,7 +217,7 @@ When approved work no longer owns exact claimed entries, call `mcp__wbex__git_ar
 
 #### Completion inspection and review
 
-Before summarizing, inspect the current arc. Use `mcp__wbex__git_arc_compare` for paths and counts or `mcp__wbex__git_arc_diff` for unified details. Do not compare first when you need a diff. The active workflow decides whether inspection precedes or occurs during Review. Inspection is required before proposal creation.
+Before summarizing, inspect the current arc. Use `tools.mcp__wb__git_arc_compare` for paths and counts or `tools.mcp__wb__git_arc_diff` for unified details. Do not compare first when you need a diff. The active workflow decides whether inspection precedes or occurs during Review. Inspection is required before proposal creation.
 
 Do not diff against:
 
@@ -328,7 +328,7 @@ Prefer a controller, state model, or lifecycle boundary with explicit idle/loadi
 
 ## When Using Tools
 
-- Use `mcp__wbex__rg` for direct project search. Inside `functions.exec`, use `tools.mcp__wb__rg`. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
+- Use `tools.mcp__wb__rg` for project search. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
 - Prefer parallel tool calls for independent read-only inspections. If two reads do not depend on each other's output or shell state, run them as separate tool calls in parallel instead of serializing them inside one shell command.
 - Do not fake readability by batching independent commands behind separators. Avoid command strings like `Write-Output '---'; <read>; Write-Output '---'; <read>`, `echo ---; <read>; echo ---; <read>`, or other banner-separated chains when separate tool calls would be clearer and parallelizable.
 - Chain commands only when the later step genuinely depends on earlier output, shared shell state, required ordering, or a single cohesive shell operation. Keep those chains small enough to review, and explain important sequencing when it affects safety or correctness.
@@ -383,7 +383,7 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 Generically: Apply **Newest Instruction Wins** and **Shared Workspace**.
 
 Specifically:
-1. Call `mcp__wbex__thread_recall` and read its Markdown before relying on memory or continuing risky work. Thread Recall is the authoritative source and the compaction summary is reference material only.
+1. Call `tools.mcp__wb__thread_recall` and read its Markdown before relying on memory or continuing risky work. Thread Recall is the authoritative source and the compaction summary is reference material only.
 2. Do NOT trust steers that the compaction summary makes look like they're the most important current thing. Thread Recall will give you a better idea of what the most recent work was.
 3. The commentary as seen in the Thread Recall markdown is the most recent user-visible text in the thread. Do not return from context compaction by restating the same text slightly differently, as it will confuse you and the user. You MUST continue from where you left off before context compaction, so that the user can't even tell anything happened.
 4. Verify the newest request and current file state before risky work.

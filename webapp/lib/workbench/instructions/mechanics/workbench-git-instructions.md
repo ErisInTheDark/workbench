@@ -50,7 +50,7 @@ Use these successor tools to revise the current inactive plan without publishing
 
 Adding paths re-snapshots every requested path, including already covered paths. Removing a path that would uncover retained dirty work rejects. Old refs remain available for diagnostics.
 
-If a plan operation reports preserved baseline drift, run the printed scoped `mcp__wbex__git_arc_diff` request. Re-add only paths whose current versions are the intended baselines.
+If a plan operation reports preserved baseline drift, run the printed scoped `tools.mcp__wb__git_arc_diff` request. Re-add only paths whose current versions are the intended baselines.
 
 ### start implementation
 
@@ -80,7 +80,7 @@ Use `mcp__wbex__git_arc_mv` for approved path moves. Its `move` value accepts ex
 
 ### compare or diff an arc
 
-Use `mcp__wbex__git_arc_compare` when paths and change counts are enough. Use `mcp__wbex__git_arc_diff` when unified details are needed. Omit `paths` to inspect the claimed set. Omit `ref` for the current active arc. An explicit `ref` can identify that same current active arc or an inactive or historical plan owned by this thread. Do not use a superseded arc ref.
+Use `tools.mcp__wb__git_arc_compare` when paths and change counts are enough. Use `tools.mcp__wb__git_arc_diff` when unified details are needed. Omit `paths` to inspect the claimed set. Omit `ref` for the current active arc. An explicit `ref` can identify that same current active arc or an inactive or historical plan owned by this thread. Do not use a superseded arc ref.
 
 In Review, choose one initial arc-scoped inspection. Do not run compare first when unified details are already required. At least one compare or diff is required before proposal creation.
 

@@ -31,11 +31,15 @@ interface WorkbenchMcpCommandInput {
 type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 type CommandExecutionItem = Extract<ThreadItem, { type: "commandExecution" }>;
 
+function isWorkbenchMcpServer(server: string) {
+  return server === "wb" || server === "wbex";
+}
+
 export function getWorkbenchMcpShellCommandItem(
   item: McpToolCallItem,
   fallbackCwd = ".",
 ): CommandExecutionItem | null {
-  if (item.server !== "wb" || item.tool !== "shell") return null;
+  if (!isWorkbenchMcpServer(item.server) || item.tool !== "shell") return null;
   const input = WorkbenchShellInputSchema.safeParse(item.arguments);
   if (!input.success) return null;
   const result = WorkbenchShellResultSchema.safeParse(item.result?.structuredContent);
@@ -78,7 +82,7 @@ export function getWorkbenchMcpCommandRoute({
   server,
   tool,
 }: WorkbenchMcpCommandInput) {
-  if (server !== "wb" || !isWorkbenchCommandPresentationName(tool)) return null;
+  if (!isWorkbenchMcpServer(server) || !isWorkbenchCommandPresentationName(tool)) return null;
   return getWorkbenchCommandRoute(tool, argumentsValue, context);
 }
 
@@ -98,6 +102,6 @@ export function getWorkbenchMcpCommandDisplay({
   server,
   tool,
 }: WorkbenchMcpCommandInput): ThreadCommandSummaryDisplay | null {
-  if (server !== "wb" || !isWorkbenchCommandPresentationName(tool)) return null;
+  if (!isWorkbenchMcpServer(server) || !isWorkbenchCommandPresentationName(tool)) return null;
   return getWorkbenchCommandSummaryDisplay(tool, argumentsValue, context);
 }

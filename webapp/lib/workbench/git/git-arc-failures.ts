@@ -199,7 +199,7 @@ export function describeGitArcFailure(failure: GitArcFailure) {
     }
     case "planDrift":
       return {
-        agentRecovery: `Call mcp__wbex__git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. If the approved plan is unchanged, follow the planned-path drift workflow with mcp__wbex__git_arc_plan_start.`,
+        agentRecovery: `Call tools.mcp__wb__git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. If the approved plan is unchanged, follow the planned-path drift workflow with mcp__wbex__git_arc_plan_start.`,
         message: "The plan baseline changed.",
         userHint: "Inspect the changed plan paths. Revise the plan only if the approved work changed.",
       };

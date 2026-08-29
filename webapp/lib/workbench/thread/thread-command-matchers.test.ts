@@ -99,6 +99,13 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
   }
 }
 
+function workbenchMcpServerForTool(tool: string) {
+  const definition = listWorkbenchAgentCommands()
+    .find((candidate) => getWorkbenchAgentCommandToolName(candidate) === tool);
+  if (!definition) throw new Error(`Unknown Workbench MCP tool: ${tool}`);
+  return definition.mcpCodeModeEligible ? "wb" : "wbex";
+}
+
 test("every exposed typed wb MCP tool has a semantic route", () => {
   const commands = listWorkbenchAgentCommands();
   const exposedNames = commands
@@ -113,7 +120,7 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
   for (const tool of exposedNames) {
     assert.ok(getWorkbenchMcpCommandRoute({
       argumentsValue: representativeMcpArguments(tool as WorkbenchCommandPresentationName),
-      server: "wb",
+      server: workbenchMcpServerForTool(tool),
       tool,
     }), tool);
   }
@@ -136,7 +143,11 @@ test("simple typed wb MCP calls share argument-sensitive CLI presentations", () 
 
   for (const [command, tool, argumentsValue] of cases) {
     const cli = getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
-    const mcp = getWorkbenchMcpCommandDisplay({ argumentsValue, server: "wb", tool });
+    const mcp = getWorkbenchMcpCommandDisplay({
+      argumentsValue,
+      server: workbenchMcpServerForTool(tool),
+      tool,
+    });
     assert.ok(mcp, tool);
     assert.equal(mcp.claimedBy, cli.claimedBy, tool);
     assert.deepEqual(mcp.summaryParts, cli.summaryParts, tool);
@@ -163,7 +174,11 @@ test("every valid simple typed wb MCP route emphasizes its important target", ()
   ] satisfies Array<[string, JsonValue, string[]]>;
 
   for (const [tool, argumentsValue, expectedKinds] of cases) {
-    const display = getWorkbenchMcpCommandDisplay({ argumentsValue, server: "wb", tool });
+    const display = getWorkbenchMcpCommandDisplay({
+      argumentsValue,
+      server: workbenchMcpServerForTool(tool),
+      tool,
+    });
     assert.ok(display, tool);
     assert.deepEqual(displayPartKinds(display.summaryParts), expectedKinds, tool);
     assert.deepEqual(displayPartKinds(display.ongoingSummaryParts), expectedKinds, tool);
@@ -218,7 +233,11 @@ test("specialized typed wb MCP calls share CLI claims without duplicate summarie
 
   for (const [command, tool, argumentsValue] of cases) {
     const cli = getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
-    const route = getWorkbenchMcpCommandRoute({ argumentsValue, server: "wb", tool });
+    const route = getWorkbenchMcpCommandRoute({
+      argumentsValue,
+      server: workbenchMcpServerForTool(tool),
+      tool,
+    });
     assert.equal(route?.kind, "specialized", tool);
     if (!route || route.kind !== "specialized") continue;
     assert.equal(route.rendering.claimedBy, cli.claimedBy, tool);
@@ -230,8 +249,10 @@ test("specialized typed wb MCP calls share CLI claims without duplicate summarie
 test("non-wb and unknown MCP tools keep generic rendering", () => {
   assert.equal(getWorkbenchMcpCommandDisplay({ argumentsValue: {}, server: "other", tool: "git_arc_compare" }), null);
   assert.equal(getWorkbenchMcpCommandDisplay({ argumentsValue: {}, server: "wb", tool: "future_command" }), null);
+  assert.equal(getWorkbenchMcpCommandDisplay({ argumentsValue: {}, server: "wbex", tool: "future_command" }), null);
   assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "other", tool: "git_arc_compare" }), null);
   assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "future_command" }), null);
+  assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wbex", tool: "future_command" }), null);
 });
 
 test("wb shell MCP evidence derives ordinary command execution presentation", () => {
@@ -242,6 +263,8 @@ test("wb shell MCP evidence derives ordinary command execution presentation", ()
   assert.equal(running.cwd, PROJECT_ROOT);
   assert.equal(running.status, "inProgress");
   assert.equal(running.exitCode, null);
+  assert.ok(getWorkbenchMcpShellCommandItem(shellMcpItem({ server: "wbex" }), PROJECT_ROOT));
+  assert.equal(getWorkbenchMcpShellCommandItem(shellMcpItem({ server: "other" }), PROJECT_ROOT), null);
 
   const completed = getWorkbenchMcpShellCommandItem(shellMcpItem({
     durationMs: 42,
@@ -284,14 +307,14 @@ test("wb shell MCP evidence derives ordinary command execution presentation", ()
 test("failed Recall MCP calls use the generic error renderer", () => {
   const recallRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "thread_recall" });
   const gitRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "git_arc_compare" });
-  const waitRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "git_arc_wait" });
+  const waitRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wbex", tool: "git_arc_wait" });
 
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, false), true);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, true), false);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(gitRoute, true), true);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(waitRoute, true), false);
-  const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { status: "blocked" }, server: "wb", tool: "thread_status" });
-  const subagentRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { message: "progress", parent: true }, server: "wb", tool: "subagent_message" });
+  const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { status: "blocked" }, server: "wbex", tool: "thread_status" });
+  const subagentRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { message: "progress", parent: true }, server: "wbex", tool: "subagent_message" });
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(statusRoute, true), false);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(subagentRoute, true), false);
 });

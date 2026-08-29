@@ -156,7 +156,7 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     "Only dirty unclaimed files can potentially use --adopt. Committed files belong in ordinary plan scope.",
     "Snapshot drift alone does not invalidate approval. Inspect the stored plan diff before deciding whether the plan changed:",
     "",
-    `Call mcp__wbex__git_arc_diff with ${code(JSON.stringify({ paths: diagnosticPaths, ref: planCheckpointCommit }), 2_000)}.`,
+    `Call tools.mcp__wb__git_arc_diff with ${code(JSON.stringify({ paths: diagnosticPaths, ref: planCheckpointCommit }), 2_000)}.`,
     "If the approved plan is unchanged, follow the planned-path drift workflow with mcp__wbex__git_arc_plan_start.",
   );
   if (snapshotDrift.length > MAX_PATHS) {

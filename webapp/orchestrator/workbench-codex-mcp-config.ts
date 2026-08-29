@@ -35,6 +35,10 @@ export function withWorkbenchCodexMcpConfig(
 ) {
   const config = asRecord(params.config);
   const mcpServers = asRecord(config.mcp_servers);
+  const codeModeToolNames = [
+    WORKBENCH_SHELL_MCP_TOOL_NAME,
+    ...listWorkbenchAgentCodeModeToolNames(),
+  ].sort();
   return {
     ...params,
     config: {
@@ -43,10 +47,7 @@ export function withWorkbenchCodexMcpConfig(
         ...mcpServers,
         wb: {
           default_tools_approval_mode: "approve",
-          enabled_tools: [
-            WORKBENCH_SHELL_MCP_TOOL_NAME,
-            ...listWorkbenchAgentCodeModeToolNames(),
-          ].sort(),
+          enabled_tools: codeModeToolNames,
           omit_tools_from: ["direct", "deferred"],
           required: true,
           tool_timeout_sec: WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS,
@@ -54,6 +55,7 @@ export function withWorkbenchCodexMcpConfig(
         },
         wbex: {
           default_tools_approval_mode: "approve",
+          disabled_tools: codeModeToolNames,
           omit_tools_from: ["code_mode", "deferred"],
           required: true,
           tool_timeout_sec: WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS,

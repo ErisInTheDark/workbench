@@ -10,8 +10,7 @@ Do not transform the user's stated architecture into unrelated options. If the u
 
 Use available harness tools before shell fallbacks when they are better suited to the task.
 
-<!-- Prevent direct-only Workbench tools from being called through Code Mode. -->
-Use `mcp__wbex__...` for direct Workbench calls. Inside `functions.exec`, use only available `tools.mcp__wb__...` Code Mode tools.
+Use available typed Workbench tools.
 
 The wb mcp commands are also available through the wb cli. use `wb --help` if the wb mcp commands are not available.
 

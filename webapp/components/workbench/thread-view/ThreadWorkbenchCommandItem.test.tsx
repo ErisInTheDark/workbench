@@ -17,7 +17,13 @@ import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
-function makeItem(tool: string, argumentsValue: McpItem["arguments"], output: string, status: McpItem["status"] = "completed"): McpItem {
+function makeItem(
+  tool: string,
+  argumentsValue: McpItem["arguments"],
+  output: string,
+  status: McpItem["status"] = "completed",
+  server: "wb" | "wbex" = "wbex",
+): McpItem {
   return {
     appContext: null,
     arguments: argumentsValue,
@@ -27,7 +33,7 @@ function makeItem(tool: string, argumentsValue: McpItem["arguments"], output: st
     pluginId: null,
     readOnlyHint: false,
     result: { _meta: null, content: [{ type: "text", text: output }], structuredContent: null },
-    server: "wb",
+    server,
     status,
     tool,
     type: "mcpToolCall",
@@ -173,7 +179,13 @@ test("Git arc waits use live intersections while running and the start card afte
 });
 
 test("title and subagent MCP operations use their dedicated renderers", () => {
-  const titleHtml = renderSpecialized(makeItem("thread_title", { title: "Render wb MCP" }, "Render wb MCP"));
+  const titleHtml = renderSpecialized(makeItem(
+    "thread_title",
+    { title: "Render wb MCP" },
+    "Render wb MCP",
+    "completed",
+    "wb",
+  ));
   const subagentHtml = renderSpecialized(makeItem("subagent_create", {
     message: "inspect renderer ownership",
     name: "Lumi",
