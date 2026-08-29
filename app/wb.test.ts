@@ -21,11 +21,12 @@ async function dispatcherFixture() {
   await fs.mkdir(path.dirname(tsxCliPath), { recursive: true });
   await fs.copyFile(rootDispatcherPath, dispatcherPath);
   await fs.writeFile(path.join(root, "app", "index.ts"), "", "utf8");
+  await fs.writeFile(path.join(root, "app", "desktop.ts"), "", "utf8");
   await fs.writeFile(path.join(root, "caller-sentinel"), "", "utf8");
   await fs.writeFile(tsxCliPath, [
     "import fs from 'node:fs';",
     "const cwd = fs.existsSync('./caller-sentinel') ? 'preserved' : 'changed';",
-    "console.log(`tsx|cwd=${cwd}|entry=${process.argv[2] ?? ''}`);",
+    "console.log(`tsx|cwd=${cwd}|entry=${process.argv[2] ?? ''}|command=${process.argv[3] ?? ''}`);",
     "",
   ].join("\n"), "utf8");
   await fs.writeFile(orchestratorCliPath, [
@@ -84,11 +85,54 @@ test("starts the typed app entry only for an unthreaded no-argument call", async
     env: {
       ...process.env,
       CODEX_THREAD_ID: "",
+      WORKBENCH_DESKTOP_PLATFORM: "other",
       WORKBENCH_THREAD_ID: "",
     },
   });
-  assert.match(result.stdout, /^tsx\|cwd=preserved\|entry=.*[\\/]app[\\/]index\.ts\n$/u);
+  assert.match(result.stdout, /^tsx\|cwd=preserved\|entry=.*[\\/]app[\\/]index\.ts\|command=\n$/u);
   assert.equal(result.stderr, "");
+});
+
+test("starts the desktop owner for an unthreaded Windows no-argument call", async (context) => {
+  const fixture = await dispatcherFixture();
+  context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
+  const result = await execFileAsync("bash", [fixture.dispatcherPath], {
+    cwd: fixture.root,
+    env: {
+      ...process.env,
+      CODEX_THREAD_ID: "",
+      WORKBENCH_DESKTOP_PLATFORM: "win32",
+      WORKBENCH_THREAD_ID: "",
+    },
+  });
+  assert.match(result.stdout, /^tsx\|cwd=preserved\|entry=.*[\\/]app[\\/]desktop\.ts\|command=start\n$/u);
+  assert.equal(result.stderr, "");
+});
+
+test("keeps shortcut installation local for humans and delegated for managed agents", async (context) => {
+  const fixture = await dispatcherFixture();
+  context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
+  const human = await execFileAsync("bash", [fixture.dispatcherPath, "shortcut"], {
+    cwd: fixture.root,
+    env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
+  });
+  assert.match(human.stdout, /^tsx\|cwd=preserved\|entry=.*[\\/]app[\\/]desktop\.ts\|command=shortcut\n$/u);
+
+  const managed = await execFileAsync("bash", [fixture.dispatcherPath, "shortcut"], {
+    cwd: fixture.root,
+    env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "thread-one" },
+  });
+  assert.match(managed.stdout, /^orchestrator\|origin=http:\/\/127\.0\.0\.1:4500\|thread=thread-one\|args=shortcut,/u);
+});
+
+test("does not discard extra shortcut arguments", async (context) => {
+  const fixture = await dispatcherFixture();
+  context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
+  const result = await execFileAsync("bash", [fixture.dispatcherPath, "shortcut", "extra"], {
+    cwd: fixture.root,
+    env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
+  });
+  assert.match(result.stdout, /^orchestrator\|origin=http:\/\/127\.0\.0\.1:4500\|thread=\|args=shortcut,extra,/u);
 });
 
 test("preserves delegated exit status", async (context) => {

@@ -11,6 +11,7 @@
 .DS_Store
 Thumbs.db
 node_modules
+tray/target/
 .next
 *.tsbuildinfo
 webapp/lib/codex/generated/

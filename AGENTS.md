@@ -69,12 +69,15 @@ Run project validation from `webapp/` unless a command says otherwise.
 pnpm test
 pnpm test -- --good-citizen
 pnpm typecheck
+cargo test --manifest-path ..\tray\Cargo.toml
+cargo build --release --manifest-path ..\tray\Cargo.toml
 ```
 
 - `pnpm test` executes the TypeScript `node:test` suite through the project-owned runner.
 - Run `pnpm test -- --good-citizen` only when the user asks for it. Otherwise, run `pnpm test`.
 - `pnpm typecheck` type-checks the app and orchestrator without emitting files.
 - `pnpm test` and `pnpm typecheck` are the only allowed `pnpm` scripts for agent validation.
+- The Cargo commands validate the native Tauri tray launcher. They write only ignored Rust build output under `tray/target/`.
 - Do not run `pnpm test` or `pnpm typecheck` for instruction-only changes. These checks are relevant only when the approved work also changes a TypeScript file.
 - When tests are added or changed, run `pnpm test`; typechecking test files does not count as executing their assertions.
 - For agent-thread rendering, use `http://localhost:<port>/agent/thread/<threadId>` for the chrome-free thread view and `http://localhost:<port>/agent/thread-lab` for pasted payload, turn, item, command-string, and simplified-command rendering checks.
@@ -84,6 +87,7 @@ pnpm typecheck
 A direct user request to perform a specific bounded action counts as explicit permission for that exact action, including when delivered as a steer. Use a questionnaire when permission has not already been given, the request is ambiguous, or a bounded scope choice still needs user input.
 
 - Obtain explicit user permission before calling any non-GET Workbench webapp endpoint directly.
+- Native launcher source changes must refresh the committed `tray/bin/windows-x64/workbench-tray.exe` with `pnpm build:tray` from the repository root. This is generation, not validation, and requires explicit user permission.
 - Ask before running installs, generation, formatting, migration, cleanup, build, or other commands that write artifacts or disturb active watch/runtime state.
 
 ### Forbidden Shortcuts
