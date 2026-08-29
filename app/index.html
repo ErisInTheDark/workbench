@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" name="viewport">
+    <meta content="light dark" name="color-scheme">
+    <meta content="#f7f8fb" media="(prefers-color-scheme: light)" name="theme-color">
+    <meta content="#10131a" media="(prefers-color-scheme: dark)" name="theme-color">
+    <meta content="yes" name="apple-mobile-web-app-capable">
+    <meta content="default" name="apple-mobile-web-app-status-bar-style">
+    <meta content="Workbench" name="apple-mobile-web-app-title">
+    <meta content="telephone=no, date=no, email=no, address=no" name="format-detection">
+    <title>Workbench</title>
+    <link href="/manifest.webmanifest" rel="manifest">
+    <link href="/tab-icons/default.png" rel="icon">
+    <link href="/icon" rel="apple-touch-icon">
+    <link href="/assets/app.css" rel="stylesheet">
+    <script>
+      try {
+        var theme = window.localStorage.getItem("workbench:theme");
+        document.documentElement.dataset.workbenchTheme =
+          theme === "magical-girl" || theme === "winter" ? theme : "default";
+      } catch {
+        document.documentElement.dataset.workbenchTheme = "default";
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="/assets/app.js" type="module"></script>
+  </body>
+</html>

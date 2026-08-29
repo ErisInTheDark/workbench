@@ -1,0 +1,61 @@
+/*
+ * No exports. Foreground entry configures the standalone Workbench app and forwards process signals to its lifecycle owner.
+ */
+import WorkbenchApp from "./WorkbenchApp.ts";
+import WorkbenchAppLogger from "./WorkbenchAppLogger.ts";
+import WorkbenchFrontendCompiler from "./WorkbenchFrontendCompiler.ts";
+import WorkbenchFrontendServer from "./WorkbenchFrontendServer.ts";
+
+const logger = new WorkbenchAppLogger();
+
+function configuredPort(value: string | undefined) {
+  if (!value?.trim()) return 0;
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) {
+    throw new Error("WORKBENCH_APP_PORT must be an integer from 0 through 65535.");
+  }
+  return port;
+}
+
+function legacyOrigin() {
+  return process.env.WORKBENCH_LEGACY_ORIGIN?.trim()
+    || process.env.NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN?.trim()
+    || `http://127.0.0.1:${process.env.PORT?.trim() || "3002"}`;
+}
+
+async function main() {
+  const app = new WorkbenchApp({
+    createServer: () => new WorkbenchFrontendServer({
+      compiler: new WorkbenchFrontendCompiler({
+        logger,
+        onDiagnostic: (message) => logger.error("tailwind", message),
+      }),
+      hostname: process.env.WORKBENCH_APP_HOST?.trim() || "0.0.0.0",
+      legacyOrigin: legacyOrigin(),
+      onDiagnostic: (message) => logger.error("http", message),
+      port: configuredPort(process.env.WORKBENCH_APP_PORT),
+    }),
+  });
+  const result = await app.start();
+  if (result.kind === "already-running") {
+    logger.line("app", "already running");
+    return;
+  }
+  logger.line("app", `listening at ${result.address.url}`);
+
+  let closing: Promise<void> | null = null;
+  const close = () => {
+    closing ??= app.close().catch((error) => {
+      logger.error("app", `shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    });
+    return closing;
+  };
+  process.once("SIGINT", () => void close());
+  process.once("SIGTERM", () => void close());
+}
+
+void main().catch((error) => {
+  logger.error("app", `failed to start: ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
+});

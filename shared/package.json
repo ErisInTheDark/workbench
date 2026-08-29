@@ -1,0 +1,12 @@
+{
+  "name": "workbench-shared",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./http/StaticHttpServer": "./http/StaticHttpServer.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.2"
+  }
+}

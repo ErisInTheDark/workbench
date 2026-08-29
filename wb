@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Root Workbench dispatcher. Keep orchestrator-backed commands on the shell fast path.
+set -u
+
+if [[ "${WORKBENCH_CWD_REDIRECTED:-}" != "1" ]]; then
+  cwd_workbench="$PWD/wb"
+  if [[ -f "$cwd_workbench" ]] && ! [[ "$cwd_workbench" -ef "$0" ]]; then
+    WORKBENCH_CWD_REDIRECTED=1 exec bash "$cwd_workbench" "$@"
+  fi
+fi
+unset WORKBENCH_CWD_REDIRECTED
+
+workbench_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+orchestrator_cli="$workbench_root/webapp/lib/workbench/cli/workbench-agent-cli.sh"
+thread_id="${WORKBENCH_THREAD_ID:-${CODEX_THREAD_ID:-}}"
+hook_mode=0
+if [[ "$#" -eq 0 && "${WORKBENCH_APPLY_PATCH_CLAIM_HOOK:-}" == "1" ]]; then
+  hook_mode=1
+elif [[ "${1:-}" == "__hook" && "${2:-}" == "apply-patch-claim" && "$#" -eq 2 ]]; then
+  hook_mode=1
+fi
+
+if (( hook_mode == 1 )) || [[ -n "$thread_id" ]] || (( "$#" > 0 )); then
+  if [[ ! -f "$orchestrator_cli" ]]; then
+    printf '%s\n' "Workbench orchestrator CLI is unavailable: $orchestrator_cli" >&2
+    exit 1
+  fi
+  export WORKBENCH_ORIGIN="${WORKBENCH_ORIGIN:-http://127.0.0.1:4500}"
+  exec bash "$orchestrator_cli" "$@"
+fi
+
+tsx_cli="$workbench_root/app/node_modules/tsx/dist/cli.mjs"
+app_entry="$workbench_root/app/index.ts"
+if [[ ! -f "$tsx_cli" || ! -f "$app_entry" ]]; then
+  printf '%s\n' 'Workbench app dependencies are unavailable. Install the checkout dependencies first.' >&2
+  exit 1
+fi
+
+exec node \
+  --disable-warning=ExperimentalWarning \
+  "$tsx_cli" \
+  "$app_entry"

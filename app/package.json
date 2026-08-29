@@ -1,0 +1,24 @@
+{
+  "name": "workbench-app",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@tailwindcss/cli": "4.2.2",
+    "better-sqlite3": "13.0.3",
+    "esbuild": "0.28.1",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-scan": "0.5.7",
+    "tailwindcss": "4.2.2",
+    "tsx": "4.21.0",
+    "workbench": "workspace:*",
+    "workbench-shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^6.0.2"
+  }
+}

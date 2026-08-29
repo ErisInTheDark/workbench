@@ -15,6 +15,8 @@ const tscPath = path.join(projectRoot, "node_modules", "typescript", "bin", "tsc
 export const typecheckProjectConfigs = [
   "tsconfig.typecheck.json",
   "orchestrator/tsconfig.json",
+  "../app/tsconfig.json",
+  "../shared/tsconfig.json",
 ];
 
 function runCompiler(configPath) {

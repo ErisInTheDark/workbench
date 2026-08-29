@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Local package adapter. The future published package will install or locate the checkout first.
+set -u
+
+package_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+checkout_cli="$package_root/../wb"
+
+if [[ ! -f "$checkout_cli" ]]; then
+  printf '%s\n' "Workbench checkout CLI is unavailable: $checkout_cli" >&2
+  exit 1
+fi
+
+exec bash "$checkout_cli" "$@"
