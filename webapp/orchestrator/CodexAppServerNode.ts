@@ -28,7 +28,7 @@ class CodexAppServerRuntime implements OrchestratorCodexAppServerRuntime {
       onFatalExit: (reason) => {
         this.acceptingMessages = false;
         this.releaseHandoffGate();
-        this.bridge?.beginStopping();
+        this.bridge?.beginStopping(reason);
         context.onCodexFatalExit(reason, this.bridge);
       },
       onMessage: (message) => this.enqueueMessage(message),
@@ -41,13 +41,13 @@ class CodexAppServerRuntime implements OrchestratorCodexAppServerRuntime {
     this.releaseHandoffGate();
   }
 
-  async detachBridge(bridge: CodexStdioBridge) {
+  async detachBridge(bridge: CodexStdioBridge, options?: Parameters<CodexStdioBridge["detachForReload"]>[0]) {
     if (this.bridge !== bridge) throw new Error("Codex bridge handoff targeted a bridge that its app-server parent does not own.");
     const gate = deferred();
     this.handoffGate = gate;
     try {
       await this.messageTail.catch(() => undefined);
-      const state = await bridge.detachForReload();
+      const state = await bridge.detachForReload(options);
       this.bridge = null;
       return state;
     } catch (error) {

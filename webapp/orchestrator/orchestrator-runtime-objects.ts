@@ -59,7 +59,7 @@ export interface OrchestratorProviderNotification { harness: HarnessKind; notifi
 export interface OrchestratorCodexAppServerRuntime {
   appServer: CodexAppServer;
   attachBridge(bridge: CodexStdioBridge): void;
-  detachBridge(bridge: CodexStdioBridge): Promise<CodexStdioBridgeReloadState>;
+  detachBridge(bridge: CodexStdioBridge, options?: Parameters<CodexStdioBridge["detachForReload"]>[0]): Promise<CodexStdioBridgeReloadState>;
   isAvailable(): boolean;
   isTransitioning(): boolean;
 }

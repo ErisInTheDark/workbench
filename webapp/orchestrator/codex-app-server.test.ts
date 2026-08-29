@@ -87,12 +87,9 @@ test("intentional replacement ignores stale child output and exit", () => {
   second.emit("exit", 1, null);
   assert.deepEqual(fatalReasons, ["Codex app-server exited."]);
   assert.deepEqual(lifecycleErrors, []);
-  assert.deepEqual(lifecycleLogs, [
-    "[codex-bridge] started shared stdio app-server",
-    "[codex-bridge] started shared stdio app-server",
-    "[codex-stdio] exited (code=0, signal=null)",
-    "[codex-stdio] exited (code=1, signal=null)",
-  ]);
+  assert.equal(lifecycleLogs.filter((message) => message.includes("launched app-server child")).length, 2);
+  assert.equal(lifecycleLogs.filter((message) => message.includes("exited")).length, 2);
+  assert.equal(lifecycleLogs.some((message) => /\b(?:started|ready)\b/iu.test(message)), false);
 });
 
 test("asynchronous stop detaches ownership before process-tree termination settles", async () => {

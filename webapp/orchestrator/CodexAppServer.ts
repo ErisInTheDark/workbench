@@ -148,7 +148,7 @@ export default class CodexAppServer {
       this.onFatalExit("Codex app-server exited.");
     });
 
-    this.log("codex-bridge", "started shared stdio app-server");
+    this.log("codex-stdio", "launched app-server child; awaiting protocol initialization");
     return codexProcess;
   }
 

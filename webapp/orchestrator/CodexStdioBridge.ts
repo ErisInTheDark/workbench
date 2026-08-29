@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - CodexStdioBridgeOptions: inject app-server, browser, instruction, transcript, and reload-generation boundaries. Keywords: codex, bridge, options, reload.
  * - CodexStdioBridgeReloadState: transferable bridge state preserved across code-only reload. Keywords: codex, reload, state.
  * - default CodexStdioBridge: translate websocket requests and Codex app-server messages around a stable app-server process. Keywords: codex, stdio, websocket, bridge.
  */
@@ -133,6 +134,7 @@ export type CodexStdioBridgeOptions = {
   onNotification: (notification: JsonRpcNotification) => void;
   prepareTurnStart?: (message: JsonRpcRequest) => Promise<void>;
   recordSqliteTranscript?: (observations: readonly WorkbenchTranscriptObservation[]) => Promise<void>;
+  restartingAppServer?: boolean;
   resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
   sendToClient: (client: BridgeClient, message: unknown) => void;
   storageRoot: string;
@@ -182,6 +184,7 @@ function transcriptSteerKey(threadId: string, entryKey: string) {
 
 type CodexStdioBridgeReloadOptions = {
   idleTimeoutMs?: number;
+  restartingAppServer?: boolean;
 };
 
 type PendingCodexUserInputRequestBase = {
@@ -996,7 +999,7 @@ export default class CodexStdioBridge {
   private readonly handleWorkbenchRequest: CodexStdioBridgeOptions["handleWorkbenchRequest"];
   private readonly instructions: WorkbenchCodexInstructionPort;
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, recordSqliteTranscript, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onAcceptedTurnSteer = onAcceptedTurnSteer;
@@ -1029,6 +1032,9 @@ export default class CodexStdioBridge {
       ...(recordSqliteTranscript ? { recordSqlite: recordSqliteTranscript } : {}),
     });
     this.upstreamInitialized = initialState?.upstreamInitialized ?? false;
+    if (restartingAppServer) {
+      this.resetUpstreamState("Codex app-server restarted before the upstream response arrived.");
+    }
     this.transcriptInstrumentationTimer = setInterval(() => {
       this.logTranscriptInstrumentation();
     }, CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS);
@@ -1060,25 +1066,14 @@ export default class CodexStdioBridge {
     }
     this.coalescedTranscriptNotifications.clear();
     this.coalescedTranscriptByteEstimate = 0;
-    this.pendingUserInputRequests.clear();
-    for (const pending of this.pendingResponses.values()) {
-      if (isPendingInternalResponse(pending)) {
-        pending.reject(new Error("Codex bridge stopped before the upstream response arrived."));
-      }
-    }
-    this.pendingResponses.clear();
     this.fileChangeFailureMarkers.clear();
     this.fileChangeTurnCursors.clear();
     this.transcriptSteers.clear();
-    this.upstreamInitialized = false;
-    if (this.upstreamInitializePromise) {
-      this.upstreamInitializePromise.catch(() => undefined);
-    }
-    this.upstreamInitializePromise = null;
   }
 
-  beginStopping() {
+  beginStopping(reason = "Codex bridge stopped before the upstream response arrived.") {
     this.acceptingWork = false;
+    this.resetUpstreamState(reason);
   }
 
   async dispose() {
@@ -1106,6 +1101,9 @@ export default class CodexStdioBridge {
       await this.transcriptStore.dispose();
       this.transcriptStore = null;
     }
+    if (options.restartingAppServer) {
+      this.resetUpstreamState("Codex app-server restarted before the upstream response arrived.");
+    }
     return {
       fileChangeFailureMarkers: this.fileChangeFailureMarkers,
       fileChangeTurnCursors: this.fileChangeTurnCursors,
@@ -1117,6 +1115,18 @@ export default class CodexStdioBridge {
       transcriptThreadContexts: this.transcriptThreadContexts,
       upstreamInitialized: this.upstreamInitialized,
     };
+  }
+
+  private resetUpstreamState(reason: string) {
+    this.pendingUserInputRequests.clear();
+    for (const pending of this.pendingResponses.values()) {
+      if (isPendingInternalResponse(pending)) pending.reject(new Error(reason));
+    }
+    this.pendingResponses.clear();
+    this.initializeResult = null;
+    this.upstreamInitialized = false;
+    if (this.upstreamInitializePromise) this.upstreamInitializePromise.catch(() => undefined);
+    this.upstreamInitializePromise = null;
   }
 
   async disposeImmediately() {

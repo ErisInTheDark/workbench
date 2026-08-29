@@ -45,6 +45,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       recordSqliteTranscript: async (observations) => {
         await transcript.record(observations);
       },
+      restartingAppServer: build.isReplacing("harness:codex"),
       transcriptShadowLog: build.get("transcriptShadowLog"),
     });
     parent.attachBridge(bridge);
@@ -60,7 +61,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         const restartingAppServer = replacement.isReplacing("harness:codex");
         if (restartingAppServer) turnRecovery.captureForReload(["codex"]);
         context.onCodexBridgeUnavailable(restartingAppServer);
-        const state = await parent.detachBridge(bridge);
+        const state = await parent.detachBridge(bridge, { restartingAppServer });
         detached = true;
         return state;
       },

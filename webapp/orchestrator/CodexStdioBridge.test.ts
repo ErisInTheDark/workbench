@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover bridge pending cleanup, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, transcript, MCP, test.
+ * - No production exports; Node tests cover app-server generation handoff, bridge pending cleanup, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, reload, transcript, MCP, test.
  */
 
 import assert from "node:assert/strict";
@@ -102,7 +102,7 @@ function bridgeThread(items: ThreadItem[] = []) {
   };
 }
 
-test("reload-safe clients receive the untouched upstream initialize result", async () => {
+test("bridge-only reload preserves the initialized app-server generation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-capability-"));
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
@@ -120,11 +120,96 @@ test("reload-safe clients receive the untouched upstream initialize result", asy
     sendToClient() {},
     storageRoot: root,
   });
+  let replacement: InstanceType<typeof CodexStdioBridge> | null = null;
   try {
-    const initializeResult = bridge.getInitializeResult() as { preserved?: string };
+    const state = await bridge.detachForReload();
+    let sent = false;
+    replacement = new CodexStdioBridge({
+      appServer: { send() { sent = true; } } as unknown as CodexAppServer,
+      bridgeUrl: "ws://127.0.0.1:1",
+      handleWorkbenchRequest: rejectWorkbenchRequest,
+      initialState: state,
+      onNotification() {},
+      resolveProjectFromCwd: async () => null,
+      sendToClient() {},
+      storageRoot: root,
+    });
+    await replacement.ensureInitialized({ id: 0, method: "initialize", params: {} });
+    const initializeResult = replacement.getInitializeResult() as { preserved?: string };
     assert.equal(initializeResult.preserved, "upstream");
+    assert.equal(sent, false);
   } finally {
-    await bridge.disposeImmediately();
+    await replacement?.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("app-server restart detachment drops process-bound state", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-app-server-restart-"));
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    initialState: {
+      initializeResult: { stale: "generation" },
+      pendingResponses: new Map(),
+      pendingUserInputRequests: new Map(),
+      requestIdAllocator: { next: 7 },
+      upstreamInitialized: true,
+    },
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    const state = await bridge.detachForReload({ restartingAppServer: true });
+    assert.equal(state.upstreamInitialized, false);
+    assert.equal(state.initializeResult, null);
+    assert.equal(state.pendingResponses.size, 0);
+    assert.equal(state.pendingUserInputRequests.size, 0);
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("replacement bridge sanitizes legacy handoff state and initializes the new generation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-app-server-upgrade-"));
+  const legacyState = {
+    initializeResult: { stale: "generation" },
+    pendingResponses: new Map(),
+    pendingUserInputRequests: new Map(),
+    requestIdAllocator: { next: 7 },
+    upstreamInitialized: true,
+  };
+  let replacement: InstanceType<typeof CodexStdioBridge> | null = null;
+  try {
+    const upstreamRequests: JsonRpcRequest[] = [];
+    const appServer = {
+      send(message: JsonRpcRequest) {
+        upstreamRequests.push(message);
+        queueMicrotask(() => {
+          void replacement!.handleUpstreamMessage({ id: message.id ?? null, result: { fresh: "generation" } });
+        });
+      },
+    } as unknown as CodexAppServer;
+    replacement = new CodexStdioBridge({
+      appServer,
+      bridgeUrl: "ws://127.0.0.1:1",
+      handleWorkbenchRequest: rejectWorkbenchRequest,
+      initialState: legacyState,
+      onNotification() {},
+      restartingAppServer: true,
+      resolveProjectFromCwd: async () => null,
+      sendToClient() {},
+      storageRoot: root,
+    });
+    assert.equal(replacement.getInitializeResult(), null);
+    await replacement.ensureInitialized({ id: 0, method: "initialize", params: {} });
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), ["initialize", "initialized"]);
+    assert.deepEqual(replacement.getInitializeResult(), { fresh: "generation" });
+  } finally {
+    await replacement?.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }
 });
@@ -1518,6 +1603,37 @@ test("caller cancellation clears a pending internal app-server response", async 
     await requestSent.promise;
     abortController.abort(new Error("turn ended"));
     await assert.rejects(response, /turn ended/u);
+    const state = await bridge.detachForReload();
+    assert.equal(state.pendingResponses.size, 0);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("fatal bridge stop rejects a pending internal app-server response", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-internal-fatal-test-"));
+  const requestSent = deferred<void>();
+  const bridge = new CodexStdioBridge({
+    appServer: {
+      send() { requestSent.resolve(); },
+    } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:4500/codex",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    const response = bridge.handleServerRequest({
+      id: 101,
+      method: "thread/read",
+      params: { includeTurns: false, threadId: "thread" },
+    });
+    await requestSent.promise;
+    bridge.beginStopping("Codex app-server exited.");
+    await assert.rejects(response, /Codex app-server exited/u);
     const state = await bridge.detachForReload();
     assert.equal(state.pendingResponses.size, 0);
   } finally {
