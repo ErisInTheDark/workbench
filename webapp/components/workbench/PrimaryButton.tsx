@@ -86,6 +86,7 @@ export default function PrimaryButton ({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const confirmedClickRef = useRef(false);
   const holdSourceRef = useRef<HoldSource | null>(null);
+  const pointerHoldCompletedRef = useRef(false);
   const [holdSource, setHoldSource] = useState<HoldSource | null>(null);
   const showSpinningBorder = pendingHalo;
   const isDisabled = Boolean(disabled);
@@ -94,14 +95,16 @@ export default function PrimaryButton ({
     : null;
   const confirmationEnabled = confirmationMs !== null;
 
-  const cancelHold = useCallback((source?: HoldSource) => {
+  const cancelHold = useCallback((source?: HoldSource, preservePointerCompletion = false) => {
     if (source && holdSourceRef.current !== source) return;
     holdSourceRef.current = null;
+    if (!preservePointerCompletion) pointerHoldCompletedRef.current = false;
     setHoldSource(null);
   }, []);
 
   const beginHold = useCallback((source: HoldSource) => {
     if (!confirmationEnabled || isDisabled || holdSourceRef.current) return;
+    pointerHoldCompletedRef.current = false;
     holdSourceRef.current = source;
     setHoldSource(source);
   }, [confirmationEnabled, isDisabled]);
@@ -110,16 +113,38 @@ export default function PrimaryButton ({
     if (isDisabled) cancelHold();
   }, [cancelHold, isDisabled]);
 
+  useEffect(() => {
+    if (holdSource !== "pointer") return;
+    const handlePointerUp = (event: PointerEvent) => {
+      const button = buttonRef.current;
+      if (button && event.composedPath().includes(button)) return;
+      cancelHold("pointer");
+    };
+    const handlePointerCancel = () => cancelHold("pointer");
+    window.addEventListener("pointerup", handlePointerUp, true);
+    window.addEventListener("pointercancel", handlePointerCancel, true);
+    return () => {
+      window.removeEventListener("pointerup", handlePointerUp, true);
+      window.removeEventListener("pointercancel", handlePointerCancel, true);
+    };
+  }, [cancelHold, holdSource]);
+
   useEffect(() => () => {
     holdSourceRef.current = null;
+    pointerHoldCompletedRef.current = false;
   }, []);
 
   function confirmHold (event: TransitionEvent<HTMLSpanElement>) {
-    if (event.propertyName !== "transform" || !holdSourceRef.current) return;
+    const source = holdSourceRef.current;
+    if (event.propertyName !== "transform" || !source) return;
+    if (source === "pointer") {
+      pointerHoldCompletedRef.current = true;
+      return;
+    }
     confirmedClickRef.current = true;
     buttonRef.current?.click();
     confirmedClickRef.current = false;
-    cancelHold();
+    cancelHold("keyboard");
   }
 
   return (
@@ -127,7 +152,7 @@ export default function PrimaryButton ({
       {...buttonProps}
       ref={buttonRef}
       type={type}
-      data-confirming={holdSource ? "true" : undefined}
+      data-confirming={holdSource === "keyboard" ? "true" : undefined}
       data-hold-to-confirm-ms={confirmationMs ?? undefined}
       data-tone={tone}
       disabled={disabled}
@@ -145,7 +170,10 @@ export default function PrimaryButton ({
         cancelHold();
       }}
       onClick={(event) => {
-        if (!confirmationEnabled || confirmedClickRef.current) {
+        const pointerConfirmed = pointerHoldCompletedRef.current && event.detail > 0;
+        if (!confirmationEnabled || confirmedClickRef.current || pointerConfirmed) {
+          confirmedClickRef.current = false;
+          pointerHoldCompletedRef.current = false;
           onClick?.(event);
           return;
         }
@@ -181,11 +209,10 @@ export default function PrimaryButton ({
       }}
       onPointerLeave={(event) => {
         onPointerLeave?.(event);
-        cancelHold("pointer");
       }}
       onPointerUp={(event) => {
         onPointerUp?.(event);
-        cancelHold("pointer");
+        cancelHold("pointer", pointerHoldCompletedRef.current);
       }}
     >
       {showSpinningBorder ? <WorkbenchSpinningBorder radius="50cqb" /> : null}
