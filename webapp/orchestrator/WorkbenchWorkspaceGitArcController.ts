@@ -22,6 +22,7 @@ import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository"
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 
 interface GitTransitions {
+  readMany<TValue>(worktreePaths: readonly string[], operation: () => Promise<TValue>): Promise<TValue>;
   runMany<TValue>(worktreePaths: readonly string[], operation: () => Promise<TValue>): Promise<TValue>;
 }
 
@@ -438,9 +439,11 @@ export default class WorkbenchWorkspaceGitArcController {
     selected: readonly RepoMember[],
     operation: (member: RepoMember) => Promise<T>,
     preflight?: (member: RepoMember) => Promise<void>,
+    mode: "read" | "write" = "write",
   ) {
     if (!selected.length) throw new Error("This workspace Git arc has no matching repository members.");
-    return await this.transitions.runMany(selected.map(({ repoRoot }) => repoRoot), async () => {
+    const run = mode === "read" ? this.transitions.readMany.bind(this.transitions) : this.transitions.runMany.bind(this.transitions);
+    return await run(selected.map(({ repoRoot }) => repoRoot), async () => {
       if (preflight) {
         for (const member of selected) {
           try {
@@ -655,7 +658,7 @@ export default class WorkbenchWorkspaceGitArcController {
         ...(group?.paths.length ? { paths: group.paths } : {}),
       };
       return request.action === "compare" ? await this.local.compare(input) : await this.local.diff(input);
-    });
+    }, undefined, "read");
     return this.aggregateResults(project, values);
   }
 
@@ -675,7 +678,7 @@ export default class WorkbenchWorkspaceGitArcController {
     const member = this.memberForRoot(members, root);
     const values = await this.runMembers([member], async () => await this.local.moveInArc({
       cwd: member.repoRoot, harness: request.harness, move: this.translateMove(root, request.move), threadId: request.threadId,
-    }));
+    }), undefined, request.move.kind === "regex" && !request.move.confirm ? "read" : "write");
     return this.aggregateResults(project, values);
   }
 
@@ -736,7 +739,10 @@ export default class WorkbenchWorkspaceGitArcController {
     request: Extract<GitCheckpointRequest, { action: "proposalCommit" | "proposalRescind" | "proposalState" }>,
   ) {
     const member = await this.findProposalMember(members, request);
-    const result = await this.transitions.runMany([member.repoRoot], async () => {
+    const run = request.action === "proposalState"
+      ? this.transitions.readMany.bind(this.transitions)
+      : this.transitions.runMany.bind(this.transitions);
+    const result = await run([member.repoRoot], async () => {
       if (request.action === "proposalState") return await this.local.getProposal({ ...request, cwd: member.repoRoot });
       if (request.action === "proposalRescind") return await this.local.rescindProposal({ ...request, cwd: member.repoRoot });
       return await this.local.commitProposal({ ...request, cwd: member.repoRoot });

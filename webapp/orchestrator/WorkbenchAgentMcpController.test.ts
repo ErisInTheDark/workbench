@@ -65,6 +65,7 @@ function responseText(result: unknown) {
 test("lists one typed tool per eligible command and dispatches with trusted thread cwd", async () => {
   const executed: WorkbenchAgentCommandRequest[] = [];
   const codexRequests: Array<{ method?: string; params?: unknown }> = [];
+  const loggedCommands: Array<{ label: string; succeeded: boolean }> = [];
   const shellCalls: Array<{ input: object; meta: Record<string, unknown> | undefined }> = [];
   const controller = new WorkbenchAgentMcpController({
     executeCommand: async (request) => {
@@ -77,6 +78,11 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     requestCodex: async (request) => {
       codexRequests.push(request);
       return { id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } };
+    },
+    runLoggedCommand: async (label, _signal, operation, succeeded) => {
+      const result = await operation();
+      loggedCommands.push({ label, succeeded: succeeded?.(result) ?? true });
+      return result;
     },
     shell: {
       execute: async (input, meta) => {
@@ -156,6 +162,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       stdout: "partial\n",
     });
     assert.deepEqual(shellCalls, [{ input: { command: "Get-ChildItem", workdir: "child" }, meta: shellMeta }]);
+    assert.deepEqual(loggedCommands, [{ label: "wb shell", succeeded: false }]);
 
     for (const [toolName, action, responseKind] of [
       ["git_arc_compare", "compare", "git-arc-compare"],

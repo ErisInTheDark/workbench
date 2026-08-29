@@ -154,7 +154,7 @@ before(async () => {
   const address = server.address();
   assert(address && typeof address === "object");
   origin = `http://127.0.0.1:${address.port}`;
-  agentCommandController = new WorkbenchAgentCommandController(origin, origin, {
+  agentCommandController = new WorkbenchAgentCommandController(origin, {
     checkApplyPatchClaims: async ({ paths }) => {
       if (paths.some((filePath) => filePath.endsWith("unavailable.ts"))) throw new Error("claim registry unavailable");
       const uncoveredPaths = paths.filter((filePath) => filePath.endsWith("unclaimed.ts"));
@@ -162,6 +162,11 @@ before(async () => {
     },
     executeBrowseRequest: async () => { throw new Error("unexpected direct Browse dispatch"); },
     executeSessionRequest: async () => { throw new Error("unexpected direct Browse session dispatch"); },
+    executeThreadRecallRequest: async (request) => {
+      const body = JSON.stringify(request.body ?? {});
+      requests.push({ body, method: request.method, url: request.path });
+      return Response.json({ method: request.method, ok: true, url: request.path });
+    },
     getReloadScopeCatalog: () => reloadCatalog,
   });
   temporaryDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-agent-cli-test-"));

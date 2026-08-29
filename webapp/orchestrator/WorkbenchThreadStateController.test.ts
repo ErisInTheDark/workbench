@@ -11,15 +11,15 @@ import type { WorkbenchReloadDirtSnapshot } from "../lib/types";
 import { getProjectQualifiedThreadDisplayKey } from "../lib/workbench/thread/thread-display-layout";
 import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 
-type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcTransition">
-  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcTransition">>;
+type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition">
+  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition">>;
 
 class WorkbenchThreadStateController extends WorkbenchThreadStateControllerOwner {
   constructor(options: TestControllerOptions) {
     super({
       resolveGitArc: async () => null,
       resolveGitArcPlan: async () => null,
-      runGitArcTransition: async (_projectId, operation) => await operation(),
+      runGitArcReadTransition: async (_projectId, operation) => await operation(),
       ...options,
     });
   }
@@ -2076,7 +2076,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
       } : null;
     },
     resolveProjectRoot: async () => root,
-    runGitArcTransition: async (_projectId, operation) => {
+    runGitArcReadTransition: async (_projectId, operation) => {
       gitArcTransitions += 1;
       insideGitArcTransition = true;
       try {

@@ -1,0 +1,60 @@
+/* No production exports. Tests protect pending cadence, terminal outcomes, cancellation, and timer cleanup for CLI/MCP timing logs. */
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
+
+test("logs repeated pending warnings and one successful completion", async () => {
+  let now = 0;
+  let callback: (() => void) | null = null;
+  const lines: string[] = [];
+  const logger = new WorkbenchAgentCommandLogger({
+    cancel: () => { callback = null; },
+    now: () => now,
+    schedule: (next) => {
+      callback = next;
+      return 1 as never;
+    },
+    writeLine: (line) => { lines.push(line.replace(/\u001b\[[0-9;]*m/gu, "")); },
+  });
+  let finish = (_value: string) => undefined;
+  const operation = new Promise<string>((resolve) => { finish = resolve; });
+  const completion = logger.run("wb git arc compare", new AbortController().signal, async () => await operation);
+
+  now = 2_000;
+  callback?.();
+  now = 4_000;
+  callback?.();
+  finish("done");
+  assert.equal(await completion, "done");
+  assert.deepEqual(lines, [
+    " CLI wb git arc compare pending after 2.0s",
+    " CLI wb git arc compare pending after 4.0s",
+    " CLI wb git arc compare ok in 4.0s",
+  ]);
+  assert.equal(callback, null);
+});
+
+test("reports failed responses and cancelled exceptions without leaking timers", async () => {
+  const lines: string[] = [];
+  let activeTimers = 0;
+  const logger = new WorkbenchAgentCommandLogger({
+    cancel: () => { activeTimers -= 1; },
+    schedule: () => {
+      activeTimers += 1;
+      return activeTimers as never;
+    },
+    writeLine: (line) => { lines.push(line.replace(/\u001b\[[0-9;]*m/gu, "")); },
+  });
+
+  await logger.run("wb git arc diff", new AbortController().signal, async () => Response.json({}, { status: 400 }), (response) => response.ok);
+  const cancellation = new AbortController();
+  await assert.rejects(logger.run("wb shell", cancellation.signal, async () => {
+    cancellation.abort(new Error("cancelled"));
+    throw cancellation.signal.reason;
+  }), /cancelled/u);
+
+  assert.match(lines[0] ?? "", /CLI wb git arc diff error in/u);
+  assert.match(lines[1] ?? "", /CLI wb shell cancelled in/u);
+  assert.equal(activeTimers, 0);
+});

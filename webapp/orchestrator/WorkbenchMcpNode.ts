@@ -40,6 +40,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       getReloadScopeCatalog: context.getReloadScopeCatalog,
       orchestratorOrigin: context.localOrchestratorOrigin,
       requestCodex: async (request) => await harnesses.request("codex", request),
+      runLoggedCommand: async (label, signal, operation, succeeded) => (
+        await agentCommand.runLoggedCommand(label, signal, operation, succeeded)
+      ),
     });
     const orchestratorHttp = new WorkbenchOrchestratorHttpRouter({
       agentCommand,

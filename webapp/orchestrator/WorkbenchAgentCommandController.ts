@@ -18,6 +18,7 @@ import {
 import type { WorkbenchHarness, WorkbenchReloadDirtSnapshot } from "../lib/types";
 import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import WorkbenchRipgrepController from "./WorkbenchRipgrepController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
@@ -26,6 +27,8 @@ interface WorkbenchAgentDirectPort {
   checkApplyPatchClaims?: (request: { cwd: string; harness: WorkbenchHarness; paths: string[]; threadId: string }) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeThreadGitRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeThreadRecallRequest?: (request: WorkbenchAgentCliRequest, signal: AbortSignal) => Promise<Response>;
   executeTokenCount?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   getReloadDirt?: (signal?: AbortSignal) => Promise<WorkbenchReloadDirtSnapshot>;
@@ -139,11 +142,11 @@ export default class WorkbenchAgentCommandController {
   private readonly ripgrep: Pick<WorkbenchRipgrepController, "execute">;
 
   constructor(
-    private readonly nextOrigin: string,
     private readonly orchestratorOrigin: string,
     private readonly direct: WorkbenchAgentDirectPort = UNCONFIGURED_DIRECT_PORT,
     private readonly fetchRequest: typeof fetch = fetch,
     ripgrep?: Pick<WorkbenchRipgrepController, "execute">,
+    private readonly commandLogger = new WorkbenchAgentCommandLogger(),
   ) {
     this.ripgrep = ripgrep ?? new WorkbenchRipgrepController({
       requestCodex: async (request) => {
@@ -235,7 +238,7 @@ export default class WorkbenchAgentCommandController {
       }
       if (parsed.request.waitForReload) {
         this.activeRequests.delete(active);
-        await this.admitReloadRequest(parsed.request, response, signal);
+        await this.admitReloadRequest(parsed.request, response, signal, this.executeStructuredRequest(parsed.request, signal));
         return;
       }
       await this.writeCliResponse(parsed.request, response, await this.executeStructuredRequest(parsed.request, signal), signal);
@@ -249,7 +252,21 @@ export default class WorkbenchAgentCommandController {
   }
 
   async executeStructuredRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
-    return await this.dispatchRequest(request, signal);
+    return await this.runLoggedCommand(
+      `wb ${request.commandName?.trim() || "command"}`,
+      signal,
+      async () => await this.dispatchRequest(request, signal),
+      (response) => response.ok,
+    );
+  }
+
+  async runLoggedCommand<TValue>(
+    label: string,
+    signal: AbortSignal,
+    operation: () => Promise<TValue>,
+    succeeded?: (value: TValue) => boolean,
+  ) {
+    return await this.commandLogger.run(label, signal, operation, succeeded);
   }
 
   private async handleApplyPatchClaimHook(
@@ -330,6 +347,12 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/api/git-checkpoint" && request.body && this.direct.executeGitArcRequest) {
       return await this.direct.executeGitArcRequest(request.body, signal);
     }
+    if (request.path === "/api/git" && request.body && this.direct.executeThreadGitRequest) {
+      return await this.direct.executeThreadGitRequest(request.body, signal);
+    }
+    if (request.path.startsWith("/api/thread-context/") && this.direct.executeThreadRecallRequest) {
+      return await this.direct.executeThreadRecallRequest(request, signal);
+    }
     if (request.path === "/api/rg" && request.body) {
       return await this.ripgrep.execute(request.body, signal);
     }
@@ -355,7 +378,7 @@ export default class WorkbenchAgentCommandController {
     if (request.path.startsWith("/api/browse")) {
       return await this.direct.executeBrowseRequest(body, signal);
     }
-    return await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));
+    throw new Error(`Workbench command ${request.commandName?.trim() || request.path} has no direct orchestrator dispatch.`);
   }
 
   private async dispatchManagedThreadRequest(pathname: string, body: Record<string, unknown>, signal: AbortSignal) {
@@ -432,12 +455,17 @@ export default class WorkbenchAgentCommandController {
     if (requestPath.startsWith("/api/orchestrator/reload")) {
       return new URL(requestPath.replace("/api/orchestrator/reload", "/orchestrator/reload"), this.orchestratorOrigin);
     }
-    return new URL(requestPath, this.nextOrigin);
+    throw new Error(`Workbench command path is not an orchestrator reload endpoint: ${requestPath}`);
   }
 
-  private async admitReloadRequest(request: WorkbenchAgentCliRequest, response: http.ServerResponse, signal: AbortSignal) {
+  private async admitReloadRequest(
+    request: WorkbenchAgentCliRequest,
+    response: http.ServerResponse,
+    signal: AbortSignal,
+    completion: Promise<Response>,
+  ) {
     // The stable reload coordinator owns the long wait after this feature-generation lease returns.
-    void this.completeReloadResponse(request, response, signal, this.dispatchRequest(request, signal));
+    void this.completeReloadResponse(request, response, signal, completion);
   }
 
   private async completeReloadResponse(

@@ -41,6 +41,7 @@ export type WorkbenchAgentCommandResponseKind =
 
 export interface WorkbenchAgentCommandRequest {
   body?: { [key: string]: JsonValue };
+  commandName?: string;
   method: "GET" | "POST";
   path: string;
   responseKind: WorkbenchAgentCommandResponseKind;
@@ -102,9 +103,14 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
 export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
   definition: TypedWorkbenchAgentCommandDefinition<TSchema>,
 ): WorkbenchAgentCommandDefinition {
-  const buildValidatedRequest = async (input: unknown, context: WorkbenchAgentCommandContext) => (
-    await definition.buildRequest(definition.inputSchema.parse(input), context)
-  );
+  const buildValidatedRequest = async (input: unknown, context: WorkbenchAgentCommandContext) => {
+    const request = await definition.buildRequest(definition.inputSchema.parse(input), context);
+    Object.defineProperty(request, "commandName", {
+      enumerable: false,
+      value: definition.words.join(" "),
+    });
+    return request;
+  };
   return {
     aliases: definition.aliases,
     buildRequestFromCli: async (args, context) => await buildValidatedRequest(definition.parseCliArgs(args), context),

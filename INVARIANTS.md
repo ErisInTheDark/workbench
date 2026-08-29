@@ -10,6 +10,8 @@ You may propose new invariants or changes to existing invariants, but you must m
 - Keep external system details at their adapter boundary.
 - Convert external data into shared Workbench types before core code uses it.
 - Do not replace an existing owner as part of an additive change.
+<!-- Prevent wb command fallback from coupling the standalone orchestrator to Next.js. -->
+- Run Workbench CLI and MCP commands in the standalone orchestrator. Never route them through Next.js.
 
 ## Managed instructions
 

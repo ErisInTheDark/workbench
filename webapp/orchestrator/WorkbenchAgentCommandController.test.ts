@@ -76,7 +76,6 @@ function createBrowsePort(executeBrowseRequest: (body: Buffer, signal: AbortSign
 test("dispatches token counting and scopes only managed-thread help by cwd", async () => {
   const requests: object[] = [];
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -127,7 +126,6 @@ test("dispatches token counting and scopes only managed-thread help by cwd", asy
 test("direct Git arc dispatch receives the caller cancellation signal", async () => {
   let receivedSignal: AbortSignal | null = null;
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -148,11 +146,48 @@ test("direct Git arc dispatch receives the caller cancellation signal", async ()
   assert.equal(receivedSignal, cancellation.signal);
 });
 
+test("dispatches thread Git directly and fails closed without a direct owner", async () => {
+  const receivedBodies: object[] = [];
+  let fetchCount = 0;
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      executeThreadGitRequest: async (body) => {
+        receivedBodies.push(body);
+        return Response.json({ ok: true });
+      },
+    },
+    async () => {
+      fetchCount += 1;
+      throw new Error("unexpected Next fetch");
+    },
+  );
+  const signal = new AbortController().signal;
+  const response = await controller.executeStructuredRequest({
+    body: { action: "status" },
+    method: "POST",
+    path: "/api/git",
+    responseKind: "native",
+  }, signal);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(receivedBodies, [{ action: "status" }]);
+  await assert.rejects(
+    controller.executeStructuredRequest({
+      method: "GET",
+      path: "/api/unowned",
+      responseKind: "native",
+    }, signal),
+    /no direct orchestrator dispatch/u,
+  );
+  assert.equal(fetchCount, 0);
+});
+
 test("answers the private apply_patch hook from the active claim owner", async () => {
   const checkedPaths: string[][] = [];
   const checkedThreadIds: string[] = [];
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -215,7 +250,6 @@ test("answers the private apply_patch hook from the active claim owner", async (
 
 test("returns Codex deny decisions for mismatched identity, malformed input, and claim-read failure", async () => {
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -251,7 +285,6 @@ test("returns Codex deny decisions for mismatched identity, malformed input, and
 test("dispatches Browse commands directly without an internal fetch and preserves response adaptation", async () => {
   let receivedBody = "";
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     createBrowsePort(async (body) => {
       receivedBody = body.toString("utf8");
@@ -282,7 +315,6 @@ test("dispatches Browse commands directly without an internal fetch and preserve
 
 test("renders complete help without an internal capability request", async () => {
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
     async () => { throw new Error("unexpected internal fetch"); },
@@ -304,7 +336,6 @@ test("renders complete help without an internal capability request", async () =>
 test("dispatches ripgrep directly with one argument-vector request", async () => {
   let received: { input: object; signal: AbortSignal } | null = null;
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
     async () => { throw new Error("unexpected internal fetch"); },
@@ -337,7 +368,6 @@ test("dispatches ripgrep directly with one argument-vector request", async () =>
 test("dispatches native subagent commands directly without waiting on Next fetch headers", async () => {
   let receivedRequest: { method?: string; params?: unknown } | null = null;
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -372,7 +402,6 @@ test("dispatches native subagent commands directly without waiting on Next fetch
 test("dispatches thread resume through the direct managed-thread transport", async () => {
   let receivedRequest: { method?: string; params?: unknown } | null = null;
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -407,7 +436,6 @@ test("cancels the exact direct subagent waiter when the native caller disconnect
   const waitCancelled = deferred<string>();
   const waitResponse = deferred<{ id: number | string | null; error: { code: number; message: string } }>();
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -453,7 +481,6 @@ test("aborts direct Browse execution when the native caller disconnects", async 
   const started = deferred<AbortSignal>();
   const aborted = deferred<Error>();
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     createBrowsePort(async (_body, signal) => {
       started.resolve(signal);
@@ -486,26 +513,25 @@ test("aborts direct Browse execution when the native caller disconnects", async 
   }
 });
 
-test("passes caller cancellation into genuine remaining fetches", async () => {
+test("dispatches Thread Recall directly and preserves caller cancellation", async () => {
   const started = deferred<AbortSignal>();
   const aborted = deferred<Error>();
-  const fetchRequest: typeof fetch = async (_input, init) => {
-    const signal = init?.signal;
-    assert.ok(signal);
-    started.resolve(signal);
-    return await new Promise<Response>((_resolve, reject) => {
-      signal.addEventListener("abort", () => {
-        const error = signal.reason instanceof Error ? signal.reason : new Error("aborted");
-        aborted.resolve(error);
-        reject(error);
-      }, { once: true });
-    });
-  };
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
-    createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
-    fetchRequest,
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      executeThreadRecallRequest: async (_request, signal) => {
+        started.resolve(signal);
+        return await new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            const error = signal.reason instanceof Error ? signal.reason : new Error("aborted");
+            aborted.resolve(error);
+            reject(error);
+          }, { once: true });
+        });
+      },
+    },
+    async () => { throw new Error("unexpected Next fetch"); },
   );
   const server = await startController(controller);
   try {
@@ -542,7 +568,6 @@ test("reload admission releases the handler before terminal polling completes", 
     return await terminal.promise;
   };
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
     fetchRequest,
@@ -581,7 +606,6 @@ test("ordinary command admission releases the handler and runtime drain cancels 
   const dirtStarted = deferred<void>();
   const dirtCancelled = deferred<Error>();
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -620,7 +644,6 @@ test("ordinary command admission releases the handler and runtime drain cancels 
 test("caller metadata cannot convert a user reload into managed admission", async () => {
   const requests: Record<string, unknown>[] = [];
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -654,7 +677,6 @@ test("caller metadata cannot convert a user reload into managed admission", asyn
 test("dirt and all share the live dirt snapshot while unsafe remains explicit", async () => {
   const requestBodies: Record<string, unknown>[] = [];
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -712,7 +734,6 @@ test("managed hard reloads bypass the direct coordinator", async () => {
     });
   };
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -766,7 +787,6 @@ test("disconnecting after reload admission aborts terminal polling", async () =>
     });
   };
   const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:3002",
     "http://127.0.0.1:4500",
     createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
     fetchRequest,

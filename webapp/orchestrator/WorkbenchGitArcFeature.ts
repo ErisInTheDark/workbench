@@ -37,7 +37,8 @@ export interface WorkbenchGitArcFeatureOptions {
   onReloadEligibilityChanged?: () => void;
   reloadScopeProjectRoot?: string;
   resolveProjectFromCwd(cwd: string): Promise<AgentEndpointProjectResolution | { cwd: string; project: { id: string } }>;
-  transitions: Pick<WorkbenchThreadTransitionCoordinator, "run"> & Partial<Pick<WorkbenchThreadTransitionCoordinator, "runMany">>;
+  transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
+    & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read" | "readMany" | "runMany">>;
 }
 
 export type WorkbenchGitArcLifecycleState = WorkspaceGitArcLifecycleState;
@@ -116,7 +117,11 @@ export default class WorkbenchGitArcFeature {
   private readonly claimWaiters = new Set<() => void>();
 
   constructor(private readonly options: WorkbenchGitArcFeatureOptions) {
+    const readMany = options.transitions.readMany ?? options.transitions.runMany;
     this.workspaceController = new WorkbenchWorkspaceGitArcController(this.controller, {
+      readMany: async (paths, operation) => readMany
+        ? await readMany.call(options.transitions, paths, operation)
+        : await options.transitions.run(paths[0] ?? "git-arc", operation),
       runMany: async (paths, operation) => options.transitions.runMany
         ? await options.transitions.runMany(paths, operation)
         : await options.transitions.run(paths[0] ?? "git-arc", operation),
@@ -213,7 +218,10 @@ export default class WorkbenchGitArcFeature {
               ? await this.dispatch(request)
               : usesWorkspaceController(project, request)
                 ? Response.json(await this.workspaceController.execute(project, request))
-                : await this.options.transitions.run(project.cwd, async () => await this.dispatch(request));
+                : mutatesGitArcState(request)
+                  ? await this.options.transitions.run(project.cwd, async () => await this.dispatch(request))
+                  : await (this.options.transitions.read ?? this.options.transitions.run)
+                    .call(this.options.transitions, project.cwd, async () => await this.dispatch(request));
           } catch (error) {
             throw new GitArcFailureException(await this.createFailure(project.project.id, request, error));
           }

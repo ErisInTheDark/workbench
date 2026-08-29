@@ -68,7 +68,8 @@ export interface WorkbenchThreadStateFeatureContext {
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
   resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
   storageRoot: string;
-  transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">;
+  transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
+    & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read">>;
 }
 
 function asRecord(value: unknown) {
@@ -232,9 +233,10 @@ export default class WorkbenchThreadStateFeature {
         return projectGitArcPlan(state ?? undefined);
       },
       resolveProjectRoot: async (projectId) => (await context.resolveProjectById(projectId)).rootPath,
-      runGitArcTransition: async (projectId, operation) => {
+      runGitArcReadTransition: async (projectId, operation) => {
         const project = await context.resolveProjectById(projectId);
-        return await context.transitions.run(project.rootPath, operation);
+        const read = context.transitions.read ?? context.transitions.run;
+        return await read.call(context.transitions, project.rootPath, operation);
       },
       storageRoot: context.storageRoot,
     });

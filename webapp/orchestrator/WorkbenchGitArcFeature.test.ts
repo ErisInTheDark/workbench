@@ -144,18 +144,22 @@ test("Git arc wait stops on caller cancellation and feature disposal", async () 
   assert.equal((await disposedResponse).status, 400);
 });
 
-test("sibling threads in one worktree share the Git arc transition lane", async () => {
+test("sibling thread card reads share the Git read lease instead of taking the writer lane", async () => {
   const keys: string[] = [];
   const feature = new WorkbenchGitArcFeature({
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: {
-      run: async (key: string) => {
-        keys.push(key);
-        throw new Error("stop after capturing the transition key");
+      read: async (key, operation) => {
+        keys.push(`read:${key}`);
+        return await operation();
       },
+      run: async (key) => { throw new Error(`unexpected writer transition: ${key}`); },
     },
+  });
+  Object.defineProperty(feature, "dispatch", {
+    value: async () => Response.json({ changes: [] }),
   });
   const request = {
     action: "compare",
@@ -166,7 +170,7 @@ test("sibling threads in one worktree share the Git arc transition lane", async 
   await feature.executeRequest({ ...request, harness: "codex", threadId: "thread-one" });
   await feature.executeRequest({ ...request, harness: "opencode", threadId: "thread-two" });
 
-  assert.deepEqual(keys, ["C:/Git/Project", "C:/Git/Project"]);
+  assert.deepEqual(keys, ["read:C:/Git/Project", "read:C:/Git/Project"]);
 });
 
 test("exact concurrent proposal and claim card reads share one transition operation", async () => {
@@ -182,10 +186,11 @@ test("exact concurrent proposal and claim card reads share one transition operat
       refreshThreadGitArcState: async () => undefined,
       resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
       transitions: {
-        run: async (_key, operation) => {
+        read: async (_key, operation) => {
           transitionCount += 1;
           return await operation();
         },
+        run: async () => { throw new Error("card reads must not take the writer lease"); },
       },
     });
     Object.defineProperty(feature, "dispatch", {
@@ -229,6 +234,10 @@ test("a Git arc mutation fences later card reads from an older shared result", a
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: {
+      read: async (key, operation) => {
+        transitionCount += 1;
+        return await coordinator.read(key, operation);
+      },
       run: async (key, operation) => {
         transitionCount += 1;
         if (transitionCount === 2) reportMutationQueued();

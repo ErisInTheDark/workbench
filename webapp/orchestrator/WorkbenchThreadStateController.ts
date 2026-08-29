@@ -137,7 +137,7 @@ export interface WorkbenchThreadStateControllerOptions {
   resolveGitArc: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<WorkbenchGitArcLifecycleState | LegacyGitArcClaim | null>;
   resolveGitArcPlan: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<WorkbenchGitArcPlanState | null>;
   resolveProjectRoot: (projectId: string) => Promise<string>;
-  runGitArcTransition: <TValue>(projectId: string, operation: () => Promise<TValue>) => Promise<TValue>;
+  runGitArcReadTransition: <TValue>(projectId: string, operation: () => Promise<TValue>) => Promise<TValue>;
   storageRoot: string;
   subscribeReloadDirt?: (listener: () => void) => () => void;
 }
@@ -1451,7 +1451,7 @@ export default class WorkbenchThreadStateController {
       return { accepted: true, revision: state.revision };
     });
     return request.method === "workbench/thread-state/settle"
-      ? await this.options.runGitArcTransition(request.projectId, mutate)
+      ? await this.options.runGitArcReadTransition(request.projectId, mutate)
       : await mutate();
   }
 

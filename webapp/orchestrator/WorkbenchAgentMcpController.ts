@@ -47,6 +47,12 @@ export interface WorkbenchAgentMcpControllerOptions {
   orchestratorOrigin: string;
   requestRegistry?: WorkbenchAgentMcpRequestRegistry;
   requestCodex: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
+  runLoggedCommand?: <TValue>(
+    label: string,
+    signal: AbortSignal,
+    operation: () => Promise<TValue>,
+    succeeded?: (value: TValue) => boolean,
+  ) => Promise<TValue>;
   shell?: Pick<WorkbenchShellController, "execute">;
 }
 
@@ -120,16 +126,27 @@ export default class WorkbenchAgentMcpController {
   private readonly orchestratorOrigin: string;
   private readonly requestRegistry: WorkbenchAgentMcpRequestRegistry;
   private readonly requestCodex: WorkbenchAgentMcpControllerOptions["requestCodex"];
+  private readonly runLoggedCommand: NonNullable<WorkbenchAgentMcpControllerOptions["runLoggedCommand"]>;
   private readonly runtimeOwner = {};
   private readonly shell: Pick<WorkbenchShellController, "execute">;
 
-  constructor({ executeCommand, getReloadScopeCatalog = () => [], lifecycleLogError = logError, orchestratorOrigin, requestCodex, requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry(), shell }: WorkbenchAgentMcpControllerOptions) {
+  constructor({
+    executeCommand,
+    getReloadScopeCatalog = () => [],
+    lifecycleLogError = logError,
+    orchestratorOrigin,
+    requestCodex,
+    requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry(),
+    runLoggedCommand = async (_label, _signal, operation) => await operation(),
+    shell,
+  }: WorkbenchAgentMcpControllerOptions) {
     this.executeCommand = executeCommand;
     this.getReloadScopeCatalog = getReloadScopeCatalog;
     this.lifecycleLogError = lifecycleLogError;
     this.orchestratorOrigin = orchestratorOrigin;
     this.requestRegistry = requestRegistry;
     this.requestCodex = requestCodex;
+    this.runLoggedCommand = runLoggedCommand;
     this.shell = shell ?? new WorkbenchShellController({ requestCodex });
   }
 
@@ -282,7 +299,12 @@ export default class WorkbenchAgentMcpController {
       });
       unregister = registration.unregister;
       signal = AbortSignal.any([signal, registration.signal]);
-      const result = await this.shell.execute(input, meta, signal);
+      const result = await this.runLoggedCommand(
+        "wb shell",
+        signal,
+        async () => await this.shell.execute(input, meta, signal),
+        (value) => value.exitCode === 0,
+      );
       if (signal.aborted) throw signal.reason;
       const output = getWorkbenchShellAggregatedOutput(result);
       return {
