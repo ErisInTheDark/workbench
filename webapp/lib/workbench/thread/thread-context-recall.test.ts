@@ -26,6 +26,7 @@ import {
   selectWorkbenchThreadRecallRecords,
   type WorkbenchThreadRecallRecord,
 } from "./thread-context-recall.ts";
+import { createWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
 import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput } from "./thread-recovery-message.ts";
 import { createWorkbenchAgentMessageText } from "./thread-agent-message.ts";
 import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "./thread-user-input-requests.ts";
@@ -161,6 +162,19 @@ function createBundle(): WorkbenchThreadContextBundle {
       status: "sent",
       threadId: "thread-1",
       turnId: "turn-new",
+    }, {
+      attemptedAt: 15,
+      canonicalItemId: null,
+      entryKey: "turn-steer:activated-only",
+      error: null,
+      input: [createWorkbenchActivatedSkillsInput(
+        '<skill filename="C:/skills/iterate/SKILL.md" trigger="/iterate">\nSECRET SKILL BODY\n</skill>',
+      )],
+      requestId: "activated-only-request",
+      resolvedAt: 16,
+      status: "sent",
+      threadId: "thread-1",
+      turnId: "turn-new",
     }],
     thread: {
       agentNickname: null,
@@ -251,8 +265,9 @@ test("builds one rich narrative projection and suppresses embedded plans with th
   assert(records.some((record) => record.ref === "steer:turn-new:turn-steer:139" && record.kind === "agent-message"));
   assert.match(
     records.find((record) => record.ref === "steer:turn-new:turn-steer:approval-note")?.text ?? "",
-    /^<wb:run-outside-sandbox:note type="declined">\nThe cwd is wrong\.\n<\/wb:run-outside-sandbox:note>$/u,
+    /^The cwd is wrong\.$/u,
   );
+  assert.equal(records.some((record) => record.text.includes("SECRET SKILL BODY")), false);
   assert.deepEqual(
     selectWorkbenchThreadRecallRecords(records, ALL_KINDS)
       .filter((record) => record.ref === "agent:plan-new" || record.ref === "plan-block:plan-new:0")

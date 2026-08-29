@@ -13,6 +13,7 @@ import {
 } from "./thread-questionnaire-transcript.ts";
 import { readWorkbenchAgentMessageInput } from "./thread-agent-message.ts";
 import type { WorkbenchThreadContextPiece } from "./thread-context-projection.ts";
+import { unwrapWorkbenchSteerDisplayInput } from "./thread-steer-display.ts";
 
 const IMAGE_PLACEHOLDER = "<an image was sent>";
 
@@ -21,7 +22,7 @@ function normalizeMarkdownPart(value: string) {
 }
 
 export function renderUserInputMarkdown(input: readonly UserInput[]) {
-  const parts = input.map((item) => {
+  const parts = unwrapWorkbenchSteerDisplayInput(input).map((item) => {
     switch (item.type) {
       case "text":
         return normalizeMarkdownPart(item.text) || "";
@@ -73,9 +74,9 @@ export function renderWorkbenchThreadContextPieceMarkdown(piece: WorkbenchThread
   }
   switch (piece.kind) {
     case "userMessage":
-      return renderUserInputMarkdown(piece.input);
+      return renderUserInputMarkdown(piece.displayInput);
     case "userSteer":
-      return renderUserInputMarkdown(piece.input);
+      return renderUserInputMarkdown(piece.displayInput);
     case "questionnaire":
       return renderQuestionnaireMarkdown(piece);
     case "planBlock":

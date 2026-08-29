@@ -20,6 +20,7 @@ import { readClipboardImageDataUrls } from "../../../lib/workbench/dom/clipboard
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import {
   buildInlineMentionHighlights,
+  getActivatedWorkbenchSkillPathsForTextValues,
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { getThreadCommandDisplay } from "../../../lib/workbench/thread/thread-command-matchers";
@@ -90,7 +91,11 @@ type InteractiveThreadUserInputRequestProps = {
   mode: "live";
   onDraftChange: (draft: WorkbenchQuestionnaireDraft) => void;
   onDraftClear: () => void;
-  onSubmit: (response: WorkbenchUserInputResponse, supplementalInput?: UserInput[]) => Promise<void>;
+  onSubmit: (
+    response: WorkbenchUserInputResponse,
+    supplementalInput?: UserInput[],
+    activatedSkillPaths?: string[],
+  ) => Promise<void>;
   presentation?: "compact" | "full";
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
@@ -324,10 +329,17 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
       type: "image",
       url: attachment.url,
     }));
+    const activatedSkillPaths = highlightSources
+      ? getActivatedWorkbenchSkillPathsForTextValues(Object.values(customValues), highlightSources)
+      : [];
     setIsSubmitting(true);
     setError("");
     try {
-      await interactiveProps.onSubmit(response, supplementalInput.length ? supplementalInput : undefined);
+      await interactiveProps.onSubmit(
+        response,
+        supplementalInput.length ? supplementalInput : undefined,
+        activatedSkillPaths.length ? activatedSkillPaths : undefined,
+      );
       submissionSucceededRef.current = true;
       onInteractiveDraftClearRef.current?.();
     } catch (submissionError) {

@@ -240,6 +240,7 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
     });
     assert.equal(upstreamRequests.length, 1);
   } finally {
+    await bridge.waitForIdle();
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }
@@ -1091,6 +1092,7 @@ test("turn-start preflight completes before upstream delivery and blocks deliver
     OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
   };
   const gate = deferred<void>();
+  const preflightStarted = deferred<void>();
   const events: string[] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
   let rejectPreflight = false;
@@ -1117,6 +1119,7 @@ test("turn-start preflight completes before upstream delivery and blocks deliver
     onNotification() {},
     prepareTurnStart: async () => {
       events.push("prepare:start");
+      preflightStarted.resolve();
       if (rejectPreflight) throw new Error("MCP refresh failed");
       await gate.promise;
       events.push("prepare:complete");
@@ -1129,20 +1132,30 @@ test("turn-start preflight completes before upstream delivery and blocks deliver
     id,
     method: "turn/start",
     params: { input: [{ text: "continue", text_elements: [], type: "text" }], threadId: "thread" },
+    workbenchPromptContext: {
+      cwd: root,
+      harness: "codex",
+      threadId: "thread",
+      workflowIds: ["default"],
+    },
   });
   try {
     const admitted = bridge.forwardRequest(request(1), client, 1);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await preflightStarted.promise;
     assert.deepEqual(events, ["send:thread/resume", "prepare:start"]);
     assert.equal(upstreamRequests.length, 1);
     const firstResumeParams = upstreamRequests[0]?.params as {
       config?: { mcp_servers?: { wb?: Record<string, unknown> } };
+      baseInstructions?: string | null;
+      developerInstructions?: string | null;
       excludeTurns?: boolean;
       threadId?: string;
     };
     assert.equal(firstResumeParams.excludeTurns, true);
     assert.equal(firstResumeParams.threadId, "thread");
     assert.equal(firstResumeParams.config?.mcp_servers?.wb?.required, true);
+    assert.ok(firstResumeParams.baseInstructions?.trim());
+    assert.ok(firstResumeParams.developerInstructions?.trim());
 
     gate.resolve();
     await admitted;

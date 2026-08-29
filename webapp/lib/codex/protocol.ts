@@ -131,7 +131,7 @@ export function createQuestionnaireCollaborationMode(
   return {
     mode: "plan",
     settings: {
-      developer_instructions: null,
+      developer_instructions: "",
       model,
       reasoning_effort: normalizeReasoningEffort(reasoningEffort),
     },

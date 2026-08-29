@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchPromptContext/WorkbenchPromptInstructions: stable prompt assembly contracts. Keywords: prompt, context, instructions.
  * - ensure/build Workbench prompt functions: delegate each source-consuming call through one fresh assembly generation. Keywords: prompt, markdown, reload.
- * - buildWorkbenchSkillCatalogDeveloperInstructions: load one current skill catalog with mentioned bodies preloaded. Keywords: skills, slash, catalog.
+ * - buildWorkbenchActivatedSkillCatalog: load fresh bodies for validated slash-activated skills. Keywords: skills, slash, input.
  * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: source-free selector and availability helpers. Keywords: selector, mechanics.
  * - default WorkbenchPromptFiles: stable public prompt API. Keywords: prompt, owner, generation.
  */
@@ -25,10 +25,10 @@ export async function buildWorkbenchPromptInstructions(
   return await loadFreshWorkbenchPromptAssembly().buildWorkbenchPromptInstructions(context);
 }
 
-export async function buildWorkbenchSkillCatalogDeveloperInstructions(
+export async function buildWorkbenchActivatedSkillCatalog(
   context: WorkbenchPromptContext = {},
 ): Promise<string | null> {
-  return await loadFreshWorkbenchPromptAssembly().buildWorkbenchSkillCatalogDeveloperInstructions(context);
+  return await loadFreshWorkbenchPromptAssembly().buildWorkbenchActivatedSkillCatalog(context);
 }
 
 export async function buildWorkbenchThreadUtilityDeveloperInstructions(
@@ -48,10 +48,10 @@ export function buildWorkbenchGitInstructions(context: WorkbenchPromptContext) {
 }
 
 const WorkbenchPromptFiles = {
+  buildWorkbenchActivatedSkillCatalog,
   buildWorkbenchCollaborationDeveloperInstructions,
   buildWorkbenchGitInstructions,
   buildWorkbenchPromptInstructions,
-  buildWorkbenchSkillCatalogDeveloperInstructions,
   buildWorkbenchThreadUtilityDeveloperInstructions,
   ensureWorkbenchPromptFiles,
   listWorkbenchInstructionMechanics,

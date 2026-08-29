@@ -20,6 +20,7 @@ interface HarnessCall {
   harness: string;
   method: string;
   params: Record<string, unknown>;
+  promptContext: Record<string, unknown> | null;
 }
 
 const callerThreadId = "parent-thread";
@@ -81,7 +82,12 @@ class FakeHarnessClient {
     const params = message.params && typeof message.params === "object" && !Array.isArray(message.params)
       ? message.params as Record<string, unknown>
       : {};
-    this.calls.push({ harness, method: message.method, params });
+    const promptContext = message.workbenchPromptContext
+      && typeof message.workbenchPromptContext === "object"
+      && !Array.isArray(message.workbenchPromptContext)
+      ? message.workbenchPromptContext as Record<string, unknown>
+      : null;
+    this.calls.push({ harness, method: message.method, params, promptContext });
 
     if (message.method === "thread/read") {
       if (harness !== "codex") return { error: { code: -32000, message: "Thread not found." }, id: 1 };
@@ -196,7 +202,13 @@ test("creates with one client and delivers a steer before empty questionnaire re
   const turnStart = clients[0].calls.find(({ method }) => method === "turn/start");
   assert.equal(threadStart?.params.effort, "medium");
   assert.equal(turnStart?.params.effort, "medium");
+  assert.equal(threadStart?.promptContext?.instructionScope, undefined);
+  assert.deepEqual(turnStart?.promptContext, {
+    ...threadStart?.promptContext,
+    threadId: childThreadId,
+  });
   assert.equal((turnStart?.params.collaborationMode as { settings?: { reasoning_effort?: string } })?.settings?.reasoning_effort, "medium");
+  assert.equal((turnStart?.params.collaborationMode as { settings?: { developer_instructions?: string } })?.settings?.developer_instructions, "");
   assert.deepEqual(readWorkbenchAgentMessageInput(turnStart?.params.input as UserInput[]), {
     message: "Inspect the code.",
     senderName: "parent agent",

@@ -19,6 +19,7 @@ import {
   isAgentScreenshotSteerInput,
   isAgentScreenshotSteerUserMessage,
 } from "./thread-steer-markers.ts";
+import { unwrapWorkbenchSteerDisplayInput } from "./thread-steer-display.ts";
 import { isWorkbenchHiddenSystemSteerInput } from "./thread-recovery-message.ts";
 
 type ContextPieceKind = "planBlock" | "questionnaire" | "userMessage" | "userSteer";
@@ -32,12 +33,14 @@ interface OrderedContextPieceBase {
 }
 
 export interface WorkbenchThreadContextUserMessagePiece extends OrderedContextPieceBase {
+  displayInput: UserInput[];
   input: UserInput[];
   itemId: string;
   kind: "userMessage";
 }
 
 export interface WorkbenchThreadContextUserSteerPiece extends OrderedContextPieceBase {
+  displayInput: UserInput[];
   entry: WorkbenchSteerHistoryEntry;
   input: UserInput[];
   kind: "userSteer";
@@ -227,8 +230,13 @@ function pushUserMessagePieces(
       if (item.type !== "userMessage" || !shouldIncludeUserMessage(item, bundle.steerEntries)) {
         return;
       }
+      const displayInput = unwrapWorkbenchSteerDisplayInput(item.content);
+      if (!displayInput.length) {
+        return;
+      }
 
       pieces.push({
+        displayInput,
         input: item.content,
         itemId: item.id,
         kind: "userMessage",
@@ -366,9 +374,14 @@ function pushSteerPieces(
     if (!shouldIncludeSteerEntry(entry)) {
       continue;
     }
+    const displayInput = unwrapWorkbenchSteerDisplayInput(entry.input);
+    if (!displayInput.length) {
+      continue;
+    }
 
     const position = resolveSteerPosition(entry, itemPositions, clientItemPositions, turnIndexes, turnItemCounts);
     pieces.push({
+      displayInput,
       entry,
       input: entry.input,
       itemId: entry.canonicalItemId,

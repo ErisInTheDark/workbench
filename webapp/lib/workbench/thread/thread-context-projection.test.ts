@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ThreadPayload, WorkbenchThreadContextBundle } from "../../types.ts";
+import { createWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
+import { renderWorkbenchThreadContextPieceMarkdown } from "./thread-context-markdown.ts";
 import { buildWorkbenchThreadContextPieces } from "./thread-context-projection.ts";
 import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryInput } from "./thread-recovery-message.ts";
 
@@ -48,6 +50,46 @@ test("exact Workbench resume and questionnaire-response steers stay out of proje
     thread: source,
   };
   assert.deepEqual(buildWorkbenchThreadContextPieces(bundle).map((piece) => piece.itemId), ["canonical-a", "canonical-b"]);
+});
+
+test("activated skill transport is stripped and hidden-only records are omitted", () => {
+  const source = thread();
+  const activated = createWorkbenchActivatedSkillsInput(
+    '<skill filename="C:/skills/iterate/SKILL.md" trigger="/iterate">\nSECRET SKILL BODY\n</skill>',
+  );
+  source.turns[0]!.items.push({
+    clientId: null,
+    content: [{ text: "/iterate now", text_elements: [], type: "text" }, activated],
+    id: "activated-message",
+    type: "userMessage",
+  });
+  const bundle: WorkbenchThreadContextBundle = {
+    browseResultEntries: [],
+    questionnaireEntries: [],
+    steerEntries: [{
+      attemptedAt: 4,
+      canonicalItemId: null,
+      clientUserMessageId: null,
+      dispatchSequence: null,
+      entryKey: "activated-only",
+      error: null,
+      input: [activated],
+      requestId: "activated-only",
+      resolvedAt: 5,
+      status: "sent",
+      threadId: "thread",
+      turnId: "turn",
+    }],
+    thread: source,
+  };
+  const pieces = buildWorkbenchThreadContextPieces(bundle);
+  const activatedMessage = pieces.find((piece) => piece.itemId === "activated-message");
+
+  assert.equal(pieces.some((piece) => piece.kind === "userSteer"), false);
+  assert.equal(
+    activatedMessage ? renderWorkbenchThreadContextPieceMarkdown(activatedMessage) : null,
+    "/iterate now",
+  );
 });
 
 test("native client identity still correlates after a canonical item id alias changes", () => {

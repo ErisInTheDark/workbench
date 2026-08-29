@@ -305,12 +305,11 @@ export default class WorkbenchSubagentController {
     return { profiles };
   }
 
-  private buildPromptContext(caller: ResolvedSubagentCaller, profile: WorkbenchComposerProfile, threadId: string, name: string, workbenchOrigin: string | undefined, instructionScope?: "threadUtilities") {
+  private buildPromptContext(caller: ResolvedSubagentCaller, profile: WorkbenchComposerProfile, threadId: string, name: string, workbenchOrigin: string | undefined) {
     return {
       agentPath: profile.agentPath,
       cwd: caller.cwd,
       harness: profile.harness,
-      ...(instructionScope ? { instructionScope } : {}),
       projectId: caller.project.id,
       roots: caller.project.roots.map((root, index) => ({ id: root.id, isPrimary: index === 0, name: root.name, relativePath: ".", rootPath: root.rootPath })),
       subagentName: name,
@@ -361,7 +360,7 @@ export default class WorkbenchSubagentController {
         await this.subagentStore.replace(caller.callerThreadId, reservationId, record);
         await this.onRelationshipCommitted(record);
         await this.requestHarness(client, profile.harness, { method: "thread/name/set", params: { cwd: caller.cwd, name: title, threadId: childId } });
-        const turnContext = this.buildPromptContext(caller, profile, childId, name, workbenchOrigin, profile.harness === "codex" ? "threadUtilities" : undefined);
+        const turnContext = this.buildPromptContext(caller, profile, childId, name, workbenchOrigin);
         await this.requestHarness(client, profile.harness, {
           method: "turn/start",
           [WORKBENCH_PROMPT_CONTEXT_FIELD]: turnContext,
@@ -596,7 +595,7 @@ export default class WorkbenchSubagentController {
     if (!profile) throw new Error("The subagent profile no longer exists.");
     await this.requestHarness(client, record.harness, {
       method: "turn/start",
-      [WORKBENCH_PROMPT_CONTEXT_FIELD]: this.buildPromptContext(caller, profile, record.threadId, record.name, typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : undefined, record.harness === "codex" ? "threadUtilities" : undefined),
+      [WORKBENCH_PROMPT_CONTEXT_FIELD]: this.buildPromptContext(caller, profile, record.threadId, record.name, typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : undefined),
       params: {
         ...(record.harness === "codex" ? { collaborationMode: createQuestionnaireCollaborationMode(profile.model, profile.reasoningEffort) } : {}),
         cwd: record.cwd, effort: profile.reasoningEffort, input, model: profile.model,

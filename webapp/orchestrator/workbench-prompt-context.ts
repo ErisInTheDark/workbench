@@ -39,7 +39,7 @@ function readInstructionScope(value: unknown): WorkbenchPromptContext["instructi
   return value === "threadUtilities" ? value : undefined;
 }
 
-function readMentionedSkillPaths(value: unknown) {
+function readActivatedSkillPaths(value: unknown) {
   if (!Array.isArray(value)) {
     return undefined;
   }
@@ -88,7 +88,7 @@ export function readWorkbenchPromptContext(message: JsonRpcRequest): WorkbenchPr
     cwd: asString(value.cwd),
     instructionScope: readInstructionScope(value.instructionScope),
     instructionInjections: readInstructionInjections(value.instructionInjections),
-    mentionedSkillPaths: readMentionedSkillPaths(value.mentionedSkillPaths),
+    activatedSkillPaths: readActivatedSkillPaths(value.activatedSkillPaths),
     projectId: asString(value.projectId),
     roots,
     subagentName: asString(value.subagentName),

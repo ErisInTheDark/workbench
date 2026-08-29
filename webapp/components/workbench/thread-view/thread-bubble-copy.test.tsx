@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
+import { createWorkbenchActivatedSkillsInput } from "../../../lib/workbench/thread/thread-activated-skills";
 import { unwrapWorkbenchSteerDisplayInput } from "../../../lib/workbench/thread/thread-steer-display";
 import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "../../../lib/workbench/thread/thread-user-input-requests";
 import {
@@ -94,6 +95,18 @@ test("approval-note metadata stays hidden from steer rendering and copy Markdown
   assert.match(html, /The requested cwd is wrong\./u);
   assert.doesNotMatch(html, /wb:run-outside-sandbox:note|type=&quot;declined&quot;/u);
   assert.equal(getUserMessageCopyMarkdown(displayInput), "The requested cwd is wrong.");
+});
+
+test("activated skill transport stays out of user rendering and copy Markdown", () => {
+  const item = createUserMessage("activated-skill", "/iterate now");
+  item.content.push(createWorkbenchActivatedSkillsInput(
+    '<skill filename="C:/skills/iterate/SKILL.md" trigger="/iterate">\nSECRET SKILL BODY\n</skill>',
+  ));
+  const html = renderUserItems([item]);
+  const displayInput = unwrapWorkbenchSteerDisplayInput(item.content);
+
+  assert.doesNotMatch(html, /wb:activated-skills|SECRET SKILL BODY/u);
+  assert.equal(getUserMessageCopyMarkdown(displayInput), "/iterate now");
 });
 
 test("image-only user messages do not render a copy action", () => {

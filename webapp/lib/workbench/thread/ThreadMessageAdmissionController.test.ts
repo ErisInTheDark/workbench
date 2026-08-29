@@ -97,7 +97,7 @@ test("admission connects, enqueues, sends exact native identity, and settles pen
 test("admission preserves Workbench context outside native steer input", async () => {
   const requests: Array<{ method: string; params?: unknown; workbenchPromptContext?: unknown }> = [];
   const workbenchPromptContext = {
-    mentionedSkillPaths: ["C:/skills/iterate/SKILL.md"],
+    activatedSkillPaths: ["C:/skills/iterate/SKILL.md"],
     threadId: "thread",
   };
   const result = setup(async <TResponse>(message) => {

@@ -9,7 +9,7 @@
  * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files. Keywords: agent, prompt, library.
  * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs. Keywords: instructions, universal, bootstrap, fingerprint.
  * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering. Keywords: bootstrap, dedupe, codex.
- * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog: build harness skill instructions, mixed skill catalogs, and universal instruction content. Keywords: bootstrap, skills, catalog.
+ * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build harness skill instructions, compact catalogs, activated skill bodies, and universal instruction content. Keywords: bootstrap, skills, catalog.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -568,24 +568,40 @@ function stripFrontmatter(content: string) {
 
 export async function buildWorkbenchSkillCatalog(
   projectSkills: readonly WorkbenchSkillDefinition[] = [],
-  mentionedSkillPaths: readonly string[] = [],
 ) {
-  const expandedPaths = new Set(
-    mentionedSkillPaths
-      .map(normalizeSkillPathIdentity)
-      .filter(Boolean),
-  );
   const activeSkills = await listActiveWorkbenchSkillDefinitions(projectSkills);
   if (!activeSkills.length) {
     return null;
   }
 
-  return activeSkills.map((skill) => {
-    const attributes = `filename="${escapeXmlAttribute(skill.path)}" trigger="${escapeXmlAttribute(skill.description)}"`;
-    if (!expandedPaths.has(normalizeSkillPathIdentity(skill.path))) {
-      return `<skill ${attributes} />`;
-    }
+  return activeSkills.map((skill) => (
+    `<skill filename="${escapeXmlAttribute(skill.path)}" trigger="${escapeXmlAttribute(skill.description)}" />`
+  )).join("\n");
+}
 
+export async function buildWorkbenchActivatedSkillCatalog(
+  projectSkills: readonly WorkbenchSkillDefinition[] = [],
+  activatedSkillPaths: readonly string[] = [],
+) {
+  const activatedPaths = new Set(
+    activatedSkillPaths
+      .map(normalizeSkillPathIdentity)
+      .filter(Boolean),
+  );
+  if (!activatedPaths.size) {
+    return null;
+  }
+
+  const activeSkills = await listActiveWorkbenchSkillDefinitions(projectSkills);
+  const activatedSkills = activeSkills.filter((skill) => (
+    activatedPaths.has(normalizeSkillPathIdentity(skill.path))
+  ));
+  if (!activatedSkills.length) {
+    return null;
+  }
+
+  return activatedSkills.map((skill) => {
+    const attributes = `filename="${escapeXmlAttribute(skill.path)}" trigger="${escapeXmlAttribute(skill.description)}"`;
     const body = stripFrontmatter(skill.content);
     return body
       ? `<skill ${attributes}>\n${body}\n</skill>`

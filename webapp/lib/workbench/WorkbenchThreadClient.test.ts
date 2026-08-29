@@ -559,7 +559,7 @@ test("differing acknowledgement runs the preserved tail once and tail failure st
   assert.equal(socket.requests.filter((request) => request.method === "turn/steer").length, 1);
   assert.equal(
     socket.requests.find((request) => request.method === "turn/steer")?.workbenchPromptContext?.instructionScope,
-    "threadUtilities",
+    undefined,
   );
   assert.equal(socket.requests.filter((request) => request.method === "thread/resume").length, 1);
   assert.equal(socket.requests.filter((request) => request.method === "steer/history/list").length, 1);
@@ -587,11 +587,11 @@ test("Codex slash mentions travel outside plain user input on steer and start", 
   client.selectThreadPayload(active);
 
   assert.equal(await client.sendThreadMessage(active, input, {
-    mentionedSkillPaths: [skillPath],
+    activatedSkillPaths: [skillPath],
   }), null);
   const steer = socket.requests.find((request) => request.method === "turn/steer");
   assert.deepEqual(steer?.params?.input, input);
-  assert.deepEqual(steer?.workbenchPromptContext?.mentionedSkillPaths, [skillPath]);
+  assert.deepEqual(steer?.workbenchPromptContext?.activatedSkillPaths, [skillPath]);
   assert.equal((steer?.params?.input as Array<{ type?: string }>).some((item) => item.type === "skill"), false);
 
   const idle = activeThread("codex", "idle", "completed");
@@ -609,13 +609,13 @@ test("Codex slash mentions travel outside plain user input on steer and start", 
     return false;
   };
   assert.equal(await client.sendThreadMessage(idle, input, {
-    mentionedSkillPaths: [skillPath],
+    activatedSkillPaths: [skillPath],
   }), null);
   const start = socket.requests.find((request) => (
     request.method === "turn/start" && request.params?.threadId === "idle"
   ));
   assert.deepEqual(start?.params?.input, input);
-  assert.deepEqual(start?.workbenchPromptContext?.mentionedSkillPaths, [skillPath]);
+  assert.deepEqual(start?.workbenchPromptContext?.activatedSkillPaths, [skillPath]);
   assert.equal((start?.params?.input as Array<{ type?: string }>).some((item) => item.type === "skill"), false);
 }));
 
@@ -633,7 +633,7 @@ test("idle selected Codex resumes once and starts with native identity while pro
   assert.equal(result, null);
   const codexStart = socket.requests.find((request) => request.method === "turn/start" && request.params?.threadId === "idle");
   assert.equal(typeof codexStart?.params?.clientUserMessageId, "string");
-  assert.equal(codexStart?.workbenchPromptContext?.instructionScope, "threadUtilities");
+  assert.equal(codexStart?.workbenchPromptContext?.instructionScope, undefined);
   const codexResume = socket.requests.find((request) => request.method === "thread/resume" && request.params?.threadId === "idle");
   assert.equal(codexResume?.params?.excludeTurns, true);
   assert.equal(codexResume?.workbenchThreadHydration, undefined);
@@ -2286,6 +2286,19 @@ test("questionnaire supplemental input and stop keep native steer identity off c
   });
   const supplemental = socket.requests.filter((request) => request.method === "turn/steer").at(-1);
   assert.equal(supplemental?.params?.clientUserMessageId, undefined);
+
+  const skillPath = "C:/skills/iterate/SKILL.md";
+  socket.notify("questionnaire/requested", {
+    itemId: "question-3", requestKey: "question-key-2", threadId: "thread", turnId: "turn",
+    request: { id: "question-2", questions: [], submitLabel: "send", summary: "question", title: "question" },
+  });
+  await client.submitPendingUserInputRequest("thread", { answers: {} }, {
+    activatedSkillPaths: [skillPath],
+  });
+  const activatedOnly = socket.requests.filter((request) => request.method === "turn/steer").at(-1);
+  assert.deepEqual(activatedOnly?.params?.input, []);
+  assert.deepEqual(activatedOnly?.workbenchPromptContext?.activatedSkillPaths, [skillPath]);
+  assert.equal(activatedOnly?.workbenchPromptContext?.instructionScope, undefined);
 }));
 
 test("interrupted proper questionnaires detach while approvals are discarded", async () => withClient(async (client, socket) => {
@@ -2411,6 +2424,7 @@ test("durable detached questionnaire responses resolve after admission even when
   };
 
   await client.submitPendingUserInputRequest("thread", { answers: { route: { answers: ["Approve"] } } }, {
+    activatedSkillPaths: ["C:/skills/iterate/SKILL.md"],
     insertAfterItemId: "prompt",
     insertAfterItemIndex: 0,
     turnId: "turn",
@@ -2424,6 +2438,7 @@ test("durable detached questionnaire responses resolve after admission even when
   assert.ok(startIndex > resumeIndex);
   const input = start?.params?.input as Array<{ text?: string; type?: string }> | undefined;
   assert.match(input?.[0]?.text ?? "", /^<wb:questionnaire-response>/u);
+  assert.deepEqual(start?.workbenchPromptContext?.activatedSkillPaths, ["C:/skills/iterate/SKILL.md"]);
   assert.equal(socket.requests.some((candidate) => candidate.method === "questionnaire/respond"), false);
   assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/thread-state/questionnaire/resolve"), true);
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);

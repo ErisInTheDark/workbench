@@ -3,7 +3,7 @@
  * - WorkbenchPromptContext/WorkbenchPromptInstructions: public prompt assembly contracts. Keywords: prompt, context, instructions.
  * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders. Keywords: AGENTS, workflows, default agent.
  * - buildWorkbenchPromptInstructions: resolve fresh prompt files and expand Workbench injections. Keywords: prompt, injections, app-server.
- * - buildWorkbenchSkillCatalogDeveloperInstructions: resolve one catalog with full bodies for validated slash mentions. Keywords: skills, slash, catalog.
+ * - buildWorkbenchActivatedSkillCatalog: resolve fresh bodies for validated slash-activated skills. Keywords: skills, slash, input.
  * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free typed Workbench instructions. Keywords: thread, utilities, MCP.
  * - buildWorkbenchCollaborationDeveloperInstructions: build Workbench-owned questionnaire collaboration instructions. Keywords: collaboration, plan mode.
  * - buildWorkbenchGitInstructions: re-export managed Git instruction rendering. Keywords: git, arc, checkpoint.
@@ -22,6 +22,7 @@ import type {
   WorkbenchProjectRoot,
 } from "../../../types";
 import {
+  buildWorkbenchActivatedSkillCatalog as buildActivatedSkillCatalog,
   buildWorkbenchSkillCatalog,
   buildWorkbenchSkillManifestInstructions,
   listWorkbenchLibraryInstructions,
@@ -311,8 +312,9 @@ function formatWorkspaceRoots(roots: readonly WorkbenchProjectRoot[] | null | un
 }
 
 function buildWorkbenchSkillsInjection(skillManifest: string | null) {
-  return WORKBENCH_INJECTION_TEMPLATES["workbench.skills"].injection
+  const body = WORKBENCH_INJECTION_TEMPLATES["workbench.skills"].injection
     .replaceAll("{workbench.skills}", skillManifest?.trim() || "No additional Workbench skills were detected.");
+  return wrapInstructionSection("workbench_skills", body) ?? "";
 }
 
 function buildWorkbenchSkillsDeveloperInstructions(skillManifest: string | null) {
@@ -357,6 +359,18 @@ function expandInstructionInjections(content: string, injections: Record<string,
   });
 }
 
+function hasInstructionInjection(content: string, expectedId: string) {
+  const injectionPattern = /\{([a-z][a-z0-9 .-]*)\}/gi;
+  return Array.from(content.matchAll(injectionPattern)).some((match) => (
+    match[1]?.trim().toLowerCase().replace(/\s+/g, ".") === expectedId
+  ));
+}
+
+function wrapInstructionSection(tagName: string, content: string | null | undefined) {
+  const body = content?.trim();
+  return body ? `<${tagName}>\n${body}\n</${tagName}>` : null;
+}
+
 function buildInstructionPackSections(instructions: readonly { content: string; name: string; path: string }[]) {
   const sections = instructions
     .map((instructionPack) => [
@@ -369,10 +383,10 @@ function buildInstructionPackSections(instructions: readonly { content: string; 
     return null;
   }
 
-  return [
+  return wrapInstructionSection("workbench_instruction_packs", [
     "Workbench provides these universal instruction packs from the Workbench Library. Treat them as Workbench-provided developer instructions for this thread.",
     ...sections,
-  ].join("\n\n");
+  ].join("\n\n"));
 }
 
 async function readActiveBasePrompt() {
@@ -449,25 +463,22 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     buildWorkbenchBrowseInstructions(context),
   ]);
   const skillManifest = context.harness === "codex"
-    ? null
+    ? await buildWorkbenchSkillCatalog(projectSkills)
     : await buildWorkbenchSkillManifestInstructions(projectSkills);
+  const baseOwnsSkillInjection = hasInstructionInjection(basePrompt, "workbench.skills");
 
   const injections: Record<string, string> = {
     "agent.definition": buildAgentDefinitionInjection(agentDefinition),
     "subagent.identity": buildSubagentIdentityInjection(context),
     "workbench.rendering": WORKBENCH_INJECTION_TEMPLATES["workbench.rendering"].injection,
-    "workbench.skills": context.harness === "codex"
-      ? ""
-      : buildWorkbenchSkillsInjection(skillManifest),
+    "workbench.skills": buildWorkbenchSkillsInjection(skillManifest),
     "workbench.tools": WORKBENCH_INJECTION_TEMPLATES["workbench.tools"].injection,
     "workflow.active": workflowInjection,
     "workspace.roots": buildWorkspaceRootsInjection(context),
   };
 
   const baseInstructions = expandInstructionInjections(basePrompt, injections).trim();
-  const developerInstructions = joinInstructionSections([
-    buildWorkbenchSkillsDeveloperInstructions(skillManifest),
-    buildInstructionPackSections(instructionPacks),
+  const mechanics = joinInstructionSections([
     browseInstructions,
     buildWorkbenchLongWaitInstructions(context),
     buildWorkbenchThreadRecallInstructions(context),
@@ -477,6 +488,11 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     buildThreadTitleInstructions(context),
     buildThreadStatusInstructions(context),
   ]);
+  const developerInstructions = joinInstructionSections([
+    baseOwnsSkillInjection ? null : buildWorkbenchSkillsDeveloperInstructions(skillManifest),
+    buildInstructionPackSections(instructionPacks),
+    wrapInstructionSection("workbench_mechanics", mechanics),
+  ]);
 
   return {
     baseInstructions: baseInstructions || null,
@@ -484,19 +500,16 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
   };
 }
 
-export async function buildWorkbenchSkillCatalogDeveloperInstructions(
+export async function buildWorkbenchActivatedSkillCatalog(
   context: WorkbenchPromptContext = {},
 ): Promise<string | null> {
   await ensureWorkbenchPromptFiles();
 
   const projectSkills = await listProjectSkillDefinitionsForPrompt(context);
-  const skillCatalog = await buildWorkbenchSkillCatalog(
+  return await buildActivatedSkillCatalog(
     projectSkills,
-    context.mentionedSkillPaths,
+    context.activatedSkillPaths,
   );
-  return skillCatalog?.trim()
-    ? buildWorkbenchSkillsInjection(skillCatalog)
-    : null;
 }
 
 export async function buildWorkbenchThreadUtilityDeveloperInstructions(
@@ -548,10 +561,10 @@ export async function buildWorkbenchCollaborationDeveloperInstructions(
 }
 
 const WorkbenchPromptFiles = {
+  buildWorkbenchActivatedSkillCatalog,
   buildWorkbenchCollaborationDeveloperInstructions,
   buildWorkbenchGitInstructions,
   buildWorkbenchPromptInstructions,
-  buildWorkbenchSkillCatalogDeveloperInstructions,
   buildWorkbenchThreadUtilityDeveloperInstructions,
   ensureWorkbenchPromptFiles,
   listWorkbenchInstructionMechanics,

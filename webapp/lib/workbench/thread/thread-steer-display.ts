@@ -4,6 +4,7 @@
  */
 
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput";
+import { stripWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
 import { WORKBENCH_AGENT_MESSAGE_TAG_WRAPPER } from "./thread-agent-message.ts";
 import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "./thread-user-input-requests.ts";
 
@@ -24,7 +25,7 @@ export function unwrapWorkbenchSteerDisplayText(value: string) {
 }
 
 export function unwrapWorkbenchSteerDisplayInput(input: readonly UserInput[]): UserInput[] {
-  return input.map((item) => {
+  return stripWorkbenchActivatedSkillsInput(input).map((item) => {
     if (item.type !== "text") return item;
     const text = unwrapWorkbenchSteerDisplayText(item.text);
     return text === item.text ? item : { ...item, text, text_elements: [] };

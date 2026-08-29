@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect asynchronous Codex shutdown and intentional child replacement from stale callbacks. Keywords: codex, app-server, generation, test.
+ * No production exports. Node tests protect Codex native prompt suppression, asynchronous shutdown, and intentional child replacement from stale callbacks. Keywords: codex, app-server, policy, generation, test.
  */
 
 import assert from "node:assert/strict";
@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import type { ChildProcess } from "node:child_process";
 
-import CodexAppServer from "./CodexAppServer";
+import CodexAppServer, { getCodexAppServerArgs } from "./CodexAppServer";
 
 function fakeChild(pid: number) {
   const child = new EventEmitter() as EventEmitter & {
@@ -31,6 +31,26 @@ function deferred() {
   const promise = new Promise<void>((nextResolve) => { resolve = nextResolve; });
   return { promise, resolve };
 }
+
+test("app-server arguments suppress Codex-owned prompt and tool systems", () => {
+  const args = getCodexAppServerArgs();
+  const requiredConfigs = [
+    "skills.include_instructions=false",
+    "include_apps_instructions=false",
+    "include_collaboration_mode_instructions=false",
+    "features.apps=false",
+    "features.plugins=false",
+    "features.multi_agent=false",
+    "features.multi_agent_v2=false",
+  ];
+
+  for (const config of requiredConfigs) {
+    const index = args.indexOf(config);
+    assert.notEqual(index, -1, `missing ${config}`);
+    assert.equal(args[index - 1], "--config");
+  }
+  assert.deepEqual(args.slice(-3), ["app-server", "--listen", "stdio://"]);
+});
 
 test("intentional replacement ignores stale child output and exit", () => {
   const first = fakeChild(101);

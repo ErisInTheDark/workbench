@@ -1,4 +1,6 @@
-/* No production exports. Tests protect Codex instruction ownership, caller config preservation, and project-local MCP capability stamping. */
+/*
+ * No production exports. Tests protect stable Codex thread instructions, per-input activated skills, caller config preservation, and project-local MCP capability stamping.
+ */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -25,10 +27,22 @@ after(async () => {
   await fs.rm(testWorkbenchLibraryRoot, { force: true, recursive: true });
 });
 
-test("adapts managed thread methods and stamps only Workbench-root MCP clients", async () => {
+function readPromptInstructions(request: JsonRpcRequest) {
+  const params = request.params as {
+    baseInstructions?: string | null;
+    developerInstructions?: string | null;
+  };
+  return {
+    baseInstructions: params.baseInstructions ?? null,
+    developerInstructions: params.developerInstructions ?? null,
+  };
+}
+
+test("start, resume, and fork rebuild one stable full prompt and stamp scoped MCP clients", async () => {
   const root = "C:/git/web/workbench";
   const adapter = new WorkbenchCodexInstructionAdapter("ws://0.0.0.0:4500", root);
   const clientScopes = new Set<string>();
+  const prompts: ReturnType<typeof readPromptInstructions>[] = [];
 
   for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
     const projectLocal = method === "thread/start";
@@ -48,9 +62,12 @@ test("adapts managed thread methods and stamps only Workbench-root MCP clients",
         threadId: "thread",
       },
     }, method);
+    prompts.push(readPromptInstructions(result));
     const config = (result.params as { config: Record<string, unknown> }).config;
     assert.equal(config.existing_setting, "preserved");
     assert.equal(config.bypass_hook_trust, true);
+    assert.equal(config.developer_instructions, "");
+    assert.equal(config.instructions, "");
     assert.deepEqual((config.mcp_servers as Record<string, unknown>).docs, { url: "https://example.com/mcp" });
     const workbenchServers = config.mcp_servers as {
       wb: Record<string, unknown>;
@@ -64,6 +81,8 @@ test("adapts managed thread methods and stamps only Workbench-root MCP clients",
       clientScopes.add(mcpUrl.searchParams.get("client") ?? "");
     }
   }
+  assert.deepEqual(prompts[1], prompts[0]);
+  assert.deepEqual(prompts[2], prompts[0]);
   assert.equal(clientScopes.size, 6);
 
   const unmarked = await adapter.augment({
@@ -73,16 +92,17 @@ test("adapts managed thread methods and stamps only Workbench-root MCP clients",
   assert.deepEqual(unmarked.params, { config: { bypass_hook_trust: false, existing_setting: "preserved" } });
 });
 
-test("configures internal Codex resumes from explicit or inherited cwd", () => {
+test("internal resume inherits the full prompt context from its triggering request", async () => {
   const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:4500", "C:/workbench");
   const local = adapter.createThreadResume({ threadId: "thread" }, { cwd: "C:/workbench", kind: "cwd" });
   const outside = adapter.createThreadResume({ threadId: "thread" }, { cwd: "C:/other", kind: "cwd" });
+  const triggeringRequest: JsonRpcRequest = {
+    method: "turn/start",
+    workbenchPromptContext: { cwd: "C:/workbench", threadId: "thread" },
+  };
   const inherited = adapter.createThreadResume({ threadId: "thread" }, {
     kind: "request",
-    request: {
-      method: "turn/start",
-      workbenchPromptContext: { cwd: "C:/workbench", instructionScope: "threadUtilities", threadId: "thread" },
-    },
+    request: triggeringRequest,
   });
   const readUrls = (request: JsonRpcRequest) => {
     const servers = (request.params as {
@@ -93,21 +113,26 @@ test("configures internal Codex resumes from explicit or inherited cwd", () => {
   readUrls(local).forEach((url) => assert.equal(url.searchParams.get("project-local"), "true"));
   readUrls(outside).forEach((url) => assert.equal(url.searchParams.get("project-local"), null));
   readUrls(inherited).forEach((url) => assert.equal(url.searchParams.get("project-local"), "true"));
-  const inheritedContext = inherited.workbenchPromptContext as {
-    cwd?: string;
-    instructionScope?: string;
-    threadId?: string;
-  };
+  const inheritedContext = inherited.workbenchPromptContext as Record<string, unknown>;
   assert.equal(inheritedContext.cwd, "C:/workbench");
-  assert.equal(inheritedContext.instructionScope, "threadUtilities");
   assert.equal(inheritedContext.threadId, "thread");
+  assert.equal(inheritedContext.instructionScope, undefined);
+
+  const directResume = await adapter.augment({
+    method: "thread/resume",
+    params: { threadId: "thread" },
+    workbenchPromptContext: triggeringRequest.workbenchPromptContext,
+  }, "thread/resume");
+  const internalResume = await adapter.augment(inherited, "thread/resume");
+  assert.deepEqual(readPromptInstructions(internalResume), readPromptInstructions(directResume));
 });
 
-test("delivers one fresh skill catalog with mentioned bodies preloaded", async () => {
+test("normal prompts stay compact while triggering turn inputs receive fresh activated bodies", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-skill-catalog-"));
   const iteratePath = path.join(root, ".agents", "skills", "iterate", "SKILL.md");
   const brainstormPath = path.join(root, ".agents", "skills", "brainstorm", "SKILL.md");
-  const iterateMarker = "PRELOADED ITERATE SKILL BODY";
+  const iterateMarker = "FRESH ITERATE SKILL BODY";
+  const revisedIterateMarker = "REVISED ITERATE SKILL BODY";
   const brainstormMarker = "INACTIVE BRAINSTORM SKILL BODY";
   await fs.mkdir(path.dirname(iteratePath), { recursive: true });
   await fs.mkdir(path.dirname(brainstormPath), { recursive: true });
@@ -127,93 +152,97 @@ ${brainstormMarker}
 `, "utf8");
 
   const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:4500", root);
+  const roots = [{ id: "project", isPrimary: true, name: "project", relativePath: "project", rootPath: root }];
   const promptContext = {
-    mentionedSkillPaths: [iteratePath, iteratePath],
+    activatedSkillPaths: [iteratePath, iteratePath],
     cwd: root,
     harness: "codex" as const,
-    instructionScope: "threadUtilities" as const,
-    roots: [{ id: "project", isPrimary: true, name: "project", relativePath: "project", rootPath: root }],
+    roots,
     threadId: "thread",
   };
-  const input = [{ text: "/iterate do the work", text_elements: [], type: "text" }];
+  const input = [{ text: "/iterate do the work", text_elements: [], type: "text" as const }];
 
   try {
     const bootstrap = await adapter.augment({
       method: "thread/start",
       params: {},
-      workbenchPromptContext: {
-        ...promptContext,
-        mentionedSkillPaths: undefined,
-        instructionScope: undefined,
-      },
+      workbenchPromptContext: { ...promptContext, activatedSkillPaths: undefined },
     }, "thread/start");
-    const bootstrapParams = bootstrap.params as {
-      baseInstructions?: string | null;
-      developerInstructions?: string | null;
-    };
-    assert.doesNotMatch(bootstrapParams.baseInstructions ?? "", /Detected Workbench skills:/u);
-    assert.doesNotMatch(bootstrapParams.developerInstructions ?? "", /Detected Workbench skills:/u);
-    assert.doesNotMatch(bootstrapParams.baseInstructions ?? "", new RegExp(iterateMarker, "u"));
-    assert.doesNotMatch(bootstrapParams.developerInstructions ?? "", new RegExp(iterateMarker, "u"));
+    const instructions = [
+      readPromptInstructions(bootstrap).baseInstructions ?? "",
+      readPromptInstructions(bootstrap).developerInstructions ?? "",
+    ].join("\n");
+    assert.doesNotMatch(instructions, new RegExp(iterateMarker, "u"));
+    assert.doesNotMatch(instructions, new RegExp(brainstormMarker, "u"));
+    assert.ok(instructions.includes(
+      `<skill filename="${iteratePath.replaceAll("\\", "/")}" trigger="Use when the user says /iterate &amp; the project allows it." />`,
+    ));
+    assert.ok(instructions.includes(
+      `<skill filename="${brainstormPath.replaceAll("\\", "/")}" trigger="Use when the user says /brainstorm." />`,
+    ));
+    assert.equal(instructions.split("<workbench_skills>").length - 1, 1);
 
     for (const method of ["turn/start", "turn/steer"] as const) {
+      const collaborationMode = {
+        mode: "plan",
+        settings: { developer_instructions: "", model: "gpt-test", reasoning_effort: null },
+      };
       const result = await adapter.augment({
         method,
         params: {
           additionalContext: {
             existing: { kind: "application", value: "preserved" },
           },
+          collaborationMode,
           input,
         },
         workbenchPromptContext: promptContext,
       }, method);
       const params = result.params as {
         additionalContext: Record<string, { kind: string; value: string }>;
-        input: unknown[];
+        collaborationMode: typeof collaborationMode;
+        input: Array<{ text: string; type: string }>;
       };
-      assert.deepEqual(params.input, input);
-      assert.deepEqual(params.additionalContext.existing, { kind: "application", value: "preserved" });
-      assert.deepEqual(Object.keys(params.additionalContext).sort(), ["existing", "workbench_skills"]);
-      const catalog = params.additionalContext.workbench_skills;
-      assert.equal(catalog.kind, "application");
-      assert.match(catalog.value, new RegExp(iterateMarker, "u"));
-      assert.doesNotMatch(catalog.value, new RegExp(brainstormMarker, "u"));
-      assert.doesNotMatch(catalog.value, /\nname: iterate\n/u);
-      assert.ok(catalog.value.includes(
+      assert.deepEqual(params.input[0], input[0]);
+      assert.equal(params.input.length, 2);
+      assert.deepEqual(params.additionalContext, {
+        existing: { kind: "application", value: "preserved" },
+      });
+      assert.deepEqual(params.collaborationMode, collaborationMode);
+      const activatedInput = params.input[1]?.text ?? "";
+      assert.match(activatedInput, /^<wb:activated-skills>\n/u);
+      assert.match(activatedInput, new RegExp(iterateMarker, "u"));
+      assert.doesNotMatch(activatedInput, new RegExp(brainstormMarker, "u"));
+      assert.doesNotMatch(activatedInput, /\nname: iterate\n/u);
+      assert.ok(activatedInput.includes(
         `<skill filename="${iteratePath.replaceAll("\\", "/")}" trigger="Use when the user says /iterate &amp; the project allows it.">`,
-      ));
-      assert.ok(catalog.value.includes(
-        `<skill filename="${brainstormPath.replaceAll("\\", "/")}" trigger="Use when the user says /brainstorm." />`,
       ));
     }
 
-    const unmentioned = await adapter.augment({
-      method: "turn/steer",
-      params: { input },
-      workbenchPromptContext: {
-        ...promptContext,
-        mentionedSkillPaths: undefined,
-      },
-    }, "turn/steer");
-    const unmentionedCatalog = (unmentioned.params as {
-      additionalContext: { workbench_skills: { value: string } };
-    }).additionalContext.workbench_skills.value;
-    assert.doesNotMatch(unmentionedCatalog, new RegExp(iterateMarker, "u"));
-    assert.doesNotMatch(unmentionedCatalog, new RegExp(brainstormMarker, "u"));
+    await fs.writeFile(iteratePath, `---
+name: iterate
+description: Use when the user says /iterate.
+---
 
-    const rejected = await adapter.augment({
+${revisedIterateMarker}
+`, "utf8");
+    const repeated = await adapter.augment({
       method: "turn/steer",
       params: { input },
-      workbenchPromptContext: {
-        ...promptContext,
-        mentionedSkillPaths: [path.join(root, "arbitrary.md")],
-      },
+      workbenchPromptContext: promptContext,
     }, "turn/steer");
-    const rejectedCatalog = (rejected.params as {
-      additionalContext: { workbench_skills: { value: string } };
-    }).additionalContext.workbench_skills.value;
-    assert.doesNotMatch(rejectedCatalog, new RegExp(iterateMarker, "u"));
-    assert.doesNotMatch(rejectedCatalog, new RegExp(brainstormMarker, "u"));
+    const repeatedInput = (repeated.params as { input: Array<{ text: string }> }).input[1]?.text ?? "";
+    assert.match(repeatedInput, new RegExp(revisedIterateMarker, "u"));
+    assert.doesNotMatch(repeatedInput, new RegExp(iterateMarker, "u"));
+
+    for (const activatedSkillPaths of [undefined, [path.join(root, "arbitrary.md")]]) {
+      const request = {
+        method: "turn/steer",
+        params: { input },
+        workbenchPromptContext: { ...promptContext, activatedSkillPaths },
+      };
+      assert.deepEqual(await adapter.augment(request, "turn/steer"), request);
+    }
   } finally {
     await fs.rm(root, { force: true, recursive: true });
   }

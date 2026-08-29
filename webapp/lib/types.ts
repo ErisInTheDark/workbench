@@ -843,10 +843,10 @@ export interface WorkbenchReadThreadOptions {
 }
 
 export interface WorkbenchSendThreadMessageOptions {
+  activatedSkillPaths?: string[];
   additionalWritableRoots?: string[];
   composerProfileSlot?: WorkbenchComposerProfileSlot;
   instructionInjections?: Record<string, string>;
-  mentionedSkillPaths?: string[];
   onThreadCreated?: (thread: ThreadPayload) => void;
   onThreadMaterialized?: (thread: ThreadPayload) => void;
   onTurnAdmitted?: (turnId: string) => void;
@@ -915,6 +915,7 @@ export interface WorkbenchUserInputResponse {
 }
 
 export interface WorkbenchSubmitUserInputRequestOptions {
+  activatedSkillPaths?: string[];
   turnId?: string | null;
   insertAfterItemId?: string | null;
   insertAfterItemIndex?: number | null;

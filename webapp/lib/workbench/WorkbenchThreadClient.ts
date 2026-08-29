@@ -3194,7 +3194,7 @@ function WorkbenchThreadClient(
     instructionInjections: Record<string, string> | undefined = undefined,
     workflowIds: readonly string[] | undefined = undefined,
     instructionScope: "full" | "threadUtilities" = "full",
-    mentionedSkillPaths: readonly string[] | undefined = undefined,
+    activatedSkillPaths: readonly string[] | undefined = undefined,
   ) {
     const sourceCwd = threadSources.get(getThreadStateKey(harness, threadId))?.cwd;
     const currentCwd = state.currentThread?.harness === harness && state.currentThread.id === threadId
@@ -3202,10 +3202,10 @@ function WorkbenchThreadClient(
       : null;
     const projectContext = effectiveThreadProjectContext(harness, threadId);
     const selectedSkillPaths = Array.from(new Set(
-      mentionedSkillPaths?.map((skillPath) => skillPath.trim()).filter(Boolean) ?? [],
+      activatedSkillPaths?.map((skillPath) => skillPath.trim()).filter(Boolean) ?? [],
     ));
     return {
-      ...(selectedSkillPaths.length ? { mentionedSkillPaths: selectedSkillPaths } : {}),
+      ...(selectedSkillPaths.length ? { activatedSkillPaths: selectedSkillPaths } : {}),
       agentPath: normalizeWorkbenchAgentPath(agentPath),
       cwd: sourceCwd ?? currentCwd ?? projectContext.projectRootPath,
       harness,
@@ -4296,7 +4296,6 @@ function WorkbenchThreadClient(
             workbenchOrigin,
             sendOptions.instructionInjections,
             sendOptions.workflowIds,
-            "threadUtilities",
           ),
         });
         refreshedThread = toThreadResumePayload(
@@ -4549,7 +4548,7 @@ function WorkbenchThreadClient(
             threadId: thread.id,
           },
           ...(shouldSendWorkbenchPromptContext("codex", sendOptions)
-            ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", thread.id, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
+            ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext("codex", thread.id, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds) }
             : {}),
         },
         startRequest: {
@@ -4561,8 +4560,8 @@ function WorkbenchThreadClient(
             workbenchOrigin,
             sendOptions.instructionInjections,
             sendOptions.workflowIds,
-            "threadUtilities",
-            sendOptions.mentionedSkillPaths,
+            "full",
+            sendOptions.activatedSkillPaths,
           ),
           params: {
             ...(selectedReasoningEffort ? { effort: selectedReasoningEffort } : {}),
@@ -4581,8 +4580,8 @@ function WorkbenchThreadClient(
             workbenchOrigin,
             sendOptions.instructionInjections,
             sendOptions.workflowIds,
-            "threadUtilities",
-            sendOptions.mentionedSkillPaths,
+            "full",
+            sendOptions.activatedSkillPaths,
           ),
           params: {},
         },
@@ -4741,7 +4740,17 @@ function WorkbenchThreadClient(
           threadId: resolvedThreadId,
         } as ThreadResumeParams & { agentPath?: string; cwd?: string; model?: string; serviceTier?: string | null; threadId: string },
         ...(harness !== "opencode" && shouldSendWorkbenchPromptContext(harness, sendOptions)
-          ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(harness, resolvedThreadId, selectedAgentPath, workbenchOrigin, sendOptions.instructionInjections, sendOptions.workflowIds, "threadUtilities") }
+          ? {
+            [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
+              harness,
+              resolvedThreadId,
+              selectedAgentPath,
+              workbenchOrigin,
+              sendOptions.instructionInjections,
+              sendOptions.workflowIds,
+              harness === "codex" ? "full" : "threadUtilities",
+            ),
+          }
           : {}),
       });
       if (!isSendProjectCurrent() || !isThreadOperationFenceCurrent(preparationFence)) {
@@ -4809,8 +4818,8 @@ function WorkbenchThreadClient(
                 workbenchOrigin,
                 sendOptions.instructionInjections,
                 sendOptions.workflowIds,
-                "threadUtilities",
-                sendOptions.mentionedSkillPaths,
+                harness === "codex" ? "full" : "threadUtilities",
+                sendOptions.activatedSkillPaths,
               ),
             }
             : {}),
@@ -4914,8 +4923,8 @@ function WorkbenchThreadClient(
                 workbenchOrigin,
                 sendOptions.instructionInjections,
                 sendOptions.workflowIds,
-                "threadUtilities",
-                sendOptions.mentionedSkillPaths,
+                "full",
+                sendOptions.activatedSkillPaths,
               ),
             }
             : harness === "opencode"
@@ -5152,9 +5161,11 @@ function WorkbenchThreadClient(
   async function sendQuestionnaireSupplementalSteer(
     pendingRequest: WorkbenchPendingUserInputRequest,
     input: UserInput[] | string,
+    activatedSkillPaths: readonly string[] | undefined,
   ) {
     const normalizedInput = normalizeThreadMessageInput(input);
-    if (!normalizedInput.length) {
+    const hasActivatedSkills = pendingRequest.harness === "codex" && Boolean(activatedSkillPaths?.length);
+    if (!normalizedInput.length && !hasActivatedSkills) {
       return;
     }
 
@@ -5168,8 +5179,19 @@ function WorkbenchThreadClient(
     const projectContext = effectiveThreadProjectContext(pendingRequest.harness, pendingRequest.threadId);
     await sendBridgeRequest<TurnSteerResponse | { ok?: boolean }>(pendingRequest.harness, {
       method: "turn/steer",
-      ...(pendingRequest.harness === "opencode"
-        ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(pendingRequest.harness, pendingRequest.threadId, agentPath, workbenchOrigin, undefined, undefined, "threadUtilities") }
+      ...(pendingRequest.harness === "opencode" || pendingRequest.harness === "codex"
+        ? {
+          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
+            pendingRequest.harness,
+            pendingRequest.threadId,
+            agentPath,
+            workbenchOrigin,
+            undefined,
+            undefined,
+            pendingRequest.harness === "codex" ? "full" : "threadUtilities",
+            activatedSkillPaths,
+          ),
+        }
         : {}),
       params: {
         ...(agentPath && pendingRequest.harness === "copilot" ? { agentPath } : {}),
@@ -5238,6 +5260,7 @@ function WorkbenchThreadClient(
           onTurnAdmitted: (turnId) => {
             admittedTurnId = turnId;
           },
+          activatedSkillPaths: options.activatedSkillPaths,
           selectThread: false,
           startNewTurn: true,
         },
@@ -5271,8 +5294,9 @@ function WorkbenchThreadClient(
       ...(supplementalApprovalSteerText ? [createTextInput(supplementalApprovalSteerText)] : []),
       ...(options.supplementalInput ?? []),
     ];
-    if (supplementalInput.length) {
-      await sendQuestionnaireSupplementalSteer(pendingRequest, supplementalInput);
+    const hasActivatedSkills = pendingRequest.harness === "codex" && Boolean(options.activatedSkillPaths?.length);
+    if (supplementalInput.length || hasActivatedSkills) {
+      await sendQuestionnaireSupplementalSteer(pendingRequest, supplementalInput, options.activatedSkillPaths);
       if (!isPendingSubmissionCurrent()) {
         throw new Error("The pending question changed before its response could be submitted.");
       }
@@ -5309,7 +5333,7 @@ function WorkbenchThreadClient(
         refreshFinalVisibleQuestionnaireHistory(threadId);
       }
     } else {
-      if (supplementalInput.length && pendingRequest.harness === "codex") {
+      if ((supplementalInput.length || hasActivatedSkills) && pendingRequest.harness === "codex") {
         await readCompletedThreadWorkbenchHistory(threadId);
       } else {
         await readCompletedQuestionnaireHistoryForHarness(threadId, pendingRequest.harness);

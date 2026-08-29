@@ -13,8 +13,8 @@ You may propose new invariants or changes to existing invariants, but you must m
 
 ## Managed instructions
 
-- Every Workbench-managed Codex start or resume must inherit Workbench prompt context and rebuild current Workbench instructions.
-- Keep one precedence-resolved Workbench skill catalog. Slash matches can preload fresh bodies in that catalog; they do not activate skills or create native Codex skill input.
+- Codex start, resume, and fork rebuild one compact thread-owned Workbench payload from current sources. Unchanged sources and selections must produce identical payloads.
+- That payload owns one precedence-resolved self-closing skill catalog. Fresh slash-activated bodies travel only in a UI-hidden `<wb:activated-skills>` item on the triggering user input, never through native skill input or turn context.
 
 ## Relational data shapes
 

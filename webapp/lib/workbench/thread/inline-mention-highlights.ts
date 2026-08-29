@@ -9,6 +9,8 @@
  * - buildInlineMentionCandidates: convert loaded skills and project files into suggestion-ready candidates. Keywords: skills, files, source.
  * - buildInlineMentionCandidatesCooperatively: build mention candidates in browser-yielding slices. Keywords: skills, files, scheduler.
  * - buildInlineMentionHighlights: resolve unambiguous /skill and #file tokens in plaintext. Keywords: parser, highlighter, plaintext.
+ * - getActivatedWorkbenchSkillPaths: return unique resolved skill paths from mention highlights. Keywords: skills, activation, paths.
+ * - getActivatedWorkbenchSkillPathsForTextValues: resolve unique skill paths across independent user-authored text values. Keywords: skills, questionnaire, activation.
  * - buildInlineMentionSuggestions: rank caret-local skill or file suggestions. Keywords: autocomplete, caret, ranking.
  * - readCachedInlineMentionCandidates: return already-prepared mention candidates without rebuilding. Keywords: cache, mentions, render.
  */
@@ -1818,4 +1820,22 @@ export function buildInlineMentionHighlights(
   }
 
   return highlights;
+}
+
+export function getActivatedWorkbenchSkillPaths(highlights: readonly InlineMentionHighlight[]) {
+  return Array.from(new Set(
+    highlights
+      .filter((highlight) => highlight.kind === "skill")
+      .map((highlight) => highlight.path.trim())
+      .filter(Boolean),
+  ));
+}
+
+export function getActivatedWorkbenchSkillPathsForTextValues(
+  values: readonly string[],
+  sources: InlineMentionHighlightSources,
+) {
+  return getActivatedWorkbenchSkillPaths(
+    values.flatMap((value) => buildInlineMentionHighlights(value, sources)),
+  );
 }

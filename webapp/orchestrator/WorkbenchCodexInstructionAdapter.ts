@@ -2,12 +2,13 @@
  * Exports:
  * - WorkbenchCodexInstructionSource: explicit request-inherited or cwd-owned context for internal Codex resume configuration. Keywords: Codex, context, cwd, request.
  * - WorkbenchCodexInstructionPort: narrow Codex request-augmentation boundary consumed by the bridge. Keywords: Codex, instructions, MCP, adapter.
- * - default WorkbenchCodexInstructionAdapter: adapt fresh Workbench instructions, skill catalogs, and project-local MCP config into Codex requests. Keywords: Codex, instructions, skills, prompt, MCP.
+ * - default WorkbenchCodexInstructionAdapter: adapt stable thread instructions, activated skill input, and project-local MCP config into Codex requests. Keywords: Codex, instructions, skills, prompt, MCP.
  */
 import path from "node:path";
 
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
+import { createWorkbenchActivatedSkillsInput } from "../lib/workbench/thread/thread-activated-skills";
 import type { JsonRpcRequest } from "./bridge-types";
 import { logError } from "./process-helpers";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
@@ -56,33 +57,6 @@ function buildWorkbenchOwnedPromptParams(params: Record<string, unknown>, prompt
     personality: "none",
   };
 }
-
-function buildWorkbenchOwnedDeveloperInstructionParams(params: Record<string, unknown>, developerInstructions: string | null) {
-  return {
-    ...params,
-    developerInstructions,
-    config: buildWorkbenchManagedThreadConfig(params, {
-      developer_instructions: "",
-    }),
-  };
-}
-
-function buildWorkbenchOwnedCollaborationParams(params: Record<string, unknown>, developerInstructions: string | null) {
-  const collaborationMode = asRecord(params.collaborationMode);
-  if (!Object.keys(collaborationMode).length) return params;
-  return {
-    ...params,
-    collaborationMode: {
-      ...collaborationMode,
-      settings: {
-        ...asRecord(collaborationMode.settings),
-        developer_instructions: developerInstructions,
-      },
-    },
-  };
-}
-
-const WORKBENCH_SKILL_CONTEXT_KEY = "workbench_skills";
 
 function pathsEqual(left: string, right: string) {
   const normalizedLeft = path.resolve(left);
@@ -136,46 +110,21 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     const context = { ...promptContext, harness: "codex" as const };
 
     if (isPromptAugmentedTurnMethod(method)) {
-      const skillCatalog = filter(
-        await workbenchPromptFiles.buildWorkbenchSkillCatalogDeveloperInstructions(context),
-        `additionalContext.${WORKBENCH_SKILL_CONTEXT_KEY}`,
+      const activatedSkillCatalog = filter(
+        await workbenchPromptFiles.buildWorkbenchActivatedSkillCatalog(context),
+        "input.wb:activated-skills",
       );
-      const turnParams = skillCatalog
-        ? {
+      if (!activatedSkillCatalog) return message;
+      const input = Array.isArray(params.input) ? params.input : [];
+      return {
+        ...message,
+        params: {
           ...params,
-          additionalContext: {
-            ...asRecord(params.additionalContext),
-            [WORKBENCH_SKILL_CONTEXT_KEY]: {
-              kind: "application",
-              value: skillCatalog,
-            },
-          },
-        }
-        : params;
-      if (method === "turn/steer") {
-        return {
-          ...message,
-          params: turnParams,
-        };
-      }
-
-      const developerInstructions = context.instructionScope === "threadUtilities"
-        ? await workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(context)
-        : await workbenchPromptFiles.buildWorkbenchCollaborationDeveloperInstructions(context);
-      return {
-        ...message,
-        params: buildWorkbenchOwnedCollaborationParams(turnParams, filter(developerInstructions, "collaborationMode.settings.developer_instructions")),
-      };
-    }
-
-    if (context.instructionScope === "threadUtilities") {
-      const developerInstructions = await workbenchPromptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(context);
-      return {
-        ...message,
-        params: this.withMcpConfig(
-          buildWorkbenchOwnedDeveloperInstructionParams(params, filter(developerInstructions, "developerInstructions")),
-          context.cwd,
-        ),
+          input: [
+            ...input,
+            createWorkbenchActivatedSkillsInput(activatedSkillCatalog),
+          ],
+        },
       };
     }
 

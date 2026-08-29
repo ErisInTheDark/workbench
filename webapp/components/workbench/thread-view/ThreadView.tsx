@@ -1153,7 +1153,7 @@ export default memo(function ThreadView ({
   const handleSendMessage = useCallback(async (
     _threadId: string,
     input: UserInput[],
-    options?: { mentionedSkillPaths?: string[] },
+    options?: { activatedSkillPaths?: string[] },
   ) => {
     if (!resolvedActiveThread || !activeProfileSlot) {
       throw new ThreadMessageNotSentError();
