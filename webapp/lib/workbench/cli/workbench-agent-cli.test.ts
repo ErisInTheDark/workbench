@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover wb parsing, transport, and generated shims. Keywords: workbench, cli, test, shim, allowlist.
+ * - No production exports; Node tests cover wb parsing, transport, response text, and generated shims. Keywords: workbench, cli, test, output, shim, allowlist.
  */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
@@ -1128,6 +1128,32 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     selectedPaths: ["src/one.ts"],
     version: 1,
   });
+  const skippedPlanResponse = adapt("git-arc-plan", {
+    checkpointCommit: planRef,
+    intentName: "Skip generated output",
+    scopePaths: ["src/one.ts"],
+    skippedIgnoredPaths: ["tmp/a.ts", "tmp/b.ts", "tmp/c.ts"],
+  }, { action: "plan", paths: ["src/one.ts", "tmp/a.ts", "tmp/b.ts", "tmp/c.ts"] });
+  assert.match(
+    skippedPlanResponse.stdout,
+    /Files tmp\/a\.ts, tmp\/b\.ts, and tmp\/c\.ts were skipped because they do not need to be claimed: they are gitignored\./u,
+  );
+  assert.equal(adapt("git-arc-add", {
+    kind: "noop",
+    noOp: true,
+    scopePaths: [],
+    skippedIgnoredPaths: ["tmp/one.ts"],
+  }, { action: "arcAdd", paths: ["tmp/one.ts"] }).stdout, (
+    "File tmp/one.ts was skipped because it does not need to be claimed: it is gitignored.\n"
+  ));
+  assert.equal(adapt("git-arc-adopt", {
+    kind: "noop",
+    noOp: true,
+    scopePaths: [],
+    skippedIgnoredPaths: ["tmp/one.ts", "tmp/two.ts"],
+  }, { action: "arcAdopt", paths: ["tmp/one.ts", "tmp/two.ts"] }).stdout, (
+    "Files tmp/one.ts and tmp/two.ts were skipped because they do not need to be claimed: they are gitignored.\n"
+  ));
   const driftResponse = adapt("git-arc-plan", {
     checkpointCommit: successorRef,
     intentName: "Polish arc UI",

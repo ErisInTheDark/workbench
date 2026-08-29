@@ -497,22 +497,27 @@ export default class WorkbenchWorkspaceGitArcController {
       rootId: member.roots[0]!.id,
       rootIds: member.roots.map(({ id }) => id),
       scopePaths: qualifyPaths(value.scopePaths),
+      ...(Array.isArray(value.skippedIgnoredPaths) ? { skippedIgnoredPaths: qualifyPaths(value.skippedIgnoredPaths) } : {}),
       ...(Array.isArray(value.restoredPaths) ? { restoredPaths: qualifyPaths(value.restoredPaths) } : {}),
     };
   }
 
   private aggregateResults(project: AgentEndpointProjectResolution, values: Array<{ member: RepoMember; result: object }>) {
     const members: Array<Record<string, unknown>> = values.map(({ member, result }) => this.decorateResult(project, member, result));
-    const first = members[0] ?? {};
+    const first = members.find((member) => typeof member.checkpointCommit === "string" && member.checkpointCommit.length > 0)
+      ?? members[0]
+      ?? {};
     const arrays = (name: string) => members.flatMap((member) => Array.isArray(member[name]) ? member[name] as unknown[] : []);
     return {
       ...first,
       acquiredClaims: arrays("acquiredClaims"),
       changes: arrays("changes"),
       members,
+      noOp: members.length > 0 && members.every((member) => member.noOp === true),
       releasedClaims: arrays("releasedClaims"),
       restoredPaths: arrays("restoredPaths"),
       scopePaths: arrays("scopePaths"),
+      skippedIgnoredPaths: arrays("skippedIgnoredPaths"),
       ...(members.some((member) => typeof member.diff === "string") ? {
         diff: members.map((member) => `### ${member.rootId}\n${String(member.diff ?? "")}`).join("\n\n"),
       } : {}),

@@ -147,7 +147,8 @@ Use these rules for non-trivial Workbench file edits.
 
 #### Core rule
 
-Do not edit files unless plan/arc safety is available and the current workspace has been compared against the correct plan ref.
+<!-- Failure: agents ask permission to edit ignored files after arc tools correctly skip them. -->
+Claim files before editing them; edit gitignored files without extra approval; adopt command-caused workspace dirt (ie `package-lock.json` via `npm install`) to include in proposed commits.
 
 Always inspect the specific arc ref you mean. Never use “latest”, “newest”, or another moving reference, because another operation may have created an unrelated successor.
 

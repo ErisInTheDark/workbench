@@ -2,7 +2,7 @@
  * Exports:
  * - default WorkbenchGitCheckpointController: route plan and proposal owners while owning active claim mutation, compare, diff, and restore orchestration. Keywords: git, checkpoint, arc, claims, restore.
  * - GitArcActiveClaim/GitArcPlanState/GitArcProposalStatus: expose active-claim, inactive-plan, and proposal lifecycle for thread-state projection. Keywords: git, arc, claim, plan, proposal, status.
- * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: identify paths rejected before an arc operation. Keywords: git, checkpoint, dirty paths, ignored paths.
+ * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: identify paths rejected before an arc operation that cannot skip them. Keywords: git, checkpoint, dirty paths, ignored paths.
  * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult/GitArcRetentionResult: typed controller operation results. Keywords: git, checkpoint, arc, move, proposal, retention, result.
  */
 import { execFile, spawn } from "node:child_process";
@@ -21,9 +21,13 @@ import { GitArcMissingClaimSetError } from "./git-arc-failures";
 import GitArcRegistry, { findGitArcCollisions, GitArcCollisionError, type GitArcCollision, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
 import GitArcPlanController, {
+  createGitArcNoopResult,
   GitCheckpointDirtyPathsError,
+  partitionIgnoredGitArcPaths,
   rejectIgnoredGitArcPaths,
+  type GitArcNoopResult,
   type GitArcPlanState,
+  type GitArcStartResult,
 } from "./GitArcPlanController";
 import GitArcProposalController, {
   type GitArcLifecycleState,
@@ -50,6 +54,7 @@ import {
 export type { GitArcProposalStatus } from "./git-arc-storage";
 export { GitCheckpointDirtyPathsError, GitCheckpointIgnoredPathsError } from "./GitArcPlanController";
 export type { GitArcPlanState } from "./GitArcPlanController";
+export type { GitArcNoopResult } from "./GitArcPlanController";
 export type { GitArcLifecycleState, GitCheckpointProposalReceipt } from "./GitArcProposalController";
 export type { GitArcRetentionResult } from "./GitArcRetentionController";
 
@@ -92,6 +97,7 @@ export interface GitCheckpointCreateResult {
   preservedDriftPaths?: string[];
   repoRoot: string;
   scopePaths: string[];
+  skippedIgnoredPaths?: string[];
 }
 
 export interface GitArcReleaseResult extends GitCheckpointCreateResult {
@@ -385,7 +391,7 @@ export default class WorkbenchGitCheckpointController {
     if (!checkpoint.metadata || checkpoint.metadata.kind !== "plan" || !checkpoint.metadata.scopePaths.length) {
       throw new Error("The selected checkpoint is not an inactive Git arc plan.");
     }
-    const scopePaths = repository.normalizePaths(checkpoint.metadata.scopePaths);
+    const scopePaths = (await partitionIgnoredGitArcPaths(repository, checkpoint.metadata.scopePaths)).paths;
     return {
       checkpointCommit: checkpoint.checkpointCommit,
       collisions: findGitArcCollisions(await registry.list(), { harness, threadId }, scopePaths),
@@ -683,7 +689,7 @@ export default class WorkbenchGitCheckpointController {
     intentDescription = "",
     paths: rawPaths,
     threadId,
-  }: ControllerInput & { adoptPaths?: string[]; intentDescription?: string; intentName: string; paths: string[] }): Promise<GitCheckpointCreateResult> {
+  }: ControllerInput & { adoptPaths?: string[]; intentDescription?: string; intentName: string; paths: string[] }): Promise<GitCheckpointCreateResult | GitArcNoopResult> {
     return await this.plans.createPlan({ adoptPaths, cwd, harness: rawHarness, intentDescription, intentName, paths: rawPaths, threadId });
   }
 
@@ -703,7 +709,7 @@ export default class WorkbenchGitCheckpointController {
     return await this.plans.createAndStartPlan(input);
   }
 
-  async startArc({ checkpointCommit, cwd, harness: rawHarness, threadId }: ControllerInput & { checkpointCommit?: string }): Promise<GitCheckpointCompareResult> {
+  async startArc({ checkpointCommit, cwd, harness: rawHarness, threadId }: ControllerInput & { checkpointCommit?: string }): Promise<GitArcStartResult | GitArcNoopResult> {
     return await this.plans.startArc({ checkpointCommit, cwd, harness: rawHarness, threadId });
   }
 
@@ -865,11 +871,13 @@ export default class WorkbenchGitCheckpointController {
     };
   }
 
-  async addToArc({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths: string[] }): Promise<GitCheckpointCreateResult> {
+  async addToArc({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths: string[] }): Promise<GitCheckpointCreateResult | GitArcNoopResult> {
     const { active, checkpoint, harness, metadata, registry, repository } = await this.requireMutableActiveArc({ cwd, harness: rawHarness, threadId });
     if (!rawPaths.length) throw new Error("Arc add requires at least one additional clean path.");
-    const paths = repository.normalizePaths(rawPaths);
-    await rejectIgnoredGitArcPaths(repository, paths);
+    const { paths, skippedIgnoredPaths } = await partitionIgnoredGitArcPaths(repository, rawPaths);
+    if (!paths.length && skippedIgnoredPaths.length) {
+      return createGitArcNoopResult(repository, skippedIgnoredPaths);
+    }
     const headMovement = await repository.classifyHeadMovement(checkpoint.parent, metadata.scopePaths, checkpoint.checkpointCommit);
     if (headMovement.kind === "incompatible") {
       throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
@@ -898,15 +906,20 @@ export default class WorkbenchGitCheckpointController {
       checkpoint.checkpointCommit,
       metadata.scopePaths,
     );
-    return await this.createActiveSuccessor({
-      active, harness, metadata, parent: headMovement.currentHead, registry, repository, scopePaths, threadId, tree,
-    });
+    return {
+      ...(await this.createActiveSuccessor({
+        active, harness, metadata, parent: headMovement.currentHead, registry, repository, scopePaths, threadId, tree,
+      })),
+      skippedIgnoredPaths,
+    };
   }
 
-  async adoptIntoArc({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths: string[] }): Promise<GitCheckpointCreateResult> {
+  async adoptIntoArc({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths: string[] }): Promise<GitCheckpointCreateResult | GitArcNoopResult> {
     const { active, checkpoint, harness, metadata, registry, repository } = await this.requireMutableActiveArc({ cwd, harness: rawHarness, threadId });
-    const paths = repository.normalizePaths(rawPaths);
-    await rejectIgnoredGitArcPaths(repository, paths);
+    const { paths, skippedIgnoredPaths } = await partitionIgnoredGitArcPaths(repository, rawPaths);
+    if (!paths.length && skippedIgnoredPaths.length) {
+      return createGitArcNoopResult(repository, skippedIgnoredPaths);
+    }
     const overlapping = paths.filter((candidate) => metadata.scopePaths.some((scopePath) => (
       pathIsCoveredBy(candidate, scopePath) || pathIsCoveredBy(scopePath, candidate)
     )));
@@ -933,9 +946,12 @@ export default class WorkbenchGitCheckpointController {
       checkpoint.checkpointCommit,
       metadata.scopePaths,
     );
-    return await this.createActiveSuccessor({
-      active, harness, metadata, parent: headMovement.currentHead, registry, repository, scopePaths, threadId, tree,
-    });
+    return {
+      ...(await this.createActiveSuccessor({
+        active, harness, metadata, parent: headMovement.currentHead, registry, repository, scopePaths, threadId, tree,
+      })),
+      skippedIgnoredPaths,
+    };
   }
 
   async removeFromArc({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths: string[] }): Promise<GitCheckpointCreateResult> {

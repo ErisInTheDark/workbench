@@ -96,6 +96,19 @@ function preservedPlanDriftLines(payload: Record<string, unknown> | null) {
   ];
 }
 
+function joinPathList(paths: string[]) {
+  if (paths.length < 2) return paths[0] ?? "";
+  if (paths.length === 2) return `${paths[0]} and ${paths[1]}`;
+  return `${paths.slice(0, -1).join(", ")}, and ${paths.at(-1)}`;
+}
+
+function skippedIgnoredPathLines(payload: Record<string, unknown> | null) {
+  const paths = readStringArray(payload, "skippedIgnoredPaths");
+  if (!paths.length) return [];
+  const subject = paths.length === 1 ? `File ${paths[0]}` : `Files ${joinPathList(paths)}`;
+  return [`${subject} ${paths.length === 1 ? "was" : "were"} skipped because ${paths.length === 1 ? "it does" : "they do"} not need to be claimed: ${paths.length === 1 ? "it is" : "they are"} gitignored.`];
+}
+
 export function adaptWorkbenchAgentCliResponse({
   httpOk,
   request,
@@ -112,6 +125,10 @@ export function adaptWorkbenchAgentCliResponse({
     return failed(failureEnvelope.success
       ? `${message}\n${formatGitArcFailureReceipt(failureEnvelope.data.gitArcFailure)}`
       : message);
+  }
+  const skippedIgnoredPaths = skippedIgnoredPathLines(payload);
+  if (payload?.noOp === true && skippedIgnoredPaths.length) {
+    return succeeded(skippedIgnoredPaths.join("\n"));
   }
 
   switch (request.responseKind) {
@@ -170,6 +187,7 @@ export function adaptWorkbenchAgentCliResponse({
         `${label} ${readString(payload, "checkpointCommit") || "(unknown commit)"}`,
         ...memberRefLines(payload),
         ...preservedPlanDriftLines(payload),
+        ...skippedIgnoredPaths,
       ], createArcReceipt(action, payload, request)).join("\n"));
     }
     case "git-arc-start":
@@ -187,6 +205,7 @@ export function adaptWorkbenchAgentCliResponse({
           `Released claims: ${releasedClaims.length ? releasedClaims.join(", ") : "none"}`,
           `Acquired claims: ${acquiredClaims.length ? acquiredClaims.join(", ") : "none"}`,
         ] : []),
+        ...skippedIgnoredPaths,
         ...changes.map((change) => {
           const kind = isRecord(change.kind) ? readString(change.kind, "type").slice(0, 1).toUpperCase() : "M";
           const additions = typeof change.additions === "number" ? change.additions : 0;

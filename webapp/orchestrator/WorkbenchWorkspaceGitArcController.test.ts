@@ -1,4 +1,4 @@
-/* No production exports. Tests protect workspace arc membership, patch claim coverage, Git-ignored exemptions, root-qualified projection, repo deduplication, per-root proposals, and proposal-owned amendment routing. */
+/* No production exports. Tests protect workspace arc membership, patch claim coverage, ignored-path skips, root-qualified projection, repo deduplication, per-root proposals, and proposal-owned amendment routing. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -33,15 +33,23 @@ class FakeLocalGitArcController {
   }>();
 
   async createPlan(input: { cwd: string; harness: string; intentDescription: string; intentName: string; paths: string[]; threadId: string }) {
+    const relativePaths = input.paths.map((filePath) => path.relative(input.cwd, filePath).replace(/\\/gu, "/")).sort();
+    const skippedIgnoredPaths = relativePaths.filter((filePath) => filePath.startsWith("ignored/"));
+    const scopePaths = relativePaths.filter((filePath) => !filePath.startsWith("ignored/"));
+    if (!scopePaths.length && skippedIgnoredPaths.length) {
+      return { kind: "noop", noOp: true, repoRoot: input.cwd, scopePaths, skippedIgnoredPaths };
+    }
     const checkpointCommit = input.cwd.toLowerCase().includes("fixture-copy")
       ? `${String(this.plans.size + 1).repeat(40).slice(0, 40)}`
       : "a".repeat(40);
-    const scopePaths = input.paths.map((filePath) => path.relative(input.cwd, filePath).replace(/\\/gu, "/")).sort();
     this.plans.set(input.cwd, {
       checkpointCommit, harness: input.harness, intentDescription: input.intentDescription, intentName: input.intentName,
       scopePaths, threadId: input.threadId, updatedAt: "2026-08-24T00:00:00.000Z",
     });
-    return { checkpointCommit, checkpointRef: `refs/${checkpointCommit}`, intentName: input.intentName, kind: "plan", repoRoot: input.cwd, scopePaths };
+    return {
+      checkpointCommit, checkpointRef: `refs/${checkpointCommit}`, intentName: input.intentName, kind: "plan",
+      repoRoot: input.cwd, scopePaths, skippedIgnoredPaths,
+    };
   }
 
   async startArc(input: { cwd: string }) {
@@ -334,6 +342,52 @@ test("active claims and Git ignore rules cover patch paths across workspace root
     allowed: false,
     uncoveredPaths: covered,
   });
+});
+
+test("workspace arc results qualify ignored skips and become no-ops only when every member skips", async () => {
+  const apiRoot = "C:/workspace/api";
+  const webRoot = "C:/workspace/web";
+  const project = createWorkspace(apiRoot, webRoot);
+  const controller = new WorkbenchWorkspaceGitArcController(
+    new FakeLocalGitArcController() as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async (rootPath) => rootPath,
+  );
+  const identity = { cwd: apiRoot, harness: "codex" as const, threadId: "ignored-plan-thread" };
+
+  const mixed = await controller.execute(project, {
+    action: "plan",
+    adoptPaths: [],
+    intentDescription: "",
+    intentName: "mixed ignored plan",
+    paths: [],
+    roots: [
+      { adoptPaths: [], paths: ["ignored/generated.ts"], rootId: "api" },
+      { adoptPaths: [], paths: ["src/valid.ts"], rootId: "web" },
+    ],
+    ...identity,
+  }) as Record<string, unknown>;
+  assert.equal(mixed.noOp, false);
+  assert.deepEqual(mixed.scopePaths, ["web:src/valid.ts"]);
+  assert.deepEqual(mixed.skippedIgnoredPaths, ["api:ignored/generated.ts"]);
+  assert.equal(typeof mixed.checkpointCommit, "string");
+
+  const skipped = await controller.execute(project, {
+    action: "plan",
+    adoptPaths: [],
+    intentDescription: "",
+    intentName: "ignored-only plan",
+    paths: [],
+    roots: [
+      { adoptPaths: [], paths: ["ignored/api.ts"], rootId: "api" },
+      { adoptPaths: [], paths: ["ignored/web.ts"], rootId: "web" },
+    ],
+    ...identity,
+  }) as Record<string, unknown>;
+  assert.equal(skipped.noOp, true);
+  assert.deepEqual(skipped.scopePaths, []);
+  assert.deepEqual(skipped.skippedIgnoredPaths, ["api:ignored/api.ts", "web:ignored/web.ts"]);
+  assert.equal(skipped.checkpointCommit, undefined);
 });
 
 test("one workspace arc aggregates two repositories and keeps proposals root-specific", async () => {
