@@ -486,8 +486,8 @@ isolatedControllerTest("arc start reports only causal commits, sibling claims, a
   const dirtySection = error.message.split("Dirty unclaimed planned files:")[1]?.split("Only dirty unclaimed files")[0] ?? "";
   assert.match(dirtySection, /three\.txt/u);
   assert.doesNotMatch(dirtySection, /two\.txt|claimed-dirty\.txt/u);
-  assert.match(error.message, new RegExp(`mcp__wb__git_arc_diff.*${planHead}`, "u"));
-  assert.match(error.message, /mcp__wb__git_arc_plan_start/u);
+  assert.match(error.message, new RegExp(`mcp__wbex__git_arc_diff.*${planHead}`, "u"));
+  assert.match(error.message, /mcp__wbex__git_arc_plan_start/u);
 
   const controller = new WorkbenchGitCheckpointController();
   const claimedPlan = await controller.createPlan({

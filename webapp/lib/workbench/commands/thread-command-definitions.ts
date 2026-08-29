@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_THREAD_COMMANDS: typed thread title, status, resume, and recall definitions shared by CLI and MCP. Keywords: workbench, thread, commands, recall.
+ * - WORKBENCH_THREAD_COMMANDS: typed thread title, status, resume, recall, and Code Mode exposure definitions shared by CLI and MCP. Keywords: workbench, thread, commands, recall, Code Mode.
  */
 import { z } from "zod";
 
@@ -28,6 +28,7 @@ const titleGet = defineWorkbenchAgentCommand({
   description: "Get the current title for a managed thread.",
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["thread"],
+  mcpCodeModeEligible: true,
   words: ["thread", "title", "get"],
   usage: "wb thread title get",
   inputSchema: z.object({}).strict(),
@@ -40,6 +41,7 @@ const titleGet = defineWorkbenchAgentCommand({
 const title = defineWorkbenchAgentCommand({
   description: "Set a concise title for a managed thread.",
   helpGroups: ["thread"],
+  mcpCodeModeEligible: true,
   words: ["thread", "title"],
   usage: "wb thread title --title <text>",
   inputSchema: z.object({ title: requiredText }).strict(),
@@ -84,6 +86,7 @@ const recallSearch = defineWorkbenchAgentCommand({
   description: "Search visible narrative history and return stable result references.",
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["thread", "thread-recall"],
+  mcpCodeModeEligible: true,
   words: ["thread", "recall", "search"],
   usage: "wb thread recall search [--thread <id>] --query <text> [--kind <kind>...] [--limit <count>] [--before <ref>]",
   inputSchema: z.object({
@@ -119,6 +122,7 @@ const recallExpand = defineWorkbenchAgentCommand({
   description: "Read one referenced record through fixed-budget content pages.",
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["thread", "thread-recall"],
+  mcpCodeModeEligible: true,
   words: ["thread", "recall", "expand"],
   usage: "wb thread recall expand [--thread <id>] --ref <ref> [--cursor <cursor>]",
   inputSchema: z.object({ cursor: requiredText.optional(), ref: requiredText, threadId: requiredText.optional() }).strict(),
@@ -138,6 +142,7 @@ const recall = defineWorkbenchAgentCommand({
   description: "Read filtered history newest-first, or continue before an emitted cursor.",
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["thread", "thread-recall"],
+  mcpCodeModeEligible: true,
   words: ["thread", "recall"],
   usage: "wb thread recall [--thread <id>] [--kind <kind>...] [--before <cursor>]",
   inputSchema: z.object({ before: requiredText.optional(), kinds: z.array(requiredText).optional(), threadId: requiredText.optional() }).strict(),

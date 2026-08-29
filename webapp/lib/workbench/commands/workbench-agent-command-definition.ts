@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - JsonValue/WorkbenchAgentCommandRequest/WorkbenchAgentCommandResponseKind/WorkbenchAgentMcpRuntimeDrainPolicy: structured command transport and MCP lifecycle contracts. Keywords: workbench, command, request, response, drain.
- * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: trusted invocation context and erased registry definition. Keywords: workbench, command, context, registry.
+ * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: trusted invocation context, MCP exposure, and erased registry definition. Keywords: workbench, command, context, registry, Code Mode.
  * - defineWorkbenchAgentCommand: preserve command-specific Zod inference while exposing one uniform registry boundary. Keywords: workbench, command, zod, schema.
  * - getWorkbenchAgentCommandToolName: derive the canonical typed MCP name from a command definition. Keywords: workbench, command, MCP, name.
  * - getWorkbenchAgentCommand/postWorkbenchAgentCommand/queryWorkbenchAgentCommandPath: request-building helpers for command families. Keywords: workbench, command, request, query.
@@ -74,6 +74,7 @@ export interface WorkbenchAgentCommandDefinition {
   helpGroups: readonly string[];
   inputSchema: z.ZodType;
   managedThreadRootOnly?: boolean;
+  mcpCodeModeEligible?: boolean;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
   usage: string;
@@ -90,6 +91,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   helpGroups: readonly string[];
   inputSchema: TSchema;
   managedThreadRootOnly?: boolean;
+  mcpCodeModeEligible?: boolean;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
   parseCliArgs(args: string[]): z.input<TSchema>;
@@ -114,6 +116,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     helpGroups: definition.helpGroups,
     inputSchema: definition.inputSchema,
     managedThreadRootOnly: definition.managedThreadRootOnly,
+    mcpCodeModeEligible: definition.mcpCodeModeEligible,
     mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,
     mcpSteerInterruptible: definition.mcpSteerInterruptible,
     usage: definition.usage,

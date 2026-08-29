@@ -21,6 +21,7 @@ const ripgrep = defineWorkbenchAgentCommand({
   description: "Search with native ripgrep arguments without shell quoting; no matches are successful empty output.",
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["rg"],
+  mcpCodeModeEligible: true,
   words: ["rg"],
   usage: "wb rg -- <rg args>",
   inputSchema: z.object({ args: ripgrepArguments }).strict(),

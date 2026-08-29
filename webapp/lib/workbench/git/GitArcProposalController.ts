@@ -116,8 +116,8 @@ function acceptedReceiptMessage(receipts: Array<{ commitSha: string; proposalId:
     claimedPaths.length
       ? `This legacy Git arc still owns ${claimedPaths.length} claimed path${claimedPaths.length === 1 ? "" : "s"}.`
       : "This Git arc is resolved and owns no live claims.",
-    "Call mcp__wb__git_arc_plan_start with the explicit next paths when the approved plan is unchanged.",
-    "Return to Brief mode and call mcp__wb__git_arc_plan when the plan changed.",
+    "Call mcp__wbex__git_arc_plan_start with the explicit next paths when the approved plan is unchanged.",
+    "Return to Brief mode and call mcp__wbex__git_arc_plan when the plan changed.",
   ].join("\n");
 }
 

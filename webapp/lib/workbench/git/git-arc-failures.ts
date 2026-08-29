@@ -199,7 +199,7 @@ export function describeGitArcFailure(failure: GitArcFailure) {
     }
     case "planDrift":
       return {
-        agentRecovery: `Call mcp__wb__git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. If the approved plan is unchanged, follow the planned-path drift workflow with mcp__wb__git_arc_plan_start.`,
+        agentRecovery: `Call mcp__wbex__git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. If the approved plan is unchanged, follow the planned-path drift workflow with mcp__wbex__git_arc_plan_start.`,
         message: "The plan baseline changed.",
         userHint: "Inspect the changed plan paths. Revise the plan only if the approved work changed.",
       };
@@ -212,24 +212,24 @@ export function describeGitArcFailure(failure: GitArcFailure) {
     case "acceptedProposals":
       return failure.claimedPaths.length
         ? {
-          agentRecovery: "Accepted proposals changed this arc's baseline. If the approved plan is unchanged, call mcp__wb__git_arc_plan_start with the explicit next paths. If the plan changed, return to Brief mode and create a new Git plan.",
+          agentRecovery: "Accepted proposals changed this arc's baseline. If the approved plan is unchanged, call mcp__wbex__git_arc_plan_start with the explicit next paths. If the plan changed, return to Brief mode and create a new Git plan.",
           message: `This Git arc has accepted commits and still owns ${failure.claimedPaths.length} live claim${failure.claimedPaths.length === 1 ? "" : "s"}.`,
           userHint: "Create a new plan for the remaining approved paths.",
         }
         : {
-          agentRecovery: "This Git arc is resolved. If approved work remains unchanged, call mcp__wb__git_arc_plan_start with the explicit next paths. If the plan changed, return to Brief mode and create a new Git plan.",
+          agentRecovery: "This Git arc is resolved. If approved work remains unchanged, call mcp__wbex__git_arc_plan_start with the explicit next paths. If the plan changed, return to Brief mode and create a new Git plan.",
           message: "This Git arc is already resolved and owns no live claims.",
           userHint: "Start a new plan for any remaining approved work.",
         };
     case "missingClaimSet":
       return {
-        agentRecovery: "Return to Brief mode. Create a new plan with mcp__wb__git_arc_plan after the exact approved paths are known.",
+        agentRecovery: "Return to Brief mode. Create a new plan with mcp__wbex__git_arc_plan after the exact approved paths are known.",
         message: "This Git arc checkpoint does not contain any claimed paths.",
         userHint: "Create a new plan for the intended files.",
       };
     case "proposalAlreadyCommitted":
       return {
-        agentRecovery: `Call mcp__wb__git_arc_propose with ${JSON.stringify({ amend: true, amendProposalId: failure.proposalId })} to amend this commit. Otherwise create a separate proposal without replaceProposalId or amendProposalId.`,
+        agentRecovery: `Call mcp__wbex__git_arc_propose with ${JSON.stringify({ amend: true, amendProposalId: failure.proposalId })} to amend this commit. Otherwise create a separate proposal without replaceProposalId or amendProposalId.`,
         message: `Commit ${failure.proposalTitle} already exists at ${failure.commitSha}.`,
         userHint: "Create a separate proposal, or amend the accepted commit.",
       };

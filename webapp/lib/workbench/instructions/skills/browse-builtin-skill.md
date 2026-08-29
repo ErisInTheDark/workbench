@@ -11,7 +11,7 @@ Browse is opt-in under Workbench Browser Work instructions. UI/frontend work alo
 
 When Workbench provides a Browse instruction section, treat it as the source of truth for whether raw CLI passthrough is enabled.
 
-This skill owns BrowseMD command shape, sequencing, screenshots, cleanup, output handling, and failure handling. Use `mcp__wb__browse_run` for normal work. Do not run the upstream Browse CLI directly.
+This skill owns BrowseMD command shape, sequencing, screenshots, cleanup, output handling, and failure handling. Use `mcp__wbex__browse_run` for normal work. Do not run the upstream Browse CLI directly.
 
 Raw passthrough is a separate gated CLI-only compatibility surface. Use it only when explicitly needed and enabled. Discover it through the general wb CLI fallback rather than treating it as the normal Browse path.
 
@@ -29,7 +29,7 @@ Stop sessions when finished. Workbench eventually cleans up inactive thread-owne
 
 ## Command Isolation
 
-Each `mcp__wb__browse_run` call must contain one auditable BrowseMD request. Do not combine it with unrelated shell work, page-data transformation, branching, or external cleanup.
+Each `mcp__wbex__browse_run` call must contain one auditable BrowseMD request. Do not combine it with unrelated shell work, page-data transformation, branching, or external cleanup.
 
 If Browse output needs further processing, run the Browse request visibly first. Then process its visible result separately.
 
@@ -46,38 +46,38 @@ If Browse output needs further processing, run the Browse request visibly first.
 9. Use `get` for targeted reads and `is` for simple state checks.
 10. Use `eval` only when snapshot, get, and is cannot read the needed state clearly.
 11. Use `screenshot` when pixels or user-visible proof matter.
-12. Call `mcp__wb__browse_stop` before ending the work. Call `mcp__wb__browse_forget` only to delete persistent profile data.
+12. Call `mcp__wbex__browse_stop` before ending the work. Call `mcp__wbex__browse_forget` only to delete persistent profile data.
 
 ## Typed Tool Shapes
 
-Inline BrowseMD sequence:
+Call `mcp__wbex__browse_run` with this inline BrowseMD payload:
 
-```ts
-await tools.mcp__wb__browse_run({
-  session: "research",
-  commands: [
+```json
+{
+  "session": "research",
+  "commands": [
     "open http://localhost:3000 --headless",
     "snapshot --compact",
     "click @0-4",
-    "screenshot",
-  ],
-})
+    "screenshot"
+  ]
+}
 ```
 
-Project BrowseMD script with variables:
+Call `mcp__wbex__browse_run` with this project-script payload:
 
-```ts
-await tools.mcp__wb__browse_run({
-  session: "research",
-  scriptPath: "check-homepage.browsemd",
-  variables: {
-    url: "https://example.com",
-    exportKey: "example",
-  },
-})
+```json
+{
+  "session": "research",
+  "scriptPath": "check-homepage.browsemd",
+  "variables": {
+    "url": "https://example.com",
+    "exportKey": "example"
+  }
+}
 ```
 
-List, stop, or forget sessions with `mcp__wb__browse_sessions`, `mcp__wb__browse_stop`, and `mcp__wb__browse_forget`. Current-thread calls normally omit `threadId` because managed caller identity supplies it.
+List, stop, or forget sessions with `mcp__wbex__browse_sessions`, `mcp__wbex__browse_stop`, and `mcp__wbex__browse_forget`. Current-thread calls normally omit `threadId` because managed caller identity supplies it.
 
 Project scripts live directly under `.workbench/browse/*.browsemd` in the selected project. Bare `scriptPath` names resolve there. Do not pass absolute paths or parent-directory segments.
 
@@ -99,7 +99,7 @@ Prefer snapshots for reasoning. Take screenshots when visual layout, styling, im
 
 Do not retry an unchanged failing command. Read the structured result, run `status` or `doctor` when health is uncertain, refresh stale references with a snapshot, change approach, and report the relevant error.
 
-If a session is stuck or mode-incompatible, force-stop it through `mcp__wb__browse_stop` and reopen it.
+If a session is stuck or mode-incompatible, force-stop it through `mcp__wbex__browse_stop` and reopen it.
 
 ## Cleanup Rule
 

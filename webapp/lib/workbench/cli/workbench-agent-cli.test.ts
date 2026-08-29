@@ -1131,11 +1131,11 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     scopePaths: ["src/one.ts", "src/two.ts"],
   }, { action: "planAdd", paths: ["src/three.ts"] });
   assert.match(driftResponse.stdout, /WARNING: These paths still use older plan baselines:[\s\S]*src\/one\.ts[\s\S]*src\/two\.ts/u);
-  assert.match(driftResponse.stdout, /mcp__wb__git_arc_diff/u);
+  assert.match(driftResponse.stdout, /mcp__wbex__git_arc_diff/u);
   assert.match(driftResponse.stdout, new RegExp(successorRef, "u"));
   assert.match(driftResponse.stdout, /src\/one\.ts.*src\/two\.ts/u);
-  assert.match(driftResponse.stdout, /mcp__wb__git_arc_plan_add.*src\/one\.ts.*src\/two\.ts/u);
-  assert.ok(driftResponse.stdout.indexOf("mcp__wb__git_arc_diff") < driftResponse.stdout.indexOf("mcp__wb__git_arc_plan_add"));
+  assert.match(driftResponse.stdout, /mcp__wbex__git_arc_plan_add.*src\/one\.ts.*src\/two\.ts/u);
+  assert.ok(driftResponse.stdout.indexOf("mcp__wbex__git_arc_diff") < driftResponse.stdout.indexOf("mcp__wbex__git_arc_plan_add"));
   assert.match(driftResponse.stdout, /arc start will reject preserved drift/u);
   assert.deepEqual(parseGitArcReceipt(driftResponse.stdout), {
     action: "plan",

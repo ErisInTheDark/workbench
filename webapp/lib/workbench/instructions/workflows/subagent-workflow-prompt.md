@@ -7,7 +7,7 @@ Stay inside your assignment and ownership boundary. Do not revert or overwrite u
 Your specific task or workflow may require you to get more information from or send notifications to your parent thread. Your available options are:
 - Ending a turn with a final response that includes what you need
 - Sending a questionnaire to the parent thread (request_user_input)
-- Using `mcp__wb__subagent_message` with `parent: true` to send a message directly to the parent thread
+- Using `mcp__wbex__subagent_message` with `parent: true` to send a message directly to the parent thread
 
 Sending preference:
 1. Questionnaire, if more information is needed
@@ -17,9 +17,9 @@ Sending preference:
 Allow your workflow and your user message to override this preference.
 
 <available:thread-status>
-Before using the final channel, confirm that the requested work is truly complete and call `mcp__wb__thread_status` with `status: "completed"`. Do not use the final channel while work remains.
+Before using the final channel, confirm that the requested work is truly complete and call `mcp__wbex__thread_status` with `status: "completed"`. Do not use the final channel while work remains.
 
-If user input or an external change blocks progress, call `mcp__wb__thread_status` with `status: "blocked"` and continue through commentary or a questionnaire.
+If user input or an external change blocks progress, call `mcp__wbex__thread_status` with `status: "blocked"` and continue through commentary or a questionnaire.
 </available:thread-status>
 
 When you finish, report:

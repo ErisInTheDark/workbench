@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - listWorkbenchAgentCommands: assemble canonical typed wb commands with reload definitions from the active topology catalog. Keywords: workbench, commands, registry, MCP, CLI.
+ * - listWorkbenchAgentCodeModeToolNames: list the explicit default-deny subset safe for nested Code Mode calls. Keywords: workbench, MCP, Code Mode, tools.
  */
 import { WORKBENCH_BROWSE_COMMANDS } from "./browse-command-definitions";
 import { WORKBENCH_GIT_ARC_COMMANDS } from "./git-arc-command-definitions";
@@ -11,7 +12,10 @@ import { WORKBENCH_RIPGREP_COMMANDS } from "./ripgrep-command-definition";
 import { WORKBENCH_SUBAGENT_COMMANDS } from "./subagent-command-definitions";
 import { WORKBENCH_THREAD_COMMANDS } from "./thread-command-definitions";
 import { WORKBENCH_TOKEN_COMMANDS } from "./token-command-definition";
-import type { WorkbenchAgentCommandDefinition } from "./workbench-agent-command-definition";
+import {
+  getWorkbenchAgentCommandToolName,
+  type WorkbenchAgentCommandDefinition,
+} from "./workbench-agent-command-definition";
 
 const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Object.freeze([
   ...WORKBENCH_RIPGREP_COMMANDS,
@@ -28,4 +32,11 @@ export function listWorkbenchAgentCommands(
   access: OrchestratorReloadScopeDescriptor["access"] = "agent",
 ) {
   return [...WORKBENCH_AGENT_COMMANDS, ...createWorkbenchReloadCommands(catalog, access)];
+}
+
+export function listWorkbenchAgentCodeModeToolNames() {
+  return WORKBENCH_AGENT_COMMANDS
+    .filter(({ hideFromMcp, mcpCodeModeEligible }) => mcpCodeModeEligible && !hideFromMcp)
+    .map(getWorkbenchAgentCommandToolName)
+    .sort();
 }

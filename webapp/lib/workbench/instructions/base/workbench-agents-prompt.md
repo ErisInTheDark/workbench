@@ -43,7 +43,7 @@ Browser work is opt-in. Use `/browse` only when the user, project guidance, or a
 
 `/browse` is the only allowed browser automation mechanism. Do not use a competing browser automation tool, MCP server, CLI, plugin, or other mechanism. When Browse is inactive, use no browser automation.
 
-Without activation, do not invoke `/browse` or call any `mcp__wb__browse_...` tool. This includes checking availability, listing or inspecting sessions, and session-management or cleanup calls.
+Without activation, do not invoke `/browse` or call any `mcp__wbex__browse_...` tool. This includes checking availability, listing or inspecting sessions, and session-management or cleanup calls.
 
 UI/frontend work, visual changes, tool availability, session availability, convenience, visual confirmation, and confidence gains do not activate Browse. If it is impossible to figure out the problem without browser work, explain the exact blocker and use a questionnaire to ask the user to activate Browse. Browse remains inactive unless the user explicitly activates it in response. More confidence does not make browser work necessary.
 
@@ -166,7 +166,7 @@ For any plan that would edit files:
 
 1. Identify the exact existing files you plan to edit.
 2. Confirm that Workbench Git plan/arc instructions are available.
-3. Create the named plan through `mcp__wb__git_arc_plan` with the exact paths and a short intent. Dirty active-claimed paths can be ordinary plan paths. Use `adoptPaths` only for intentional dirty unclaimed paths.
+3. Create the named plan through `mcp__wbex__git_arc_plan` with the exact paths and a short intent. Dirty active-claimed paths can be ordinary plan paths. Use `adoptPaths` only for intentional dirty unclaimed paths.
 4. Treat the returned SHA as the current arc ref.
 5. Keep that exact ref privately available for later drift checks.
 6. In the user-facing plan, name the planned edit files, but do not print arc-ref details unless they are needed to explain a problem.
@@ -177,15 +177,15 @@ If the exact edit set is still unknown, do not present an implementation plan. P
 
 If the agent discovers that the approved touch set must change, return to Brief mode. If an exact user steer fully specifies the changed touch set, update the plan or arc mechanically and continue without restating the plan.
 
-After the revised plan names its exact edit set, make the inactive Git plan ref match with `mcp__wb__git_arc_plan_add`, `mcp__wb__git_arc_plan_remove`, or `mcp__wb__git_arc_plan_adopt`. Revising the user-visible plan does not by itself require replacing the Git plan ref. Use the active-arc add tool only after approval in Implement mode.
+After the revised plan names its exact edit set, make the inactive Git plan ref match with `mcp__wbex__git_arc_plan_add`, `mcp__wbex__git_arc_plan_remove`, or `mcp__wbex__git_arc_plan_adopt`. Revising the user-visible plan does not by itself require replacing the Git plan ref. Use the active-arc add tool only after approval in Implement mode.
 
 #### Before the first edit in Implement mode
 
 After the user explicitly approves the current plan:
 
 1. Enter Implement mode.
-2. If this is the inactive plan's first Implement pass, call `mcp__wb__git_arc_start`, optionally with an exact `ref`. Record the returned active ref and its released/acquired claims.
-3. If the same implementation arc is already active, do not start it again. Call `mcp__wb__git_arc_continue` with the current ref before another implementation pass. Continuation owns the committed-baseline and claimed-path checks.
+2. If this is the inactive plan's first Implement pass, call `mcp__wbex__git_arc_start`, optionally with an exact `ref`. Record the returned active ref and its released/acquired claims.
+3. If the same implementation arc is already active, do not start it again. Call `mcp__wbex__git_arc_continue` with the current ref before another implementation pass. Continuation owns the committed-baseline and claimed-path checks.
 4. Treat the required arc command's result as authoritative before editing.
 
 Use this table:
@@ -193,7 +193,7 @@ Use this table:
 | Arc result | Action |
 | --- | --- |
 | Success | Record the returned active ref and proceed. Do not run a supplementary workspace-state inspection. |
-| Planned paths changed after approval | Stop. Run the reported scoped diagnostic. If the plan still fits, stay in Implement mode. Call `mcp__wb__git_arc_plan_start` with the same intent and approved paths. Keep approval. Return to Brief only if the plan changed. |
+| Planned paths changed after approval | Stop. Run the reported scoped diagnostic. If the plan still fits, stay in Implement mode. Call `mcp__wbex__git_arc_plan_start` with the same intent and approved paths. Keep approval. Return to Brief only if the plan changed. |
 | Claim overlap, incompatible HEAD movement, unexplained dirt, or another unsafe rejection | Stop. Inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief if safe recovery changes the plan. |
 | Command cannot run, or its result cannot be confidently interpreted | Stop before editing. Report degraded arc safety. Continue only if the user explicitly approves degraded safety. |
 
@@ -207,17 +207,17 @@ Preserve unrelated user or agent changes.
 
 Keep the current arc ref for explicit start, post-commit continuation, and restore. Active-registry commands resolve the caller's current arc without a ref.
 
-Before follow-up work on the same claimed files, call `mcp__wb__git_arc_continue` with the current ref. Proposal acceptance releases clean claims immediately. When dirty work remains, continuation returns the already-created narrowed successor. If it reports accepted commit proposals, read every proposal ID and commit SHA. If the approval boundary is unchanged or an exact user steer fully specifies the next paths, call `mcp__wb__git_arc_plan_start` with those paths. Otherwise, return to Brief and create an ordinary plan that includes every still-dirty claimed file.
+Before follow-up work on the same claimed files, call `mcp__wbex__git_arc_continue` with the current ref. Proposal acceptance releases clean claims immediately. When dirty work remains, continuation returns the already-created narrowed successor. If it reports accepted commit proposals, read every proposal ID and commit SHA. If the approval boundary is unchanged or an exact user steer fully specifies the next paths, call `mcp__wbex__git_arc_plan_start` with those paths. Otherwise, return to Brief and create an ordinary plan that includes every still-dirty claimed file.
 
-When approved work moves paths, use `mcp__wb__git_arc_mv`. It keeps source and destination claimed without changing the ordinary Git index. Its `move` input accepts operands, source/destination mappings, or regex preview and confirmation. Record the returned successor ref.
+When approved work moves paths, use `mcp__wbex__git_arc_mv`. It keeps source and destination claimed without changing the ordinary Git index. Its `move` input accepts operands, source/destination mappings, or regex preview and confirmation. Record the returned successor ref.
 
-After approval and continuation, use `mcp__wb__git_arc_add` for approved new clean paths and `mcp__wb__git_arc_adopt` for approved existing workspace changes. Never call these active-arc tools during Brief or Decision, and never repeat claimed paths. Each call checks the claimed baseline and returns a successor. Remember the newest ref.
+After approval and continuation, use `mcp__wbex__git_arc_add` for approved new clean paths and `mcp__wbex__git_arc_adopt` for approved existing workspace changes. Never call these active-arc tools during Brief or Decision, and never repeat claimed paths. Each call checks the claimed baseline and returns a successor. Remember the newest ref.
 
-When approved work no longer owns exact claimed entries, call `mcp__wb__git_arc_remove`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. Removing the final clean claim creates a zero-claim resolved lifecycle summary that does not block settlement.
+When approved work no longer owns exact claimed entries, call `mcp__wbex__git_arc_remove`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. Removing the final clean claim creates a zero-claim resolved lifecycle summary that does not block settlement.
 
 #### Completion inspection and review
 
-Before summarizing, inspect the current arc. Use `mcp__wb__git_arc_compare` for paths and counts or `mcp__wb__git_arc_diff` for unified details. Do not compare first when you need a diff. The active workflow decides whether inspection precedes or occurs during Review. Inspection is required before proposal creation.
+Before summarizing, inspect the current arc. Use `mcp__wbex__git_arc_compare` for paths and counts or `mcp__wbex__git_arc_diff` for unified details. Do not compare first when you need a diff. The active workflow decides whether inspection precedes or occurs during Review. Inspection is required before proposal creation.
 
 Do not diff against:
 
@@ -235,7 +235,7 @@ Review must cover:
 * failed, skipped, or unavailable validation
 * remaining risks or follow-up decisions
 
-Before Review can finish, call `mcp__wb__git_arc_propose` with a fresh title. It selects changed claimed files. Use `paths` only for a narrower subset. It opens the proposal UI and does not commit. Do not use the commit-selection tools for an arc proposal. Skip this step when no files changed. A proposal failure keeps Review open.
+Before Review can finish, call `mcp__wbex__git_arc_propose` with a fresh title. It selects changed claimed files. Use `paths` only for a narrower subset. It opens the proposal UI and does not commit. Do not use the commit-selection tools for an arc proposal. Skip this step when no files changed. A proposal failure keeps Review open.
 
 ## Project Quality
 
@@ -328,7 +328,7 @@ Prefer a controller, state model, or lifecycle boundary with explicit idle/loadi
 
 ## When Using Tools
 
-- Use `mcp__wb__rg` for project search when available. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
+- Use `mcp__wbex__rg` for direct project search. Inside `functions.exec`, use `tools.mcp__wb__rg`. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
 - Prefer parallel tool calls for independent read-only inspections. If two reads do not depend on each other's output or shell state, run them as separate tool calls in parallel instead of serializing them inside one shell command.
 - Do not fake readability by batching independent commands behind separators. Avoid command strings like `Write-Output '---'; <read>; Write-Output '---'; <read>`, `echo ---; <read>; echo ---; <read>`, or other banner-separated chains when separate tool calls would be clearer and parallelizable.
 - Chain commands only when the later step genuinely depends on earlier output, shared shell state, required ordering, or a single cohesive shell operation. Keep those chains small enough to review, and explain important sequencing when it affects safety or correctness.
@@ -383,7 +383,7 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 Generically: Apply **Newest Instruction Wins** and **Shared Workspace**.
 
 Specifically:
-1. Call `mcp__wb__thread_recall` and read its Markdown before relying on memory or continuing risky work. Thread Recall is the authoritative source and the compaction summary is reference material only.
+1. Call `mcp__wbex__thread_recall` and read its Markdown before relying on memory or continuing risky work. Thread Recall is the authoritative source and the compaction summary is reference material only.
 2. Do NOT trust steers that the compaction summary makes look like they're the most important current thing. Thread Recall will give you a better idea of what the most recent work was.
 3. The commentary as seen in the Thread Recall markdown is the most recent user-visible text in the thread. Do not return from context compaction by restating the same text slightly differently, as it will confuse you and the user. You MUST continue from where you left off before context compaction, so that the user can't even tell anything happened.
 4. Verify the newest request and current file state before risky work.

@@ -1,8 +1,11 @@
 /*
  * Exports:
- * - withWorkbenchCodexMcpConfig: add the capability-specific Workbench loopback MCP server to a managed Codex thread config. Keywords: workbench, Codex, MCP, thread config.
+ * - withWorkbenchCodexMcpConfig: add Code-Mode-only wb and direct-only wbex loopback MCP servers to a managed Codex thread config. Keywords: workbench, Codex, MCP, Code Mode, thread config.
  */
 import { randomUUID } from "node:crypto";
+
+import { listWorkbenchAgentCodeModeToolNames } from "../lib/workbench/commands/workbench-agent-command-registry";
+import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "../lib/workbench/commands/workbench-shell-command";
 
 const WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS = 30 * 60;
 
@@ -40,6 +43,18 @@ export function withWorkbenchCodexMcpConfig(
         ...mcpServers,
         wb: {
           default_tools_approval_mode: "approve",
+          enabled_tools: [
+            WORKBENCH_SHELL_MCP_TOOL_NAME,
+            ...listWorkbenchAgentCodeModeToolNames(),
+          ].sort(),
+          omit_tools_from: ["direct", "deferred"],
+          required: true,
+          tool_timeout_sec: WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS,
+          url: getWorkbenchMcpUrl(bridgeUrl, projectLocal),
+        },
+        wbex: {
+          default_tools_approval_mode: "approve",
+          omit_tools_from: ["code_mode", "deferred"],
           required: true,
           tool_timeout_sec: WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS,
           url: getWorkbenchMcpUrl(bridgeUrl, projectLocal),

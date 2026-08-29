@@ -52,14 +52,19 @@ test("adapts managed thread methods and stamps only Workbench-root MCP clients",
     assert.equal(config.existing_setting, "preserved");
     assert.equal(config.bypass_hook_trust, true);
     assert.deepEqual((config.mcp_servers as Record<string, unknown>).docs, { url: "https://example.com/mcp" });
-    const wb = (config.mcp_servers as { wb: Record<string, unknown> }).wb;
-    const mcpUrl = new URL(String(wb.url));
-    assert.equal(mcpUrl.origin, "http://127.0.0.1:4500");
-    assert.equal(mcpUrl.pathname, "/orchestrator/mcp");
-    assert.equal(mcpUrl.searchParams.get("project-local"), projectLocal ? "true" : null);
-    clientScopes.add(mcpUrl.searchParams.get("client") ?? "");
+    const workbenchServers = config.mcp_servers as {
+      wb: Record<string, unknown>;
+      wbex: Record<string, unknown>;
+    };
+    for (const server of [workbenchServers.wb, workbenchServers.wbex]) {
+      const mcpUrl = new URL(String(server.url));
+      assert.equal(mcpUrl.origin, "http://127.0.0.1:4500");
+      assert.equal(mcpUrl.pathname, "/orchestrator/mcp");
+      assert.equal(mcpUrl.searchParams.get("project-local"), projectLocal ? "true" : null);
+      clientScopes.add(mcpUrl.searchParams.get("client") ?? "");
+    }
   }
-  assert.equal(clientScopes.size, 3);
+  assert.equal(clientScopes.size, 6);
 
   const unmarked = await adapter.augment({
     method: "thread/start",
@@ -79,12 +84,15 @@ test("configures internal Codex resumes from explicit or inherited cwd", () => {
       workbenchPromptContext: { cwd: "C:/workbench", instructionScope: "threadUtilities", threadId: "thread" },
     },
   });
-  const readUrl = (request: JsonRpcRequest) => new URL(
-    (request.params as { config: { mcp_servers: { wb: { url: string } } } }).config.mcp_servers.wb.url,
-  );
-  assert.equal(readUrl(local).searchParams.get("project-local"), "true");
-  assert.equal(readUrl(outside).searchParams.get("project-local"), null);
-  assert.equal(readUrl(inherited).searchParams.get("project-local"), "true");
+  const readUrls = (request: JsonRpcRequest) => {
+    const servers = (request.params as {
+      config: { mcp_servers: { wb: { url: string }; wbex: { url: string } } };
+    }).config.mcp_servers;
+    return [new URL(servers.wb.url), new URL(servers.wbex.url)];
+  };
+  readUrls(local).forEach((url) => assert.equal(url.searchParams.get("project-local"), "true"));
+  readUrls(outside).forEach((url) => assert.equal(url.searchParams.get("project-local"), null));
+  readUrls(inherited).forEach((url) => assert.equal(url.searchParams.get("project-local"), "true"));
   const inheritedContext = inherited.workbenchPromptContext as {
     cwd?: string;
     instructionScope?: string;

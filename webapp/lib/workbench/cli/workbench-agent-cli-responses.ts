@@ -87,10 +87,10 @@ function preservedPlanDriftLines(payload: Record<string, unknown> | null) {
     ...(count > paths.length ? [`- ... ${count - paths.length} more`] : []),
     "",
     "Inspect this drift first:",
-    `Call mcp__wb__git_arc_diff with ${diffArgs}.`,
+    `Call mcp__wbex__git_arc_diff with ${diffArgs}.`,
     "",
     "If the approved plan still applies, re-snapshot only the inspected paths:",
-    `Call mcp__wb__git_arc_plan_add with ${refreshArgs}.`,
+    `Call mcp__wbex__git_arc_plan_add with ${refreshArgs}.`,
     "",
     "Otherwise, revise the plan. arc start will reject preserved drift.",
   ];

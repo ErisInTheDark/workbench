@@ -1,10 +1,13 @@
 /*
  * Exports:
+ * - WORKBENCH_SHELL_MCP_TOOL_NAME: canonical MCP registration and exposure name for the sandboxed shell. Keywords: workbench, shell, MCP, name.
  * - WorkbenchShellInputSchema/WorkbenchShellInput: define the MCP-only sandboxed shell request. Keywords: workbench, shell, MCP, input, schema.
  * - WorkbenchShellResultSchema/WorkbenchShellResult: define resolved command output shared by the orchestrator and transcript renderer. Keywords: workbench, shell, result, cwd, exit.
  * - getWorkbenchShellAggregatedOutput: combine stdout and stderr with one boundary rule. Keywords: workbench, shell, output, stderr.
  */
 import { z } from "zod";
+
+export const WORKBENCH_SHELL_MCP_TOOL_NAME = "shell";
 
 export const WorkbenchShellInputSchema = z.object({
   command: z.string().min(1).describe("Shell command string to run inside the current turn sandbox."),

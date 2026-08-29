@@ -527,7 +527,7 @@ test("accepted proposal receipts remain structured when a resolved arc cannot co
   assert.match(result.error, /already resolved and owns no live claims/u);
   assert.match(result.error, /fix accepted arc work \(b{40}\)/u);
   assert.doesNotMatch(result.error, /80d73f22-2adc-4bd3-83e0-affa363743eb|wb git arc/u);
-  assert.match(result.error, /mcp__wb__git_arc_plan_start/u);
+  assert.match(result.error, /mcp__wbex__git_arc_plan_start/u);
 });
 
 test("known proposal and claim-set errors keep recovery typed", async () => {
@@ -567,7 +567,7 @@ test("known proposal and claim-set errors keep recovery typed", async () => {
     const result = await response.json() as GitArcFailureEnvelope;
     assert.equal(response.status, 400);
     assert.deepEqual(result.gitArcFailure, item.expected);
-    assert.match(result.error, /mcp__wb__git_arc_/u);
+    assert.match(result.error, /mcp__wbex__git_arc_/u);
     assert.doesNotMatch(result.error, /wb git arc/u);
   }
 });

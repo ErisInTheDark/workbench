@@ -19,6 +19,7 @@ import {
 } from "../lib/workbench/commands/workbench-agent-command-definition";
 import {
   getWorkbenchShellAggregatedOutput,
+  WORKBENCH_SHELL_MCP_TOOL_NAME,
   WorkbenchShellInputSchema,
   WorkbenchShellResultSchema,
 } from "../lib/workbench/commands/workbench-shell-command";
@@ -218,8 +219,8 @@ export default class WorkbenchAgentMcpController {
       this.requestRegistry.cancel(clientScope, notification.params.requestId, notification.params.reason);
     });
     const names = new Set<string>();
-    names.add("shell");
-    server.registerTool("shell", {
+    names.add(WORKBENCH_SHELL_MCP_TOOL_NAME);
+    server.registerTool(WORKBENCH_SHELL_MCP_TOOL_NAME, {
       annotations: {
         destructiveHint: true,
         idempotentHint: false,

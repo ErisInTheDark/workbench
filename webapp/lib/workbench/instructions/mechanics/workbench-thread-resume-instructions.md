@@ -1,5 +1,6 @@
 ## Workbench Thread Resume
 
-Use `mcp__wb__thread_resume` to interrupt the current managed turn and start its lifecycle-owned replacement turn.
+<!-- Prevent task continuation from forcing a new turn. -->
+Use `mcp__wbex__thread_resume` only when the user says a forced new turn should supply new instructions or MCP tools.
 
-The tool persists the captured turn handoff before interruption. Do not add a second interrupt, restart, timeout, or recovery owner around it.
+It persists the handoff and owns interruption and replacement. Add no second interrupt, restart, timeout, or recovery owner.

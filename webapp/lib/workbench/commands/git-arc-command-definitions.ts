@@ -263,6 +263,7 @@ function inspectionCommand(action: "compare" | "diff") {
       : "Show unified diff content for an arc's claimed set or selected paths.",
     effects: { idempotent: true, readOnly: true },
     helpGroups: ["git-arc"],
+    mcpCodeModeEligible: true,
     words: ["git", "arc", action],
     usage: `wb git arc ${action} [--ref <active-or-plan-ref>] [-- <path> [<path>...]]`,
     inputSchema: z.object({
