@@ -209,8 +209,8 @@ export default function ThreadComposer ({
 }) {
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const {
+    isWithinBottomDistance,
     reportComposerArmed,
-    reportComposerGeometryChange,
   } = useThreadScrollViewportContext();
   const [value, setValue] = useState(threadComposerDraft?.text ?? "");
   const [attachments, setAttachments] = useState<ComposerImageAttachment[]>(threadComposerDraft?.attachments ?? []);
@@ -1230,9 +1230,9 @@ export default function ThreadComposer ({
       collapsedContent={stickyPreviewText}
       collapsedLabel="Expand composer"
       collapsedPreviewKind={stickyPreviewKind}
+      isWithinScrollBottomDistance={isWithinBottomDistance}
       onArmedChange={reportComposerArmed}
       onCollapsedChange={setIsStickyComposerCollapsed}
-      onGeometryChange={reportComposerGeometryChange}
       scrollTargetSelector='[data-thread-scroll-target="true"]'
     >
       {composerForm}

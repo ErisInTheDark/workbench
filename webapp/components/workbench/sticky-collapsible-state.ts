@@ -1,27 +1,36 @@
 /*
  * Exports:
- * - isStickyCollapsibleSentinelBelowVisibleBoundary: decide when a collapsible source position has moved below its visible scrollport. Keywords: sticky, collapsible, scrollport, viewport.
- * - preserveStickyCollapsibleExpandedHeight: keep the mounted surface's source footprint from shrinking across content replacement. Keywords: sticky, collapsible, height, placeholder.
+ * - StickyCollapsiblePlacement: identify whether the stable composer host occupies its inline or sticky slot. Keywords: sticky, collapsible, placement.
+ * - resolveStickyCollapsiblePlacement: apply the near-bottom release and separate geometric thresholds to composer placement. Keywords: sticky, collapsible, hysteresis, viewport.
  */
 
-export function preserveStickyCollapsibleExpandedHeight(
-  preservedHeight: number,
-  measuredHeight: number,
-) {
-  return Math.max(preservedHeight, measuredHeight);
-}
+export type StickyCollapsiblePlacement = "inline" | "sticky";
 
-export function isStickyCollapsibleSentinelBelowVisibleBoundary({
+export function resolveStickyCollapsiblePlacement({
+  currentPlacement,
+  inlineSlotTop,
+  isNearScrollBottom,
   scrollTargetBottom,
-  sentinelTop,
+  stickyComposerTop,
   viewportBottom,
 }: {
+  currentPlacement: StickyCollapsiblePlacement;
+  inlineSlotTop: number;
+  isNearScrollBottom: boolean;
   scrollTargetBottom: number | null;
-  sentinelTop: number;
+  stickyComposerTop: number | null;
   viewportBottom: number;
-}) {
-  const visibleBottom = scrollTargetBottom === null
-    ? viewportBottom
-    : Math.min(scrollTargetBottom, viewportBottom);
-  return sentinelTop >= visibleBottom;
+}): StickyCollapsiblePlacement {
+  if (isNearScrollBottom) return "inline";
+
+  if (currentPlacement === "inline") {
+    const visibleBottom = scrollTargetBottom === null
+      ? viewportBottom
+      : Math.min(scrollTargetBottom, viewportBottom);
+    return inlineSlotTop >= visibleBottom ? "sticky" : "inline";
+  }
+
+  return stickyComposerTop !== null && inlineSlotTop <= stickyComposerTop
+    ? "inline"
+    : "sticky";
 }

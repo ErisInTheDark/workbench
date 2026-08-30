@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadScrollViewport: own atomic reverse-at-bottom and normal-while-reading thread scroll modes. Keywords: thread, scroll, viewport, reverse flex, reading.
- * - Local state owner and helpers: convert scroll coordinates before paint and receive composer-arming intent through the nearest viewport context. Keywords: thread, scroll mode, composer, atomic transition.
+ * - Local state owner and helpers: convert scroll coordinates before paint, receive composer arming, and answer bottom-distance queries. Keywords: thread, scroll mode, composer, atomic transition.
  */
 "use client";
 
@@ -172,31 +172,17 @@ function ActiveThreadScrollViewport ({
     scheduleReadingTransition,
   ]);
 
-  const reportComposerGeometryChange = useCallback(() => {
+  const isWithinBottomDistance = useCallback((tolerancePx: number) => {
     const viewport = viewportRef.current;
-    if (
-      !viewport
-      || !pendingReadingModeRef.current
-      || !composerArmedRef.current
-      || modeRef.current !== "bottom-following"
-      || pendingTransitionRef.current
-    ) {
-      return;
-    }
-
-    const metrics = readScrollMetrics(viewport);
-    if (ThreadScrollMode.isAtBottom("bottom-following", metrics)) {
-      pendingReadingModeRef.current = false;
-      cancelReadingTransition();
-      return;
-    }
-    scheduleReadingTransition();
-  }, [cancelReadingTransition, scheduleReadingTransition]);
+    return viewport
+      ? ThreadScrollMode.isAtBottom(modeRef.current, readScrollMetrics(viewport), tolerancePx)
+      : false;
+  }, []);
 
   const contextValue = useMemo<ThreadScrollViewportContextValue>(() => ({
+    isWithinBottomDistance,
     reportComposerArmed,
-    reportComposerGeometryChange,
-  }), [reportComposerArmed, reportComposerGeometryChange]);
+  }), [isWithinBottomDistance, reportComposerArmed]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;

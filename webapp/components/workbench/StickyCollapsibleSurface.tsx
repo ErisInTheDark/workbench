@@ -1,27 +1,33 @@
 /*
  * Exports:
- * - default StickyCollapsibleSurface: own composer-style sentinel arming, sticky overlay, height preservation, and collapse interaction. Keywords: sticky, collapsible, surface, scrollport.
- * - Local helpers: classify interactive targets and report measured geometry changes and armed-state edges. Keywords: sticky, sentinel, height, armed state, interaction.
+ * - default StickyCollapsibleSurface: move one composer surface between permanent inline and sticky slots while preserving its source footprint and releasing near bottom. Keywords: sticky, collapsible, portal, scrollport.
+ * - Local helpers: classify interactive targets, move the stable portal host, and read the visible viewport boundary. Keywords: sticky, movement, viewport, interaction.
  */
 "use client";
 
 import {
-  type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 
 import ChevronIcon from "./ChevronIcon";
 import {
-  isStickyCollapsibleSentinelBelowVisibleBoundary,
-  preserveStickyCollapsibleExpandedHeight,
+  resolveStickyCollapsiblePlacement,
+  type StickyCollapsiblePlacement,
 } from "./sticky-collapsible-state";
 
 const STICKY_MOTION_DURATION_MS = 240;
+const STICKY_BOTTOM_RELEASE_TOLERANCE_PX = 25;
+
+type MoveBeforeDestination = HTMLElement & {
+  moveBefore?: (movedNode: Node, referenceNode: Node | null) => void;
+};
 
 function isInteractiveTarget(currentTarget: HTMLElement, target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
@@ -29,15 +35,22 @@ function isInteractiveTarget(currentTarget: HTMLElement, target: EventTarget | n
   return Boolean(interactiveTarget && interactiveTarget !== currentTarget);
 }
 
-function isArmedForElement(sentinelElement: HTMLElement, scrollTargetSelector: string) {
+function movePortalHost(destination: HTMLElement, portalHost: HTMLElement) {
+  const moveBeforeDestination = destination as MoveBeforeDestination;
+  if (
+    destination.isConnected
+    && portalHost.isConnected
+    && typeof moveBeforeDestination.moveBefore === "function"
+  ) {
+    moveBeforeDestination.moveBefore(portalHost, null);
+    return;
+  }
+  destination.insertBefore(portalHost, null);
+}
+
+function getVisibleViewportBottom() {
   const viewport = window.visualViewport;
-  const viewportBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
-  const scrollTarget = sentinelElement.closest<HTMLElement>(scrollTargetSelector);
-  return isStickyCollapsibleSentinelBelowVisibleBoundary({
-    scrollTargetBottom: scrollTarget?.getBoundingClientRect().bottom ?? null,
-    sentinelTop: sentinelElement.getBoundingClientRect().top,
-    viewportBottom,
-  });
+  return viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
 }
 
 export default function StickyCollapsibleSurface({
@@ -48,9 +61,9 @@ export default function StickyCollapsibleSurface({
   collapsedContent,
   collapsedLabel,
   collapsedPreviewKind,
+  isWithinScrollBottomDistance,
   onArmedChange,
   onCollapsedChange,
-  onGeometryChange,
   order,
   scrollTargetSelector,
 }: {
@@ -61,118 +74,130 @@ export default function StickyCollapsibleSurface({
   collapsedContent: ReactNode;
   collapsedLabel: string;
   collapsedPreviewKind?: string;
+  isWithinScrollBottomDistance?: (tolerancePx: number) => boolean;
   onArmedChange?: (armed: boolean) => void;
   onCollapsedChange(collapsed: boolean): void;
-  onGeometryChange?: () => void;
   order?: number;
   scrollTargetSelector: string;
 }) {
-  const [preservedExpandedHeightPx, setPreservedExpandedHeightPx] = useState(0);
-  const [isArmed, setIsArmed] = useState(false);
-  const [motionState, setMotionState] = useState<"idle" | "entering" | "leaving">("idle");
-  const expandedRef = useRef<HTMLDivElement>(null);
-  const isArmedRef = useRef(false);
-  const measuredExpandedHeightPxRef = useRef(0);
-  const preservedExpandedHeightPxRef = useRef(0);
-  const previousArmedRef = useRef(false);
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  const surfaceRef = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState<StickyCollapsiblePlacement>("inline");
+  const inlineSlotRef = useRef<HTMLDivElement>(null);
+  const placementRef = useRef<StickyCollapsiblePlacement>("inline");
+  const portalHostRef = useRef<HTMLDivElement | null>(null);
+  const previousPlacementRef = useRef<StickyCollapsiblePlacement>("inline");
+  const stickySlotRef = useRef<HTMLDivElement>(null);
 
-  const commitArmedState = useCallback((nextArmed: boolean) => {
-    if (isArmedRef.current === nextArmed) return;
-    isArmedRef.current = nextArmed;
-    setIsArmed(nextArmed);
-    onArmedChange?.(nextArmed);
-  }, [onArmedChange]);
+  if (portalHostRef.current === null && typeof document !== "undefined") {
+    const portalHost = document.createElement("div");
+    portalHost.className = "sticky-collapsible-portal-host";
+    portalHost.dataset.stickyArmed = "false";
+    portalHost.dataset.stickyMotion = "idle";
+    portalHostRef.current = portalHost;
+  }
 
-  useEffect(() => {
-    const sentinelElement = sentinelRef.current;
-    if (!sentinelElement) {
-      commitArmedState(true);
+  const setInlineSlot = useCallback((inlineSlot: HTMLDivElement | null) => {
+    inlineSlotRef.current = inlineSlot;
+    const portalHost = portalHostRef.current;
+    if (inlineSlot && portalHost && placementRef.current === "inline" && portalHost.parentNode !== inlineSlot) {
+      movePortalHost(inlineSlot, portalHost);
+    }
+  }, []);
+
+  const setStickySlot = useCallback((stickySlot: HTMLDivElement | null) => {
+    stickySlotRef.current = stickySlot;
+    const portalHost = portalHostRef.current;
+    if (stickySlot && portalHost && placementRef.current === "sticky" && portalHost.parentNode !== stickySlot) {
+      movePortalHost(stickySlot, portalHost);
+    }
+  }, []);
+
+  const commitPlacement = useCallback((nextPlacement: StickyCollapsiblePlacement) => {
+    const inlineSlot = inlineSlotRef.current;
+    const stickySlot = stickySlotRef.current;
+    const portalHost = portalHostRef.current;
+    if (
+      nextPlacement === placementRef.current
+      || !inlineSlot
+      || !stickySlot
+      || !portalHost
+    ) {
       return;
     }
 
-    const scrollTarget = sentinelElement.closest<HTMLElement>(scrollTargetSelector);
-    let frameId: number | null = null;
-    const updateArmedState = () => {
-      frameId = null;
-      commitArmedState(isArmedForElement(sentinelElement, scrollTargetSelector));
-    };
-    const requestUpdateArmedState = () => {
-      if (frameId === null) frameId = window.requestAnimationFrame(updateArmedState);
-    };
-    const resizeObserver = typeof ResizeObserver !== "undefined"
-      ? new ResizeObserver(requestUpdateArmedState)
-      : null;
-    const scrollEventTarget: HTMLElement | Window = scrollTarget ?? window;
+    if (nextPlacement === "sticky") {
+      inlineSlot.style.height = `${inlineSlot.getBoundingClientRect().height}px`;
+      portalHost.dataset.stickyArmed = "true";
+      movePortalHost(stickySlot, portalHost);
+    } else {
+      portalHost.dataset.stickyArmed = "false";
+      movePortalHost(inlineSlot, portalHost);
+      inlineSlot.style.removeProperty("height");
+    }
 
-    updateArmedState();
+    placementRef.current = nextPlacement;
+    setPlacement(nextPlacement);
+    onArmedChange?.(nextPlacement === "sticky");
+  }, [onArmedChange]);
+
+  useLayoutEffect(() => {
+    const inlineSlot = inlineSlotRef.current;
+    const portalHost = portalHostRef.current;
+    if (!inlineSlot || !portalHost) return;
+
+    const scrollTarget = inlineSlot.closest<HTMLElement>(scrollTargetSelector);
+    const scrollEventTarget: HTMLElement | Window = scrollTarget ?? window;
+    let frameId: number | null = null;
+
+    const updatePlacement = () => {
+      frameId = null;
+      const nextPlacement = resolveStickyCollapsiblePlacement({
+        currentPlacement: placementRef.current,
+        inlineSlotTop: inlineSlot.getBoundingClientRect().top,
+        isNearScrollBottom: isWithinScrollBottomDistance?.(STICKY_BOTTOM_RELEASE_TOLERANCE_PX) ?? false,
+        scrollTargetBottom: scrollTarget?.getBoundingClientRect().bottom ?? null,
+        stickyComposerTop: placementRef.current === "sticky"
+          ? portalHost.getBoundingClientRect().top
+          : null,
+        viewportBottom: getVisibleViewportBottom(),
+      });
+      commitPlacement(nextPlacement);
+    };
+    const requestPlacementUpdate = () => {
+      if (frameId === null) frameId = window.requestAnimationFrame(updatePlacement);
+    };
+    const resizeObserver = scrollTarget && typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(requestPlacementUpdate)
+      : null;
+
+    updatePlacement();
     if (scrollTarget) resizeObserver?.observe(scrollTarget);
-    if (expandedRef.current) resizeObserver?.observe(expandedRef.current);
-    if (surfaceRef.current) resizeObserver?.observe(surfaceRef.current);
-    scrollEventTarget.addEventListener("scroll", requestUpdateArmedState, { passive: true });
-    window.addEventListener("resize", requestUpdateArmedState);
-    window.visualViewport?.addEventListener("resize", requestUpdateArmedState);
-    window.visualViewport?.addEventListener("scroll", requestUpdateArmedState);
+    scrollEventTarget.addEventListener("scroll", requestPlacementUpdate, { passive: true });
+    window.addEventListener("resize", requestPlacementUpdate);
+    window.visualViewport?.addEventListener("resize", requestPlacementUpdate);
+    window.visualViewport?.addEventListener("scroll", requestPlacementUpdate);
     return () => {
       if (frameId !== null) window.cancelAnimationFrame(frameId);
       resizeObserver?.disconnect();
-      scrollEventTarget.removeEventListener("scroll", requestUpdateArmedState);
-      window.removeEventListener("resize", requestUpdateArmedState);
-      window.visualViewport?.removeEventListener("resize", requestUpdateArmedState);
-      window.visualViewport?.removeEventListener("scroll", requestUpdateArmedState);
+      scrollEventTarget.removeEventListener("scroll", requestPlacementUpdate);
+      window.removeEventListener("resize", requestPlacementUpdate);
+      window.visualViewport?.removeEventListener("resize", requestPlacementUpdate);
+      window.visualViewport?.removeEventListener("scroll", requestPlacementUpdate);
     };
-  }, [commitArmedState, scrollTargetSelector]);
+  }, [commitPlacement, isWithinScrollBottomDistance, scrollTargetSelector]);
 
   useEffect(() => {
-    const sentinelElement = sentinelRef.current;
-    if (sentinelElement) commitArmedState(isArmedForElement(sentinelElement, scrollTargetSelector));
-  });
+    const previousPlacement = previousPlacementRef.current;
+    if (previousPlacement === placement) return;
+    previousPlacementRef.current = placement;
 
-  useEffect(() => {
-    const previousIsArmed = previousArmedRef.current;
-    if (previousIsArmed === isArmed) return;
-    previousArmedRef.current = isArmed;
-    setMotionState(isArmed ? "entering" : "leaving");
-    const timeoutId = window.setTimeout(() => setMotionState("idle"), STICKY_MOTION_DURATION_MS);
+    const portalHost = portalHostRef.current;
+    if (!portalHost) return;
+    portalHost.dataset.stickyMotion = placement === "sticky" ? "entering" : "leaving";
+    const timeoutId = window.setTimeout(() => {
+      portalHost.dataset.stickyMotion = "idle";
+    }, STICKY_MOTION_DURATION_MS);
     return () => window.clearTimeout(timeoutId);
-  }, [isArmed]);
-
-  useEffect(() => {
-    if (typeof ResizeObserver === "undefined") return;
-    const expandedElement = expandedRef.current;
-    const surfaceElement = surfaceRef.current;
-    if (!expandedElement || !surfaceElement) return;
-
-    const updateHeight = () => {
-      const surfaceStyle = window.getComputedStyle(surfaceElement);
-      const verticalPadding = (
-        (Number.parseFloat(surfaceStyle.paddingTop) || 0)
-        + (Number.parseFloat(surfaceStyle.paddingBottom) || 0)
-      );
-      const nextHeight = expandedElement.getBoundingClientRect().height + verticalPadding;
-      if (Math.abs(measuredExpandedHeightPxRef.current - nextHeight) < 0.5) return;
-      measuredExpandedHeightPxRef.current = nextHeight;
-      const nextPreservedHeight = preserveStickyCollapsibleExpandedHeight(
-        preservedExpandedHeightPxRef.current,
-        nextHeight,
-      );
-      if (nextPreservedHeight !== preservedExpandedHeightPxRef.current) {
-        preservedExpandedHeightPxRef.current = nextPreservedHeight;
-        setPreservedExpandedHeightPx(nextPreservedHeight);
-      }
-      onGeometryChange?.();
-    };
-    updateHeight();
-    const frameId = window.requestAnimationFrame(updateHeight);
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(expandedElement);
-    observer.observe(surfaceElement);
-    return () => {
-      window.cancelAnimationFrame(frameId);
-      observer.disconnect();
-    };
-  }, [collapsed, onGeometryChange]);
+  }, [placement]);
 
   const expand = () => onCollapsedChange(false);
   const handleCollapsedKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -181,72 +206,71 @@ export default function StickyCollapsibleSurface({
     event.preventDefault();
     expand();
   };
-  const style = {
-    ...(preservedExpandedHeightPx > 0
-      ? { "--sticky-collapsible-expanded-height": `${preservedExpandedHeightPx}px` }
-      : {}),
-    ...(order === undefined ? {} : { order }),
-  } as CSSProperties;
   const collapseControlLabel = collapsed ? collapsedLabel : collapseLabel;
+  const portalHost = portalHostRef.current;
 
   return (
     <>
       <div
-        ref={sentinelRef}
-        aria-hidden="true"
-        className="sticky-collapsible-top-sentinel"
+        ref={setInlineSlot}
+        className="sticky-collapsible-inline-slot"
         style={order === undefined ? undefined : { order }}
       />
       <div
-        className="sticky-collapsible-host"
-        data-collapsed={collapsed ? "true" : "false"}
-        data-sticky-armed={isArmed ? "true" : "false"}
-        data-sticky-motion={motionState}
-        style={style}
-      >
-        <div className="sticky-collapsible-spacer" aria-hidden="true" />
-        <div className="sticky-collapsible-shell">
+        ref={setStickySlot}
+        className="sticky-collapsible-sticky-slot"
+        style={order === undefined ? undefined : { order }}
+      />
+      {portalHost
+        ? createPortal(
           <div
-            ref={surfaceRef}
-            className="sticky-collapsible-surface"
+            className="sticky-collapsible-host"
             data-collapsed={collapsed ? "true" : "false"}
           >
-            <div ref={expandedRef} className="sticky-collapsible-expanded">
-              <div className="sticky-collapsible-collapse-button-slot">
-                <button
-                  aria-expanded={!collapsed}
-                  aria-label={collapseControlLabel}
-                  className="inline-flex size-9 items-center justify-center rounded-full text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                  onClick={() => onCollapsedChange(!collapsed)}
-                  title={collapseControlLabel}
-                  type="button"
+            <div className="sticky-collapsible-shell">
+              <div
+                className="sticky-collapsible-surface"
+                data-collapsed={collapsed ? "true" : "false"}
+              >
+                <div className="sticky-collapsible-expanded">
+                  <div className="sticky-collapsible-collapse-button-slot">
+                    <button
+                      aria-expanded={!collapsed}
+                      aria-label={collapseControlLabel}
+                      className="inline-flex size-9 items-center justify-center rounded-full text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                      onClick={() => onCollapsedChange(!collapsed)}
+                      title={collapseControlLabel}
+                      type="button"
+                    >
+                      <ChevronIcon className={`size-4 transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} />
+                    </button>
+                  </div>
+                  <div className="min-w-0">{children}</div>
+                </div>
+                <div
+                  aria-label={collapsedLabel}
+                  className="sticky-collapsible-collapsed"
+                  onClick={(event) => {
+                    if (!isInteractiveTarget(event.currentTarget, event.target)) expand();
+                  }}
+                  onKeyDown={handleCollapsedKeyDown}
+                  role="button"
+                  tabIndex={0}
                 >
-                  <ChevronIcon className={`size-4 transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} />
-                </button>
+                  <span className="sticky-collapsible-collapsed-chevron" aria-hidden="true">
+                    <ChevronIcon className="size-4 -rotate-90" />
+                  </span>
+                  <span className="sticky-collapsible-collapsed-text" data-preview-kind={collapsedPreviewKind}>
+                    {collapsedContent}
+                  </span>
+                  {collapsedAccessory ? <span className="sticky-collapsible-collapsed-accessory">{collapsedAccessory}</span> : null}
+                </div>
               </div>
-              <div className="min-w-0">{children}</div>
             </div>
-            <div
-              aria-label={collapsedLabel}
-              className="sticky-collapsible-collapsed"
-              onClick={(event) => {
-                if (!isInteractiveTarget(event.currentTarget, event.target)) expand();
-              }}
-              onKeyDown={handleCollapsedKeyDown}
-              role="button"
-              tabIndex={0}
-            >
-              <span className="sticky-collapsible-collapsed-chevron" aria-hidden="true">
-                <ChevronIcon className="size-4 -rotate-90" />
-              </span>
-              <span className="sticky-collapsible-collapsed-text" data-preview-kind={collapsedPreviewKind}>
-                {collapsedContent}
-              </span>
-              {collapsedAccessory ? <span className="sticky-collapsible-collapsed-accessory">{collapsedAccessory}</span> : null}
-            </div>
-          </div>
-        </div>
-      </div>
+          </div>,
+          portalHost,
+        )
+        : null}
     </>
   );
 }

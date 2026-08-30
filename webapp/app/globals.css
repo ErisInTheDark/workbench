@@ -242,24 +242,46 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     background-color: color-mix(in srgb, var(--text) 16%, transparent);
   }
 
-  .sticky-collapsible-top-sentinel {
-    height: 1px;
-    margin-bottom: -1px;
-    pointer-events: none;
-  }
-
-  .sticky-collapsible-host {
-    --sticky-collapsible-motion-duration: 220ms;
-    --sticky-collapsible-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
-    interpolate-size: allow-keywords;
-    margin-top: 1.5rem;
+  .sticky-collapsible-inline-slot {
+    box-sizing: border-box;
+    flex-shrink: 0;
+    min-width: 0;
+    padding-top: 1.5rem;
     position: relative;
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"] {
+  .sticky-collapsible-sticky-slot {
     bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
+    flex-shrink: 0;
+    height: 0;
+    min-width: 0;
+    pointer-events: none;
     position: sticky;
     z-index: 20;
+  }
+
+  .sticky-collapsible-portal-host {
+    --sticky-collapsible-motion-duration: 220ms;
+    --sticky-collapsible-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+    min-width: 0;
+  }
+
+  .sticky-collapsible-inline-slot > .sticky-collapsible-portal-host {
+    pointer-events: auto;
+    position: relative;
+  }
+
+  .sticky-collapsible-sticky-slot > .sticky-collapsible-portal-host {
+    bottom: 0;
+    left: 0;
+    pointer-events: auto;
+    position: absolute;
+    right: 0;
+  }
+
+  .sticky-collapsible-host {
+    interpolate-size: allow-keywords;
+    position: relative;
   }
 
   .sticky-collapsible-shell {
@@ -318,14 +340,10 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       transform: translateY(0.45rem) scale(0.985);
     }
 
-    .sticky-collapsible-host[data-sticky-motion="leaving"] .thread-composer-mode-panel[data-active="true"] {
+    .sticky-collapsible-portal-host[data-sticky-motion="leaving"] .thread-composer-mode-panel[data-active="true"] {
       opacity: 1;
       transform: translateY(0) scale(1);
     }
-  }
-
-  .sticky-collapsible-spacer {
-    display: none;
   }
 
   .sticky-collapsible-expanded {
@@ -388,29 +406,29 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     }
   }
 
-  .sticky-collapsible-host[data-sticky-motion="entering"] .sticky-collapsible-shell {
+  .sticky-collapsible-portal-host[data-sticky-motion="entering"] .sticky-collapsible-shell {
     animation: sticky-collapsible-enter var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease) both;
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-shell {
+  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-shell {
     opacity: 1;
     transform: translateY(0);
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-collapse-button-slot {
+  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-collapse-button-slot {
     display: block;
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-expanded {
+  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-expanded {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface {
+  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface {
     border: 1px solid color-mix(in srgb, var(--text), transparent 80%);
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"] .thread-composer-sticky-form-content,
-  .sticky-collapsible-host[data-sticky-armed="true"] .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
+  .sticky-collapsible-portal-host[data-sticky-armed="true"] .thread-composer-sticky-form-content,
+  .sticky-collapsible-portal-host[data-sticky-armed="true"] .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
     max-height: min(52dvh, calc(100dvh - env(safe-area-inset-bottom, 0px) - 11rem));
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -421,19 +439,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease);
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-spacer {
-    display: block;
-    height: var(--sticky-collapsible-expanded-height, 0px);
-  }
-
-  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-shell {
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    left: 0;
-  }
-
-  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-expanded {
+  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-expanded {
     position: absolute;
     inset: 0.75rem;
     opacity: 0;
@@ -446,7 +452,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     visibility: hidden;
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed {
+  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed {
     align-items: center;
     color: var(--text);
     cursor: pointer;
@@ -462,18 +468,18 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   @starting-style {
-    .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed {
+    .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed {
       opacity: 0;
       transform: translateY(0.35rem) scale(0.985);
     }
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed:focus-visible {
+  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface[data-collapsed="true"] .sticky-collapsible-collapsed:focus-visible {
     border-radius: 0.85rem;
     box-shadow: 0 0 0 2px var(--accent-soft);
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-collapsed-chevron {
+  .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-collapsed-chevron {
     color: var(--muted);
     display: inline-flex;
     align-items: center;
@@ -1025,6 +1031,7 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       background-position: 50% 50%;
     }
 
+    .sticky-collapsible-portal-host,
     .sticky-collapsible-host,
     .sticky-collapsible-shell,
     .sticky-collapsible-surface,
@@ -1109,18 +1116,21 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   @media (hover: none) and (pointer: coarse) {
-    .sticky-collapsible-host[data-sticky-armed="true"] {
+    .sticky-collapsible-sticky-slot {
       bottom: 0;
+    }
+
+    .sticky-collapsible-sticky-slot > .sticky-collapsible-portal-host {
       margin-inline: calc(0px - var(--thread-scroll-inline-padding, 0px));
     }
 
-    .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-shell,
-    .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface {
+    .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-shell,
+    .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface {
       border-bottom-left-radius: 0;
       border-bottom-right-radius: 0;
     }
 
-    .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-surface {
+    .sticky-collapsible-portal-host[data-sticky-armed="true"] .sticky-collapsible-surface {
       padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
     }
 
