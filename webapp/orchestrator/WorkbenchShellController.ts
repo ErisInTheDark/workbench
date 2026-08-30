@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WORKBENCH_SHELL_SANDBOX_CAPABILITY/WORKBENCH_SHELL_TOOL_DESCRIPTION: advertise the MCP-only sandbox metadata and behavior contract. Keywords: workbench, shell, MCP, sandbox.
- * - WorkbenchShellControllerOptions: inject Codex execution and host command resolution. Keywords: workbench, shell, options, test.
- * - default WorkbenchShellController: run host-shell commands through Codex's exact MCP sandbox state. Keywords: workbench, shell, Codex, sandbox.
+ * - WorkbenchShellControllerOptions: inject Codex execution and host environment. Keywords: workbench, shell, options, test.
+ * - default WorkbenchShellController: run host-shell commands through the Codex thread's exact sandbox state. Keywords: workbench, shell, Codex, sandbox.
  */
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
@@ -13,9 +13,17 @@ import type { JsonValue } from "../lib/workbench/commands/workbench-agent-comman
 import { WorkbenchShellInputSchema } from "../lib/workbench/commands/workbench-shell-command";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexCommandExecController from "./CodexCommandExecController";
-import { getSpawnDescriptor } from "./process-helpers";
 
 export const WORKBENCH_SHELL_SANDBOX_CAPABILITY = "codex/sandbox-state-meta";
+const WINDOWS_CODEX_ARGS_ENV = "WORKBENCH_CODEX_SANDBOX_ARGS_JSON";
+const WINDOWS_CODEX_LAUNCH_SCRIPT = [
+  '$ErrorActionPreference = "Stop"',
+  `$raw = [Environment]::GetEnvironmentVariable("${WINDOWS_CODEX_ARGS_ENV}", "Process")`,
+  `[Environment]::SetEnvironmentVariable("${WINDOWS_CODEX_ARGS_ENV}", $null, "Process")`,
+  "[string[]]$codexArgs = ConvertFrom-Json -InputObject $raw",
+  "& (Get-Command codex -CommandType ExternalScript -ErrorAction Stop).Source @codexArgs",
+  "exit $LASTEXITCODE",
+].join("; ");
 const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
   z.boolean(),
   z.number(),
@@ -35,7 +43,6 @@ export const WORKBENCH_SHELL_TOOL_DESCRIPTION = "Run a shell command inside the 
 
 export interface WorkbenchShellControllerOptions {
   commandExec?: Pick<CodexCommandExecController, "execute">;
-  getCodexSpawnDescriptor?: typeof getSpawnDescriptor;
   platform?: NodeJS.Platform;
   requestCodex?: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   shellEnvironment?: NodeJS.ProcessEnv;
@@ -54,16 +61,22 @@ function hostShellCommand(command: string, login: boolean, platform: NodeJS.Plat
   return [environment.SHELL?.trim() || "/bin/sh", login ? "-lc" : "-c", command];
 }
 
+function codexSandboxLaunch(codexArgs: string[], platform: NodeJS.Platform) {
+  if (platform !== "win32") return { command: ["codex", ...codexArgs] };
+  return {
+    command: ["pwsh", "-NoProfile", "-Command", WINDOWS_CODEX_LAUNCH_SCRIPT],
+    env: { [WINDOWS_CODEX_ARGS_ENV]: JSON.stringify(codexArgs) },
+  };
+}
+
 export default class WorkbenchShellController {
   private readonly commandExec: Pick<CodexCommandExecController, "execute">;
-  private readonly getCodexSpawnDescriptor: typeof getSpawnDescriptor;
   private readonly platform: NodeJS.Platform;
   private readonly shellEnvironment: NodeJS.ProcessEnv;
 
-  constructor({ commandExec, getCodexSpawnDescriptor = getSpawnDescriptor, platform = process.platform, requestCodex, shellEnvironment = process.env }: WorkbenchShellControllerOptions) {
+  constructor({ commandExec, platform = process.platform, requestCodex, shellEnvironment = process.env }: WorkbenchShellControllerOptions) {
     if (!commandExec && !requestCodex) throw new Error("Codex command execution is not configured.");
     this.commandExec = commandExec ?? new CodexCommandExecController({ requestCodex: requestCodex! });
-    this.getCodexSpawnDescriptor = getCodexSpawnDescriptor;
     this.platform = platform;
     this.shellEnvironment = shellEnvironment;
   }
@@ -83,13 +96,16 @@ export default class WorkbenchShellController {
       this.platform,
       this.shellEnvironment,
     );
-    const descriptor = this.getCodexSpawnDescriptor({
-      command: "codex",
-      args: ["sandbox", "--sandbox-state-json", JSON.stringify(commandState), "--", ...shellCommand],
-    });
+    const launch = codexSandboxLaunch([
+      "sandbox",
+      "--sandbox-state-json",
+      JSON.stringify(commandState),
+      "--",
+      ...shellCommand,
+    ], this.platform);
 
     const result = await this.commandExec.execute({
-      command: [descriptor.command, ...descriptor.args],
+      ...launch,
       cwd: commandCwd,
       sandboxPolicy: { type: "dangerFullAccess" },
       ...(request.timeout_ms === undefined ? {} : { timeoutMs: request.timeout_ms }),
