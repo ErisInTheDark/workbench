@@ -8,6 +8,7 @@
  * - getCodexAppServerHttpOrigin: derive the HTTP health-check origin from the resolved websocket URL. Keywords: codex, readyz, healthz, origin.
  * - getCodexAppServerReadyUrl: resolve the bridge readiness endpoint. Keywords: codex, readyz.
  * - getCodexAppServerHealthUrl: resolve the bridge health endpoint. Keywords: codex, healthz.
+ * - getCodexTranscriptAssetUrl: map canonical transcript storage keys to the daemon HTTP asset route. Keywords: transcript, asset, daemon.
  */
 export const DEFAULT_CODEX_APP_SERVER_BRIDGE_PORT = "4500";
 export const DEFAULT_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${DEFAULT_CODEX_APP_SERVER_BRIDGE_PORT}`;
@@ -95,4 +96,11 @@ export function getCodexAppServerReadyUrl() {
 
 export function getCodexAppServerHealthUrl() {
   return `${getCodexAppServerHttpOrigin()}/healthz`;
+}
+
+export function getCodexTranscriptAssetUrl(value: string) {
+  const assetUrl = value.trim();
+  return assetUrl.startsWith("/api/transcript-assets/")
+    ? `${getCodexAppServerHttpOrigin()}/orchestrator/transcript-assets/${assetUrl.slice("/api/transcript-assets/".length)}`
+    : value;
 }

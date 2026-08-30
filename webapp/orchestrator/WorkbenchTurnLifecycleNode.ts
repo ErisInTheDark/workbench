@@ -59,16 +59,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const recoverOpenCodeTurn = context.harnessPorts.opencode.recoverInterruptedTurn;
     if (!recoverOpenCodeTurn) throw new Error("OpenCode is missing its declared turn-recovery port.");
     let turnRecovery!: WorkbenchTurnRecoveryController;
-    const prepareCodexMcp = async () => {
-      await codexMcpGeneration.prepare(null, async () => {
-        const response = await context.harnessPorts.codex.request({
-          id: `workbench:mcp-refresh:${codexMcpGeneration.generation}`,
-          method: "config/mcpServer/reload",
-          params: null,
-        });
-        if (response.error) throw new Error(response.error.message);
-      });
-    };
     turnRecovery = new WorkbenchTurnRecoveryController(
       new WorkbenchTurnRecoveryHandoffStore(context.legacyMigrationProjectRoot),
       context.logTurnRecovery,
@@ -83,9 +73,12 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       state?.turnRecovery,
       {
         codex: async (candidate) => await recoverCodexTurn(candidate, {
-          prepareMcp: prepareCodexMcp,
           request: async (request) => {
             if (request.method === "turn/start") turnRecovery.observeRequest("codex", request);
+            if (request.method === "workbench/codex/message/admit") {
+              const startRequest = record(record(request.params)?.startRequest);
+              if (startRequest?.method === "turn/start") turnRecovery.observeRequest("codex", startRequest as import("./bridge-types").JsonRpcRequest);
+            }
             return await context.harnessPorts.codex.request(request);
           },
         }),

@@ -29,6 +29,14 @@ class BrowseExecution implements OrchestratorBrowseExecution {
     return await this.getController().executeSessionRequest(request, signal);
   }
 
+  async listSessions(request: object) {
+    return await this.getController().listSessions(request as import("../lib/types").WorkbenchBrowseSessionListRequest);
+  }
+
+  async controlSession(request: object) {
+    return await this.getController().controlSession(request as import("../lib/types").WorkbenchBrowseSessionControlRequest);
+  }
+
   handleBrowseHttpRequest: WorkbenchBrowseController["handleBrowseHttpRequest"] = async (request, response) => {
     await this.getController().handleBrowseHttpRequest(request, response);
   };
@@ -74,6 +82,10 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       ? (build.handoffState as { execution: BrowseExecution }).execution
       : new BrowseExecution(context);
     let detached = false;
+    const unregisterBrowse = build.get("daemonRequests").registerBrowse({
+      controlSession: async (request) => await execution.controlSession(request),
+      listSessions: async (request) => await execution.listSessions(request),
+    });
     return {
       beginRuntimeDrain: () => { execution.beginDrain(); },
       detachForReload: async () => {
@@ -81,7 +93,10 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         detached = true;
         return { execution };
       },
-      dispose: async () => { if (!detached) await execution.detach(); },
+      dispose: async () => {
+        unregisterBrowse();
+        if (!detached) await execution.detach();
+      },
       registrations: { browseExecution: execution },
       start: async () => {
         if (build.mode === "restore") execution.resume();
@@ -92,7 +107,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload orchestrator-owned Browse execution without restarting browser sessions.",
   lifecycle: "handoff",
   provides: ["browseExecution"],
-  requires: [],
+  requires: ["daemonRequests"],
   safeAll: true,
   scope: "server:browse",
   sources: [

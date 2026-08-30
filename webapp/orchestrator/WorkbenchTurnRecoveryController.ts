@@ -75,6 +75,14 @@ export default class WorkbenchTurnRecoveryController {
   }
 
   observeRequest(harness: WorkbenchHarness, request: JsonRpcRequest, now = Date.now()) {
+    if (harness === "codex" && request.method === "workbench/codex/message/admit") {
+      const params = record(request.params);
+      const resumeRequest = record(params?.resumeRequest);
+      const startRequest = record(params?.startRequest);
+      if (resumeRequest?.method === "thread/resume") this.observeRequest(harness, resumeRequest as JsonRpcRequest, now);
+      if (startRequest?.method === "turn/start") this.observeRequest(harness, startRequest as JsonRpcRequest, now);
+      return;
+    }
     const params = record(request.params);
     const threadId = typeof params?.threadId === "string" ? params.threadId : null;
     if (harness === "codex" && request.method === "thread/resume" && threadId) {

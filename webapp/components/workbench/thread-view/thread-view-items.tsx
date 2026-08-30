@@ -14,6 +14,7 @@ import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../../../lib/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
+import { getCodexTranscriptAssetUrl } from "../../../lib/codex/config";
 import { getCurrentTurn } from "../../../lib/codex/thread-state";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
 import {
@@ -711,7 +712,7 @@ function ThreadUserInputLine ({
         <ThreadUserImage
           alt="User-provided image"
           className="max-w-[22rem]"
-          src={input.url}
+          src={getCodexTranscriptAssetUrl(input.url)}
         />
       );
     case "localImage":

@@ -75,6 +75,9 @@ function createTransport() {
       calls.push(`delete:${projectId}:${filePath}:${options.confirmUntracked === true}`);
       return { path: filePath, tracked: true };
     },
+    async readCatalog() {
+      return await (await fetch("/api/projects")).json() as import("../types").WorkbenchProjectsPayload;
+    },
     async refresh(projectId) {
       calls.push(`refresh:${projectId}`);
     },

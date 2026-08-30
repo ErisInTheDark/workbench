@@ -22,6 +22,7 @@ export interface WorkbenchOrchestratorHttpRouterOptions {
   projectCatalog: HttpController;
   projectSnapshot: ProjectSnapshotHttpController;
   threadGit: HttpController;
+  transcriptAssets?: HttpController;
 }
 
 interface RouteDefinition {
@@ -42,7 +43,7 @@ function sendJson(response: http.ServerResponse, statusCode: number, payload: ob
 export default class WorkbenchOrchestratorHttpRouter {
   private readonly routes: readonly RouteDefinition[];
 
-  constructor(options: WorkbenchOrchestratorHttpRouterOptions) {
+  constructor(private readonly options: WorkbenchOrchestratorHttpRouterOptions) {
     this.routes = [
       {
         errorMessage: "Git arc request failed.",
@@ -97,6 +98,14 @@ export default class WorkbenchOrchestratorHttpRouter {
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
     const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
+    if (this.options.transcriptAssets && request.method === "GET" && requestPath.startsWith("/orchestrator/transcript-assets/")) {
+      try {
+        await this.options.transcriptAssets.handleHttpRequest(request, response);
+      } catch (error) {
+        sendJson(response, 500, { error: error instanceof Error ? error.message : "Transcript asset request failed." });
+      }
+      return;
+    }
     const route = this.routes.find((candidate) => (
       candidate.path === requestPath
       && (candidate.methods === null || candidate.methods.includes(request.method ?? ""))

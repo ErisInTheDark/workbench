@@ -6,16 +6,12 @@
 
 import { useEffect, useState } from "react";
 
-import { GitCheckpointCompareResultSchema } from "../../../lib/workbench/git/checkpoint-contracts";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
-  parseGitArcFailureEnvelope,
   type GitArcFailure,
-  type GitArcFailureAction,
 } from "../../../lib/workbench/git/git-arc-failures";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
-import reportClientSchemaError from "../../../lib/workbench/report-client-schema-error";
 import type { GitArcProposalStatus } from "../../../lib/workbench/git/git-arc-storage";
 import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId, WorkbenchThreadLifecycle } from "../../../lib/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
@@ -24,6 +20,7 @@ import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
+import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 
 type ReleaseAction = "restore" | "unclaim";
 type ClaimChangeState = "clean" | "dirty" | "error" | "loading";
@@ -32,15 +29,6 @@ type LifecyclePresentation = Omit<WorkbenchGitArcLifecycleState, "phase" | "prop
   proposalIds?: string[];
   proposals: Array<{ proposalId: string; status: GitArcProposalStatus }>;
 };
-
-async function requireGitArcResponse(response: Response, action: GitArcFailureAction, fallback: string) {
-  if (response.ok) return response;
-  const text = await response.text();
-  const envelope = parseGitArcFailureEnvelope(text, (error) => {
-    reportClientSchemaError("Rejected Git arc lifecycle failure response", error);
-  });
-  throw new GitArcFailureException(envelope?.gitArcFailure ?? createGitArcOperationRejected(action, envelope?.error || text.trim() || fallback));
-}
 
 export default function ThreadGitArcLifecycleCard({
   claim,
@@ -65,6 +53,7 @@ export default function ThreadGitArcLifecycleCard({
   threadLifecycle: WorkbenchThreadLifecycle;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const daemon = useWorkbenchDaemonClient();
   const phase = claim.phase ?? (claim.claimedPaths.length ? "active" : "resolved");
   const visibleProposals = claim.proposals.filter(({ status }) => status === "proposed" || status === "committed");
   const [activeAction, setActiveAction] = useState<ReleaseAction | null>(null);
@@ -80,20 +69,8 @@ export default function ThreadGitArcLifecycleCard({
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await fetch("/api/git-checkpoint", {
-          body: JSON.stringify({ action: "compare", cwd, harness, threadId }),
-          cache: "no-store",
-          headers: { "Content-Type": "application/json" },
-          method: "POST",
-          signal: controller.signal,
-        });
-        await requireGitArcResponse(response, "compare", "Unable to inspect the active Git arc claim.");
-        const parsed = GitCheckpointCompareResultSchema.safeParse(await response.json());
-        if (!parsed.success) {
-          reportClientSchemaError("Rejected Git arc comparison response", parsed.error);
-          throw new Error("Workbench returned an invalid Git arc comparison.");
-        }
-        setChangeState(getGitArcClaimReleaseAction(parsed.data.changes.length) === "restore" ? "dirty" : "clean");
+        const comparison = await daemon.requestGitArc("git/arc/compare", { cwd, harness, refs: [], roots: [], threadId });
+        setChangeState(getGitArcClaimReleaseAction(comparison.changes.length) === "restore" ? "dirty" : "clean");
       } catch (compareError) {
         if (controller.signal.aborted) return;
         setChangeState("error");
@@ -103,40 +80,40 @@ export default function ThreadGitArcLifecycleCard({
       }
     })();
     return () => controller.abort();
-  }, [claim.checkpointCommit, claim.claimedPaths.length, cwd, harness, phase, threadId]);
+  }, [claim.checkpointCommit, claim.claimedPaths.length, cwd, daemon, harness, phase, threadId]);
 
   const release = async (action: ReleaseAction) => {
     if (activeAction) return;
     setActiveAction(action);
     setFailure(null);
     try {
-      const response = await fetch("/api/git-checkpoint", {
-        body: JSON.stringify(action === "restore" ? memberRefs.length ? {
-          action: "restore",
-          confirmRestore: true,
-          cwd,
-          harness,
-          refs: memberRefs,
-          threadId,
-        } : {
-          action: "restore",
-          checkpointCommit: claim.checkpointCommit,
-          confirmRestore: true,
+      if (action === "restore") {
+        await daemon.requestGitArc("git/arc/restore", memberRefs.length ? {
+            confirmRestore: true,
+            cwd,
+            harness,
+            refs: memberRefs,
+            roots: [],
+            threadId,
+          } : {
+            checkpointCommit: claim.checkpointCommit,
+            confirmRestore: true,
+            cwd,
+            harness,
+            paths: claim.claimedPaths,
+            refs: [],
+            roots: [],
+            threadId,
+          });
+      } else {
+        await daemon.requestGitArc("git/arc/remove", {
           cwd,
           harness,
           paths: claim.claimedPaths,
+          roots: [],
           threadId,
-        } : {
-          action: "arcRemove",
-          cwd,
-          harness,
-          paths: claim.claimedPaths,
-          threadId,
-        }),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      });
-      await requireGitArcResponse(response, action === "restore" ? "restore" : "arcRemove", "Unable to release the Git arc claim.");
+        });
+      }
       await onReleased();
     } catch (releaseError) {
       setFailure(releaseError instanceof GitArcFailureException

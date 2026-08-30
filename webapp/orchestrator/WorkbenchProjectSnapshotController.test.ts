@@ -102,6 +102,7 @@ function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: numb
   let now = 1_000;
   let snapshotReads = 0;
   let snapshotReader = async (projectId: string | null | undefined) => createSnapshot(projectId || "default");
+  const resolvedProjectIds: Array<string | null | undefined> = [];
   const watchers: FakeWatcher[] = [];
   const controller = new WorkbenchProjectSnapshotController({
     cacheTtlMs: 100,
@@ -117,9 +118,9 @@ function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: numb
       assertProjectFileCanBeDeleted: async () => undefined,
       createProjectEntry: async () => "created.md",
       deleteProjectFile: async (filePath) => { deletedPaths.push(filePath); },
-      getProjectSnapshot: async (projectId) => {
+      getProjectSnapshot: async (project) => {
         snapshotReads += 1;
-        return await snapshotReader(projectId);
+        return await snapshotReader(project.id);
       },
       isGitTrackedFile: async () => tracked,
       resolveProjectFilePath: (project, requestPath) => ({
@@ -129,15 +130,18 @@ function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: numb
         root: project.roots[0],
         rootRelativePath: requestPath,
       }),
-      resolveProjectRoot: async (projectId) => ({
+    },
+    pollIntervalMs: 60_000,
+    resolveProjectById: async (projectId) => {
+      resolvedProjectIds.push(projectId);
+      return {
         id: projectId || "default",
         kind: "git" as const,
         root: `C:/projects/${projectId || "default"}`,
         rootPath: `C:/projects/${projectId || "default"}`,
         roots: [{ id: projectId || "default", name: projectId || "default", root: `C:/projects/${projectId || "default"}`, rootPath: `C:/projects/${projectId || "default"}` }],
-      }),
+      };
     },
-    pollIntervalMs: 60_000,
   });
   const readTree = async (projectId: string) => await captureResponse(async (response) => {
     await controller.handleTreeHttpRequest(createRequest("GET", `/orchestrator/tree?projectId=${projectId}`) as never, response as never);
@@ -148,6 +152,7 @@ function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: numb
     errors,
     get snapshotReads() { return snapshotReads; },
     readTree,
+    resolvedProjectIds,
     setNow(value: number) { now = value; },
     setTracked(value: boolean) { tracked = value; },
     setSnapshotReader(reader: typeof snapshotReader) { snapshotReader = reader; },
@@ -162,6 +167,7 @@ test("dormant HTTP reads cache without starting project watchers", async () => {
   assert.equal(first.headers["X-Workbench-Snapshot-Cache"], "miss");
   assert.equal(second.headers["X-Workbench-Snapshot-Cache"], "hit");
   assert.equal(harness.snapshotReads, 1);
+  assert.deepEqual(harness.resolvedProjectIds, ["alpha"]);
   assert.deepEqual(JSON.parse(second.body), createSnapshot("alpha"));
   assert.equal(harness.watchers.length, 0);
 });
@@ -177,6 +183,7 @@ test("coalesces concurrent dormant snapshot misses", async () => {
   assert.equal(firstResponse.headers["X-Workbench-Snapshot-Cache"], "miss");
   assert.equal(secondResponse.headers["X-Workbench-Snapshot-Cache"], "coalesced");
   assert.equal(harness.snapshotReads, 1);
+  assert.deepEqual(harness.resolvedProjectIds, ["alpha"]);
 });
 
 test("an observed project publishes only changed snapshots", async () => {

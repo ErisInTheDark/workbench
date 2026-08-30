@@ -64,6 +64,7 @@ export interface WorkbenchSubagentControllerOptions {
   bridgeUrl: string;
   createHarnessClient?: () => WorkbenchSubagentHarnessClient;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
+  profileStore?: WorkbenchComposerProfileStore;
   resolveProjectFromCwd?: typeof resolveAgentEndpointProjectFromCwd;
   storageRoot: string;
   subagentStore: WorkbenchSubagentControllerStore;
@@ -138,6 +139,7 @@ export default class WorkbenchSubagentController {
     bridgeUrl,
     createHarnessClient = () => new CodexAppServerClient(),
     onRelationshipCommitted,
+    profileStore,
     resolveProjectFromCwd = resolveAgentEndpointProjectFromCwd,
     storageRoot,
     subagentStore,
@@ -146,7 +148,7 @@ export default class WorkbenchSubagentController {
     this.bridgeUrl = bridgeUrl;
     this.createHarnessClient = createHarnessClient;
     this.onRelationshipCommitted = onRelationshipCommitted;
-    this.profileStore = new WorkbenchComposerProfileStore(storageRoot);
+    this.profileStore = profileStore ?? new WorkbenchComposerProfileStore(storageRoot);
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.subagentStore = subagentStore;
     this.threadState = threadState;
@@ -164,8 +166,6 @@ export default class WorkbenchSubagentController {
     try {
       const params = isRecord(message.params) ? message.params : {};
       switch (message.method) {
-        case "workbench/composerProfiles/read": return { id, result: await this.profileStore.read() };
-        case "workbench/composerProfiles/mutate": return { id, result: await this.profileStore.mutate(params.mutation) };
         case "workbench/subagent/list": return { id, result: await this.list(params) };
         case "workbench/subagent/profiles": return { id, result: await this.profiles(params) };
         case "workbench/subagent/create": return { id, result: await this.withHarnessClient((client) => this.create(client, params)) };
@@ -179,6 +179,10 @@ export default class WorkbenchSubagentController {
     } catch (error) {
       return { id, error: { code: -32000, message: error instanceof Error ? error.message : "Workbench subagent request failed." } };
     }
+  }
+
+  mutateProfile(value: unknown) {
+    return this.profileStore.mutate(value);
   }
 
   private async withHarnessClient<T>(operation: (client: WorkbenchSubagentHarnessClient) => Promise<T>) {

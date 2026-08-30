@@ -16,7 +16,7 @@ function errorResponse(error: unknown) {
 
 export async function GET(request: NextRequest) {
   try {
-    const result = await sendServerWorkbenchOrchestratorRequest(request, "codex", { method: "workbench/composerProfiles/read", params: {} });
+    const result = await sendServerWorkbenchOrchestratorRequest(request, "codex", { method: "profiles/read", params: {} });
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return errorResponse(error); }
 }
@@ -25,9 +25,17 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as { action?: unknown; mutation?: unknown };
     if (body.action !== "mutate") throw new Error("Composer profile action must be mutate.");
+    const mutation = body.mutation && typeof body.mutation === "object" && !Array.isArray(body.mutation)
+      ? body.mutation as { kind?: unknown; profile?: unknown; profileId?: unknown }
+      : null;
+    if (mutation?.kind !== "upsert" && mutation?.kind !== "delete") {
+      throw new Error("Composer profile mutation must be upsert or delete.");
+    }
     const result = await sendServerWorkbenchOrchestratorRequest(request, "codex", {
-      method: "workbench/composerProfiles/mutate",
-      params: { mutation: body.mutation },
+      method: mutation.kind === "upsert" ? "profiles/upsert" : "profiles/delete",
+      params: mutation.kind === "upsert"
+        ? { profile: mutation.profile }
+        : { profileId: mutation.profileId },
     });
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return errorResponse(error); }

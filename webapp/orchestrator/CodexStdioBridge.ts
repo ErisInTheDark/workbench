@@ -23,6 +23,8 @@ import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
+import type { ThreadResumeResponse } from "../lib/codex/generated/app-server/v2/ThreadResumeResponse";
+import { getCurrentInProgressTurn, isThreadStatusActive } from "../lib/codex/thread-state";
 import type { ToolRequestUserInputParams } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputParams";
 import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
@@ -133,7 +135,10 @@ export type CodexStdioBridgeOptions = {
   instructions?: WorkbenchCodexInstructionPort;
   onAcceptedTurnSteer?: (threadId: string) => void;
   onNotification: (notification: JsonRpcNotification) => void;
-  prepareTurnStart?: (message: JsonRpcRequest) => Promise<void>;
+  prepareTurnStart?: (
+    message: JsonRpcRequest,
+    requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
+  ) => Promise<void>;
   recordSqliteTranscript?: (observations: readonly WorkbenchTranscriptObservation[]) => Promise<void>;
   restartingAppServer?: boolean;
   resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
@@ -160,6 +165,7 @@ export type CodexStdioBridgeReloadState = {
   fileChangeFailureMarkers?: Map<string, WorkbenchFileChangeFailureMarker>;
   fileChangeTurnCursors?: Map<string, string>;
   initializeResult: unknown;
+  unmaterializedThreadIds?: Set<string>;
   pendingResponses: Map<number, PendingResponse>;
   pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
   requestIdAllocator: RequestIdAllocator;
@@ -959,14 +965,6 @@ function loadCodexTranscriptStore({ reload = false }: { reload?: boolean } = {})
   return (require("./CodexTranscriptStore") as { default: CodexTranscriptStoreConstructor }).default;
 }
 
-function isUnmaterializedThreadResumeError(
-  error: { code: number; message: string },
-  threadId: string,
-) {
-  return error.code === -32600
-    && error.message === `no rollout found for thread id ${threadId}`;
-}
-
 export default class CodexStdioBridge {
   private readonly appServer: CodexAppServer;
   private readonly bridgeUrl: string;
@@ -985,7 +983,7 @@ export default class CodexStdioBridge {
   private transcriptStoreReloadPending = false;
   private initializeResult: unknown;
   private acceptingWork = true;
-  private operationQueue: Promise<unknown> = Promise.resolve();
+  private commandQueue: Promise<unknown> = Promise.resolve();
   private readonly pendingUserInputRequests: Map<string, PendingCodexUserInputRequest>;
   private readonly pendingResponses: Map<number, PendingResponse>;
   private readonly requestIdAllocator: RequestIdAllocator;
@@ -1001,6 +999,7 @@ export default class CodexStdioBridge {
   private transcriptLastLogAt: number | null = null;
   private readonly transcriptThreadContexts: Map<string, CodexTranscriptThreadContext>;
   private readonly transcriptSteers: Map<string, WorkbenchSteerHistoryEntry>;
+  private readonly unmaterializedThreadIds: Set<string>;
   private readonly transcriptShadowLog: OrchestratorTranscriptShadowLog | undefined;
   private readonly transcriptRecording: CodexTranscriptRecordingController;
   private upstreamInitialized: boolean;
@@ -1038,6 +1037,7 @@ export default class CodexStdioBridge {
     this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
     this.transcriptThreadContexts = initialState?.transcriptThreadContexts ?? new Map();
     this.transcriptSteers = initialState?.transcriptSteers ?? new Map();
+    this.unmaterializedThreadIds = initialState?.unmaterializedThreadIds ?? new Set();
     this.transcriptRecording = new CodexTranscriptRecordingController({
       ...(recordSqliteTranscript ? { recordSqlite: recordSqliteTranscript } : {}),
     });
@@ -1154,12 +1154,14 @@ export default class CodexStdioBridge {
       requestIdAllocator: this.requestIdAllocator,
       transcriptSteers: this.transcriptSteers,
       transcriptThreadContexts: this.transcriptThreadContexts,
+      unmaterializedThreadIds: this.unmaterializedThreadIds,
       upstreamInitialized: this.upstreamInitialized,
     };
   }
 
   private resetUpstreamState(reason: string) {
     this.pendingUserInputRequests.clear();
+    this.unmaterializedThreadIds.clear();
     for (const pending of this.pendingResponses.values()) {
       if (isPendingInternalResponse(pending)) pending.reject(new Error(reason));
     }
@@ -1223,22 +1225,43 @@ export default class CodexStdioBridge {
   }
 
   async forwardRequest(message: JsonRpcRequest, client: BridgeClient, clientRequestId: number | string) {
-    if (message.method === "turn/start") await this.prepareTurnStartRequest(message);
-    await this.enqueueOperation(() => {
+    if (message.method === "turn/start") {
+      const response = await this.enqueueCommand(async () => {
+        this.assertAcceptingWork();
+        const admission = await this.admitNativeCodexTurn({
+          requestId: message.id ?? clientRequestId,
+          startRequest: message,
+        });
+        return this.toNativeTurnStartResponse(admission, clientRequestId);
+      });
+      this.sendToClient(client, response);
+      return;
+    }
+    if (message.method === "thread/resume" || message.method === "thread/unsubscribe") {
+      this.sendToClient(client, {
+        id: clientRequestId,
+        error: { code: -32600, message: `${message.method} is owned by the Workbench turn-start lifecycle.` },
+      });
+      return;
+    }
+    await this.enqueueCommand(() => {
       this.assertAcceptingWork();
       return this.dispatchRequest(message, { client, clientRequestId });
     });
   }
 
   async forwardNotification(message: JsonRpcRequest) {
-    await this.enqueueOperation(() => {
+    await this.enqueueCommand(() => {
       this.assertAcceptingWork();
       this.send(message);
     });
   }
 
   async handleBridgeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
-    if (message.method?.startsWith("workbench/subagent/") || message.method?.startsWith("workbench/composerProfiles/")) {
+    if (message.method === "workbench/codex/message/admit") {
+      return await this.enqueueCommand(() => this.handleManagedMessageAdmission(message));
+    }
+    if (message.method?.startsWith("workbench/subagent/")) {
       this.assertAcceptingWork();
       return await this.handleWorkbenchRequest(message);
     }
@@ -1248,8 +1271,14 @@ export default class CodexStdioBridge {
     if (message.method === "thread/context/read") {
       return await this.handleThreadContextReadRequest(message);
     }
+    if (message.method === "thread/resume" || message.method === "thread/unsubscribe") {
+      return {
+        id: message.id ?? null,
+        error: { code: -32600, message: `${message.method} is owned by the Workbench turn-start lifecycle.` },
+      };
+    }
 
-    return await this.enqueueOperation(() => this.handleBridgeRequestImmediately(message));
+    return await this.enqueueCommand(() => this.handleBridgeRequestImmediately(message));
   }
 
   async handleServerRequest(message: JsonRpcRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<JsonRpcResponse> {
@@ -1258,10 +1287,20 @@ export default class CodexStdioBridge {
     if (options.signal?.aborted) abortFromCaller();
     else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     const run = async () => {
-      if (message.method === "turn/start") await this.prepareTurnStartRequest(message);
+      if (message.method === "turn/start") {
+        return await this.enqueueCommand(async () => {
+          if (controller?.signal.aborted) throw controller.signal.reason;
+          this.assertAcceptingWork();
+          const admission = await this.admitNativeCodexTurn({
+            requestId: message.id ?? `workbench:internal-start:${Date.now()}`,
+            startRequest: message,
+          });
+          return this.toNativeTurnStartResponse(admission, message.id ?? null);
+        });
+      }
       const bridgeResponse = await this.handleBridgeRequest(message);
       if (bridgeResponse) return bridgeResponse;
-      const dispatch = await this.enqueueOperation(() => {
+      const dispatch = await this.enqueueCommand(() => {
         if (controller?.signal.aborted) throw controller.signal.reason;
         this.assertAcceptingWork();
         return this.dispatchRequest(message, { internal: true, signal: controller?.signal });
@@ -1653,41 +1692,28 @@ export default class CodexStdioBridge {
     return { response: null };
   }
 
-  private async prepareTurnStartRequest(message: JsonRpcRequest) {
-    const params = asRecord(message.params);
-    const threadId = asString(params?.threadId)?.trim();
-    if (!threadId) {
-      throw new Error("Codex turn/start requires a thread id before its Workbench runtime can be prepared.");
-    }
-
-    const resumeResponse = await this.handleServerRequest(
-      this.instructions.createThreadResume({
-        excludeTurns: true,
-        threadId,
-      }, { kind: "request", request: message }),
-    );
-    // Codex deliberately rejects resume between thread/start and the first
-    // turn/start because that first turn is what materializes rollout storage.
-    if (resumeResponse.error && !isUnmaterializedThreadResumeError(resumeResponse.error, threadId)) {
-      throw new Error(resumeResponse.error.message);
-    }
-
-    await this.prepareTurnStart(message);
+  private toNativeTurnStartResponse(admission: JsonRpcResponse, requestId: number | string | null): JsonRpcResponse {
+    if (admission.error) return { id: requestId, error: admission.error };
+    const result = asRecord(admission.result);
+    const turn = result?.kind === "started" ? result.turn : null;
+    return turn && typeof turn === "object"
+      ? { id: requestId, result: { turn } }
+      : { id: requestId, error: { code: -32000, message: "Codex turn start was not admitted as a new turn." } };
   }
 
-  private async enqueueOperation<TValue>(task: () => TValue | Promise<TValue>) {
-    const nextOperation = this.operationQueue
+  private async enqueueCommand<TValue>(task: () => TValue | Promise<TValue>) {
+    const nextCommand = this.commandQueue
       .catch(() => undefined)
       .then(task);
-    this.operationQueue = nextOperation.catch(() => undefined);
-    return await nextOperation;
+    this.commandQueue = nextCommand.catch(() => undefined);
+    return await nextCommand;
   }
 
   async waitForIdle() {
     while (true) {
-      const currentQueue = this.operationQueue;
+      const currentQueue = this.commandQueue;
       await currentQueue.catch(() => undefined);
-      if (this.operationQueue === currentQueue) {
+      if (this.commandQueue === currentQueue) {
         break;
       }
     }
@@ -1719,7 +1745,7 @@ export default class CodexStdioBridge {
       return;
     }
 
-    await this.enqueueOperation(() => this.handleUpstreamNonResponseMessage(message));
+    await this.handleUpstreamNonResponseMessage(message);
   }
 
   private async handleUpstreamResponse(message: JsonRpcResponse) {
@@ -1729,6 +1755,14 @@ export default class CodexStdioBridge {
     }
 
     this.pendingResponses.delete(Number(message.id));
+    if (!message.error && pending.method === "thread/start") {
+      const threadId = asString(asRecord(asRecord(message.result)?.thread)?.id)?.trim();
+      if (threadId) this.unmaterializedThreadIds.add(threadId);
+    }
+    if (!message.error && pending.method === "turn/start") {
+      const threadId = asString(asRecord(pending.upstreamRequest.params)?.threadId)?.trim();
+      if (threadId) this.unmaterializedThreadIds.delete(threadId);
+    }
     if (!isPendingInternalResponse(pending) && pending.method === "turn/steer" && !message.error) {
       const turnId = asString(asRecord(message.result)?.turnId)?.trim();
       const threadId = asString(asRecord(pending.upstreamRequest.params)?.threadId)?.trim();
@@ -1831,6 +1865,10 @@ export default class CodexStdioBridge {
 
     if (isJsonRpcNotification(message)) {
       let syntheticFileChangeNotification: JsonRpcNotification | null = null;
+      if (message.method === "turn/started") {
+        const threadId = asString(asRecord(message.params)?.threadId)?.trim();
+        if (threadId) this.unmaterializedThreadIds.delete(threadId);
+      }
       if (message.method === "item/started" || message.method === "item/completed") {
         this.recordFileChangeTurnCursor(message.params);
       }
@@ -2408,25 +2446,6 @@ export default class CodexStdioBridge {
 
   private async readThreadPage(message: JsonRpcRequest): Promise<WorkbenchThreadPageResponse> {
     const params = WorkbenchThreadPageReadParamsSchema.parse(message.params);
-    let resumeResult: Record<string, unknown> | null = null;
-
-    if (params.cursor === null && params.readScope !== "subagentBackground") {
-      const resumeDispatch = await this.dispatchRequest(
-        this.instructions.createThreadResume({
-          ...(params.cwd ? { cwd: params.cwd } : {}),
-          excludeTurns: true,
-          threadId: params.threadId,
-        }, { kind: "request", request: message }),
-        { internal: true },
-      );
-      if (!resumeDispatch.response) {
-        throw new Error("Workbench thread-page resume did not create an internal response.");
-      }
-      const resumeResponse = await resumeDispatch.response;
-      if (resumeResponse.error) throw new Error(resumeResponse.error.message);
-      resumeResult = asRecord(resumeResponse.result);
-    }
-
     const hydration: WorkbenchThreadHydrationRequest = params.cursor === null
       ? { mode: "latest" }
       : { beforeTurnId: params.cursor, mode: "previous" };
@@ -2443,10 +2462,7 @@ export default class CodexStdioBridge {
 
     return {
       ...context,
-      model: asString(resumeResult?.model),
       nextCursor: readWorkbenchThreadPageNextCursor(context.thread),
-      reasoningEffort: asString(resumeResult?.reasoningEffort),
-      serviceTier: asString(resumeResult?.serviceTier),
     };
   }
 
@@ -2729,6 +2745,185 @@ export default class CodexStdioBridge {
         }, { propagateFailure: true });
       },
     };
+  }
+
+  private async handleManagedMessageAdmission(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const params = asRecord(message.params);
+    const threadId = asString(params?.threadId)?.trim();
+    const resumeRequest = asRecord(params?.resumeRequest) as JsonRpcRequest | null;
+    const startRequest = asRecord(params?.startRequest) as JsonRpcRequest | null;
+    const steerRequest = params?.steerRequest === undefined
+      ? null
+      : asRecord(params.steerRequest) as JsonRpcRequest | null;
+    if (
+      !threadId
+      || resumeRequest?.method !== "thread/resume"
+      || startRequest?.method !== "turn/start"
+      || (steerRequest !== null && steerRequest.method !== "turn/steer")
+      || asString(asRecord(resumeRequest.params)?.threadId)?.trim() !== threadId
+      || asString(asRecord(startRequest.params)?.threadId)?.trim() !== threadId
+    ) {
+      return { id: message.id ?? null, error: { code: -32602, message: "A valid managed Codex message admission is required." } };
+    }
+
+    return await this.admitCodexTurn({
+      requestId: message.id ?? null,
+      resumeRequest,
+      startRequest,
+      steerRequest,
+    });
+  }
+
+  private async admitCodexTurn({
+    requestId,
+    resumeRequest,
+    startRequest,
+    steerRequest,
+  }: {
+    requestId: number | string | null;
+    resumeRequest: JsonRpcRequest;
+    startRequest: JsonRpcRequest;
+    steerRequest: JsonRpcRequest | null;
+  }): Promise<JsonRpcResponse> {
+    const threadId = asString(asRecord(startRequest.params)?.threadId)?.trim();
+    if (!threadId) {
+      return { id: requestId, error: { code: -32602, message: "Codex turn start requires a thread id." } };
+    }
+    this.assertAcceptingWork();
+    const readResponse = await this.dispatchManagedProviderRequest({
+      id: `workbench:admission-read:${String(requestId ?? Date.now())}`,
+      method: "thread/read",
+      params: { includeTurns: true, threadId },
+      workbenchThreadHydration: { mode: "latest" },
+    });
+    if (readResponse.error) return { id: requestId, error: readResponse.error };
+    const readThread = asRecord(readResponse.result)?.thread as ThreadReadResponse["thread"] | undefined;
+    if (!readThread) return { id: requestId, error: { code: -32000, message: "Codex admission could not read the thread." } };
+    const activeTurn = this.readManagedActiveTurn(readThread, readThread.turns);
+    if (activeTurn) {
+      return await this.dispatchManagedMessageSteer(requestId, threadId, activeTurn, startRequest, steerRequest);
+    }
+    if (readThread.status.type !== "idle" && readThread.status.type !== "notLoaded") {
+      return { id: requestId, error: { code: -32000, message: `The Codex thread is ${readThread.status.type}, not inactive.` } };
+    }
+
+    const unsubscribeResponse = await this.dispatchManagedProviderRequest({
+      id: `workbench:admission-unsubscribe:${String(requestId ?? Date.now())}`,
+      method: "thread/unsubscribe",
+      params: { threadId },
+    });
+    if (unsubscribeResponse.error) return { id: requestId, error: unsubscribeResponse.error };
+
+    const resumeResponse = await this.dispatchManagedProviderRequest({
+      ...resumeRequest,
+      id: `workbench:admission-resume:${String(requestId ?? Date.now())}`,
+    });
+    if (resumeResponse.error) {
+      return { id: requestId, error: resumeResponse.error };
+    } else {
+      const resumeResult = asRecord(resumeResponse.result) as ThreadResumeResponse | null;
+      const resumedThread = resumeResult?.thread;
+      if (!resumedThread) {
+        return { id: requestId, error: { code: -32000, message: "Codex admission received no resumed thread." } };
+      }
+      const resumedTurns = resumeResult.initialTurnsPage?.data ?? resumedThread.turns;
+      const resumedActiveTurn = this.readManagedActiveTurn(resumedThread, resumedTurns);
+      if (resumedActiveTurn) {
+        return await this.dispatchManagedMessageSteer(requestId, threadId, resumedActiveTurn, startRequest, steerRequest);
+      }
+      if (resumedThread.status.type !== "idle") {
+        return { id: requestId, error: { code: -32000, message: `The resumed Codex thread is ${resumedThread.status.type}, not inactive.` } };
+      }
+    }
+
+    return await this.dispatchPreparedTurnStart(requestId, startRequest);
+  }
+
+  private async admitNativeCodexTurn({
+    requestId,
+    startRequest,
+  }: {
+    requestId: number | string | null;
+    startRequest: JsonRpcRequest;
+  }): Promise<JsonRpcResponse> {
+    const threadId = asString(asRecord(startRequest.params)?.threadId)?.trim();
+    if (!threadId) {
+      return { id: requestId, error: { code: -32602, message: "Codex turn start requires a thread id." } };
+    }
+    if (this.unmaterializedThreadIds.has(threadId)) {
+      return await this.dispatchPreparedTurnStart(requestId, startRequest);
+    }
+    return await this.admitCodexTurn({
+      requestId,
+      resumeRequest: this.instructions.createThreadResume({
+        excludeTurns: true,
+        threadId,
+      }, { kind: "request", request: startRequest }),
+      startRequest,
+      steerRequest: null,
+    });
+  }
+
+  private async dispatchPreparedTurnStart(
+    requestId: number | string | null,
+    startRequest: JsonRpcRequest,
+  ): Promise<JsonRpcResponse> {
+    await this.prepareTurnStart(
+      startRequest,
+      (request) => this.dispatchManagedProviderRequest(request),
+    );
+    const response = await this.dispatchManagedProviderRequest(startRequest);
+    if (response.error) return { id: requestId, error: response.error };
+    const turn = asRecord(response.result)?.turn;
+    return turn && typeof turn === "object"
+      ? { id: requestId, result: { kind: "started", turn } }
+      : { id: requestId, error: { code: -32000, message: "Managed Codex turn start returned no turn." } };
+  }
+
+  private async dispatchManagedProviderRequest(request: JsonRpcRequest) {
+    const dispatch = await this.dispatchRequest(request, { internal: true });
+    if (!dispatch.response) throw new Error(`Managed Codex request ${request.method} produced no response.`);
+    return await dispatch.response;
+  }
+
+  private readManagedActiveTurn(thread: Thread, turns: Turn[]) {
+    if (!isThreadStatusActive(thread.status)) return null;
+    const activeTurn = getCurrentInProgressTurn({ turns });
+    if (!activeTurn) throw new Error(`Active Codex thread ${thread.id} has no current in-progress turn.`);
+    return activeTurn;
+  }
+
+  private async dispatchManagedMessageSteer(
+    requestId: number | string | null,
+    threadId: string,
+    activeTurn: Turn,
+    startRequest: JsonRpcRequest,
+    steerRequest: JsonRpcRequest | null,
+  ): Promise<JsonRpcResponse> {
+    const startParams = asRecord(startRequest.params);
+    const clientUserMessageId = asString(startParams?.clientUserMessageId)?.trim();
+    if (!steerRequest || !clientUserMessageId || !Array.isArray(startParams?.input)) {
+      return { id: requestId, error: { code: -32602, message: "Managed Codex steer context and message input are required." } };
+    }
+    const response = await this.dispatchManagedProviderRequest({
+      ...steerRequest,
+      id: `workbench:admission-steer:${String(requestId ?? Date.now())}`,
+      method: "turn/steer",
+      params: {
+        ...asRecord(steerRequest.params),
+        clientUserMessageId,
+        expectedTurnId: activeTurn.id,
+        input: startParams.input,
+        threadId,
+      },
+    });
+    if (response.error) return { id: requestId, error: response.error };
+    const turnId = asString(asRecord(response.result)?.turnId)?.trim();
+    if (!turnId) {
+      return { id: requestId, error: { code: -32000, message: "Managed Codex steer returned no turn id." } };
+    }
+    this.onAcceptedTurnSteer(threadId);
+    return { id: requestId, result: { kind: "steered", turnId } };
   }
 
   private async createSqliteProviderTurnPageObservations(

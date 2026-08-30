@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - CodexTurnRecoveryPort: direct Codex request and MCP-freshness boundary used during turn replacement. Keywords: codex, recovery, port.
- * - recoverCodexTurn: deduplicate, interrupt, cold-resume, and replace one Codex turn. Keywords: codex, recovery, resume, MCP.
+ * - CodexTurnRecoveryPort: direct Codex request boundary used during turn replacement. Keywords: codex, recovery, port.
+ * - recoverCodexTurn: deduplicate, interrupt, and delegate replacement to managed admission. Keywords: codex, recovery, resume.
  */
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import { getCurrentTurn } from "../lib/codex/thread-state";
@@ -10,7 +10,6 @@ import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
 
 export interface CodexTurnRecoveryPort {
-  prepareMcp(): Promise<void>;
   request(request: JsonRpcRequest): Promise<JsonRpcResponse>;
 }
 
@@ -70,24 +69,22 @@ export async function recoverCodexTurn(candidate: WorkbenchTurnRecoveryHandoffCa
   }
   if (containsRecoveryMarker(thread, candidate.recoveryId)) return "completed" as const;
 
-  await port.prepareMcp();
-  await requireSuccess(port, {
-    id: `recovery-unsubscribe:${candidate.recoveryId}`,
-    method: "thread/unsubscribe",
-    params: { threadId: candidate.threadId },
-  });
-  await requireSuccess(port, {
-    ...structuredClone(candidate.resumeRequest),
-    id: `recovery-resume:${candidate.recoveryId}`,
-  });
-  const request = structuredClone(candidate.request);
-  request.id = `recovery-start:${candidate.recoveryId}`;
-  request.params = {
-    ...record(request.params),
+  const startRequest = structuredClone(candidate.request);
+  startRequest.id = `recovery-start:${candidate.recoveryId}`;
+  startRequest.params = {
+    ...record(startRequest.params),
     clientUserMessageId: candidate.recoveryId,
     input: createWorkbenchThreadRecoveryInput(),
     threadId: candidate.threadId,
   };
-  await requireSuccess(port, request);
+  await requireSuccess(port, {
+    id: `recovery-admit:${candidate.recoveryId}`,
+    method: "workbench/codex/message/admit",
+    params: {
+      resumeRequest: structuredClone(candidate.resumeRequest),
+      startRequest,
+      threadId: candidate.threadId,
+    },
+  });
   return "recovered" as const;
 }

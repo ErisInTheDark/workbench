@@ -83,6 +83,7 @@ interface WorkbenchProjectClient {
 }
 
 export interface WorkbenchProjectTransport {
+  readCatalog(): Promise<WorkbenchProjectsPayload>;
   createEntry(projectId: string, parentPath: string, name: string, type: "directory" | "file"): Promise<CreateEntryPayload>;
   deleteFile(projectId: string, filePath: string, options: { confirmUntracked?: boolean }): Promise<DeleteFileResponse>;
   refresh(projectId: string): Promise<void>;
@@ -337,13 +338,7 @@ function WorkbenchProjectClient({
   }
 
   async function refreshProjects() {
-    const response = await fetch("/api/projects", { cache: "no-store" });
-    if (!response.ok) {
-      const error = await response.json().catch(err => ({ error: "Unable to load projects.", cause: err }));
-      throw new Error(error.error, { cause: error.cause });
-    }
-
-    const payload = await response.json();
+    const payload = await transport.readCatalog();
     const parsed = WorkbenchProjectsPayloadSchema.safeParse(payload);
     if (!parsed.success) {
       reportClientSchemaError("Repaired Workbench project catalog response", parsed.error);

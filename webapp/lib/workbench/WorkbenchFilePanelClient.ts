@@ -8,6 +8,7 @@
  */
 
 import type { ChangeSummary } from "../types";
+import type { FilePayload, SaveConflictPayload, SaveFilePayload } from "../types";
 import {
     createListItemDomEditor,
 } from "./dom/mutation/list-item-dom-edit";
@@ -70,10 +71,13 @@ export interface WorkbenchFilePanelClientOptions {
   draftStore: FileDraftStore;
   emitExplorerStateChange: () => void;
   expandProjectPath: (filePath: string) => void;
-  fileApiPath?: string;
+  fileTransport: {
+    read(projectId: string, path: string): Promise<FilePayload>;
+    reset(projectId: string, path: string, expectedMtimeMs: number, force?: boolean): Promise<SaveFilePayload | SaveConflictPayload>;
+    save(projectId: string, path: string, content: string, expectedMtimeMs: number, force?: boolean): Promise<SaveFilePayload | SaveConflictPayload>;
+  };
   getProjectChangeSummary: (path: string) => ChangeSummary | null | undefined;
   getProjectId: () => string;
-  keepEverythingOnSave?: boolean;
   onContentChange?: (content: string) => void;
   refreshProjectOnSave?: boolean;
   refreshProject: () => Promise<void>;
@@ -108,10 +112,9 @@ function WorkbenchFilePanelClient(
     draftStore,
     emitExplorerStateChange,
     expandProjectPath,
-    fileApiPath,
+    fileTransport,
     getProjectChangeSummary,
     getProjectId,
-    keepEverythingOnSave = false,
     onContentChange,
     refreshProjectOnSave,
     refreshProject,
@@ -433,10 +436,9 @@ function WorkbenchFilePanelClient(
     emitExplorerStateChange,
     eventBus,
     expandProjectPath,
-    fileApiPath,
+    fileTransport,
     fileSessionState,
     getProjectId,
-    keepEverythingOnSave,
     refreshProjectOnSave,
     refreshProject,
     sessionState,

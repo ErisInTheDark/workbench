@@ -4,23 +4,23 @@
  */
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 
 import type { FileUpdateChange } from "../../../lib/codex/generated/app-server/v2/FileUpdateChange";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
-  parseGitArcFailureEnvelope,
   type GitArcFailure,
 } from "../../../lib/workbench/git/git-arc-failures";
 import {
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
 } from "../../../lib/workbench/thread/thread-command-matchers";
-import reportClientSchemaError from "../../../lib/workbench/report-client-schema-error";
 import { ThreadFileChangeList } from "./ThreadFileChangeItem";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
+import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
+import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 
 type CheckpointDiffState =
   | { failure: GitArcFailure; status: "error" }
@@ -31,21 +31,19 @@ type CheckpointDiffState =
 function buildFullDiffRequestBody({
   cwd,
   diffArtifactId,
-  projectId,
+  harness,
   threadId,
 }: {
   cwd: string;
   diffArtifactId: string;
-  projectId?: string | null;
+  harness: "codex" | "copilot" | "opencode";
   threadId: string;
 }) {
   return {
-    action: "diff",
     cwd,
     diffArtifactId,
-    ...(projectId ? { projectId } : {}),
+    harness,
     threadId,
-    view: "full",
   };
 }
 
@@ -68,6 +66,8 @@ export default function ThreadCheckpointDiffItem({
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const daemon = useWorkbenchDaemonClient();
+  const gitArcPresentation = useContext(ThreadGitArcPresentationContext);
   const legacyChanges = useMemo(() => parseGitCheckpointDiffOutput(output), [output]);
   const diffArtifactId = useMemo(() => parseGitCheckpointDiffArtifactId(output), [output]);
   const [state, setState] = useState<CheckpointDiffState>({ status: "idle" });
@@ -80,31 +80,12 @@ export default function ThreadCheckpointDiffItem({
 
     const abortController = new AbortController();
     setState({ status: "loading" });
-    void fetch("/api/git-checkpoint", {
-      body: JSON.stringify(buildFullDiffRequestBody({
+    void daemon.requestGitArc("git/arc/diff-artifact/read", buildFullDiffRequestBody({
         cwd,
         diffArtifactId,
-        projectId,
+        harness: gitArcPresentation?.harness ?? "codex",
         threadId,
-      })),
-      cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      method: "POST",
-      signal: abortController.signal,
-    }).then(async (response) => {
-      const text = await response.text();
-      if (!response.ok) {
-        const envelope = parseGitArcFailureEnvelope(text, (error) => {
-          reportClientSchemaError("Rejected Git arc diff failure response", error);
-        });
-        throw new GitArcFailureException(envelope?.gitArcFailure ?? createGitArcOperationRejected(
-          "readDiffArtifact",
-          envelope?.error || text.trim() || "Unable to load checkpoint diff artifact.",
-        ));
-      }
-
+      })).then((text) => {
       if (!abortController.signal.aborted) {
         setState({
           changes: parseGitCheckpointDiffOutput(text),
@@ -125,7 +106,7 @@ export default function ThreadCheckpointDiffItem({
     });
 
     return () => abortController.abort();
-  }, [cwd, diffArtifactId, legacyChanges.length, projectId, threadId]);
+  }, [cwd, daemon, diffArtifactId, gitArcPresentation?.harness, legacyChanges.length, threadId]);
 
   if (legacyChanges.length) {
     return (

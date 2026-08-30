@@ -231,16 +231,7 @@ export default class WorkbenchLegacyMigrationSourceController {
       method: "thread/read",
       params: { cwd, includeTurns: true, ...(harness === "codex" ? {} : { projectId }), threadId: context.providerThreadId },
     }), timeoutMs, signal);
-    let response = await read("thread-read");
-    if (response.error?.message === `thread not loaded: ${context.providerThreadId}` && harness === "codex") {
-      const resumed = await raceDeadline(this.options.requestHarness(harness, {
-        id: `legacy-migration:${context.correlationId}:thread-resume`,
-        method: "thread/resume",
-        params: { threadId: context.providerThreadId },
-      }), timeoutMs, signal);
-      if (resumed.error) throw new LegacyMigrationSnapshotError("providerResumeFailed", withProviderReason(context, resumed.error, cwd), false, { cause: resumed.error });
-      response = await read("thread-read-after-resume");
-    }
+    const response = await read("thread-read");
     if (response.error) {
       if (missingProviderMessage(response.error.message, context.providerThreadId)) throw new LegacyMigrationSnapshotError("providerMissing", context, true, { cause: response.error });
       throw new LegacyMigrationSnapshotError("providerReadFailed", withProviderReason(context, response.error, cwd), false, { cause: response.error });

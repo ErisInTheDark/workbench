@@ -13,6 +13,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   create: (_context, build) => {
     const controller = new WorkbenchWebSocketRequestController({
       harnesses: build.get("harnesses"),
+      daemonRequests: build.get("daemonRequests"),
       initialState: build.handoffState as WorkbenchWebSocketRequestControllerState | undefined,
       reload: build.get("reloadController"),
       threadState: build.get("threadState").controller,
@@ -33,7 +34,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload browser WebSocket routing, request diagnostics, and aggregate event-stream health without restarting sockets.",
   lifecycle: "handoff",
   provides: ["webSocketRequests"],
-  requires: ["harnesses", "reloadController", "threadState", "transcript", "transcriptShadowLog"],
+  requires: ["daemonRequests", "harnesses", "reloadController", "threadState", "transcript", "transcriptShadowLog"],
   safeAll: true,
   scope: "server:websocket",
   sources: [

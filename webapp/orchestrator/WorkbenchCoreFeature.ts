@@ -10,6 +10,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "bridgeRequest",
   "browseSessionCleanup",
   "codexHealth",
+  "daemonRequests",
   "gitArc",
   "harnesses",
   "legacyMigrationSource",

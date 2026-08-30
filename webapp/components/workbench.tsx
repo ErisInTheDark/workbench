@@ -161,6 +161,7 @@ import {
 } from "./workbench/workbench-icons";
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
 import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
+import WorkbenchDaemonClientContext from "./workbench/WorkbenchDaemonClientContext";
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
@@ -503,13 +504,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const clientStateController = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
   const [composerProfileController] = useState(() => new WorkbenchComposerProfileController(clientStateController));
-  useEffect(() => {
-    void composerProfileController.initializePersistence(createComposerProfilePersistence());
-
-    return () => {
-      composerProfileController.dispose();
-    };
-  }, [composerProfileController]);
   const { navigateToRoute, route } = useWorkbenchRoute();
   const currentRouteRef = useRef<WorkbenchRoute>(route);
   currentRouteRef.current = route;
@@ -523,6 +517,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const [selectionError, setSelectionError] = useState("");
   const [rateLimits, setRateLimits] = useState<RateLimitSnapshot | null>(null);
   const [controls, setControls] = useState<WorkbenchControls | null>(null);
+  useEffect(() => {
+    if (!controls) return;
+    void composerProfileController.initializePersistence(createComposerProfilePersistence(controls.daemon));
+    return () => { composerProfileController.dispose(); };
+  }, [composerProfileController, controls]);
   const [harness, setHarness] = useState<WorkbenchHarness>(() => (
     clientStateController.records("globalPreference").find((record) => (
       record.preference.key === "harness"
@@ -896,16 +895,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     setIsBrowseSessionsLoading(true);
     setBrowseSessionsError("");
     try {
-      const response = await fetch(`/api/browse/sessions?projectId=${encodeURIComponent(projectId)}`, {
-        cache: "no-store",
-        signal: options.signal,
+      if (!controls) return;
+      const payload = await controls.daemon.request("browse/sessions/read", {
+        cwd: null,
+        includeRuntime: true,
+        projectId,
+        threadId: null,
+        timeoutMs: 5_000,
       });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: "Unable to load Browse sessions." }));
-        throw new Error(error.error);
-      }
-
-      const payload = await response.json() as WorkbenchBrowseSessionListResponse;
       if (!options.signal?.aborted) setBrowseSessions(payload.sessions);
     } catch (error) {
       if (!options.signal?.aborted) {
@@ -914,7 +911,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     } finally {
       if (!options.signal?.aborted) setIsBrowseSessionsLoading(false);
     }
-  }, [activeProjectId]);
+  }, [activeProjectId, controls]);
   useEffect(() => {
     if (!activeProjectId) {
       setBrowseSessions([]);
@@ -1044,13 +1041,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     let cancelled = false;
     setIsLocalCapabilitySettingsLoading(true);
     setLocalCapabilitySettingsError("");
-    void fetch("/api/workbench-settings", { cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`Unable to load local capabilities (${response.status}).`);
-        }
-        return await response.json() as WorkbenchLocalCapabilitySettingsResponse;
-      })
+    if (!controls) return () => { cancelled = true; };
+    void controls.daemon.request("local-capabilities/read", {})
       .then((payload) => {
         if (cancelled) {
           return;
@@ -1073,7 +1065,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [controls]);
 
   const updateBrowseRawCommandsEnabled = useCallback((enabled: boolean) => {
     const previousSettings = localCapabilitySettings;
@@ -1083,24 +1075,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }));
     setIsLocalCapabilitySettingsLoading(true);
     setLocalCapabilitySettingsError("");
-    void fetch("/api/workbench-settings", {
-      body: JSON.stringify({
+    if (!controls) return;
+    void controls.daemon.request("local-capabilities/update", {
         localCapabilities: {
           browseRawCommandsEnabled: enabled,
         },
-      }),
-      cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      method: "PUT",
     })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`Unable to update local capabilities (${response.status}).`);
-        }
-        return await response.json() as WorkbenchLocalCapabilitySettingsResponse;
-      })
       .then((payload) => {
         setLocalCapabilitySettings(payload.localCapabilities);
       })
@@ -1111,7 +1091,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       .finally(() => {
         setIsLocalCapabilitySettingsLoading(false);
       });
-  }, [localCapabilitySettings]);
+  }, [controls, localCapabilitySettings]);
 
   const updateGlobalSetting = useCallback(<K extends WorkbenchSettingKey> (key: K, value: WorkbenchGlobalSettings[K]) => {
     setGlobalSettings((current) => {
@@ -1296,22 +1276,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       path: target.path,
       projectId: target.projectId ?? explorer.currentProjectId ?? route.projectId,
     };
-    const response = await fetch("/api/file/open", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to open file in VS Code." }));
-      console.error(error.error);
+    if (!controls) return false;
+    try {
+      await controls.daemon.request("native/file/open", payload);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : "Unable to open file in VS Code.");
       return false;
     }
-
     return true;
-  }, [explorer.currentProjectId, route.projectId]);
+  }, [controls, explorer.currentProjectId, route.projectId]);
 
   const openFileByPolicy = useCallback(async (target: WorkbenchFileOpenTarget) => {
     const path = target.path;
@@ -1356,31 +1329,24 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return;
     }
 
-    const response = await fetch("/api/browse/sessions", {
-      body: JSON.stringify({
-        action,
+    if (!controls) return;
+    try {
+      const method = action === "forget" ? "browse/sessions/forget" : "browse/sessions/stop";
+      const payload = await controls.daemon.request(method, {
         force: options.force === true,
         projectId: activeProjectId,
         session: session.name,
-      }),
-      cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      method: "POST",
-    });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to update Browse session." }));
-      setBrowseSessionsError(error.error);
+      });
+      if (payload.result?.ok === false) {
+        setBrowseSessionsError(payload.result.error ?? "Unable to stop Browse session.");
+        return;
+      }
+    } catch (error) {
+      setBrowseSessionsError(error instanceof Error ? error.message : "Unable to update Browse session.");
       return;
     }
-
-    const payload = await response.json() as WorkbenchBrowseSessionControlResponse;
-    if (payload.result?.ok === false) {
-      setBrowseSessionsError(payload.result.error ?? "Unable to stop Browse session.");
-    }
     await refreshBrowseSessions(activeProjectId);
-  }, [activeProjectId, refreshBrowseSessions]);
+  }, [activeProjectId, controls, refreshBrowseSessions]);
   const getBrowseSessionContextMenu = useCallback((session: WorkbenchBrowseSessionSummary): WorkbenchContextMenuDefinition => ({
     id: `browse-session:${session.name}`,
     items: [
@@ -2274,19 +2240,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     setProjectActionError("");
     try {
       const request: RevealProjectEntryRequest = { path, projectId };
-      const response = await fetch("/api/file/reveal", {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: "Unable to show that entry in the file explorer." }));
-        throw new Error(typeof error.error === "string" ? error.error : "Unable to show that entry in the file explorer.");
-      }
+      if (!controls) throw new Error("The daemon is not ready.");
+      await controls.daemon.request("native/file/reveal", request);
     } catch (error) {
       setProjectActionError(error instanceof Error ? error.message : "Unable to show that entry in the file explorer.");
     }
-  }, [explorer.currentProjectId, route.projectId]);
+  }, [controls, explorer.currentProjectId, route.projectId]);
 
   const closeDeletedFileViews = useCallback((filePath: string) => {
     setMainLayout((current) => WorkbenchMainLayout.panels(current)
@@ -2554,12 +2513,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
     const projectId = explorer.currentProjectId || route.projectId;
     void Promise.all(quickOpenPaths.map(async (path) => {
-      const response = await fetch(`/api/file?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(path)}`, { cache: "no-store" });
-      if (!response.ok) {
-        return null;
-      }
-
-      const payload = await response.json() as FilePayload;
+      if (!controls) return null;
+      const payload = await controls.daemon.request("project/file/read", { path, projectId }).catch(() => null);
+      if (!payload) return null;
       return [path, payload.updatedAt] as const;
     })).then((entries) => {
       if (cancelled) {
@@ -2581,7 +2537,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     return () => {
       cancelled = true;
     };
-  }, [explorer.currentProjectId, quickOpenPaths, route.projectId, showEmptyState]);
+  }, [controls, explorer.currentProjectId, quickOpenPaths, route.projectId, showEmptyState]);
 
   const renderSettingControl = (
     key: WorkbenchSettingKey,
@@ -2791,6 +2747,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   };
 
   return (
+    <WorkbenchDaemonClientContext.Provider value={controls?.daemon ?? null}>
     <WorkbenchComposerProfileProvider controller={composerProfileController}>
       <WorkbenchSidebarPreferencesProvider
         projectId={explorer.currentProjectId || route.projectId}
@@ -3846,5 +3803,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         }}
       </WorkbenchSidebarPreferencesProvider>
     </WorkbenchComposerProfileProvider>
+    </WorkbenchDaemonClientContext.Provider>
   );
 }

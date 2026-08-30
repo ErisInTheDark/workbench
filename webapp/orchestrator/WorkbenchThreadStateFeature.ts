@@ -332,8 +332,13 @@ export default class WorkbenchThreadStateFeature {
 
   async dispose() { await this.controller.dispose(); }
 
-  async getCodexMcpState(threadId: string) {
-    const response = await this.context.harnesses.request("codex", { id: 0, method: "thread/read", params: { includeTurns: false, threadId } });
+  async getCodexMcpState(
+    threadId: string,
+    requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse> = (request) => (
+      this.context.harnesses.request("codex", request)
+    ),
+  ) {
+    const response = await requestProvider({ id: 0, method: "thread/read", params: { includeTurns: false, threadId } });
     if (response.error) throw new Error(response.error.message);
     const thread = (response.result as ThreadReadResponse | undefined)?.thread;
     if (!thread || thread.id !== threadId) throw new Error("The managed Codex thread could not be read before turn admission.");

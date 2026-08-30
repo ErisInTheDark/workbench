@@ -9,10 +9,8 @@
  */
 
 import type { ThreadResumeParams } from "../../codex/generated/app-server/v2/ThreadResumeParams";
-import type { ThreadResumeResponse } from "../../codex/generated/app-server/v2/ThreadResumeResponse";
 import type { Turn } from "../../codex/generated/app-server/v2/Turn";
 import type { TurnStartParams } from "../../codex/generated/app-server/v2/TurnStartParams";
-import type { TurnStartResponse } from "../../codex/generated/app-server/v2/TurnStartResponse";
 import type { TurnSteerParams } from "../../codex/generated/app-server/v2/TurnSteerParams";
 import type { TurnSteerResponse } from "../../codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput";
@@ -26,6 +24,9 @@ import type { ThreadOptimisticInputStore } from "./ThreadOptimisticInputStore";
 import { ThreadMessageNotSentError } from "./thread-message-submission";
 
 type CodexRequest = { method: string; params?: unknown } & Record<string, unknown>;
+type ManagedMessageAdmissionResponse =
+  | { kind: "started"; turn: Turn }
+  | { kind: "steered"; turnId: string };
 
 export interface CodexMessageRequestClient {
   connect: () => Promise<void>;
@@ -41,7 +42,6 @@ export interface ThreadMessageAdmissionLifecycleState {
 }
 
 export interface ThreadMessageAdmissionRequest {
-  mergeAndInstallResumedThread: (thread: ThreadPayload, expectedSourceRevision: number) => ThreadPayload | null;
   projectStartedTurn: (context: {
     clientUserMessageId: string;
     input: UserInput[];
@@ -59,7 +59,6 @@ export interface ThreadMessageAdmissionRequest {
     method: "turn/steer";
     params: Omit<TurnSteerParams, "clientUserMessageId" | "expectedTurnId" | "input" | "threadId">;
   };
-  toResumedThread: (response: ThreadResumeResponse) => ThreadPayload;
 }
 
 export type ThreadMessageAdmissionResult =
@@ -246,7 +245,7 @@ function ThreadMessageAdmissionController({
   ): Promise<ThreadMessageAdmissionResult> {
     const clientUserMessageId = optimisticInputs.createClientUserMessageId();
     const sourceRevision = sources.getRevision(capture.selectedThreadKey);
-    const response = await client.sendRequest<TurnStartResponse>({
+    const startRequest = {
       ...request.startRequest,
       params: {
         ...request.startRequest.params,
@@ -255,12 +254,39 @@ function ThreadMessageAdmissionController({
         threadId: capture.threadId,
       },
       workbenchHarness: "codex",
-    });
+    };
+    let response: CodexJsonRpcResponse<ManagedMessageAdmissionResponse>;
+    try {
+      response = await client.sendRequest<ManagedMessageAdmissionResponse>({
+        method: "workbench/codex/message/admit",
+        params: {
+          resumeRequest: request.resumeRequest,
+          startRequest,
+          steerRequest: request.steerRequest,
+          threadId: capture.threadId,
+        },
+        workbenchHarness: "codex",
+      });
+    } catch (error) {
+      if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
+      throw error;
+    }
     if (isCodexJsonRpcFailure(response)) {
+      if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
       throw new Error(response.error.message);
     }
-    const turn = response.result?.turn;
+    if (response.result?.kind === "steered") {
+      const turnId = response.result.turnId.trim();
+      if (!turnId) {
+        if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
+        throw new Error("Managed message admission returned an empty steer turn id.");
+      }
+      reportAccepted(capture, clientUserMessageId, turnId);
+      return { handle: clientUserMessageId, kind: "admitted" };
+    }
+    const turn = response.result?.kind === "started" ? response.result.turn : null;
     if (!turn || typeof turn.id !== "string" || !turn.id.trim()) {
+      if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
       throw new Error("turn/start returned an empty turn id.");
     }
     request.projectStartedTurn({
@@ -298,51 +324,7 @@ function ThreadMessageAdmissionController({
       return await dispatchSteer(connected, connectedThread, input, request);
     }
 
-    const connectedInProgressTurnId = getCurrentInProgressTurn(connectedThread)?.id ?? null;
-    const resumeSourceRevision = sources.getRevision(connected.selectedThreadKey);
-    let response: CodexJsonRpcResponse<ThreadResumeResponse>;
-    try {
-      response = await client.sendRequest<ThreadResumeResponse>({
-        ...request.resumeRequest,
-        workbenchHarness: "codex",
-      });
-    } catch (error) {
-      if (!isCapturedOwnerCurrent(initial)) {
-        throw new ThreadMessageNotSentError();
-      }
-      throw error;
-    }
-    const resumedOwner = revalidateOwner(initial);
-    if (isCodexJsonRpcFailure(response)) {
-      throw new Error(response.error.message);
-    }
-    if (!response.result?.thread) {
-      throw new Error("thread/resume returned no thread.");
-    }
-
-    const currentSourceRevision = sources.getRevision(resumedOwner.selectedThreadKey);
-    const sourceAdvancedDuringResume = currentSourceRevision !== resumeSourceRevision;
-    const candidate = sourceAdvancedDuringResume
-      ? sources.get(resumedOwner.selectedThreadKey)
-      : request.mergeAndInstallResumedThread(request.toResumedThread(response.result), resumeSourceRevision);
-    if (!candidate) {
-      throw new ThreadMessageNotSentError();
-    }
-
-    const status = getThreadStatus(candidate);
-    const candidateInProgressTurn = getCurrentInProgressTurn(candidate);
-    const sourceIntroducedDifferentInProgressTurn = sourceAdvancedDuringResume
-      && candidateInProgressTurn?.id !== connectedInProgressTurnId;
-    if (
-      candidateInProgressTurn
-      && (sourceIntroducedDifferentInProgressTurn || isThreadStatusActive(status))
-    ) {
-      return await dispatchSteer(resumedOwner, candidate, input, request);
-    }
-    if (isThreadStatusActive(status)) {
-      throw new ThreadMessageNotSentError();
-    }
-    return await dispatchStart(resumedOwner, input, request);
+    return await dispatchStart(connected, input, request);
   }
 
   return { admit };

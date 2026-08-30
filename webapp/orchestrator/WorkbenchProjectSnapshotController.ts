@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchProjectSnapshotControllerOptions: injected tree operations, watcher factory, clock, polling, logging, and cache bound for deterministic lifecycle tests. Keywords: project, snapshot, poll, watcher, test.
+ * - WorkbenchProjectSnapshotControllerOptions: injected project resolution, tree operations, watcher factory, clock, polling, logging, and cache bound for deterministic lifecycle tests. Keywords: project, snapshot, poll, watcher, test.
  * - default WorkbenchProjectSnapshotController: own one reloadable snapshot loop per observed project, mutations, change-only publication, HTTP compatibility, and disposal. Keywords: project, tree, websocket, cache, lifecycle.
  */
 import fs from "node:fs";
@@ -12,10 +12,10 @@ import {
   createProjectEntry,
   deleteProjectFile,
   formatWorkspaceQualifiedPath,
-  getProjectSnapshot,
+  getProjectSnapshotFromResolvedProject,
   normalizeRelativePath,
   resolveProjectFilePath,
-  resolveProjectRoot,
+  type ResolvedProject,
 } from "../lib/project";
 import { isGitTrackedFile } from "../lib/git";
 import type { CreateEntryPayload, DeleteFileResponse, ProjectSnapshot } from "../lib/types";
@@ -66,10 +66,9 @@ type ProjectOperations = {
   assertProjectFileCanBeDeleted: typeof assertProjectFileCanBeDeleted;
   createProjectEntry: typeof createProjectEntry;
   deleteProjectFile: typeof deleteProjectFile;
-  getProjectSnapshot: typeof getProjectSnapshot;
+  getProjectSnapshot: typeof getProjectSnapshotFromResolvedProject;
   isGitTrackedFile: typeof isGitTrackedFile;
   resolveProjectFilePath: typeof resolveProjectFilePath;
-  resolveProjectRoot: typeof resolveProjectRoot;
 };
 
 export interface WorkbenchProjectSnapshotControllerOptions {
@@ -80,6 +79,7 @@ export interface WorkbenchProjectSnapshotControllerOptions {
   now?: () => number;
   operations?: ProjectOperations;
   pollIntervalMs?: number;
+  resolveProjectById: (projectId?: string | null) => Promise<ResolvedProject>;
 }
 
 function defaultCreateWatcher(rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) {
@@ -146,6 +146,7 @@ export default class WorkbenchProjectSnapshotController {
   private readonly operations: ProjectOperations;
   private readonly pollIntervalMs: number;
   private readonly projects = new Map<string, ProjectSnapshotState>();
+  private readonly resolveProjectById: WorkbenchProjectSnapshotControllerOptions["resolveProjectById"];
 
   constructor({
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
@@ -153,9 +154,10 @@ export default class WorkbenchProjectSnapshotController {
     logError = (message) => console.error(message),
     maxProjectSnapshots = DEFAULT_MAX_PROJECT_SNAPSHOTS,
     now = Date.now,
-    operations = { assertProjectFileCanBeDeleted, createProjectEntry, deleteProjectFile, getProjectSnapshot, isGitTrackedFile, resolveProjectFilePath, resolveProjectRoot },
+    operations = { assertProjectFileCanBeDeleted, createProjectEntry, deleteProjectFile, getProjectSnapshot: getProjectSnapshotFromResolvedProject, isGitTrackedFile, resolveProjectFilePath },
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
-  }: WorkbenchProjectSnapshotControllerOptions = {}) {
+    resolveProjectById,
+  }: WorkbenchProjectSnapshotControllerOptions) {
     this.cacheTtlMs = cacheTtlMs;
     this.createWatcher = createWatcher;
     this.logError = logError;
@@ -163,6 +165,7 @@ export default class WorkbenchProjectSnapshotController {
     this.now = now;
     this.operations = operations;
     this.pollIntervalMs = Math.max(1, Math.trunc(pollIntervalMs));
+    this.resolveProjectById = resolveProjectById;
   }
 
   dispose() {
@@ -258,8 +261,14 @@ export default class WorkbenchProjectSnapshotController {
     this.scheduleRefresh(key, projectId, 0);
   }
 
+  async refreshAfterFileMutation(projectId: string) {
+    this.invalidateSnapshot(projectId);
+    this.invalidateSnapshot("__default__");
+    return (await this.readSnapshot(projectId)).snapshot;
+  }
+
   private async createEntry(request: Extract<WorkbenchProjectStateRequest, { method: "workbench/thread-state/project/entry/create" }>): Promise<CreateEntryPayload> {
-    const resolvedProject = await this.operations.resolveProjectRoot(request.projectId);
+    const resolvedProject = await this.resolveProjectById(request.projectId);
     const resolvedParent = this.operations.resolveProjectFilePath(resolvedProject, request.parentPath);
     const createdRootPath = await this.operations.createProjectEntry(resolvedParent.rootRelativePath, request.name, request.type, resolvedParent.gitRoot);
     const createdPath = resolvedProject.kind === "workspace"
@@ -272,7 +281,7 @@ export default class WorkbenchProjectSnapshotController {
   }
 
   private async deleteFile(request: Extract<WorkbenchProjectStateRequest, { method: "workbench/thread-state/project/file/delete" }>): Promise<DeleteFileResponse> {
-    const resolvedProject = await this.operations.resolveProjectRoot(request.projectId);
+    const resolvedProject = await this.resolveProjectById(request.projectId);
     const resolvedFile = this.operations.resolveProjectFilePath(resolvedProject, request.path);
     await this.operations.assertProjectFileCanBeDeleted(resolvedFile.rootRelativePath, resolvedFile.gitRoot);
     const tracked = await this.operations.isGitTrackedFile(resolvedFile.gitRoot, resolvedFile.rootRelativePath);
@@ -352,7 +361,9 @@ export default class WorkbenchProjectSnapshotController {
     if (state.refreshTimer) clearTimeout(state.refreshTimer);
     state.refreshTimer = null;
     state.refreshRequested = false;
-    const promise = this.operations.getProjectSnapshot(projectId).then((snapshot) => {
+    const promise = this.resolveProjectById(projectId).then((project) => (
+      this.operations.getProjectSnapshot(project)
+    )).then((snapshot) => {
       if (this.disposed) return null;
       this.installSnapshot(key, state, snapshot);
       state.failureReported = false;

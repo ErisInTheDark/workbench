@@ -32,9 +32,15 @@ before(async () => {
   testWorkbenchLibraryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-library-test-"));
   process.env.WORKBENCH_LIBRARY_ROOT = testWorkbenchLibraryRoot;
   await fs.mkdir(path.join(testWorkbenchLibraryRoot, "instructions"), { recursive: true });
+  await fs.mkdir(path.join(testWorkbenchLibraryRoot, "agents"), { recursive: true });
   await fs.writeFile(
     path.join(testWorkbenchLibraryRoot, "instructions", "universal.md"),
     "COLD RESUME UNIVERSAL INSTRUCTION",
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(testWorkbenchLibraryRoot, "agents", "lily.md"),
+    "---\nname: Lily test agent\ndescription: Test-only prefix identity.\n---\nLILY PREFIX SENTINEL",
     "utf8",
   );
   const [bridgeModule, instructionModule] = await Promise.all([
@@ -283,23 +289,7 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
         workflowIds: ["default"],
       },
     });
-    assert.equal(upstreamRequests.length, 1);
-    assert.equal(upstreamRequests[0]?.method, "thread/resume");
-    const resumeParams = upstreamRequests[0]?.params as {
-      config?: { mcp_servers?: { wb?: Record<string, unknown> } };
-      cwd?: string;
-      baseInstructions?: string | null;
-      developerInstructions?: string | null;
-      excludeTurns?: boolean;
-      threadId?: string;
-    };
-    assert.equal(resumeParams.cwd, "C:/repo");
-    assert.equal(resumeParams.excludeTurns, true);
-    assert.equal(resumeParams.threadId, "thread");
-    assert.ok(resumeParams.baseInstructions?.trim());
-    assert.match(resumeParams.developerInstructions ?? "", /COLD RESUME UNIVERSAL INSTRUCTION/u);
-    assert.equal(resumeParams.config?.mcp_servers?.wb?.required, true);
-    assert.match(String(resumeParams.config?.mcp_servers?.wb?.url), /^http:\/\/127\.0\.0\.1:1\/orchestrator\/mcp\?/u);
+    assert.deepEqual(upstreamRequests, []);
     assert.deepEqual(contextRequests[0], {
       method: "thread/context/read",
       params: { includeTurns: false, threadId: "thread" },
@@ -313,7 +303,7 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
       method: "workbench/thread/page/read",
       params: { cursor: "turn", threadId: "thread" },
     });
-    assert.equal(upstreamRequests.length, 1);
+    assert.equal(upstreamRequests.length, 0);
     assert.deepEqual(contextRequests[1]?.workbenchThreadHydration, {
       beforeTurnId: "turn",
       mode: "previous",
@@ -324,7 +314,7 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
       method: "workbench/thread/page/read",
       params: { cursor: null, cwd: "C:/repo", readScope: "subagentBackground", threadId: "thread" },
     });
-    assert.equal(upstreamRequests.length, 1);
+    assert.equal(upstreamRequests.length, 0);
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
@@ -450,6 +440,7 @@ test("background thread pages repair inactive provider turns directly into both 
     ]);
     assert.equal(sqliteBatches.flat().some(({ kind }) => kind === "canonicalWindow"), false);
   } finally {
+    await bridge.waitForIdle();
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }
@@ -876,13 +867,14 @@ test("live transcript recording survives throwing compatibility readers across r
       },
     });
     await bridge.forwardRequest({
-      id: "resume",
-      method: "thread/resume",
-      params: { excludeTurns: true, threadId: "thread" },
-    }, client, "resume");
-    const resumeRequest = upstreamRequests.slice().reverse().find((request) => request.method === "thread/resume")!;
+      id: "read",
+      method: "thread/read",
+      params: { includeTurns: false, threadId: "thread" },
+      workbenchThreadHydration: { mode: "latest" },
+    }, client, "read");
+    const readRequest = upstreamRequests.slice().reverse().find((request) => request.method === "thread/read")!;
     await bridge.handleUpstreamMessage({
-      id: resumeRequest.id ?? null,
+      id: readRequest.id ?? null,
       result: { thread: { ...bridgeThread(), turns: [], updatedAt: 5 } },
     });
     await bridge.waitForIdle();
@@ -921,7 +913,9 @@ test("live transcript recording survives throwing compatibility readers across r
       && observation.entry.entryKey === "browse-entry"
       && observation.asset?.digest === assetDigest
     )));
-    assert.deepEqual(sqliteBatches.at(-1)?.map((observation) => observation.kind), ["thread"]);
+    assert.equal(sqliteBatches.some((batch) => (
+      batch.length === 1 && batch[0]?.kind === "thread"
+    )), true);
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
@@ -1169,7 +1163,7 @@ test("successful external send remaps the response id and detaches with settled 
   }
 });
 
-test("excludeTurns resume cannot rehydrate a stored transcript", async () => {
+test("direct thread resume is rejected without forwarding or transcript hydration", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-metadata-resume-test-"));
   const TranscriptStore = (await import("./CodexTranscriptStore.js")).default as unknown as typeof CodexTranscriptStore;
   const transcriptStore = new TranscriptStore(root);
@@ -1190,9 +1184,9 @@ test("excludeTurns resume cannot rehydrate a stored transcript", async () => {
   const client: BridgeClient = {
     OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
   };
-  let upstreamRequest: JsonRpcRequest | null = null;
+  const upstreamRequests: JsonRpcRequest[] = [];
   const appServer = {
-    send(message: JsonRpcRequest) { upstreamRequest = message; },
+    send(message: JsonRpcRequest) { upstreamRequests.push(message); },
   } as unknown as CodexAppServer;
   const clientMessages: unknown[] = [];
   const bridge = new CodexStdioBridge({
@@ -1211,15 +1205,10 @@ test("excludeTurns resume cannot rehydrate a stored transcript", async () => {
       params: { excludeTurns: true, threadId: "thread" },
       workbenchThreadHydration: { mode: "latest" },
     }, client, 51);
-    assert.equal(upstreamRequest?.method, "thread/resume");
-
-    await bridge.handleUpstreamMessage({
-      id: upstreamRequest!.id,
-      result: { thread: { ...bridgeThread(), turns: [] } },
-    });
-
-    const response = clientMessages[0] as { result?: { thread?: Thread } };
-    assert.deepEqual(response.result?.thread?.turns, []);
+    assert.deepEqual(upstreamRequests, []);
+    const response = clientMessages[0] as { error?: { code?: number; message?: string } };
+    assert.equal(response.error?.code, -32600);
+    assert.match(response.error?.message ?? "", /turn-start lifecycle/u);
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
@@ -1295,29 +1284,132 @@ test("accepted internal steers do not interrupt MCP waits", async () => {
   }
 });
 
-test("turn-start preflight completes before upstream delivery and blocks delivery on failure", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-turn-preflight-"));
-  const client: BridgeClient = {
-    OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
-  };
-  const gate = deferred<void>();
-  const preflightStarted = deferred<void>();
+test("fresh first turn survives bridge reload and failed admission without resume", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-fresh-start-"));
   const events: string[] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
-  let rejectPreflight = false;
-  let resumeErrorMessage: string | null = null;
+  let turnStartAttempts = 0;
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      queueMicrotask(() => {
+        if (message.method === "thread/start") {
+          void bridge.handleUpstreamMessage({
+            id: message.id ?? null,
+            result: {
+              thread: { ...bridgeThread(), id: "fresh", status: { type: "idle" }, turns: [] },
+            },
+          });
+          return;
+        }
+        if (message.method === "turn/start") {
+          turnStartAttempts += 1;
+          void bridge.handleUpstreamMessage(turnStartAttempts === 1
+            ? { error: { code: -32000, message: "first admission failed" }, id: message.id ?? null }
+            : {
+              id: message.id ?? null,
+              result: { turn: { ...bridgeThread().turns[0]!, id: "fresh-turn" } },
+            });
+          return;
+        }
+        void bridge.handleUpstreamMessage({
+          error: { code: -32000, message: `unexpected ${message.method}` },
+          id: message.id ?? null,
+        });
+      });
+    },
+  } as unknown as CodexAppServer;
+  const createBridge = (
+    initialState?: import("./CodexStdioBridge").CodexStdioBridgeReloadState,
+  ) => new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    initialState,
+    onNotification() {},
+    prepareTurnStart: async () => { events.push("prepare:mcp"); },
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  bridge = createBridge();
+  const firstTurn = {
+    id: 2,
+    method: "turn/start",
+    params: {
+      input: [{ text: "hello", text_elements: [], type: "text" }],
+      threadId: "fresh",
+    },
+  };
+  try {
+    const started = await bridge.handleServerRequest({
+      id: 1,
+      method: "thread/start",
+      params: { cwd: root },
+    });
+    assert.equal((started.result as { thread?: { id?: string } } | undefined)?.thread?.id, "fresh");
+
+    const state = await bridge.detachForReload();
+    bridge = createBridge(state);
+    const failed = await bridge.handleServerRequest(firstTurn);
+    assert.equal(failed.error?.message, "first admission failed");
+    const admitted = await bridge.handleServerRequest({ ...firstTurn, id: 3 });
+    assert.equal((admitted.result as { turn?: { id?: string } } | undefined)?.turn?.id, "fresh-turn");
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), [
+      "thread/start",
+      "turn/start",
+      "turn/start",
+    ]);
+    assert.deepEqual(events, ["prepare:mcp", "prepare:mcp"]);
+  } finally {
+    await bridge.waitForIdle();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("managed unloaded turn start resolves when MCP preparation requests a provider reload", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-managed-start-"));
+  const events: string[] = [];
+  const upstreamRequests: JsonRpcRequest[] = [];
+  const unloadedThread = { ...bridgeThread(), status: { type: "notLoaded" as const }, turns: [] };
+  const resumedThread = { ...bridgeThread(), status: { type: "idle" as const }, turns: [] };
+  const startedTurn = { ...bridgeThread().turns[0]!, id: "managed-turn" };
+  let resumed = false;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
     send(message: JsonRpcRequest) {
       events.push(`send:${message.method}`);
       upstreamRequests.push(message);
-      if (message.method === "thread/resume") {
-        queueMicrotask(() => {
-          void bridge.handleUpstreamMessage(resumeErrorMessage
-            ? { error: { code: resumeErrorMessage.startsWith("no rollout found") ? -32600 : -32000, message: resumeErrorMessage }, id: message.id ?? null }
-            : { id: message.id ?? null, result: { thread: { ...bridgeThread(), turns: [] } } });
-        });
-      }
+      const result = message.method === "thread/read"
+        ? { thread: resumed ? resumedThread : unloadedThread }
+        : message.method === "thread/unsubscribe"
+          ? { status: "notLoaded" }
+          : message.method === "thread/resume"
+            ? (() => {
+              resumed = true;
+              return {
+                initialTurnsPage: { backwardsCursor: null, data: [], nextCursor: null },
+                thread: resumedThread,
+              };
+            })()
+            : message.method === "config/mcpServer/reload"
+              ? {}
+              : message.method === "turn/start"
+                ? { turn: startedTurn }
+                : null;
+      queueMicrotask(() => {
+        void (async () => {
+          await bridge.handleUpstreamMessage({
+            method: "workbench/test/upstream-progress",
+            params: { requestMethod: message.method },
+          });
+          await bridge.handleUpstreamMessage(result
+            ? { id: message.id ?? null, result }
+            : { error: { code: -32000, message: `unexpected ${message.method}` }, id: message.id ?? null });
+        })();
+      });
     },
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
@@ -1325,88 +1417,308 @@ test("turn-start preflight completes before upstream delivery and blocks deliver
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
-    onNotification() {},
-    prepareTurnStart: async () => {
-      events.push("prepare:start");
-      preflightStarted.resolve();
-      if (rejectPreflight) throw new Error("MCP refresh failed");
-      await gate.promise;
-      events.push("prepare:complete");
+    onNotification() { events.push("receive:notification"); },
+    prepareTurnStart: async (_request, requestProvider) => {
+      events.push("prepare:mcp");
+      const threadRead = await requestProvider({
+        id: "mcp-thread-read",
+        method: "thread/read",
+        params: { includeTurns: false, threadId: "thread" },
+      });
+      if (threadRead.error) throw new Error(threadRead.error.message);
+      const response = await requestProvider({
+        id: "mcp-reload",
+        method: "config/mcpServer/reload",
+        params: null,
+      });
+      if (response.error) throw new Error(response.error.message);
     },
     resolveProjectFromCwd: async () => null,
     sendToClient() {},
     storageRoot: root,
   });
-  const request = (id: number): JsonRpcRequest => ({
-    id,
-    method: "turn/start",
-    params: { input: [{ text: "continue", text_elements: [], type: "text" }], threadId: "thread" },
-    workbenchPromptContext: {
-      cwd: root,
-      harness: "codex",
+  const promptContext = {
+    agentPath: "library:agents/lily.md",
+    cwd: root,
+    harness: "codex",
+    threadId: "thread",
+    workflowIds: ["default"],
+  };
+  try {
+    const response = await bridge.handleBridgeRequest({
+      id: 71,
+      method: "workbench/codex/message/admit",
+      params: {
+        resumeRequest: {
+          method: "thread/resume",
+          params: {
+            excludeTurns: true,
+            initialTurnsPage: { itemsView: "notLoaded", limit: 1, sortDirection: "desc" },
+            threadId: "thread",
+          },
+          workbenchPromptContext: promptContext,
+        },
+        startRequest: {
+          method: "turn/start",
+          params: {
+            clientUserMessageId: "message-id",
+            input: [{ text: "hello", text_elements: [], type: "text" }],
+            threadId: "thread",
+          },
+          workbenchPromptContext: promptContext,
+        },
+        steerRequest: { method: "turn/steer", params: {}, workbenchPromptContext: promptContext },
+        threadId: "thread",
+      },
+    });
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), [
+      "thread/read",
+      "thread/unsubscribe",
+      "thread/resume",
+      "thread/read",
+      "config/mcpServer/reload",
+      "turn/start",
+    ]);
+    assert.deepEqual(events, [
+      "send:thread/read",
+      "receive:notification",
+      "send:thread/unsubscribe",
+      "receive:notification",
+      "send:thread/resume",
+      "receive:notification",
+      "prepare:mcp",
+      "send:thread/read",
+      "receive:notification",
+      "send:config/mcpServer/reload",
+      "receive:notification",
+      "send:turn/start",
+      "receive:notification",
+    ]);
+    const resumeParams = upstreamRequests[2]?.params as {
+      baseInstructions?: string | null;
+      developerInstructions?: string | null;
+    };
+    assert.match(`${resumeParams.baseInstructions ?? ""}\n${resumeParams.developerInstructions ?? ""}`, /LILY PREFIX SENTINEL/u);
+    const startParams = upstreamRequests[5]?.params as Record<string, unknown>;
+    assert.equal("baseInstructions" in startParams, false);
+    assert.equal("developerInstructions" in startParams, false);
+    assert.deepEqual(response?.result, { kind: "started", turn: startedTurn });
+  } finally {
+    await bridge.waitForIdle();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("managed admission steers a provider-confirmed active turn without changing its prefix", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-managed-steer-"));
+  const upstreamRequests: JsonRpcRequest[] = [];
+  const acceptedSteers: string[] = [];
+  let prepared = false;
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      const result = message.method === "thread/read"
+        ? { thread: bridgeThread() }
+        : message.method === "turn/steer"
+          ? { turnId: "turn" }
+          : null;
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage(result
+          ? { id: message.id ?? null, result }
+          : { error: { code: -32000, message: `unexpected ${message.method}` }, id: message.id ?? null });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onAcceptedTurnSteer: (threadId) => { acceptedSteers.push(threadId); },
+    onNotification() {},
+    prepareTurnStart: async () => { prepared = true; },
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    const response = await bridge.handleBridgeRequest({
+      id: 72,
+      method: "workbench/codex/message/admit",
+      params: {
+        resumeRequest: { method: "thread/resume", params: { threadId: "thread" } },
+        startRequest: {
+          method: "turn/start",
+          params: {
+            clientUserMessageId: "message-id",
+            input: [{ text: "steer me", text_elements: [], type: "text" }],
+            threadId: "thread",
+          },
+        },
+        steerRequest: { method: "turn/steer", params: {} },
+        threadId: "thread",
+      },
+    });
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), ["thread/read", "turn/steer"]);
+    assert.deepEqual(upstreamRequests[1]?.params, {
+      clientUserMessageId: "message-id",
+      expectedTurnId: "turn",
+      input: [{ text: "steer me", text_elements: [], type: "text" }],
       threadId: "thread",
-      workflowIds: ["default"],
+    });
+    assert.equal(prepared, false);
+    assert.deepEqual(acceptedSteers, ["thread"]);
+    assert.deepEqual(response?.result, { kind: "steered", turnId: "turn" });
+  } finally {
+    await bridge.waitForIdle();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("managed admission rejects provider system errors before lifecycle mutation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-system-error-start-"));
+  const upstreamRequests: JsonRpcRequest[] = [];
+  let prepared = false;
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage({
+          id: message.id ?? null,
+          result: {
+            thread: { ...bridgeThread(), status: { type: "systemError" }, turns: [] },
+          },
+        });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    prepareTurnStart: async () => { prepared = true; },
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    const response = await bridge.handleBridgeRequest({
+      id: 73,
+      method: "workbench/codex/message/admit",
+      params: {
+        resumeRequest: { method: "thread/resume", params: { threadId: "thread" } },
+        startRequest: {
+          method: "turn/start",
+          params: {
+            clientUserMessageId: "message-id",
+            input: [{ text: "do not start", text_elements: [], type: "text" }],
+            threadId: "thread",
+          },
+        },
+        steerRequest: { method: "turn/steer", params: {} },
+        threadId: "thread",
+      },
+    });
+    assert.match(response?.error?.message ?? "", /systemError/u);
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), ["thread/read"]);
+    assert.equal(prepared, false);
+  } finally {
+    await bridge.waitForIdle();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("managed inactive admissions serialize complete resume and start lifecycles", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-serialized-starts-"));
+  const upstreamRequests: JsonRpcRequest[] = [];
+  let heldRead: JsonRpcRequest | null = null;
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      if (message.method === "thread/read" && heldRead === null) {
+        heldRead = message;
+        return;
+      }
+      const params = message.params as { threadId?: string } | undefined;
+      const threadId = params?.threadId ?? "thread";
+      const idleThread = { ...bridgeThread(), id: threadId, status: { type: "idle" as const }, turns: [] };
+      const result = message.method === "thread/read"
+        ? { thread: idleThread }
+        : message.method === "thread/unsubscribe"
+          ? { status: "unsubscribed" }
+          : message.method === "thread/resume"
+            ? { initialTurnsPage: { backwardsCursor: null, data: [], nextCursor: null }, thread: idleThread }
+            : message.method === "turn/start"
+              ? { turn: { ...bridgeThread().turns[0]!, id: `${threadId}-turn` } }
+              : null;
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage(result
+          ? { id: message.id ?? null, result }
+          : { error: { code: -32000, message: `unexpected ${message.method}` }, id: message.id ?? null });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    prepareTurnStart: async () => undefined,
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const admit = (threadId: string) => bridge.handleBridgeRequest({
+    id: threadId,
+    method: "workbench/codex/message/admit",
+    params: {
+      resumeRequest: { method: "thread/resume", params: { threadId } },
+      startRequest: {
+        method: "turn/start",
+        params: {
+          clientUserMessageId: `${threadId}-message`,
+          input: [{ text: threadId, text_elements: [], type: "text" }],
+          threadId,
+        },
+      },
+      steerRequest: { method: "turn/steer", params: {} },
+      threadId,
     },
   });
   try {
-    const admitted = bridge.forwardRequest(request(1), client, 1);
-    await preflightStarted.promise;
-    assert.deepEqual(events, ["send:thread/resume", "prepare:start"]);
-    assert.equal(upstreamRequests.length, 1);
-    const firstResumeParams = upstreamRequests[0]?.params as {
-      config?: { mcp_servers?: { wb?: Record<string, unknown> } };
-      baseInstructions?: string | null;
-      developerInstructions?: string | null;
-      excludeTurns?: boolean;
-      threadId?: string;
-    };
-    assert.equal(firstResumeParams.excludeTurns, true);
-    assert.equal(firstResumeParams.threadId, "thread");
-    assert.equal(firstResumeParams.config?.mcp_servers?.wb?.required, true);
-    assert.ok(firstResumeParams.baseInstructions?.trim());
-    assert.ok(firstResumeParams.developerInstructions?.trim());
+    const first = admit("one");
+    const second = admit("two");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), ["thread/read"]);
 
-    gate.resolve();
-    await admitted;
-    assert.deepEqual(events, [
-      "send:thread/resume",
-      "prepare:start",
-      "prepare:complete",
-      "send:turn/start",
-    ]);
-    assert.equal(upstreamRequests.length, 2);
-
-    rejectPreflight = true;
-    await assert.rejects(bridge.forwardRequest(request(2), client, 2), /MCP refresh failed/u);
-    assert.deepEqual(upstreamRequests.map((candidate) => candidate.method), [
-      "thread/resume",
-      "turn/start",
-      "thread/resume",
-    ]);
-
-    rejectPreflight = false;
-    resumeErrorMessage = "resume failed";
-    await assert.rejects(bridge.forwardRequest(request(3), client, 3), /resume failed/u);
-    assert.deepEqual(upstreamRequests.map((candidate) => candidate.method), [
-      "thread/resume",
-      "turn/start",
-      "thread/resume",
-      "thread/resume",
-    ]);
-
-    resumeErrorMessage = "no rollout found for thread id thread";
-    await bridge.forwardRequest(request(4), client, 4);
-    assert.deepEqual(upstreamRequests.slice(-2).map((candidate) => candidate.method), [
-      "thread/resume",
-      "turn/start",
-    ]);
-    assert.deepEqual(events.slice(-4), [
-      "send:thread/resume",
-      "prepare:start",
-      "prepare:complete",
-      "send:turn/start",
+    const firstRead = heldRead!;
+    heldRead = firstRead;
+    await bridge.handleUpstreamMessage({
+      id: firstRead.id ?? null,
+      result: { thread: { ...bridgeThread(), id: "one", status: { type: "idle" }, turns: [] } },
+    });
+    await Promise.all([first, second]);
+    assert.deepEqual(upstreamRequests.map((request) => [
+      request.method,
+      (request.params as { threadId?: string } | undefined)?.threadId,
+    ]), [
+      ["thread/read", "one"],
+      ["thread/unsubscribe", "one"],
+      ["thread/resume", "one"],
+      ["turn/start", "one"],
+      ["thread/read", "two"],
+      ["thread/unsubscribe", "two"],
+      ["thread/resume", "two"],
+      ["turn/start", "two"],
     ]);
   } finally {
+    await bridge.waitForIdle();
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }

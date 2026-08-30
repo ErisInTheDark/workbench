@@ -52,6 +52,7 @@ function createClient(send: BridgeClient["send"] = (_data, callback) => callback
 
 function createController(options: {
   clock: FakeClock;
+  daemonRequests?: WorkbenchWebSocketRequestControllerOptions["daemonRequests"];
   initialState?: WorkbenchWebSocketRequestControllerOptions["initialState"];
   lines?: string[];
   onDisconnect?: (connectionId: string) => void;
@@ -63,6 +64,7 @@ function createController(options: {
   const lines = options.lines ?? [];
   const controller = new WorkbenchWebSocketRequestController({
     clearTimeout: options.clock.clearTimeout,
+    ...(options.daemonRequests ? { daemonRequests: options.daemonRequests } : {}),
     harnesses: {
       handleBrowserMessage: async (_harness, message, client) => await options.onHarnessMessage?.(message, client),
       resolveHarness: (value, resolveOptions) => {
@@ -92,6 +94,25 @@ function createController(options: {
   });
   return { controller, lines };
 }
+
+test("labels daemon and compatible Workbench requests with the wb namespace", async () => {
+  const clock = new FakeClock();
+  const { controller, lines } = createController({
+    clock,
+    daemonRequests: {
+      accepts: (method) => method === "project/catalog/read",
+      handle: async (request) => ({ id: request.id ?? null, result: { data: [], rootPath: "" } }),
+    },
+  });
+  const client = createClient();
+
+  await controller.handleMessage(client, "connection-1", frame("project/catalog/read", 1), false);
+  await controller.handleMessage(client, "connection-1", frame("workbench/thread-state/read", 2), false);
+
+  assert.match(lines[0] ?? "", /WS wb:project\/catalog\/read .*ok/u);
+  assert.match(lines[1] ?? "", /WS wb:thread-state\/read .*ok/u);
+  controller.dispose();
+});
 
 test("browser reload admission responds before starting the reserved batch", async () => {
   const clock = new FakeClock();

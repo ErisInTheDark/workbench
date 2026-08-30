@@ -205,6 +205,10 @@ export default class WorkbenchProjectCatalogController {
     return this.catalog.payload;
   }
 
+  async readCatalog() {
+    return (await this.readFreshCatalog()).catalog.payload;
+  }
+
   invalidate = () => {
     if (this.disposed) return;
     this.catalogExpiresAt = 0;

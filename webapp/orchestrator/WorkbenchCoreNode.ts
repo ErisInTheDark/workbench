@@ -26,14 +26,20 @@ import type {
 import ReloadableNode, { type ReloadableNodeLease } from "./ReloadableNode";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 import WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
+import WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCatalogController";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
+import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCoreFeature";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchHarnessController, { type WorkbenchHarnessAdapter } from "./WorkbenchHarnessController";
+import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import WorkbenchLegacyMigrationSourceController, { readLegacyMigrationSourceConfig } from "./WorkbenchLegacyMigrationSourceController";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
+import WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
+import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
+import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
@@ -81,8 +87,7 @@ function createHarnessAdapters(context: OrchestratorProcessContext, controller: 
       internal: ports.codex,
       recovery: createRecoveryCapability("codex", controller),
       serverMethods: [
-        "workbench/composerProfiles/read",
-        "workbench/composerProfiles/mutate",
+        "workbench/codex/message/admit",
         "thread/context/read",
         "thread/name/set",
         "workbench/notification/broadcast",
@@ -117,7 +122,9 @@ function createWorkbenchCoreFeature(
 ) {
   const modules = createModules();
   const projectCatalog = new WorkbenchProjectCatalogController();
-  const projectSnapshot = new WorkbenchProjectSnapshotController();
+  const projectSnapshot = new WorkbenchProjectSnapshotController({
+    resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
+  });
   const worktreeGitTransitions = createWorktreeGitTransitions(context.threadTransitions);
   let threadState: WorkbenchThreadStateFeature | null = null;
   const requireThreadState = () => {
@@ -127,6 +134,7 @@ function createWorkbenchCoreFeature(
   const harnesses = new WorkbenchHarnessController(createHarnessAdapters(context, turnRecovery), {
     admitTurnStart: () => database.assertReady(),
   });
+  const profileStore = new WorkbenchComposerProfileStore(context.legacyMigrationProjectRoot);
   const gitArc = new WorkbenchGitArcFeature({
     getThreadClaimContext: async (projectId, harness, threadId) => {
       if (!threadState) throw new Error("Thread state is not ready for Git arc ownership.");
@@ -139,6 +147,15 @@ function createWorkbenchCoreFeature(
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
     transitions: worktreeGitTransitions,
   });
+  const daemonRequests = new WorkbenchDaemonRequestController({
+    agents: new WorkbenchAgentSkillCatalogController((projectId) => projectCatalog.resolveProjectById(projectId)),
+    files: new WorkbenchProjectFileController(projectCatalog, projectSnapshot),
+    gitArc,
+    nativeFiles: new WorkbenchNativeFileController(projectCatalog),
+    profiles: profileStore,
+    projects: projectCatalog,
+    settings: new WorkbenchServerSettings(),
+  });
   const threadGit = new WorkbenchThreadGitFeature({
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" }),
     transitions: worktreeGitTransitions,
@@ -147,6 +164,7 @@ function createWorkbenchCoreFeature(
     bridgeUrl: context.codexBridgeUrl,
     onRelationshipCommitted: context.installSubagentRelationship,
     resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
+    profileStore,
     storageRoot: context.legacyMigrationProjectRoot,
     threadState: {
       getEntry: async (projectId, harness, threadId) => {
@@ -212,7 +230,7 @@ function createWorkbenchCoreFeature(
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
   const registrations: Pick<OrchestratorRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
-    bridgeRequest, browseSessionCleanup, codexHealth, gitArc, harnesses, legacyMigrationSource, modules, nextDevHealth, projectCatalog, projectSnapshot, subagents, threadGit, threadState,
+    bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, legacyMigrationSource, modules, nextDevHealth, projectCatalog, projectSnapshot, subagents, threadGit, threadState,
   };
   return new WorkbenchCoreFeature({
     beginRuntimeDrain: () => { subagents.beginRuntimeDrain(); },
@@ -253,11 +271,17 @@ function createWorkbenchCoreFeature(
       await turnRecovery.completeObservedTurn(harness, notification, observation?.lifecycle ?? null, async (candidate, request) => {
         if (candidate.harness === "codex") {
           if (!candidate.resumeRequest) throw new Error("The unfinished Codex turn has no captured thread/resume request.");
-          const resumeResponse = await harnesses.request("codex", {
-            ...candidate.resumeRequest,
-            id: `unfinished-resume:${candidate.recoveryId}`,
+          const response = await harnesses.request("codex", {
+            id: `unfinished-admit:${candidate.recoveryId}`,
+            method: "workbench/codex/message/admit",
+            params: {
+              resumeRequest: candidate.resumeRequest,
+              startRequest: request,
+              threadId: candidate.threadId,
+            },
           });
-          if (resumeResponse.error) throw new Error(resumeResponse.error.message);
+          if (response.error) throw new Error(response.error.message);
+          return;
         }
         const response = await harnesses.request(candidate.harness, request);
         if (response.error) throw new Error(response.error.message);

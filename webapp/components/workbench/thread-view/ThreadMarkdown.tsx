@@ -11,6 +11,7 @@ import { collectPlaintextAbsoluteFileLinkPaths } from "../../../lib/workbench/ma
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { normalizeWorkbenchPath, type WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import { renderThreadMarkdown } from "./thread-markdown-render";
+import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -135,6 +136,7 @@ function readCachedExternalFileLinkRoots(paths: readonly string[]) {
 }
 
 function useExternalFileLinkRoots(markdown: string) {
+  const daemon = useWorkbenchDaemonClient();
   const [version, setVersion] = useState(0);
   const paths = useMemo(() => collectPlaintextAbsoluteFileLinkPaths(markdown), [markdown]);
 
@@ -147,24 +149,10 @@ function useExternalFileLinkRoots(markdown: string) {
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await fetch("/api/file/link-roots", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ paths: unresolvedPaths }),
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          for (const path of unresolvedPaths) {
-            externalFileLinkRootCache.set(path, null);
-          }
-          setVersion((current) => current + 1);
-          return;
-        }
-
-        const payload = await response.json().catch(() => null) as ResolveExternalFileLinkRootsResponse | null;
+        const payload: ResolveExternalFileLinkRootsResponse | null = await daemon.request(
+          "native/file/link-roots",
+          { paths: unresolvedPaths },
+        );
         const roots = Array.isArray(payload?.roots) ? payload.roots : [];
         for (const path of unresolvedPaths) {
           const normalizedPath = normalizeWorkbenchPath(path);
@@ -189,7 +177,7 @@ function useExternalFileLinkRoots(markdown: string) {
     return () => {
       controller.abort();
     };
-  }, [paths]);
+  }, [daemon, paths]);
 
   return useMemo(() => readCachedExternalFileLinkRoots(paths), [paths, version]);
 }

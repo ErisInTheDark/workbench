@@ -24,6 +24,7 @@ import type {
   WorkbenchComposerInputDraft,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
+import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 import {
   areWorkbenchAgentPathsEqual,
   getWorkbenchAgentPathLabel,
@@ -207,6 +208,7 @@ export default function ThreadComposer ({
   thread: ThreadPayload;
   threadLifecycle: WorkbenchThreadLifecycle | null;
 }) {
+  const daemon = useWorkbenchDaemonClient();
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const {
     isWithinBottomDistance,
@@ -385,12 +387,7 @@ export default function ThreadComposer ({
     setAgentsError("");
     setIsLoadingAgents(true);
 
-    return fetch(`/api/agents?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" }).then(async (response) => {
-      if (!response.ok) {
-        throw new Error("Unable to load agents.");
-      }
-
-      const payload = await response.json() as { data?: WorkbenchAgentOption[] };
+    return daemon.request("agents/list", { projectId }).then((payload) => {
       if (agentLoadGenerationRef.current !== generation) {
         return;
       }
@@ -408,7 +405,7 @@ export default function ThreadComposer ({
         setIsLoadingAgents(false);
       }
     });
-  }, [isCommentMode, projectId]);
+  }, [daemon, isCommentMode, projectId]);
   const loadAvailableModels = useCallback((options: { clearBeforeLoad?: boolean; forceRefresh?: boolean; harness?: ThreadPayload["harness"]; showErrors?: boolean; showLoading?: boolean } = {}): Promise<void> => {
     const {
       clearBeforeLoad = false,

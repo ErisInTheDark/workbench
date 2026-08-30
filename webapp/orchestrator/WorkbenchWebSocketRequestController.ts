@@ -26,6 +26,7 @@ import {
 } from "../lib/workbench/websocket-stream";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
+import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import type WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReloadController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import WorkbenchWebSocketStreamController, {
@@ -78,6 +79,7 @@ interface PendingRequest extends WorkbenchWebSocketPendingRequestState {
 
 export interface WorkbenchWebSocketRequestControllerOptions {
   clearTimeout?: (timer: Timer) => void;
+  daemonRequests?: Pick<WorkbenchDaemonRequestController, "accepts" | "handle">;
   harnesses: Pick<WorkbenchHarnessController, "handleBrowserMessage" | "resolveHarness">;
   initialState?: WorkbenchWebSocketRequestControllerState;
   now?: () => number;
@@ -116,9 +118,8 @@ function pendingToken() {
 }
 
 function methodLabel(harness: WorkbenchHarness | "unknown" | "workbench", method: string) {
-  return harness === "workbench" && method.startsWith("workbench/")
-    ? `workbench:${method.slice("workbench/".length)}`
-    : `${harness}:${method}`;
+  if (harness !== "workbench") return `${harness}:${method}`;
+  return `wb:${method.startsWith("workbench/") ? method.slice("workbench/".length) : method}`;
 }
 
 function readResponseId(message: unknown): RequestId | undefined {
@@ -136,6 +137,7 @@ function responseIsError(message: unknown) {
 export default class WorkbenchWebSocketRequestController {
   private detached = false;
   private readonly harnesses: WorkbenchWebSocketRequestControllerOptions["harnesses"];
+  private readonly daemonRequests: NonNullable<WorkbenchWebSocketRequestControllerOptions["daemonRequests"]>;
   private readonly now: NonNullable<WorkbenchWebSocketRequestControllerOptions["now"]>;
   private readonly pending = new Map<BridgeClient, Map<RequestId, PendingRequest>>();
   private readonly reload: WorkbenchWebSocketRequestControllerOptions["reload"];
@@ -151,6 +153,10 @@ export default class WorkbenchWebSocketRequestController {
 
   constructor({
     clearTimeout: cancel = clearTimeout,
+    daemonRequests = {
+      accepts: () => false,
+      handle: async (request) => ({ id: request.id ?? null, error: { code: -32601, message: "Daemon method not found." } }),
+    },
     harnesses,
     initialState,
     now = Date.now,
@@ -162,6 +168,7 @@ export default class WorkbenchWebSocketRequestController {
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketRequestControllerOptions) {
     this.cancel = cancel;
+    this.daemonRequests = daemonRequests;
     this.harnesses = harnesses;
     this.now = now;
     this.reload = reload;
@@ -205,7 +212,8 @@ export default class WorkbenchWebSocketRequestController {
     const requestId = "id" in message ? message.id : undefined;
     const isRequest = requestId === null || typeof requestId === "number" || typeof requestId === "string";
     const transcriptRequest = decodeWorkbenchTranscriptRequest(method, message.params);
-    const workbenchRequest = method.startsWith("workbench/thread-state/")
+    const daemonRequest = this.daemonRequests.accepts(method);
+    const workbenchRequest = daemonRequest || method.startsWith("workbench/thread-state/")
       || method === WORKBENCH_RELOAD_METHOD
       || transcriptRequest !== null;
     let harness: WorkbenchHarness | "unknown" | "workbench" = workbenchRequest ? "workbench" : "unknown";
@@ -237,6 +245,10 @@ export default class WorkbenchWebSocketRequestController {
     await this.announceTranscriptCapabilities(client);
 
     if (workbenchRequest && isRequest) {
+      if (daemonRequest) {
+        await this.sendJsonToClient(client, await this.daemonRequests.handle(message));
+        return;
+      }
       if (method === WORKBENCH_RELOAD_METHOD) {
         const parsed = OrchestratorReloadRequestSchema.safeParse(message.params);
         if (!parsed.success) {

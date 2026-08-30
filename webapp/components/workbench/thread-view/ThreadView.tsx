@@ -33,6 +33,7 @@ import type {
   WorkbenchThreadTurnHistoryEntry,
   WorkbenchUserInputResponse,
 } from "../../../lib/types";
+import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 import { areDeeplyEqual } from "../../../lib/workbench/deep-equality";
 import { writeTextToClipboard } from "../../../lib/workbench/dom/clipboard";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
@@ -675,6 +676,7 @@ export default memo(function ThreadView ({
   thread: ThreadPayload;
   viewInstanceKey?: string;
 }) {
+  const daemon = useWorkbenchDaemonClient();
   const clientStateController = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
@@ -1032,15 +1034,7 @@ export default memo(function ThreadView ({
 
   useEffect(() => {
     let cancelled = false;
-    const url = projectId
-      ? `/api/workbench-library/skills?projectId=${encodeURIComponent(projectId)}`
-      : "/api/workbench-library/skills";
-    void fetch(url, { cache: "no-store" }).then(async (response) => {
-      if (!response.ok) {
-        throw new Error("Unable to load skills.");
-      }
-
-      const payload = await response.json() as { data?: WorkbenchSkillSummary[] };
+    void daemon.request("skills/read", { projectId: projectId || null }).then((payload) => {
       if (!cancelled) {
         setWorkbenchSkills(payload.data ?? []);
       }
@@ -1053,7 +1047,7 @@ export default memo(function ThreadView ({
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [daemon, projectId]);
 
   useEffect(() => {
     const preloadBatch = getNextSubagentHydrationBatch({

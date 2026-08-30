@@ -89,52 +89,23 @@ test("excluded selected scope is typed terminal with safe context and zero provi
   assert.equal(dispatches, 0);
 });
 
-test("admitted unloaded Codex session resumes once then rereads once", async () => {
+test("unloaded Codex snapshots remain static reads and never resume the thread", async () => {
   const requests: JsonRpcRequest[] = [];
-  let reads = 0;
   const source = new WorkbenchLegacyMigrationSourceController({
     allowedProjectIds: new Set(["project"]), capability: "enabled",
     requestHarness: async (_harness, request) => {
       requests.push(request);
-      if (request.method === "thread/resume") return { id: request.id ?? null, result: { thread: { cwd, id: "selected", turns: [] } } };
-      reads += 1;
-      return reads === 1
-        ? { error: { code: -32600, message: "thread not loaded: selected" }, id: request.id ?? null }
-        : { id: request.id ?? null, result: { thread: { cwd, id: "selected", turns: [] } } };
+      return { error: { code: -32600, message: "thread not loaded: selected" }, id: request.id ?? null };
     },
     resolveProjectFromCwd: async () => ({ cwd, project: { id: "project" } }),
   });
-  await source.execute(snapshotContext);
-  assert.deepEqual(requests.map((request) => request.method), ["thread/read", "thread/resume", "thread/read"]);
+  await assert.rejects(source.execute(snapshotContext), (error) => (
+    error instanceof LegacyMigrationSnapshotError
+    && error.causeCode === "providerReadFailed"
+    && error.terminal === false
+  ));
+  assert.deepEqual(requests.map((request) => request.method), ["thread/read"]);
   assert.deepEqual(requests[0]?.params, { cwd, includeTurns: true, threadId: "selected" });
-  assert.deepEqual(requests[1]?.params, { threadId: "selected" });
-  assert.deepEqual(requests[2]?.params, { cwd, includeTurns: true, threadId: "selected" });
-});
-
-test("resume failure preserves only a bounded safe provider reason without changing retry truth", async () => {
-  const requests: JsonRpcRequest[] = [];
-  const source = new WorkbenchLegacyMigrationSourceController({
-    allowedProjectIds: new Set(["project"]), capability: "enabled",
-    requestHarness: async (_harness, request) => {
-      requests.push(request);
-      return request.method === "thread/read"
-        ? { error: { code: -32600, message: "thread not loaded: selected" }, id: request.id ?? null }
-        : { error: { code: -32602, data: { authorization: "Bearer raw-provider-secret" }, message: `Invalid params at ${cwd}/private.json token=raw-provider-secret ${"x".repeat(300)}` }, id: request.id ?? null };
-    },
-    resolveProjectFromCwd: async () => ({ cwd, project: { id: "project" } }),
-  });
-  await assert.rejects(source.execute(snapshotContext), (error) => {
-    assert.ok(error instanceof LegacyMigrationSnapshotError);
-    assert.equal(error.causeCode, "providerResumeFailed");
-    assert.equal(error.terminal, false);
-    assert.equal(error.context.providerReason?.code, -32602);
-    assert.match(error.context.providerReason?.message ?? "", /Invalid params at \[path\] token=\[redacted\]/u);
-    assert.ok((error.context.providerReason?.message.length ?? 0) <= 240);
-    assert.doesNotMatch(JSON.stringify({ context: error.context, message: error.message }), /raw-provider-secret|authorization|private\.json/u);
-    return true;
-  });
-  assert.deepEqual(requests.map((request) => request.method), ["thread/read", "thread/resume"]);
-  assert.deepEqual(requests[1]?.params, { threadId: "selected" });
 });
 
 test("read failure serializes a sanitized provider code and message", async () => {

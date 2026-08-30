@@ -9,16 +9,10 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
 import type { WorkbenchHarness } from "../../../lib/types";
 import {
-  GitCheckpointProposalSchema,
-} from "../../../lib/workbench/git/checkpoint-contracts";
-import {
   createGitArcOperationRejected,
   GitArcFailureException,
-  parseGitArcFailureEnvelope,
   parseGitArcFailureReceipt,
-  type GitArcFailureAction,
 } from "../../../lib/workbench/git/git-arc-failures";
-import reportClientSchemaError from "../../../lib/workbench/report-client-schema-error";
 import type {
   GitCheckpointCommitCommandIntent,
   ThreadCommandExecutionOutcome,
@@ -29,29 +23,7 @@ import ThreadCheckpointCommitCard, {
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import { proposalIntentOwnsMessage } from "./thread-git-arc-proposal-intents";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
-
-async function readProposalResponse(response: Response, action: GitArcFailureAction) {
-  const text = await response.text();
-  if (!response.ok) {
-    try {
-      const envelope = parseGitArcFailureEnvelope(text, (error) => {
-        reportClientSchemaError("Rejected Git arc proposal failure response", error);
-      });
-      if (envelope) throw new GitArcFailureException(envelope.gitArcFailure);
-      const errorPayload = JSON.parse(text) as { error?: string };
-      throw new GitArcFailureException(createGitArcOperationRejected(action, errorPayload.error || "Unable to load checkpoint proposal."));
-    } catch (error) {
-      if (error instanceof GitArcFailureException) throw error;
-      throw new GitArcFailureException(createGitArcOperationRejected(action, text.trim() || "Unable to load checkpoint proposal."));
-    }
-  }
-  const parsed = GitCheckpointProposalSchema.safeParse(JSON.parse(text));
-  if (!parsed.success) {
-    reportClientSchemaError("Rejected checkpoint proposal response", parsed.error);
-    throw new Error("Workbench returned an invalid checkpoint proposal response.");
-  }
-  return parsed.data;
-}
+import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 
 interface ThreadCheckpointCommitItemProps {
   commandOutcome: ThreadCommandExecutionOutcome;
@@ -87,6 +59,7 @@ function ThreadCheckpointCommitController({
   threadId,
   workspaceRoots,
 }: ThreadCheckpointCommitItemProps & { cwd: string; harness: WorkbenchHarness }) {
+  const daemon = useWorkbenchDaemonClient();
   const [includeNewer, setIncludeNewer] = useState(false);
   const [title, setTitle] = useState(intent?.title ?? (presentation && presentation !== "full" ? "Commit proposal" : ""));
   const [description, setDescription] = useState(intent?.description ?? "");
@@ -100,13 +73,10 @@ function ThreadCheckpointCommitController({
     if (!proposalId) return;
     setState((current) => current.status === "loaded" ? current : { status: "pending" });
     try {
-      const proposal = await readProposalResponse(await fetch("/api/git-checkpoint", {
-        body: JSON.stringify({ action: "proposalState", cwd, harness, includeNewer, proposalId, threadId }),
-        cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-        signal,
-      }), "proposalState");
+      const proposal = await daemon.requestGitArc(
+        "git/arc/proposal/read",
+        { cwd, harness, includeNewer, proposalId, threadId },
+      );
       if (signal?.aborted) return;
       if (!titleHydrated.current || proposal.status !== "proposed") setTitle(proposal.title);
       if (!descriptionHydrated.current || proposal.status !== "proposed") setDescription(proposal.description);
@@ -126,7 +96,7 @@ function ThreadCheckpointCommitController({
         status: "error",
       });
     }
-  }, [cwd, harness, includeNewer, proposalId, threadId]);
+  }, [cwd, daemon, harness, includeNewer, proposalId, threadId]);
 
   useEffect(() => {
     if (!proposalId) {
@@ -164,9 +134,9 @@ function ThreadCheckpointCommitController({
     if (!title.trim() || committing) return;
     setCommitting(true);
     try {
-      const proposal = await readProposalResponse(await fetch("/api/git-checkpoint", {
-        body: JSON.stringify({
-          action: "proposalCommit",
+      const proposal = await daemon.requestGitArc(
+        "git/arc/proposal/commit",
+        {
           cwd,
           description,
           harness,
@@ -174,11 +144,8 @@ function ThreadCheckpointCommitController({
           proposalId,
           threadId,
           title,
-        }),
-        cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }), "proposalCommit");
+        },
+      );
       setTitle(proposal.title);
       setDescription(proposal.description);
       setState({ proposal, status: "loaded" });

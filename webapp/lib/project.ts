@@ -9,11 +9,11 @@
  * - discoverProjects/resolveDiscoveredProject/resolveProjectRootFromProjects/resolveProjectRoot/getDefaultProjectId: find and resolve selectable git projects and VS Code workspaces, newest HEAD activity first. Keywords: project, workspace, discovery, catalog, id, last commit.
  * - createProjectEntry/assertProjectFileCanBeDeleted/deleteProjectFile: create project entries, validate deletion targets, or permanently delete one project file. Keywords: create, delete, file, directory.
  * - buildTree/buildProjectTree: build the visible explorer tree for a project. Keywords: tree, explorer, filesystem.
- * - getProjectSnapshot: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
+ * - getProjectSnapshot/getProjectSnapshotFromResolvedProject: assemble the project tree, root info, and git change summary for the client. Keywords: snapshot, project, explorer.
  * - resolveExternalFileLinkRoot: find the owning git root for an absolute local file link. Keywords: file link, absolute path, git root.
  * - parseWorkspaceQualifiedPath/formatWorkspaceQualifiedPath/resolveProjectFilePath: resolve root-qualified workspace paths. Keywords: workspace root, file path, qualified path.
  * - listProjectSkills/listProjectSkillDefinitions/listProjectSkillDefinitionsFromRoot: discover project-level Workbench Skill metadata and full file content from `.agents/skills`. Keywords: project, skills, manifest.
- * - listUserInvocableAgents/readUserInvocableAgentDefinition/readUserInvocableAgentDefinitionFromRoot: discover project-level agent markdown files from `.agents/agents` and load metadata/prompt. Keywords: agent, prompt, custom agent, iterator.
+ * - listUserInvocableAgents/listUserInvocableAgentsFromResolvedProject/readUserInvocableAgentDefinition/readUserInvocableAgentDefinitionFromRoot: discover project-level agent markdown files from `.agents/agents` and load metadata/prompt. Keywords: agent, prompt, custom agent, iterator.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -1037,7 +1037,10 @@ async function getProjectChanges(project: ResolvedProject) {
 }
 
 export async function getProjectSnapshot(projectId?: string | null) {
-  const resolvedProject = await resolveProjectRoot(projectId);
+  return await getProjectSnapshotFromResolvedProject(await resolveProjectRoot(projectId));
+}
+
+export async function getProjectSnapshotFromResolvedProject(resolvedProject: ResolvedProject) {
   const [tree, changes] = await Promise.all([
     resolvedProject.kind === "workspace" ? buildWorkspaceTree(resolvedProject) : buildProjectTree(resolvedProject.root),
     getProjectChanges(resolvedProject),
@@ -1147,7 +1150,10 @@ export async function listProjectSkillDefinitionsFromRoot(rootDir: string): Prom
 }
 
 export async function listUserInvocableAgents(projectId?: string | null) {
-  const resolvedProject = await resolveProjectRoot(projectId);
+  return await listUserInvocableAgentsFromResolvedProject(await resolveProjectRoot(projectId));
+}
+
+export async function listUserInvocableAgentsFromResolvedProject(resolvedProject: ResolvedProject) {
   const libraryAgents = await listWorkbenchLibraryAgents();
   if (resolvedProject.id === WORKBENCH_LIBRARY_PROJECT_ID) {
     return libraryAgents;

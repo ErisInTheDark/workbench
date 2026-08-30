@@ -73,6 +73,14 @@ function respondDetachedQuestionnaireLifecycle(target: FakeWebSocket, request: S
   return false;
 }
 
+function readManagedStartRequest(request: SocketRequest) {
+  const params = request.params as {
+    startRequest?: SocketRequest;
+    threadId?: string;
+  } | undefined;
+  return params?.startRequest ?? null;
+}
+
 class FakeWebSocket {
   static readonly OPEN = 1;
   static intercept: ((socket: FakeWebSocket, request: SocketRequest) => boolean) | null = null;
@@ -143,6 +151,13 @@ class FakeWebSocket {
     } else if (request.method === "turn/start") {
       const threadId = String(request.params?.threadId ?? "thread");
       queueMicrotask(() => this.respond(request.id, { turn: wireThread(threadId, `${threadId}-started`).turns[0] }));
+    } else if (request.method === "workbench/codex/message/admit") {
+      const startRequest = readManagedStartRequest(request);
+      const threadId = String(request.params?.threadId ?? startRequest?.params?.threadId ?? "thread");
+      queueMicrotask(() => this.respond(request.id, {
+        kind: "started",
+        turn: wireThread(threadId, `${threadId}-started`).turns[0],
+      }));
     } else if (request.method === "workbench/transcript/subscribe") {
       queueMicrotask(() => this.respond(request.id, { subscribed: true }));
     } else if (request.method === "workbench/transcript/unsubscribe") {
@@ -304,21 +319,12 @@ function questionnaireEntry(turnId: string, itemId: string): WorkbenchQuestionna
 test("normal message admission stays independent until transcript capability is advertised", async () => withClient(async (client, socket) => {
   const source = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(source);
-  FakeWebSocket.intercept = (target, request) => {
-    if (request.method !== "thread/resume" || request.params?.threadId !== "idle") return false;
-    queueMicrotask(() => target.respond(request.id, {
-      model: "model",
-      reasoningEffort: null,
-      serviceTier: null,
-      thread: wireThread("idle", "idle-turn", "completed"),
-    }));
-    return true;
-  };
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(socket.requests.some((request) => request.method.startsWith("workbench/transcript/")), false);
 
   await client.sendThreadMessage(source, [{ text: "hello", text_elements: [], type: "text" }]);
-  assert.equal(socket.requests.some((request) => request.method === "turn/start"), true);
+  assert.equal(socket.requests.some((request) => request.method === "workbench/codex/message/admit"), true);
+  assert.equal(socket.requests.some((request) => request.method === "turn/start"), false);
   assert.equal(socket.requests.some((request) => request.method.startsWith("workbench/transcript/")), false);
 
   socket.notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 1 });
@@ -561,7 +567,7 @@ test("differing acknowledgement runs the preserved tail once and tail failure st
     socket.requests.find((request) => request.method === "turn/steer")?.workbenchPromptContext?.instructionScope,
     undefined,
   );
-  assert.equal(socket.requests.filter((request) => request.method === "thread/resume").length, 1);
+  assert.equal(socket.requests.filter((request) => request.method === "thread/read").length, 1);
   assert.equal(socket.requests.filter((request) => request.method === "steer/history/list").length, 1);
 
   const second = activeThread("codex", "second");
@@ -571,7 +577,7 @@ test("differing acknowledgement runs the preserved tail once and tail failure st
       queueMicrotask(() => target.respond(request.id, { turnId: "different-second-turn" }));
       return true;
     }
-    if (request.method === "thread/resume") {
+    if (request.method === "thread/read") {
       queueMicrotask(() => target.fail(request.id, "reconciliation failed"));
       return true;
     }
@@ -596,48 +602,33 @@ test("Codex slash mentions travel outside plain user input on steer and start", 
 
   const idle = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(idle);
-  FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/resume" && request.params?.threadId === "idle") {
-      queueMicrotask(() => target.respond(request.id, {
-        model: "model",
-        reasoningEffort: null,
-        serviceTier: null,
-        thread: wireThread("idle", "idle-turn", "completed"),
-      }));
-      return true;
-    }
-    return false;
-  };
   assert.equal(await client.sendThreadMessage(idle, input, {
     activatedSkillPaths: [skillPath],
   }), null);
-  const start = socket.requests.find((request) => (
-    request.method === "turn/start" && request.params?.threadId === "idle"
+  const admission = socket.requests.find((request) => (
+    request.method === "workbench/codex/message/admit" && request.params?.threadId === "idle"
   ));
+  const start = admission ? readManagedStartRequest(admission) : null;
   assert.deepEqual(start?.params?.input, input);
   assert.deepEqual(start?.workbenchPromptContext?.activatedSkillPaths, [skillPath]);
   assert.equal((start?.params?.input as Array<{ type?: string }>).some((item) => item.type === "skill"), false);
 }));
 
-test("idle selected Codex resumes once and starts with native identity while providers preserve their routes", async () => withClient(async (client, socket) => {
+test("idle selected Codex sends one managed lifecycle intent while providers preserve their routes", async () => withClient(async (client, socket) => {
   const idle = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(idle);
-  FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/resume" && request.params?.threadId === "idle") {
-      queueMicrotask(() => target.respond(request.id, { model: "model", reasoningEffort: null, serviceTier: null, thread: wireThread("idle", "idle-turn", "completed") }));
-      return true;
-    }
-    return false;
-  };
   const result = await client.sendThreadMessage(idle, [{ text: "codex", text_elements: [], type: "text" }]);
   assert.equal(result, null);
-  const codexStart = socket.requests.find((request) => request.method === "turn/start" && request.params?.threadId === "idle");
+  const admission = socket.requests.find((request) => request.method === "workbench/codex/message/admit" && request.params?.threadId === "idle");
+  const codexStart = admission ? readManagedStartRequest(admission) : null;
   assert.equal(typeof codexStart?.params?.clientUserMessageId, "string");
   assert.equal(codexStart?.workbenchPromptContext?.instructionScope, undefined);
-  const codexResume = socket.requests.find((request) => request.method === "thread/resume" && request.params?.threadId === "idle");
+  const codexResume = (admission?.params as { resumeRequest?: SocketRequest } | undefined)?.resumeRequest;
   assert.equal(codexResume?.params?.excludeTurns, true);
   assert.equal(codexResume?.workbenchThreadHydration, undefined);
-  assert.equal(socket.requests.filter((request) => request.method === "thread/resume" && request.params?.threadId === "idle").length, 1);
+  assert.equal(socket.requests.filter((request) => request.method === "workbench/codex/message/admit" && request.params?.threadId === "idle").length, 1);
+  assert.equal(socket.requests.some((request) => request.method === "thread/resume"), false);
+  assert.equal(socket.requests.some((request) => request.method === "turn/start" && request.params?.threadId === "idle"), false);
   assert.equal(socket.requests.some((request) => request.method === "thread/read" && request.params?.threadId === "idle"), false);
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "idle"), false);
   assert.deepEqual(socket.requests.find((request) => request.method === "workbench/thread-state/intent/accept" && (request.params?.identity as { threadId?: string } | undefined)?.threadId === "idle")?.params, {
@@ -660,7 +651,7 @@ test("idle selected Codex resumes once and starts with native identity while pro
   }
 }));
 
-test("bounded selected Codex uses one lifecycle-only resume and preserves loaded transcript state", async () => withClient(async (client, socket) => {
+test("bounded selected Codex captures one lifecycle resume intent and preserves loaded transcript state", async () => withClient(async (client, socket) => {
   const loadedItem: ThreadItem = {
     id: "loaded-item",
     memoryCitation: null,
@@ -680,25 +671,10 @@ test("bounded selected Codex uses one lifecycle-only resume and preserves loaded
     turns: [{ ...base.turns[0]!, items: [loadedItem] }],
   };
   client.selectThreadPayload(idle);
-  FakeWebSocket.intercept = (target, request) => {
-    if (request.method !== "thread/resume" || request.params?.threadId !== "idle") return false;
-    const completed = wireThread("idle", "idle-turn", "completed");
-    queueMicrotask(() => target.respond(request.id, {
-      initialTurnsPage: {
-        backwardsCursor: null,
-        data: [{ ...completed.turns[0]!, items: [], itemsView: "notLoaded" }],
-        nextCursor: null,
-      },
-      model: "model",
-      reasoningEffort: null,
-      serviceTier: null,
-      thread: { ...completed, turns: [] },
-    }));
-    return true;
-  };
 
   assert.equal(await client.sendThreadMessage(idle, [{ text: "start", text_elements: [], type: "text" }]), null);
-  const resume = socket.requests.find((request) => request.method === "thread/resume" && request.params?.threadId === "idle");
+  const admission = socket.requests.find((request) => request.method === "workbench/codex/message/admit" && request.params?.threadId === "idle");
+  const resume = (admission?.params as { resumeRequest?: SocketRequest } | undefined)?.resumeRequest;
   assert.equal(resume?.params?.excludeTurns, true);
   assert.deepEqual(resume?.params?.initialTurnsPage, {
     itemsView: "notLoaded",
@@ -706,7 +682,7 @@ test("bounded selected Codex uses one lifecycle-only resume and preserves loaded
     sortDirection: "desc",
   });
   assert.equal(resume?.workbenchThreadHydration, undefined);
-  assert.equal(socket.requests.filter((request) => request.method === "turn/start" && request.params?.threadId === "idle").length, 1);
+  assert.equal(socket.requests.filter((request) => request.method === "turn/start" && request.params?.threadId === "idle").length, 0);
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "idle"), false);
   const snapshot = client.getSnapshot().currentThread;
   assert.deepEqual(snapshot?.turns.find((turn) => turn.id === "idle-turn")?.items.map((item) => item.id), ["loaded-item"]);
@@ -715,51 +691,32 @@ test("bounded selected Codex uses one lifecycle-only resume and preserves loaded
   assert.equal(snapshot?.nextPageCursor, "idle-turn");
 }));
 
-test("bounded resume steers an unseen active turn from its lifecycle page", async () => withClient(async (client, socket) => {
+test("managed admission reports an unseen provider-active turn without a browser lifecycle fork", async () => withClient(async (client, socket) => {
   const idle = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(idle);
   FakeWebSocket.intercept = (target, request) => {
-    if (request.method !== "thread/resume" || request.params?.threadId !== "idle") return false;
-    const active = wireThread("idle", "provider-turn", "inProgress");
-    queueMicrotask(() => target.respond(request.id, {
-      initialTurnsPage: {
-        backwardsCursor: null,
-        data: [{ ...active.turns[0]!, items: [], itemsView: "notLoaded" }],
-        nextCursor: null,
-      },
-      model: "model",
-      reasoningEffort: null,
-      serviceTier: null,
-      thread: { ...active, turns: [] },
-    }));
+    if (request.method !== "workbench/codex/message/admit" || request.params?.threadId !== "idle") return false;
+    queueMicrotask(() => target.respond(request.id, { kind: "steered", turnId: "provider-turn" }));
     return true;
   };
 
   assert.equal(await client.sendThreadMessage(idle, [{ text: "steer", text_elements: [], type: "text" }]), null);
-  const steer = socket.requests.find((request) => request.method === "turn/steer" && request.params?.threadId === "idle");
-  assert.equal(steer?.params?.expectedTurnId, "provider-turn");
+  assert.equal(socket.requests.some((request) => request.method === "turn/steer"), false);
   assert.equal(socket.requests.some((request) => request.method === "turn/start" && request.params?.threadId === "idle"), false);
 }));
 
-test("bounded active resume without a turn identity fails closed", async () => withClient(async (client, socket) => {
+test("managed admission fails closed when provider-active state has no turn identity", async () => withClient(async (client, socket) => {
   const idle = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(idle);
   FakeWebSocket.intercept = (target, request) => {
-    if (request.method !== "thread/resume" || request.params?.threadId !== "idle") return false;
-    const active = wireThread("idle", "provider-turn", "inProgress");
-    queueMicrotask(() => target.respond(request.id, {
-      initialTurnsPage: { backwardsCursor: null, data: [], nextCursor: null },
-      model: "model",
-      reasoningEffort: null,
-      serviceTier: null,
-      thread: { ...active, turns: [] },
-    }));
+    if (request.method !== "workbench/codex/message/admit" || request.params?.threadId !== "idle") return false;
+    queueMicrotask(() => target.fail(request.id, "Active Codex thread idle has no current in-progress turn."));
     return true;
   };
 
   await assert.rejects(
     client.sendThreadMessage(idle, [{ text: "do not guess", text_elements: [], type: "text" }]),
-    ThreadMessageNotSentError,
+    /no current in-progress turn/u,
   );
   assert.equal(socket.requests.some((request) => (
     request.params?.threadId === "idle"
@@ -839,11 +796,8 @@ test("an accepted background child turn publishes Working before the send return
   client.selectThreadPayload(activeThread("codex", "parent"));
   const child = activeThread("codex", "child", "completed");
   FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/resume" && request.params?.threadId === "child") {
+    if (request.method === "thread/read" && request.params?.threadId === "child") {
       queueMicrotask(() => target.respond(request.id, {
-        model: "model",
-        reasoningEffort: null,
-        serviceTier: null,
         thread: wireThread("child", "child-turn", "completed"),
       }));
       return true;
@@ -1307,62 +1261,58 @@ test("visible questionnaire keeps back-to-back selected steers admissible", asyn
   assert.equal(snapshot.currentThread?.turns[0]?.items.filter((item) => item.type === "userMessage").length, 3);
 }));
 
-test("selection drift during selected resume sends no obsolete message", async () => withClient(async (client, socket) => {
+test("selection drift after managed admission keeps the newly selected thread", async () => withClient(async (client, socket) => {
   const idle = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(idle);
-  let resumeRequest: SocketRequest | null = null;
+  let admissionRequest: SocketRequest | null = null;
   FakeWebSocket.intercept = (_target, request) => {
-    if (request.method === "thread/resume" && request.params?.threadId === "idle") {
-      resumeRequest = request;
+    if (request.method === "workbench/codex/message/admit" && request.params?.threadId === "idle") {
+      admissionRequest = request;
       return true;
     }
     return false;
   };
   const send = client.sendThreadMessage(idle, [{ text: "stale", text_elements: [], type: "text" }]);
-  await waitForRequest(socket, "thread/resume");
+  await waitForRequest(socket, "workbench/codex/message/admit");
   client.selectThreadPayload(activeThread("codex", "other"));
-  socket.respond(resumeRequest!.id, { model: "model", reasoningEffort: null, serviceTier: null, thread: wireThread("idle", "idle-turn", "completed") });
-  await assert.rejects(send, ThreadMessageNotSentError);
+  socket.respond(admissionRequest!.id, { kind: "started", turn: wireThread("idle", "idle-started").turns[0] });
+  assert.equal(await send, null);
   assert.equal(socket.requests.some((request) => (request.method === "turn/steer" || request.method === "turn/start") && request.params?.threadId === "idle"), false);
   assert.equal(client.getSnapshot().currentThread?.id, "other");
 }));
 
-test("same-selection completion drift during resume starts once instead of rejecting", async () => withClient(async (client, socket) => {
+test("same-selection completion drift during managed admission projects the started turn once", async () => withClient(async (client, socket) => {
   const idle = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(idle);
-  let resumeRequest: SocketRequest | null = null;
+  let admissionRequest: SocketRequest | null = null;
   FakeWebSocket.intercept = (_target, request) => {
-    if (request.method === "thread/resume" && request.params?.threadId === "idle") {
-      resumeRequest = request;
+    if (request.method === "workbench/codex/message/admit" && request.params?.threadId === "idle") {
+      admissionRequest = request;
       return true;
     }
     return false;
   };
 
   const send = client.sendThreadMessage(idle, [{ text: "keep me", text_elements: [], type: "text" }]);
-  await waitForRequest(socket, "thread/resume");
+  await waitForRequest(socket, "workbench/codex/message/admit");
   socket.notify("thread/status/changed", {
     status: { type: "idle" },
     threadId: "idle",
   });
-  socket.respond(resumeRequest!.id, { model: "model", reasoningEffort: null, serviceTier: null, thread: wireThread("idle", "idle-turn", "completed") });
+  socket.respond(admissionRequest!.id, { kind: "started", turn: wireThread("idle", "idle-started").turns[0] });
 
   assert.equal(await send, null);
-  assert.equal(socket.requests.filter((request) => request.method === "turn/start" && request.params?.threadId === "idle").length, 1);
+  assert.equal(socket.requests.filter((request) => request.method === "workbench/codex/message/admit").length, 1);
+  assert.equal(client.getSnapshot().currentThread?.turns.filter((turn) => turn.id === "idle-started").length, 1);
   assert.equal(client.getSnapshot().currentThread?.id, "idle");
 }));
 
-test("idle status with a stale in-progress turn uses authoritative preparation and starts a new turn", async () => withClient(async (client, socket) => {
+test("idle status with a stale in-progress turn delegates authoritative admission to the bridge", async () => withClient(async (client, socket) => {
   const stale = { ...activeThread(), status: "idle" };
-  const completed = wireThread("thread", "turn", "completed");
   client.selectThreadPayload(stale);
   FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/resume") {
-      queueMicrotask(() => target.respond(request.id, { model: "model", reasoningEffort: null, serviceTier: null, thread: completed }));
-      return true;
-    }
-    if (request.method === "turn/start") {
-      queueMicrotask(() => target.respond(request.id, { turn: wireThread("thread", "new-turn").turns[0] }));
+    if (request.method === "workbench/codex/message/admit") {
+      queueMicrotask(() => target.respond(request.id, { kind: "started", turn: wireThread("thread", "new-turn").turns[0] }));
       return true;
     }
     return false;
@@ -1370,13 +1320,14 @@ test("idle status with a stale in-progress turn uses authoritative preparation a
 
   const result = await client.sendThreadMessage(stale, [{ text: "new turn", text_elements: [], type: "text" }]);
   assert.equal(socket.requests.filter((request) => request.method === "turn/steer").length, 0);
-  assert.equal(socket.requests.filter((request) => request.method === "turn/start").length, 1);
+  assert.equal(socket.requests.filter((request) => request.method === "turn/start").length, 0);
+  assert.equal(socket.requests.filter((request) => request.method === "workbench/codex/message/admit").length, 1);
   assert.equal(result, null);
   assert.equal(client.getSnapshot().currentThread?.turns.at(-1)?.id, "new-turn");
   assert.equal(socket.requests.some((request) => request.method === "thread/read"), false);
 }));
 
-test("selected resume preserves already-loaded earlier turns before starting", async () => withClient(async (client, socket) => {
+test("managed admission preserves already-loaded earlier turns when projecting the start", async () => withClient(async (client, socket) => {
   const base = activeThread("codex", "thread", "completed");
   const olderTurn = { ...base.turns[0]!, completedAt: 2, durationMs: 1, id: "older", startedAt: 1, status: "completed" as const };
   const currentTurn = { ...base.turns[0]!, id: "current" };
@@ -1388,12 +1339,10 @@ test("selected resume preserves already-loaded earlier turns before starting", a
   };
   client.selectThreadPayload(source);
   FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/resume") {
+    if (request.method === "workbench/codex/message/admit") {
       queueMicrotask(() => target.respond(request.id, {
-        model: "model",
-        reasoningEffort: null,
-        serviceTier: null,
-        thread: wireThread("thread", "current", "completed"),
+        kind: "started",
+        turn: wireThread("thread", "thread-started").turns[0],
       }));
       return true;
     }
@@ -1404,88 +1353,46 @@ test("selected resume preserves already-loaded earlier turns before starting", a
   assert.deepEqual(client.getSnapshot().currentThread?.turns.map((turn) => turn.id), ["older", "current", "thread-started"]);
 }));
 
-test("new active turn notification during resume wins and receives one steer", async () => withClient(async (client, socket) => {
+test("daemon-side active-turn admission settles without a second browser steer", async () => withClient(async (client, socket) => {
   const idle = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(idle);
-  let resumeRequest: SocketRequest | null = null;
+  let admissionRequest: SocketRequest | null = null;
   FakeWebSocket.intercept = (_target, request) => {
-    if (request.method === "thread/resume" && !resumeRequest) {
-      resumeRequest = request;
+    if (request.method === "workbench/codex/message/admit" && !admissionRequest) {
+      admissionRequest = request;
       return true;
     }
     return false;
   };
 
   const send = client.sendThreadMessage(idle, [{ text: "join active", text_elements: [], type: "text" }]);
-  await waitForRequest(socket, "thread/resume");
+  await waitForRequest(socket, "workbench/codex/message/admit");
   socket.notify("turn/started", {
     threadId: "idle",
     turn: wireThread("idle", "notification-turn").turns[0],
   });
-  socket.respond(resumeRequest!.id, {
-    model: "model",
-    reasoningEffort: null,
-    serviceTier: null,
-    thread: wireThread("idle", "idle-turn", "completed"),
-  });
+  socket.respond(admissionRequest!.id, { kind: "steered", turnId: "notification-turn" });
 
   assert.equal(await send, null);
-  assert.equal(socket.requests.filter((request) => request.method === "turn/steer" && request.params?.expectedTurnId === "notification-turn").length, 1);
+  assert.equal(socket.requests.filter((request) => request.method === "turn/steer").length, 0);
   assert.equal(socket.requests.some((request) => request.method === "turn/start" && request.params?.threadId === "idle"), false);
 }));
 
-test("compaction during selected resume cancels before message dispatch", async () => withClient(async (client, socket) => {
+test("canonical initial notification before managed admission acknowledgement is preserved once", async () => withClient(async (client, socket) => {
   const idle = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(idle);
-  let resumeRequest: SocketRequest | null = null;
-  FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/resume" && !resumeRequest) {
-      resumeRequest = request;
-      return true;
-    }
-    if (request.method === "thread/compact/start") {
-      queueMicrotask(() => target.respond(request.id, {}));
-      return true;
-    }
-    return false;
-  };
-
-  const send = client.sendThreadMessage(idle, [{ text: "after compact", text_elements: [], type: "text" }]);
-  await waitForRequest(socket, "thread/resume");
-  await client.compactThread(idle);
-  socket.respond(resumeRequest!.id, {
-    model: "model", reasoningEffort: null, serviceTier: null,
-    thread: wireThread("idle", "idle-turn", "completed"),
-  });
-
-  await assert.rejects(send, ThreadMessageNotSentError);
-  assert.equal(socket.requests.some((request) => request.method === "turn/start" || request.method === "turn/steer"), false);
-}));
-
-test("canonical initial notification before start acknowledgement is preserved once", async () => withClient(async (client, socket) => {
-  const idle = activeThread("codex", "idle", "completed");
-  client.selectThreadPayload(idle);
-  let startRequest: SocketRequest | null = null;
-  FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/resume") {
-      queueMicrotask(() => target.respond(request.id, {
-        model: "model",
-        reasoningEffort: null,
-        serviceTier: null,
-        thread: wireThread("idle", "idle-turn", "completed"),
-      }));
-      return true;
-    }
-    if (request.method === "turn/start") {
-      startRequest = request;
+  let admissionRequest: SocketRequest | null = null;
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method === "workbench/codex/message/admit") {
+      admissionRequest = request;
       return true;
     }
     return false;
   };
 
   const send = client.sendThreadMessage(idle, [{ text: "initial", text_elements: [], type: "text" }]);
-  await waitForRequest(socket, "turn/start");
-  const clientId = String(startRequest!.params?.clientUserMessageId ?? "");
+  await waitForRequest(socket, "workbench/codex/message/admit");
+  const clientId = String(readManagedStartRequest(admissionRequest!)?.params?.clientUserMessageId ?? "");
   const startedTurn = wireThread("idle", "new-turn").turns[0]!;
   socket.notify("turn/started", { threadId: "idle", turn: startedTurn });
   socket.notify("item/started", {
@@ -1493,7 +1400,7 @@ test("canonical initial notification before start acknowledgement is preserved o
     threadId: "idle",
     turnId: "new-turn",
   });
-  socket.respond(startRequest!.id, { turn: startedTurn });
+  socket.respond(admissionRequest!.id, { kind: "started", turn: startedTurn });
 
   assert.equal(await send, null);
   const initialItems = client.getSnapshot().currentThread?.turns.find((turn) => turn.id === "new-turn")?.items.filter((item) => item.type === "userMessage") ?? [];
@@ -1769,22 +1676,22 @@ test("project reset suppresses stale reconciliation failure warnings", async () 
   await withClient(async (client, socket) => {
     const source = activeThread();
     client.selectThreadPayload(source);
-    let resumeRequest: SocketRequest | null = null;
+    let readRequest: SocketRequest | null = null;
     FakeWebSocket.intercept = (target, request) => {
       if (request.method === "turn/steer") {
         queueMicrotask(() => target.respond(request.id, { turnId: "acknowledged-turn" }));
         return true;
       }
-      if (request.method === "thread/resume") {
-        resumeRequest = request;
+      if (request.method === "thread/read") {
+        readRequest = request;
         return true;
       }
       return false;
     };
     const send = client.sendThreadMessage(source, [{ text: "queued", text_elements: [], type: "text" }]);
-    await waitForRequest(socket, "thread/resume");
+    await waitForRequest(socket, "thread/read");
     client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
-    socket.fail(resumeRequest!.id, "old reconciliation failed");
+    socket.fail(readRequest!.id, "old reconciliation failed");
     assert.equal(await send, null);
     assert.equal(statusMessages.some((message) => message.includes("immediate thread reconciliation failed")), false);
   }, { onStatusMessage: (message) => statusMessages.push(message) });
@@ -2416,7 +2323,7 @@ test("durable detached questionnaire responses resolve after admission even when
       queueMicrotask(() => target.respond(candidate.id, { turn: admitted.turns[1] }));
       return true;
     }
-    if (turnStarted && candidate.method === "thread/resume") {
+    if (turnStarted && candidate.method === "thread/read") {
       queueMicrotask(() => target.fail(candidate.id, "immediate reconciliation failed"));
       return true;
     }
@@ -2431,11 +2338,10 @@ test("durable detached questionnaire responses resolve after admission even when
   });
   const start = socket.requests.find((candidate) => candidate.method === "turn/start");
   const readIndex = socket.requests.findIndex((candidate) => candidate.method === "thread/read");
-  const resumeIndex = socket.requests.findIndex((candidate) => candidate.method === "thread/resume");
   const startIndex = socket.requests.findIndex((candidate) => candidate.method === "turn/start");
   assert.ok(readIndex >= 0);
-  assert.ok(resumeIndex > readIndex);
-  assert.ok(startIndex > resumeIndex);
+  assert.ok(startIndex > readIndex);
+  assert.equal(socket.requests.some((candidate) => candidate.method === "thread/resume"), false);
   const input = start?.params?.input as Array<{ text?: string; type?: string }> | undefined;
   assert.match(input?.[0]?.text ?? "", /^<wb:questionnaire-response>/u);
   assert.deepEqual(start?.workbenchPromptContext?.activatedSkillPaths, ["C:/skills/iterate/SKILL.md"]);

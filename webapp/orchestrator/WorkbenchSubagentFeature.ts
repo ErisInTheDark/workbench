@@ -7,12 +7,14 @@ import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "../lib/typ
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "../lib/workbench/thread/thread-state";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { JsonRpcRequest } from "./bridge-types";
+import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 
 export interface WorkbenchSubagentFeatureContext {
   bridgeUrl: string;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
+  profileStore: WorkbenchComposerProfileStore;
   resolveProjectFromCwd(cwd: string | null | undefined, options?: { endpointName?: string }): Promise<AgentEndpointProjectResolution>;
   storageRoot: string;
   threadState: {
@@ -31,6 +33,7 @@ export default class WorkbenchSubagentFeature {
     this.controller = new WorkbenchSubagentController({
       bridgeUrl: context.bridgeUrl,
       onRelationshipCommitted: context.onRelationshipCommitted,
+      profileStore: context.profileStore,
       resolveProjectFromCwd: context.resolveProjectFromCwd,
       storageRoot: context.storageRoot,
       subagentStore: this.store,

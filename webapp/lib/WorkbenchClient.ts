@@ -51,6 +51,7 @@ import WorkbenchFilePanelClient from "./workbench/WorkbenchFilePanelClient";
 import type { WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench/WorkbenchThreadClient";
+import WorkbenchDaemonClient from "./workbench/daemon/WorkbenchDaemonClient";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema, type WorkbenchProjectStateUpdate } from "./workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
 import conformWorkbenchThreadStateOpenResult from "./workbench/thread/browser-thread-state-conformance";
@@ -61,7 +62,7 @@ import reportClientSchemaError from "./workbench/report-client-schema-error";
 type MountedWorkbenchControls = WorkbenchControls & {
   createFilePanelClient: (
     surfaces: WorkbenchEditorDomSurfaces,
-    options?: Partial<Omit<WorkbenchFilePanelClientOptions, "clearThreadSelection" | "draftStore" | "emitExplorerStateChange" | "expandProjectPath" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>,
+    options?: Partial<Omit<WorkbenchFilePanelClientOptions, "clearThreadSelection" | "draftStore" | "emitExplorerStateChange" | "expandProjectPath" | "fileTransport" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>,
   ) => ReturnType<typeof WorkbenchFilePanelClient>;
 };
 
@@ -267,12 +268,16 @@ export async function WorkbenchClient(
     },
     publishAcceptedIntent: (event) => coordinateAcceptedIntent(event),
   });
+  const daemon = new WorkbenchDaemonClient({
+    request: async (method, params) => await threadClient.requestWorkbench(method, params),
+  });
   const projectClient = WorkbenchProjectClient({
     clientStateController: workbenchBindings.clientStateController,
     onError: (message) => reportStatusMessage(message),
     transport: {
       createEntry: async (projectId, parentPath, name, type) => WorkbenchCreateEntryResultSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/project/entry/create", { name, parentPath, projectId, type })),
       deleteFile: async (projectId, filePath, options) => WorkbenchDeleteFileResultSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/project/file/delete", { confirmUntracked: options.confirmUntracked, path: filePath, projectId })),
+      readCatalog: async () => await daemon.request("project/catalog/read", {}),
       refresh: async (projectId) => { await threadClient.requestWorkbench("workbench/thread-state/project/refresh", { projectId }); },
     },
   });
@@ -981,6 +986,7 @@ export async function WorkbenchClient(
 
   const controls: MountedWorkbenchControls = {
     applyRoute,
+    daemon,
     createFilePanelClient: (surfaces, filePanelOptions = {}) => WorkbenchFilePanelClient({
       ...filePanelOptions,
       clearThreadSelection: () => {
@@ -988,6 +994,11 @@ export async function WorkbenchClient(
         applyCurrentThreadSelection(null);
       },
       draftStore,
+      fileTransport: {
+        read: async (projectId, path) => await daemon.request("project/file/read", { path, projectId }),
+        reset: async (projectId, path, expectedMtimeMs, force) => await daemon.request("project/file/reset", { expectedMtimeMs, force, path, projectId }),
+        save: async (projectId, path, content, expectedMtimeMs, force) => await daemon.request("project/file/save", { content, expectedMtimeMs, force, path, projectId }),
+      },
       emitExplorerStateChange,
       expandProjectPath: (filePath) => {
         projectClient.expandPath(filePath);

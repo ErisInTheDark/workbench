@@ -7,6 +7,7 @@ import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } fro
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import WorkbenchOrchestratorHttpRouter from "./WorkbenchOrchestratorHttpRouter";
+import WorkbenchTranscriptAssetController from "./WorkbenchTranscriptAssetController";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 
 const REQUIRED_REGISTRATIONS = [
@@ -53,6 +54,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       projectCatalog: build.get("projectCatalog"),
       projectSnapshot: build.get("projectSnapshot"),
       threadGit: build.get("threadGit"),
+      transcriptAssets: new WorkbenchTranscriptAssetController(context.legacyMigrationProjectRoot),
     });
     return {
       activate: () => {

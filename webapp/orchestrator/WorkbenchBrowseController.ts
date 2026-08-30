@@ -129,6 +129,10 @@ export default class WorkbenchBrowseController {
     return await this.requestHandler.listSessions(request, signal);
   }
 
+  async controlSession(request: WorkbenchBrowseSessionControlRequest, signal?: AbortSignal) {
+    return await this.runCommand(() => this.requestHandler.controlSession(request, signal));
+  }
+
   async executeBrowseRequest(body: Buffer, signal: AbortSignal) {
     return await this.requestHandler.handle(
       body,
@@ -167,7 +171,7 @@ export default class WorkbenchBrowseController {
           return jsonResponse({ error: "A valid Browse session control request is required." }, 400);
         }
         const payload: WorkbenchBrowseSessionControlRequest = { ...value, action, session };
-        const result = await this.runCommand(() => this.requestHandler.controlSession(payload, signal));
+        const result = await this.controlSession(payload, signal);
         return jsonResponse(result);
       }
       return jsonResponse({ error: "Method not allowed" }, 405);

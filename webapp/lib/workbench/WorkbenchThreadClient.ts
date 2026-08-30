@@ -72,6 +72,7 @@ import type {
     WorkbenchUserInputResponse,
 } from "../types";
 import { normalizeWorkbenchAgentPath } from "./agent-paths";
+import { WorkbenchDaemonRequestError } from "./daemon/WorkbenchDaemonClient";
 import WorkbenchTranscriptClient from "./database/transcript/WorkbenchTranscriptClient";
 import { workbenchTranscriptOperations } from "./database/transcript/workbench-transcript-contract";
 import { areDeeplyEqual } from "./deep-equality";
@@ -869,7 +870,12 @@ function WorkbenchThreadClient(
 
   async function requestWorkbench<TResponse>(method: string, params: unknown) {
     const response = await codexClient.sendRequest<TResponse>({ method, params }, { socketOnly: true });
-    if (isCodexJsonRpcFailure(response)) throw new Error(response.error.message);
+    if (isCodexJsonRpcFailure(response)) {
+      const data = response.error.data && typeof response.error.data === "object" && !Array.isArray(response.error.data)
+        ? response.error.data
+        : null;
+      throw new WorkbenchDaemonRequestError(response.error.message, response.error.code, data);
+    }
     return response.result;
   }
 
@@ -4360,29 +4366,16 @@ function WorkbenchThreadClient(
     try {
       let refreshedThread: ThreadPayload;
       if (harness === "codex") {
-        const response = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
-          method: "thread/resume",
-          params: {
-            excludeTurns: true,
-            initialTurnsPage: CODEX_RESUME_LIFECYCLE_PAGE,
-            ...(selectedModel ? { model: selectedModel } : {}),
-            serviceTier: selectedServiceTier,
-            threadId: resolvedThreadId,
-          } as ThreadResumeParams & { model?: string; serviceTier?: string | null; threadId: string },
-          [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
-            harness,
-            resolvedThreadId,
-            resumedThread.agentPath,
-            workbenchOrigin,
-            sendOptions.instructionInjections,
-            sendOptions.workflowIds,
-          ),
+        const response = await sendBridgeRequest<ThreadReadResponse>(harness, {
+          method: "thread/read",
+          params: { includeTurns: false, threadId: resolvedThreadId },
+          workbenchThreadHydration: { mode: "latest" },
         });
-        refreshedThread = toThreadResumePayload(
-          response,
+        refreshedThread = toThreadPayload(
+          response.thread,
           harness,
-          response.model ?? resumedThread.model,
-          response.reasoningEffort ?? resumedThread.reasoningEffort,
+          selectedModel ?? resumedThread.model,
+          resumedThread.reasoningEffort,
           selectedServiceTier,
           resumedThread.agentPath,
         );
@@ -4557,18 +4550,6 @@ function WorkbenchThreadClient(
     if (canUseSelectedCodexMessageAdmission(thread, sendOptions)) {
       const threadKey = getThreadStateKey("codex", thread.id);
       const admission = await messageAdmissionController.admit(thread.id, normalizedInput, {
-        mergeAndInstallResumedThread: (resumed, expectedSourceRevision) => {
-          if (threadSources.getRevision(threadKey) !== expectedSourceRevision) {
-            return threadSources.get(threadKey);
-          }
-          const merged = mergeLiveStreamingThreadSnapshot(resumed);
-          setThreadStatusSource(merged, merged.status);
-          commitCanonicalThreadSource(merged);
-          if (threadDocuments.getSelectedThreadKey() === threadKey) {
-            flushSelectedThreadRendering();
-          }
-          return threadSources.get(threadKey);
-        },
         projectStartedTurn: ({
           clientUserMessageId,
           input: startedInput,
@@ -4665,14 +4646,6 @@ function WorkbenchThreadClient(
           ),
           params: {},
         },
-        toResumedThread: (response) => toThreadResumePayload(
-          response,
-          "codex",
-          response.model ?? selectedModel,
-          selectedReasoningEffort ?? response.reasoningEffort,
-          selectedServiceTier,
-          selectedAgentPath,
-        ),
       });
       if (admission.kind === "admitted" || admission.kind === "turnStarted") {
         return null;
@@ -4806,45 +4779,52 @@ function WorkbenchThreadClient(
       if (!isSendProjectCurrent() || !isThreadOperationFenceCurrent(preparationFence)) {
         throw new ThreadMessageNotSentError();
       }
-      const resumedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
-        method: "thread/resume",
-        params: {
-          ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
-          ...(operationProjectContext.projectId && harness === "copilot" ? { projectId: operationProjectContext.projectId } : {}),
-          ...(operationProjectContext.projectRootPath && harness !== "codex" ? { cwd: operationProjectContext.projectRootPath } : {}),
-          ...(selectedModel ? { model: selectedModel } : {}),
-          ...(harness === "codex" ? { serviceTier: selectedServiceTier } : {}),
-          ...(usesCodexThreadWindows
-            ? { excludeTurns: true, initialTurnsPage: CODEX_RESUME_LIFECYCLE_PAGE }
-            : {}),
-          threadId: resolvedThreadId,
-        } as ThreadResumeParams & { agentPath?: string; cwd?: string; model?: string; serviceTier?: string | null; threadId: string },
-        ...(harness !== "opencode" && shouldSendWorkbenchPromptContext(harness, sendOptions)
-          ? {
-            [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
-              harness,
-              resolvedThreadId,
-              selectedAgentPath,
-              workbenchOrigin,
-              sendOptions.instructionInjections,
-              sendOptions.workflowIds,
-              harness === "codex" ? "full" : "threadUtilities",
-            ),
-          }
-          : {}),
-      });
-      if (!isSendProjectCurrent() || !isThreadOperationFenceCurrent(preparationFence)) {
-        throw new ThreadMessageNotSentError();
-      }
       const readableThread = toThreadPayload(readableThreadResponse.thread, harness);
-      resumedThread = toThreadResumePayload(
-        resumedThreadResponse,
-        harness,
-        resumedThreadResponse.model ?? selectedModel ?? readableThread.model,
-        selectedReasoningEffort ?? resumedThreadResponse.reasoningEffort ?? readableThread.reasoningEffort,
-        harness === "codex" ? selectedServiceTier : resumedThreadResponse.serviceTier ?? readableThread.serviceTier,
-        selectedAgentPath,
-      );
+      if (harness === "codex") {
+        resumedThread = toThreadPayload(
+          readableThreadResponse.thread,
+          harness,
+          selectedModel ?? readableThread.model,
+          selectedReasoningEffort ?? readableThread.reasoningEffort,
+          selectedServiceTier,
+          selectedAgentPath,
+        );
+      } else {
+        const resumedThreadResponse = await sendBridgeRequest<CodexThreadSessionResponse>(harness, {
+          method: "thread/resume",
+          params: {
+            ...(selectedAgentPath && harness === "copilot" ? { agentPath: selectedAgentPath } : {}),
+            ...(operationProjectContext.projectId && harness === "copilot" ? { projectId: operationProjectContext.projectId } : {}),
+            ...(operationProjectContext.projectRootPath ? { cwd: operationProjectContext.projectRootPath } : {}),
+            ...(selectedModel ? { model: selectedModel } : {}),
+            threadId: resolvedThreadId,
+          } as ThreadResumeParams & { agentPath?: string; cwd?: string; model?: string; threadId: string },
+          ...(harness !== "opencode" && shouldSendWorkbenchPromptContext(harness, sendOptions)
+            ? {
+              [WORKBENCH_PROMPT_CONTEXT_FIELD]: buildWorkbenchPromptContext(
+                harness,
+                resolvedThreadId,
+                selectedAgentPath,
+                workbenchOrigin,
+                sendOptions.instructionInjections,
+                sendOptions.workflowIds,
+                "threadUtilities",
+              ),
+            }
+            : {}),
+        });
+        if (!isSendProjectCurrent() || !isThreadOperationFenceCurrent(preparationFence)) {
+          throw new ThreadMessageNotSentError();
+        }
+        resumedThread = toThreadResumePayload(
+          resumedThreadResponse,
+          harness,
+          resumedThreadResponse.model ?? selectedModel ?? readableThread.model,
+          selectedReasoningEffort ?? resumedThreadResponse.reasoningEffort ?? readableThread.reasoningEffort,
+          resumedThreadResponse.serviceTier ?? readableThread.serviceTier,
+          selectedAgentPath,
+        );
+      }
 
       const currentInProgressTurn = getCurrentInProgressTurn(resumedThread);
       const visibleCurrentTurn = getCurrentTurn(readableThread);

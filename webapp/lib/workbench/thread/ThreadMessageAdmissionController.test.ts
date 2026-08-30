@@ -29,7 +29,6 @@ function setup(
     connect?: () => Promise<void>;
     createClientUserMessageId?: () => string;
     renderSource?: (key: string) => void;
-    resumedThread?: ThreadPayload;
     steerContext?: Record<string, unknown>;
   } = {},
 ) {
@@ -55,10 +54,6 @@ function setup(
     sources,
   });
   const admit = (input: Parameters<typeof controller.admit>[1]) => controller.admit("thread", input, {
-    mergeAndInstallResumedThread: (resumedThread) => {
-      sources.install(resumedThread);
-      return resumedThread;
-    },
     projectStartedTurn: ({ clientUserMessageId, input: startedInput, turn }) => {
       const current = sources.get("codex:thread");
       if (!current) return;
@@ -73,7 +68,6 @@ function setup(
       params: {},
       ...(options.steerContext ? { workbenchPromptContext: options.steerContext } : {}),
     },
-    toResumedThread: () => options.resumedThread ?? { ...thread(), status: "idle", turns: [] },
   });
   return { admit, controller, documents, events, lifecycle, optimisticInputs, sources };
 }
@@ -125,57 +119,63 @@ test("active waiting source admits an ordinary steer", async () => {
   assert.equal((requests[0]?.params as { expectedTurnId?: string }).expectedTurnId, "turn");
 });
 
-test("idle thread resumes once and starts one turn with native identity", async () => {
+test("idle thread sends one managed admission with the exact resume context and native message identity", async () => {
   const requests: Array<{ method: string; params?: unknown }> = [];
   const result = setup(async <TResponse>(message) => {
     requests.push(message);
-    if (message.method === "thread/resume") {
-      return { id: 1, result: { thread: {} } } as CodexJsonRpcResponse<TResponse>;
-    }
     return {
-      id: 2,
-      result: { turn: { ...thread().turns[0]!, id: "new-turn" } },
+      id: 1,
+      result: { kind: "started", turn: { ...thread().turns[0]!, id: "new-turn" } },
     } as CodexJsonRpcResponse<TResponse>;
   });
   result.sources.update("codex:thread", (source) => ({ ...source, status: "idle" }));
 
   const admission = await result.admit([{ text: "new turn", text_elements: [], type: "text" }]);
   assert.equal(admission.kind, "turnStarted");
-  assert.deepEqual(requests.map(({ method }) => method), ["thread/resume", "turn/start"]);
-  assert.equal((requests[1]?.params as { clientUserMessageId?: string }).clientUserMessageId, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  assert.deepEqual(requests.map(({ method }) => method), ["workbench/codex/message/admit"]);
+  const params = requests[0]?.params as {
+    resumeRequest?: { method?: string; params?: { threadId?: string } };
+    startRequest?: { method?: string; params?: { clientUserMessageId?: string; threadId?: string } };
+    steerRequest?: { method?: string };
+    threadId?: string;
+  };
+  assert.equal(params.threadId, "thread");
+  assert.deepEqual(params.resumeRequest, { method: "thread/resume", params: { threadId: "thread" } });
+  assert.equal(params.startRequest?.method, "turn/start");
+  assert.equal(params.startRequest?.params?.clientUserMessageId, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  assert.equal(params.startRequest?.params?.threadId, "thread");
+  assert.equal(params.steerRequest?.method, "turn/steer");
   assert.equal(result.events.at(-1), "accepted:new-turn");
 });
 
-test("idle source churn during resume cannot steer a stale in-progress turn", async () => {
+test("source churn during managed admission does not create a second browser lifecycle path", async () => {
   const requests: Array<{ method: string; params?: unknown }> = [];
   let result: ReturnType<typeof setup>;
   result = setup(async <TResponse>(message) => {
     requests.push(message);
-    if (message.method === "thread/resume") {
-      result.sources.update("codex:thread", (source) => ({ ...source, updatedAt: source.updatedAt + 1 }));
-      return { id: 1, result: { thread: {} } } as CodexJsonRpcResponse<TResponse>;
-    }
-    return { id: 2, result: { turn: { ...thread().turns[0]!, id: "new-turn" } } } as CodexJsonRpcResponse<TResponse>;
+    result.sources.update("codex:thread", (source) => ({ ...source, updatedAt: source.updatedAt + 1 }));
+    return {
+      id: 1,
+      result: { kind: "started", turn: { ...thread().turns[0]!, id: "new-turn" } },
+    } as CodexJsonRpcResponse<TResponse>;
   });
   result.sources.update("codex:thread", (source) => ({ ...source, status: "idle" }));
 
   assert.equal((await result.admit([{ text: "new turn", text_elements: [], type: "text" }])).kind, "turnStarted");
-  assert.deepEqual(requests.map(({ method }) => method), ["thread/resume", "turn/start"]);
+  assert.deepEqual(requests.map(({ method }) => method), ["workbench/codex/message/admit"]);
 });
 
-test("waiting resume candidate steers its in-progress turn", async () => {
+test("managed admission reports a daemon-side active-turn steer as admitted", async () => {
   const requests: string[] = [];
-  const waiting = { ...thread(), status: "active:waitingOnUserInput" };
   const result = setup(async <TResponse>(message) => {
     requests.push(message.method);
-    return message.method === "thread/resume"
-      ? { id: 1, result: { thread: {} } } as CodexJsonRpcResponse<TResponse>
-      : { id: 2, result: { turnId: "turn" } } as CodexJsonRpcResponse<TResponse>;
-  }, { resumedThread: waiting });
+    return { id: 1, result: { kind: "steered", turnId: "turn" } } as CodexJsonRpcResponse<TResponse>;
+  });
   result.sources.update("codex:thread", (source) => ({ ...source, status: "idle", turns: [] }));
 
   assert.equal((await result.admit([{ text: "queued", text_elements: [], type: "text" }])).kind, "admitted");
-  assert.deepEqual(requests, ["thread/resume", "turn/steer"]);
+  assert.deepEqual(requests, ["workbench/codex/message/admit"]);
+  assert.equal(result.events.at(-1), "accepted:turn");
 });
 
 test("active-to-idle drift during connect resumes and starts instead of cancelling", async () => {
@@ -184,9 +184,10 @@ test("active-to-idle drift during connect resumes and starts instead of cancelli
   const methods: string[] = [];
   const result = setup(async <TResponse>(message) => {
     methods.push(message.method);
-    return message.method === "thread/resume"
-      ? { id: 1, result: { thread: {} } } as CodexJsonRpcResponse<TResponse>
-      : { id: 2, result: { turn: { ...thread().turns[0]!, id: "new-turn" } } } as CodexJsonRpcResponse<TResponse>;
+    return {
+      id: 1,
+      result: { kind: "started", turn: { ...thread().turns[0]!, id: "new-turn" } },
+    } as CodexJsonRpcResponse<TResponse>;
   }, { connect: () => connected });
   const admission = result.admit([{ text: "new turn", text_elements: [], type: "text" }]);
   result.sources.update("codex:thread", (source) => ({
@@ -196,7 +197,7 @@ test("active-to-idle drift during connect resumes and starts instead of cancelli
   }));
   release();
   assert.equal((await admission).kind, "turnStarted");
-  assert.deepEqual(methods, ["thread/resume", "turn/start"]);
+  assert.deepEqual(methods, ["workbench/codex/message/admit"]);
 });
 
 test("idle-to-active drift during connect steers the newest turn without resume", async () => {
@@ -247,15 +248,12 @@ test("owner cancellation wins over connect and resume failures before dispatch",
 
   for (const resumeResult of ["transport", "malformed"] as const) {
     let result: ReturnType<typeof setup>;
-    result = setup(async <TResponse>(message) => {
-      if (message.method === "thread/resume") {
-        result.lifecycle.messageAdmissionIntentRevision += 1;
-        if (resumeResult === "transport") {
-          throw new Error("resume failed");
-        }
-        return { id: 1, result: {} } as CodexJsonRpcResponse<TResponse>;
+    result = setup(async <TResponse>() => {
+      result.lifecycle.messageAdmissionIntentRevision += 1;
+      if (resumeResult === "transport") {
+        throw new Error("admission failed");
       }
-      return { id: 2, result: { turn: thread().turns[0] } } as CodexJsonRpcResponse<TResponse>;
+      return { id: 1, result: { kind: "started", turn: {} } } as CodexJsonRpcResponse<TResponse>;
     });
     result.sources.update("codex:thread", (source) => ({ ...source, status: "idle", turns: [] }));
     await assert.rejects(
@@ -296,10 +294,8 @@ test("valid steer acknowledgement after project reset remains admitted", async (
 });
 
 test("malformed turn start acknowledgement fails with the controlled boundary error", async () => {
-  const result = setup(async <TResponse>(message) => (
-    message.method === "thread/resume"
-      ? { id: 1, result: { thread: {} } } as CodexJsonRpcResponse<TResponse>
-      : { id: 2, result: { turn: {} } } as CodexJsonRpcResponse<TResponse>
+  const result = setup(async <TResponse>() => (
+    { id: 1, result: { kind: "started", turn: {} } } as CodexJsonRpcResponse<TResponse>
   ));
   result.sources.update("codex:thread", (source) => ({ ...source, status: "idle", turns: [] }));
 

@@ -26,6 +26,7 @@ import type WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import type WorkbenchBridgeRequestController from "./WorkbenchBridgeRequestController";
 import type WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
 import type WorkbenchCodexInstructionAdapter from "./WorkbenchCodexInstructionAdapter";
+import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import type WorkbenchBrowseController from "./WorkbenchBrowseController";
 import type WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
@@ -108,6 +109,7 @@ export interface OrchestratorRuntimeObjects {
   codexMcpGeneration: WorkbenchCodexMcpGenerationController;
   codexInstructions: WorkbenchCodexInstructionAdapter;
   database: OrchestratorDatabaseRegistration;
+  daemonRequests: WorkbenchDaemonRequestController;
   gitArc: WorkbenchGitArcFeature;
   harnesses: WorkbenchHarnessController;
   legacyMigrationSource: WorkbenchLegacyMigrationSourceController;

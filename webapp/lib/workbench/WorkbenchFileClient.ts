@@ -59,10 +59,13 @@ export interface WorkbenchFileClientOptions {
   emitExplorerStateChange: () => void;
   eventBus: WorkbenchEventBus;
   expandProjectPath: (path: string) => void;
-  fileApiPath?: string;
+  fileTransport: {
+    read(projectId: string, path: string): Promise<FilePayload>;
+    reset(projectId: string, path: string, expectedMtimeMs: number, force?: boolean): Promise<SaveFilePayload | SaveConflictPayload>;
+    save(projectId: string, path: string, content: string, expectedMtimeMs: number, force?: boolean): Promise<SaveFilePayload | SaveConflictPayload>;
+  };
   fileSessionState: FileSessionState;
   getProjectId: () => string;
-  keepEverythingOnSave?: boolean;
   refreshProjectOnSave?: boolean;
   refreshProject: () => Promise<void>;
   sessionState: SessionState;
@@ -106,10 +109,9 @@ function WorkbenchFileClient(
     emitExplorerStateChange,
     eventBus,
     expandProjectPath,
-    fileApiPath = "/api/file",
+    fileTransport,
     fileSessionState: state,
     getProjectId,
-    keepEverythingOnSave = false,
     refreshProjectOnSave = true,
     refreshProject,
     sessionState,
@@ -264,14 +266,12 @@ function WorkbenchFileClient(
 
   async function fetchFilePayload(filePath: string) {
     const projectId = getProjectId();
-    const response = await fetch(`${fileApiPath}?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(filePath)}`, { cache: "no-store" });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to open file." }));
-      editorDocument.refreshStatusMessage(error.error);
+    try {
+      return await fileTransport.read(projectId, filePath);
+    } catch (error) {
+      editorDocument.refreshStatusMessage(error instanceof Error ? error.message : "Unable to open file.");
       return null;
     }
-
-    return await response.json() as FilePayload;
   }
 
   function syncCurrentDraftBuffer() {
@@ -477,48 +477,31 @@ function WorkbenchFileClient(
 
     const filePath = sessionState.currentPath;
     const expectedMtimeMs = state.expectedMtimeMs;
-    const response = await fetch(fileApiPath, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        projectId: getProjectId(),
-        path: filePath,
-        resetToHead: true,
-        expectedMtimeMs,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to reset file to HEAD." }));
-      if (response.status === 409) {
+    if (expectedMtimeMs === null) {
+      editorDocument.refreshStatusMessage("The file must be reloaded before it can be reset.");
+      return;
+    }
+    try {
+      const payload = await fileTransport.reset(getProjectId(), filePath, expectedMtimeMs);
+      if ("actualMtimeMs" in payload) {
         if (sessionState.currentPath === filePath) {
-          state.pendingWriteConflict = error as SaveConflictPayload;
-          eventBus.emit("saveConflictSurfaced", error as SaveConflictPayload);
+          state.pendingWriteConflict = payload;
+          eventBus.emit("saveConflictSurfaced", payload);
           syncCurrentDraftBuffer();
           editorDocument.refreshStatusMessage();
         }
         return;
       }
-
+      if (refreshProjectOnSave) await refreshProject();
       if (sessionState.currentPath === filePath) {
-        editorDocument.refreshStatusMessage(error.error);
+        await openFile(filePath, { ignoreDirty: true, source: "reload" });
+        editorDocument.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
+      } else {
+        await clearDraftBuffer(filePath);
       }
-      return;
+    } catch (error) {
+      if (sessionState.currentPath === filePath) editorDocument.refreshStatusMessage(error instanceof Error ? error.message : "Unable to reset file to HEAD.");
     }
-
-    const payload = (await response.json()) as SaveFilePayload;
-    if (refreshProjectOnSave) {
-      await refreshProject();
-    }
-    if (sessionState.currentPath === filePath) {
-      await openFile(filePath, { ignoreDirty: true, source: "reload" });
-      editorDocument.refreshStatusMessage(`Reset to HEAD - ${formatTimestamp(payload.updatedAt)}`);
-      return;
-    }
-
-    await clearDraftBuffer(filePath);
   }
 
   async function saveCurrentFile({ force = false }: { force?: boolean } = {}) {
@@ -537,88 +520,39 @@ function WorkbenchFileClient(
     const filePath = sessionState.currentPath;
     const expectedMtimeMs = state.expectedMtimeMs;
     const content = inspection.content;
-    const response = await fetch(fileApiPath, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        projectId: getProjectId(),
-        path: filePath,
-        content,
-        ...(keepEverythingOnSave ? { baseContent: state.baselineContent } : {}),
-        expectedMtimeMs,
-        force,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unable to save file." }));
-      if (response.status === 409) {
-        if (sessionState.currentPath === filePath) {
-          state.pendingWriteConflict = error as SaveConflictPayload;
-          eventBus.emit("saveConflictSurfaced", error as SaveConflictPayload);
-          syncCurrentDraftBuffer();
-          editorDocument.refreshStatusMessage();
-        }
-        return;
-      }
-
+    if (expectedMtimeMs === null) {
+      editorDocument.refreshStatusMessage("The file must be reloaded before it can be saved.");
+      return;
+    }
+    let payload: SaveFilePayload | SaveConflictPayload;
+    try {
+      payload = await fileTransport.save(getProjectId(), filePath, content, expectedMtimeMs, force);
+    } catch (error) {
+      if (sessionState.currentPath === filePath) editorDocument.refreshStatusMessage(error instanceof Error ? error.message : "Unable to save file.");
+      return;
+    }
+    if ("actualMtimeMs" in payload) {
       if (sessionState.currentPath === filePath) {
-        editorDocument.refreshStatusMessage(error.error);
+        state.pendingWriteConflict = payload;
+        eventBus.emit("saveConflictSurfaced", payload);
+        syncCurrentDraftBuffer();
+        editorDocument.refreshStatusMessage();
       }
       return;
     }
-
-    const payload = (await response.json()) as SaveFilePayload & { content?: string; headContent?: string | null };
-    const savedContent = typeof payload.content === "string" ? payload.content : content;
-    if (refreshProjectOnSave) {
-      await refreshProject();
-    }
-    let saveReconcileAction: LiveMarkdownReconcileAction["type"] | null = null;
+    if (refreshProjectOnSave) await refreshProject();
     if (sessionState.currentPath === filePath) {
-      if (savedContent !== content && state.mode === "rich") {
-        saveReconcileAction = applyIncomingMarkdownToCurrentFile(savedContent).action;
-      } else {
-        state.currentContent = content;
-        state.baselineContent = savedContent;
-        state.dirty = state.currentContent !== state.baselineContent;
-      }
+      state.currentContent = content;
+      state.baselineContent = content;
+      state.dirty = false;
       state.expectedMtimeMs = payload.mtimeMs;
-      state.headContent = payload.headContent ?? state.headContent;
       clearWriteConflict();
-      if (state.currentContent === state.baselineContent) {
-        state.saveIssue = null;
-      }
-
-      if (!state.dirty) {
-        state.dirty = false;
-        await clearDraftBuffer(filePath);
-      } else {
-        state.dirty = true;
-        syncCurrentDraftBuffer();
-      }
-    } else {
-      const bufferedDraft = draftStore.getBuffer(filePath);
-      if (!bufferedDraft || bufferedDraft.content === savedContent) {
-        await clearDraftBuffer(filePath);
-      }
-    }
-
-    eventBus.emit("saveCompleted", {
-      path: filePath,
-      updatedAt: payload.updatedAt,
-    });
-    if (sessionState.currentPath === filePath) {
-      const saveStatus = savedContent === content || saveReconcileAction === "metadataOnly"
-        ? "Saved"
-        : saveReconcileAction === "appendRemoteTail"
-          ? "Saved with disk append"
-          : saveReconcileAction === "keepLocal"
-            ? "Saved local editor state"
-            : "Updated from disk";
-      editorDocument.refreshStatusMessage(`${saveStatus} - ${formatTimestamp(payload.updatedAt)}`);
+      state.saveIssue = null;
+      await clearDraftBuffer(filePath);
+      editorDocument.refreshStatusMessage(`Saved ${formatTimestamp(payload.updatedAt)}`);
       editorDocument.scheduleDiffGutterRefresh();
+    } else {
+      await clearDraftBuffer(filePath);
     }
     emitExplorerStateChange();
   }

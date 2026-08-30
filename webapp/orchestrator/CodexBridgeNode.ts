@@ -4,6 +4,7 @@
  */
 import CodexStdioBridge from "./CodexStdioBridge";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
+import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
@@ -24,12 +25,15 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const threadState = build.get("threadState");
     const turnRecovery = build.get("turnRecovery");
     let bridge!: CodexStdioBridge;
-    const prepareTurnStart = async (request: import("./bridge-types").JsonRpcRequest) => {
+    const prepareTurnStart = async (
+      request: JsonRpcRequest,
+      requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
+    ) => {
       const threadId = typeof record(request.params)?.threadId === "string" ? String(record(request.params)!.threadId).trim() : "";
       if (!threadId) throw new Error("Codex turn/start requires a thread id before MCP freshness can be checked.");
-      const state = await threadState.getCodexMcpState(threadId);
+      const state = await threadState.getCodexMcpState(threadId, requestProvider);
       const generation = await codexMcpGeneration.prepare(state.generation, async () => {
-        const response = await bridge.handleServerRequest({
+        const response = await requestProvider({
           id: `workbench:mcp-refresh:${codexMcpGeneration.generation}`,
           method: "config/mcpServer/reload",
           params: null,
