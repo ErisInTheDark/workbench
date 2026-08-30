@@ -15,15 +15,7 @@
     <link href="/tab-icons/default.png" rel="icon">
     <link href="/icon" rel="apple-touch-icon">
     <link href="/assets/app.css" rel="stylesheet">
-    <script>
-      try {
-        var theme = window.localStorage.getItem("workbench:theme");
-        document.documentElement.dataset.workbenchTheme =
-          theme === "magical-girl" || theme === "winter" ? theme : "default";
-      } catch {
-        document.documentElement.dataset.workbenchTheme = "default";
-      }
-    </script>
+    <script>document.documentElement.dataset.workbenchTheme = "default";</script>
   </head>
   <body>
     <div id="root"></div>

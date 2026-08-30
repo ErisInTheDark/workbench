@@ -30,6 +30,7 @@
     "react-scan": "0.5.7",
     "tailwindcss": "4.2.2",
     "tsx": "4.21.0",
+    "workbench-shared": "workspace:*",
     "zod": "4.3.6"
   },
   "devDependencies": {

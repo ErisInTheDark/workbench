@@ -15,7 +15,7 @@ import { WorkbenchProjectsPayloadSchema, type WorkbenchProjectStateUpdate } from
 import { areDeeplyEqual } from "./deep-equality";
 import ProjectTreeFileIndex, { type ProjectTreeFileCandidate, type ProjectTreeFileIndex as ProjectTreeFileIndexRecord } from "./project/ProjectTreeFileIndex";
 import reportClientSchemaError from "./report-client-schema-error";
-import { persistExpandedDirectories, readStoredExpandedDirectories } from "./state/browser-state";
+import WorkbenchClientStateController from "./state/WorkbenchClientStateController";
 import { conformToZodSchema } from "./zod-schema-conformer";
 
 export function cloneTreeNodes(nodes: TreeNode[]): TreeNode[] {
@@ -89,15 +89,25 @@ export interface WorkbenchProjectTransport {
 }
 
 export interface WorkbenchProjectClientOptions {
+  clientStateController?: WorkbenchClientStateController;
   onError?: (message: string) => void;
   transport: WorkbenchProjectTransport;
 }
 
-function createInitialProjectState(): WorkbenchProjectState {
+function readExpandedDirectories(controller: WorkbenchClientStateController | undefined, projectId = "") {
+  if (!controller || !projectId) return [];
+  return controller.records("expandedDirectory").flatMap((record) => (
+    record.daemonRegistrationId === controller.daemonRegistrationId && record.projectId === projectId
+      ? [record.path]
+      : []
+  ));
+}
+
+function createInitialProjectState(controller: WorkbenchClientStateController | undefined): WorkbenchProjectState {
   return {
     changes: {},
     currentProjectId: "",
-    expandedDirectories: new Set(readStoredExpandedDirectories()),
+    expandedDirectories: new Set(readExpandedDirectories(controller)),
     fileIndex: ProjectTreeFileIndex.empty,
     hasLoadedProject: false,
     isLoading: false,
@@ -110,12 +120,41 @@ function createInitialProjectState(): WorkbenchProjectState {
   };
 }
 
-function WorkbenchProjectClient({ onError = () => undefined, transport }: WorkbenchProjectClientOptions): WorkbenchProjectClient {
+function WorkbenchProjectClient({
+  clientStateController,
+  onError = () => undefined,
+  transport,
+}: WorkbenchProjectClientOptions): WorkbenchProjectClient {
   const listeners = new Set<WorkbenchProjectListener>();
-  const state = createInitialProjectState();
+  const state = createInitialProjectState(clientStateController);
   let projectRevision = -1;
   let snapshotDirty = true;
   let snapshot: WorkbenchProjectSnapshot | null = null;
+
+  function persistCurrentExpandedDirectories() {
+    if (!clientStateController || !state.currentProjectId) return;
+    const desired = new Set(state.expandedDirectories);
+    const current = clientStateController.records("expandedDirectory").filter((record) => (
+      record.daemonRegistrationId === clientStateController.daemonRegistrationId
+      && record.projectId === state.currentProjectId
+    ));
+    const operations: Promise<unknown>[] = [];
+    for (const record of current) {
+      if (!desired.delete(record.path)) operations.push(clientStateController.delete({
+        daemonRegistrationId: clientStateController.daemonRegistrationId,
+        kind: "expandedDirectory",
+        path: record.path,
+        projectId: state.currentProjectId,
+      }));
+    }
+    for (const path of desired) operations.push(clientStateController.put({
+      daemonRegistrationId: clientStateController.daemonRegistrationId,
+      kind: "expandedDirectory",
+      path,
+      projectId: state.currentProjectId,
+    }));
+    void Promise.all(operations).catch((error: Error) => onError(error.message));
+  }
 
   function buildSnapshot(): WorkbenchProjectSnapshot {
     return {
@@ -255,7 +294,7 @@ function WorkbenchProjectClient({ onError = () => undefined, transport }: Workbe
       state.isLoading = true;
       projectRevision = -1;
     }
-    state.expandedDirectories = new Set(readStoredExpandedDirectories(nextProjectId));
+    state.expandedDirectories = new Set(readExpandedDirectories(clientStateController, nextProjectId));
     emit();
     return () => {
       if (state.currentProjectId !== nextProjectId) return;
@@ -362,7 +401,7 @@ function WorkbenchProjectClient({ onError = () => undefined, transport }: Workbe
       state.expandedDirectories.add(payload.path);
     }
 
-    persistExpandedDirectories(state.expandedDirectories, state.currentProjectId);
+    persistCurrentExpandedDirectories();
     emit();
     return payload.path;
   }
@@ -402,7 +441,7 @@ function WorkbenchProjectClient({ onError = () => undefined, transport }: Workbe
     const initialProject = state.projects.find((project) => project.id === state.currentProjectId) ?? state.projects[0] ?? null;
     if (!state.currentProjectId && initialProject) {
       applyProjectOption(initialProject, { loading: true });
-      state.expandedDirectories = new Set(readStoredExpandedDirectories(state.currentProjectId));
+      state.expandedDirectories = new Set(readExpandedDirectories(clientStateController, state.currentProjectId));
       emit();
     } else if (didRefreshProjectsChange) {
       emit();
@@ -420,7 +459,7 @@ function WorkbenchProjectClient({ onError = () => undefined, transport }: Workbe
       state.expandedDirectories.add(path);
     }
 
-    persistExpandedDirectories(state.expandedDirectories, state.currentProjectId);
+    persistCurrentExpandedDirectories();
     emit();
     return true;
   }
@@ -439,7 +478,7 @@ function WorkbenchProjectClient({ onError = () => undefined, transport }: Workbe
     }
 
     if (didExpand) {
-      persistExpandedDirectories(state.expandedDirectories, state.currentProjectId);
+      persistCurrentExpandedDirectories();
       emit();
     }
 

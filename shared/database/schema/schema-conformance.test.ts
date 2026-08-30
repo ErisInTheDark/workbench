@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { conformSelectedRow } from "./schema-conformance";
-import { booleanInteger, defineTable, enumText, integer, jsonText, publishCurrentTable, text } from "./schema-definition";
+import { conformSelectedRow } from "./schema-conformance.ts";
+import { booleanInteger, defineTable, enumText, integer, jsonText, publishCurrentTable, text } from "./schema-definition.ts";
 
 const table = publishCurrentTable(defineTable("conformance_examples", {
   id: text().primaryKey(),

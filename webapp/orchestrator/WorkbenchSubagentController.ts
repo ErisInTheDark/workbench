@@ -165,7 +165,6 @@ export default class WorkbenchSubagentController {
       const params = isRecord(message.params) ? message.params : {};
       switch (message.method) {
         case "workbench/composerProfiles/read": return { id, result: await this.profileStore.read() };
-        case "workbench/composerProfiles/importLegacy": return { id, result: await this.profileStore.importLegacy(params.profiles) };
         case "workbench/composerProfiles/mutate": return { id, result: await this.profileStore.mutate(params.mutation) };
         case "workbench/subagent/list": return { id, result: await this.list(params) };
         case "workbench/subagent/profiles": return { id, result: await this.profiles(params) };

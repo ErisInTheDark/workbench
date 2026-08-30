@@ -44,11 +44,11 @@ import {
   type ProjectFilePathDisambiguationIndex,
 } from "../../../lib/workbench/project/project-file-path";
 import type { ProjectTreeFileCandidate } from "../../../lib/workbench/project/ProjectTreeFileIndex";
-import {
-  persistThreadLiveActivityOpen,
-  readStoredThreadLiveActivityOpen,
-} from "../../../lib/workbench/state/browser-state";
 import CooperativeRebuildQueue from "../../../lib/workbench/state/CooperativeRebuildQueue";
+import {
+  useWorkbenchClientStateController,
+  useWorkbenchClientStateSnapshot,
+} from "../workbench-client-state-context";
 import {
   buildInlineMentionCandidates,
   buildInlineMentionCandidatesCooperatively,
@@ -675,13 +675,36 @@ export default memo(function ThreadView ({
   thread: ThreadPayload;
   viewInstanceKey?: string;
 }) {
+  const clientStateController = useWorkbenchClientStateController();
+  const clientState = useWorkbenchClientStateSnapshot();
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const [activeThreadId, setActiveThreadId] = useState(selectedThreadId ?? thread.id);
   const [areSettledSubagentsVisible, setAreSettledSubagentsVisible] = useState(false);
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
   const [previousTurnLoadStates, dispatchPreviousTurnLoad] = useReducer(previousTurnLoadReducer, {});
-  const [isLiveActivityOpen, setIsLiveActivityOpen] = useState(readStoredThreadLiveActivityOpen);
+  const [isLiveActivityOpen, setIsLiveActivityOpen] = useState(() => {
+    const preference = clientState.records.find((record) => (
+      record.kind === "globalPreference" && record.preference.key === "threadLiveActivityOpen"
+    ));
+    return preference?.kind === "globalPreference" && typeof preference.preference.value === "boolean"
+      ? preference.preference.value
+      : true;
+  });
+  useEffect(() => {
+    const preference = clientState.records.find((record) => (
+      record.kind === "globalPreference" && record.preference.key === "threadLiveActivityOpen"
+    ));
+    if (preference?.kind === "globalPreference" && typeof preference.preference.value === "boolean") {
+      setIsLiveActivityOpen(preference.preference.value);
+    }
+  }, [clientState.records]);
+  const persistLiveActivityOpen = useCallback((open: boolean) => {
+    void clientStateController.put({
+      kind: "globalPreference",
+      preference: { key: "threadLiveActivityOpen", value: open },
+    });
+  }, [clientStateController]);
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const historySentinelRef = useRef<HTMLDivElement>(null);
@@ -1633,7 +1656,7 @@ export default memo(function ThreadView ({
                   onToggle={(event) => {
                     const nextIsOpen = event.currentTarget.open;
                     setIsLiveActivityOpen(nextIsOpen);
-                    persistThreadLiveActivityOpen(nextIsOpen);
+                    persistLiveActivityOpen(nextIsOpen);
                   }}
                   summary={<span className="thread-thinking-text">{liveActivity.title}</span>}
                   summaryClassName="text-[0.92em] font-medium leading-[1.6]"
@@ -1656,7 +1679,7 @@ export default memo(function ThreadView ({
                 onToggle={(event) => {
                   const nextIsOpen = event.currentTarget.open;
                   setIsLiveActivityOpen(nextIsOpen);
-                  persistThreadLiveActivityOpen(nextIsOpen);
+                  persistLiveActivityOpen(nextIsOpen);
                 }}
                 summaryClassName="text-[0.92em] font-medium leading-[1.6]"
                 summary={<span className="thread-thinking-text">{liveActivity.title}</span>}

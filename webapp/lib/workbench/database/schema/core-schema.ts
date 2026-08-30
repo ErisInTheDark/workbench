@@ -23,13 +23,13 @@ import {
   unique,
   type SelectRow,
   type TableDefinition,
-} from "./schema-definition.ts";
+} from "workbench-shared/database/schema/schema-definition";
 import {
   createTable,
   defineSubsystemHistory,
   defineTableHistory,
   tableVersion,
-} from "./schema-history.ts";
+} from "workbench-shared/database/schema/schema-history";
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({

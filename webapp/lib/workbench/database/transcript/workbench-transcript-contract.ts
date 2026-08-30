@@ -16,8 +16,8 @@ import {
   type DatabaseConformanceIssue,
   type DatabaseConformancePath,
   type DatabaseConformanceResult,
-} from "../schema/schema-conformance.ts";
-import type { SelectRow, TableDefinition } from "../schema/schema-definition.ts";
+} from "workbench-shared/database/schema/schema-conformance";
+import type { SelectRow, TableDefinition } from "workbench-shared/database/schema/schema-definition";
 
 export const transcriptSnapshotTables = Object.freeze({
   threadItems: itemTables.threadItems,

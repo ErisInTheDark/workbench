@@ -7,17 +7,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import http from "node:http";
 import https from "node:https";
-import { createRequire } from "node:module";
 
 import StaticHttpServer, { type StaticHttpServerAddress } from "workbench-shared/http/StaticHttpServer";
 
 import WorkbenchFrontendCompiler from "./WorkbenchFrontendCompiler.ts";
-
-const require = createRequire(import.meta.url);
-const {
-  LAST_PROJECT_LAUNCH_COOKIE_NAME,
-  resolveLastProjectLaunchHref,
-} = require("../webapp/lib/workbench/state/last-project-cookie.ts") as typeof import("../webapp/lib/workbench/state/last-project-cookie.ts");
+import WorkbenchAppStateRoutes from "./state/workbench-app-state-routes.ts";
 
 export interface WorkbenchFrontendBuildOwner {
   readonly outputDirectoryPath: string;
@@ -31,6 +25,7 @@ export interface WorkbenchFrontendServerOptions {
   legacyOrigin?: string;
   onDiagnostic?: (message: string) => void;
   port?: number;
+  stateRoutes?: Pick<WorkbenchAppStateRoutes, "handle">;
 }
 
 const HOP_BY_HOP_HEADERS = new Set([
@@ -79,6 +74,7 @@ export default class WorkbenchFrontendServer {
   private readonly legacyOrigin: URL;
   private readonly onDiagnostic: (message: string) => void;
   private readonly port: number;
+  private readonly stateRoutes: Pick<WorkbenchAppStateRoutes, "handle">;
   private staticServer: StaticHttpServer | null = null;
 
   constructor(options: WorkbenchFrontendServerOptions = {}) {
@@ -90,6 +86,7 @@ export default class WorkbenchFrontendServer {
     }
     this.onDiagnostic = options.onDiagnostic ?? ((message) => console.error(message));
     this.port = options.port ?? 0;
+    this.stateRoutes = options.stateRoutes ?? { handle: async () => false };
   }
 
   async start(): Promise<StaticHttpServerAddress> {
@@ -98,14 +95,7 @@ export default class WorkbenchFrontendServer {
     await this.compiler.startWatching();
     const staticServer = new StaticHttpServer({
       beforeStaticRequest: async ({ request, response, url }) => {
-        if (url.pathname === "/launch" && request.method === "GET") {
-          response.writeHead(307, {
-            "Cache-Control": "private, no-store",
-            Location: resolveLastProjectLaunchHref(parseCookie(request, LAST_PROJECT_LAUNCH_COOKIE_NAME)),
-          });
-          response.end();
-          return true;
-        }
+        if (await this.stateRoutes.handle(request, response, url)) return true;
         if (url.pathname === "/icon" || url.pathname.startsWith("/api/")) {
           await this.proxyLegacyRequest(request, response);
           return true;

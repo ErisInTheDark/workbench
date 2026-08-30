@@ -4,10 +4,11 @@
  * - default WorkbenchAppLaunchLease: hold one OS-released exclusive app process lease. Keywords: app, process, lease, controller.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import Database from "better-sqlite3";
+
+import resolveWorkbenchLibraryRoot from "./workbench-library-root.ts";
 
 export interface WorkbenchAppLaunchLeaseOptions {
   databasePath?: string;
@@ -32,11 +33,7 @@ export default class WorkbenchAppLaunchLease {
   }
 
   static async acquire(options: WorkbenchAppLaunchLeaseOptions = {}) {
-    const workbenchLibraryRoot = path.resolve(
-      options.workbenchLibraryRoot
-        ?? process.env.WORKBENCH_LIBRARY_ROOT?.trim()
-        ?? path.join(os.homedir(), ".workbench"),
-    );
+    const workbenchLibraryRoot = resolveWorkbenchLibraryRoot(options.workbenchLibraryRoot);
     const databasePath = path.resolve(
       options.databasePath ?? path.join(workbenchLibraryRoot, "runtime", "app-launch.sqlite3"),
     );

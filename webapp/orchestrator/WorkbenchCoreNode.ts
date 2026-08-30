@@ -82,7 +82,6 @@ function createHarnessAdapters(context: OrchestratorProcessContext, controller: 
       recovery: createRecoveryCapability("codex", controller),
       serverMethods: [
         "workbench/composerProfiles/read",
-        "workbench/composerProfiles/importLegacy",
         "workbench/composerProfiles/mutate",
         "thread/context/read",
         "thread/name/set",

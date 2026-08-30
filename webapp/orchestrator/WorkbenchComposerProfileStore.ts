@@ -7,7 +7,6 @@ import path from "node:path";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileMutation, WorkbenchComposerProfileStorePayload } from "../lib/types";
 import {
   applyComposerProfileMutation,
-  mergeComposerProfiles,
   normalizeComposerProfile,
   normalizeComposerProfileMutation,
 } from "../lib/workbench/state/composer-profile-state";
@@ -43,16 +42,6 @@ export default class WorkbenchComposerProfileStore {
 
   async read() {
     return payload(normalizeStore(await this.jsonStore.read(this.filePath, EMPTY_STORE)));
-  }
-
-  async importLegacy(values: unknown) {
-    const incoming = Array.isArray(values) ? values.flatMap((value) => normalizeComposerProfile(value) ?? []) : [];
-    await this.jsonStore.update(this.filePath, EMPTY_STORE, (rawCurrent) => {
-      const current = normalizeStore(rawCurrent);
-      const profiles = mergeComposerProfiles(Object.values(current.profiles), incoming);
-      return { profiles: Object.fromEntries(profiles.map((profile) => [profile.id, profile])), version: 1 as const };
-    });
-    return await this.read();
   }
 
   async mutate(value: unknown) {

@@ -6,7 +6,7 @@ import type Database from "better-sqlite3";
 import type {
   ColumnDefinition,
   CurrentTableDefinition,
-} from "../../../lib/workbench/database/schema/schema-definition.ts";
+} from "workbench-shared/database/schema/schema-definition";
 import {
   coreTables,
   evidenceTables,
@@ -26,7 +26,7 @@ import {
   type WorkbenchDatabaseQuery,
   type WorkbenchDatabaseRow,
   type WorkbenchDatabaseRowInFilter,
-} from "../workbench-database-statements.ts";
+} from "workbench-shared/database/workbench-database-statements";
 import {
   transformQuestionnaireEntry,
   transformSteerEntry,

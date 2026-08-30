@@ -91,26 +91,27 @@ export default function ThreadProfilePicker({ agents, canToggleHarness, currentS
     const agent = agents.find(({ path }) => path === profile.agentPath) ?? null;
     const label = getComposerProfileDisplayLabel(profile, agent?.name, model?.displayName);
     const active = selection.kind === "profile" && selection.profileId === profile.id;
-    const cycleEffort = (direction: 1 | -1) => { const efforts = model?.supportedReasoningEfforts ?? []; if (!efforts.length) return; const index = efforts.indexOf(profile.reasoningEffort ?? ""); controller.updateProfile(profile.id, { reasoningEffort: efforts[((index < 0 ? 0 : index) + direction + efforts.length) % efforts.length] ?? null }); };
+    const cycleEffort = (direction: 1 | -1) => { const efforts = model?.supportedReasoningEfforts ?? []; if (!efforts.length) return; const index = efforts.indexOf(profile.reasoningEffort ?? ""); void controller.updateProfile(profile.id, { reasoningEffort: efforts[((index < 0 ? 0 : index) + direction + efforts.length) % efforts.length] ?? null }); };
     const selectFromRow = (event: MouseEvent<HTMLElement>) => { if (!(event.target instanceof HTMLElement) || event.target.closest("button,[contenteditable='plaintext-only']")) return; controller.selectProfile(slot, profile.id); };
     return <article key={profile.id} role="radio" aria-checked={active} tabIndex={0} className={`rounded-[1rem] border px-4 py-3 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft ${active ? "border-text bg-[color-mix(in_srgb,var(--text)_6%,transparent)]" : "border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_98%,transparent)]"}`} onClick={selectFromRow} onKeyDown={(event) => { if (event.key === " " && event.target === event.currentTarget) { event.preventDefault(); controller.selectProfile(slot, profile.id); } }}>
       <div className="flex flex-wrap items-center gap-2">
-        <ProfileNameEditable fallback={label} name={profile.name} onCommit={(name) => controller.updateProfile(profile.id, { name })} />
+        <ProfileNameEditable fallback={label} name={profile.name} onCommit={(name) => { void controller.updateProfile(profile.id, { name }); }} />
         <div className="ml-auto flex items-center gap-2">
-          <ThreadPickerGroupMoveButton direction={profile.scope.kind === "global" ? "down" : "up"} disabled={profile.scope.kind === "project" && profile.agentSource === "project"} label={profile.scope.kind === "global" ? `Move ${label} to this project` : `Promote ${label} globally`} onClick={() => controller.updateProfile(profile.id, { scope: profile.scope.kind === "global" ? { kind: "project", projectId } : { kind: "global" } })} />
-          <button type="button" aria-label={`Remove ${label}`} title={`Remove ${label}`} className={`${iconButtonClassName} hover:!text-danger`} onClick={(event) => { event.stopPropagation(); controller.deleteProfile(profile.id); }}><FileDeleteIcon /></button>
+          <ThreadPickerGroupMoveButton direction={profile.scope.kind === "global" ? "down" : "up"} disabled={profile.scope.kind === "project" && profile.agentSource === "project"} label={profile.scope.kind === "global" ? `Move ${label} to this project` : `Promote ${label} globally`} onClick={() => { void controller.updateProfile(profile.id, { scope: profile.scope.kind === "global" ? { kind: "project", projectId } : { kind: "global" } }); }} />
+          <button type="button" aria-label={`Remove ${label}`} title={`Remove ${label}`} className={`${iconButtonClassName} hover:!text-danger`} onClick={(event) => { event.stopPropagation(); void controller.deleteProfile(profile.id); }}><FileDeleteIcon /></button>
         </div>
       </div>
-      <ProfileDescriptionEditable description={profile.description} onCommit={(description) => controller.updateProfile(profile.id, { description })} />
+      <ProfileDescriptionEditable description={profile.description} onCommit={(description) => { void controller.updateProfile(profile.id, { description }); }} />
       <div className="mt-1.5 flex flex-wrap items-center gap-3 text-muted">
         <span className="text-[0.78em]"><ThreadHarnessControl harness={profile.harness} /></span>
-        <ThreadComposerRibbon agentLabel={agent?.name ?? (profile.agentPath || "Default agent")} currentReasoningEffort={profile.reasoningEffort} isFastModeEnabled={profile.serviceTier === "fast"} isProfilePanelOpen={false} modelLabel={model?.displayName ?? profile.model} profileLabel="" showsFastModeControl={profile.harness === "codex" && Boolean(model?.supportsFastMode)} showsProfileControl={false} showsReasoningEffortControl={Boolean(model?.supportsReasoningEffort && profile.reasoningEffort)} onAgentOpen={() => onAgentOpen(profile.id)} onFastModeToggle={() => controller.updateProfile(profile.id, { serviceTier: profile.serviceTier === "fast" ? null : "fast" })} onModelOpen={() => onModelOpen(profile.id, profile.harness)} onProfileOpen={() => {}} onReasoningEffortCycle={cycleEffort} />
+        <ThreadComposerRibbon agentLabel={agent?.name ?? (profile.agentPath || "Default agent")} currentReasoningEffort={profile.reasoningEffort} isFastModeEnabled={profile.serviceTier === "fast"} isProfilePanelOpen={false} modelLabel={model?.displayName ?? profile.model} profileLabel="" showsFastModeControl={profile.harness === "codex" && Boolean(model?.supportsFastMode)} showsProfileControl={false} showsReasoningEffortControl={Boolean(model?.supportsReasoningEffort && profile.reasoningEffort)} onAgentOpen={() => onAgentOpen(profile.id)} onFastModeToggle={() => { void controller.updateProfile(profile.id, { serviceTier: profile.serviceTier === "fast" ? null : "fast" }); }} onModelOpen={() => onModelOpen(profile.id, profile.harness)} onProfileOpen={() => {}} onReasoningEffortCycle={cycleEffort} />
       </div>
     </article>;
   };
 
   return <section aria-label="Composer profiles">
     <ThreadComposerPickerHeader onClose={onClose} title="Choose a profile" />
+    {snapshot.error ? <p role="alert" className="mt-3 rounded-xl bg-danger-soft px-3 py-2 text-[0.78em] text-danger">{snapshot.error}</p> : null}
     <div role="radiogroup" aria-label="Composer profiles" className="mt-3 grid gap-3">
       <button type="button" role="radio" aria-checked={selection.kind === "custom"} className={`rounded-[1rem] border px-4 py-3 text-left transition ${selection.kind === "custom" ? "border-text bg-[color-mix(in_srgb,var(--text)_6%,transparent)]" : "border-[color-mix(in_srgb,var(--text)_10%,transparent)]"}`} onClick={() => controller.selectCustom(slot, currentSettings)}><span className="block font-semibold text-text">Custom</span><span className="mt-1 block text-[0.78em] leading-[1.6] text-muted">Use independent ribbon settings for this composer.</span></button>
       <p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-muted">Global</p>{globals.map(renderProfile)}
@@ -118,7 +119,11 @@ export default function ThreadProfilePicker({ agents, canToggleHarness, currentS
     </div>
     <div className="mt-4 flex items-center justify-end gap-2 text-[0.78em] text-muted">
       <ThreadHarnessControl canToggle={canToggleHarness} harness={currentSettings.harness} onToggle={onHarnessToggle} />
-      <button type="button" disabled={!currentSettings.model} aria-label="Create profile" title="Create profile" className={`${iconButtonClassName} size-9 disabled:cursor-not-allowed disabled:opacity-40`} onClick={() => { const profile = controller.createProfile({ ...currentSettings, name: "", scope: { kind: "project", projectId } }); controller.selectProfile(slot, profile.id); }}><SparkleIcon /></button>
+      <button type="button" disabled={!currentSettings.model} aria-label="Create profile" title="Create profile" className={`${iconButtonClassName} size-9 disabled:cursor-not-allowed disabled:opacity-40`} onClick={() => {
+        void controller.createProfile({ ...currentSettings, name: "", scope: { kind: "project", projectId } }).then((profile) => {
+          if (profile) controller.selectProfile(slot, profile.id);
+        });
+      }}><SparkleIcon /></button>
     </div>
   </section>;
 }

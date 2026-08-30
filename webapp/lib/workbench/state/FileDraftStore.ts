@@ -2,47 +2,25 @@
  * Exports:
  * - FileDraftStoreSnapshot: readonly projection of shared draft buffers keyed by file path. Keywords: workbench, file, draft, store, snapshot.
  * - FileDraftStoreListener: subscriber signature for shared draft-store updates. Keywords: workbench, file, draft, subscribe.
- * - default FileDraftStore: create the shared project-scoped draft buffer persistence owner. Keywords: workbench, file, draft, IndexedDB, persistence, default export.
+ * - default FileDraftStore: create the shared project-scoped draft buffer persistence owner. Keywords: workbench, file, draft, app state, persistence, default export.
  */
+
+import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 
 import {
     markdownToHtml as renderMarkdownToHtml,
 } from "../markdown/markdown-html-render";
 import type { EditorMode } from "../WorkbenchEditorClient";
 import {
-    cloneEditHistory,
-    normalizeEditHistory,
-    type EditHistoryState,
+    createInitialEditHistory,
 } from "./edit-history";
 import {
     cloneDraftBuffer,
     type DraftBuffer,
 } from "./FileSessionState";
-import workbenchDraftStorage, {
-    FILE_DRAFT_STORE_NAME,
-} from "../storage/workbench-draft-storage";
+import type WorkbenchClientStateController from "./WorkbenchClientStateController";
 
-const DRAFT_DISCARD_TOMBSTONE_STORAGE_KEY = "workbench:file-draft-discard-tombstones:v1";
-const DRAFT_DISCARD_TOMBSTONE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-
-interface PersistedDraftRecord {
-  key: string;
-  projectId: string;
-  path: string;
-  baselineContent: string;
-  content: string;
-  expectedMtimeMs: number | null;
-  headContent: string | null;
-  history?: EditHistoryState | null;
-  mode: EditorMode;
-}
-
-interface DraftDiscardTombstone {
-  discardedAt: number;
-  key: string;
-  path: string;
-  projectId: string;
-}
+type FileDraftRecord = Extract<WorkbenchClientStateRecord, { kind: "fileDraft" }>;
 
 export interface FileDraftStoreSnapshot {
   draftBuffers: Map<string, DraftBuffer>;
@@ -61,88 +39,24 @@ export interface FileDraftStore {
   subscribe: (listener: FileDraftStoreListener) => () => void;
 }
 
-function createDraftRecordKey(projectId: string, filePath: string) {
-  return `${projectId}:${filePath}`;
-}
-
-function readDraftDiscardTombstones() {
-  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
-    return new Map<string, DraftDiscardTombstone>();
-  }
-
-  const records = new Map<string, DraftDiscardTombstone>();
-  const now = Date.now();
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(DRAFT_DISCARD_TOMBSTONE_STORAGE_KEY) ?? "[]") as DraftDiscardTombstone[];
-    for (const record of parsed) {
-      if (
-        !record
-        || typeof record.key !== "string"
-        || typeof record.projectId !== "string"
-        || typeof record.path !== "string"
-        || !Number.isFinite(record.discardedAt)
-      ) {
-        continue;
-      }
-
-      if (now - record.discardedAt > DRAFT_DISCARD_TOMBSTONE_RETENTION_MS) {
-        continue;
-      }
-
-      records.set(record.key, record);
-    }
-  } catch {
-    return records;
-  }
-
-  return records;
-}
-
-function writeDraftDiscardTombstones(records: Map<string, DraftDiscardTombstone>) {
-  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(DRAFT_DISCARD_TOMBSTONE_STORAGE_KEY, JSON.stringify(Array.from(records.values())));
-  } catch {
-    // Draft tombstones are a best-effort guard around IndexedDB cleanup.
-  }
-}
-
-function markDraftDiscardTombstone(projectId: string, filePath: string) {
-  const records = readDraftDiscardTombstones();
-  const key = createDraftRecordKey(projectId, filePath);
-  records.set(key, {
-    discardedAt: Date.now(),
-    key,
-    path: filePath,
-    projectId,
-  });
-  writeDraftDiscardTombstones(records);
-}
-
-function clearDraftDiscardTombstone(projectId: string, filePath: string) {
-  const records = readDraftDiscardTombstones();
-  const key = createDraftRecordKey(projectId, filePath);
-  if (!records.delete(key)) {
-    return;
-  }
-
-  writeDraftDiscardTombstones(records);
-}
-
-function buildPersistedDraftRecord(projectId: string, filePath: string, buffer: DraftBuffer): PersistedDraftRecord {
+function buildPersistedDraftRecord(
+  controller: WorkbenchClientStateController,
+  projectId: string,
+  filePath: string,
+  buffer: DraftBuffer,
+): FileDraftRecord {
   return {
-    key: createDraftRecordKey(projectId, filePath),
+    daemonRegistrationId: controller.daemonRegistrationId,
+    kind: "fileDraft",
     projectId,
     path: filePath,
-    baselineContent: buffer.baselineContent,
-    content: buffer.content,
-    expectedMtimeMs: buffer.expectedMtimeMs,
-    headContent: buffer.headContent,
-    history: cloneEditHistory(buffer.history),
-    mode: buffer.mode,
+    value: {
+      baselineContent: buffer.baselineContent,
+      content: buffer.content,
+      expectedMtimeMs: buffer.expectedMtimeMs,
+      headContent: buffer.headContent,
+      mode: buffer.mode,
+    },
   };
 }
 
@@ -161,6 +75,8 @@ function cloneDraftBuffers(draftBuffers: Map<string, DraftBuffer>) {
 function FileDraftStore(
   getProjectId: () => string,
   onChange: () => void = () => {},
+  clientStateController?: WorkbenchClientStateController,
+  onPersistenceError: (message: string) => void = () => {},
 ): FileDraftStore {
   const listeners = new Set<FileDraftStoreListener>();
   let draftBuffers = new Map<string, DraftBuffer>();
@@ -187,41 +103,47 @@ function FileDraftStore(
     };
   }
 
-  async function getPersistedDraftRecords() {
+  function getPersistedDraftRecords() {
+    if (!clientStateController) {
+      return [];
+    }
     const projectId = getProjectId();
-    const records = await workbenchDraftStorage.getAll<PersistedDraftRecord>(FILE_DRAFT_STORE_NAME);
-    return records.filter((record) => record.projectId === projectId);
-  }
-
-  async function putPersistedDraftRecord(record: PersistedDraftRecord) {
-    await workbenchDraftStorage.put(FILE_DRAFT_STORE_NAME, record);
-  }
-
-  async function deletePersistedDraftRecord(projectId: string, filePath: string) {
-    await workbenchDraftStorage.delete(FILE_DRAFT_STORE_NAME, createDraftRecordKey(projectId, filePath));
+    return clientStateController.records("fileDraft").filter((record) => (
+      record.daemonRegistrationId === clientStateController.daemonRegistrationId
+      && record.projectId === projectId
+    ));
   }
 
   function enqueueDraftPersistence(operation: () => Promise<void>) {
-    draftPersistenceQueue = draftPersistenceQueue
-      .catch(() => {
-        // Keep later persistence operations flowing after a transient failure.
-      })
-      .then(operation);
-
-    return draftPersistenceQueue;
+    const result = draftPersistenceQueue.then(operation);
+    draftPersistenceQueue = result.catch((error) => {
+      onPersistenceError(error instanceof Error ? error.message : "Workbench could not persist the file draft.");
+    });
+    return result;
   }
 
   function persistDraftBuffer(filePath: string, buffer: DraftBuffer | null) {
     const projectId = getProjectId();
+    if (!clientStateController) {
+      return Promise.resolve();
+    }
     return enqueueDraftPersistence(async () => {
       if (!buffer || !buffer.dirty) {
-        markDraftDiscardTombstone(projectId, filePath);
-        await deletePersistedDraftRecord(projectId, filePath);
+        await clientStateController.delete({
+          daemonRegistrationId: clientStateController.daemonRegistrationId,
+          kind: "fileDraft",
+          path: filePath,
+          projectId,
+        });
         return;
       }
 
-      clearDraftDiscardTombstone(projectId, filePath);
-      await putPersistedDraftRecord(buildPersistedDraftRecord(projectId, filePath, buffer));
+      await clientStateController.put(buildPersistedDraftRecord(
+        clientStateController,
+        projectId,
+        filePath,
+        buffer,
+      ));
     });
   }
 
@@ -251,28 +173,17 @@ function FileDraftStore(
   }
 
   async function hydratePersistedDrafts() {
-    const records = await getPersistedDraftRecords();
-    const tombstones = readDraftDiscardTombstones();
-    const staleDiscardedRecords: PersistedDraftRecord[] = [];
-    const draftEntries = records
-      .filter((record) => {
-        const isDiscarded = tombstones.has(createDraftRecordKey(record.projectId, record.path));
-        if (isDiscarded) {
-          staleDiscardedRecords.push(record);
-        }
-
-        return !isDiscarded;
-      })
+    const draftEntries = getPersistedDraftRecords()
       .map((record) => {
         const buffer: DraftBuffer = {
-          baselineContent: record.baselineContent,
-          content: record.content,
-          dirty: record.content !== record.baselineContent,
-          editorState: createEditorStateFromContent(record.content, record.mode),
-          expectedMtimeMs: record.expectedMtimeMs,
-          headContent: record.headContent ?? null,
-          history: normalizeEditHistory(record.history ?? null, record.content),
-          mode: record.mode,
+          baselineContent: record.value.baselineContent,
+          content: record.value.content,
+          dirty: record.value.content !== record.value.baselineContent,
+          editorState: createEditorStateFromContent(record.value.content, record.value.mode),
+          expectedMtimeMs: record.value.expectedMtimeMs,
+          headContent: record.value.headContent,
+          history: createInitialEditHistory(record.value.content),
+          mode: record.value.mode,
           pendingWriteConflict: null,
           saveIssue: null,
         };
@@ -282,10 +193,6 @@ function FileDraftStore(
 
     draftBuffers = new Map(draftEntries);
     emit();
-
-    for (const record of staleDiscardedRecords) {
-      void persistDraftBuffer(record.path, null);
-    }
   }
 
   function getLocallyModifiedPaths() {

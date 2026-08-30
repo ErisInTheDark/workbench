@@ -30,6 +30,7 @@ import type { TurnStartParams } from "../codex/generated/app-server/v2/TurnStart
 import type { TurnStartResponse } from "../codex/generated/app-server/v2/TurnStartResponse";
 import type { TurnSteerResponse } from "../codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../codex/generated/app-server/v2/UserInput";
+import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 import {
     createQuestionnaireCollaborationMode,
     createTextInput,
@@ -78,24 +79,9 @@ import {
     getThreadStateChangeTagText as getNormalizedThreadStateChangeTagText,
 } from "./markdown/markdown-parse";
 import LifecycleScope from "./state/LifecycleScope";
+import WorkbenchClientStateController from "./state/WorkbenchClientStateController";
 import ThreadDocumentStore from "./state/ThreadDocumentStore";
 import ThreadSourceStore from "./state/ThreadSourceStore";
-import {
-    clearStoredThreadTokenUsage,
-    persistHarnessAgent,
-    persistHarnessModel,
-    persistHarnessModelEffort,
-    persistHarnessServiceTier,
-    persistThreadServiceTier,
-    persistThreadTokenUsage,
-    readLocalWorkbenchOrigin,
-    readStoredHarnessAgent,
-    readStoredHarnessModel,
-    readStoredHarnessModelEffort,
-    readStoredHarnessServiceTier,
-    readStoredThreadServiceTier,
-    readStoredThreadTokenUsage,
-} from "./state/browser-state";
 import ThreadCanonicalLayer from "./thread/ThreadCanonicalLayer";
 import ThreadGoalController from "./thread/ThreadGoalController";
 import ThreadMessageAdmissionController from "./thread/ThreadMessageAdmissionController";
@@ -147,6 +133,21 @@ const CODEX_RESUME_LIFECYCLE_PAGE = {
 const DEFAULT_WORKFLOW_IDS = ["default"] as const;
 const SUBAGENT_WORKFLOW_IDS = ["subagent"] as const;
 const DRAFT_THREAD_ID = "new";
+
+function readLocalWorkbenchOrigin() {
+  const explicitOrigin = process.env.NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN?.trim();
+  if (explicitOrigin) {
+    return explicitOrigin.replace(/\/$/u, "");
+  }
+
+  try {
+    const currentUrl = new URL(window.location.href);
+    const port = currentUrl.port || (currentUrl.protocol === "https:" ? "443" : "80");
+    return `http://127.0.0.1:${port}`;
+  } catch {
+    return null;
+  }
+}
 
 function isApprovalUserInputRequest(request: WorkbenchUserInputRequest) {
   return request.approval !== undefined || isWorkbenchApprovalRequest(request);
@@ -217,6 +218,7 @@ export interface WorkbenchAcceptedIntent {
 }
 
 export interface WorkbenchThreadClientOptions {
+  clientStateController?: WorkbenchClientStateController;
   onStatusMessage?: (message: string) => void;
   onThreadStarted?: (thread: ThreadPayload) => void;
   publishAcceptedIntent?: (event: WorkbenchAcceptedIntent) => Promise<void>;
@@ -781,6 +783,88 @@ function WorkbenchThreadClient(
   options: WorkbenchThreadClientOptions = {},
   lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchThreadClient {
+  const clientStateController = options.clientStateController;
+  const readHarnessPreference = (harness: WorkbenchHarness) => (
+    clientStateController?.records("harnessPreference").find((record) => (
+      record.daemonRegistrationId === clientStateController.daemonRegistrationId
+      && record.harness === harness
+    ))
+  );
+  const persistHarnessPreference = (
+    harness: WorkbenchHarness,
+    changes: Partial<Pick<
+      Extract<WorkbenchClientStateRecord, { kind: "harnessPreference" }>,
+      "agentPath" | "model" | "serviceTier"
+    >>,
+  ) => {
+    if (!clientStateController) return;
+    const current = readHarnessPreference(harness);
+    void clientStateController.put({
+      agentPath: current?.agentPath ?? null,
+      daemonRegistrationId: clientStateController.daemonRegistrationId,
+      harness,
+      kind: "harnessPreference",
+      model: current?.model ?? null,
+      serviceTier: current?.serviceTier ?? null,
+      ...changes,
+    }).catch((error: Error) => options.onStatusMessage?.(error.message));
+  };
+  const readStoredHarnessAgent = (harness: WorkbenchHarness) => readHarnessPreference(harness)?.agentPath ?? null;
+  const readStoredHarnessModel = (harness: WorkbenchHarness) => readHarnessPreference(harness)?.model ?? null;
+  const readStoredHarnessServiceTier = (harness: WorkbenchHarness) => readHarnessPreference(harness)?.serviceTier ?? null;
+  const persistHarnessAgent = (harness: WorkbenchHarness, agentPath: string | null) => {
+    persistHarnessPreference(harness, { agentPath });
+  };
+  const persistHarnessModel = (harness: WorkbenchHarness, model: string | null) => {
+    persistHarnessPreference(harness, { model });
+  };
+  const persistHarnessServiceTier = (harness: WorkbenchHarness, serviceTier: "fast" | null) => {
+    persistHarnessPreference(harness, { serviceTier });
+  };
+  const readStoredHarnessModelEffort = (harness: WorkbenchHarness, model: string | null) => {
+    if (!clientStateController || !model) return null;
+    return clientStateController.records("modelEffort").find((record) => (
+      record.daemonRegistrationId === clientStateController.daemonRegistrationId
+      && record.harness === harness
+      && record.model === model
+    ))?.reasoningEffort ?? null;
+  };
+  const persistHarnessModelEffort = (
+    harness: WorkbenchHarness,
+    model: string,
+    reasoningEffort: string | null,
+  ) => {
+    if (!clientStateController) return;
+    void clientStateController.put({
+      daemonRegistrationId: clientStateController.daemonRegistrationId,
+      harness,
+      kind: "modelEffort",
+      model,
+      reasoningEffort,
+    }).catch((error: Error) => options.onStatusMessage?.(error.message));
+  };
+  const readStoredThreadServiceTier = (harness: WorkbenchHarness, threadId: string) => {
+    if (!clientStateController) return undefined;
+    return clientStateController.records("threadServiceTier").find((record) => (
+      record.daemonRegistrationId === clientStateController.daemonRegistrationId
+      && record.harness === harness
+      && record.threadId === threadId
+    ))?.serviceTier;
+  };
+  const persistThreadServiceTier = (
+    harness: WorkbenchHarness,
+    threadId: string,
+    serviceTier: string | null,
+  ) => {
+    if (!clientStateController) return;
+    void clientStateController.put({
+      daemonRegistrationId: clientStateController.daemonRegistrationId,
+      harness,
+      kind: "threadServiceTier",
+      serviceTier: serviceTier === "fast" ? "fast" : null,
+      threadId,
+    }).catch((error: Error) => options.onStatusMessage?.(error.message));
+  };
   const codexClient = new CodexAppServerClient();
 
   async function requestWorkbench<TResponse>(method: string, params: unknown) {
@@ -1221,9 +1305,7 @@ function WorkbenchThreadClient(
     const model = thread.model ?? record.model;
     const reasoningEffort = thread.reasoningEffort ?? record.reasoningEffort;
     const serviceTier = thread.serviceTier ?? record.serviceTier;
-    const tokenUsage = thread.tokenUsage
-      ?? readStoredThreadTokenUsage(thread.harness, thread.id)
-      ?? record.tokenUsage;
+    const tokenUsage = thread.tokenUsage ?? record.tokenUsage;
     if (
       record.agentNickname === agentNickname
       && record.agentPath === agentPath
@@ -1833,8 +1915,7 @@ function WorkbenchThreadClient(
       return thread;
     }
 
-    const tokenUsage = readStoredThreadTokenUsage(thread.harness, thread.id);
-    return tokenUsage ? { ...thread, tokenUsage } : thread;
+    return thread;
   }
 
   function isWorkbenchSyntheticUserMessageItem(item: ThreadItem) {
@@ -4046,7 +4127,6 @@ function WorkbenchThreadClient(
           name: notification.params.threadName ?? null,
         });
       case "thread/tokenUsage/updated":
-        persistThreadTokenUsage(harness, notification.params.threadId, notification.params.tokenUsage);
         updateStablePreferenceSource(state.currentThread, (record) => {
           record.tokenUsage = notification.params.tokenUsage;
         });
@@ -5529,7 +5609,6 @@ function WorkbenchThreadClient(
     if (!isProjectOperationIdentityCurrent(projectIdentity)) {
       return thread;
     }
-    clearStoredThreadTokenUsage(thread.harness, thread.id);
     if (state.currentThread?.id === thread.id && state.currentThread.harness === thread.harness) {
       updateStablePreferenceSource(state.currentThread, (record) => {
         record.tokenUsage = null;

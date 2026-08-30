@@ -3,10 +3,19 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./database/schema/schema-conformance": "./database/schema/schema-conformance.ts",
+    "./database/schema/schema-definition": "./database/schema/schema-definition.ts",
+    "./database/schema/schema-history": "./database/schema/schema-history.ts",
+    "./database/workbench-database-statements": "./database/workbench-database-statements.ts",
+    "./state/workbench-app-state-schema": "./state/workbench-app-state-schema.ts",
+    "./state/workbench-client-state-projection": "./state/workbench-client-state-projection.ts",
+    "./state/workbench-client-state": "./state/workbench-client-state.ts",
     "./http/StaticHttpServer": "./http/StaticHttpServer.ts"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
     "@types/node": "^25.6.0",
+    "better-sqlite3": "13.0.3",
     "typescript": "^6.0.2"
   }
 }

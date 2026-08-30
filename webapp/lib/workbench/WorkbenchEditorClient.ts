@@ -65,13 +65,17 @@ import {
     isSameSaveGuardIssue,
     logSaveGuardIssue,
 } from "./markdown/save-guard-inspection";
-import { MAX_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, persistFontSize, readStoredFontSize } from "./state/browser-state";
 import type { EditHistorySelection } from "./state/edit-history";
 import type { EditHistoryReplayRequest } from "./state/EditHistoryManager";
 import type EditorDocumentAdapter from "./state/EditorDocumentAdapter";
 import type FileSessionState from "./state/FileSessionState";
 import LifecycleScope from "./state/LifecycleScope";
 import type SessionState from "./state/SessionState";
+import {
+    DEFAULT_EDITOR_FONT_SIZE,
+    MAX_EDITOR_FONT_SIZE,
+    MIN_EDITOR_FONT_SIZE,
+} from "./state/workbench-settings";
 import type { WorkbenchEditorDomSurfaces } from "./workbench-dom";
 
 const DEFAULT_STATUS_MESSAGE = "Markdown files open as rich text. Save with Ctrl/Cmd+S.";
@@ -241,14 +245,14 @@ interface WorkbenchEditorClient {
 
 export function createInitialEditorUIStateSnapshot(): EditorUIStateSnapshot {
   return {
-    fontSize: readStoredFontSize(),
+    fontSize: DEFAULT_EDITOR_FONT_SIZE,
     statusMessage: DEFAULT_STATUS_MESSAGE,
   };
 }
 
 function createInitialEditorState(): EditorUIState {
   return {
-    fontSize: readStoredFontSize(),
+    fontSize: DEFAULT_EDITOR_FONT_SIZE,
     statusMessage: DEFAULT_STATUS_MESSAGE,
     threadLabel: "",
   };
@@ -1499,7 +1503,7 @@ function WorkbenchEditorClient(
     setFontSize(nextFontSize);
   }
 
-  function setFontSize(fontSize: number, setOptions: { persist?: boolean } = {}) {
+  function setFontSize(fontSize: number, _setOptions: { persist?: boolean } = {}) {
     const nextFontSize = Math.min(
       MAX_EDITOR_FONT_SIZE,
       Math.max(MIN_EDITOR_FONT_SIZE, Number(fontSize.toFixed(2))),
@@ -1509,9 +1513,6 @@ function WorkbenchEditorClient(
     }
 
     state.fontSize = nextFontSize;
-    if (setOptions.persist !== false) {
-      persistFontSize(state.fontSize);
-    }
     applyEditorFontSize();
     emit();
   }

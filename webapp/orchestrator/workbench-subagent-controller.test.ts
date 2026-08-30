@@ -180,7 +180,7 @@ test("creates with one client and delivers a steer before empty questionnaire re
     subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
-  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
+  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/mutate", params: { mutation: { kind: "upsert", profile: profile() } } });
   const profiles = await controller.handleRequest({ id: 2, method: "workbench/subagent/profiles", params: { cwd } });
   assert.deepEqual(profiles, { id: 2, result: { profiles: [profile()] } });
   const created = await controller.handleRequest({
@@ -288,7 +288,7 @@ test("starts an idle direct parent through the pre-reload store surface", async 
     subagentStore: createPreReloadStoreSurface(subagentStore),
   });
 
-  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
+  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/mutate", params: { mutation: { kind: "upsert", profile: profile() } } });
   assert.deepEqual(await controller.handleRequest({
     id: 2,
     method: "workbench/subagent/create",
@@ -332,7 +332,7 @@ test("starts an idle child with attributed parent-agent input", async (context) 
     subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
-  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
+  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/mutate", params: { mutation: { kind: "upsert", profile: profile() } } });
   assert.deepEqual(await controller.handleRequest({
     id: 2,
     method: "workbench/subagent/create",
@@ -371,7 +371,7 @@ test("steers an active direct parent and rejects callers without a relationship"
     subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
-  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
+  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/mutate", params: { mutation: { kind: "upsert", profile: profile() } } });
   assert.deepEqual(await controller.handleRequest({
     id: 2,
     method: "workbench/subagent/create",
@@ -413,7 +413,7 @@ test("keeps relationship storage independent from lifecycle through create, mess
     subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
-  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
+  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/mutate", params: { mutation: { kind: "upsert", profile: profile() } } });
   const created = await controller.handleRequest({
     id: 2,
     method: "workbench/subagent/create",
@@ -458,7 +458,7 @@ test("keeps a created child durable when its first turn fails to start", async (
     subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
-  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/importLegacy", params: { profiles: [profile()] } });
+  await controller.handleRequest({ id: 1, method: "workbench/composerProfiles/mutate", params: { mutation: { kind: "upsert", profile: profile() } } });
   const created = await controller.handleRequest({
     id: 2,
     method: "workbench/subagent/create",

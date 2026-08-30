@@ -38,14 +38,11 @@ import {
     isWorkbenchRouteOwnerOfThread,
     type WorkbenchRoute,
 } from "./workbench/navigation/workbench-route";
-import {
-    readStoredHarness,
-    readStoredFontSize,
-} from "./workbench/state/browser-state";
 import FileDraftStore from "./workbench/state/FileDraftStore";
-import { persistLastProjectLaunch } from "./workbench/state/last-project-cookie";
+import WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import SessionState from "./workbench/state/SessionState";
+import { DEFAULT_EDITOR_FONT_SIZE } from "./workbench/state/workbench-settings";
 import {
     type WorkbenchEditorDomSurfaces,
     type WorkbenchDomSurfaces,
@@ -67,6 +64,24 @@ type MountedWorkbenchControls = WorkbenchControls & {
     options?: Partial<Omit<WorkbenchFilePanelClientOptions, "clearThreadSelection" | "draftStore" | "emitExplorerStateChange" | "expandProjectPath" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>,
   ) => ReturnType<typeof WorkbenchFilePanelClient>;
 };
+
+function readInitialEditorFontSize(controller?: WorkbenchClientStateController) {
+  const record = controller?.records("globalPreference").find((candidate) => (
+    candidate.preference.key === "editorFontSize"
+  ));
+  return record?.preference.key === "editorFontSize"
+    ? record.preference.value
+    : DEFAULT_EDITOR_FONT_SIZE;
+}
+
+function readInitialHarness(controller?: WorkbenchClientStateController): WorkbenchHarness {
+  const record = controller?.records("globalPreference").find((candidate) => (
+    candidate.preference.key === "harness"
+  ));
+  return record?.preference.key === "harness"
+    ? record.preference.value
+    : "codex";
+}
 
 function areThreadSummariesEquivalent(left: ThreadSummary, right: ThreadSummary) {
   return left.id === right.id
@@ -223,7 +238,10 @@ export async function requestWorkbenchReload(
 }
 
 export async function WorkbenchClient(
-  bindings: WorkbenchBindings & { dom?: WorkbenchDomSurfaces | null } = {},
+  bindings: WorkbenchBindings & {
+    clientStateController?: WorkbenchClientStateController;
+    dom?: WorkbenchDomSurfaces | null;
+  } = {},
 ): Promise<() => void> {
   const { ...workbenchBindings } = bindings;
 
@@ -237,6 +255,7 @@ export async function WorkbenchClient(
     throw new Error("The thread sidebar coordinator is not ready.");
   };
   const threadClient = WorkbenchThreadClient({
+    clientStateController: workbenchBindings.clientStateController,
     onStatusMessage: (message) => {
       reportStatusMessage(message);
     },
@@ -249,6 +268,7 @@ export async function WorkbenchClient(
     publishAcceptedIntent: (event) => coordinateAcceptedIntent(event),
   });
   const projectClient = WorkbenchProjectClient({
+    clientStateController: workbenchBindings.clientStateController,
     onError: (message) => reportStatusMessage(message),
     transport: {
       createEntry: async (projectId, parentPath, name, type) => WorkbenchCreateEntryResultSchema.parse(await threadClient.requestWorkbench("workbench/thread-state/project/entry/create", { name, parentPath, projectId, type })),
@@ -327,6 +347,8 @@ export async function WorkbenchClient(
   const draftStore = FileDraftStore(
     () => projectClient.getSnapshot().currentProjectId,
     emitExplorerStateChange,
+    workbenchBindings.clientStateController,
+    (message) => reportStatusMessage(message),
   );
   let activeFilePath = "";
   let activeProjectId = projectClient.getSnapshot().currentProjectId;
@@ -450,7 +472,7 @@ export async function WorkbenchClient(
       expandedDirectories: projectSnapshot.expandedDirectories,
       locallyModifiedPaths: getLocallyModifiedPaths(),
       threadsError: threadSnapshot.threadsError,
-      fontSize: readStoredFontSize(),
+      fontSize: readInitialEditorFontSize(workbenchBindings.clientStateController),
       workbenchStorageRootPath: projectSnapshot.workbenchStorageRootPath,
     };
   }
@@ -655,7 +677,7 @@ export async function WorkbenchClient(
     }
 
     if (threadClient.isDraftThreadId(threadId)) {
-      const draftThread = threadClient.createThread(harness ?? readStoredHarness(), threadId, { entries, project });
+      const draftThread = threadClient.createThread(harness ?? readInitialHarness(workbenchBindings.clientStateController), threadId, { entries, project });
       applyThreadPayloadToCurrentView(draftThread);
       emitExplorerStateChange();
       return true;
@@ -746,7 +768,7 @@ export async function WorkbenchClient(
     try {
       await draftStore.clearBuffer(filePath);
     } catch {
-      reportStatusMessage("The file was deleted, but its persisted Workbench draft could not be removed from browser storage.");
+      reportStatusMessage("The file was deleted, but its persisted Workbench draft could not be removed from app storage.");
     }
     if (activeFilePath === filePath) {
       activeFilePath = "";
@@ -806,7 +828,13 @@ export async function WorkbenchClient(
 
     const nextProjectId = projectClient.getSnapshot().currentProjectId;
     if (!route.projectId && nextProjectId) await threadSidebarClient.open(nextProjectId);
-    if (nextProjectId) persistLastProjectLaunch(nextProjectId);
+    if (nextProjectId && workbenchBindings.clientStateController) {
+      void workbenchBindings.clientStateController.put({
+        daemonRegistrationId: workbenchBindings.clientStateController.daemonRegistrationId,
+        kind: "lastLaunchTarget",
+        projectId: nextProjectId,
+      }).catch((error: Error) => reportStatusMessage(error.message));
+    }
     if (nextProjectId && previousProjectId !== nextProjectId) {
       await draftStore.hydratePersistedDrafts();
     }

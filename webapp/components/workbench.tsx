@@ -78,10 +78,6 @@ import {
 } from "../lib/workbench/navigation/workbench-route";
 import ProjectTreeFileIndex from "../lib/workbench/project/ProjectTreeFileIndex";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
-import {
-  persistHarness,
-  readStoredHarness,
-} from "../lib/workbench/state/browser-state";
 import { createComposerProfilePersistence } from "../lib/workbench/state/composer-profile-api";
 import {
   getPreferredMobilePane,
@@ -104,14 +100,6 @@ import {
   type WorkbenchSettingKey,
 } from "../lib/workbench/state/workbench-settings";
 import WorkbenchComposerProfileController from "../lib/workbench/state/WorkbenchComposerProfileController";
-import {
-  deletePersistedThreadComposerDraft,
-  deletePersistedThreadQuestionnaireDraft,
-  getPersistedThreadComposerDraftRecords,
-  getPersistedThreadQuestionnaireDraftRecords,
-  putPersistedThreadComposerDraft,
-  putPersistedThreadQuestionnaireDraft,
-} from "../lib/workbench/storage/workbench-draft-storage";
 import { getThreadDocumentFromSnapshot } from "../lib/workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../lib/workbench/thread/thread-message-submission";
 import { countDraftPromptTokens, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../lib/workbench/thread/thread-state";
@@ -176,6 +164,10 @@ import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContex
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
+import {
+  useWorkbenchClientStateController,
+  useWorkbenchClientStateSnapshot,
+} from "./workbench/workbench-client-state-context";
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
@@ -507,11 +499,11 @@ function pruneResolvedUserInputRequestKeys (
 }
 
 export default function Workbench () {
-  const [composerProfileController] = useState(() => new WorkbenchComposerProfileController());
+  const clientStateController = useWorkbenchClientStateController();
+  const clientState = useWorkbenchClientStateSnapshot();
+  const [composerProfileController] = useState(() => new WorkbenchComposerProfileController(clientStateController));
   useEffect(() => {
-    void composerProfileController.initializePersistence(createComposerProfilePersistence()).catch(() => {
-      // The local outbox retains mutations until the stateless profile route is available again.
-    });
+    void composerProfileController.initializePersistence(createComposerProfilePersistence());
 
     return () => {
       composerProfileController.dispose();
@@ -530,13 +522,11 @@ export default function Workbench () {
   const [selectionError, setSelectionError] = useState("");
   const [rateLimits, setRateLimits] = useState<RateLimitSnapshot | null>(null);
   const [controls, setControls] = useState<WorkbenchControls | null>(null);
-  const [harness, setHarness] = useState<WorkbenchHarness>(() => {
-    if (typeof window === "undefined") {
-      return "codex";
-    }
-
-    return readStoredHarness();
-  });
+  const [harness, setHarness] = useState<WorkbenchHarness>(() => (
+    clientStateController.records("globalPreference").find((record) => (
+      record.preference.key === "harness"
+    ))?.preference.value as WorkbenchHarness | undefined
+  ) ?? "codex");
   const [isMobile, setIsMobile] = useState(false);
   const [mobileShellHeaderHeight, setMobileShellHeaderHeight] = useState(0);
   const [isMobileShellHeaderVisible, setIsMobileShellHeaderVisible] = useState(true);
@@ -546,13 +536,9 @@ export default function Workbench () {
   const [isDeletingFile, setIsDeletingFile] = useState(false);
   const [deleteDialogError, setDeleteDialogError] = useState("");
   const [projectActionError, setProjectActionError] = useState("");
-  const [globalSettings, setGlobalSettings] = useState<WorkbenchGlobalSettings>(() => {
-    if (typeof window === "undefined") {
-      return readGlobalWorkbenchSettings();
-    }
-
-    return readGlobalWorkbenchSettings();
-  });
+  const [globalSettings, setGlobalSettings] = useState<WorkbenchGlobalSettings>(() => (
+    readGlobalWorkbenchSettings(clientState.records)
+  ));
   const [localCapabilitySettings, setLocalCapabilitySettings] = useState<WorkbenchLocalCapabilitySettings>(DEFAULT_LOCAL_CAPABILITY_SETTINGS);
   const [isLocalCapabilitySettingsLoading, setIsLocalCapabilitySettingsLoading] = useState(false);
   const [localCapabilitySettingsError, setLocalCapabilitySettingsError] = useState("");
@@ -705,6 +691,7 @@ export default function Workbench () {
       void import("../lib/WorkbenchClient").then(async ({ WorkbenchClient: initWorkbench }) => {
         const dom = getWorkbenchDomSurfaces();
         const nextCleanup = await initWorkbench({
+          clientStateController,
           dom,
           initialRoute: currentRouteRef.current,
           onExplorerStateChange: (snapshot) => {
@@ -764,7 +751,7 @@ export default function Workbench () {
       }
       cleanup();
     };
-  }, []);
+  }, [clientStateController]);
 
   const selectedThreadProjectId = route.view === "thread"
     ? route.threadOwnerProjectId || explorer.currentProjectId || route.projectId
@@ -776,36 +763,25 @@ export default function Workbench () {
       return;
     }
 
-    let cancelled = false;
-    void Promise.all([
-      getPersistedThreadComposerDraftRecords(selectedThreadProjectId),
-      getPersistedThreadQuestionnaireDraftRecords(selectedThreadProjectId),
-    ]).then(([composerRecords, questionnaireRecords]) => {
-      if (cancelled) {
-        return;
-      }
-
-      setThreadComposerDraftsByThreadId(Object.fromEntries(
-        composerRecords.map((record) => [record.threadId, {
-          attachments: record.attachments,
-          text: record.text,
-          updatedAt: record.updatedAt,
-        }]),
-      ));
-      setThreadQuestionnaireDraftsByKey(Object.fromEntries(
-        questionnaireRecords.map((record) => [`${record.threadId}:${record.requestKey}`, {
-          attachments: record.attachments,
-          customValues: record.customValues,
-          selectedValues: record.selectedValues,
-          updatedAt: record.updatedAt,
-        }]),
-      ));
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedThreadProjectId]);
+    setThreadComposerDraftsByThreadId(Object.fromEntries(
+      clientState.records.flatMap((record) => (
+        record.kind === "composerDraft"
+        && record.daemonRegistrationId === clientState.daemonRegistrationId
+        && record.projectId === selectedThreadProjectId
+          ? [[record.threadId, record.value]]
+          : []
+      )),
+    ));
+    setThreadQuestionnaireDraftsByKey(Object.fromEntries(
+      clientState.records.flatMap((record) => (
+        record.kind === "questionnaireDraft"
+        && record.daemonRegistrationId === clientState.daemonRegistrationId
+        && record.projectId === selectedThreadProjectId
+          ? [[`${record.threadId}:${record.requestKey}`, record.value]]
+          : []
+      )),
+    ));
+  }, [clientState.daemonRegistrationId, clientState.records, selectedThreadProjectId]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -1024,15 +1000,26 @@ export default function Workbench () {
   }, [pageTitle]);
 
   useEffect(() => {
-    if (!explorer.currentProjectId || projectSettingsByProjectId[explorer.currentProjectId]) {
-      return;
+    setGlobalSettings(readGlobalWorkbenchSettings(clientState.records));
+    const storedHarness = clientState.records.find((record) => (
+      record.kind === "globalPreference" && record.preference.key === "harness"
+    ));
+    if (storedHarness?.kind === "globalPreference" && typeof storedHarness.preference.value === "string") {
+      setHarness(storedHarness.preference.value as WorkbenchHarness);
     }
+  }, [clientState.records]);
 
+  useEffect(() => {
+    if (!explorer.currentProjectId) return;
     setProjectSettingsByProjectId((current) => ({
       ...current,
-      [explorer.currentProjectId]: readProjectWorkbenchSettings(explorer.currentProjectId),
+      [explorer.currentProjectId]: readProjectWorkbenchSettings(
+        clientState.daemonRegistrationId,
+        explorer.currentProjectId,
+        clientState.records,
+      ),
     }));
-  }, [explorer.currentProjectId, projectSettingsByProjectId]);
+  }, [clientState.daemonRegistrationId, clientState.records, explorer.currentProjectId]);
 
   const closeCreateDialog = () => {
     if (isCreatingEntry) {
@@ -1131,10 +1118,12 @@ export default function Workbench () {
         ...current,
         [key]: key === "editorFontSize" && typeof value === "number" ? clampEditorFontSize(value) : value,
       };
-      writeGlobalWorkbenchSettings(nextSettings);
+      void writeGlobalWorkbenchSettings(clientStateController, nextSettings).catch((error: Error) => {
+        setSelectionError(error.message);
+      });
       return nextSettings;
     });
-  }, []);
+  }, [clientStateController]);
 
   const updateProjectSetting = useCallback(<K extends WorkbenchSettingKey> (key: K, value: WorkbenchGlobalSettings[K]) => {
     const projectId = explorer.currentProjectId;
@@ -1143,7 +1132,11 @@ export default function Workbench () {
     }
 
     setProjectSettingsByProjectId((current) => {
-      const currentSettings = current[projectId] ?? readProjectWorkbenchSettings(projectId);
+      const currentSettings = current[projectId] ?? readProjectWorkbenchSettings(
+        clientState.daemonRegistrationId,
+        projectId,
+        clientState.records,
+      );
       const nextSettings = {
         ...currentSettings,
         [key]: {
@@ -1152,13 +1145,15 @@ export default function Workbench () {
           value: key === "editorFontSize" && typeof value === "number" ? clampEditorFontSize(value) : value,
         },
       } satisfies WorkbenchProjectSettings;
-      writeProjectWorkbenchSettings(projectId, nextSettings);
+      void writeProjectWorkbenchSettings(clientStateController, projectId, nextSettings).catch((error: Error) => {
+        setSelectionError(error.message);
+      });
       return {
         ...current,
         [projectId]: nextSettings,
       };
     });
-  }, [explorer.currentProjectId]);
+  }, [clientState.daemonRegistrationId, clientState.records, clientStateController, explorer.currentProjectId]);
 
   const resetProjectSettingOverride = useCallback((key: WorkbenchSettingKey) => {
     const projectId = explorer.currentProjectId;
@@ -1167,7 +1162,11 @@ export default function Workbench () {
     }
 
     setProjectSettingsByProjectId((current) => {
-      const currentSettings = current[projectId] ?? readProjectWorkbenchSettings(projectId);
+      const currentSettings = current[projectId] ?? readProjectWorkbenchSettings(
+        clientState.daemonRegistrationId,
+        projectId,
+        clientState.records,
+      );
       const nextSettings = {
         ...currentSettings,
         [key]: {
@@ -1175,13 +1174,15 @@ export default function Workbench () {
           enabled: false,
         },
       } satisfies WorkbenchProjectSettings;
-      writeProjectWorkbenchSettings(projectId, nextSettings);
+      void writeProjectWorkbenchSettings(clientStateController, projectId, nextSettings).catch((error: Error) => {
+        setSelectionError(error.message);
+      });
       return {
         ...current,
         [projectId]: nextSettings,
       };
     });
-  }, [explorer.currentProjectId]);
+  }, [clientState.daemonRegistrationId, clientState.records, clientStateController, explorer.currentProjectId]);
 
   const updateThreadCodeBlockWrapSetting = useCallback((nextValue: boolean) => {
     if (explorer.currentProjectId) {
@@ -1624,7 +1625,13 @@ export default function Workbench () {
     const isProviderThread = threadId !== "new" && !threadId.startsWith("draft:");
     if (isProviderThread) {
       setThreadComposerDraftsByThreadId((current) => ({ ...current, [threadId]: draft }));
-      void putPersistedThreadComposerDraft(selectedThreadProjectId, threadId, draft);
+      void clientStateController.put({
+        daemonRegistrationId: clientState.daemonRegistrationId,
+        kind: "composerDraft",
+        projectId: selectedThreadProjectId,
+        threadId,
+        value: draft,
+      }).catch((error: Error) => setSelectionError(error.message));
       return;
     }
     if (!controls || route.view !== "thread") return;
@@ -1673,7 +1680,17 @@ export default function Workbench () {
       composerProfileController.materializeDraftSelection(profileSlot, draftId, harness, selectedThreadProjectId);
       navigateToRoute(createThreadRoute(selectedThreadProjectId, { draftId, kind: "draft" }), { replace: true });
     }
-  }, [activeRouteDraft, composerProfileController, controls, currentThread, navigateToRoute, route, selectedThreadProjectId]);
+  }, [
+    activeRouteDraft,
+    clientState.daemonRegistrationId,
+    clientStateController,
+    composerProfileController,
+    controls,
+    currentThread,
+    navigateToRoute,
+    route,
+    selectedThreadProjectId,
+  ]);
 
   const handleThreadComposerDraftClear = useCallback((threadId: string) => {
     if (!selectedThreadProjectId) return;
@@ -1685,7 +1702,12 @@ export default function Workbench () {
         delete next[threadId];
         return next;
       });
-      void deletePersistedThreadComposerDraft(selectedThreadProjectId, threadId);
+      void clientStateController.delete({
+        daemonRegistrationId: clientState.daemonRegistrationId,
+        kind: "composerDraft",
+        projectId: selectedThreadProjectId,
+        threadId,
+      }).catch((error: Error) => setSelectionError(error.message));
       return;
     }
     const currentRoute = currentRouteRef.current;
@@ -1693,7 +1715,7 @@ export default function Workbench () {
       return;
     }
     void controls.deleteThreadDraft(currentRoute.threadTarget.draftId);
-  }, [controls, selectedThreadProjectId, threadComposerDraftsByThreadId]);
+  }, [clientState.daemonRegistrationId, clientStateController, controls, selectedThreadProjectId, threadComposerDraftsByThreadId]);
 
   const handleThreadQuestionnaireDraftChange = useCallback((threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => {
     if (!selectedThreadProjectId || !requestKey) {
@@ -1704,8 +1726,15 @@ export default function Workbench () {
       ...current,
       [`${threadId}:${requestKey}`]: draft,
     }));
-    void putPersistedThreadQuestionnaireDraft(selectedThreadProjectId, threadId, requestKey, draft);
-  }, [selectedThreadProjectId]);
+    void clientStateController.put({
+      daemonRegistrationId: clientState.daemonRegistrationId,
+      kind: "questionnaireDraft",
+      projectId: selectedThreadProjectId,
+      requestKey,
+      threadId,
+      value: draft,
+    }).catch((error: Error) => setSelectionError(error.message));
+  }, [clientState.daemonRegistrationId, clientStateController, selectedThreadProjectId]);
 
   const handleThreadQuestionnaireDraftClear = useCallback((threadId: string, requestKey: string) => {
     if (!requestKey) {
@@ -1724,9 +1753,15 @@ export default function Workbench () {
     });
 
     if (selectedThreadProjectId) {
-      void deletePersistedThreadQuestionnaireDraft(selectedThreadProjectId, threadId, requestKey);
+      void clientStateController.delete({
+        daemonRegistrationId: clientState.daemonRegistrationId,
+        kind: "questionnaireDraft",
+        projectId: selectedThreadProjectId,
+        requestKey,
+        threadId,
+      }).catch((error: Error) => setSelectionError(error.message));
     }
-  }, [selectedThreadProjectId]);
+  }, [clientState.daemonRegistrationId, clientStateController, selectedThreadProjectId]);
 
   const stopThread = useCallback(async (thread: ThreadPayload) => {
     if (!controls) {
@@ -1770,11 +1805,14 @@ export default function Workbench () {
 
   const setThreadComposerSettings = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
     if (currentThread?.id === threadId && currentThread.isDraft && currentThread.harness !== settings.harness) {
-      persistHarness(settings.harness);
+      void clientStateController.put({
+        kind: "globalPreference",
+        preference: { key: "harness", value: settings.harness },
+      }).catch((error: Error) => setSelectionError(error.message));
       setHarness(settings.harness);
     }
     controls?.setCurrentThreadComposerSettings(threadId, settings);
-  }, [controls, currentThread]);
+  }, [clientStateController, controls, currentThread]);
 
   const submitUserInputRequest = useCallback(async (
     threadId: string,
@@ -2722,7 +2760,10 @@ export default function Workbench () {
       return;
     }
 
-    persistHarness(nextHarness);
+    void clientStateController.put({
+      kind: "globalPreference",
+      preference: { key: "harness", value: nextHarness },
+    }).catch((error: Error) => setSelectionError(error.message));
     setHarness(nextHarness);
     controls?.setDraftThreadHarness(nextHarness);
   };

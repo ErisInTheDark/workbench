@@ -21,8 +21,8 @@ import { evidenceSchemaHistory } from "../../lib/workbench/database/schema/evide
 import { interactionSchemaHistory } from "../../lib/workbench/database/schema/interaction-schema.ts";
 import { itemSchemaHistory } from "../../lib/workbench/database/schema/item-schema.ts";
 import { operationSourceSchemaHistory } from "../../lib/workbench/database/schema/operation-source-schema.ts";
-import { applyWorkbenchDatabaseSchema, defineWorkbenchDatabaseSchema } from "../../lib/workbench/database/schema/schema-history.ts";
-import type { CurrentTableDefinition } from "../../lib/workbench/database/schema/schema-definition.ts";
+import type { CurrentTableDefinition } from "workbench-shared/database/schema/schema-definition";
+import { applyWorkbenchDatabaseSchema, defineWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
 import { coreTables } from "../../lib/workbench/database/schema/core-schema.ts";
 import { evidenceTables } from "../../lib/workbench/database/schema/evidence-schema.ts";
 import { interactionTables } from "../../lib/workbench/database/schema/interaction-schema.ts";

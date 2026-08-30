@@ -15,22 +15,41 @@ const address = {
   url: "http://127.0.0.1:43210",
 };
 
-function fixture(options: { failClose?: boolean; failStart?: boolean; leaseAvailable?: boolean } = {}) {
+function fixture(options: {
+  failLeaseDispose?: boolean;
+  failServerClose?: boolean;
+  failServerStart?: boolean;
+  failStateClose?: boolean;
+  failStateStart?: boolean;
+  leaseAvailable?: boolean;
+} = {}) {
   const events: string[] = [];
   const lease: WorkbenchAppLease = {
     dispose: async () => {
       events.push("lease:dispose");
+      if (options.failLeaseDispose) throw new Error("lease dispose failed");
     },
   };
   const server: WorkbenchAppServer = {
     close: async () => {
       events.push("server:close");
-      if (options.failClose) throw new Error("close failed");
+      if (options.failServerClose) throw new Error("server close failed");
     },
     start: async () => {
       events.push("server:start");
-      if (options.failStart) throw new Error("start failed");
+      if (options.failServerStart) throw new Error("server start failed");
       return address;
+    },
+  };
+  const state = {
+    close: () => {
+      events.push("state:close");
+      if (options.failStateClose) throw new Error("state close failed");
+    },
+    start: () => {
+      events.push("state:start");
+      if (options.failStateStart) throw new Error("state start failed");
+      return "registration";
     },
   };
   let serverCreations = 0;
@@ -40,6 +59,7 @@ function fixture(options: { failClose?: boolean; failStart?: boolean; leaseAvail
       return options.leaseAvailable === false ? null : lease;
     },
     callerThreadId: null,
+    createState: () => state,
     createServer: () => {
       serverCreations += 1;
       return server;
@@ -77,30 +97,45 @@ test("closes the server before releasing the app lease", async () => {
   await target.app.close();
   assert.deepEqual(target.events, [
     "lease:acquire",
+    "state:start",
     "server:start",
     "server:close",
+    "state:close",
     "lease:dispose",
   ]);
 });
 
 test("releases the lease after startup failure", async () => {
-  const target = fixture({ failStart: true });
+  const target = fixture({ failServerStart: true });
   await assert.rejects(target.app.start(), /start failed/u);
   assert.deepEqual(target.events, [
     "lease:acquire",
+    "state:start",
     "server:start",
     "server:close",
+    "state:close",
     "lease:dispose",
   ]);
 });
 
-test("retains the lease when owned server shutdown fails", async () => {
-  const target = fixture({ failClose: true });
+test("shutdown attempts every reverse-order owner and aggregates failures", async () => {
+  const target = fixture({ failLeaseDispose: true, failServerClose: true, failStateClose: true });
   await target.app.start();
-  await assert.rejects(target.app.close(), /close failed/u);
+  await assert.rejects(target.app.close(), (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors.map((failure) => failure instanceof Error ? failure.message : String(failure)), [
+      "server close failed",
+      "state close failed",
+      "lease dispose failed",
+    ]);
+    return true;
+  });
   assert.deepEqual(target.events, [
     "lease:acquire",
+    "state:start",
     "server:start",
     "server:close",
+    "state:close",
+    "lease:dispose",
   ]);
 });

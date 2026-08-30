@@ -5,7 +5,6 @@
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { copyFile, mkdir } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
@@ -14,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
 
 import WorkbenchAppLogger from "./WorkbenchAppLogger.ts";
+import resolveWorkbenchLibraryRoot from "./workbench-library-root.ts";
 
 export interface WorkbenchFrontendCompilerOptions {
   environment?: NodeJS.ProcessEnv;
@@ -60,9 +60,7 @@ export default class WorkbenchFrontendCompiler {
     this.repositoryRootPath = path.resolve(options.repositoryRootPath ?? defaultRepositoryRootPath);
     this.appDirectoryPath = path.join(this.repositoryRootPath, "app");
     this.environment = { ...process.env, ...options.environment };
-    const workbenchLibraryRoot = path.resolve(
-      this.environment.WORKBENCH_LIBRARY_ROOT?.trim() || path.join(os.homedir(), ".workbench"),
-    );
+    const workbenchLibraryRoot = resolveWorkbenchLibraryRoot(this.environment.WORKBENCH_LIBRARY_ROOT);
     this.outputDirectoryPath = path.resolve(
       options.outputDirectoryPath ?? path.join(workbenchLibraryRoot, "runtime", "app"),
     );

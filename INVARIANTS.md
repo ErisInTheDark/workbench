@@ -10,6 +10,9 @@ You may propose new invariants or changes to existing invariants, but you must m
 - Keep external system details at their adapter boundary.
 - Convert external data into shared Workbench types before core code uses it.
 - Do not replace an existing owner as part of an additive change.
+<!-- Prevent random connection ports or browser origins from redefining durable client state. -->
+- Store app-owned preferences and drafts in app SQLite, never browser storage.
+- Scope daemon-owned references through app daemon registrations. Ports and addresses are connection locations, never identity.
 <!-- Prevent wb command fallback from coupling the standalone orchestrator to Next.js. -->
 - Run Workbench CLI and MCP commands in the standalone orchestrator. Never route them through Next.js.
 

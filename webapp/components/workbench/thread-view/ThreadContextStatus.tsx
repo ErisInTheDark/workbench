@@ -8,7 +8,6 @@ import { useState } from "react";
 
 import type { ThreadTokenUsage } from "../../../lib/codex/generated/app-server/v2/ThreadTokenUsage";
 import type { ThreadPayload } from "../../../lib/types";
-import { readStoredThreadTokenUsage } from "../../../lib/workbench/state/browser-state";
 import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
 
 const visibleTokenUsageByThreadKey = new Map<string, ThreadTokenUsage>();
@@ -24,7 +23,7 @@ function resolveVisibleTokenUsage(thread: ThreadPayload) {
     return thread.tokenUsage;
   }
 
-  const cachedTokenUsage = visibleTokenUsageByThreadKey.get(threadKey) ?? readStoredThreadTokenUsage(thread.harness, thread.id);
+  const cachedTokenUsage = visibleTokenUsageByThreadKey.get(threadKey);
   if (cachedTokenUsage) {
     visibleTokenUsageByThreadKey.set(threadKey, cachedTokenUsage);
   }

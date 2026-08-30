@@ -22,6 +22,10 @@ import {
   WorkbenchSidebarPreferencesContext,
   type WorkbenchSidebarPreferencesValue,
 } from "./workbench-sidebar-preferences-context";
+import {
+  useWorkbenchClientStateController,
+  useWorkbenchClientStateSnapshot,
+} from "./workbench-client-state-context";
 
 interface WorkbenchSidebarPreferencesState {
   readonly preferences: WorkbenchProjectSidebarPreferences;
@@ -35,6 +39,8 @@ export default function WorkbenchSidebarPreferencesProvider({
   children: (value: WorkbenchSidebarPreferencesValue) => ReactNode;
   projectId: string;
 }) {
+  const controller = useWorkbenchClientStateController();
+  const clientState = useWorkbenchClientStateSnapshot();
   const defaultPreferences = useMemo(createDefaultWorkbenchProjectSidebarPreferences, [projectId]);
   const [state, setState] = useState<WorkbenchSidebarPreferencesState>(() => ({
     preferences: defaultPreferences,
@@ -43,10 +49,12 @@ export default function WorkbenchSidebarPreferencesProvider({
   const preferences = state.projectId === projectId ? state.preferences : defaultPreferences;
   useEffect(() => {
     setState({
-      preferences: projectId ? readWorkbenchProjectSidebarPreferences(projectId) : defaultPreferences,
+      preferences: projectId
+        ? readWorkbenchProjectSidebarPreferences(clientState.daemonRegistrationId, projectId, clientState.records)
+        : defaultPreferences,
       projectId,
     });
-  }, [defaultPreferences, projectId]);
+  }, [clientState.daemonRegistrationId, clientState.records, defaultPreferences, projectId]);
 
   const update = useCallback((
     transform: (current: WorkbenchProjectSidebarPreferences) => WorkbenchProjectSidebarPreferences,
@@ -54,13 +62,17 @@ export default function WorkbenchSidebarPreferencesProvider({
     setState((currentState) => {
       const current = currentState.projectId === projectId ? currentState.preferences : defaultPreferences;
       const next = transform(current);
-      if (projectId) writeWorkbenchProjectSidebarPreferences(projectId, next);
+      if (projectId) {
+        void writeWorkbenchProjectSidebarPreferences(controller, projectId, next).catch((error) => {
+          console.error("Workbench sidebar preference persistence failed.", error);
+        });
+      }
       return {
         preferences: next,
         projectId,
       };
     });
-  }, [defaultPreferences, projectId]);
+  }, [controller, defaultPreferences, projectId]);
   const setDisclosureOpen = useCallback<WorkbenchSidebarPreferencesValue["setDisclosureOpen"]>(
     (key, open) => update((current) => current[key] === open ? current : { ...current, [key]: open }),
     [update],

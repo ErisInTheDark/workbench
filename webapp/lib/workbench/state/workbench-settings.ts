@@ -6,25 +6,18 @@
  * - WorkbenchProjectSidebarPreferences: project-local sidebar display state. Keywords: settings, project, sidebar, disclosure, folders.
  * - WORKBENCH_SETTING_DEFINITIONS: labels and option metadata for settings UI rendering. Keywords: settings, registry, UI.
  * - createDefaultGlobalWorkbenchSettings/createDefaultWorkbenchProjectSidebarPreferences: create agentic global and sidebar defaults. Keywords: settings, defaults, sidebar, agentic.
- * - readGlobalWorkbenchSettings/writeGlobalWorkbenchSettings: persist global Workbench preferences in localStorage. Keywords: settings, localStorage, global.
- * - readProjectWorkbenchSettings/writeProjectWorkbenchSettings: persist explicit project override slots in localStorage. Keywords: settings, localStorage, project.
- * - readWorkbenchProjectSidebarPreferences/writeWorkbenchProjectSidebarPreferences: repair and persist project-local sidebar preferences beside project setting overrides. Keywords: settings, localStorage, project, sidebar, conformance.
+ * - readGlobalWorkbenchSettings/writeGlobalWorkbenchSettings: project global settings from and write them through the app-state controller. Keywords: settings, app state, global.
+ * - readProjectWorkbenchSettings/writeProjectWorkbenchSettings: project explicit project override slots from and write them through app state. Keywords: settings, app state, project.
+ * - readWorkbenchProjectSidebarPreferences/writeWorkbenchProjectSidebarPreferences: project and persist relational sidebar preferences and folder collections. Keywords: settings, app state, project, sidebar.
  * - resolveWorkbenchSettings: merge project overrides over global settings. Keywords: settings, inheritance, overrides.
- * - readStoredEditorFontSize/writeStoredEditorFontSize/readStoredTheme/writeStoredTheme: compatibility helpers for older callers. Keywords: settings, legacy, bridge.
  */
+import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 
-import { z } from "zod";
-
-import { conformToZodSchema } from "../zod-schema-conformer";
+import WorkbenchClientStateController from "./WorkbenchClientStateController";
 
 export const DEFAULT_EDITOR_FONT_SIZE = 1.08;
 export const MIN_EDITOR_FONT_SIZE = 0.84;
 export const MAX_EDITOR_FONT_SIZE = 1.72;
-
-const GLOBAL_SETTINGS_STORAGE_KEY = "workbench:settings:global";
-const PROJECT_SETTINGS_STORAGE_KEY = "workbench:settings:projects";
-const LEGACY_FONT_SIZE_STORAGE_KEY = "workbench:font-size";
-const LEGACY_THEME_STORAGE_KEY = "workbench:theme";
 
 export type WorkbenchTheme = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamily = "sans" | "serif" | "mono";
@@ -77,23 +70,6 @@ export interface WorkbenchProjectSidebarPreferences {
   readonly threadFolderIds: readonly string[];
   readonly threadsOpen: boolean;
 }
-
-const WorkbenchProjectSidebarPreferencesSchema: z.ZodType<WorkbenchProjectSidebarPreferences> = z.object({
-  browseSessionsOpen: z.boolean(),
-  explorerOpen: z.boolean(),
-  pinnedFolderIds: z.array(z.string()).max(500),
-  pinnedStatusCountsExpanded: z.boolean(),
-  pinnedThreadsOpen: z.boolean(),
-  projectStatusCountsExpanded: z.boolean(),
-  projectsOpen: z.boolean(),
-  projectTimeGroupCount: z.number().int().min(1).max(100),
-  reloadNecessaryOpen: z.boolean(),
-  settledThreadItemLimit: z.number().int().min(50).max(5_000),
-  settledThreadsOpen: z.boolean(),
-  sidebarCollapsed: z.boolean(),
-  threadFolderIds: z.array(z.string()).max(500),
-  threadsOpen: z.boolean(),
-}).strict();
 
 export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = WorkbenchSettingKey> = {
   description: string;
@@ -234,49 +210,16 @@ function normalizeFileOpenBehavior(value: unknown): WorkbenchFileOpenBehavior {
   return value === "workbench-or-vscode" || value === "vscode" ? value : "workbench";
 }
 
-function readJsonStorageValue(key: string) {
-  try {
-    const rawValue = window.localStorage.getItem(key);
-    return rawValue ? JSON.parse(rawValue) : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeJsonStorageValue(key: string, value: unknown) {
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // Ignore storage failures and keep in-memory settings usable.
-  }
-}
-
-function readLegacyTheme() {
-  try {
-    return normalizeTheme(window.localStorage.getItem(LEGACY_THEME_STORAGE_KEY));
-  } catch {
-    return "default";
-  }
-}
-
-function readLegacyEditorFontSize() {
-  try {
-    return clampEditorFontSize(window.localStorage.getItem(LEGACY_FONT_SIZE_STORAGE_KEY));
-  } catch {
-    return DEFAULT_EDITOR_FONT_SIZE;
-  }
-}
-
 function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettings {
   const candidate = isRecord(value) ? value : {};
   return {
     composerSpellCheck: typeof candidate.composerSpellCheck === "boolean" ? candidate.composerSpellCheck : false,
     editorFontFamily: normalizeEditorFontFamily(candidate.editorFontFamily),
-    editorFontSize: clampEditorFontSize(candidate.editorFontSize ?? readLegacyEditorFontSize()),
+    editorFontSize: clampEditorFontSize(candidate.editorFontSize),
     editorSpellCheck: typeof candidate.editorSpellCheck === "boolean" ? candidate.editorSpellCheck : false,
     fileOpenBehavior: normalizeFileOpenBehavior(candidate.fileOpenBehavior),
     showUnopenableFiles: typeof candidate.showUnopenableFiles === "boolean" ? candidate.showUnopenableFiles : false,
-    theme: normalizeTheme(candidate.theme ?? readLegacyTheme()),
+    theme: normalizeTheme(candidate.theme),
     threadCodeBlockWrap: typeof candidate.threadCodeBlockWrap === "boolean" ? candidate.threadCodeBlockWrap : false,
   };
 }
@@ -355,25 +298,40 @@ export function createDefaultWorkbenchProjectSidebarPreferences(): WorkbenchProj
   };
 }
 
-export function readGlobalWorkbenchSettings() {
-  return normalizeGlobalWorkbenchSettings(readJsonStorageValue(GLOBAL_SETTINGS_STORAGE_KEY));
+export function readGlobalWorkbenchSettings(records: readonly WorkbenchClientStateRecord[] = []) {
+  const values = Object.fromEntries(records.flatMap((record) => (
+    record.kind === "globalPreference"
+      ? [[record.preference.key, record.preference.value]]
+      : []
+  )));
+  return normalizeGlobalWorkbenchSettings(values);
 }
 
-export function writeGlobalWorkbenchSettings(settings: WorkbenchGlobalSettings) {
+export async function writeGlobalWorkbenchSettings(
+  controller: WorkbenchClientStateController,
+  settings: WorkbenchGlobalSettings,
+) {
   const normalizedSettings = normalizeGlobalWorkbenchSettings(settings);
-  writeJsonStorageValue(GLOBAL_SETTINGS_STORAGE_KEY, normalizedSettings);
-  try {
-    window.localStorage.setItem(LEGACY_THEME_STORAGE_KEY, normalizedSettings.theme);
-    window.localStorage.setItem(LEGACY_FONT_SIZE_STORAGE_KEY, String(normalizedSettings.editorFontSize));
-  } catch {
-    // Legacy mirrors are best-effort only.
-  }
+  await Promise.all((Object.keys(normalizedSettings) as WorkbenchSettingKey[]).map((key) => (
+    controller.put({ kind: "globalPreference", preference: { key, value: normalizedSettings[key] } } as Extract<
+      WorkbenchClientStateRecord,
+      { kind: "globalPreference" }
+    >)
+  )));
 }
 
-export function readProjectWorkbenchSettings(projectId: string) {
-  const allProjectSettings = readJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY);
-  const projectSettings = isRecord(allProjectSettings) ? allProjectSettings[projectId] : null;
-  const candidate = isRecord(projectSettings) ? projectSettings : {};
+export function readProjectWorkbenchSettings(
+  daemonRegistrationId: string,
+  projectId: string,
+  records: readonly WorkbenchClientStateRecord[] = [],
+) {
+  const candidate = Object.fromEntries(records.flatMap((record) => (
+    record.kind === "projectPreference"
+    && record.daemonRegistrationId === daemonRegistrationId
+    && record.projectId === projectId
+      ? [[record.preference.key, record.preference]]
+      : []
+  )));
   return {
     composerSpellCheck: normalizeProjectOverride("composerSpellCheck", candidate.composerSpellCheck),
     editorFontFamily: normalizeProjectOverride("editorFontFamily", candidate.editorFontFamily),
@@ -386,48 +344,93 @@ export function readProjectWorkbenchSettings(projectId: string) {
   } satisfies WorkbenchProjectSettings;
 }
 
-export function writeProjectWorkbenchSettings(projectId: string, settings: WorkbenchProjectSettings) {
-  const allProjectSettings = readJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY);
-  const nextProjectSettings = isRecord(allProjectSettings) ? { ...allProjectSettings } : {};
-  const currentProjectSettings = isRecord(nextProjectSettings[projectId]) ? nextProjectSettings[projectId] : {};
-  nextProjectSettings[projectId] = {
-    ...currentProjectSettings,
-    composerSpellCheck: normalizeProjectOverride("composerSpellCheck", settings.composerSpellCheck),
-    editorFontFamily: normalizeProjectOverride("editorFontFamily", settings.editorFontFamily),
-    editorFontSize: normalizeProjectOverride("editorFontSize", settings.editorFontSize),
-    editorSpellCheck: normalizeProjectOverride("editorSpellCheck", settings.editorSpellCheck),
-    fileOpenBehavior: normalizeProjectOverride("fileOpenBehavior", settings.fileOpenBehavior),
-    showUnopenableFiles: normalizeProjectOverride("showUnopenableFiles", settings.showUnopenableFiles),
-    theme: normalizeProjectOverride("theme", settings.theme),
-    threadCodeBlockWrap: normalizeProjectOverride("threadCodeBlockWrap", settings.threadCodeBlockWrap),
-  };
-  writeJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY, nextProjectSettings);
+export async function writeProjectWorkbenchSettings(
+  controller: WorkbenchClientStateController,
+  projectId: string,
+  settings: WorkbenchProjectSettings,
+) {
+  await Promise.all((Object.keys(settings) as WorkbenchSettingKey[]).map((key) => (
+    controller.put({
+      daemonRegistrationId: controller.daemonRegistrationId,
+      kind: "projectPreference",
+      preference: { ...normalizeProjectOverride(key, settings[key]), key } as never,
+      projectId,
+    })
+  )));
 }
 
-export function readWorkbenchProjectSidebarPreferences(projectId: string): WorkbenchProjectSidebarPreferences {
-  const allProjectSettings = readJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY);
-  const projectSettings = isRecord(allProjectSettings) ? allProjectSettings[projectId] : null;
-  const candidate = isRecord(projectSettings) ? projectSettings.sidebarPreferences : null;
-  const defaults = createDefaultWorkbenchProjectSidebarPreferences();
-  return conformToZodSchema(WorkbenchProjectSidebarPreferencesSchema, candidate, defaults).data;
+export function readWorkbenchProjectSidebarPreferences(
+  daemonRegistrationId: string,
+  projectId: string,
+  records: readonly WorkbenchClientStateRecord[] = [],
+): WorkbenchProjectSidebarPreferences {
+  const preferences = { ...createDefaultWorkbenchProjectSidebarPreferences() };
+  for (const record of records) {
+    if (record.kind === "sidebarPreference"
+      && record.daemonRegistrationId === daemonRegistrationId
+      && record.projectId === projectId) {
+      (preferences as Record<string, boolean | number | readonly string[]>)[record.preference.key] = record.preference.value;
+    }
+  }
+  preferences.pinnedFolderIds = records.flatMap((record) => (
+    record.kind === "sidebarFolder"
+    && record.daemonRegistrationId === daemonRegistrationId
+    && record.projectId === projectId
+    && record.scope === "pinned"
+      ? [record.folderId]
+      : []
+  ));
+  preferences.threadFolderIds = records.flatMap((record) => (
+    record.kind === "sidebarFolder"
+    && record.daemonRegistrationId === daemonRegistrationId
+    && record.projectId === projectId
+    && record.scope === "thread"
+      ? [record.folderId]
+      : []
+  ));
+  return preferences;
 }
 
-export function writeWorkbenchProjectSidebarPreferences(
+export async function writeWorkbenchProjectSidebarPreferences(
+  controller: WorkbenchClientStateController,
   projectId: string,
   preferences: WorkbenchProjectSidebarPreferences,
 ) {
-  const allProjectSettings = readJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY);
-  const nextProjectSettings = isRecord(allProjectSettings) ? { ...allProjectSettings } : {};
-  const currentProjectSettings = isRecord(nextProjectSettings[projectId]) ? nextProjectSettings[projectId] : {};
-  nextProjectSettings[projectId] = {
-    ...currentProjectSettings,
-    sidebarPreferences: conformToZodSchema(
-      WorkbenchProjectSidebarPreferencesSchema,
-      preferences,
-      createDefaultWorkbenchProjectSidebarPreferences(),
-    ).data,
-  };
-  writeJsonStorageValue(PROJECT_SETTINGS_STORAGE_KEY, nextProjectSettings);
+  const daemonRegistrationId = controller.daemonRegistrationId;
+  const scalarEntries = Object.entries(preferences).filter(([key]) => (
+    key !== "pinnedFolderIds" && key !== "threadFolderIds"
+  )) as Array<[Exclude<keyof WorkbenchProjectSidebarPreferences, "pinnedFolderIds" | "threadFolderIds">, boolean | number]>;
+  const operations: Promise<unknown>[] = scalarEntries.map(([key, value]) => controller.put({
+    daemonRegistrationId,
+    kind: "sidebarPreference",
+    preference: { key, value } as never,
+    projectId,
+  }));
+  for (const scope of ["pinned", "thread"] as const) {
+    const desired = new Set(scope === "pinned" ? preferences.pinnedFolderIds : preferences.threadFolderIds);
+    const current = controller.records("sidebarFolder").filter((record) => (
+      record.daemonRegistrationId === daemonRegistrationId
+      && record.projectId === projectId
+      && record.scope === scope
+    ));
+    for (const record of current) {
+      if (!desired.delete(record.folderId)) operations.push(controller.delete({
+        daemonRegistrationId,
+        folderId: record.folderId,
+        kind: "sidebarFolder",
+        projectId,
+        scope,
+      }));
+    }
+    for (const folderId of desired) operations.push(controller.put({
+      daemonRegistrationId,
+      folderId,
+      kind: "sidebarFolder",
+      projectId,
+      scope,
+    }));
+  }
+  await Promise.all(operations);
 }
 
 export function resolveWorkbenchSettings(
@@ -444,26 +447,4 @@ export function resolveWorkbenchSettings(
     theme: projectSettings.theme.enabled ? projectSettings.theme.value : globalSettings.theme,
     threadCodeBlockWrap: projectSettings.threadCodeBlockWrap.enabled ? projectSettings.threadCodeBlockWrap.value : globalSettings.threadCodeBlockWrap,
   };
-}
-
-export function readStoredEditorFontSize() {
-  return readGlobalWorkbenchSettings().editorFontSize;
-}
-
-export function writeStoredEditorFontSize(fontSize: number) {
-  writeGlobalWorkbenchSettings({
-    ...readGlobalWorkbenchSettings(),
-    editorFontSize: clampEditorFontSize(fontSize),
-  });
-}
-
-export function readStoredTheme() {
-  return readGlobalWorkbenchSettings().theme;
-}
-
-export function writeStoredTheme(theme: WorkbenchTheme) {
-  writeGlobalWorkbenchSettings({
-    ...readGlobalWorkbenchSettings(),
-    theme,
-  });
 }

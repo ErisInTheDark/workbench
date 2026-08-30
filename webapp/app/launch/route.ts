@@ -1,21 +1,15 @@
 /*
  * Exports:
- * - GET: redirect standalone Workbench launches to the last confirmed project sidebar without caching user-specific state. Keywords: workbench, launch, project, cookie, redirect, iOS.
+ * - GET: keep direct Next launches memory-only by redirecting to the Workbench root. Keywords: workbench, launch, memory, redirect.
  */
 
-import { type NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
-import {
-  LAST_PROJECT_LAUNCH_COOKIE_NAME,
-  resolveLastProjectLaunchHref,
-} from "../../lib/workbench/state/last-project-cookie";
-
-export function GET(request: NextRequest) {
-  const launchHref = resolveLastProjectLaunchHref(request.cookies.get(LAST_PROJECT_LAUNCH_COOKIE_NAME)?.value);
+export function GET() {
   return new NextResponse(null, {
     headers: {
       "Cache-Control": "private, no-store",
-      Location: launchHref,
+      Location: "/",
     },
     status: 307,
   });

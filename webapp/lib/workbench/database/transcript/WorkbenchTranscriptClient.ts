@@ -16,7 +16,7 @@ import {
   workbenchTranscriptNotifications,
   workbenchTranscriptOperations,
 } from "./workbench-transcript-contract.ts";
-import type { DatabaseConformancePath } from "../schema/schema-conformance.ts";
+import type { DatabaseConformancePath } from "workbench-shared/database/schema/schema-conformance";
 
 export type { WorkbenchTranscriptConformanceReport } from "./workbench-transcript-contract.ts";
 

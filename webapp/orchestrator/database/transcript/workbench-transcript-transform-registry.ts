@@ -5,7 +5,7 @@
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem.ts";
 import type { WorkbenchFileChangeItem } from "../../../lib/workbench/thread/workbench-file-change.ts";
 import type { ItemSchemaRows } from "../../../lib/workbench/database/schema/item-schema.ts";
-import type { WorkbenchDatabaseMutation } from "../workbench-database-statements.ts";
+import type { WorkbenchDatabaseMutation } from "workbench-shared/database/workbench-database-statements";
 import { transformCoreTranscriptItem } from "./workbench-transcript-core-transformers.ts";
 import { transformInteractionTranscriptItem } from "./workbench-transcript-interaction-transformers.ts";
 import { transformOperationTranscriptItem } from "./workbench-transcript-operation-transformers.ts";

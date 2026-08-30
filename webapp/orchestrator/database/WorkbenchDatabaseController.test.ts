@@ -16,7 +16,7 @@ import {
   WORKBENCH_DATABASE_SCHEMA_VERSION,
   WORKBENCH_DATABASE_TABLE_NAMES,
 } from "./workbench-database-schema";
-import { insertRow, selectRows, upsertRow } from "./workbench-database-statements";
+import { insertRow, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
 
 test("the database worker opens, proves readiness, reports all tables, and closes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-"));

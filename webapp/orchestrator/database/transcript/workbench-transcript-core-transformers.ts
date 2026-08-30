@@ -9,7 +9,7 @@ import {
   insertRow,
   upsertRow,
   type WorkbenchDatabaseMutation,
-} from "../workbench-database-statements.ts";
+} from "workbench-shared/database/workbench-database-statements";
 import type {
   WorkbenchTranscriptItemTransform,
   WorkbenchTranscriptItemTransformContext,

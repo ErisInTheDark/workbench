@@ -1082,7 +1082,7 @@ export default function ThreadComposer ({
                       onRefresh={refreshAvailableModels}
                       onSelectModel={(model) => {
                         if (profilePickerTarget) {
-                          composerProfileController.updateProfile(profilePickerTarget.id, {
+                          void composerProfileController.updateProfile(profilePickerTarget.id, {
                             model: model.id,
                             reasoningEffort: model.supportsReasoningEffort
                               ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null
@@ -1144,7 +1144,7 @@ export default function ThreadComposer ({
                     onSelectAgent={(agentPath) => {
                       const agent = availableAgents.find((candidate) => areWorkbenchAgentPathsEqual(candidate.path, agentPath)) ?? null;
                       if (profilePickerTarget) {
-                        composerProfileController.updateProfile(profilePickerTarget.id, {
+                        void composerProfileController.updateProfile(profilePickerTarget.id, {
                           agentPath,
                           agentSource: agent?.source ?? null,
                         });

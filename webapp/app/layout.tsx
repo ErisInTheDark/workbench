@@ -2,22 +2,13 @@
  * Exports:
  * - metadata: root document metadata for the standalone-capable Workbench app. Keywords: metadata, title, icons, iOS, standalone.
  * - viewport: root viewport settings for responsive Workbench rendering and color-scheme chrome. Keywords: viewport, mobile, theme.
- * - default RootLayout: application document shell with early theme bootstrap. Keywords: layout, theme, bootstrap.
+ * - default RootLayout: application document shell with memory-only default theme. Keywords: layout, theme.
  */
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
 import { ReactScan } from "../components/ReactScan";
 import "./globals.css";
-
-const THEME_BOOTSTRAP_SCRIPT = `
-try {
-  var theme = window.localStorage.getItem("workbench:theme");
-  document.documentElement.dataset.workbenchTheme = theme === "magical-girl" || theme === "winter" ? theme : "default";
-} catch {
-  document.documentElement.dataset.workbenchTheme = "default";
-}
-`;
 
 export const metadata: Metadata = {
   title: "Workbench",
@@ -53,10 +44,9 @@ export const viewport: Viewport = {
 
 export default function RootLayout ({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html data-workbench-theme="default" lang="en" suppressHydrationWarning>
       <ReactScan />
       <body suppressHydrationWarning>
-        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />
         {children}
       </body>
     </html>

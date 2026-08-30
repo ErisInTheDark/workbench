@@ -6,6 +6,8 @@ import WorkbenchAppLogger from "./WorkbenchAppLogger.ts";
 import WorkbenchAppProcessProtocol from "./WorkbenchAppProcessProtocol.ts";
 import WorkbenchFrontendCompiler from "./WorkbenchFrontendCompiler.ts";
 import WorkbenchFrontendServer from "./WorkbenchFrontendServer.ts";
+import WorkbenchAppStateController from "./state/WorkbenchAppStateController.ts";
+import WorkbenchAppStateRoutes from "./state/workbench-app-state-routes.ts";
 
 const logger = new WorkbenchAppLogger();
 
@@ -26,7 +28,8 @@ function legacyOrigin() {
 
 async function main() {
   const app = new WorkbenchApp({
-    createServer: () => new WorkbenchFrontendServer({
+    createState: () => new WorkbenchAppStateController(),
+    createServer: (state) => new WorkbenchFrontendServer({
       compiler: new WorkbenchFrontendCompiler({
         logger,
         onDiagnostic: (message) => logger.error("tailwind", message),
@@ -35,6 +38,7 @@ async function main() {
       legacyOrigin: legacyOrigin(),
       onDiagnostic: (message) => logger.error("http", message),
       port: configuredPort(process.env.WORKBENCH_APP_PORT),
+      stateRoutes: new WorkbenchAppStateRoutes(state as WorkbenchAppStateController),
     }),
   });
   const result = await app.start();

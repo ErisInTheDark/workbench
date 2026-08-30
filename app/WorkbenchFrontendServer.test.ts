@@ -1,18 +1,14 @@
 /*
- * No production exports. Node tests protect launch restoration, SPA serving, legacy proxy semantics, bounded proxy failure, and lifecycle disposal.
+ * No production exports. Node tests protect app-route delegation, SPA serving, legacy proxy semantics, bounded proxy failure, and lifecycle disposal.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import WorkbenchFrontendServer, { type WorkbenchFrontendBuildOwner } from "./WorkbenchFrontendServer.ts";
-
-const require = createRequire(import.meta.url);
-const { createLastProjectLaunchCookie } = require("../webapp/lib/workbench/state/last-project-cookie.ts") as typeof import("../webapp/lib/workbench/state/last-project-cookie.ts");
 
 class FixtureCompiler implements WorkbenchFrontendBuildOwner {
   readonly events: string[] = [];
@@ -47,9 +43,23 @@ async function listen(server: ReturnType<typeof createServer>) {
   return `http://127.0.0.1:${address.port}`;
 }
 
-test("serves the SPA and preserves last-project launch restoration", async (context) => {
+test("serves the SPA and delegates launch restoration to app state routes", async (context) => {
   const compiler = new FixtureCompiler(await staticFixture());
-  const server = new WorkbenchFrontendServer({ compiler, hostname: "127.0.0.1" });
+  const server = new WorkbenchFrontendServer({
+    compiler,
+    hostname: "127.0.0.1",
+    stateRoutes: {
+      handle: async (_request, response, url) => {
+        if (url.pathname !== "/launch") return false;
+        response.writeHead(307, {
+          "Cache-Control": "private, no-store",
+          Location: "/project/nested%2Fproject%20one",
+        });
+        response.end();
+        return true;
+      },
+    },
+  });
   context.after(async () => await server.close());
   const { url } = await server.start();
 
@@ -57,12 +67,9 @@ test("serves the SPA and preserves last-project launch restoration", async (cont
   assert.equal(page.status, 200);
   assert.equal(await page.text(), "<main>Standalone Workbench</main>");
 
-  const launch = await fetch(`${url}/launch`, {
-    headers: { Cookie: createLastProjectLaunchCookie("nested/project one").split(";", 1)[0] },
-    redirect: "manual",
-  });
+  const launch = await fetch(`${url}/launch`, { redirect: "manual" });
   assert.equal(launch.status, 307);
-  assert.equal(launch.headers.get("location"), "/nested/project%20one");
+  assert.equal(launch.headers.get("location"), "/project/nested%2Fproject%20one");
   assert.equal(launch.headers.get("cache-control"), "private, no-store");
 });
 
@@ -96,6 +103,41 @@ test("streams legacy methods, bodies, status, and response headers", async (cont
   assert.equal(response.headers.get("content-type"), "application/json");
   assert.equal(response.headers.get("x-request-method"), "POST");
   assert.deepEqual(await response.json(), { body: "sparkles" });
+});
+
+test("app-state routes bypass legacy Next while unrelated APIs still proxy", async (context) => {
+  const legacyPaths: string[] = [];
+  const legacy = createServer((request, response) => {
+    legacyPaths.push(request.url ?? "");
+    response.writeHead(200, { "Content-Type": "text/plain" });
+    response.end("legacy");
+  });
+  context.after(() => legacy.close());
+  const legacyOrigin = await listen(legacy);
+
+  const compiler = new FixtureCompiler(await staticFixture());
+  const server = new WorkbenchFrontendServer({
+    compiler,
+    hostname: "127.0.0.1",
+    legacyOrigin,
+    stateRoutes: {
+      handle: async (_request, response, url) => {
+        if (url.pathname !== "/api/workbench-client-state/global-preference") return false;
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end('{"owner":"app-state"}');
+        return true;
+      },
+    },
+  });
+  context.after(async () => await server.close());
+  const { url } = await server.start();
+
+  const appStateResponse = await fetch(`${url}/api/workbench-client-state/global-preference`, { method: "PUT" });
+  assert.deepEqual(await appStateResponse.json(), { owner: "app-state" });
+  assert.deepEqual(legacyPaths, []);
+
+  assert.equal(await (await fetch(`${url}/api/projects`)).text(), "legacy");
+  assert.deepEqual(legacyPaths, ["/api/projects"]);
 });
 
 test("reports legacy failure and disposes compiler plus listener", async () => {

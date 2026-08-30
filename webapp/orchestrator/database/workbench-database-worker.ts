@@ -10,7 +10,7 @@ import { installWorkbenchDatabaseSchema, workbenchDatabaseTables } from "./workb
 import {
   compileWorkbenchDatabaseStatement,
   type WorkbenchDatabaseRow,
-} from "./workbench-database-statements.ts";
+} from "workbench-shared/database/workbench-database-statements";
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository.ts";
 
 if (!parentPort) throw new Error("Workbench database worker requires a parent port");

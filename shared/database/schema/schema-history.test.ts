@@ -15,7 +15,7 @@ import {
   sql,
   tableColumns,
   text,
-} from "./schema-definition";
+} from "./schema-definition.ts";
 import {
   addColumns,
   applyWorkbenchDatabaseSchema,
@@ -26,7 +26,7 @@ import {
   defineWorkbenchDatabaseSchema,
   rebuildTable,
   tableVersion,
-} from "./schema-history";
+} from "./schema-history.ts";
 
 interface TableInfoRow {
   name: string;

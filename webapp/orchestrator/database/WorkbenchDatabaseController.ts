@@ -18,7 +18,7 @@ import type {
   WorkbenchDatabaseMutation,
   WorkbenchDatabaseQuery,
   WorkbenchDatabaseRow,
-} from "./workbench-database-statements";
+} from "workbench-shared/database/workbench-database-statements";
 import type {
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,

@@ -10,7 +10,7 @@ import type {
   WorkbenchDatabaseMutation,
   WorkbenchDatabaseQuery,
   WorkbenchDatabaseRow,
-} from "./workbench-database-statements.ts";
+} from "workbench-shared/database/workbench-database-statements";
 import type {
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,

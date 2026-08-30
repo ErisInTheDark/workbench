@@ -1,0 +1,255 @@
+/*
+ * Exports:
+ * - WorkbenchClientStateControllerOptions: HTTP, polling, and visibility seams. Keywords: browser, state, controller, test.
+ * - WorkbenchClientStateSnapshot: immutable browser projection and visible failure. Keywords: browser, state, snapshot.
+ * - default WorkbenchClientStateController: own validated app-state bootstrap, memory, writes, and polling. Keywords: browser, state, lifecycle.
+ */
+import type {
+  WorkbenchClientStateIdentity,
+  WorkbenchClientStateMutation,
+  WorkbenchClientStateRecord,
+  WorkbenchClientStateResponse,
+} from "workbench-shared/state/workbench-client-state";
+import { workbenchClientStateMutationPath } from "workbench-shared/state/workbench-client-state";
+import {
+  projectWorkbenchClientStateRows,
+  workbenchClientStateRecordIdentity,
+} from "workbench-shared/state/workbench-client-state-projection";
+
+import { conformWorkbenchClientStateResponse } from "./workbench-client-state-conformance";
+
+export interface WorkbenchClientStateSnapshot {
+  daemonRegistrationId: string;
+  error: string;
+  records: readonly WorkbenchClientStateRecord[];
+  revision: number;
+}
+
+export interface WorkbenchClientStateControllerOptions {
+  fetcher?: typeof fetch;
+  mode?: "http" | "memory";
+  pollDelayMs?: number;
+  schedule?: (callback: () => void, delayMs: number) => number;
+  cancelSchedule?: (id: number) => void;
+  visibility?: {
+    hidden(): boolean;
+    subscribe(listener: () => void): () => void;
+  };
+}
+
+function identityKey(identity: WorkbenchClientStateIdentity) {
+  switch (identity.kind) {
+    case "globalPreference": return `global:${identity.key}`;
+    case "projectPreference": return `project:${identity.daemonRegistrationId}:${identity.projectId}:${identity.key}`;
+    case "sidebarPreference": return `sidebar:${identity.daemonRegistrationId}:${identity.projectId}:${identity.key}`;
+    case "sidebarFolder": return `folder:${identity.daemonRegistrationId}:${identity.projectId}:${identity.scope}:${identity.folderId}`;
+    case "expandedDirectory": return `directory:${identity.daemonRegistrationId}:${identity.projectId}:${identity.path}`;
+    case "harnessPreference": return `harness:${identity.daemonRegistrationId}:${identity.harness}`;
+    case "modelEffort": return `effort:${identity.daemonRegistrationId}:${identity.harness}:${identity.model}`;
+    case "threadServiceTier": return `tier:${identity.daemonRegistrationId}:${identity.harness}:${identity.threadId}`;
+    case "newThreadProfilePreference": return `profile:new:${identity.daemonRegistrationId}:${identity.projectId}`;
+    case "draftProfilePreference": return `profile:draft:${identity.daemonRegistrationId}:${identity.projectId}:${identity.harness}:${identity.draftId}`;
+    case "threadProfilePreference": return `profile:thread:${identity.daemonRegistrationId}:${identity.harness}:${identity.threadId}`;
+    case "fileDraft": return `file:${identity.daemonRegistrationId}:${identity.projectId}:${identity.path}`;
+    case "composerDraft": return `composer:${identity.daemonRegistrationId}:${identity.projectId}:${identity.threadId}`;
+    case "questionnaireDraft": return `questionnaire:${identity.daemonRegistrationId}:${identity.projectId}:${identity.threadId}:${identity.requestKey}`;
+    case "lastLaunchTarget": return "launch";
+  }
+}
+
+function browserVisibility(): WorkbenchClientStateControllerOptions["visibility"] {
+  if (typeof document === "undefined") return { hidden: () => false, subscribe: () => () => {} };
+  return {
+    hidden: () => document.hidden,
+    subscribe: (listener) => {
+      document.addEventListener("visibilitychange", listener);
+      return () => document.removeEventListener("visibilitychange", listener);
+    },
+  };
+}
+
+export default class WorkbenchClientStateController {
+  readonly #cancelSchedule: (id: number) => void;
+  readonly #fetcher: typeof fetch;
+  readonly #listeners = new Set<() => void>();
+  readonly #mode: "http" | "memory";
+  readonly #pollDelayMs: number;
+  readonly #records = new Map<string, WorkbenchClientStateRecord>();
+  readonly #schedule: (callback: () => void, delayMs: number) => number;
+  readonly #visibility: NonNullable<WorkbenchClientStateControllerOptions["visibility"]>;
+  #daemonRegistrationId = "memory";
+  #disposed = false;
+  #error = "";
+  #polling = false;
+  #revision = 0;
+  #scheduledPoll: number | null = null;
+  #snapshot: WorkbenchClientStateSnapshot = { daemonRegistrationId: "memory", error: "", records: [], revision: 0 };
+  #unsubscribeVisibility: (() => void) | null = null;
+
+  constructor(options: WorkbenchClientStateControllerOptions = {}) {
+    this.#mode = options.mode ?? "memory";
+    this.#fetcher = options.fetcher ?? fetch;
+    this.#pollDelayMs = options.pollDelayMs ?? 2_000;
+    this.#schedule = options.schedule ?? ((callback, delayMs) => window.setTimeout(callback, delayMs));
+    this.#cancelSchedule = options.cancelSchedule ?? ((id) => window.clearTimeout(id));
+    this.#visibility = options.visibility ?? browserVisibility();
+  }
+
+  get daemonRegistrationId() {
+    return this.#daemonRegistrationId;
+  }
+
+  getSnapshot = () => this.#snapshot;
+
+  subscribe = (listener: () => void) => {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  };
+
+  records<Kind extends WorkbenchClientStateRecord["kind"]>(kind: Kind) {
+    return this.#snapshot.records.filter((record): record is Extract<WorkbenchClientStateRecord, { kind: Kind }> => record.kind === kind);
+  }
+
+  async bootstrap() {
+    if (this.#mode === "memory") return this.#snapshot;
+    const response = await this.#request("GET", "/api/workbench-client-state");
+    if (response.kind !== "snapshot") throw new Error("Workbench app state bootstrap did not return a complete snapshot.");
+    this.#apply(response);
+    this.#unsubscribeVisibility = this.#visibility.subscribe(() => {
+      if (this.#disposed || this.#visibility.hidden()) {
+        this.#cancelPendingPoll();
+        return;
+      }
+      void this.#poll();
+    });
+    this.#schedulePoll();
+    return this.#snapshot;
+  }
+
+  async put(record: WorkbenchClientStateRecord) {
+    return await this.#mutate({ action: "put", record });
+  }
+
+  async delete(identity: WorkbenchClientStateIdentity) {
+    return await this.#mutate({ action: "delete", identity });
+  }
+
+  dispose() {
+    this.#disposed = true;
+    this.#cancelPendingPoll();
+    this.#unsubscribeVisibility?.();
+    this.#unsubscribeVisibility = null;
+    this.#listeners.clear();
+  }
+
+  async #mutate(mutation: WorkbenchClientStateMutation) {
+    if (this.#mode === "memory") {
+      this.#revision += 1;
+      if (mutation.action === "put") {
+        this.#records.set(identityKey(workbenchClientStateRecordIdentity(mutation.record)), mutation.record);
+      }
+      else this.#records.delete(identityKey(mutation.identity));
+      this.#publish();
+      return this.#snapshot;
+    }
+    const response = await this.#request(
+      mutation.action === "put" ? "PUT" : "DELETE",
+      workbenchClientStateMutationPath(
+        mutation.action === "put" ? mutation.record.kind : mutation.identity.kind,
+      ),
+      mutation,
+    );
+    this.#apply(response);
+    return this.#snapshot;
+  }
+
+  async #poll() {
+    if (this.#disposed || this.#mode === "memory" || this.#visibility.hidden() || this.#polling) return;
+    this.#cancelPendingPoll();
+    this.#polling = true;
+    try {
+      const response = await this.#request("GET", `/api/workbench-client-state?sinceRevision=${this.#revision}`);
+      this.#apply(response);
+      this.#setError("");
+    } catch (error) {
+      this.#setError(error instanceof Error ? error.message : "Workbench app state polling failed.");
+    } finally {
+      this.#polling = false;
+      this.#schedulePoll();
+    }
+  }
+
+  #schedulePoll() {
+    if (this.#disposed || this.#mode === "memory" || this.#visibility.hidden() || this.#scheduledPoll !== null) return;
+    this.#scheduledPoll = this.#schedule(() => {
+      this.#scheduledPoll = null;
+      void this.#poll();
+    }, this.#pollDelayMs);
+  }
+
+  #cancelPendingPoll() {
+    if (this.#scheduledPoll === null) return;
+    this.#cancelSchedule(this.#scheduledPoll);
+    this.#scheduledPoll = null;
+  }
+
+  async #request(method: "DELETE" | "GET" | "PUT", url: string, mutation?: WorkbenchClientStateMutation) {
+    const body = mutation
+      ? mutation.action === "put" ? mutation.record : mutation.identity
+      : undefined;
+    const response = await this.#fetcher(url, {
+      ...(body ? { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } } : {}),
+      method,
+    });
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message.slice(0, 1_000) || `Workbench app state request failed with ${response.status}.`);
+    }
+    const conformed = conformWorkbenchClientStateResponse(await response.json());
+    if (conformed.repairedPaths.length || !conformed.success) {
+      console.warn("Workbench app-state response required schema conformance.", {
+        issues: "data" in conformed ? [] : conformed.issues.slice(0, 20),
+        repairedPaths: conformed.repairedPaths.slice(0, 20),
+      });
+    }
+    if (!("data" in conformed)) {
+      throw new Error("The Workbench app-state response was invalid.");
+    }
+    return conformed.data;
+  }
+
+  #apply(response: WorkbenchClientStateResponse) {
+    if (response.revision < this.#revision) return;
+    if (this.#daemonRegistrationId !== "memory" && response.daemonRegistrationId !== this.#daemonRegistrationId) {
+      throw new Error("Workbench app-state daemon registration changed during this browser session.");
+    }
+    this.#daemonRegistrationId = response.daemonRegistrationId;
+    if (response.kind === "snapshot") this.#records.clear();
+    for (const change of projectWorkbenchClientStateRows(response.rows)) {
+      if (response.kind === "delta" && change.revision <= this.#revision) continue;
+      if (change.change === "upsert") {
+        this.#records.set(identityKey(workbenchClientStateRecordIdentity(change.record)), change.record);
+      } else {
+        this.#records.delete(identityKey(change.identity));
+      }
+    }
+    this.#revision = response.revision;
+    this.#publish();
+  }
+
+  #setError(error: string) {
+    if (this.#error === error) return;
+    this.#error = error;
+    this.#publish();
+  }
+
+  #publish() {
+    this.#snapshot = {
+      daemonRegistrationId: this.#daemonRegistrationId,
+      error: this.#error,
+      records: [...this.#records.values()],
+      revision: this.#revision,
+    };
+    for (const listener of this.#listeners) listener();
+  }
+}

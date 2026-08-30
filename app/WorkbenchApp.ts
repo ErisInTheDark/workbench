@@ -17,10 +17,16 @@ export interface WorkbenchAppLease {
   dispose(): Promise<void>;
 }
 
+export interface WorkbenchAppStateOwner {
+  close(): void;
+  start(): string;
+}
+
 export interface WorkbenchAppOptions {
   acquireLaunchLease?: () => Promise<WorkbenchAppLease | null>;
   callerThreadId?: string | null;
-  createServer: () => WorkbenchAppServer;
+  createServer: (state: WorkbenchAppStateOwner) => WorkbenchAppServer;
+  createState?: () => WorkbenchAppStateOwner;
 }
 
 export type WorkbenchAppStartResult =
@@ -41,9 +47,11 @@ function throwFailures(message: string, failures: unknown[]) {
 export default class WorkbenchApp {
   private readonly acquireLaunchLease: () => Promise<WorkbenchAppLease | null>;
   private readonly callerThreadId: string | null;
-  private readonly createServer: () => WorkbenchAppServer;
+  private readonly createServer: (state: WorkbenchAppStateOwner) => WorkbenchAppServer;
+  private readonly createState: () => WorkbenchAppStateOwner;
   private lease: WorkbenchAppLease | null = null;
   private server: WorkbenchAppServer | null = null;
+  private state: WorkbenchAppStateOwner | null = null;
 
   constructor(options: WorkbenchAppOptions) {
     this.acquireLaunchLease = options.acquireLaunchLease ?? (() => WorkbenchAppLaunchLease.acquire());
@@ -51,6 +59,7 @@ export default class WorkbenchApp {
       ? options.callerThreadId?.trim() || null
       : currentThreadId();
     this.createServer = options.createServer;
+    this.createState = options.createState ?? (() => ({ close: () => {}, start: () => "" }));
   }
 
   async start(): Promise<WorkbenchAppStartResult> {
@@ -62,11 +71,14 @@ export default class WorkbenchApp {
     const lease = await this.acquireLaunchLease();
     if (!lease) return { kind: "already-running" };
 
-    const server = this.createServer();
+    const state = this.createState();
+    const server = this.createServer(state);
     try {
+      state.start();
       const address = await server.start();
       this.lease = lease;
       this.server = server;
+      this.state = state;
       return { address, kind: "started" };
     } catch (error) {
       const failures = [error];
@@ -74,6 +86,11 @@ export default class WorkbenchApp {
         await server.close();
       } catch (closeError) {
         failures.push(closeError);
+      }
+      try {
+        state.close();
+      } catch (stateError) {
+        failures.push(stateError);
       }
       try {
         await lease.dispose();
@@ -88,11 +105,28 @@ export default class WorkbenchApp {
   async close() {
     const server = this.server;
     const lease = this.lease;
-    if (!server || !lease) return;
+    const state = this.state;
+    if (!server || !lease || !state) return;
 
-    await server.close();
     this.server = null;
-    await lease.dispose();
+    this.state = null;
     this.lease = null;
+    const failures: unknown[] = [];
+    try {
+      await server.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      state.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await lease.dispose();
+    } catch (error) {
+      failures.push(error);
+    }
+    throwFailures("Workbench app shutdown failed.", failures);
   }
 }

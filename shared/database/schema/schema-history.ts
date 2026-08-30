@@ -158,7 +158,7 @@ export function rebuildTable<From extends TableDefinition, To extends TableDefin
 }): RebuildTableMigration {
   assertSameTable(input.from, input.to);
   const sourceColumns = tableColumns(input.from);
-  const explicitMap = input.map?.({ from: sourceColumns, expression: sql }) ?? {};
+  const explicitMap: RebuildMap<To> = input.map?.({ from: sourceColumns, expression: sql }) ?? {};
   const copy: RebuildCopy[] = [];
   for (const [targetColumn, targetDefinition] of Object.entries(input.to.columns)) {
     const explicit = explicitMap[targetColumn];

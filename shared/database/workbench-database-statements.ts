@@ -10,7 +10,7 @@ import type {
   InsertRow,
   SelectRow,
   TableDefinition,
-} from "../../lib/workbench/database/schema/schema-definition.ts";
+} from "./schema/schema-definition.ts";
 
 export type WorkbenchDatabaseValue = string | number | null;
 export type WorkbenchDatabaseRow = Record<string, WorkbenchDatabaseValue>;
