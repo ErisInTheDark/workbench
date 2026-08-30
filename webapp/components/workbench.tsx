@@ -13,6 +13,7 @@ import type {
   WorkbenchBrowseSessionControlResponse,
   WorkbenchBrowseSessionListResponse,
   WorkbenchBrowseSessionSummary,
+  WorkbenchAppRuntimeStore,
   WorkbenchComposerInputDraft,
   WorkbenchComposerSettings,
   WorkbenchControls,
@@ -498,7 +499,7 @@ function pruneResolvedUserInputRequestKeys (
     : resolvedRequestKeysByThreadId;
 }
 
-export default function Workbench () {
+export default function Workbench ({ appRuntime = null }: { appRuntime?: WorkbenchAppRuntimeStore | null }) {
   const clientStateController = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
   const [composerProfileController] = useState(() => new WorkbenchComposerProfileController(clientStateController));
@@ -3023,6 +3024,7 @@ export default function Workbench () {
                     </section>
                   ) : null}
                   <ReloadNecessary
+                    appRuntime={appRuntime}
                     reloadScopes={controls?.reloadScopes ?? null}
                     store={threadSidebarStore}
                   />

@@ -10,7 +10,14 @@
     "./state/workbench-app-state-schema": "./state/workbench-app-state-schema.ts",
     "./state/workbench-client-state-projection": "./state/workbench-client-state-projection.ts",
     "./state/workbench-client-state": "./state/workbench-client-state.ts",
-    "./http/StaticHttpServer": "./http/StaticHttpServer.ts"
+    "./http/HttpServer": "./http/HttpServer.ts",
+    "./http/StaticHttpRequestController": "./http/StaticHttpRequestController.ts",
+    "./http/StaticHttpServer": "./http/StaticHttpServer.ts",
+    "./reload/ReloadableNode": "./reload/ReloadableNode.ts",
+    "./reload/ReloadableNodeHost": "./reload/ReloadableNodeHost.ts",
+    "./reload/reloadable-node-loader": "./reload/reloadable-node-loader.ts",
+    "./reload/workbench-reload": "./reload/workbench-reload.ts",
+    "./source-pattern-matcher": "./source-pattern-matcher.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "9.6.0",

@@ -6,8 +6,10 @@ import WorkbenchAppLogger from "./WorkbenchAppLogger.ts";
 import WorkbenchAppProcessProtocol from "./WorkbenchAppProcessProtocol.ts";
 import WorkbenchFrontendCompiler from "./WorkbenchFrontendCompiler.ts";
 import WorkbenchFrontendServer from "./WorkbenchFrontendServer.ts";
-import WorkbenchAppStateController from "./state/WorkbenchAppStateController.ts";
-import WorkbenchAppStateRoutes from "./state/workbench-app-state-routes.ts";
+import WorkbenchAppStateRepository from "./state/WorkbenchAppStateRepository.ts";
+import WorkbenchAppRuntime from "./runtime/WorkbenchAppRuntime.ts";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const logger = new WorkbenchAppLogger();
 
@@ -27,18 +29,27 @@ function legacyOrigin() {
 }
 
 async function main() {
+  const repositoryRootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const createCompiler = () => new WorkbenchFrontendCompiler({
+    logger,
+    onDiagnostic: (message) => logger.error("tailwind", message),
+    repositoryRootPath,
+  });
+  const outputDirectoryPath = createCompiler().outputDirectoryPath;
   const app = new WorkbenchApp({
-    createState: () => new WorkbenchAppStateController(),
-    createServer: (state) => new WorkbenchFrontendServer({
-      compiler: new WorkbenchFrontendCompiler({
-        logger,
-        onDiagnostic: (message) => logger.error("tailwind", message),
-      }),
-      hostname: process.env.WORKBENCH_APP_HOST?.trim() || "0.0.0.0",
+    createRuntime: () => new WorkbenchAppRuntime({
+      createCompiler,
+      createDatabase: () => new WorkbenchAppStateRepository(),
       legacyOrigin: legacyOrigin(),
+      logger,
+      outputDirectoryPath,
+      repositoryRootPath,
+    }),
+    createServer: (runtime) => new WorkbenchFrontendServer({
+      hostname: process.env.WORKBENCH_APP_HOST?.trim() || "0.0.0.0",
       onDiagnostic: (message) => logger.error("http", message),
       port: configuredPort(process.env.WORKBENCH_APP_PORT),
-      stateRoutes: new WorkbenchAppStateRoutes(state as WorkbenchAppStateController),
+      requests: runtime,
     }),
   });
   const result = await app.start();

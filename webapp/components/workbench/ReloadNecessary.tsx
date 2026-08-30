@@ -6,21 +6,26 @@
 
 import { useState, useSyncExternalStore } from "react";
 
-import type { OrchestratorReloadResponse, OrchestratorReloadScope, WorkbenchReloadDirtScope, WorkbenchThreadSidebarStore } from "../../lib/types";
+import type { OrchestratorReloadResponse, OrchestratorReloadScope, WorkbenchAppRuntimeStore, WorkbenchReloadDirtScope, WorkbenchThreadSidebarStore } from "../../lib/types";
 import ChevronIcon from "./ChevronIcon";
 import PrimaryButton from "./PrimaryButton";
 import {
+  getDirectlyReloadableScopes,
   getReloadAllHoldMs,
   getReloadScopeHoldMs,
+  mergeReloadDirt,
+  partitionReloadScopes,
 } from "./reload-necessary-state";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 
 const EMPTY_SUBSCRIBE = () => () => undefined;
 
-export default function ReloadNecessary({
+export default function ReloadNecessary ({
+  appRuntime,
   reloadScopes,
   store,
 }: {
+  appRuntime: WorkbenchAppRuntimeStore | null;
   reloadScopes: ((scopes: OrchestratorReloadScope[]) => Promise<OrchestratorReloadResponse>) | null;
   store: WorkbenchThreadSidebarStore | null;
 }) {
@@ -29,18 +34,31 @@ export default function ReloadNecessary({
   const { preferences, setReloadNecessaryOpen } = useWorkbenchSidebarPreferences();
   const collapsed = !preferences.reloadNecessaryOpen;
   const snapshot = useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, store?.getSnapshot ?? (() => null), () => null);
-  const dirt = snapshot?.reloadDirt;
+  const appDirt = useSyncExternalStore(
+    appRuntime?.subscribe ?? EMPTY_SUBSCRIBE,
+    appRuntime?.getSnapshot ?? (() => null),
+    () => null,
+  );
+  const dirt = mergeReloadDirt(appDirt, snapshot?.reloadDirt);
 
-  if (!dirt?.dirtyScopes.length) return null;
+  if (!dirt || (!dirt.dirtyScopes.length && !dirt.error)) return null;
 
   const pending = new Set(dirt.pendingScopes);
+  const reloadableScopes = getDirectlyReloadableScopes(dirt.dirtyScopes);
   const reload = async (scopes: readonly WorkbenchReloadDirtScope[]) => {
     const selected = scopes.map(({ scope }) => scope);
     setRequestError("");
     setRequesting(selected);
     try {
-      if (!reloadScopes) throw new Error("Workbench reload controls are not ready.");
-      await reloadScopes(selected);
+      const owners = partitionReloadScopes(selected);
+      await Promise.all([
+        owners.client.length
+          ? appRuntime?.reloadScopes(owners.client) ?? Promise.reject(new Error("Workbench app reload controls are not ready."))
+          : undefined,
+        owners.server.length
+          ? reloadScopes?.(owners.server) ?? Promise.reject(new Error("Workbench daemon reload controls are not ready."))
+          : undefined,
+      ]);
     } catch (error) {
       setRequestError(error instanceof Error ? error.message : "Unable to reload the selected scopes.");
     } finally {
@@ -51,14 +69,13 @@ export default function ReloadNecessary({
 
   return (
     <section
-      className="sticky bottom-0 z-20 mt-auto"
+      className="sticky bottom-0 z-20 mt-auto ml-3"
       data-reload-necessary="true"
     >
       <div className="rounded-[1.15rem] border border-[color-mix(in_srgb,var(--text)_20%,transparent)] bg-[color:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] p-2.5 backdrop-blur-md">
         <div
-          className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 ${
-            collapsed ? "" : "border-b border-[color-mix(in_srgb,var(--text)_12%,transparent)] pb-2"
-          }`}
+          className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 ${collapsed ? "" : "border-b border-[color-mix(in_srgb,var(--text)_12%,transparent)] pb-2"
+            }`}
         >
           <button
             aria-expanded={!collapsed}
@@ -73,25 +90,28 @@ export default function ReloadNecessary({
           <p className="m-0 min-w-0 truncate font-semibold text-text">
             Reload necessary
           </p>
-          <PrimaryButton
+          {reloadableScopes.length ? <PrimaryButton
             className="!px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px]"
             disabled={allBusy}
-            holdToConfirmMs={getReloadAllHoldMs(dirt.dirtyScopes)}
-            onClick={() => void reload(dirt.dirtyScopes)}
+            holdToConfirmMs={getReloadAllHoldMs(reloadableScopes)}
+            onClick={() => void reload(reloadableScopes)}
             pendingHalo={allBusy}
-            tone={dirt.dirtyScopes.some(({ destructive }) => destructive) ? "danger" : "default"}
+            tone={reloadableScopes.some(({ destructive }) => destructive) ? "danger" : "default"}
           >
             Reload all
-          </PrimaryButton>
+          </PrimaryButton> : null}
         </div>
         {!collapsed ? (
           <div className="mt-2 space-y-1.5">
             {dirt.dirtyScopes.map((scope) => {
               const busy = pending.has(scope.scope) || requesting.includes(scope.scope);
+              const restartRequired = scope.scope === "client:process";
               return (
                 <div className="flex items-center justify-between gap-2" key={scope.scope}>
                   <p className="m-0 min-w-0 truncate text-[0.8rem] font-medium text-text">{scope.scope}</p>
-                  <PrimaryButton
+                  {restartRequired ? (
+                    <span className="shrink-0 text-[0.74rem] font-medium text-danger">Restart required</span>
+                  ) : <PrimaryButton
                     className="!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px]"
                     disabled={busy}
                     holdToConfirmMs={getReloadScopeHoldMs(scope)}
@@ -100,7 +120,7 @@ export default function ReloadNecessary({
                     tone={scope.destructive ? "danger" : "default"}
                   >
                     Reload
-                  </PrimaryButton>
+                  </PrimaryButton>}
                 </div>
               );
             })}

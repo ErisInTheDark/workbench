@@ -7,6 +7,7 @@ import ThreadRenderLab from "../webapp/components/workbench/thread-view/ThreadRe
 import Workbench from "../webapp/components/workbench.tsx";
 import WorkbenchClientStateProvider from "../webapp/components/workbench/WorkbenchClientStateProvider.tsx";
 import WorkbenchClientStateController from "../webapp/lib/workbench/state/WorkbenchClientStateController.ts";
+import WorkbenchAppRuntimeClient from "../webapp/lib/workbench/app/WorkbenchAppRuntimeClient.ts";
 import { usePathname } from "./browser-navigation.ts";
 
 function threadIdFromPath(pathname: string) {
@@ -19,7 +20,13 @@ function threadIdFromPath(pathname: string) {
   }
 }
 
-export default function WorkbenchBrowserApp({ controller }: { controller: WorkbenchClientStateController }) {
+export default function WorkbenchBrowserApp({
+  controller,
+  runtime,
+}: {
+  controller: WorkbenchClientStateController;
+  runtime: WorkbenchAppRuntimeClient;
+}) {
   const pathname = usePathname();
   let content;
   if (pathname === "/agent/thread-lab") {
@@ -27,7 +34,7 @@ export default function WorkbenchBrowserApp({ controller }: { controller: Workbe
   } else if (pathname === "/agent/thread" || pathname.startsWith("/agent/thread/")) {
     content = <AgentThreadViewer initialThreadId={threadIdFromPath(pathname)} />;
   } else {
-    content = <Workbench />;
+    content = <Workbench appRuntime={runtime} />;
   }
   return (
     <WorkbenchClientStateProvider controller={controller}>

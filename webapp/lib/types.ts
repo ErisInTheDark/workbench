@@ -5,6 +5,8 @@
  * - OrchestratorReloadState: orchestrator reload lifecycle state.
  * - OrchestratorReloadRequest: orchestrator reload request contract.
  * - OrchestratorReloadResponse: orchestrator reload response contract.
+ * - WorkbenchReloadDirtScope/WorkbenchReloadDirtSnapshot: shared app and daemon reload dirt.
+ * - WorkbenchAppRuntimeStore: browser-facing app reload observation and command port.
  * - WorkbenchLocalCapabilitySettings: local capability settings contract.
  * - WorkbenchLocalCapabilitySettingsResponse: local capability read response.
  * - WorkbenchLocalCapabilitySettingsUpdateRequest: local capability update request.
@@ -155,6 +157,7 @@ import type { Turn } from "./codex/generated/app-server/v2/Turn";
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
 import type { WorkbenchRoute } from "./workbench/navigation/workbench-route";
 import type { OrchestratorReloadResponse, OrchestratorReloadScope } from "./workbench/orchestrator-reload";
+import type { WorkbenchReloadDirtSnapshot as SharedWorkbenchReloadDirtSnapshot, WorkbenchReloadDirtScope as SharedWorkbenchReloadDirtScope, WorkbenchReloadResponse, WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline";
 import type { WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
@@ -167,16 +170,13 @@ export type {
   OrchestratorReloadState,
 } from "./workbench/orchestrator-reload";
 
-export interface WorkbenchReloadDirtScope {
-  description: string;
-  destructive: boolean;
-  scope: OrchestratorReloadScope;
-}
+export type WorkbenchReloadDirtScope = SharedWorkbenchReloadDirtScope;
+export type WorkbenchReloadDirtSnapshot = SharedWorkbenchReloadDirtSnapshot;
 
-export interface WorkbenchReloadDirtSnapshot {
-  dirtyScopes: WorkbenchReloadDirtScope[];
-  error: string | null;
-  pendingScopes: OrchestratorReloadScope[];
+export interface WorkbenchAppRuntimeStore {
+  getSnapshot(): WorkbenchReloadDirtSnapshot;
+  reloadScopes(scopes: readonly WorkbenchReloadScope[]): Promise<WorkbenchReloadResponse>;
+  subscribe(listener: () => void): () => void;
 }
 
 export interface WorkbenchLocalCapabilitySettings {

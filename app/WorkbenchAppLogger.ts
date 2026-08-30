@@ -7,12 +7,13 @@ const ANSI_CYAN = "\u001b[36m";
 const ANSI_GRAY = "\u001b[90m";
 const ANSI_GREEN = "\u001b[32m";
 const ANSI_MAGENTA = "\u001b[35m";
+const ANSI_RED = "\u001b[31m";
 const ANSI_RESET = "\u001b[0m";
 const ANSI_YELLOW = "\u001b[33m";
 const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/gu;
 const DURATION_PATTERN = /(?<![\p{L}\p{N}_])(\d+(?:\.\d+)?(?:µs|ms|s))(?![\p{L}\p{N}_])/gu;
 
-type WorkbenchAppLogDomain = "app" | "esbuild" | "http" | "tailwind";
+type WorkbenchAppLogDomain = "app" | "client" | "esbuild" | "http" | "tailwind";
 
 interface WorkbenchAppLoggerOptions {
   color?: boolean;
@@ -23,6 +24,7 @@ interface WorkbenchAppLoggerOptions {
 
 const domainColors: Record<WorkbenchAppLogDomain, string> = {
   app: ANSI_CYAN,
+  client: ANSI_RED,
   esbuild: ANSI_GREEN,
   http: ANSI_BLUE,
   tailwind: ANSI_YELLOW,
@@ -77,11 +79,10 @@ export default class WorkbenchAppLogger {
 
   private format(domain: WorkbenchAppLogDomain, message: string) {
     const cleanMessage = message.replace(ANSI_PATTERN, "").trimEnd();
-    if (!this.color) return `${timestamp(this.now())} ${domain} ${cleanMessage}\n`;
-    const coloredMessage = cleanMessage.replace(
-      DURATION_PATTERN,
-      `${ANSI_MAGENTA}$1${ANSI_RESET}`,
-    );
-    return `${ANSI_GRAY}${timestamp(this.now())}${ANSI_RESET} ${domainColors[domain]}${domain}${ANSI_RESET} ${coloredMessage}\n`;
+    return cleanMessage.split(/\r\n|\n|\r/u).map((line) => {
+      if (!this.color) return `${timestamp(this.now())} ${domain} ${line}\n`;
+      const coloredMessage = line.replace(DURATION_PATTERN, `${ANSI_MAGENTA}$1${ANSI_RESET}`);
+      return `${ANSI_GRAY}${timestamp(this.now())}${ANSI_RESET} ${domainColors[domain]}${domain}${ANSI_RESET} ${coloredMessage}\n`;
+    }).join("");
   }
 }

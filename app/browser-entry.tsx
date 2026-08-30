@@ -1,36 +1,54 @@
 /*
- * No exports. Browser entry installs route events, mounts React Scan, and renders the standalone Workbench browser shell.
+ * No exports. Browser entry installs diagnostics before loading and rendering the standalone Workbench browser shell.
  */
-import { createRoot } from "react-dom/client";
+import WorkbenchBrowserLogForwarder from "./WorkbenchBrowserLogForwarder.ts";
 
-import { ReactScan } from "../webapp/components/ReactScan.tsx";
-import WorkbenchClientStateController from "../webapp/lib/workbench/state/WorkbenchClientStateController.ts";
-import { installBrowserNavigationEvents } from "./browser-navigation.ts";
-import WorkbenchBrowserApp from "./WorkbenchBrowserApp.tsx";
-
-installBrowserNavigationEvents();
+const logForwarder = new WorkbenchBrowserLogForwarder();
+logForwarder.install();
 
 async function start() {
+  const [
+    { createRoot },
+    { ReactScan },
+    { default: WorkbenchClientStateController },
+    { default: WorkbenchAppRuntimeClient },
+    { installBrowserNavigationEvents },
+    { default: WorkbenchBrowserApp },
+  ] = await Promise.all([
+    import("react-dom/client"),
+    import("../webapp/components/ReactScan.tsx"),
+    import("../webapp/lib/workbench/state/WorkbenchClientStateController.ts"),
+    import("../webapp/lib/workbench/app/WorkbenchAppRuntimeClient.ts"),
+    import("./browser-navigation.ts"),
+    import("./WorkbenchBrowserApp.tsx"),
+  ]);
+  installBrowserNavigationEvents();
   const rootElement = document.getElementById("root");
   if (!rootElement) throw new Error("Workbench app root is unavailable.");
   const controller = new WorkbenchClientStateController({ mode: "http" });
+  const runtime = new WorkbenchAppRuntimeClient();
   try {
-    await controller.bootstrap();
+    await Promise.all([controller.bootstrap(), runtime.bootstrap()]);
     const theme = controller.records("globalPreference").find((record) => (
       record.preference.key === "theme"
     ))?.preference.value;
     document.documentElement.dataset.workbenchTheme = theme === "magical-girl" || theme === "winter"
       ? theme
       : "default";
-    window.addEventListener("pagehide", () => controller.dispose(), { once: true });
+    window.addEventListener("pagehide", () => {
+      controller.dispose();
+      runtime.dispose();
+      logForwarder.dispose();
+    }, { once: true });
     createRoot(rootElement).render(
       <>
         <ReactScan />
-        <WorkbenchBrowserApp controller={controller} />
+        <WorkbenchBrowserApp controller={controller} runtime={runtime} />
       </>,
     );
   } catch (error) {
     controller.dispose();
+    runtime.dispose();
     document.documentElement.dataset.workbenchTheme = "default";
     rootElement.textContent = error instanceof Error
       ? `Workbench could not load its app state: ${error.message}`

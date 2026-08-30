@@ -6,6 +6,7 @@ import test from "node:test";
 
 import WorkbenchApp, {
   type WorkbenchAppLease,
+  type WorkbenchAppRuntime,
   type WorkbenchAppServer,
 } from "./WorkbenchApp.ts";
 
@@ -19,8 +20,8 @@ function fixture(options: {
   failLeaseDispose?: boolean;
   failServerClose?: boolean;
   failServerStart?: boolean;
-  failStateClose?: boolean;
-  failStateStart?: boolean;
+  failRuntimeClose?: boolean;
+  failRuntimeStart?: boolean;
   leaseAvailable?: boolean;
 } = {}) {
   const events: string[] = [];
@@ -41,15 +42,15 @@ function fixture(options: {
       return address;
     },
   };
-  const state = {
-    close: () => {
-      events.push("state:close");
-      if (options.failStateClose) throw new Error("state close failed");
+  const runtime: WorkbenchAppRuntime = {
+    close: async () => {
+      events.push("runtime:close");
+      if (options.failRuntimeClose) throw new Error("runtime close failed");
     },
-    start: () => {
-      events.push("state:start");
-      if (options.failStateStart) throw new Error("state start failed");
-      return "registration";
+    handleRequest: async () => {},
+    start: async () => {
+      events.push("runtime:start");
+      if (options.failRuntimeStart) throw new Error("runtime start failed");
     },
   };
   let serverCreations = 0;
@@ -59,7 +60,7 @@ function fixture(options: {
       return options.leaseAvailable === false ? null : lease;
     },
     callerThreadId: null,
-    createState: () => state,
+    createRuntime: () => runtime,
     createServer: () => {
       serverCreations += 1;
       return server;
@@ -83,6 +84,7 @@ test("rejects a managed thread before acquiring app resources", async () => {
       return null;
     },
     callerThreadId: "thread-one",
+    createRuntime: () => { throw new Error("runtime must not be constructed"); },
     createServer: () => {
       throw new Error("server must not be constructed");
     },
@@ -97,10 +99,10 @@ test("closes the server before releasing the app lease", async () => {
   await target.app.close();
   assert.deepEqual(target.events, [
     "lease:acquire",
-    "state:start",
+    "runtime:start",
     "server:start",
     "server:close",
-    "state:close",
+    "runtime:close",
     "lease:dispose",
   ]);
 });
@@ -110,32 +112,32 @@ test("releases the lease after startup failure", async () => {
   await assert.rejects(target.app.start(), /start failed/u);
   assert.deepEqual(target.events, [
     "lease:acquire",
-    "state:start",
+    "runtime:start",
     "server:start",
     "server:close",
-    "state:close",
+    "runtime:close",
     "lease:dispose",
   ]);
 });
 
 test("shutdown attempts every reverse-order owner and aggregates failures", async () => {
-  const target = fixture({ failLeaseDispose: true, failServerClose: true, failStateClose: true });
+  const target = fixture({ failLeaseDispose: true, failRuntimeClose: true, failServerClose: true });
   await target.app.start();
   await assert.rejects(target.app.close(), (error: unknown) => {
     assert.ok(error instanceof AggregateError);
     assert.deepEqual(error.errors.map((failure) => failure instanceof Error ? failure.message : String(failure)), [
       "server close failed",
-      "state close failed",
+      "runtime close failed",
       "lease dispose failed",
     ]);
     return true;
   });
   assert.deepEqual(target.events, [
     "lease:acquire",
-    "state:start",
+    "runtime:start",
     "server:start",
     "server:close",
-    "state:close",
+    "runtime:close",
     "lease:dispose",
   ]);
 });

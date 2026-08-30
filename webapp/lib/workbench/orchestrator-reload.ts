@@ -10,8 +10,9 @@
  */
 
 import { z } from "zod";
+import { WORKBENCH_RELOAD_SCOPE_PATTERN } from "workbench-shared/reload/workbench-reload";
 
-export const ORCHESTRATOR_RELOAD_SCOPE_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u;
+export const ORCHESTRATOR_RELOAD_SCOPE_PATTERN = WORKBENCH_RELOAD_SCOPE_PATTERN;
 const RELOAD_SCOPE_GROUP_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*(?:\+[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*)*$/u;
 const MAX_RELOAD_SCOPES = 64;
 const MAX_RELOAD_SCOPE_LENGTH = 64;
