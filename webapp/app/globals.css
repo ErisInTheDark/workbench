@@ -421,12 +421,12 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
       opacity var(--sticky-collapsible-motion-duration) var(--sticky-collapsible-motion-ease);
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"][data-collapsed="true"] .sticky-collapsible-spacer {
+  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-spacer {
     display: block;
     height: var(--sticky-collapsible-expanded-height, 0px);
   }
 
-  .sticky-collapsible-host[data-sticky-armed="true"][data-collapsed="true"] .sticky-collapsible-shell {
+  .sticky-collapsible-host[data-sticky-armed="true"] .sticky-collapsible-shell {
     position: absolute;
     right: 0;
     bottom: 0;

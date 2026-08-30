@@ -5,7 +5,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { isStickyCollapsibleSentinelBelowVisibleBoundary } from "./sticky-collapsible-state";
+import {
+  isStickyCollapsibleSentinelBelowVisibleBoundary,
+  preserveStickyCollapsibleExpandedHeight,
+} from "./sticky-collapsible-state";
+
+test("a sticky source footprint grows but does not shrink across mounted content replacement", () => {
+  assert.equal(preserveStickyCollapsibleExpandedHeight(180, 240), 240);
+  assert.equal(preserveStickyCollapsibleExpandedHeight(240, 140), 240);
+});
 
 test("a sticky collapsible arms when its sentinel leaves a nested scrollport below", () => {
   assert.equal(isStickyCollapsibleSentinelBelowVisibleBoundary({

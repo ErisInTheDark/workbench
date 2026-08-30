@@ -16,7 +16,10 @@ import {
 } from "react";
 
 import ChevronIcon from "./ChevronIcon";
-import { isStickyCollapsibleSentinelBelowVisibleBoundary } from "./sticky-collapsible-state";
+import {
+  isStickyCollapsibleSentinelBelowVisibleBoundary,
+  preserveStickyCollapsibleExpandedHeight,
+} from "./sticky-collapsible-state";
 
 const STICKY_MOTION_DURATION_MS = 240;
 
@@ -64,12 +67,13 @@ export default function StickyCollapsibleSurface({
   order?: number;
   scrollTargetSelector: string;
 }) {
-  const [expandedHeightPx, setExpandedHeightPx] = useState(0);
+  const [preservedExpandedHeightPx, setPreservedExpandedHeightPx] = useState(0);
   const [isArmed, setIsArmed] = useState(false);
   const [motionState, setMotionState] = useState<"idle" | "entering" | "leaving">("idle");
-  const expandedHeightPxRef = useRef(0);
   const expandedRef = useRef<HTMLDivElement>(null);
   const isArmedRef = useRef(false);
+  const measuredExpandedHeightPxRef = useRef(0);
+  const preservedExpandedHeightPxRef = useRef(0);
   const previousArmedRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -147,9 +151,16 @@ export default function StickyCollapsibleSurface({
         + (Number.parseFloat(surfaceStyle.paddingBottom) || 0)
       );
       const nextHeight = expandedElement.getBoundingClientRect().height + verticalPadding;
-      if (Math.abs(expandedHeightPxRef.current - nextHeight) < 0.5) return;
-      expandedHeightPxRef.current = nextHeight;
-      setExpandedHeightPx(nextHeight);
+      if (Math.abs(measuredExpandedHeightPxRef.current - nextHeight) < 0.5) return;
+      measuredExpandedHeightPxRef.current = nextHeight;
+      const nextPreservedHeight = preserveStickyCollapsibleExpandedHeight(
+        preservedExpandedHeightPxRef.current,
+        nextHeight,
+      );
+      if (nextPreservedHeight !== preservedExpandedHeightPxRef.current) {
+        preservedExpandedHeightPxRef.current = nextPreservedHeight;
+        setPreservedExpandedHeightPx(nextPreservedHeight);
+      }
       onGeometryChange?.();
     };
     updateHeight();
@@ -171,7 +182,9 @@ export default function StickyCollapsibleSurface({
     expand();
   };
   const style = {
-    ...(expandedHeightPx > 0 ? { "--sticky-collapsible-expanded-height": `${expandedHeightPx}px` } : {}),
+    ...(preservedExpandedHeightPx > 0
+      ? { "--sticky-collapsible-expanded-height": `${preservedExpandedHeightPx}px` }
+      : {}),
     ...(order === undefined ? {} : { order }),
   } as CSSProperties;
   const collapseControlLabel = collapsed ? collapsedLabel : collapseLabel;
