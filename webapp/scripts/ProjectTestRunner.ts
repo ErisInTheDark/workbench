@@ -2,7 +2,7 @@
  * Default export:
  * - ProjectTestRunner: deterministically discovers TypeScript tests and owns the Node test-runner child lifecycle. Keywords: tests, discovery, TypeScript, lifecycle, Windows.
  * - ProjectTestRunnerOptions/PreparedTestFixtures: inject runner-owned fixture setup and cleanup, process spawning, bounded file concurrency, and timeout. Keywords: tests, fixtures, process, concurrency, timeout.
- * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse the cooperative full-suite flag and discovery inputs. Keywords: tests, CLI, good citizen, concurrency.
+ * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse project-wide defaults, explicit discovery inputs, and the cooperative full-suite flag. Keywords: tests, CLI, filtering, good citizen, concurrency.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { readdir, stat } from "node:fs/promises";
@@ -19,6 +19,7 @@ import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../lib/workbench/WorkbenchTemporar
 import ProjectTestRunCoordinator, { type ProjectTestRunLease } from "./ProjectTestRunCoordinator";
 
 const EXCLUDED_DIRECTORY_NAMES = new Set([".next", "build", "coverage", "dist", "generated", "node_modules"]);
+const DEFAULT_TEST_INPUTS = [".", "../app", "../package", "../shared"] as const;
 const GIT_TEST_CONCURRENCY = 1;
 const NESTED_GIT_TEST_CONCURRENCY = 1;
 const ORDINARY_TEST_CONCURRENCY = 8;
@@ -65,7 +66,7 @@ export function parseProjectTestRunnerArguments(arguments_: readonly string[]): 
     inputs.push(argument);
   }
   return {
-    inputs: inputs.length ? inputs : ["."],
+    inputs: inputs.length ? inputs : [...DEFAULT_TEST_INPUTS],
     ...(goodCitizen ? { testConcurrency: 1, testTimeoutMs: GOOD_CITIZEN_TEST_TIMEOUT_MS } : {}),
   };
 }

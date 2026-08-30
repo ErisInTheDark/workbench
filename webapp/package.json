@@ -9,7 +9,7 @@
     "dev:orchestrator": "node --env-file-if-exists=.env.local --import tsx orchestrator/index.ts",
     "dev:next": "next dev -p 3002",
     "codex:generate-types": "codex app-server generate-ts --experimental --out lib/codex/generated/app-server",
-    "test": "node --disable-warning=ExperimentalWarning --import tsx scripts/ProjectTestRunner.ts . ../app ../package ../shared",
+    "test": "node --disable-warning=ExperimentalWarning --import tsx scripts/ProjectTestRunner.ts",
     "typecheck": "node scripts/typecheck.mjs"
   },
   "dependencies": {
