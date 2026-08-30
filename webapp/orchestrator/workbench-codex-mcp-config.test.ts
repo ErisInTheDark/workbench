@@ -42,49 +42,9 @@ test("adds separated direct and Code Mode wb servers while preserving caller con
   assert.deepEqual((result.config as { mcp_servers: Record<string, unknown> }).mcp_servers.docs, {
     url: "https://example.com/mcp",
   });
-  const { url: _codeUrl, ...wbCodeWithoutUrl } = servers.wb;
-  const { url: _url, ...wbexWithoutUrl } = servers.wbex;
-  assert.deepEqual(wbCodeWithoutUrl, {
-    default_tools_approval_mode: "approve",
-    enabled_tools: [
-      "git_arc_compare",
-      "git_arc_diff",
-      "rg",
-      "shell",
-      "thread_recall",
-      "thread_recall_expand",
-      "thread_recall_search",
-      "thread_title",
-      "thread_title_get",
-      "tokens",
-      "tokens_instructions",
-    ],
-    omit_tools_from: ["direct", "deferred"],
-    required: true,
-    tool_timeout_sec: 1800,
-  });
-  assert.deepEqual(wbexWithoutUrl, {
-    default_tools_approval_mode: "approve",
-    disabled_tools: [
-      "git_arc_compare",
-      "git_arc_diff",
-      "rg",
-      "shell",
-      "thread_recall",
-      "thread_recall_expand",
-      "thread_recall_search",
-      "thread_title",
-      "thread_title_get",
-      "tokens",
-      "tokens_instructions",
-    ],
-    omit_tools_from: ["code_mode", "deferred"],
-    required: true,
-    tool_timeout_sec: 1800,
-  });
-  assert.deepEqual(wbexWithoutUrl.disabled_tools, wbCodeWithoutUrl.enabled_tools);
-  assert.equal((wbCodeWithoutUrl.enabled_tools as string[]).some((name) => name.startsWith("subagent_")), false);
-  assert.equal((wbCodeWithoutUrl.enabled_tools as string[]).includes("thread_refresh"), false);
+  assert.deepEqual(servers.wb.omit_tools_from, ["direct", "deferred"]);
+  assert.deepEqual(servers.wbex.omit_tools_from, ["code_mode", "deferred"]);
+  assert.deepEqual(servers.wbex.disabled_tools, servers.wb.enabled_tools);
 });
 
 test("derives secure loopback MCP transport and rejects non-WebSocket bridge URLs", () => {

@@ -153,6 +153,7 @@ const wait = defineWorkbenchAgentCommand({
       ...(input.refs.length ? { refs: input.refs } : {}), ...baseBody(callerHarness, callerThreadId, cwd),
     }, "git-arc-wait");
   },
+  mcpCodeModeEligible: true,
   mcpRuntimeDrainPolicy: "abort-immediately",
   mcpSteerInterruptible: true,
 });

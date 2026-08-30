@@ -58,7 +58,7 @@ For an inactive plan's first Implement pass, call `mcp__wbex__git_arc_start`. Pa
 
 If start reports planned-path drift, run its exact scoped diagnostic. Drift alone does not invalidate approval. When paths, behavior, ownership, mechanics, and validation remain unchanged, use `mcp__wbex__git_arc_plan_start` with the same approved paths. Return to Brief only when the plan changed.
 
-`mcp__wbex__git_arc_wait` waits until the current or selected plan can start, then acquires its claims. Treat it as a Workbench Long Wait.
+`tools.mcp__wb__git_arc_wait` waits until the current or selected plan can start, then acquires its claims. Treat it as a Workbench Long Wait.
 
 ### continue or extend an active arc
 

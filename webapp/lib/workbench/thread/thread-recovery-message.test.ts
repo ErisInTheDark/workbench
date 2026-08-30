@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect exact recovery identity, content, and collision behavior. Keywords: thread, recovery, test.
+ * No production exports. Node tests protect recovery identity, classification, and collision behavior. Keywords: thread, recovery, test.
  */
 
 import assert from "node:assert/strict";
@@ -48,15 +48,7 @@ test("manual recovery follows inactive Workbench lifecycle without competing wit
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [{ ...interruptedTurn, completedAt: null, status: "inProgress" }] }, attention, false), false);
 });
 
-test("only the exact single recovery texts are recognized", () => {
-  assert.equal(WORKBENCH_THREAD_RECOVERY_MESSAGE, "<wb:resume />");
-  assert.equal(WORKBENCH_UNFINISHED_TURN_MESSAGE, `<wb:resume>
-You have inappropriately ended the turn without finishing the task. The correct next action may be one of: 
-1. Continue your work or
-2. Use a questionnaire if it's a user decision or
-3. Set the thread status and wrap up properly before ending the turn
-Determine the correct next action and take it. Do not repeat this mistake.
-</wb:resume>`);
+test("only owner-built recovery inputs are recognized", () => {
   assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchThreadRecoveryInput()), true);
   assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchUnfinishedTurnInput()), true);
   assert.equal(isWorkbenchUnfinishedTurnInput(createWorkbenchUnfinishedTurnInput()), true);

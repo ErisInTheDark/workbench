@@ -7,7 +7,8 @@ import { randomUUID } from "node:crypto";
 import { listWorkbenchAgentCodeModeToolNames } from "../lib/workbench/commands/workbench-agent-command-registry";
 import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "../lib/workbench/commands/workbench-shell-command";
 
-const WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS = 30 * 60;
+const WORKBENCH_CODE_MODE_MCP_TOOL_TIMEOUT_SECONDS = 6 * 60 * 60;
+const WORKBENCH_DIRECT_MCP_TOOL_TIMEOUT_SECONDS = 30 * 60;
 
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -50,7 +51,7 @@ export function withWorkbenchCodexMcpConfig(
           enabled_tools: codeModeToolNames,
           omit_tools_from: ["direct", "deferred"],
           required: true,
-          tool_timeout_sec: WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS,
+          tool_timeout_sec: WORKBENCH_CODE_MODE_MCP_TOOL_TIMEOUT_SECONDS,
           url: getWorkbenchMcpUrl(bridgeUrl, projectLocal),
         },
         wbex: {
@@ -58,7 +59,7 @@ export function withWorkbenchCodexMcpConfig(
           disabled_tools: codeModeToolNames,
           omit_tools_from: ["code_mode", "deferred"],
           required: true,
-          tool_timeout_sec: WORKBENCH_MCP_TOOL_TIMEOUT_SECONDS,
+          tool_timeout_sec: WORKBENCH_DIRECT_MCP_TOOL_TIMEOUT_SECONDS,
           url: getWorkbenchMcpUrl(bridgeUrl, projectLocal),
         },
       },

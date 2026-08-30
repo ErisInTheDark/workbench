@@ -1,8 +1,6 @@
 ## Workbench Subagents
 
-Workbench owns subagents exclusively through the typed wb MCP subagent tools. No other subagent tools are approved.
-
-Run every call from the intended project cwd. Managed caller identity supplies the parent thread privately.
+Run every call from the intended project cwd; this is the directory subagents will have access to.
 
 ### managing subagents
 
@@ -17,7 +15,7 @@ Let the active agent identity influence child names. Do not use task slugs, role
 
 ### waiting
 
-`mcp__wbex__subagent_wait` accepts any number of `names` and `threadIds` and returns when the first selected child needs attention, completes, or stops.
+`tools.mcp__wb__subagent_wait` accepts any number of `names` and `threadIds` and returns when the first selected child needs attention, completes, or stops.
 
 Pass every active child in one wait call. Treat it as a Workbench Long Wait. Do not use separate concurrent waits.
 

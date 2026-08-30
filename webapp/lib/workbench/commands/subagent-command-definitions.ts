@@ -109,6 +109,7 @@ function targetCommand(action: "settle" | "stop" | "wait", description: string) 
     description,
     effects: action === "wait" ? { idempotent: true, readOnly: true } : action === "stop" ? { destructive: true } : {},
     helpGroups: ["subagent"],
+    mcpCodeModeEligible: action === "wait" || undefined,
     mcpRuntimeDrainPolicy: action === "wait" ? "abort-immediately" : undefined,
     mcpSteerInterruptible: action === "wait" || undefined,
     words: ["subagent", action],
