@@ -200,13 +200,13 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     responseKind: "thread-title-get",
   });
 
-  const resume = await parseWorkbenchAgentCliCommand(["thread", "resume"], { callerThreadId: "thread/1", cwd: "C:/workspace" });
-  assert.equal(resume.kind, "request");
-  assert.deepEqual(resume.request, {
+  const refresh = await parseWorkbenchAgentCliCommand(["thread", "refresh"], { callerThreadId: "thread/1", cwd: "C:/workspace" });
+  assert.equal(refresh.kind, "request");
+  assert.deepEqual(refresh.request, {
     body: { callerThreadId: "thread/1", cwd: "C:/workspace" },
     method: "POST",
     path: "/api/thread-resume",
-    responseKind: "thread-resume",
+    responseKind: "thread-refresh",
   });
 
   const recall = await parseWorkbenchAgentCliCommand([
@@ -1111,7 +1111,7 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     stderr: "",
     stdout: "Thread title: Current task\n",
   });
-  assert.equal(adapt("thread-resume", { accepted: true }).stdout, "Thread resume scheduled.\n");
+  assert.equal(adapt("thread-refresh", { accepted: true }).stdout, "Thread refresh scheduled.\n");
   const planRef = "a".repeat(40);
   const successorRef = "b".repeat(40);
   const planResponse = adapt("git-arc-plan", {

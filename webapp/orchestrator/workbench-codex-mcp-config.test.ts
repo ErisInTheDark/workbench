@@ -84,7 +84,7 @@ test("adds separated direct and Code Mode wb servers while preserving caller con
   });
   assert.deepEqual(wbexWithoutUrl.disabled_tools, wbCodeWithoutUrl.enabled_tools);
   assert.equal((wbCodeWithoutUrl.enabled_tools as string[]).some((name) => name.startsWith("subagent_")), false);
-  assert.equal((wbCodeWithoutUrl.enabled_tools as string[]).includes("thread_resume"), false);
+  assert.equal((wbCodeWithoutUrl.enabled_tools as string[]).includes("thread_refresh"), false);
 });
 
 test("derives secure loopback MCP transport and rejects non-WebSocket bridge URLs", () => {

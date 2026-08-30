@@ -132,7 +132,7 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
 
 test("simple typed wb MCP calls share argument-sensitive CLI presentations", () => {
   const cases = [
-    ["wb thread resume", "thread_resume", {}],
+    ["wb thread refresh", "thread_refresh", {}],
     ["wb tokens -- count-me", "tokens", { text: "count-me" }],
     ["wb tokens instructions", "tokens_instructions", {}],
     ["wb git add -- src/a.ts", "git_add", { paths: ["src/a.ts"] }],
@@ -161,7 +161,7 @@ test("every valid simple typed wb MCP route emphasizes its important target", ()
   const cases = [
     ["rg", { args: ["-n", "needle", "webapp"] }, ["plain", "pattern", "plain", "path"]],
     ["thread_title_get", {}, ["plain", "primary"]],
-    ["thread_resume", {}, ["plain", "primary"]],
+    ["thread_refresh", {}, ["plain", "primary"]],
     ["git_add", { paths: ["src/a.ts"] }, ["plain", "primary"]],
     ["git_unstage", { paths: ["src/a.ts"] }, ["plain", "primary"]],
     ["git_commit", { description: "Details", title: "Commit" }, ["plain", "primary"]],

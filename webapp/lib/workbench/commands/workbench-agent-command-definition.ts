@@ -35,7 +35,7 @@ export type WorkbenchAgentCommandResponseKind =
   | "subagent-list"
   | "subagent-settle"
   | "thread-status"
-  | "thread-resume"
+  | "thread-refresh"
   | "thread-title-get"
   | "thread-title";
 

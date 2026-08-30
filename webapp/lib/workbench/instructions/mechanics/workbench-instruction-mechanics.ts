@@ -7,7 +7,7 @@
  * - buildWorkbenchLongWaitInstructions: render shared blocking-call mechanics. Keywords: wait, steer, instructions.
  * - buildWorkbenchSubagentInstructions: render fresh typed subagent mechanics. Keywords: subagent, instructions, MCP.
  * - buildWorkbenchThreadRecallInstructions: render fresh current-thread recall mechanics. Keywords: thread, recall, instructions.
- * - buildWorkbenchThreadResumeInstructions: render fresh current-thread resume mechanics. Keywords: thread, resume, instructions.
+ * - buildWorkbenchThreadRefreshInstructions: render fresh current-thread refresh mechanics. Keywords: thread, refresh, instructions.
  * - buildThreadStatusInstructions: render fresh current-thread status mechanics. Keywords: thread, status, instructions.
  */
 
@@ -29,7 +29,7 @@ export function listWorkbenchInstructionMechanics(context: WorkbenchPromptContex
   if (isManagedPromptThread(context)) {
     available.add("thread-git");
     available.add("thread-recall");
-    available.add("thread-resume");
+    available.add("thread-refresh");
     available.add("thread-status");
     if (!context.subagentName?.trim()) available.add("thread-title");
   }
@@ -75,9 +75,9 @@ export function buildWorkbenchThreadRecallInstructions(context: WorkbenchPromptC
     : null;
 }
 
-export function buildWorkbenchThreadResumeInstructions(context: WorkbenchPromptContext) {
+export function buildWorkbenchThreadRefreshInstructions(context: WorkbenchPromptContext) {
   return isManagedPromptThread(context)
-    ? readInstructionSource("mechanics/workbench-thread-resume-instructions.md")
+    ? readInstructionSource("mechanics/workbench-thread-refresh-instructions.md")
     : null;
 }
 

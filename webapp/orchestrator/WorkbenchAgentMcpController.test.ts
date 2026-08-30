@@ -131,9 +131,9 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       "amend", "amendProposalId", "description", "paths", "replaceProposalId", "rootId", "title",
     ]);
     assert.equal(inventory.tools.some(({ name }) => name === "orchestrator_reload" || name === "reload" || name === "dirt"), false);
-    const resume = inventory.tools.find(({ name }) => name === "thread_resume");
-    assert.ok(resume);
-    assert.deepEqual(resume.inputSchema.properties, {});
+    const refresh = inventory.tools.find(({ name }) => name === "thread_refresh");
+    assert.ok(refresh);
+    assert.deepEqual(refresh.inputSchema.properties, {});
     const ripgrep = inventory.tools.find(({ name }) => name === "rg");
     assert.ok(ripgrep);
     assert.deepEqual(Object.keys(ripgrep.inputSchema.properties ?? {}), ["args"]);

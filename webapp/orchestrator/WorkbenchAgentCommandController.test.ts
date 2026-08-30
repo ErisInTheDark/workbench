@@ -399,7 +399,7 @@ test("dispatches native subagent commands directly without waiting on Next fetch
   }
 });
 
-test("dispatches thread resume through the direct managed-thread transport", async () => {
+test("dispatches thread refresh through the direct managed-thread transport", async () => {
   let receivedRequest: { method?: string; params?: unknown } | null = null;
   const controller = new WorkbenchAgentCommandController(
     "http://127.0.0.1:4500",
@@ -415,12 +415,12 @@ test("dispatches thread resume through the direct managed-thread transport", asy
   const server = await startController(controller);
   try {
     const response = await fetch(`${server.origin}/orchestrator/agent-command`, {
-      body: subagentCommandBody(["thread", "resume"]),
+      body: subagentCommandBody(["thread", "refresh"]),
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       method: "POST",
     });
     assert.equal(response.status, 200);
-    assert.equal(await response.text(), "Thread resume scheduled.\n");
+    assert.equal(await response.text(), "Thread refresh scheduled.\n");
     assert.deepEqual(receivedRequest, {
       id: 0,
       method: "workbench/thread/resume",

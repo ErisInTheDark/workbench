@@ -8,7 +8,7 @@ test("managed top-level threads expose current-thread mechanics before and after
   for (const threadId of ["new", "draft:123", "thread-1"]) {
     const context = { harness: "codex" as const, threadId, workbenchOrigin: "http://localhost" };
     const available = listWorkbenchInstructionMechanics(context);
-    for (const mechanic of ["thread-title", "thread-status", "thread-git", "thread-recall", "thread-resume"]) {
+    for (const mechanic of ["thread-title", "thread-status", "thread-git", "thread-recall", "thread-refresh"]) {
       assert.equal(available.has(mechanic), true, `${threadId} should expose ${mechanic}`);
     }
   }
@@ -19,5 +19,5 @@ test("managed top-level threads expose current-thread mechanics before and after
   assert.equal(subagent.has("thread-status"), true);
   assert.equal(subagent.has("thread-git"), true);
   assert.equal(subagent.has("thread-recall"), true);
-  assert.equal(subagent.has("thread-resume"), true);
+  assert.equal(subagent.has("thread-refresh"), true);
 });

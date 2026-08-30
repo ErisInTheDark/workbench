@@ -36,7 +36,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "thread_title_get",
   "thread_title",
   "thread_status",
-  "thread_resume",
+  "thread_refresh",
   "thread_recall_search",
   "thread_recall_expand",
   "thread_recall",
@@ -518,8 +518,8 @@ export function getWorkbenchCommandRoute(
         ? specialized("workbench-cli.thread-status", { kind: "threadStatus", status })
         : null;
     }
-    case "thread_resume":
-      return simple("workbench-cli.thread-resume", actionTarget("Resuming ", "thread"), actionTarget("Resumed ", "thread"));
+    case "thread_refresh":
+      return simple("workbench-cli.thread-refresh", actionTarget("Refreshing ", "thread"), actionTarget("Refreshed ", "thread"));
     case "thread_recall_search":
     case "thread_recall_expand":
     case "thread_recall":

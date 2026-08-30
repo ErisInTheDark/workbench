@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_THREAD_COMMANDS: typed thread title, status, resume, recall, and Code Mode exposure definitions shared by CLI and MCP. Keywords: workbench, thread, commands, recall, Code Mode.
+ * - WORKBENCH_THREAD_COMMANDS: typed thread title, status, refresh, recall, and Code Mode exposure definitions shared by CLI and MCP. Keywords: workbench, thread, commands, recall, Code Mode.
  */
 import { z } from "zod";
 
@@ -69,15 +69,15 @@ const status = defineWorkbenchAgentCommand({
   },
 });
 
-const resume = defineWorkbenchAgentCommand({
-  description: "Interrupt this managed turn and start its lifecycle-owned replacement turn.",
+const refresh = defineWorkbenchAgentCommand({
+  description: "Refresh this managed thread by interrupting the current turn and starting its lifecycle-owned replacement.",
   helpGroups: ["thread"],
-  words: ["thread", "resume"],
-  usage: "wb thread resume",
+  words: ["thread", "refresh"],
+  usage: "wb thread refresh",
   inputSchema: z.object({}).strict(),
   parseCliArgs(args) { new WorkbenchAgentCommandFlags(args, {}); return {}; },
   buildRequest(_input, { callerThreadId, cwd }) {
-    return postWorkbenchAgentCommand("/api/thread-resume", { callerThreadId: requireCallerThreadId(callerThreadId), cwd }, "thread-resume");
+    return postWorkbenchAgentCommand("/api/thread-resume", { callerThreadId: requireCallerThreadId(callerThreadId), cwd }, "thread-refresh");
   },
 });
 
@@ -158,4 +158,4 @@ const recall = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_THREAD_COMMANDS = [titleGet, title, status, resume, recallSearch, recallExpand, recall] as const;
+export const WORKBENCH_THREAD_COMMANDS = [titleGet, title, status, refresh, recallSearch, recallExpand, recall] as const;

@@ -286,10 +286,10 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     },
   }),
   CommandMatcher({
-    id: "workbench-cli.thread-resume",
+    id: "workbench-cli.thread-refresh",
     match: ({ stage, summaryParts }) => {
-      if (summaryParts.length || !/^wb(?:\.cmd)?\s+thread\s+resume(?:\s|$)/iu.test(stage.text.trim())) return null;
-      return getWorkbenchCommandRendering("thread_resume", {})?.result ?? null;
+      if (summaryParts.length || !/^wb(?:\.cmd)?\s+thread\s+refresh(?:\s|$)/iu.test(stage.text.trim())) return null;
+      return getWorkbenchCommandRendering("thread_refresh", {})?.result ?? null;
     },
   }),
   CommandMatcher({

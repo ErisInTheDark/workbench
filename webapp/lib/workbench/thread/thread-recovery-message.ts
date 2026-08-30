@@ -15,10 +15,11 @@ import type { WorkbenchThreadLifecycle } from "./thread-state";
 
 export const WORKBENCH_THREAD_RECOVERY_MESSAGE = "<wb:resume />";
 export const WORKBENCH_UNFINISHED_TURN_MESSAGE = `<wb:resume>
-You have inappropriately ended the turn without finishing the task. The correct next action may be one of: 
-1. sending a questionnaire or
-2. setting the thread status to blocked or completed before ending the turn. 
-Determine the correct next action and take it. Do not repeat this mistake.
+You inappropriately ended the turn without finishing the task. The correct next action could be: 
+1. continuing your work or
+2. sending a questionnaire or
+3. setting the thread status to blocked or completed before ending.
+Determine the correct action. Do not commentate on this resumption. Do not repeat this mistake.
 </wb:resume>`;
 export const WORKBENCH_THREAD_RECOVERY_ID_PREFIX = "workbench:thread-recovery:";
 const WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER = defineTagWrapper("wb:questionnaire-response", {

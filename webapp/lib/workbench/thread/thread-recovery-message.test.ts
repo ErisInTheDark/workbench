@@ -52,8 +52,9 @@ test("only the exact single recovery texts are recognized", () => {
   assert.equal(WORKBENCH_THREAD_RECOVERY_MESSAGE, "<wb:resume />");
   assert.equal(WORKBENCH_UNFINISHED_TURN_MESSAGE, `<wb:resume>
 You have inappropriately ended the turn without finishing the task. The correct next action may be one of: 
-1. sending a questionnaire or
-2. setting the thread status to blocked or completed before ending the turn. 
+1. Continue your work or
+2. Use a questionnaire if it's a user decision or
+3. Set the thread status and wrap up properly before ending the turn
 Determine the correct next action and take it. Do not repeat this mistake.
 </wb:resume>`);
   assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchThreadRecoveryInput()), true);
