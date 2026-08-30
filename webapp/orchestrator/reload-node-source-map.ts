@@ -7,18 +7,17 @@
  */
 import path from "node:path";
 
+import type {
+  ReloadDirtSourceDescriptor,
+  ReloadDirtSourceState,
+} from "workbench-shared/reload/ReloadDirtController";
+
 import type { OrchestratorReloadScope } from "../lib/types";
 import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
 import ReloadableNode, { type ReloadableNodeGraph } from "./ReloadableNode";
 
-export interface ReloadNodeSourceDescriptor extends OrchestratorReloadScopeDescriptor {
-  paths: readonly string[];
-}
-
-export interface ReloadNodeSourceState {
-  dependantClosure(scopes: readonly OrchestratorReloadScope[]): OrchestratorReloadScope[];
-  descriptors: readonly ReloadNodeSourceDescriptor[];
-}
+export type ReloadNodeSourceDescriptor = ReloadDirtSourceDescriptor & OrchestratorReloadScopeDescriptor;
+export type ReloadNodeSourceState = ReloadDirtSourceState;
 
 type GraphNode = ReloadableNode<object, object, object>;
 

@@ -1,172 +1,102 @@
 /*
  * Exports:
- * - WorkbenchAppReloadDirtControllerState: transferable dirt, pending batch, and source generations. Keywords: reload, handoff, watcher.
- * - default WorkbenchAppReloadDirtController: map source events to app scopes without owning graph execution. Keywords: reload, dirt, app.
+ * - WorkbenchAppReloadDirtControllerState: shared Git-backed dirt handoff state.
+ * - WorkbenchAppReloadDirtControllerOptions/default WorkbenchAppReloadDirtController: discover app server sources and apply the app snapshot ref. Keywords: app, reload, Git.
  */
-import { watch, type FSWatcher } from "node:fs";
+import { readdirSync } from "node:fs";
+import path from "node:path";
 
+import ReloadDirtController, {
+  type ReloadDirtControllerState,
+  type ReloadDirtSourceDescriptor,
+  type ReloadDirtSourceState,
+} from "workbench-shared/reload/ReloadDirtController";
 import type {
-  WorkbenchReloadDirtSnapshot,
   WorkbenchReloadScope,
   WorkbenchReloadScopeDescriptor,
 } from "workbench-shared/reload/workbench-reload";
 
-const MAX_ERROR_LENGTH = 500;
+const APP_RELOAD_SNAPSHOT_REF = "refs/worktree/workbench/app-reload-snapshot";
+const SOURCE_ROOTS = ["app", "shared"] as const;
 
-export interface WorkbenchAppReloadDirtControllerState {
-  dirtyGenerations: Map<WorkbenchReloadScope, number>;
-  error: string | null;
-  generation: number;
-  pendingGenerations: Map<WorkbenchReloadScope, number>;
-  pendingScopes: WorkbenchReloadScope[];
-}
+export type WorkbenchAppReloadDirtControllerState = ReloadDirtControllerState;
 
 export interface WorkbenchAppReloadDirtControllerOptions {
   getCatalog(): readonly WorkbenchReloadScopeDescriptor[];
   getScopesForPaths(paths: readonly string[]): WorkbenchReloadScope[];
   onChange?(): void;
   repositoryRootPath: string;
-  watchSource?: typeof watch;
+  watchSource?: typeof import("node:fs").watch;
 }
 
-function boundedError(error: unknown) {
-  return (error instanceof Error ? error.message : String(error)).slice(0, MAX_ERROR_LENGTH);
+function isProductionSourcePath(sourcePath: string) {
+  return !sourcePath.split("/").some((segment) => segment === "node_modules")
+    && !/(?:^|\/)[^/]+\.test\.[^/]+$/u.test(sourcePath);
 }
 
-function sameSnapshot(left: WorkbenchReloadDirtSnapshot, right: WorkbenchReloadDirtSnapshot) {
-  return left.error === right.error
-    && left.pendingScopes.length === right.pendingScopes.length
-    && left.pendingScopes.every((scope, index) => scope === right.pendingScopes[index])
-    && left.dirtyScopes.length === right.dirtyScopes.length
-    && left.dirtyScopes.every((scope, index) => {
-      const candidate = right.dirtyScopes[index];
-      return candidate?.scope === scope.scope
-        && candidate.description === scope.description
-        && candidate.destructive === scope.destructive;
-    });
-}
-
-export default class WorkbenchAppReloadDirtController {
-  private attached = true;
-  private readonly listeners = new Set<() => void>();
-  private snapshot: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
-  private readonly state: WorkbenchAppReloadDirtControllerState;
-  private watcher: FSWatcher | null = null;
-
-  constructor(
-    private readonly options: WorkbenchAppReloadDirtControllerOptions,
-    state?: WorkbenchAppReloadDirtControllerState,
-  ) {
-    this.state = state ?? {
-      dirtyGenerations: new Map(),
-      error: null,
-      generation: 0,
-      pendingGenerations: new Map(),
-      pendingScopes: [],
-    };
-  }
-
-  start() {
-    if (this.watcher) throw new Error("Workbench app reload dirt is already watching.");
-    this.watcher = (this.options.watchSource ?? watch)(
-      this.options.repositoryRootPath,
-      { recursive: true },
-      (_event, filename) => this.observePath(filename ? String(filename).replace(/\\/gu, "/") : null),
-    );
-    this.watcher.on("error", (error) => this.publishError(error));
-    this.publishCurrent();
-  }
-
-  getSnapshot() {
-    return this.snapshot;
-  }
-
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  beginReload(scopes: readonly WorkbenchReloadScope[]) {
-    const selected = [...new Set(scopes)];
-    this.state.pendingScopes = selected;
-    this.state.pendingGenerations = new Map(selected.map((scope) => [
-      scope,
-      this.state.dirtyGenerations.get(scope) ?? this.state.generation,
-    ]));
-    this.state.error = null;
-    this.publishCurrent();
-  }
-
-  completeReload(appliedScopes: readonly WorkbenchReloadScope[]) {
-    for (const scope of appliedScopes) {
-      const admittedGeneration = this.state.pendingGenerations.get(scope);
-      if (admittedGeneration === undefined) continue;
-      if ((this.state.dirtyGenerations.get(scope) ?? admittedGeneration) === admittedGeneration) {
-        this.state.dirtyGenerations.delete(scope);
+function listProductionSourcePaths(repositoryRootPath: string) {
+  const sourcePaths: string[] = [];
+  const visit = (absoluteDirectoryPath: string, relativeDirectoryPath: string) => {
+    for (const entry of readdirSync(absoluteDirectoryPath, { withFileTypes: true })) {
+      if (entry.name === "node_modules") continue;
+      const sourcePath = path.posix.join(relativeDirectoryPath, entry.name);
+      if (entry.isDirectory()) {
+        visit(path.join(absoluteDirectoryPath, entry.name), sourcePath);
+      } else if (isProductionSourcePath(sourcePath)) {
+        sourcePaths.push(sourcePath);
       }
     }
-    this.state.pendingScopes = [];
-    this.state.pendingGenerations.clear();
-    this.state.error = null;
-    this.publishCurrent();
+  };
+  for (const sourceRoot of SOURCE_ROOTS) {
+    visit(path.join(repositoryRootPath, sourceRoot), sourceRoot);
   }
+  return sourcePaths.sort();
+}
 
-  failReload(error: unknown) {
-    this.state.pendingScopes = [];
-    this.state.pendingGenerations.clear();
-    this.state.error = boundedError(error);
-    this.publishCurrent();
+function createSourceState(options: WorkbenchAppReloadDirtControllerOptions): ReloadDirtSourceState {
+  const catalog = options.getCatalog();
+  const pathsByScope = new Map<WorkbenchReloadScope, Set<string>>(
+    catalog.map(({ scope }) => [scope, new Set()]),
+  );
+  for (const sourcePath of listProductionSourcePaths(options.repositoryRootPath)) {
+    for (const scope of options.getScopesForPaths([sourcePath])) {
+      pathsByScope.get(scope)?.add(sourcePath);
+    }
   }
+  return {
+    dependantClosure: (scopes) => [...new Set(scopes)],
+    descriptors: catalog.map((descriptor): ReloadDirtSourceDescriptor => ({
+      ...descriptor,
+      paths: [...pathsByScope.get(descriptor.scope) ?? []].sort(),
+    })),
+  };
+}
 
-  detachForReload() {
-    this.attached = false;
-    this.watcher?.close();
-    this.watcher = null;
-    return this.state;
-  }
+function sharedStateOrNull(state: WorkbenchAppReloadDirtControllerState | object | undefined) {
+  return state
+    && "baselines" in state
+    && state.baselines instanceof Map
+    && "descriptors" in state
+    && state.descriptors instanceof Map
+    ? state as WorkbenchAppReloadDirtControllerState
+    : null;
+}
 
-  dispose() {
-    this.attached = false;
-    this.watcher?.close();
-    this.watcher = null;
-    this.listeners.clear();
-  }
-
-  private observePath(sourcePath: string | null) {
-    const catalog = this.options.getCatalog();
-    const scopes = sourcePath
-      ? this.options.getScopesForPaths([sourcePath])
-      : catalog.map(({ scope }) => scope);
-    if (!scopes.length) return;
-    this.state.generation += 1;
-    for (const scope of scopes) this.state.dirtyGenerations.set(scope, this.state.generation);
-    this.publishCurrent();
-  }
-
-  private publishError(error: unknown) {
-    this.state.error = boundedError(error);
-    this.publishCurrent();
-  }
-
-  private publishCurrent() {
-    const catalog = this.options.getCatalog();
-    const descriptors = new Map(catalog.map((descriptor) => [descriptor.scope, descriptor]));
-    const dirtyScopes = catalog.flatMap((descriptor) => this.state.dirtyGenerations.has(descriptor.scope)
-      ? [{
-        description: descriptor.description,
-        destructive: descriptor.destructive === true,
-        scope: descriptor.scope,
-      }]
-      : []);
-    const next = {
-      dirtyScopes,
-      error: this.state.error,
-      pendingScopes: this.state.pendingScopes.filter((scope) => descriptors.has(scope)),
-    };
-    if (sameSnapshot(this.snapshot, next)) return;
-    this.snapshot = next;
-    if (!this.attached) return;
-    this.options.onChange?.();
-    for (const listener of this.listeners) listener();
+export default class WorkbenchAppReloadDirtController extends ReloadDirtController {
+  constructor(
+    options: WorkbenchAppReloadDirtControllerOptions,
+    state?: WorkbenchAppReloadDirtControllerState | object,
+  ) {
+    super({
+      getSourceState: () => createSourceState(options),
+      isPotentialSourcePath: (sourcePath) => (
+        isProductionSourcePath(sourcePath)
+        && options.getScopesForPaths([sourcePath]).length > 0
+      ),
+      onChange: options.onChange,
+      repoRoot: options.repositoryRootPath,
+      snapshotRef: APP_RELOAD_SNAPSHOT_REF,
+      watchSource: options.watchSource,
+    }, sharedStateOrNull(state));
   }
 }

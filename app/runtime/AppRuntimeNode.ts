@@ -41,7 +41,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
       dispose: () => {
         if (detached) return;
         reload.dispose();
-        dirt.dispose();
+        return dirt.dispose();
       },
       registrations: { reloadController: reload, reloadDirt: dirt },
       start: () => dirt.start(),
@@ -57,5 +57,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
     "app/runtime/AppRuntimeNode.ts",
     "app/runtime/WorkbenchAppReloadController.ts",
     "app/runtime/WorkbenchAppReloadDirtController.ts",
+    "shared/reload/ReloadDirtController.ts",
+    "shared/reload/ReloadDirtSnapshotRepository.ts",
   ].join("\n"),
 });

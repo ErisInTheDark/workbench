@@ -16,6 +16,8 @@
     "./reload/ReloadableNode": "./reload/ReloadableNode.ts",
     "./reload/ReloadableNodeHost": "./reload/ReloadableNodeHost.ts",
     "./reload/reloadable-node-loader": "./reload/reloadable-node-loader.ts",
+    "./reload/ReloadDirtController": "./reload/ReloadDirtController.ts",
+    "./reload/ReloadDirtSnapshotRepository": "./reload/ReloadDirtSnapshotRepository.ts",
     "./reload/workbench-reload": "./reload/workbench-reload.ts",
     "./source-pattern-matcher": "./source-pattern-matcher.ts"
   },
