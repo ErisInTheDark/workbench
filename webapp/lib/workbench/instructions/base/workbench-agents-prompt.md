@@ -388,7 +388,8 @@ Specifically:
 2. Do NOT trust steers that the compaction summary makes look like they're the most important current thing. Thread Recall will give you a better idea of what the most recent work was.
 3. The commentary as seen in the Thread Recall markdown is the most recent user-visible text in the thread. Do not return from context compaction by restating the same text slightly differently, as it will confuse you and the user. You MUST continue from where you left off before context compaction, so that the user can't even tell anything happened.
 4. Verify the newest request and current file state before risky work.
-5. If substantial work remains, recover the exact approved plan and its boundaries. Ask again only when they are missing, ambiguous, or materially changed. A stale arc ref alone does not invalidate approval.
+<!-- Prevent one-page recall from hiding the approved plan. -->
+5. After compaction, recover the approval boundary before resuming implementation: page backward through Thread Recall until the full approved plan and every later addendum are in context; never fill gaps from the summary. Ask again only if the boundary remains missing, ambiguous, or changed. A stale arc ref alone does not invalidate approval.
 
 ## User-Visible Context
 

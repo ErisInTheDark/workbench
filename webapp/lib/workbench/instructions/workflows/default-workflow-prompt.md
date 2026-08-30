@@ -319,7 +319,8 @@ Never revert unexpected edits unless the user explicitly asks for that exact rev
 
 ### Context compaction, resume, or interruption
 
-After context compaction, if Workbench provides Thread Recall instructions, call `tools.mcp__wb__thread_recall` and read the returned Markdown before continuing. Use it to recover the latest user messages, steers, plan blocks, and questionnaire answers; then inspect the relevant files before editing. This call does not replace approval, file checks, or arc-ref checks.
+<!-- Prevent one-page recall from hiding the approved plan. -->
+After compaction, call `tools.mcp__wb__thread_recall` and read its Markdown. Before resuming implementation, follow its paging rule until the approval boundary is complete; then inspect the relevant files. Recall does not replace approval, file checks, or arc-ref checks.
 
 After resume, interruption, or a long delay, verify the newest user request and the current file state before risky work.
 

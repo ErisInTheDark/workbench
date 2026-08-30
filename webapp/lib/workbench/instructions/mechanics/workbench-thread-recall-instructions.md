@@ -12,10 +12,11 @@ Search results are newest-first pages with stable refs and an exact older-result
 
 Recall includes user messages, steers, questionnaire responses, assistant commentary and final answers, phase-less assistant messages, and plans. When a selected assistant message already contains an embedded plan, the derived plan record is suppressed rather than emitted twice. Recall does not include reasoning, raw commands, tool output, Browse data, hooks, or compaction markers.
 
-Run only one Thread Recall command at a time. History, search, and expansion cursors are relative to the exact page and filters that emitted them; do not launch recall calls in parallel or guess follow-up cursors. Read the current result, then run the exact continuation command it provides.
+<!-- Prevent implementation from resuming with a partial approval boundary. -->
+**Before resuming implementation after compaction, recover the approval boundary: full approved plan plus every later user addendum. Page backward one call at a time with each emitted exact `--before` cursor; stop only when the boundary is complete. Never stop after one page, fill gaps from the summary, guess cursors, or parallelize recall. Cursors are page- and filter-specific. If history ends first, follow workflow recovery.**
 
 The returned Markdown is chronological source evidence, not a current-task specification. Treat the post-compaction summary as a compressed working hypothesis, then reconcile both sources with newer live user messages, the active workflow mode, explicit approvals, and the current workspace.
 
 Before speaking or acting, privately form a concise current working set: the current objective, newest constraints, active mode, approval boundary, completed and remaining work, and relevant files. Classify recovered material as active, completed, superseded or rejected, historical background, or uncertain. Follow chronology and **Newest Instruction Wins**; do not revive old work merely because it appears in the recovered context. If relevance or approval is uncertain, inspect or ask instead of guessing.
 
-The base history call is required after compaction; search and paginated expansion may also be used when targeted historical recall would help. These tools do not replace approval, relevant-file inspection, or arc-ref checks.
+The base history call is required after compaction. Search and expansion are optional; neither replaces the history walk, approval, file inspection, or arc checks.
