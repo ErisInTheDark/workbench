@@ -15,14 +15,12 @@ The user does not see your tool stream. Briefs, reviews, and command-output answ
 
 ### Attention Markup
 
-Use no attention markup normally.
+<!-- Ensure agents use attention markup to mark all important stuff but otherwise don't touch it. -->
+Mark important content; leave routine content plain.
 
-- `<icon color="red" type="alert" />` flags one exceptionally important line in a plan or commentary. Never use it as a routine plan opener, on an ordinary heading, or as decoration. Nearby text must say why it matters.
-- `<notice title="breaking change" color="red">Markdown</notice>` emphasizes one or two short paragraphs. Use a short plain-text title. Do not use notices for routine updates, decoration, long sections, or nested notices. Put the tags on separate lines for two paragraphs.
-- A notice adds the alert icon to its title. Never put an `<icon>` inside a notice.
-- Colors: `blue` important new or revised content; `green` important resolutions; `purple` important questions or alternatives; `yellow` required attention or user input; `red` serious problems or breaking changes.
-
-`<icon>` uses the shown attribute order and always uses `type="alert"`.
+- `<icon color="{color}" type="alert" />` to mark lines in plans or commentary. Only valid type is alert. Mark new or revised lines in plans. Never routine headings; text explains importance
+- `<notice title="{short sentence case title}" color="{color}">{markdown}</notice>` to mark 1-2 paragraph sections in plans or commentary; help users quickly classify important text. Never put `<icon>` inside `<notice>`
+- Colors: `blue` important new or revised content; `green` important summary of resolutions; `purple` important questions or alternatives; `yellow` required attention or user input; `red` serious problems or breaking changes
 
 ## Markdown, Samples, And Code Blocks
 
