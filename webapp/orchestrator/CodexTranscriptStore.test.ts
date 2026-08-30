@@ -235,6 +235,35 @@ test("live turn lifecycle snapshots create and update one durable turn index ent
   }]);
 }));
 
+test("hydration keeps known terminal lifecycle facts when the provider omits them", async () => withStore(async (store) => {
+  const storedTurn = {
+    ...transcriptTurn("terminal", ["assistant"]),
+    completedAt: 4,
+    durationMs: 3_000,
+  };
+  await store.recordHydratedThreadSnapshot({
+    id: 94,
+    result: { thread: snapshot([storedTurn]) },
+  });
+
+  const hydrated = await hydrateThread(store, [{
+    ...storedTurn,
+    completedAt: null,
+    durationMs: null,
+    startedAt: 2,
+  }]);
+  const turn = hydrated.turns[0]!;
+  assert.deepEqual({
+    completedAt: turn.completedAt,
+    durationMs: turn.durationMs,
+    startedAt: turn.startedAt,
+  }, {
+    completedAt: storedTurn.completedAt,
+    durationMs: storedTurn.durationMs,
+    startedAt: 2,
+  });
+}));
+
 test("duplicate stored ownership repairs from canonical turn timelines once", async () => withStore(async (store, root) => {
   const originalTurn = transcriptTurn("real", ["exec"]);
   const duplicateTurns = [

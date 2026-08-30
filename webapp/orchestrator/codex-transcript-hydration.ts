@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - hydrateThreadWithStoredTurns: merge disk transcript turns into an upstream thread snapshot. Keywords: codex, transcript, hydration, turns.
- * - mergeStoredTurnIntoUpstreamTurn: preserve richer stored turn items while keeping volatile upstream metadata. Keywords: turn merge, itemsView, live metadata.
+ * - mergeStoredTurnIntoUpstreamTurn: preserve richer stored items and backfill omitted lifecycle facts without replacing provider truth. Keywords: turn merge, itemsView, lifecycle.
  */
 import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
@@ -160,14 +160,27 @@ function mergeTurnItemLists(
 
 export function mergeStoredTurnIntoUpstreamTurn(upstreamTurn: Turn, storedTurn: StoredTurnWithTimeline) {
   const storedTurnValue = storedTurn.turn;
-  if (!shouldUseStoredItems(upstreamTurn, storedTurnValue)) {
-    const items = mergeTurnItemLists(upstreamTurn.items, storedTurnValue.items, storedTurn.itemTimeline);
-    return items === upstreamTurn.items ? upstreamTurn : { ...upstreamTurn, items };
+  const isTerminal = upstreamTurn.status !== "inProgress";
+  const startedAt = upstreamTurn.startedAt ?? storedTurnValue.startedAt;
+  const completedAt = isTerminal
+    ? upstreamTurn.completedAt ?? storedTurnValue.completedAt
+    : upstreamTurn.completedAt;
+  const durationMs = isTerminal
+    ? upstreamTurn.durationMs ?? storedTurnValue.durationMs
+    : upstreamTurn.durationMs;
+  const mergedLifecycleTurn = startedAt === upstreamTurn.startedAt
+      && completedAt === upstreamTurn.completedAt
+      && durationMs === upstreamTurn.durationMs
+    ? upstreamTurn
+    : { ...upstreamTurn, completedAt, durationMs, startedAt };
+  if (!shouldUseStoredItems(mergedLifecycleTurn, storedTurnValue)) {
+    const items = mergeTurnItemLists(mergedLifecycleTurn.items, storedTurnValue.items, storedTurn.itemTimeline);
+    return items === mergedLifecycleTurn.items ? mergedLifecycleTurn : { ...mergedLifecycleTurn, items };
   }
 
   return {
-    ...upstreamTurn,
-    items: mergeTurnItemLists(storedTurnValue.items, upstreamTurn.items, storedTurn.itemTimeline, {
+    ...mergedLifecycleTurn,
+    items: mergeTurnItemLists(storedTurnValue.items, mergedLifecycleTurn.items, storedTurn.itemTimeline, {
       pruneSecondarySnapshotNarrativeArtifacts: true,
     }),
     itemsView: storedTurnValue.itemsView,
