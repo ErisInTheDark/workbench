@@ -1075,12 +1075,28 @@ export default memo(function ThreadView ({
       return;
     }
 
-    const intervalId = window.setInterval(() => {
-      void loadSubthread(pollingThreadId, getSubagentHarness(subagents, pollingThreadId, thread.harness), { background: true });
-    }, SUBTHREAD_POLL_INTERVAL_MS);
+    let cancelled = false;
+    let timerId: number | null = null;
+    const poll = async () => {
+      try {
+        await loadSubthread(
+          pollingThreadId,
+          getSubagentHarness(subagents, pollingThreadId, thread.harness),
+          { background: true },
+        );
+      } catch (error) {
+        console.error("Subthread polling failed.", error);
+      } finally {
+        if (!cancelled) {
+          timerId = window.setTimeout(() => { void poll(); }, SUBTHREAD_POLL_INTERVAL_MS);
+        }
+      }
+    };
+    timerId = window.setTimeout(() => { void poll(); }, SUBTHREAD_POLL_INTERVAL_MS);
 
     return () => {
-      window.clearInterval(intervalId);
+      cancelled = true;
+      if (timerId !== null) window.clearTimeout(timerId);
     };
   }, [loadSubthread, pollingThreadId, subagents, thread.harness]);
 

@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - CodexThreadWindowStore: durable provider-window port used by bounded loading and recovery. Keywords: codex, thread, window, store.
  * - default CodexThreadWindowLoader: import Codex turn identities and materialize one requested provider turn window. Keywords: codex, thread, pagination, window.
  */
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
@@ -10,7 +11,7 @@ import type { WorkbenchThreadTurnHistoryEntry } from "../lib/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type CodexTranscriptStore from "./CodexTranscriptStore";
 
-type CodexThreadWindowStore = Pick<
+export type CodexThreadWindowStore = Pick<
   CodexTranscriptStore,
   "readProviderPreviousCursor" | "recordProviderTurnCatalog" | "recordProviderTurnPage"
 >;
@@ -69,6 +70,14 @@ function hasTurn(thread: Thread, turnId: string | null) {
   return turnId !== null && thread.turns.some((turn) => turn.id === turnId);
 }
 
+function findTurn(thread: Thread, turnId: string | null) {
+  return turnId === null ? null : thread.turns.find((turn) => turn.id === turnId) ?? null;
+}
+
+function isProviderThreadInactive(thread: Thread) {
+  return record(thread.status)?.type === "idle";
+}
+
 export default class CodexThreadWindowLoader {
   constructor(
     private readonly request: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
@@ -79,9 +88,14 @@ export default class CodexThreadWindowLoader {
     metadataThread: Thread,
     hydratedThread: Thread,
     hydration: WorkbenchThreadHydrationRequest,
+    options: { recoveryOnly?: boolean } = {},
   ) {
     if (hydration.mode === "legacyFull") return false;
+    if (options.recoveryOnly && hydration.mode !== "latest") return false;
     if (hydration.mode === "latest") {
+      if (options.recoveryOnly) {
+        return await this.recoverLatestWindow(store, metadataThread, hydratedThread);
+      }
       return await this.ensureLatestWindow(store, metadataThread, hydratedThread);
     }
 
@@ -143,7 +157,12 @@ export default class CodexThreadWindowLoader {
       await store.recordProviderTurnCatalog(thread, []);
       return true;
     }
-    if (metadataLatestTurn.id === storedLatestTurnId && hasTurn(hydratedThread, storedLatestTurnId)) {
+    const hydratedLatestTurn = findTurn(hydratedThread, storedLatestTurnId);
+    if (
+      metadataLatestTurn.id === storedLatestTurnId
+      && hydratedLatestTurn
+      && metadataLatestTurn.status === hydratedLatestTurn.status
+    ) {
       return false;
     }
 
@@ -197,6 +216,39 @@ export default class CodexThreadWindowLoader {
       { cursor: firstPage.nextCursor, turnId: latestTurn.id },
     );
     await store.recordProviderTurnPage(thread, latestTurn, firstPage.nextCursor);
+    return true;
+  }
+
+  private async recoverLatestWindow(
+    store: CodexThreadWindowStore,
+    thread: Thread,
+    hydratedThread: Thread,
+  ) {
+    const storedLatestTurnId = readHistory(hydratedThread).at(-1)?.turnId ?? null;
+    const storedLatestTurn = findTurn(hydratedThread, storedLatestTurnId);
+    if (
+      !isProviderThreadInactive(thread)
+      || !storedLatestTurn
+      || storedLatestTurn.status !== "inProgress"
+    ) {
+      return false;
+    }
+
+    const page = await this.requestTurns({
+      itemsView: "full",
+      limit: 1,
+      sortDirection: "desc",
+      threadId: thread.id,
+    });
+    const providerLatestTurn = page.data[0] ?? null;
+    if (!providerLatestTurn || providerLatestTurn.id !== storedLatestTurnId) {
+      throw new Error(`Codex recovery latest turn did not match stored turn ${storedLatestTurnId}.`);
+    }
+    if (providerLatestTurn.status === "inProgress") {
+      throw new Error(`Codex thread ${thread.id} is inactive but latest turn ${providerLatestTurn.id} is still in progress.`);
+    }
+
+    await store.recordProviderTurnPage(thread, providerLatestTurn, page.nextCursor);
     return true;
   }
 

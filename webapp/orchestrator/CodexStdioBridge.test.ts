@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover app-server generation handoff, bridge pending cleanup, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, reload, transcript, MCP, test.
+ * - No production exports; Node tests cover app-server generation handoff, reload-safe page recovery, bridge pending cleanup, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, reload, transcript, recovery, MCP, test.
  */
 
 import assert from "node:assert/strict";
@@ -19,6 +19,7 @@ import {
   createWorkbenchFileChangeFailureSystemMessage,
   type WorkbenchFileChangeItem,
 } from "../lib/workbench/thread/workbench-file-change";
+import type { WorkbenchThreadPageResponse } from "../lib/workbench/thread/workbench-thread-page";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 import type { WorkbenchTranscriptObservation } from "./database/transcript/workbench-transcript-types";
 
@@ -326,6 +327,129 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
     assert.equal(upstreamRequests.length, 1);
   } finally {
     await bridge.waitForIdle();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("background thread pages repair inactive provider turns directly into both transcript recorders", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-thread-recovery-"));
+  const contextResolutionStarted = deferred<void>();
+  const releaseContextResolution = deferred<void>();
+  const laterProviderFactRecorded = deferred<void>();
+  const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
+  const upstreamRequests: JsonRpcRequest[] = [];
+  const userItem: ThreadItem = {
+    clientId: null,
+    content: [{ text: "hello", text_elements: [], type: "text" }],
+    id: "user",
+    type: "userMessage",
+  };
+  const assistantItem: ThreadItem = {
+    id: "assistant",
+    memoryCitation: null,
+    phase: "commentary",
+    text: "recovered tail",
+    type: "agentMessage",
+  };
+  const staleTurn = {
+    ...bridgeThread([userItem]).turns[0]!,
+    items: [userItem],
+  };
+  const providerTurn = {
+    ...staleTurn,
+    completedAt: 3,
+    durationMs: 2_000,
+    items: [userItem, assistantItem],
+    status: "interrupted" as const,
+  };
+  const providerThread = {
+    ...bridgeThread(),
+    status: { type: "idle" as const },
+    turns: [],
+  };
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      queueMicrotask(() => {
+        const result = message.method === "thread/read"
+          ? { thread: providerThread }
+          : message.method === "thread/turns/list"
+            ? { data: [providerTurn], nextCursor: null }
+            : {};
+        void bridge.handleUpstreamMessage({ id: message.id ?? null, result });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    recordSqliteTranscript: async (observations) => {
+      sqliteBatches.push([...observations]);
+      if (observations.length === 1 && observations[0]?.kind === "item") {
+        laterProviderFactRecorded.resolve();
+      }
+    },
+    resolveProjectFromCwd: async () => {
+      contextResolutionStarted.resolve();
+      await releaseContextResolution.promise;
+      return {
+        cwd: "C:/repo",
+        project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+        root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+      };
+    },
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const owner = bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore };
+  try {
+    await owner.ensureTranscriptStore().recordHydratedThreadSnapshot({
+      id: "stale",
+      result: { thread: { ...bridgeThread([userItem]), turns: [staleTurn] } },
+    });
+    const responsePromise = bridge.handleBridgeRequest({
+      id: 1,
+      method: "workbench/thread/page/read",
+      params: {
+        cursor: null,
+        readScope: "subagentBackground",
+        threadId: "thread",
+      },
+    });
+    await contextResolutionStarted.promise;
+    await bridge.handleUpstreamMessage({
+      id: "later-provider-fact",
+      method: "item/tool/call",
+      params: {
+        arguments: { query: "later" },
+        callId: "later-call",
+        namespace: "workbench",
+        threadId: "thread",
+        tool: "search",
+        turnId: "turn",
+      },
+    });
+    releaseContextResolution.resolve();
+    const response = await responsePromise;
+    await laterProviderFactRecorded.promise;
+
+    const recovered = (response?.result as WorkbenchThreadPageResponse).thread.turns[0]!;
+    assert.equal(recovered.status, "interrupted");
+    assert.deepEqual(recovered.items.map(({ id }) => id), ["user", "assistant", "later-call"]);
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), [
+      "thread/read",
+      "thread/turns/list",
+    ]);
+    assert.deepEqual(sqliteBatches.map((batch) => batch.map(({ kind }) => kind)), [
+      ["thread", "turn", "item", "item"],
+      ["item"],
+    ]);
+    assert.equal(sqliteBatches.flat().some(({ kind }) => kind === "canonicalWindow"), false);
+  } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }

@@ -180,6 +180,80 @@ test("already materialized latest windows use one metadata probe without fetchin
   assert.deepEqual(owner.pages, []);
 });
 
+test("inactive provider metadata repairs the same durable turn from one full provider page", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const providerTurn = turn("latest", ["user", "assistant"]);
+  const loader = new CodexThreadWindowLoader(async (request) => {
+    requests.push(request);
+    return response({ data: [providerTurn], nextCursor: "after-latest" });
+  });
+  const owner = fakeStore();
+  const storedTurn = {
+    ...turn("latest", ["user"]),
+    completedAt: null,
+    durationMs: null,
+    status: "inProgress" as const,
+  };
+  const hydrated = withHistory([storedTurn], [{
+    ...history("latest", "loaded"),
+    completedAt: null,
+    durationMs: null,
+    itemCount: 1,
+    status: "inProgress",
+  }]);
+
+  assert.equal(await loader.ensureWindow(
+    owner.store,
+    thread(),
+    hydrated,
+    { mode: "latest" },
+    { recoveryOnly: true },
+  ), true);
+  assert.deepEqual(requests.map((request) => request.params), [{
+    itemsView: "full",
+    limit: 1,
+    sortDirection: "desc",
+    threadId: "thread",
+  }]);
+  assert.deepEqual(owner.pages.map(({ cursor, turn: candidate }) => ({
+    cursor,
+    itemIds: candidate.items.map(({ id }) => id),
+    status: candidate.status,
+    turnId: candidate.id,
+  })), [{
+    cursor: "after-latest",
+    itemIds: ["user", "assistant"],
+    status: "completed",
+    turnId: "latest",
+  }]);
+});
+
+test("inactive recovery fails closed when provider latest identity differs", async () => {
+  const loader = new CodexThreadWindowLoader(async () => response({
+    data: [turn("other", ["assistant"])],
+    nextCursor: null,
+  }));
+  const owner = fakeStore();
+  const storedTurn = {
+    ...turn("latest", ["user"]),
+    completedAt: null,
+    durationMs: null,
+    status: "inProgress" as const,
+  };
+  const hydrated = withHistory([storedTurn], [{
+    ...history("latest", "loaded"),
+    completedAt: null,
+    durationMs: null,
+    status: "inProgress",
+  }]);
+
+  await assert.rejects(
+    loader.ensureWindow(owner.store, thread(), hydrated, { mode: "latest" }, { recoveryOnly: true }),
+    /did not match stored turn latest/u,
+  );
+  assert.deepEqual(owner.pages, []);
+});
+
 test("stale latest windows import only the missing suffix and materialize the provider latest turn", async () => {
   const requests: JsonRpcRequest[] = [];
   const latest = turn("latest", ["latest-item"]);

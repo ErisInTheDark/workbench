@@ -85,7 +85,8 @@ import {
 } from "./codex-transcript-normalizers";
 import type CodexAppServer from "./CodexAppServer";
 import type { WorkbenchCodexInstructionPort } from "./WorkbenchCodexInstructionAdapter";
-import CodexThreadWindowLoader from "./CodexThreadWindowLoader";
+import CodexThreadPageReadController from "./CodexThreadPageReadController";
+import CodexThreadWindowLoader, { type CodexThreadWindowStore } from "./CodexThreadWindowLoader";
 import CodexTranscriptRecordingController from "./CodexTranscriptRecordingController";
 import type { OrchestratorTranscriptShadowLog } from "./orchestrator-runtime-objects";
 import { logError } from "./process-helpers";
@@ -176,6 +177,13 @@ const MAX_FILE_CHANGE_TURN_CURSORS = 2_048;
 
 function fileChangeTurnKey(threadId: string, turnId: string) {
   return `${threadId}\0${turnId}`;
+}
+
+function backgroundThreadPageReadKey(message: JsonRpcRequest) {
+  const params = WorkbenchThreadPageReadParamsSchema.parse(message.params);
+  if (params.readScope !== "subagentBackground") return undefined;
+  const fields = [params.threadId, params.cursor ?? "", params.cwd ?? "", params.readScope];
+  return fields.map((field) => `${field.length}:${field}`).join("|");
 }
 
 function transcriptSteerKey(threadId: string, entryKey: string) {
@@ -970,7 +978,9 @@ export default class CodexStdioBridge {
   private readonly sqliteTranscriptEnabled: boolean;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
   private readonly storageRoot: string;
+  private readonly threadPageReads = new CodexThreadPageReadController();
   private readonly threadWindowLoader: CodexThreadWindowLoader;
+  private threadPageReadsPreparedForReload = false;
   private transcriptStore: CodexTranscriptStoreInstance | null = null;
   private transcriptStoreReloadPending = false;
   private initializeResult: unknown;
@@ -1073,6 +1083,7 @@ export default class CodexStdioBridge {
 
   beginStopping(reason = "Codex bridge stopped before the upstream response arrived.") {
     this.acceptingWork = false;
+    this.threadPageReads.beginDrain();
     this.resetUpstreamState(reason);
   }
 
@@ -1085,16 +1096,46 @@ export default class CodexStdioBridge {
   }
 
   async stopAfterFlushingTranscripts() {
+    this.threadPageReads.beginDrain();
+    await this.threadPageReads.waitForIdle();
     await this.waitForIdle();
     this.stop();
   }
 
+  async prepareForReload(options: CodexStdioBridgeReloadOptions = {}) {
+    if (this.threadPageReadsPreparedForReload) return;
+    this.threadPageReads.beginDrain();
+    try {
+      await withTimeout(
+        this.threadPageReads.waitForIdle(),
+        options.idleTimeoutMs,
+        "Codex bridge is busy with active thread-page reads; retry reload after those reads settle.",
+      );
+      this.threadPageReadsPreparedForReload = true;
+    } catch (error) {
+      this.threadPageReads.resumeAfterFailedReload();
+      throw error;
+    }
+  }
+
+  resumeAfterReloadFailure() {
+    if (!this.acceptingWork) return;
+    this.threadPageReadsPreparedForReload = false;
+    this.threadPageReads.resumeAfterFailedReload();
+  }
+
   async detachForReload(options: CodexStdioBridgeReloadOptions = {}): Promise<CodexStdioBridgeReloadState> {
-    await withTimeout(
-      this.waitForIdle(),
-      options.idleTimeoutMs,
-      "Codex bridge is busy with active work; retry reload after the current bridge work settles.",
-    );
+    await this.prepareForReload(options);
+    try {
+      await withTimeout(
+        this.waitForIdle(),
+        options.idleTimeoutMs,
+        "Codex bridge is busy with active work; retry reload after the current bridge work settles.",
+      );
+    } catch (error) {
+      this.resumeAfterReloadFailure();
+      throw error;
+    }
     this.acceptingWork = false;
     clearInterval(this.transcriptInstrumentationTimer);
     if (this.transcriptStore) {
@@ -1130,6 +1171,7 @@ export default class CodexStdioBridge {
   }
 
   async disposeImmediately() {
+    this.threadPageReads.beginDrain();
     this.stop();
     if (this.transcriptStore) {
       await this.transcriptStore.dispose();
@@ -1309,7 +1351,10 @@ export default class CodexStdioBridge {
       this.assertAcceptingWork();
       return {
         id: requestId,
-        result: await this.readThreadPage(message),
+        result: await this.threadPageReads.run(
+          () => this.readThreadPage(message),
+          { backgroundKey: backgroundThreadPageReadKey(message) },
+        ),
       };
     } catch (error) {
       return {
@@ -2004,6 +2049,7 @@ export default class CodexStdioBridge {
   private async captureTranscript(
     label: string,
     task: () => Promise<unknown>,
+    options: { propagateFailure?: boolean } = {},
   ) {
     const taskId = this.nextTranscriptTaskId;
     this.nextTranscriptTaskId += 1;
@@ -2021,6 +2067,7 @@ export default class CodexStdioBridge {
             level: "error",
             source: "codex-transcript",
           });
+          if (options.propagateFailure) throw error;
         }
       });
     this.transcriptQueue = transcriptTask.catch(() => undefined);
@@ -2297,17 +2344,18 @@ export default class CodexStdioBridge {
         touchThread: !isSubagentBackgroundRead,
       })
       : upstreamReadResponse;
-    if (!isSubagentBackgroundRead && readParams.includeTurns === false && hydration && !readResponse.error) {
+    if (readParams.includeTurns === false && hydration && !readResponse.error) {
       const metadataThread = asRecord(asRecord(upstreamReadResponse.result)?.thread) as Thread | null;
       const hydratedThread = asRecord(asRecord(readResponse.result)?.thread) as Thread | null;
       if (!metadataThread?.id || !hydratedThread?.id) {
         throw new Error("Bounded thread/context/read did not receive a readable thread.");
       }
       if (await this.threadWindowLoader.ensureWindow(
-        transcriptStore,
+        this.createThreadWindowStore(transcriptStore),
         metadataThread,
         hydratedThread,
         hydration,
+        { recoveryOnly: isSubagentBackgroundRead },
       )) {
         readResponse = await transcriptStore.hydrateThreadResponse(readRequest, upstreamReadResponse, {
           hydration,
@@ -2661,6 +2709,45 @@ export default class CodexStdioBridge {
     });
 
     return warning ? { ok: true, warning } : { ok: true };
+  }
+
+  private createThreadWindowStore(transcriptStore: CodexTranscriptStoreInstance): CodexThreadWindowStore {
+    return {
+      readProviderPreviousCursor: (threadId, beforeTurnId) => (
+        transcriptStore.readProviderPreviousCursor(threadId, beforeTurnId)
+      ),
+      recordProviderTurnCatalog: (thread, turns, boundary) => (
+        transcriptStore.recordProviderTurnCatalog(thread, turns, boundary)
+      ),
+      recordProviderTurnPage: async (thread, turn, previousCursor) => {
+        await this.captureTranscript(`provider-turn-page:${thread.id}:${turn.id}`, async () => {
+          const observations = await this.createSqliteProviderTurnPageObservations(thread, turn);
+          await this.transcriptRecording.recordProviderFact({
+            observations,
+            recordLegacy: () => transcriptStore.recordProviderTurnPage(thread, turn, previousCursor),
+          });
+        }, { propagateFailure: true });
+      },
+    };
+  }
+
+  private async createSqliteProviderTurnPageObservations(
+    thread: Thread,
+    turn: Turn,
+  ): Promise<WorkbenchTranscriptAtomicObservation[]> {
+    if (!this.sqliteTranscriptEnabled) return [];
+    const context = await this.resolveTranscriptThreadContext(thread);
+    return [
+      createCodexTranscriptProviderThreadObservation(thread.id, context),
+      createCodexTranscriptProviderTurnObservation({ context, threadId: thread.id, turn }),
+      ...turn.items.map((item) => createCodexTranscriptProviderItemObservation({
+        item,
+        lifecycle: turn.status === "inProgress" ? "streaming" : "completed",
+        observedAt: Math.round((turn.completedAt ?? turn.startedAt ?? thread.updatedAt) * 1_000),
+        threadId: thread.id,
+        turnId: turn.id,
+      })),
+    ];
   }
 
   private async createSqliteProviderResponseObservations(
