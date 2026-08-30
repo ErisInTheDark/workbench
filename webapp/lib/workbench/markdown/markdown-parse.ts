@@ -10,7 +10,7 @@
  * - parseBlocks: parse markdown into block nodes for rendering and diffing. Keywords: markdown, parser, blocks.
  * - parseInlineMarkdown: parse inline markdown into renderer-neutral nodes. Keywords: markdown, inline, parser.
  * - parseThreadStateChangeMode: detect display-only thread mode change tags. Keywords: thread, mode, state, parser.
- * - normalizeThreadWorkflowTagBoundaries: isolate thread workflow tags before line-oriented block parsing. Keywords: thread, mode, plan, parser.
+ * - normalizeThreadBlockTagBoundaries: isolate known thread block tags before line-oriented parsing. Keywords: thread, HTML, block, parser.
  * - getThreadStateChangeTagText: normalize display-only thread mode change tags. Keywords: thread, mode, state, parser.
  * - formatThreadStateChangeMode: format thread mode identifiers for display. Keywords: thread, mode, label.
  * - stripInlineCodeSpans: remove inline code spans for thread ordered-step detection. Keywords: thread, code, step.
@@ -102,8 +102,15 @@ export interface MarkdownParseOptions {
 
 const THREAD_STATE_CHANGE_TAG_PATTERN = /^<set-state\s+mode=(["'])((?:(?!\1).)*)\1\s*\/>$/;
 const THREAD_STATE_CHANGE_BOUNDARY_PATTERN = /<set-state\s+mode=(["'])((?:(?!\1).)*)\1\s*\/>/g;
-const THREAD_WORKFLOW_TAG_BOUNDARY_PATTERN = new RegExp(
-  `${THREAD_STATE_CHANGE_BOUNDARY_PATTERN.source}|<\\/?[Pp][Ll][Aa][Nn]>`,
+const THREAD_NOTICE_OPEN_TAG_BOUNDARY_PATTERN = /<notice title="[^"\r\n]*" color="[a-z][a-z0-9-]*">/;
+const THREAD_NOTICE_CLOSE_TAG_BOUNDARY_PATTERN = /<\/notice>/;
+const THREAD_BLOCK_TAG_BOUNDARY_PATTERN = new RegExp(
+  [
+    THREAD_STATE_CHANGE_BOUNDARY_PATTERN.source,
+    "<\\/?[Pp][Ll][Aa][Nn]>",
+    THREAD_NOTICE_OPEN_TAG_BOUNDARY_PATTERN.source,
+    THREAD_NOTICE_CLOSE_TAG_BOUNDARY_PATTERN.source,
+  ].join("|"),
   "g",
 );
 
@@ -194,8 +201,8 @@ export function getThreadStateChangeTagText(markdown: string) {
   return match ? match[0] : null;
 }
 
-function isolateThreadWorkflowTagsInPlainText(line: string, startIndex: number, endIndex: number) {
-  return line.slice(startIndex, endIndex).replace(THREAD_WORKFLOW_TAG_BOUNDARY_PATTERN, (match, ...args: unknown[]) => {
+function isolateThreadBlockTagsInPlainText(line: string, startIndex: number, endIndex: number) {
+  return line.slice(startIndex, endIndex).replace(THREAD_BLOCK_TAG_BOUNDARY_PATTERN, (match, ...args: unknown[]) => {
     const offset = typeof args[args.length - 2] === "number" ? args[args.length - 2] as number : 0;
     const matchStart = startIndex + offset;
     const matchEnd = matchStart + match.length;
@@ -206,7 +213,7 @@ function isolateThreadWorkflowTagsInPlainText(line: string, startIndex: number, 
   });
 }
 
-function normalizeThreadWorkflowTagLineBoundaries(line: string) {
+function normalizeThreadBlockTagLineBoundaries(line: string) {
   let normalizedLine = "";
   let plainTextStartIndex = 0;
   let index = 0;
@@ -224,17 +231,17 @@ function normalizeThreadWorkflowTagLineBoundaries(line: string) {
       continue;
     }
 
-    normalizedLine += isolateThreadWorkflowTagsInPlainText(line, plainTextStartIndex, index);
+    normalizedLine += isolateThreadBlockTagsInPlainText(line, plainTextStartIndex, index);
     normalizedLine += line.slice(index, closeIndex + fenceLength);
     index = closeIndex + fenceLength;
     plainTextStartIndex = index;
   }
 
-  normalizedLine += isolateThreadWorkflowTagsInPlainText(line, plainTextStartIndex, line.length);
+  normalizedLine += isolateThreadBlockTagsInPlainText(line, plainTextStartIndex, line.length);
   return normalizedLine;
 }
 
-export function normalizeThreadWorkflowTagBoundaries(markdown: string, options: MarkdownParseOptions = {}) {
+export function normalizeThreadBlockTagBoundaries(markdown: string, options: MarkdownParseOptions = {}) {
   if ((options.profile ?? "editor") !== "thread") {
     return markdown;
   }
@@ -259,7 +266,7 @@ export function normalizeThreadWorkflowTagBoundaries(markdown: string, options: 
         return line;
       }
 
-      return normalizeThreadWorkflowTagLineBoundaries(line);
+      return normalizeThreadBlockTagLineBoundaries(line);
     })
     .join("\n");
 }
@@ -1140,7 +1147,6 @@ function isThreadStrayPlanCloseLine(line: string, options: MarkdownParseOptions)
     && isThreadPlanCloseLine(line);
 }
 
-const THREAD_NOTICE_COMPACT_LINE_PATTERN = /^<notice title="([^"\r\n]*)" color="([a-z][a-z0-9-]*)">(.*?)<\/notice>\s*$/u;
 const THREAD_NOTICE_OPEN_LINE_PATTERN = /^<notice title="([^"\r\n]*)" color="([a-z][a-z0-9-]*)">\s*$/u;
 const THREAD_NOTICE_CLOSE_LINE_PATTERN = /^<\/notice>\s*$/u;
 
@@ -1149,8 +1155,7 @@ function isThreadNoticeOpenLine(line: string, options: MarkdownParseOptions) {
     return false;
   }
 
-  const source = line.trim();
-  return THREAD_NOTICE_COMPACT_LINE_PATTERN.test(source) || THREAD_NOTICE_OPEN_LINE_PATTERN.test(source);
+  return THREAD_NOTICE_OPEN_LINE_PATTERN.test(line.trim());
 }
 
 function parseThreadNoticeBlock(lines: string[], startIndex: number, options: MarkdownParseOptions) {
@@ -1159,20 +1164,6 @@ function parseThreadNoticeBlock(lines: string[], startIndex: number, options: Ma
   }
 
   const openingLine = lines[startIndex];
-  const compactMatch = THREAD_NOTICE_COMPACT_LINE_PATTERN.exec(openingLine.trim());
-  if (compactMatch) {
-    return {
-      block: {
-        color: compactMatch[2],
-        source: openingLine,
-        text: compactMatch[3].trim(),
-        title: compactMatch[1].trim(),
-        type: "notice" as const,
-      },
-      nextIndex: startIndex + 1,
-    };
-  }
-
   const openingMatch = THREAD_NOTICE_OPEN_LINE_PATTERN.exec(openingLine.trim());
   if (!openingMatch) {
     return null;
@@ -1526,7 +1517,7 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
 }
 
 export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}): ParsedBlock[] {
-  const normalizedMarkdown = normalizeThreadWorkflowTagBoundaries(markdown, options);
+  const normalizedMarkdown = normalizeThreadBlockTagBoundaries(markdown, options);
   const lines = normalizedMarkdown.replace(/\r\n/g, "\n").split("\n");
   return parseBlocksFromLines(lines, options);
 }

@@ -88,6 +88,20 @@ test("thread notices render compact and two-paragraph Markdown bodies", () => {
   assert.match(html, /href="https:\/\/example\.com\/owner"/u);
 });
 
+test("thread notices accept body text beside multiline delimiters", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    '<notice title="Mixed delimiters" color="yellow">Opening-line **body**.',
+    "",
+    "Closing-line `body`.</notice>",
+  ].join("\n"))));
+
+  assert.equal(Array.from(html.matchAll(/data-thread-notice="true"/gu)).length, 1);
+  assert.match(html, /aria-label="Mixed delimiters"/u);
+  assert.match(html, /data-thread-notice-color="yellow"/u);
+  assert.match(html, /Opening-line <strong>body<\/strong>\.<\/p><p[^>]*>Closing-line <code[^>]*>body<\/code>\./u);
+  assert.doesNotMatch(html, /&lt;\/?notice/u);
+});
+
 test("thread notices render inside plans without closing on fenced source", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
     "<plan>",
@@ -107,7 +121,7 @@ test("thread notices render inside plans without closing on fenced source", () =
   assert.match(html, /Still inside the notice\./u);
 });
 
-test("unsupported, empty, unclosed, and fenced notices remain literal text", () => {
+test("unsupported, empty, unclosed, and code-contained notices remain literal text", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
     '<notice title="Unsupported" color="orange">body</notice>',
     "",
@@ -116,6 +130,8 @@ test("unsupported, empty, unclosed, and fenced notices remain literal text", () 
     '<notice title="Unclosed" color="blue">',
     "body",
     "",
+    '`<notice title="Code span" color="green">body</notice>`',
+    "",
     "```md",
     '<notice title="Source" color="green">body</notice>',
     "```",
@@ -123,8 +139,9 @@ test("unsupported, empty, unclosed, and fenced notices remain literal text", () 
 
   assert.doesNotMatch(html, /data-thread-notice=/u);
   assert.doesNotMatch(html, /data-thread-notice-icon=/u);
-  assert.match(html, /&lt;notice title=&quot;Unsupported&quot; color=&quot;orange&quot;&gt;body&lt;\/notice&gt;/u);
-  assert.match(html, /&lt;notice title=&quot;&quot; color=&quot;red&quot;&gt;body&lt;\/notice&gt;/u);
+  assert.match(html, /&lt;notice title=&quot;Unsupported&quot; color=&quot;orange&quot;&gt;\s*body\s*&lt;\/notice&gt;/u);
+  assert.match(html, /&lt;notice title=&quot;&quot; color=&quot;red&quot;&gt;\s*body\s*&lt;\/notice&gt;/u);
   assert.match(html, /&lt;notice title=&quot;Unclosed&quot; color=&quot;blue&quot;&gt;/u);
+  assert.match(html, /<code[^>]*>&lt;notice title=&quot;Code span&quot; color=&quot;green&quot;&gt;body&lt;\/notice&gt;<\/code>/u);
   assert.match(html, /&lt;notice title=&quot;Source&quot; color=&quot;green&quot;&gt;body&lt;\/notice&gt;/u);
 });
