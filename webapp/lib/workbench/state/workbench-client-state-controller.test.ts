@@ -120,6 +120,24 @@ test("app-state conformance rejects a missing required current-table column", ()
   }
 });
 
+test("HTTP bootstrap invokes fetch with the browser global receiver", async () => {
+  const fetcher: typeof fetch = function (this: typeof globalThis) {
+    assert.equal(this, globalThis);
+    return Promise.resolve(Response.json(response("snapshot", 0, emptyRows())));
+  };
+  const controller = new WorkbenchClientStateController({
+    cancelSchedule: () => undefined,
+    fetcher,
+    mode: "http",
+    schedule: () => 1,
+    visibility: { hidden: () => false, subscribe: () => () => undefined },
+  });
+
+  await controller.bootstrap();
+  assert.equal(controller.getSnapshot().daemonRegistrationId, "registration");
+  controller.dispose();
+});
+
 test("browser state applies a conformed snapshot and a later tombstone delta", async () => {
   const snapshotRows = emptyRows();
   snapshotRows.globalPreferences.push({

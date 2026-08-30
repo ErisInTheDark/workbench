@@ -88,7 +88,8 @@ export default class WorkbenchClientStateController {
 
   constructor(options: WorkbenchClientStateControllerOptions = {}) {
     this.#mode = options.mode ?? "memory";
-    this.#fetcher = options.fetcher ?? fetch;
+    const fetcher = options.fetcher ?? globalThis.fetch;
+    this.#fetcher = (input, init) => fetcher.call(globalThis, input, init);
     this.#pollDelayMs = options.pollDelayMs ?? 2_000;
     this.#schedule = options.schedule ?? ((callback, delayMs) => window.setTimeout(callback, delayMs));
     this.#cancelSchedule = options.cancelSchedule ?? ((id) => window.clearTimeout(id));
