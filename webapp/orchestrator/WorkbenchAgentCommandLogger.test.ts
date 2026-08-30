@@ -35,6 +35,28 @@ test("logs repeated pending warnings and one successful completion", async () =>
   assert.equal(callback, null);
 });
 
+test("omits pending warnings for normal long waits while preserving completion logs", async () => {
+  let scheduled = 0;
+  const lines: string[] = [];
+  const logger = new WorkbenchAgentCommandLogger({
+    now: () => 4_000,
+    schedule: () => {
+      scheduled += 1;
+      return scheduled as never;
+    },
+    writeLine: (line) => { lines.push(line.replace(/\u001b\[[0-9;]*m/gu, "")); },
+  });
+
+  await logger.run("wb shell", new AbortController().signal, async () => "done");
+  await logger.run("wb git arc wait", new AbortController().signal, async () => "done");
+
+  assert.equal(scheduled, 0);
+  assert.deepEqual(lines, [
+    " CLI wb shell ok in 0ms",
+    " CLI wb git arc wait ok in 0ms",
+  ]);
+});
+
 test("reports failed responses and cancelled exceptions without leaking timers", async () => {
   const lines: string[] = [];
   let activeTimers = 0;

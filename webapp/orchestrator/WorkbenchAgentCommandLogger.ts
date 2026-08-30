@@ -6,6 +6,7 @@
 
 const DEFAULT_PENDING_THRESHOLD_MS = 2_000;
 const PENDING_WARNING_INTERVAL_MS = 2_000;
+const PENDING_WARNING_OMISSION_LABELS = new Set(["wb git arc wait", "wb shell"]);
 const ANSI_GREEN = "\u001b[32m";
 const ANSI_RED = "\u001b[31m";
 const ANSI_YELLOW = "\u001b[33m";
@@ -71,7 +72,9 @@ export default class WorkbenchAgentCommandLogger {
       this.writeLine(` CLI ${label} ${pendingToken()} after ${formatDuration(this.now() - startedAt)}`);
       timer = this.schedule(warn, PENDING_WARNING_INTERVAL_MS);
     };
-    timer = this.schedule(warn, this.pendingThresholdMs);
+    if (!PENDING_WARNING_OMISSION_LABELS.has(label)) {
+      timer = this.schedule(warn, this.pendingThresholdMs);
+    }
     let outcome: WorkbenchAgentCommandLogOutcome = "error";
     try {
       const value = await operation();
