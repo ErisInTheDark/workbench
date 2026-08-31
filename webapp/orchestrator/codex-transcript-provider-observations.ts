@@ -15,6 +15,7 @@ import type {
   WorkbenchTranscriptItemLifecycle,
 } from "./database/transcript/workbench-transcript-types.ts";
 import type { JsonRpcRequest } from "./bridge-types.ts";
+import { createFirstTurnItemOwners } from "./codex-transcript-item-ownership.ts";
 import { asRecord, asString } from "./codex-transcript-normalizers.ts";
 import { createDynamicToolCallItem } from "./codex-transcript-timeline.ts";
 
@@ -131,6 +132,10 @@ export function createCodexTranscriptProviderThreadObservations(
   thread: Thread,
   context: CodexTranscriptProviderContext,
 ): WorkbenchTranscriptAtomicObservation[] {
+  const itemOwners = createFirstTurnItemOwners(thread.turns.map((turn) => ({
+    itemIds: turn.items.map(({ id }) => id),
+    turnId: turn.id,
+  })));
   const observations: WorkbenchTranscriptAtomicObservation[] = [
     createCodexTranscriptProviderThreadObservation(thread.id, context),
   ];
@@ -142,6 +147,7 @@ export function createCodexTranscriptProviderThreadObservations(
       turnIndex,
     }));
     for (const item of turn.items) {
+      if (itemOwners.get(item.id) !== turn.id) continue;
       observations.push(createCodexTranscriptProviderItemObservation({
         item,
         lifecycle: turn.status === "inProgress" ? "streaming" : "completed",

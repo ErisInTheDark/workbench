@@ -8,7 +8,7 @@ import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
 import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "../lib/types.ts";
 import { createCodexTranscriptSqliteImport } from "./codex-transcript-sqlite-import.ts";
 
-function thread() {
+function thread(): Thread & { workbenchTurnHistory: WorkbenchThreadTurnHistoryEntry[] } {
   return {
     agentNickname: null,
     agentRole: null,
@@ -199,5 +199,48 @@ test("reused provider request keys keep questionnaire observations in their owni
       ["older", "question-older", "reused"],
       ["newer", "question-newer", "reused"],
     ],
+  );
+});
+
+test("latest-only import omits items owned by an unloaded earlier turn", () => {
+  const carriedThread = thread();
+  const olderItem = carriedThread.turns[0]!.items[0]!;
+  carriedThread.turns = [{
+    ...carriedThread.turns[1]!,
+    items: [olderItem, ...carriedThread.turns[1]!.items],
+  }];
+  carriedThread.workbenchTurnHistory = [{
+    ...carriedThread.workbenchTurnHistory[0]!,
+    itemIds: [olderItem.id],
+    loadState: "unloaded",
+  }, {
+    ...carriedThread.workbenchTurnHistory[1]!,
+    itemIds: [olderItem.id, "prompt", "answer"],
+  }];
+
+  const snapshot = createCodexTranscriptSqliteImport({
+    browseResultEntries: [],
+    context: {
+      activityAt: 6_000,
+      createdAt: 1_000,
+      nativeLocation: "C:/repo",
+      projectId: "project",
+      projectRoot: "C:/repo",
+      title: "Thread",
+      updatedAt: 6_000,
+    },
+    questionnaireEntries: [],
+    steerEntries: [],
+    thread: carriedThread,
+  });
+  assert.equal(snapshot.kind, "canonicalWindow");
+  if (snapshot.kind !== "canonicalWindow") return;
+
+  assert.deepEqual(snapshot.materializedTurnIds, ["newer"]);
+  assert.deepEqual(
+    snapshot.observations
+      .filter((observation) => observation.kind === "item")
+      .map(({ item, turnId }) => [turnId, item.id]),
+    [["newer", "prompt"], ["newer", "answer"]],
   );
 });

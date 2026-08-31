@@ -18,6 +18,7 @@ import { normalizeWorkbenchThreadItemTimeline } from "../lib/workbench/thread/th
 import AtomicJsonStore from "./AtomicJsonStore";
 import { hydrateThreadWithStoredTurns } from "./codex-transcript-hydration";
 import { shouldPersistRawNotificationToJournal } from "./codex-transcript-event-routing";
+import { createFirstTurnItemOwners } from "./codex-transcript-item-ownership";
 import { mergeThreadItem } from "./codex-transcript-item-merge";
 import {
   asNumber,
@@ -225,14 +226,13 @@ function mergeTurnIndexes(
 }
 
 function keepFirstTurnItemOwners(entries: CodexTranscriptThreadFile["turnIndex"]) {
-  const ownedItemIds = new Set<string>();
+  const itemOwners = createFirstTurnItemOwners(entries);
   return entries.flatMap((entry) => {
     if (!entry.itemIds) {
       return [entry];
     }
 
-    const itemIds = entry.itemIds.filter((itemId) => !ownedItemIds.has(itemId));
-    itemIds.forEach((itemId) => ownedItemIds.add(itemId));
+    const itemIds = entry.itemIds.filter((itemId) => itemOwners.get(itemId) === entry.turnId);
     if (entry.itemCount > 0 && itemIds.length === 0) {
       return [];
     }
@@ -278,18 +278,6 @@ function reconcileTurnIndexItemIds(
   }));
 }
 
-function createTurnItemOwners(entries: CodexTranscriptThreadFile["turnIndex"]) {
-  const owners = new Map<string, string>();
-  for (const entry of entries) {
-    for (const itemId of entry.itemIds ?? []) {
-      if (!owners.has(itemId)) {
-        owners.set(itemId, entry.turnId);
-      }
-    }
-  }
-  return owners;
-}
-
 function keepTurnOwnedItems(turn: Turn, itemOwners: ReadonlyMap<string, string>) {
   const items = turn.items.filter((item) => {
     const ownerTurnId = itemOwners.get(item.id);
@@ -300,7 +288,7 @@ function keepTurnOwnedItems(turn: Turn, itemOwners: ReadonlyMap<string, string>)
 
 function keepIndexedTurns(thread: Thread, entries: CodexTranscriptThreadFile["turnIndex"]) {
   const indexedTurnIds = new Set(entries.map((entry) => entry.turnId));
-  const itemOwners = createTurnItemOwners(entries);
+  const itemOwners = createFirstTurnItemOwners(entries);
   const turns = thread.turns.flatMap((turn) => (
     indexedTurnIds.has(turn.id) ? [keepTurnOwnedItems(turn, itemOwners)] : []
   ));
@@ -1466,7 +1454,7 @@ export default class CodexTranscriptStore {
       }
       indexedThread = keepIndexedTurns(thread, turnIndex);
       const indexedTurnIds = new Set(turnIndex.map((entry) => entry.turnId));
-      const itemOwners = createTurnItemOwners(turnIndex);
+      const itemOwners = createFirstTurnItemOwners(turnIndex);
       const itemTimelineByTurnId = new Map(storedTurnFiles.map((file) => [file.turnId, file.itemTimeline]));
       const storedTurns = storedTurnFiles
         .filter((file) => indexedTurnIds.has(file.turnId))
@@ -1504,7 +1492,7 @@ export default class CodexTranscriptStore {
     }
     indexedThread = keepIndexedTurns(thread, turnIndex);
     const indexedTurnIds = new Set(turnIndex.map((entry) => entry.turnId));
-    const itemOwners = createTurnItemOwners(turnIndex);
+    const itemOwners = createFirstTurnItemOwners(turnIndex);
     const selectedUpstreamThread = {
       ...indexedThread,
       turns: indexedThread.turns.filter((turn) => selectedTurnIds.has(turn.id)),

@@ -110,6 +110,52 @@ test("standalone provider turns establish a readable live materialization", () =
   }
 });
 
+test("repeated same-thread items keep their earliest turn owner regardless of observation order", () => {
+  const { database, repository } = createRepository();
+  const item = (threadId: string, turnId: string, text: string): WorkbenchTranscriptAtomicObservation => ({
+    kind: "item",
+    threadId,
+    turnId,
+    lifecycle: "completed",
+    observedAt: 4,
+    item: {
+      id: "carried",
+      memoryCitation: null,
+      phase: "commentary",
+      text,
+      type: "agentMessage",
+    },
+  });
+  try {
+    repository.settle([
+      threadObservation(),
+      turnObservation("earlier", 0),
+      turnObservation("later", 1),
+    ]);
+    repository.settle([item("thread", "later", "arrived latest-first")]);
+    repository.settle([item("thread", "earlier", "repaired to first owner")]);
+    repository.settle([item("thread", "later", "repeated later")]);
+
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 2 });
+    assert.ok(snapshot);
+    assert.deepEqual(
+      snapshot.rows.threadItems.map(({ id, item_position, turn_id }) => [id, turn_id, item_position]),
+      [["carried", "earlier", 0]],
+    );
+
+    repository.settle([
+      threadObservation("other"),
+      turnObservation("other-turn", 0, "other"),
+    ]);
+    assert.throws(
+      () => repository.settle([item("other", "other-turn", "different thread")]),
+      /changed thread or turn owner/u,
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test("top-level mutations reject a metadata-only compatibility turn", () => {
   const { database, repository } = createRepository();
   const steer: WorkbenchSteerHistoryEntry = {

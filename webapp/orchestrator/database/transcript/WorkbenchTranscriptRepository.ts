@@ -356,15 +356,27 @@ export default class WorkbenchTranscriptRepository {
       throw new Error(`Transcript item ${itemId} references an unmaterialized turn`);
     }
     const existing = this.#one(selectRows(itemTables.threadItems, { where: { id: itemId } }));
-    if (existing && (existing.thread_id !== threadId || existing.turn_id !== turnId)) {
+    if (existing && existing.thread_id !== threadId) {
       throw new Error(`Transcript item ${itemId} changed thread or turn owner`);
     }
     if (existing && existing.type !== transform.itemType) {
       throw new Error(`Transcript item ${itemId} changed type from ${existing.type} to ${transform.itemType}`);
     }
-    const stableItemPosition = itemPosition ?? existing?.item_position ?? (() => {
+    const existingOwnerTurn = existing?.turn_id === turnId
+      ? turn
+      : existing
+        ? this.#one(selectRows(coreTables.threadTurns, { where: { id: existing.turn_id } }))
+        : null;
+    const stableTurnId = existingOwnerTurn && existingOwnerTurn.turn_index <= turn.turn_index
+      ? existingOwnerTurn.id
+      : turnId;
+    const stableItemPosition = existing
+      && stableTurnId === existing.turn_id
+      && (turnId !== stableTurnId || itemPosition === undefined)
+      ? existing.item_position
+      : itemPosition ?? (() => {
       const turnItems = this.#all(selectRows(itemTables.threadItems, {
-        where: { turn_id: turnId },
+        where: { turn_id: stableTurnId },
         orderBy: [{ column: "item_position" }],
       }));
       return (turnItems.at(-1)?.item_position ?? -1) + 1;
@@ -379,14 +391,14 @@ export default class WorkbenchTranscriptRepository {
     this.#run(upsertRow(itemTables.threadItems, {
       id: itemId,
       thread_id: threadId,
-      turn_id: turnId,
+      turn_id: stableTurnId,
       item_position: stableItemPosition,
       type: transform.itemType,
       created_at: existing?.created_at ?? observedAt,
       updated_at: observedAt,
     }, {
       conflictColumns: ["id"],
-      updateColumns: ["item_position", "updated_at"],
+      updateColumns: ["turn_id", "item_position", "updated_at"],
     }));
     this.#run(deleteRows(itemTables.threadItemTimelines, { item_id: itemId }));
     if (timeline) {

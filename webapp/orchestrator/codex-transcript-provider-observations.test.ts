@@ -101,6 +101,32 @@ test("one provider snapshot becomes direct ordered thread, turn, and item facts"
   });
 });
 
+test("complete provider snapshots keep carried items with their first turn", () => {
+  const thread = providerThread();
+  const carried = thread.turns[0]!.items[0]!;
+  thread.turns.push({
+    completedAt: 9,
+    durationMs: 2_000,
+    error: null,
+    id: "later",
+    items: [
+      carried,
+      { id: "later-answer", memoryCitation: null, phase: "final_answer", text: "later", type: "agentMessage" },
+    ],
+    itemsView: "full",
+    startedAt: 7,
+    status: "completed",
+  });
+
+  const observations = createCodexTranscriptProviderThreadObservations(thread, context);
+  assert.deepEqual(
+    observations
+      .filter((observation) => observation.kind === "item")
+      .map(({ item, turnId }) => [turnId, item.id]),
+    [["turn", "answer"], ["later", "later-answer"]],
+  );
+});
+
 test("one provider item lifecycle becomes one atomic observation", () => {
   const item = {
     id: "answer",

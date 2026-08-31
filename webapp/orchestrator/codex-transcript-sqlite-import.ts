@@ -24,6 +24,7 @@ import {
   createCodexTranscriptProviderItemObservation,
   type CodexTranscriptProviderContext,
 } from "./codex-transcript-provider-observations.ts";
+import { createFirstTurnItemOwners } from "./codex-transcript-item-ownership.ts";
 
 export interface CodexTranscriptSqliteImportInput {
   browseAssets?: ReadonlyMap<string, Extract<WorkbenchTranscriptAtomicObservation, { kind: "browse" }>["asset"]>;
@@ -81,6 +82,10 @@ export function createCodexTranscriptSqliteImport({
     activityAt: context.activityAt,
   }];
   const loadedTurnsById = new Map(payload.turns.map((turn) => [turn.id, turn]));
+  const itemOwners = createFirstTurnItemOwners(payload.turnHistory.map((history) => ({
+    itemIds: history.itemIds ?? loadedTurnsById.get(history.turnId)?.items.map(({ id }) => id),
+    turnId: history.turnId,
+  })));
   for (const [turnIndex, history] of payload.turnHistory.entries()) {
     const turn = loadedTurnsById.get(history.turnId);
     observations.push({
@@ -104,6 +109,8 @@ export function createCodexTranscriptSqliteImport({
     });
     if (!turn) continue;
     for (const item of turn.items) {
+      const ownerTurnId = itemOwners.get(item.id);
+      if (ownerTurnId && ownerTurnId !== turn.id) continue;
       const questionnaire = questionnaireBySyntheticId.get(item.id);
       if (questionnaire) {
         observations.push({ kind: "questionnaire", entry: questionnaire, observedAt: questionnaire.resolvedAt });
