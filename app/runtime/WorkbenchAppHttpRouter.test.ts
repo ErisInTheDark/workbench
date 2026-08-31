@@ -35,7 +35,7 @@ async function fixtureRouter(
   await writeFile(path.join(output, "tab-icons", "default-256.png"), "icon", "utf8");
   const state = {
     read: () => ({
-      rows: { lastLaunchTarget: [{ daemon_registration_id: "daemon", deleted: 0, id: "singleton", project_id: "project one", revision: 1 }] },
+      rows: { lastLaunchTarget: [{ daemon_registration_id: "daemon", deleted: 0, id: "singleton", project_id: "web/workbench", revision: 1 }] },
     }),
   } as unknown as WorkbenchAppStateController;
   return new WorkbenchAppHttpRouter({
@@ -96,7 +96,7 @@ test("serves SPA and launch routes while unrelated APIs remain legacy-owned", as
   assert.equal(icon.headers.get("content-type"), "image/png");
   assert.equal(await icon.text(), "icon");
   const launch = await fetch(`${url}/launch`, { redirect: "manual" });
-  assert.equal(launch.headers.get("location"), "/project/project%20one");
+  assert.equal(launch.headers.get("location"), "/web/workbench");
   assert.equal(await (await fetch(`${url}/api/projects`)).text(), "legacy");
 });
 

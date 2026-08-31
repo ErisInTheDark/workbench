@@ -10,6 +10,11 @@
  */
 
 import {
+  createWorkbenchProjectHref,
+  encodeWorkbenchRoutePath,
+} from "workbench-shared/navigation/workbench-route-path";
+
+import {
   parseWorkbenchMosaicRouteExpression,
   serializeWorkbenchMosaicRouteExpression,
   type WorkbenchMosaicNode,
@@ -210,14 +215,6 @@ function encodeRouteSegment(value: string) {
   return encodeURIComponent(value);
 }
 
-function encodeRoutePath(value: string) {
-  return value
-    .split("/")
-    .filter((segment) => segment.length > 0)
-    .map((segment) => encodeRouteSegment(segment))
-    .join("/");
-}
-
 function decodeRouteSegment(value: string): DecodedRouteSegment {
   try {
     return {
@@ -391,9 +388,9 @@ export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike 
 }
 
 export function createWorkbenchHref(route: WorkbenchRoute) {
-  const projectPath = encodeRoutePath(route.projectId);
+  const projectPath = encodeWorkbenchRoutePath(route.projectId);
   if (route.view === "file") {
-    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/file/${encodeRoutePath(route.filePath)}`;
+    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/file/${encodeWorkbenchRoutePath(route.filePath)}`;
   }
   if (route.view === "thread") {
     const target = route.threadTarget ?? (route.threadId === "new" ? { kind: "new" as const } : { kind: "provider" as const, threadId: route.threadId });
@@ -415,11 +412,11 @@ export function createWorkbenchHref(route: WorkbenchRoute) {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/mosaic/${serializeWorkbenchMosaicRouteExpression(route.mosaicNode)}`;
   }
 
-  return projectPath ? `/${projectPath}` : "/";
+  return createWorkbenchProjectHref(route.projectId);
 }
 
 export function createProjectHref(projectId: string) {
-  return createWorkbenchHref(createProjectRoute(projectId));
+  return createWorkbenchProjectHref(projectId);
 }
 
 export function createFileHref(projectId: string, filePath: string) {

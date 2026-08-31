@@ -1,8 +1,25 @@
-/* No production exports. Tests protect blank, draft, provider, and materialized mosaic route identity. */
+/* No production exports. Tests protect project, blank, draft, provider, and materialized mosaic route identity. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPinnedThreadHref, createThreadHref, getWorkbenchDraftIdFromThreadId, getWorkbenchMosaicThreadRootIds, isWorkbenchRouteOwnerOfThread, isWorkbenchThreadTargetSelected, parseWorkbenchRouteFromPath } from "./workbench-route";
+import {
+  createPinnedThreadHref,
+  createProjectHref,
+  createThreadHref,
+  getWorkbenchDraftIdFromThreadId,
+  getWorkbenchMosaicThreadRootIds,
+  isWorkbenchRouteOwnerOfThread,
+  isWorkbenchThreadTargetSelected,
+  parseWorkbenchRouteFromPath,
+} from "./workbench-route";
 import { createWorkbenchMosaicSplit, createWorkbenchMosaicTarget, parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route";
+
+test("project hrefs preserve slash and reserved-character identities", () => {
+  for (const projectId of ["web/workbench", "team space/project%two"]) {
+    const route = parseWorkbenchRouteFromPath(createProjectHref(projectId));
+    assert.equal(route.view, "project");
+    assert.equal(route.projectId, projectId);
+  }
+});
 
 test("thread routes discriminate blank drafts and provider ids", () => {
   const draftId = "123e4567-e89b-42d3-a456-426614174000";

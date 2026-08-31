@@ -9,6 +9,7 @@ import {
   type WorkbenchClientStateIdentity,
   type WorkbenchClientStateRecord,
 } from "workbench-shared/state/workbench-client-state";
+import { createWorkbenchProjectHref } from "workbench-shared/navigation/workbench-route-path";
 
 import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
 
@@ -51,7 +52,7 @@ export default class WorkbenchAppStateRoutes {
       const target = snapshot.rows.lastLaunchTarget.find((row) => row.deleted === 0);
       response.writeHead(307, {
         "Cache-Control": "private, no-store",
-        Location: target ? `/project/${encodeURIComponent(target.project_id)}` : "/",
+        Location: target ? createWorkbenchProjectHref(target.project_id) : "/",
       });
       response.end();
       return true;

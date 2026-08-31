@@ -14,6 +14,7 @@
     "./http/StaticHttpRequestController": "./http/StaticHttpRequestController.ts",
     "./http/StaticHttpServer": "./http/StaticHttpServer.ts",
     "./http/workbench-app-port": "./http/workbench-app-port.ts",
+    "./navigation/workbench-route-path": "./navigation/workbench-route-path.ts",
     "./reload/ReloadableNode": "./reload/ReloadableNode.ts",
     "./reload/ReloadableNodeHost": "./reload/ReloadableNodeHost.ts",
     "./reload/reloadable-node-loader": "./reload/reloadable-node-loader.ts",
