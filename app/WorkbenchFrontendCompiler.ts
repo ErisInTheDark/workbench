@@ -4,7 +4,7 @@
  * - default WorkbenchFrontendCompiler: own initial esbuild/Tailwind output and both watch lifecycles. Keywords: frontend, compiler, watch, controller.
  */
 import { type ChildProcess, spawn } from "node:child_process";
-import { copyFile, mkdir } from "node:fs/promises";
+import { cp, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
@@ -53,12 +53,14 @@ export default class WorkbenchFrontendCompiler {
   private readonly logger: WorkbenchAppLogger;
   private readonly onDiagnostic: (message: string) => void;
   private readonly repositoryRootPath: string;
+  private readonly staticDirectoryPath: string;
   private esbuildContext: esbuild.BuildContext | null = null;
   private tailwindWatcher: ChildProcess | null = null;
 
   constructor(options: WorkbenchFrontendCompilerOptions = {}) {
     this.repositoryRootPath = path.resolve(options.repositoryRootPath ?? defaultRepositoryRootPath);
     this.appDirectoryPath = path.join(this.repositoryRootPath, "app");
+    this.staticDirectoryPath = path.join(this.repositoryRootPath, "static");
     this.environment = { ...process.env, ...options.environment };
     const workbenchLibraryRoot = resolveWorkbenchLibraryRoot(this.environment.WORKBENCH_LIBRARY_ROOT);
     this.outputDirectoryPath = path.resolve(
@@ -180,19 +182,8 @@ export default class WorkbenchFrontendCompiler {
 
   private async prepareStaticOutput() {
     const assetsDirectoryPath = path.join(this.outputDirectoryPath, "assets");
-    const tabIconsDirectoryPath = path.join(this.outputDirectoryPath, "tab-icons");
-    await Promise.all([
-      mkdir(assetsDirectoryPath, { recursive: true }),
-      mkdir(tabIconsDirectoryPath, { recursive: true }),
-    ]);
-    await Promise.all([
-      copyFile(path.join(this.appDirectoryPath, "index.html"), path.join(this.outputDirectoryPath, "index.html")),
-      copyFile(path.join(this.appDirectoryPath, "manifest.webmanifest"), path.join(this.outputDirectoryPath, "manifest.webmanifest")),
-      ...["active.png", "default.png", "questionnaire.png"].map((fileName) => copyFile(
-        path.join(this.repositoryRootPath, "webapp", "public", "tab-icons", fileName),
-        path.join(tabIconsDirectoryPath, fileName),
-      )),
-    ]);
+    await cp(this.staticDirectoryPath, this.outputDirectoryPath, { recursive: true });
+    await mkdir(assetsDirectoryPath, { recursive: true });
   }
 
   private tailwindArguments(watch: boolean) {

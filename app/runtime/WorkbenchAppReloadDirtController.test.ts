@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect ignored runtime churn, missing watcher filenames, scoped app/shared dirt, partial advancement, and watcher disposal.
+ * No production exports. Tests protect ignored runtime churn, missing watcher filenames, scoped app/shared/static dirt, partial advancement, and watcher disposal.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -22,9 +22,11 @@ async function fixture(context: test.TestContext) {
   await git("config", "user.name", "Workbench test");
   await fsp.mkdir(path.join(repositoryRootPath, "app", "runtime"), { recursive: true });
   await fsp.mkdir(path.join(repositoryRootPath, "shared"), { recursive: true });
+  await fsp.mkdir(path.join(repositoryRootPath, "static"), { recursive: true });
   await fsp.writeFile(path.join(repositoryRootPath, ".gitignore"), ".workbench/\n", "utf8");
   await fsp.writeFile(path.join(repositoryRootPath, "app", "runtime", "http.ts"), "export const http = 1;\n", "utf8");
   await fsp.writeFile(path.join(repositoryRootPath, "shared", "owner.ts"), "export const shared = 1;\n", "utf8");
+  await fsp.writeFile(path.join(repositoryRootPath, "static", "index.html"), "<main>app</main>\n", "utf8");
   await git("add", ".");
   await git("commit", "-m", "initial");
 
@@ -37,12 +39,14 @@ async function fixture(context: test.TestContext) {
   const controller = new WorkbenchAppReloadDirtController({
     getCatalog: () => [
       { access: "operator", description: "HTTP", safeAll: false, scope: "client:http" },
+      { access: "operator", description: "Compiler", safeAll: false, scope: "client:compiler" },
       { access: "operator", description: "Process", destructive: true, safeAll: false, scope: "client:process" },
     ],
     getScopesForPaths: (paths) => {
       const scopes = new Set<string>();
       for (const sourcePath of paths) {
         if (sourcePath.startsWith("app/runtime/") && sourcePath.endsWith(".ts")) scopes.add("client:http");
+        if (sourcePath.startsWith("static/")) scopes.add("client:compiler");
         if (sourcePath === "shared/owner.ts") {
           scopes.add("client:http");
           scopes.add("client:process");
@@ -79,7 +83,7 @@ test("ignored runtime writes and missing filenames reconcile clean instead of di
   assert.deepEqual((await target.controller.refresh()).dirtyScopes, []);
 });
 
-test("real app and shared edits dirty only actual owners and advance independently", async (context) => {
+test("real app, shared, and static edits dirty only actual owners and advance independently", async (context) => {
   const target = await fixture(context);
   const httpPath = path.join(target.repositoryRootPath, "app", "runtime", "http.ts");
   await fsp.writeFile(httpPath, "export const http = 2;\n", "utf8");
@@ -89,13 +93,18 @@ test("real app and shared edits dirty only actual owners and advance independent
   assert.deepEqual(target.controller.getSnapshot().dirtyScopes, []);
 
   const sharedPath = path.join(target.repositoryRootPath, "shared", "owner.ts");
+  const staticPath = path.join(target.repositoryRootPath, "static", "index.html");
   await fsp.writeFile(sharedPath, "export const shared = 2;\n", "utf8");
+  await fsp.writeFile(staticPath, "<main>changed</main>\n", "utf8");
   target.observe("shared/owner.ts");
+  target.observe("static/index.html");
   assert.deepEqual(
     (await target.controller.refresh()).dirtyScopes.map(({ scope }) => scope),
-    ["client:http", "client:process"],
+    ["client:http", "client:compiler", "client:process"],
   );
   await target.controller.completeReload(["client:http"]);
+  assert.deepEqual(target.controller.getSnapshot().dirtyScopes.map(({ scope }) => scope), ["client:compiler", "client:process"]);
+  await target.controller.completeReload(["client:compiler"]);
   assert.deepEqual(target.controller.getSnapshot().dirtyScopes.map(({ scope }) => scope), ["client:process"]);
   await target.controller.completeReload(["client:process"]);
 

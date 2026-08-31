@@ -17,7 +17,7 @@ import type {
 } from "workbench-shared/reload/workbench-reload";
 
 const APP_RELOAD_SNAPSHOT_REF = "refs/worktree/workbench/app-reload-snapshot";
-const SOURCE_ROOTS = ["app", "shared"] as const;
+const SOURCE_ROOTS = ["app", "shared", "static"] as const;
 
 export type WorkbenchAppReloadDirtControllerState = ReloadDirtControllerState;
 

@@ -2,7 +2,7 @@
  * No production exports. Tests protect client-log admission, SPA serving, launch restoration, and legacy proxy ownership.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -24,9 +24,15 @@ async function listen(server: ReturnType<typeof createServer>) {
   return `http://127.0.0.1:${address.port}`;
 }
 
-async function fixtureRouter(errors: string[], legacyOrigin: string) {
+async function fixtureRouter(
+  errors: string[],
+  legacyOrigin: string,
+  appOrigin = "http://127.0.0.1:43210",
+) {
   const output = await mkdtemp(path.join(os.tmpdir(), "workbench-app-router-"));
+  await mkdir(path.join(output, "tab-icons"), { recursive: true });
   await writeFile(path.join(output, "index.html"), "<main>app</main>", "utf8");
+  await writeFile(path.join(output, "tab-icons", "default-256.png"), "icon", "utf8");
   const state = {
     read: () => ({
       rows: { lastLaunchTarget: [{ daemon_registration_id: "daemon", deleted: 0, id: "singleton", project_id: "project one", revision: 1 }] },
@@ -35,8 +41,8 @@ async function fixtureRouter(errors: string[], legacyOrigin: string) {
   return new WorkbenchAppHttpRouter({
     appPort: {
       read: () => ({
-        appOrigin: "http://127.0.0.1:43210",
-        currentPort: 43_210,
+        appOrigin,
+        currentPort: Number(new URL(appOrigin).port),
         editable: true,
         source: "random",
       }),
@@ -86,7 +92,26 @@ test("serves SPA and launch routes while unrelated APIs remain legacy-owned", as
   context.after(async () => await server.close());
   const { url } = await server.start();
   assert.equal(await (await fetch(`${url}/project/one`, { headers: { Accept: "text/html" } })).text(), "<main>app</main>");
+  const icon = await fetch(`${url}/tab-icons/default-256.png`);
+  assert.equal(icon.headers.get("content-type"), "image/png");
+  assert.equal(await icon.text(), "icon");
   const launch = await fetch(`${url}/launch`, { redirect: "manual" });
   assert.equal(launch.headers.get("location"), "/project/project%20one");
   assert.equal(await (await fetch(`${url}/api/projects`)).text(), "legacy");
+});
+
+test("rejects a legacy proxy target that resolves to the app listener", async (context) => {
+  const errors: string[] = [];
+  const appOrigin = "http://127.0.0.1:43210";
+  const router = await fixtureRouter(errors, appOrigin, appOrigin);
+  await router.start();
+  context.after(() => router.close());
+  const server = new HttpServer({ handleRequest: (request, response) => router.handle(request, response), hostname: "127.0.0.1" });
+  context.after(async () => await server.close());
+  const { url } = await server.start();
+
+  const response = await fetch(`${url}/api/projects`);
+
+  assert.equal(response.status, 502);
+  assert.equal(errors.filter((message) => message.includes("Refused recursive legacy request")).length, 1);
 });

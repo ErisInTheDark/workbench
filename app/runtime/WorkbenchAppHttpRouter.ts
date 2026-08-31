@@ -46,6 +46,23 @@ function sendProxyFailure(response: ServerResponse) {
   response.end("The legacy Workbench server is unavailable.");
 }
 
+function effectivePort(url: URL) {
+  return url.port || (url.protocol === "https:" ? "443" : "80");
+}
+
+function isLoopbackHostname(hostname: string) {
+  return hostname === "127.0.0.1" || hostname === "::1" || hostname === "localhost";
+}
+
+function isSameListener(left: URL, right: URL) {
+  return left.origin === right.origin || (
+    left.protocol === right.protocol
+    && effectivePort(left) === effectivePort(right)
+    && isLoopbackHostname(left.hostname)
+    && isLoopbackHostname(right.hostname)
+  );
+}
+
 async function readBoundedJson(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let bytes = 0;
@@ -124,7 +141,7 @@ export default class WorkbenchAppHttpRouter {
     }
     if (await this.portRoutes.handle(request, response, url)) return;
     if (await this.stateRoutes.handle(request, response, url)) return;
-    if (url.pathname === "/icon" || url.pathname.startsWith("/api/")) {
+    if (url.pathname.startsWith("/api/")) {
       await this.proxyLegacyRequest(request, response);
       return;
     }
@@ -150,6 +167,11 @@ export default class WorkbenchAppHttpRouter {
 
   private async proxyLegacyRequest(request: IncomingMessage, response: ServerResponse) {
     const target = new URL(request.url ?? "/", this.legacyOrigin);
+    if (isSameListener(target, new URL(this.options.appPort.read().appOrigin))) {
+      this.options.logger.error("http", `Refused recursive legacy request for ${target.pathname}.`);
+      sendProxyFailure(response);
+      return;
+    }
     const client = target.protocol === "https:" ? https : http;
     await new Promise<void>((resolve) => {
       const proxyRequest = client.request(target, {

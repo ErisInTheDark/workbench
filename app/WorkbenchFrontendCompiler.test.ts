@@ -59,8 +59,19 @@ test("watches the real browser app into static output without Next runtime impor
     assertFile(path.join(outputDirectoryPath, "assets", "app.css.map")),
     assertFile(path.join(outputDirectoryPath, "tab-icons", "active.png")),
     assertFile(path.join(outputDirectoryPath, "tab-icons", "default.png")),
+    assertFile(path.join(outputDirectoryPath, "tab-icons", "default-256.png")),
     assertFile(path.join(outputDirectoryPath, "tab-icons", "questionnaire.png")),
   ]);
+
+  const html = await readFile(path.join(outputDirectoryPath, "index.html"), "utf8");
+  const mobileWebAppCapabilities = Object.fromEntries(
+    [...html.matchAll(/<meta content="([^"]+)" name="((?:apple-)?mobile-web-app-capable)">/gu)]
+      .map(([, content, name]) => [name, content]),
+  );
+  assert.deepEqual(mobileWebAppCapabilities, {
+    "apple-mobile-web-app-capable": "yes",
+    "mobile-web-app-capable": "yes",
+  });
 
   const javascript = await readFile(path.join(outputDirectoryPath, "assets", "app.js"), "utf8");
   assert.doesNotMatch(javascript, /from\s+["']next\/navigation["']/u);
