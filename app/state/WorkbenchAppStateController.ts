@@ -108,14 +108,17 @@ export default class WorkbenchAppStateController {
 
   readGlobalPreference<TKey extends WorkbenchGlobalPreference["key"]>(
     key: TKey,
-  ): GlobalPreferenceForKey<TKey>["value"] | null {
+  ): GlobalPreferenceForKey<TKey>["value"] | null;
+  readGlobalPreference(
+    key: WorkbenchGlobalPreference["key"],
+  ): WorkbenchGlobalPreference["value"] | null {
     for (const change of projectWorkbenchClientStateRows(this.read().rows)) {
       if (
         change.change === "upsert"
         && change.record.kind === "globalPreference"
         && change.record.preference.key === key
       ) {
-        return change.record.preference.value as GlobalPreferenceForKey<TKey>["value"];
+        return change.record.preference.value;
       }
     }
     return null;

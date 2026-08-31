@@ -131,7 +131,7 @@ function ThreadCheckpointCommitController({
   }, [commandOutcome, failureReason, loadProposal, proposalId]);
 
   const commit = async () => {
-    if (!title.trim() || committing) return;
+    if (!proposalId || !title.trim() || committing) return;
     setCommitting(true);
     try {
       const proposal = await daemon.requestGitArc(
@@ -202,7 +202,7 @@ export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommit
   const harness = props.harness ?? presentation?.harness ?? "codex";
   const hoistedTargetId = props.proposalId ? `thread-checkpoint-proposal-${props.proposalId}` : null;
   const resolvedIntent = props.intent ?? (props.proposalId ? presentation?.proposalIntents?.get(props.proposalId) ?? null : null);
-  if (!props.hoisted && props.proposalId && (
+  if (!props.hoisted && props.proposalId && hoistedTargetId && (
     presentation?.hoistedProposalIds?.has(props.proposalId) || presentation?.hoistedProposalId === props.proposalId
   )) {
     return (

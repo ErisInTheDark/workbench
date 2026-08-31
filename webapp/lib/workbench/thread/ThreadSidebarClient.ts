@@ -255,6 +255,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.publish();
   }
   private async flushQueue(id: string, queue: DraftQueue) {
+    const readQueuedDraft = () => queue.draft;
     if (queue.timer) { clearTimeout(queue.timer); queue.timer = null; }
     if (queue.inFlight) await queue.inFlight;
     if (queue.retired) return;
@@ -273,13 +274,15 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       }
     } catch (error) {
       if (queue.retired) return;
-      if (!queue.draft || queue.draft.clientUpdatedAt < draft.clientUpdatedAt) queue.draft = draft;
+      const queuedDraft = readQueuedDraft();
+      if (!queuedDraft || queuedDraft.clientUpdatedAt < draft.clientUpdatedAt) queue.draft = draft;
       if (this.snapshot) {
         const message = error instanceof Error ? error.message : "Unable to save this draft.";
         this.snapshot = { ...this.snapshot, error: `Draft save failed: ${message}`.slice(0, 500), freshness: "partial" };
         this.publish();
       }
-      this.edit(queue.draft);
+      const retryDraft = readQueuedDraft();
+      if (retryDraft) this.edit(retryDraft);
       throw error;
     }
     if (queue.draft) await this.flushQueue(id, queue);

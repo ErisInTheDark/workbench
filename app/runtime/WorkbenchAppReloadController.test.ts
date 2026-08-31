@@ -23,9 +23,9 @@ test("starts an ordinary reload only after its admission is acknowledged", async
   });
   const admission = controller.admit(["client:http"]);
   assert.equal(admission.response.state, "running");
-  assert.deepEqual(events, []);
+  assert.equal(events.length, 0);
   const completion = admission.start();
-  assert.deepEqual(events, []);
+  assert.equal(events.length, 0);
   scheduled.shift()?.();
   await completion;
   assert.deepEqual(events, ["begin:client:http", "execute:client:http", "complete:client:http"]);
@@ -57,7 +57,7 @@ test("keeps process restart exclusive and cancellable before acknowledgement", a
   });
   cancelled.cancel();
   await assert.rejects(cancelled.start(), /no longer active/u);
-  assert.deepEqual(events, []);
+  assert.equal(events.length, 0);
 
   const admission = controller.admit(["client:process"], () => {
     events.push("restart");
@@ -73,7 +73,7 @@ test("keeps process restart exclusive and cancellable before acknowledgement", a
     state: "succeeded",
   });
   const completion = admission.start();
-  assert.deepEqual(events, []);
+  assert.equal(events.length, 0);
   scheduled.shift()?.();
   await completion;
   assert.deepEqual(events, ["restart"]);

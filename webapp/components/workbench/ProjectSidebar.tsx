@@ -76,7 +76,7 @@ function ProjectCard({
 }) {
   const { activityAt, project, summary } = entry;
   const counts = summary?.counts ?? WorkbenchThreadStatusCounts.emptyCounts;
-  const dominantStatus = WorkbenchThreadStatusCounts.items.find(({ key }) => counts[key] > 0) ?? null;
+  const dominantStatus = WorkbenchThreadStatusCounts.items.find(({ key }) => (counts[key] ?? 0) > 0) ?? null;
   const statusClassName = dominantStatus ? getWorkbenchThreadStatusClassName(dominantStatus.tone) : "text-muted";
   const timestamp = activityAt === null ? null : new Date(activityAt);
   const compact = project.kind === "workbench-library" || !dominantStatus;

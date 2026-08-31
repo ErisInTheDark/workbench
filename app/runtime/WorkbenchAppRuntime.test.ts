@@ -90,8 +90,10 @@ test("assigns every app server source to a reloadable node or the explicit proce
   assert.deepEqual(owners("app/WorkbenchFrontendCompiler.ts"), ["client:compiler"]);
   assert.deepEqual(owners("app/runtime/AppHttpNode.ts"), ["client:http", "client:topology"]);
   assert.deepEqual(owners("app/index.ts"), ["client:process"]);
+  assert.deepEqual(owners("app/app-command-line.ts"), ["client:process"]);
   assert.deepEqual(owners("app/package.json"), ["client:process"]);
   assert.deepEqual(owners("app/tsconfig.json"), ["client:process"]);
+  assert.deepEqual(owners("package.json"), ["client:process"]);
   assert.deepEqual(owners("shared/http/StaticHttpRequestController.ts"), ["client:http"]);
   assert.deepEqual(owners("shared/http/workbench-app-port.ts"), ["client:http"]);
   assert.deepEqual(owners("shared/http/HttpServer.ts"), ["client:process"]);

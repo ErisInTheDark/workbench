@@ -69,7 +69,7 @@ function sharedSeedMutation(
 
 export default class WorkbenchBrowserStateRegistry {
   readonly #sharedController: WorkbenchAppStateController;
-  readonly #sharedDaemonRegistrationId: string;
+  #sharedDaemonRegistrationId: string | null = null;
   readonly #sharedRepository: WorkbenchAppStateRepository;
   readonly #browserStateDirectoryPath: string | null;
   readonly #onDiagnostic: (message: string) => void;
@@ -84,13 +84,17 @@ export default class WorkbenchBrowserStateRegistry {
   ) {
     this.#sharedRepository = sharedRepository;
     this.#sharedController = new WorkbenchAppStateController(sharedRepository);
-    this.#sharedDaemonRegistrationId = sharedRepository.daemonRegistrationId;
     this.#browserStateDirectoryPath = options.browserStateDirectoryPath
       ? path.resolve(options.browserStateDirectoryPath)
       : sharedRepository.databasePath
         ? path.join(path.dirname(sharedRepository.databasePath), "browser-state")
         : null;
     this.#onDiagnostic = options.onDiagnostic ?? (() => {});
+  }
+
+  start() {
+    if (this.#sharedDaemonRegistrationId) throw new Error("Workbench browser state registry has already started.");
+    this.#sharedDaemonRegistrationId = this.#sharedRepository.daemonRegistrationId;
   }
 
   get daemonRegistrationId() {
@@ -202,7 +206,9 @@ export default class WorkbenchBrowserStateRegistry {
   }
 
   #enqueueSeedMutation(mutation: WorkbenchClientStateMutation) {
-    const seedMutation = sharedSeedMutation(mutation, this.#sharedDaemonRegistrationId);
+    const daemonRegistrationId = this.#sharedDaemonRegistrationId;
+    if (!daemonRegistrationId) throw new Error("Workbench browser state registry is not ready.");
+    const seedMutation = sharedSeedMutation(mutation, daemonRegistrationId);
     const operation = this.#seedQueue.then(async () => {
       try {
         await this.#sharedController.mutate(seedMutation);

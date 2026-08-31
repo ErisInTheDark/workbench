@@ -7,6 +7,7 @@ mod desktop_app_controller;
 mod rotating_log_writer;
 mod windows_child_job;
 mod windows_process_wait;
+mod windows_single_instance;
 
 use desktop_app_controller::DesktopAppController;
 use std::{
@@ -103,7 +104,7 @@ fn run() -> Result<(), String> {
     let setup_controller = Arc::clone(&controller);
     let event_controller = Arc::clone(&controller);
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _arguments, _cwd| {
+        .plugin(windows_single_instance::init(|app| {
             app.state::<Arc<DesktopAppController>>()
                 .open_browser(app);
         }))

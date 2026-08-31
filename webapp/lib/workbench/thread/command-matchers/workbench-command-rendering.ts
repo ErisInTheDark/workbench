@@ -531,6 +531,7 @@ export function getWorkbenchCommandRoute(
     case "git_commit":
       return simple("workbench-git.commit", actionTarget("Committing ", "selected files"), actionTarget("Committed ", "selected files"));
   }
+  return null;
 }
 
 export function getWorkbenchCommandRendering(

@@ -1170,7 +1170,7 @@ function ThreadCommandDetailResultBlock({
   return (
     <div className="max-w-[46rem] pl-6 pt-1">
       <ThreadCodeDisplay
-        header={<ThreadCommandHeader command={row.target.text} surface="framed" />}
+        header={<ThreadCommandHeader command={row.target?.text ?? ""} surface="framed" />}
         output={output}
         preview
         previewHeight="10rem"

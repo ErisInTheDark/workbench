@@ -128,7 +128,7 @@ function WorkbenchFormatCommandController(
 
     options.syncEditorAfterStructuralChange(() => {
       options.clearPendingInlineFormats();
-      document.execCommand(command, false, value);
+      document.execCommand(command, false, value ?? undefined);
       options.editor.focus();
     });
   }

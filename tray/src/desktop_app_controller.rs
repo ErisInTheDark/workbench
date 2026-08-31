@@ -27,6 +27,20 @@ fn quit_deadline_expired(deadline: Option<Instant>, now: Instant) -> bool {
     deadline.is_some_and(|deadline| now >= deadline)
 }
 
+fn unexpected_child_failure(
+    succeeded: bool,
+    shutdown_intent: Option<ShutdownIntent>,
+    diagnostic: Option<&str>,
+) -> Option<String> {
+    if succeeded || shutdown_intent.is_some() {
+        return None;
+    }
+    Some(match diagnostic {
+        Some(diagnostic) => format!("Workbench app exited unexpectedly.\n\n{diagnostic}"),
+        None => "Workbench app exited unexpectedly. See .workbench/logs for details.".into(),
+    })
+}
+
 enum ManagerCommand {
     Quit,
     Restart,
@@ -45,21 +59,45 @@ enum AppOriginChange {
     Unchanged,
 }
 
-fn update_app_origin(current: &mut Option<String>, next: String) -> AppOriginChange {
-    if current.as_ref() == Some(&next) {
-        return AppOriginChange::Unchanged;
-    }
-    let change = if current.is_some() {
-        AppOriginChange::Moved
-    } else {
-        AppOriginChange::Ready
-    };
-    *current = Some(next);
-    change
+#[derive(Default)]
+struct AppOriginState {
+    open_when_ready: bool,
+    origin: Option<String>,
 }
 
-fn should_open_browser(change: &AppOriginChange, requested: bool) -> bool {
-    requested && *change == AppOriginChange::Ready
+impl AppOriginState {
+    fn launch_url(&self) -> Option<String> {
+        self.origin
+            .as_ref()
+            .map(|origin| format!("{origin}/launch"))
+    }
+
+    fn request_open(&mut self) -> Option<String> {
+        match self.launch_url() {
+            Some(url) => Some(url),
+            None => {
+                self.open_when_ready = true;
+                None
+            }
+        }
+    }
+
+    fn update(&mut self, next: String, requested: bool) -> (AppOriginChange, bool) {
+        if self.origin.as_ref() == Some(&next) {
+            return (AppOriginChange::Unchanged, false);
+        }
+        let change = if self.origin.is_some() {
+            AppOriginChange::Moved
+        } else {
+            AppOriginChange::Ready
+        };
+        self.origin = Some(next);
+        let open = change == AppOriginChange::Ready && (requested || self.open_when_ready);
+        if open {
+            self.open_when_ready = false;
+        }
+        (change, open)
+    }
 }
 
 #[derive(Deserialize)]
@@ -77,7 +115,7 @@ enum DesktopRecord {
 }
 
 pub struct DesktopAppController {
-    app_origin: Mutex<Option<String>>,
+    app_origin: Mutex<AppOriginState>,
     command_sender: Sender<ManagerCommand>,
     command_receiver: Mutex<Option<Receiver<ManagerCommand>>>,
     exit_allowed: AtomicBool,
@@ -98,7 +136,7 @@ impl DesktopAppController {
         .map_err(|error| format!("Unable to create Workbench app log: {error}"))?;
         let (command_sender, command_receiver) = mpsc::channel();
         Ok(Self {
-            app_origin: Mutex::new(None),
+            app_origin: Mutex::new(AppOriginState::default()),
             command_sender,
             command_receiver: Mutex::new(Some(command_receiver)),
             exit_allowed: AtomicBool::new(false),
@@ -114,8 +152,13 @@ impl DesktopAppController {
     }
 
     pub fn open_browser(&self, app: &AppHandle) {
-        let Some(url) = self.launch_url() else {
-            self.log_launcher("Workbench app URL is not ready to open.");
+        let url = self
+            .app_origin
+            .lock()
+            .expect("app origin lock poisoned")
+            .request_open();
+        let Some(url) = url else {
+            self.log_launcher("Workbench app URL is not ready; retaining the open request.");
             return;
         };
         if let Err(error) = app.opener().open_url(url, None::<&str>) {
@@ -212,10 +255,17 @@ impl DesktopAppController {
             }
         });
         let stderr_log = Arc::clone(&self.log);
+        let last_child_diagnostic = Arc::new(Mutex::new(None));
+        let stderr_diagnostic = Arc::clone(&last_child_diagnostic);
         let stderr_thread = thread::spawn(move || {
             for line in BufReader::new(stderr).lines() {
                 match line {
-                    Ok(line) => write_child_log(&stderr_log, &line),
+                    Ok(line) => {
+                        if let Ok(mut diagnostic) = stderr_diagnostic.lock() {
+                            *diagnostic = Some(line.chars().take(500).collect::<String>());
+                        }
+                        write_child_log(&stderr_log, &line);
+                    }
                     Err(error) => {
                         write_launcher_log(
                             &stderr_log,
@@ -237,6 +287,7 @@ impl DesktopAppController {
                 job,
                 stdout_thread,
                 stderr_thread,
+                last_child_diagnostic,
             )
         });
         Ok(())
@@ -271,14 +322,15 @@ impl DesktopAppController {
                 open_browser,
                 version: 1,
             } if valid_app_origin(&app_origin) => {
-                let mut current_origin =
+                let mut origin_state =
                     self.app_origin.lock().expect("app origin lock poisoned");
-                let change = update_app_origin(&mut current_origin, app_origin.clone());
-                drop(current_origin);
+                let (change, open_browser) =
+                    origin_state.update(app_origin.clone(), open_browser);
+                drop(origin_state);
                 match change {
                     AppOriginChange::Ready => {
                         self.log_launcher(&format!("Workbench app ready at {app_origin}."));
-                        if should_open_browser(&change, open_browser) {
+                        if open_browser {
                             self.open_browser(app);
                         }
                     }
@@ -310,8 +362,7 @@ impl DesktopAppController {
         self.app_origin
             .lock()
             .expect("app origin lock poisoned")
-            .as_ref()
-            .map(|origin| format!("{origin}/launch"))
+            .launch_url()
     }
 
     fn run_process_manager(
@@ -323,6 +374,7 @@ impl DesktopAppController {
         job: WindowsChildJob,
         stdout_thread: thread::JoinHandle<()>,
         stderr_thread: thread::JoinHandle<()>,
+        last_child_diagnostic: Arc<Mutex<Option<String>>>,
     ) {
         let mut shutdown_deadline = None;
         let mut shutdown_intent = None;
@@ -334,6 +386,15 @@ impl DesktopAppController {
                         "Workbench app exited with status {}.",
                         status.code().map_or_else(|| "unknown".into(), |code| code.to_string())
                     ));
+                    let diagnostic = last_child_diagnostic
+                        .lock()
+                        .ok()
+                        .and_then(|diagnostic| diagnostic.clone());
+                    if let Some(failure) =
+                        unexpected_child_failure(status.success(), shutdown_intent, diagnostic.as_deref())
+                    {
+                        crate::report_fatal_error(&failure);
+                    }
                     match shutdown_intent {
                         Some(ShutdownIntent::Restart) => self.finish_restart(&app),
                         Some(ShutdownIntent::Quit) if status.success() => self.finish(&app, 0),
@@ -540,8 +601,8 @@ fn write_launcher_log(log: &Arc<Mutex<RotatingLogWriter>>, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        quit_deadline_expired, should_open_browser, update_app_origin, valid_app_origin,
-        AppOriginChange, DesktopAppController, DesktopRecord, ManagerCommand,
+        quit_deadline_expired, unexpected_child_failure, valid_app_origin, AppOriginChange,
+        AppOriginState, DesktopAppController, DesktopRecord, ManagerCommand, ShutdownIntent,
     };
     use std::{
         sync::Arc,
@@ -555,6 +616,23 @@ mod tests {
         assert!(!valid_app_origin("https://127.0.0.1:43210"));
         assert!(!valid_app_origin("http://127.0.0.1:0"));
         assert!(!valid_app_origin("http://127.0.0.1:not-a-port"));
+    }
+
+    #[test]
+    fn only_unexpected_child_failure_needs_a_fatal_report() {
+        let failure = unexpected_child_failure(false, None, Some("state is not ready"))
+            .expect("unexpected failure report");
+        assert!(failure.contains("state is not ready"));
+
+        assert_eq!(unexpected_child_failure(true, None, Some("ignored")), None);
+        assert_eq!(
+            unexpected_child_failure(false, Some(ShutdownIntent::Quit), Some("ignored")),
+            None
+        );
+        assert_eq!(
+            unexpected_child_failure(false, Some(ShutdownIntent::Restart), Some("ignored")),
+            None
+        );
     }
 
     #[test]
@@ -579,23 +657,46 @@ mod tests {
 
     #[test]
     fn later_readiness_replaces_the_tray_origin_without_restarting_startup() {
-        let mut origin = None;
+        let mut origin = AppOriginState::default();
         assert_eq!(
-            update_app_origin(&mut origin, "http://127.0.0.1:43210".into()),
-            AppOriginChange::Ready
+            origin.update("http://127.0.0.1:43210".into(), false),
+            (AppOriginChange::Ready, false)
         );
         assert_eq!(
-            update_app_origin(&mut origin, "http://127.0.0.1:43211".into()),
-            AppOriginChange::Moved
+            origin.update("http://127.0.0.1:43211".into(), true),
+            (AppOriginChange::Moved, false)
         );
         assert_eq!(
-            update_app_origin(&mut origin, "http://127.0.0.1:43211".into()),
-            AppOriginChange::Unchanged
+            origin.update("http://127.0.0.1:43211".into(), true),
+            (AppOriginChange::Unchanged, false)
         );
-        assert_eq!(origin.as_deref(), Some("http://127.0.0.1:43211"));
-        assert!(should_open_browser(&AppOriginChange::Ready, true));
-        assert!(!should_open_browser(&AppOriginChange::Ready, false));
-        assert!(!should_open_browser(&AppOriginChange::Moved, true));
+        assert_eq!(
+            origin.launch_url().as_deref(),
+            Some("http://127.0.0.1:43211/launch")
+        );
+    }
+
+    #[test]
+    fn pre_ready_open_is_retained_and_consumed_once() {
+        let mut origin = AppOriginState::default();
+        assert_eq!(origin.request_open(), None);
+        assert_eq!(
+            origin.update("http://127.0.0.1:43210".into(), false),
+            (AppOriginChange::Ready, true)
+        );
+        assert_eq!(
+            origin.update("http://127.0.0.1:43210".into(), false),
+            (AppOriginChange::Unchanged, false)
+        );
+    }
+
+    #[test]
+    fn random_ready_requests_open_without_pending_activation() {
+        let mut origin = AppOriginState::default();
+        assert_eq!(
+            origin.update("http://127.0.0.1:43210".into(), true),
+            (AppOriginChange::Ready, true)
+        );
     }
 
     #[test]

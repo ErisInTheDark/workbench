@@ -123,6 +123,7 @@ export function getThreadItemRenderSignature(item: ThreadItem) {
       case "contextCompaction":
         return `${item.id}:${item.type}`;
     }
+    throw new Error("Unsupported thread item signature.");
   });
 }
 

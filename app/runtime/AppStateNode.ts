@@ -19,7 +19,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
     return {
       dispose: async () => await state.close(),
       registrations: { state },
-      start: () => {},
+      start: () => state.start(),
     };
   },
   description: "Reload typed app-state reads, projections, and mutations without replacing SQLite.",

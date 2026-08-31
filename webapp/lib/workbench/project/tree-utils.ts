@@ -79,13 +79,13 @@ function visitProjectTreeFiles(nodes: TreeNode[], visitor: (node: Extract<TreeNo
   }
 }
 
-export function getFirstFile(nodes: TreeNode[], predicate: (filePath: string) => boolean = () => true) {
+export function getFirstFile(nodes: TreeNode[], predicate: (filePath: string) => boolean = () => true): string | null {
   for (const node of nodes) {
     if (node.type === "file" && predicate(node.path)) {
       return node.path;
     }
     if (node.type === "directory") {
-      const nested = getFirstFile(node.children, predicate);
+      const nested: string | null = getFirstFile(node.children, predicate);
       if (nested) {
         return nested;
       }

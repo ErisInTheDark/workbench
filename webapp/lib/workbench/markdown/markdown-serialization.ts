@@ -278,7 +278,7 @@ export function resolveOrderedListItemOrdinals(
   });
 }
 
-function serializeListElement(node: Element, indent = 0) {
+function serializeListElement(node: Element, indent = 0): string {
   const listType = node.tagName.toLowerCase();
   if (listType !== "ul" && listType !== "ol") {
     return "";
@@ -300,7 +300,7 @@ function serializeListElement(node: Element, indent = 0) {
       const line = text
         ? `${" ".repeat(indent)}${prefix}${text}`.trimEnd()
         : `${" ".repeat(indent)}${prefix}`;
-      const nested = getNestedBlockElementsForItem(item)
+      const nested: string = getNestedBlockElementsForItem(item)
         .map((childBlock) => serializeNestedListChildBlock(childBlock, indent + 2))
         .filter(Boolean)
         .join("\n");
@@ -319,8 +319,8 @@ function indentMarkdownLines(markdown: string, indent: number) {
     .join("\n");
 }
 
-function serializeNestedListChildBlock(element: Element, indent: number) {
-  const markdown = isListElement(element)
+function serializeNestedListChildBlock(element: Element, indent: number): string {
+  const markdown: string = isListElement(element)
     ? serializeListElement(element)
     : serializeBlockElement(element).text;
 

@@ -295,7 +295,7 @@ function WorkbenchThreadSidebarActionsProvider({
 
   const value = useMemo<WorkbenchThreadSidebarActionsValue>(() => ({
     autoFocusFolderId,
-    displayOrder: snapshot?.projectId === projectId ? snapshot.displayOrder : {},
+    displayOrder: snapshot?.projectId === projectId ? snapshot.displayOrder ?? {} : {},
     entries,
     error: snapshot?.projectId === projectId ? snapshot.error ?? "" : "",
     getThreadContextMenu,

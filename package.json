@@ -2,6 +2,7 @@
   "name": "workbench-root",
   "private": true,
   "scripts": {
+    "app": "node app/node_modules/tsx/dist/cli.mjs app/index.ts",
     "build:tray": "node scripts/build-tray.mjs",
     "typecheck": "node scripts/typecheck.mjs"
   },

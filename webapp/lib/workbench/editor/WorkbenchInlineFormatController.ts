@@ -1656,7 +1656,7 @@ function getDeepestMatchingMarkedRun(node: Node | null, marks: InlineMark[]) {
       return current;
     }
 
-    const childElements = Array.from(current.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
+    const childElements: HTMLElement[] = Array.from(current.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
     if (childElements.length !== 1) {
       return null;
     }

@@ -387,7 +387,7 @@ export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike 
   return parseWorkbenchRouteFromPath(location.pathname, location.search);
 }
 
-export function createWorkbenchHref(route: WorkbenchRoute) {
+export function createWorkbenchHref(route: WorkbenchRoute): string {
   const projectPath = encodeWorkbenchRoutePath(route.projectId);
   if (route.view === "file") {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/file/${encodeWorkbenchRoutePath(route.filePath)}`;

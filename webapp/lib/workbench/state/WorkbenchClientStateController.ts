@@ -61,7 +61,7 @@ function identityKey(identity: WorkbenchClientStateIdentity) {
   }
 }
 
-function browserVisibility(): WorkbenchClientStateControllerOptions["visibility"] {
+function browserVisibility(): NonNullable<WorkbenchClientStateControllerOptions["visibility"]> {
   if (typeof document === "undefined") return { hidden: () => false, subscribe: () => () => {} };
   return {
     hidden: () => document.hidden,

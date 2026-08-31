@@ -70,6 +70,7 @@ function cloneUserInput(input: UserInput): UserInput {
     case "mention":
       return { name: input.name, path: input.path, type: input.type };
   }
+  throw new Error("Unsupported optimistic user input.");
 }
 
 function isOptimisticItem(item: ThreadItem) {

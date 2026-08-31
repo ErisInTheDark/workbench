@@ -3,28 +3,28 @@
  * - WorkbenchAppStateRepositoryOptions: app-state database path and clock seams. Keywords: app, state, SQLite, test.
  * - default WorkbenchAppStateRepository: own one app-state SQLite connection, schema, transactions, and local registration. Keywords: app, state, repository.
  */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 
 import Database from "better-sqlite3";
 import {
-  compileWorkbenchDatabaseStatement,
-  insertRow,
-  selectRows,
-  updateRows,
-  type WorkbenchDatabaseMutation,
-  type WorkbenchDatabaseQuery,
-  type WorkbenchDatabaseRow,
+    compileWorkbenchDatabaseStatement,
+    insertRow,
+    selectRows,
+    updateRows,
+    type WorkbenchDatabaseMutation,
+    type WorkbenchDatabaseQuery,
+    type WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
 
-import resolveWorkbenchLibraryRoot from "../workbench-library-root.ts";
-import {
-  appStateSchema,
-  appStateTableInventory,
-  appStateTables,
-} from "workbench-shared/state/workbench-app-state-schema";
 import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
+import {
+    appStateSchema,
+    appStateTableInventory,
+    appStateTables,
+} from "workbench-shared/state/workbench-app-state-schema";
+import resolveWorkbenchLibraryRoot from "../workbench-library-root.ts";
 
 export interface WorkbenchAppStateRepositoryOptions {
   databasePath?: string;

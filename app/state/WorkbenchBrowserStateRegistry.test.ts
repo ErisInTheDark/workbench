@@ -44,6 +44,7 @@ async function fixture(context: TestContext) {
     browserStateDirectoryPath: path.join(directory, "browser-state"),
     onDiagnostic: (message) => diagnostics.push(message),
   });
+  registry.start();
   context.after(async () => {
     await registry.close();
     shared.close();
@@ -77,6 +78,7 @@ test("UUID databases clone, diverge, reopen, and share one coalesced first open"
   const reopened = new WorkbenchBrowserStateRegistry(shared, {
     browserStateDirectoryPath: path.join(directory, "browser-state"),
   });
+  reopened.start();
   assert.equal(globalPreference(records(await reopened.readBrowser(BROWSER_A)), "theme")?.preference.value, "magical-girl");
   await reopened.close();
 });
@@ -152,6 +154,7 @@ test("failed clones never promote partial browser databases", async (context) =>
   shared.start();
   const browserStateDirectoryPath = path.join(directory, "browser-state");
   const registry = new WorkbenchBrowserStateRegistry(shared, { browserStateDirectoryPath });
+  registry.start();
   context.after(async () => {
     await registry.close();
     shared.close();

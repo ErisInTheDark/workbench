@@ -8,21 +8,14 @@ import WorkbenchFrontendCompiler from "./WorkbenchFrontendCompiler.ts";
 import WorkbenchFrontendServer from "./WorkbenchFrontendServer.ts";
 import WorkbenchAppStateRepository from "./state/WorkbenchAppStateRepository.ts";
 import WorkbenchAppRuntime from "./runtime/WorkbenchAppRuntime.ts";
+import { readWorkbenchAppCommandLine } from "./app-command-line.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const logger = new WorkbenchAppLogger();
 
-function configuredPort(value: string | undefined) {
-  if (!value?.trim()) return null;
-  const port = Number(value);
-  if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) {
-    throw new Error("WORKBENCH_APP_PORT must be an integer from 0 through 65535.");
-  }
-  return port;
-}
-
 async function main() {
+  const commandLine = readWorkbenchAppCommandLine();
   const repositoryRootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const desktopProtocolEnabled = process.env.WORKBENCH_DESKTOP_PROTOCOL === "1";
   const createCompiler = () => new WorkbenchFrontendCompiler({
@@ -55,7 +48,7 @@ async function main() {
       port,
       requests: runtime,
     }),
-    environmentPort: configuredPort(process.env.WORKBENCH_APP_PORT),
+    environmentPort: commandLine.port,
     onAddressChange: (address) => protocol?.announceReady(address.url, false),
     onDiagnostic: (message) => logger.error("app", message),
   });

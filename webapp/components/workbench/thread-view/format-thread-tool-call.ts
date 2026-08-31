@@ -77,7 +77,7 @@ export function formatDynamicToolInvocation({
 }
 
 function readMcpTextContent(value: JsonValue) {
-  return Boolean(value)
+  return value !== null
     && typeof value === "object"
     && !Array.isArray(value)
     && value.type === "text"

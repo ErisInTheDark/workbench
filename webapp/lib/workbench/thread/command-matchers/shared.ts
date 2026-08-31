@@ -65,12 +65,12 @@ export const COMMON_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
 
       return CommandMatcher.Result({
         ongoingSummaryParts: pathPart
-          ? [CommandMatcher.Text(formatGitLsFilesPathPrefix({ listsUntrackedFiles, path }, true)), pathPart]
+          ? [CommandMatcher.Text(formatGitLsFilesPathPrefix({ listsUntrackedFiles, path: path ?? "" }, true)), pathPart]
           : [CommandMatcher.Text(listsUntrackedFiles ? "Listing untracked files" : "Listing tracked files")],
         summaryStats: { listedFiles: 1 },
         summaryParts: pathPart
           ? [
-            CommandMatcher.Text(formatGitLsFilesPathPrefix({ listsUntrackedFiles, path })),
+            CommandMatcher.Text(formatGitLsFilesPathPrefix({ listsUntrackedFiles, path: path ?? "" })),
             pathPart,
           ]
           : [CommandMatcher.Text(listsUntrackedFiles ? "List untracked files" : "List tracked files")],

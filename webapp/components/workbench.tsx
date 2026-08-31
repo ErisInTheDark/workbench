@@ -517,6 +517,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const [selectionError, setSelectionError] = useState("");
   const [rateLimits, setRateLimits] = useState<RateLimitSnapshot | null>(null);
   const [controls, setControls] = useState<WorkbenchControls | null>(null);
+  const updateThreadState: WorkbenchControls["updateThreadState"] = useCallback((request) => {
+    if (!controls) return Promise.reject(new Error("Workbench controls are not ready."));
+    return controls.updateThreadState(request);
+  }, [controls]);
   useEffect(() => {
     if (!controls) return;
     void composerProfileController.initializePersistence(createComposerProfilePersistence(controls.daemon));
@@ -1392,7 +1396,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       throw new ThreadMessageNotSentError();
     }
     const submittedRoute = currentRouteRef.current;
-    let createdThread: ThreadPayload | null = null;
+    const createdThreadRef: { current: ThreadPayload | null } = { current: null };
     let didMaterialize = false;
 
     const replaceMosaicDraftThread = (materializedThread: ThreadPayload, removeDraftState: boolean) => {
@@ -1450,7 +1454,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       ? {
         ...options,
         onThreadCreated: (materializedThread) => {
-          createdThread = materializedThread;
+          createdThreadRef.current = materializedThread;
           const projectId = submittedRoute.projectId || explorer.currentProjectId;
           const submittedThreadKey = `${projectId}:${thread.harness}:${thread.id}`;
           const materializedThreadKey = `${projectId}:${materializedThread.harness}:${materializedThread.id}`;
@@ -1476,6 +1480,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       payload = await controls.sendThreadMessage(thread, input, materializedOptions);
     } catch (error) {
       const currentRoute = currentRouteRef.current;
+      const createdThread = createdThreadRef.current;
       if (!didMaterialize && createdThread && isWorkbenchRouteOwnerOfThread(currentRoute, createdThread.id)) {
         navigateToRoute(submittedRoute, { replace: true });
       }
@@ -3086,7 +3091,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       onThreadServiceTierChange={setThreadServiceTier}
                       onThreadSettingsChange={setThreadComposerSettings}
                       onThreadModelChange={setThreadModel}
-                      onUpdateThreadState={controls.updateThreadState}
+                      onUpdateThreadState={updateThreadState}
                       selectedThreadId={selectedThreadIdForView}
                       onSelectedThreadChange={handleSelectedThreadChange}
                       onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
@@ -3104,7 +3109,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       threadComposerDraft={activeThreadComposerDraft}
                       threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                       threadDocuments={threadDocuments}
-                      threadGoalControls={controls.threadGoals}
+                      threadGoalControls={controls?.threadGoals ?? null}
                       threadSidebarStore={threadSidebarStore}
                       threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                       viewInstanceKey={threadViewInstanceKey}
@@ -3320,7 +3325,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             onThreadServiceTierChange={setThreadServiceTier}
                             onThreadSettingsChange={setThreadComposerSettings}
                             onThreadModelChange={setThreadModel}
-                            onUpdateThreadState={controls.updateThreadState}
+                            onUpdateThreadState={updateThreadState}
                             selectedThreadId={getWorkbenchThreadTargetSelectedId(target.target)}
                             onSelectedThreadChange={(selectedThreadId) => {
                               if (!route.mosaicNode || target.target.kind === "new" || target.target.kind === "draft") return;

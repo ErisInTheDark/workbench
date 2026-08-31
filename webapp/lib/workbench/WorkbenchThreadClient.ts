@@ -893,7 +893,11 @@ function WorkbenchThreadClient(
   }
 
   function onWorkbenchNotification(listener: (notification: { method: "workbench/thread-state/reset" | "workbench/thread-state/updated"; params: unknown }) => void) {
-    return codexClient.onWorkbenchNotification(listener);
+    return codexClient.onWorkbenchNotification((notification) => {
+      if (notification.method === "workbench/thread-state/reset" || notification.method === "workbench/thread-state/updated") {
+        listener({ method: notification.method, params: notification.params });
+      }
+    });
   }
 
   function onReconnect(listener: () => void) {
@@ -1276,7 +1280,7 @@ function WorkbenchThreadClient(
     }
 
     const matchingKeys = Object.entries(threadDocuments.getSnapshot().documentsByKey)
-      .filter(([key, document]) => document.id === threadId && threadSources.has(key))
+      .filter(([key, document]) => document?.id === threadId && threadSources.has(key))
       .map(([key]) => key);
     if (matchingKeys.length === 1) {
       return matchingKeys;
@@ -3064,7 +3068,7 @@ function WorkbenchThreadClient(
     let cursor: string | null = null;
 
     do {
-      const response = await sendBridgeRequest<ModelListResponse>(harness, {
+      const response: ModelListResponse = await sendBridgeRequest<ModelListResponse>(harness, {
         method: "model/list",
         params: {
           cursor,
@@ -3399,12 +3403,15 @@ function WorkbenchThreadClient(
     const projectContext = effectiveThreadProjectContext(harness, threadId);
     const requestedCwd = options.cwd?.trim() || projectContext.projectRootPath || null;
     const projectRootPaths = getThreadProjectRootPaths(projectContext);
-    const isCurrentThread = state.currentThread?.id === threadId && state.currentThread.harness === harness;
+    const currentThread = state.currentThread?.id === threadId && state.currentThread.harness === harness
+      ? state.currentThread
+      : null;
+    const isCurrentThread = currentThread !== null;
     const currentModel = isCurrentThread ? getThreadModel(threadId) : null;
     const currentReasoningEffort = isCurrentThread ? getThreadReasoningEffort(threadId) : null;
     try {
       const selectedAgentPath = isCurrentThread
-        ? state.currentThread.agentPath
+        ? currentThread?.agentPath ?? null
         : readStoredHarnessAgent(harness);
       const storedServiceTier = harness === "codex" ? readStoredThreadServiceTier(harness, threadId) : undefined;
       const hasServiceTierPreference = harness === "codex" && (isCurrentThread || storedServiceTier !== undefined);
@@ -3625,15 +3632,17 @@ function WorkbenchThreadClient(
         if (readGeneration === rateLimitGeneration && !state.rateLimitsByHarness.has(harness) && state.currentThread?.harness === harness) {
           setRateLimits(null);
         }
-      } finally {
-        if (refreshRateLimitsPromisesByHarness.get(harness) === refreshPromise) {
-          refreshRateLimitsPromisesByHarness.delete(harness);
-        }
       }
     })();
 
     refreshRateLimitsPromisesByHarness.set(harness, refreshPromise);
-    await refreshPromise;
+    try {
+      await refreshPromise;
+    } finally {
+      if (refreshRateLimitsPromisesByHarness.get(harness) === refreshPromise) {
+        refreshRateLimitsPromisesByHarness.delete(harness);
+      }
+    }
   }
 
   function normalizeThreadMessageInput(input: UserInput[] | string) {
@@ -4907,7 +4916,7 @@ function WorkbenchThreadClient(
           throw new ThreadMessageNotSentError();
         }
         resumedThread = toThreadResumePayload(
-          resumedThreadResponse,
+          { ...resumedThreadResponse, model: resumedThreadResponse.model ?? undefined },
           harness,
           resumedThreadResponse.model ?? selectedModel ?? readableThread.model,
           selectedReasoningEffort ?? resumedThreadResponse.reasoningEffort ?? readableThread.reasoningEffort,
@@ -5109,7 +5118,7 @@ function WorkbenchThreadClient(
             turn.id !== connectingTurnId
             && !bootstrapTurnIds.has(turn.id)
           ));
-          if (admittedTurn) {
+          if (currentSource && admittedTurn) {
             optimisticInputs.movePending(pendingInitialOptimisticHandle, admittedTurn.id);
             optimisticInputs.transition(pendingInitialOptimisticHandle, "sent");
             bumpOverlayRevisionForKey(threadKey, "optimisticRevision");
@@ -5398,7 +5407,11 @@ function WorkbenchThreadClient(
         request: pendingRequest.request,
         requestKey: pendingRequest.requestKey,
         resolvedAt: Date.now(),
-        response,
+        response: {
+          answers: Object.fromEntries(
+            Object.entries(response.answers).filter((entry): entry is [string, NonNullable<typeof entry[1]>] => entry[1] !== undefined),
+          ),
+        },
         threadId: pendingRequest.threadId,
         turnId: originalTurnId,
       };

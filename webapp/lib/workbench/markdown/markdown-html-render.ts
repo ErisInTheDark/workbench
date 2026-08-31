@@ -141,7 +141,7 @@ function renderListBlock(block: Extract<ParsedBlock, { type: "ul" | "ol" }>, opt
   return `<${block.type}>${block.items.map((item) => renderListItem(item, options)).join("")}</${block.type}>`;
 }
 
-function renderChildBlocks(blocks: ParsedBlock[], options: MarkdownParseOptions = {}) {
+function renderChildBlocks(blocks: ParsedBlock[], options: MarkdownParseOptions = {}): string {
   return blocks.map((block) => renderBlockHtml(block, options)).join("");
 }
 
@@ -151,10 +151,10 @@ function isThreadSingleItemOrderedStep(block: Extract<ParsedBlock, { type: "ol" 
     && /^\d+[.)]$/.test(block.items[0].marker);
 }
 
-function renderThreadSingleItemOrderedStep(block: Extract<ParsedBlock, { type: "ol" }>, options: MarkdownParseOptions = {}) {
+function renderThreadSingleItemOrderedStep(block: Extract<ParsedBlock, { type: "ol" }>, options: MarkdownParseOptions = {}): string {
   const item = block.items[0];
   const content = renderInline(item.text, options);
-  const childContent = renderChildBlocks(item.children, options);
+  const childContent: string = renderChildBlocks(item.children, options);
 
   if (stripInlineCodeSpans(item.text).includes(".")) {
     return `<p>${escapeHtml(item.marker)}${content ? ` ${content}` : ""}</p>${childContent}`;
@@ -215,7 +215,7 @@ function renderListItem(item: ParsedListItem, options: MarkdownParseOptions = {}
   return `<li${valueAttribute}><details open><summary>${content}</summary>${childContent}</details></li>`;
 }
 
-function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {}) {
+function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {}): string {
   switch (block.type) {
     case "list-break":
       return Array.from(

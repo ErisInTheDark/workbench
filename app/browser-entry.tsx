@@ -41,30 +41,31 @@ async function start() {
       browserStateId: identity.browserStateId,
       mode: "http",
     });
-    await Promise.all([controller.bootstrap(), runtime.bootstrap()]);
+    const activeController = controller;
+    await Promise.all([activeController.bootstrap(), runtime.bootstrap()]);
     if (window.location.pathname === "/launch") {
-      const target = controller.records("lastLaunchTarget")[0];
+      const target = activeController.records("lastLaunchTarget")[0];
       window.history.replaceState(
         window.history.state,
         "",
         target ? createWorkbenchProjectHref(target.projectId) : "/",
       );
     }
-    const theme = controller.records("globalPreference").find((record) => (
+    const theme = activeController.records("globalPreference").find((record) => (
       record.preference.key === "theme"
     ))?.preference.value;
     document.documentElement.dataset.workbenchTheme = theme === "magical-girl" || theme === "winter"
       ? theme
       : "default";
     window.addEventListener("pagehide", () => {
-      controller.dispose();
+      activeController.dispose();
       runtime.dispose();
       logForwarder.dispose();
     }, { once: true });
     createRoot(rootElement).render(
       <>
         <ReactScan />
-        <WorkbenchBrowserApp controller={controller} runtime={runtime} />
+        <WorkbenchBrowserApp controller={activeController} runtime={runtime} />
       </>,
     );
   } catch (error) {

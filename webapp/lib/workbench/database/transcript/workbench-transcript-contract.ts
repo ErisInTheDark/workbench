@@ -164,11 +164,11 @@ export function conformWorkbenchTranscriptSnapshot(
 
   const thread = conformSelectedRow(coreTables.workbenchThreads, value.thread, ["thread"]);
   repairedPaths.push(...thread.repairedPaths);
-  if ("issues" in thread) issues.push(...thread.issues);
+  if ("issues" in thread && thread.issues) issues.push(...thread.issues);
 
   const turns = conformRows(coreTables.threadTurns, value.turns, ["turns"]);
   repairedPaths.push(...turns.repairedPaths);
-  if ("issues" in turns) issues.push(...turns.issues);
+  if (!turns.success) issues.push(...turns.issues);
 
   const loadedTurnIds = value.loadedTurnIds;
   if (!Array.isArray(loadedTurnIds) || loadedTurnIds.some((id) => typeof id !== "string")) {
@@ -191,14 +191,14 @@ export function conformWorkbenchTranscriptSnapshot(
     }
     const result = conformRows(table, rowsValue[name], ["rows", name]);
     repairedPaths.push(...result.repairedPaths);
-    if ("data" in result) {
+    if (result.success) {
       rows[name as keyof WorkbenchTranscriptSnapshotRows] = result.data as never;
     } else {
       issues.push(...result.issues);
     }
   }
 
-  if (issues.length || !("data" in thread) || !("data" in turns)) return { issues, repairedPaths, success: false };
+  if (issues.length || !thread.success || !turns.success) return { issues, repairedPaths, success: false };
   return {
     data: {
       thread: thread.data,
@@ -471,17 +471,17 @@ function conformLiteralResult<Key extends string>(key: Key) {
   };
 }
 
-const readOperation = Object.freeze({
-  kind: "read",
-  method: "workbench/transcript/read",
-  decodeParams: decodeReadParams,
-  conformResult: conformSnapshotResult,
-}) satisfies WorkbenchTranscriptOperation<
+const readOperation: WorkbenchTranscriptOperation<
   "read",
   "workbench/transcript/read",
   WorkbenchTranscriptReadRequest,
   { snapshot: WorkbenchTranscriptSnapshot | null }
->;
+> = Object.freeze({
+  kind: "read",
+  method: "workbench/transcript/read",
+  decodeParams: decodeReadParams,
+  conformResult: conformSnapshotResult,
+});
 
 const subscribeOperation = Object.freeze({
   kind: "subscribe",

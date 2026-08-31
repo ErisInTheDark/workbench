@@ -318,7 +318,7 @@ export function mergeAdjacentSiblingLists(root: ParentNode) {
 
     const separator = getNextMeaningfulSibling(current.nextSibling);
     const nextList = isListMergeSeparatorNode(separator)
-      ? getNextMeaningfulSibling(separator.nextSibling)
+      ? getNextMeaningfulSibling(separator?.nextSibling ?? null)
       : separator;
 
     if (isMergeableListElement(nextList) && nextList.tagName === current.tagName) {

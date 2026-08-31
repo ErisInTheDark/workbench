@@ -368,7 +368,7 @@ function normalizeThreadPayload(value: JsonValue): ThreadPayload | null {
     return createThreadPayloadFromRecord(value);
   }
 
-  if (isJsonObject(value.status)) {
+  if (value.status !== undefined && isJsonObject(value.status)) {
     return toThreadPayload(value as Thread, "codex");
   }
 

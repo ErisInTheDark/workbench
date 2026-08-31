@@ -1674,7 +1674,7 @@ export default memo(function ThreadView ({
                   {liveActivity.title}
                 </p>
               )
-            ) : liveActivity.kind === "reasoning" && liveActivity.body ? (
+            ) : activeThread && liveActivity.kind === "reasoning" && liveActivity.body ? (
               <ThreadDisclosure
                 contentClassName="mt-2"
                 open={isLiveActivityOpen}
@@ -1712,7 +1712,7 @@ export default memo(function ThreadView ({
             threadId={activeThread.id}
           />
         ) : null}
-        {terminalGitArc && activeThread ? (
+        {terminalGitArc && activeThread && activeGitArcSelection ? (
           <ThreadGitArcLifecycleCard
             claim={terminalGitArc}
             cwd={activeThread.cwd}

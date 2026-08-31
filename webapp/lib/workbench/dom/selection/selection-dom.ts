@@ -60,7 +60,7 @@ export function getNodePathFromEditor(editor: HTMLElement, node: Node) {
   let current: Node | null = node;
 
   while (current && current !== editor) {
-    const parentNode = current.parentNode;
+    const parentNode: ParentNode | null = current.parentNode;
     if (!parentNode) {
       return null;
     }
