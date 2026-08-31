@@ -7,7 +7,6 @@
   "scripts": {
     "dev": "bash ../run-orchestrator-loop.sh",
     "dev:orchestrator": "node --env-file-if-exists=.env.local --import tsx orchestrator/index.ts",
-    "dev:next": "next dev -p 3002",
     "codex:generate-types": "codex app-server generate-ts --experimental --out lib/codex/generated/app-server",
     "test": "node --disable-warning=ExperimentalWarning --import tsx scripts/ProjectTestRunner.ts"
   },
@@ -19,17 +18,16 @@
     "@opencode-ai/client": "0.0.0-beta-17498",
     "@opencode-ai/plugin": "0.0.0-beta-17498",
     "@opencode-ai/sdk": "1.17.11",
-    "@tailwindcss/postcss": "4.2.2",
     "better-sqlite3": "13.0.3",
     "browse": "^0.9.1",
     "js-tiktoken": "1.0.21",
-    "next": "15.3.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-scan": "0.5.7",
     "tailwindcss": "4.2.2",
     "tsx": "4.21.0",
     "workbench-shared": "workspace:*",
+    "ws": "8.21.0",
     "zod": "4.3.6"
   },
   "devDependencies": {
@@ -37,6 +35,7 @@
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "8.18.1",
     "typescript": "^6.0.2"
   }
 }

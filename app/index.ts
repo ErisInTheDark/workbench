@@ -22,12 +22,6 @@ function configuredPort(value: string | undefined) {
   return port;
 }
 
-function legacyOrigin() {
-  return process.env.WORKBENCH_LEGACY_ORIGIN?.trim()
-    || process.env.NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN?.trim()
-    || `http://127.0.0.1:${process.env.PORT?.trim() || "3002"}`;
-}
-
 async function main() {
   const repositoryRootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const createCompiler = () => new WorkbenchFrontendCompiler({
@@ -42,7 +36,6 @@ async function main() {
       appPort,
       createCompiler,
       createDatabase: () => new WorkbenchAppStateRepository(),
-      legacyOrigin: legacyOrigin(),
       logger,
       outputDirectoryPath,
       repositoryRootPath,

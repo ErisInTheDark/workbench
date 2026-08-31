@@ -8,7 +8,7 @@ import Workbench from "../webapp/components/workbench.tsx";
 import WorkbenchClientStateProvider from "../webapp/components/workbench/WorkbenchClientStateProvider.tsx";
 import WorkbenchClientStateController from "../webapp/lib/workbench/state/WorkbenchClientStateController.ts";
 import WorkbenchAppRuntimeClient from "../webapp/lib/workbench/app/WorkbenchAppRuntimeClient.ts";
-import { usePathname } from "./browser-navigation.ts";
+import { usePathname } from "../webapp/lib/workbench/navigation/browser-navigation.ts";
 
 function threadIdFromPath(pathname: string) {
   const match = /^\/agent\/thread\/([^/]+)\/?$/u.exec(pathname);

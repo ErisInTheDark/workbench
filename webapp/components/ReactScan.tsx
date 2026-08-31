@@ -4,7 +4,7 @@ import { JSX, useEffect } from "react";
 
 export function ReactScan (): JSX.Element {
 	useEffect(() => {
-		if (process.env.NEXT_PUBLIC_DISABLE_REACT_SCAN) {
+		if (process.env.WORKBENCH_DISABLE_REACT_SCAN) {
 			return;
 		}
 		if (window.location.pathname.startsWith("/agent/thread")) {

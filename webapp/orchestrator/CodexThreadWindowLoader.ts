@@ -6,7 +6,7 @@
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadTurnsListParams } from "../lib/codex/generated/app-server/v2/ThreadTurnsListParams";
 import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
-import type { WorkbenchThreadHydrationRequest } from "../lib/codex/server-orchestrator";
+import type { WorkbenchThreadHydrationRequest } from "../lib/codex/thread-hydration";
 import type { WorkbenchThreadTurnHistoryEntry } from "../lib/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type CodexTranscriptStore from "./CodexTranscriptStore";

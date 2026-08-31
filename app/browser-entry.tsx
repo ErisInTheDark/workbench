@@ -19,7 +19,7 @@ async function start() {
     import("../webapp/components/ReactScan.tsx"),
     import("../webapp/lib/workbench/state/WorkbenchClientStateController.ts"),
     import("../webapp/lib/workbench/app/WorkbenchAppRuntimeClient.ts"),
-    import("./browser-navigation.ts"),
+    import("../webapp/lib/workbench/navigation/browser-navigation.ts"),
     import("./WorkbenchBrowserApp.tsx"),
   ]);
   installBrowserNavigationEvents();

@@ -15,7 +15,6 @@ import WorkbenchAppRuntime from "./WorkbenchAppRuntime.ts";
 const appDirectoryPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const nonServerSourcePaths = new Set([
   "app/browser-entry.tsx",
-  "app/browser-navigation.ts",
   "app/desktop.ts",
   "app/WorkbenchBrowserApp.tsx",
   "app/WorkbenchBrowserLogForwarder.ts",
@@ -49,7 +48,6 @@ function runtime() {
     },
     createCompiler: () => compiler,
     createDatabase: () => database,
-    legacyOrigin: "http://127.0.0.1:3002",
     logger: new WorkbenchAppLogger({ color: false, writeError: () => {}, writeOutput: () => {} }),
     outputDirectoryPath: "C:/workbench-output",
     repositoryRootPath: "C:/repo",

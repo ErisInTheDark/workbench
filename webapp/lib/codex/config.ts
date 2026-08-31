@@ -61,13 +61,13 @@ function buildCodexAppServerUrlFromCurrentLocation(locationHref: string, port: s
 }
 
 export function getCodexAppServerPort() {
-  return readNonEmptyEnv(process.env.NEXT_PUBLIC_CODEX_APP_SERVER_PORT)
-    ?? parseConfiguredWebSocketPort(readNonEmptyEnv(process.env.NEXT_PUBLIC_CODEX_APP_SERVER_URL))
+  return readNonEmptyEnv(process.env.WORKBENCH_CODEX_APP_SERVER_PORT)
+    ?? parseConfiguredWebSocketPort(readNonEmptyEnv(process.env.WORKBENCH_CODEX_APP_SERVER_URL))
     ?? DEFAULT_CODEX_APP_SERVER_BRIDGE_PORT;
 }
 
 export function getCodexAppServerUrl() {
-  const explicitPublicUrl = readNonEmptyEnv(process.env.NEXT_PUBLIC_CODEX_APP_SERVER_URL);
+  const explicitPublicUrl = readNonEmptyEnv(process.env.WORKBENCH_CODEX_APP_SERVER_URL);
   if (explicitPublicUrl) {
     return explicitPublicUrl;
   }

@@ -15,7 +15,6 @@ import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type CodexHealthMonitor from "./CodexHealthMonitor";
-import type NextDevHealthSupervisor from "./NextDevHealthSupervisor";
 import type OpenCodeAppServer from "./OpenCodeAppServer";
 import type { OpenCodeBridge } from "./opencode-bridge";
 import * as copilotThreadState from "./copilot-thread-state";
@@ -116,7 +115,6 @@ export interface OrchestratorRuntimeObjects {
   legacyMigrationSource: WorkbenchLegacyMigrationSourceController;
   mcp: WorkbenchAgentMcpController;
   modules: OrchestratorReloadableModules;
-  nextDevHealth: NextDevHealthSupervisor;
   openCodeAppServer: OpenCodeAppServer;
   openCodeBridge: OpenCodeBridge;
   orchestratorHttp: WorkbenchOrchestratorHttpRouter;

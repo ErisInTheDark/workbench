@@ -12,7 +12,6 @@ import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
 import type { CodexStdioBridgeOptions, CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type { CodexHealthMonitorOptions } from "./CodexHealthMonitor";
-import type { NextDevHealthSupervisorOptions } from "./NextDevHealthSupervisor";
 import type { OpenCodeBridgeOptions } from "./opencode-bridge";
 import type { OpenCodeAppServerOptions } from "./OpenCodeAppServer";
 import type { WorkbenchBrowseResultCallbacks } from "./WorkbenchBrowseResultController";
@@ -59,9 +58,7 @@ export interface OrchestratorProcessContext {
   installSubagentRelationship(record: WorkbenchSubagentRelationship): Promise<void>;
   legacyMigrationProjectRoot: string;
   localOrchestratorOrigin: string;
-  localWorkbenchOrigin: string;
   logTurnRecovery(message: string): void;
-  nextDevHealthOptions: NextDevHealthSupervisorOptions;
   notifyReloadEligibilityChanged(): void;
   notifyThreadLifecycle(projectId: string, entry: WorkbenchThreadSidebarEntry): void;
   onCodexBridgeReady(bridge: CodexStdioBridge): Promise<void>;
@@ -72,7 +69,6 @@ export interface OrchestratorProcessContext {
   publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   reportTurnRecoveryFailure(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
   refreshWorkbenchPromptFiles(): Promise<void>;
-  reloadClient(): Promise<void>;
   requestOrchestratorReload(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   runTurnRecoveryTask(owner: WorkbenchTurnRecoveryController, label: string, task: () => Promise<void>): Promise<void>;
   threadTransitions: WorkbenchThreadTransitionCoordinator;

@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - AppHttpNode: own reloadable app routes, static resolution, proxying, and client diagnostics. Keywords: app, HTTP, reload.
+ * - AppHttpNode: own reloadable app routes, static resolution, and client diagnostics. Keywords: app, HTTP, reload.
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 
@@ -14,7 +14,6 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   create: (context, build) => {
     const router = new WorkbenchAppHttpRouter({
       appPort: context.appPort,
-      legacyOrigin: context.legacyOrigin,
       logger: context.logger,
       outputDirectoryPath: context.outputDirectoryPath,
       state: build.get("state"),
@@ -25,7 +24,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
       start: async () => await router.start(),
     };
   },
-  description: "Reload app routes, static SPA serving, legacy proxying, and browser diagnostic admission.",
+  description: "Reload app routes, static SPA serving, and browser diagnostic admission.",
   lifecycle: "atomic",
   provides: ["http"],
   requires: ["state"],

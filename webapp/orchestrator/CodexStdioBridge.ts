@@ -30,7 +30,7 @@ import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-se
 import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
 import type { TurnSteerResponse } from "../lib/codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import type { WorkbenchThreadHydrationRequest } from "../lib/codex/server-orchestrator";
+import type { WorkbenchThreadHydrationRequest } from "../lib/codex/thread-hydration";
 import type {
     WorkbenchApprovalCommandContext,
     WorkbenchBrowseResultEntry,

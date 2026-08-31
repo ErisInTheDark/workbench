@@ -3,7 +3,7 @@
  * - BrowserNavigationTarget: minimal browser boundary used by the navigation store. Keywords: History API, test seam.
  * - installBrowserNavigationEvents: publish push and replace navigation through one browser event. Keywords: History API, lifecycle.
  * - subscribeBrowserNavigation: subscribe to push, replace, back, and forward navigation. Keywords: History API, popstate.
- * - usePathname/useSearchParams: replacement-build compatibility hooks for next/navigation consumers. Keywords: React, route, compatibility.
+ * - usePathname/useSearchParams: browser history hooks for route consumers. Keywords: React, route, history.
  */
 import { useMemo, useSyncExternalStore } from "react";
 

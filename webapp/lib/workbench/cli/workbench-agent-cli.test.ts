@@ -49,7 +49,6 @@ const reloadCatalog = [
   { access: "agent" as const, description: "MCP", safeAll: true, scope: "server:mcp" },
   { access: "agent" as const, description: "OpenCode bridge", safeAll: true, scope: "server:opencode" },
   { access: "agent" as const, description: "Topology", safeAll: false, scope: "server:topology" },
-  { access: "agent" as const, description: "Client", safeAll: true, scope: "client:all" },
   { access: "cli" as const, description: "Codex app-server", safeAll: false, scope: "harness:codex" },
   { access: "cli" as const, description: "OpenCode app-server", safeAll: false, scope: "harness:opencode" },
   { access: "operator" as const, description: "Process", safeAll: false, scope: "server:process" },
@@ -139,7 +138,7 @@ before(async () => {
             return;
           }
           response.writeHead(200, { "Content-Type": "application/json" });
-          response.end(JSON.stringify({ appliedScopes: ["server:codex"], completedAt: Date.now(), error: null, ok: true, queuedScopes: ["client:all"], requestedScopes: ["server:codex", "client:all"], startedAt: 1, state: "succeeded" }));
+          response.end(JSON.stringify({ appliedScopes: ["server:codex"], completedAt: Date.now(), error: null, ok: true, queuedScopes: [], requestedScopes: ["server:codex"], startedAt: 1, state: "succeeded" }));
           return;
         }
         response.writeHead(202, { "Content-Type": "application/json" });
@@ -771,7 +770,7 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
 
 test("rejects arbitrary request capabilities and unsafe restore", async () => {
   for (const args of [
-    ["request", "--url", "http://localhost:3002/api/file"],
+    ["request", "--url", "http://localhost:43210/api/file"],
     ["git", "arc", "diff", "--thread", "thread-1", "--ref", "abc", "--", "src/file.ts"],
     ["git", "arc", "restore", "--thread", "thread-1", "--ref", "abc"],
     ["git", "arc", "restore", "--ref", "abc"],
@@ -818,14 +817,14 @@ test("routes canonical, compatibility, and leaf help to the nearest owning group
 test("maps composable reload switches to one deduplicated fixed request", async () => {
   const unmanaged = { callerThreadId: null, reloadCatalog };
   const parsed = await parseWorkbenchAgentCliCommand([
-    "reload", "--client:all", "--server:codex", "--harness:opencode", "--client:all",
+    "reload", "--server:codex", "--harness:opencode", "--server:codex",
     "--server:core+browse", "--server:opencode",
   ], unmanaged);
   if (parsed.kind === "error") throw new Error(parsed.error);
   assert.equal(parsed.kind, "request");
   if (parsed.kind !== "request") return;
   assert.deepEqual(parsed.request, {
-    body: { scopes: ["client:all", "server:codex", "harness:opencode", "server:core", "server:browse", "server:opencode"] },
+    body: { scopes: ["server:codex", "harness:opencode", "server:core", "server:browse", "server:opencode"] },
     method: "POST",
     path: "/api/orchestrator/reload",
     responseKind: "orchestrator-reload",
@@ -1026,15 +1025,15 @@ test("generates executable POSIX and working Windows shims", async (context) => 
   env.CODEX_THREAD_ID = "";
   reloadStatusReadCount = 0;
   const result = await execFileAsync(installed.windowsShimPath, [
-    "reload", "--server:codex", "--client:all",
+    "reload", "--server:codex",
   ], {
     cwd: temporaryDirectoryPath,
     env,
     shell: true,
   });
-  assert.equal(result.stdout, "Reload succeeded.\nApplied: server:codex\nQueued: client:all\n");
+  assert.equal(result.stdout, "Reload succeeded.\nApplied: server:codex\nQueued: none\n");
   const reloadPost = [...requests].reverse().find((request) => request.url === "/orchestrator/reload" && request.method === "POST");
-  assert.deepEqual(JSON.parse(reloadPost?.body ?? "{}"), { scopes: ["server:codex", "client:all"] });
+  assert.deepEqual(JSON.parse(reloadPost?.body ?? "{}"), { scopes: ["server:codex"] });
 });
 
 test("redirects a PATH-resolved wb command to the Workbench install in cwd", async () => {

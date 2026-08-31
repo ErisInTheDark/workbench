@@ -16,7 +16,6 @@ export interface AppProcessContext {
   executeReloadScopes(scopes: WorkbenchReloadScope[]): Promise<WorkbenchReloadScope[]>;
   getReloadScopeCatalog(): readonly WorkbenchReloadScopeDescriptor[];
   getReloadScopesForPaths(paths: readonly string[]): WorkbenchReloadScope[];
-  legacyOrigin: string;
   logger: WorkbenchAppLogger;
   outputDirectoryPath: string;
   repositoryRootPath: string;

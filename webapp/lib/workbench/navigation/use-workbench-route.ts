@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - useWorkbenchRoute: React hook that derives workbench route state from Next App Router and exposes guarded user navigation. Keywords: URL source of truth, Next router, pathname, search params.
+ * - useWorkbenchRoute: React hook that derives workbench route state from browser history and exposes guarded user navigation. Keywords: URL source of truth, browser history, pathname, search params.
  */
 
-import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 
+import { usePathname, useSearchParams } from "./browser-navigation";
 import {
   createWorkbenchHref,
   parseWorkbenchRouteFromLocation,

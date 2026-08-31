@@ -52,11 +52,10 @@ export function parseWorkbenchEnvironmentText(source) {
 export function deriveWorkbenchRuntimeTopology(environment) {
   const bridgeUrl = requiredValue(environment, "CODEX_APP_SERVER_URL", "ws://0.0.0.0:4500");
   const listeners = [
-    { key: "next", label: "Next", port: integerPort(environment, "PORT", "3002") },
     { key: "bridge", label: "Workbench bridge", port: urlPort({ CODEX_APP_SERVER_URL: bridgeUrl }, "CODEX_APP_SERVER_URL") },
   ];
   if (!(typeof environment.OPENCODE_SERVER_URL === "string" && environment.OPENCODE_SERVER_URL.trim())) {
-    listeners.splice(1, 0, { key: "openCode", label: "OpenCode", port: integerPort(environment, "OPENCODE_SERVER_PORT", "4096") });
+    listeners.unshift({ key: "openCode", label: "OpenCode", port: integerPort(environment, "OPENCODE_SERVER_PORT", "4096") });
   }
   const seen = new Map();
   for (const listener of listeners) {

@@ -17,8 +17,8 @@ You may propose new invariants or changes to existing invariants, but you must m
 - Move the app port by binding the replacement before retiring the old listener. Preserve app runtime and state identity. Update browser and desktop origins together.
 <!-- Prevent native release generation from requiring a running Workbench shutdown. -->
 - Keep the committed tray launcher path replaceable while it runs. Retire the loaded image by rename before promoting a validated replacement.
-<!-- Prevent wb command fallback from coupling the standalone orchestrator to Next.js. -->
-- Run Workbench CLI and MCP commands in the standalone orchestrator. Never route them through Next.js.
+<!-- Prevent wb command fallback from coupling the standalone orchestrator to the app server. -->
+- Run Workbench CLI and MCP commands in the standalone orchestrator. Never route them through the app server.
 
 ## Managed instructions
 

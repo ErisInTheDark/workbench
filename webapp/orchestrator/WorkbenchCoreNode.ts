@@ -10,7 +10,6 @@ import * as workbenchLibrary from "../lib/workbench-library";
 import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import CodexBridgeNode from "./CodexBridgeNode";
 import CodexHealthMonitor from "./CodexHealthMonitor";
-import NextDevHealthSupervisor from "./NextDevHealthSupervisor";
 import OpenCodeBridgeNode from "./OpenCodeBridgeNode";
 import * as copilotThreadState from "./copilot-thread-state";
 import * as opencodeLiveThreadState from "./opencode-live-thread-state";
@@ -228,11 +227,6 @@ function createWorkbenchCoreFeature(
       await context.browseCleanupOptions.cleanupStaleInactiveSessions(options);
     },
   });
-  const nextDevHealth = new NextDevHealthSupervisor({
-    ...context.nextDevHealthOptions,
-    isShuttingDown: () => !lease.isCurrent() || context.nextDevHealthOptions.isShuttingDown(),
-    restartNextDev: (reason) => lease.isCurrent() && context.nextDevHealthOptions.restartNextDev(reason),
-  });
   const codexHealth = new CodexHealthMonitor({
     ...context.codexHealthOptions,
     isProbeAllowed: () => lease.isCurrent() && context.codexHealthOptions.isProbeAllowed(),
@@ -240,15 +234,13 @@ function createWorkbenchCoreFeature(
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
   const registrations: Pick<OrchestratorRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
-    bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, legacyMigrationSource, modules, nextDevHealth, projectCatalog, projectSnapshot, subagents, threadGit, threadState,
+    bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, legacyMigrationSource, modules, projectCatalog, projectSnapshot, subagents, threadGit, threadState,
   };
   return new WorkbenchCoreFeature({
     beginRuntimeDrain: () => { subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
       reportPhase("codex health disposal");
       codexHealth.dispose();
-      reportPhase("next-dev health disposal");
-      nextDevHealth.dispose();
       reportPhase("browse session cleanup disposal");
       browseSessionCleanup.dispose();
       reportPhase("subagent disposal");
@@ -302,7 +294,6 @@ function createWorkbenchCoreFeature(
       await projectCatalog.ensureLoaded();
       await subagents.start();
       browseSessionCleanup.start();
-      nextDevHealth.start();
     },
   });
 }
@@ -341,7 +332,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/orchestrator/WorkbenchThreadStateController.ts",
     "webapp/orchestrator/BrowseSessionCleanupSupervisor.ts",
     "webapp/orchestrator/CodexHealthMonitor.ts",
-    "webapp/orchestrator/NextDevHealthSupervisor.ts",
     "webapp/lib/project.ts",
     "webapp/lib/thread-bootstrap.ts",
     "webapp/lib/workbench-library.ts",

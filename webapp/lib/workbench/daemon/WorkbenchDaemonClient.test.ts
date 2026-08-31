@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect daemon fallback and transport failure boundaries. Keywords: daemon, rpc, fallback, test.
+ * - No production exports; tests protect daemon transport failure and domain result boundaries. Keywords: daemon, rpc, failure, test.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { GitArcFailureException } from "../git/git-arc-failures.ts";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./WorkbenchDaemonClient.ts";
 
-test("only method-not-found uses the legacy route", async () => {
+test("transport failures never fall back to app HTTP", async () => {
   const originalFetch = globalThis.fetch;
   let fetches = 0;
   globalThis.fetch = async () => {
@@ -16,42 +16,19 @@ test("only method-not-found uses the legacy route", async () => {
     return Response.json({ localCapabilities: { browseRawCommandsEnabled: true } });
   };
   try {
-    const unavailable = new WorkbenchDaemonClient({
-      request: async () => { throw new Error("daemon disconnected"); },
-    });
+    const unavailable = new WorkbenchDaemonClient({ request: async () => { throw new Error("daemon disconnected"); } });
     await assert.rejects(
       unavailable.request("local-capabilities/read", {}),
       /daemon disconnected/u,
     );
     assert.equal(fetches, 0);
 
-    const oldDaemon = new WorkbenchDaemonClient({
+    const missingMethod = new WorkbenchDaemonClient({
       request: async () => { throw new WorkbenchDaemonRequestError("method not found", -32601); },
     });
-    assert.deepEqual(
-      await oldDaemon.request("local-capabilities/read", {}),
-      { localCapabilities: { browseRawCommandsEnabled: true } },
-    );
-    assert.equal(fetches, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("other JSON-RPC failures never fall back", async () => {
-  const originalFetch = globalThis.fetch;
-  let fetches = 0;
-  globalThis.fetch = async () => {
-    fetches += 1;
-    return Response.json({});
-  };
-  try {
-    const client = new WorkbenchDaemonClient({
-      request: async () => { throw new WorkbenchDaemonRequestError("forbidden", -32000); },
-    });
     await assert.rejects(
-      client.request("project/catalog/read", {}),
-      /forbidden/u,
+      missingMethod.request("local-capabilities/read", {}),
+      /method not found/u,
     );
     assert.equal(fetches, 0);
   } finally {

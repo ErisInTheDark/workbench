@@ -41,14 +41,12 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:database",
     "harness:codex",
     "harness:opencode",
-    "client:all",
     "server:instructions",
     "server:codex/instructions",
   ]);
   const { nodes, parents } = flattenParents(graph.roots);
 
   assert.deepEqual([...nodes.keys()].sort(), [
-    "client:all",
     "harness:codex",
     "harness:opencode",
     "server:browse",

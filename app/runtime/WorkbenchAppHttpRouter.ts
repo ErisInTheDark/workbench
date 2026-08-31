@@ -1,10 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchAppHttpRouter: own app routes, bounded client diagnostics, legacy proxying, and static SPA resolution. Keywords: app, HTTP, proxy, client logs.
+ * - default WorkbenchAppHttpRouter: own app routes, bounded client diagnostics, and static SPA resolution. Keywords: app, HTTP, client logs.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import http from "node:http";
-import https from "node:https";
 
 import StaticHttpRequestController from "workbench-shared/http/StaticHttpRequestController";
 
@@ -18,16 +16,6 @@ const CLIENT_LOG_PATH = "/api/workbench-client-log";
 const MAX_CLIENT_LOG_BODY_BYTES = 128_000;
 const MAX_CLIENT_LOG_ENTRIES = 100;
 const MAX_CLIENT_LOG_MESSAGE = 8_000;
-const HOP_BY_HOP_HEADERS = new Set([
-  "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-  "te", "trailer", "transfer-encoding", "upgrade",
-]);
-
-function filteredHeaders(headers: IncomingMessage["headers"]) {
-  return Object.fromEntries(
-    Object.entries(headers).filter(([name, value]) => value !== undefined && !HOP_BY_HOP_HEADERS.has(name.toLowerCase())),
-  );
-}
 
 function sendJson(response: ServerResponse, status: number, value: object) {
   response.writeHead(status, {
@@ -35,32 +23,6 @@ function sendJson(response: ServerResponse, status: number, value: object) {
     "Content-Type": "application/json; charset=utf-8",
   });
   response.end(JSON.stringify(value));
-}
-
-function sendProxyFailure(response: ServerResponse) {
-  if (response.headersSent) {
-    if (!response.writableEnded) response.destroy();
-    return;
-  }
-  response.writeHead(502, { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" });
-  response.end("The legacy Workbench server is unavailable.");
-}
-
-function effectivePort(url: URL) {
-  return url.port || (url.protocol === "https:" ? "443" : "80");
-}
-
-function isLoopbackHostname(hostname: string) {
-  return hostname === "127.0.0.1" || hostname === "::1" || hostname === "localhost";
-}
-
-function isSameListener(left: URL, right: URL) {
-  return left.origin === right.origin || (
-    left.protocol === right.protocol
-    && effectivePort(left) === effectivePort(right)
-    && isLoopbackHostname(left.hostname)
-    && isLoopbackHostname(right.hostname)
-  );
 }
 
 async function readBoundedJson(request: IncomingMessage): Promise<unknown> {
@@ -98,22 +60,16 @@ function parseClientLogs(value: unknown) {
 }
 
 export default class WorkbenchAppHttpRouter {
-  private readonly legacyOrigin: URL;
   private readonly portRoutes: WorkbenchAppPortRoutes;
   private readonly stateRoutes: WorkbenchAppStateRoutes;
   private readonly staticRequests: StaticHttpRequestController;
 
   constructor(private readonly options: {
     appPort: WorkbenchAppPortControl;
-    legacyOrigin: string;
     logger: WorkbenchAppLogger;
     outputDirectoryPath: string;
     state: WorkbenchAppStateController;
   }) {
-    this.legacyOrigin = new URL(options.legacyOrigin);
-    if (this.legacyOrigin.protocol !== "http:" && this.legacyOrigin.protocol !== "https:") {
-      throw new Error("Legacy Workbench origin must use HTTP or HTTPS.");
-    }
     this.portRoutes = new WorkbenchAppPortRoutes({
       appPort: options.appPort,
       onDiagnostic: (message) => options.logger.error("http", message),
@@ -142,7 +98,7 @@ export default class WorkbenchAppHttpRouter {
     if (await this.portRoutes.handle(request, response, url)) return;
     if (await this.stateRoutes.handle(request, response, url)) return;
     if (url.pathname.startsWith("/api/")) {
-      await this.proxyLegacyRequest(request, response);
+      sendJson(response, 404, { error: "Workbench app route not found." });
       return;
     }
     await this.staticRequests.handleRequest(request, response);
@@ -165,44 +121,4 @@ export default class WorkbenchAppHttpRouter {
     }
   }
 
-  private async proxyLegacyRequest(request: IncomingMessage, response: ServerResponse) {
-    const target = new URL(request.url ?? "/", this.legacyOrigin);
-    if (isSameListener(target, new URL(this.options.appPort.read().appOrigin))) {
-      this.options.logger.error("http", `Refused recursive legacy request for ${target.pathname}.`);
-      sendProxyFailure(response);
-      return;
-    }
-    const client = target.protocol === "https:" ? https : http;
-    await new Promise<void>((resolve) => {
-      const proxyRequest = client.request(target, {
-        headers: { ...filteredHeaders(request.headers), host: target.host },
-        method: request.method,
-      }, (proxyResponse) => {
-        response.writeHead(
-          proxyResponse.statusCode ?? 502,
-          proxyResponse.statusMessage,
-          filteredHeaders(proxyResponse.headers),
-        );
-        proxyResponse.once("error", (error) => {
-          this.options.logger.error("http", `legacy response failed: ${error.message}`);
-          if (!response.writableEnded) response.destroy(error);
-          resolve();
-        });
-        proxyResponse.once("end", resolve);
-        proxyResponse.pipe(response);
-      });
-      const fail = (error: Error) => {
-        this.options.logger.error("http", `legacy request failed: ${error.message}`);
-        sendProxyFailure(response);
-        resolve();
-      };
-      proxyRequest.once("error", fail);
-      proxyRequest.once("close", resolve);
-      request.once("aborted", () => proxyRequest.destroy());
-      response.once("close", () => {
-        if (!response.writableEnded) proxyRequest.destroy();
-      });
-      request.pipe(proxyRequest);
-    });
-  }
 }

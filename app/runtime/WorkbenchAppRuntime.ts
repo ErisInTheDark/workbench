@@ -26,7 +26,6 @@ export interface WorkbenchAppRuntimeOptions {
   appPort: WorkbenchAppPortControl;
   createCompiler(): WorkbenchFrontendCompiler;
   createDatabase(): WorkbenchAppStateRepository;
-  legacyOrigin: string;
   logger: WorkbenchAppLogger;
   outputDirectoryPath: string;
   repositoryRootPath: string;
@@ -89,7 +88,6 @@ export default class WorkbenchAppRuntime {
       },
       getReloadScopeCatalog: () => host.getReloadScopeCatalog(),
       getReloadScopesForPaths: (paths) => host.getReloadScopesForPaths(paths),
-      legacyOrigin: options.legacyOrigin,
       logger: options.logger,
       outputDirectoryPath: options.outputDirectoryPath,
       repositoryRootPath: options.repositoryRootPath,

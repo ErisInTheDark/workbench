@@ -15,7 +15,6 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "harnesses",
   "legacyMigrationSource",
   "modules",
-  "nextDevHealth",
   "projectCatalog",
   "projectSnapshot",
   "subagents",

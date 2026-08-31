@@ -123,17 +123,13 @@ export default class WorkbenchFrontendCompiler {
   private esbuildOptions(): esbuild.BuildOptions {
     return {
       absWorkingDir: this.repositoryRootPath,
-      alias: {
-        "next/navigation": path.join(this.appDirectoryPath, "browser-navigation.ts"),
-      },
       assetNames: "assets/[name]-[hash]",
       bundle: true,
       define: {
         "process.env": JSON.stringify({
-          NEXT_PUBLIC_CODEX_APP_SERVER_PORT: this.environment.NEXT_PUBLIC_CODEX_APP_SERVER_PORT ?? "4500",
-          NEXT_PUBLIC_CODEX_APP_SERVER_URL: this.environment.NEXT_PUBLIC_CODEX_APP_SERVER_URL,
-          NEXT_PUBLIC_DISABLE_REACT_SCAN: this.environment.NEXT_PUBLIC_DISABLE_REACT_SCAN,
-          NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN: this.environment.NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN,
+          WORKBENCH_CODEX_APP_SERVER_PORT: this.environment.WORKBENCH_CODEX_APP_SERVER_PORT ?? "4500",
+          WORKBENCH_CODEX_APP_SERVER_URL: this.environment.WORKBENCH_CODEX_APP_SERVER_URL,
+          WORKBENCH_DISABLE_REACT_SCAN: this.environment.WORKBENCH_DISABLE_REACT_SCAN,
         }),
       },
       entryPoints: [path.join(this.appDirectoryPath, "browser-entry.tsx")],

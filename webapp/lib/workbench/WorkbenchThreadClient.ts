@@ -136,15 +136,8 @@ const SUBAGENT_WORKFLOW_IDS = ["subagent"] as const;
 const DRAFT_THREAD_ID = "new";
 
 function readLocalWorkbenchOrigin() {
-  const explicitOrigin = process.env.NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN?.trim();
-  if (explicitOrigin) {
-    return explicitOrigin.replace(/\/$/u, "");
-  }
-
   try {
-    const currentUrl = new URL(window.location.href);
-    const port = currentUrl.port || (currentUrl.protocol === "https:" ? "443" : "80");
-    return `http://127.0.0.1:${port}`;
+    return new URL(window.location.href).origin;
   } catch {
     return null;
   }

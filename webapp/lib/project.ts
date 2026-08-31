@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - appRoot: absolute path to the Next.js app workspace. Keywords: project, app root, workspace.
+ * - appRoot: absolute path to the Workbench server workspace. Keywords: project, app root, workspace.
  * - projectRoot: absolute path to the repository root used by the workbench. Keywords: project, repo root, workspace.
  * - projectsRoot: absolute configured root scanned for selectable projects. Keywords: projects, discovery, root.
  * - normalizeRelativePath: normalize project paths to forward-slash form for client transport. Keywords: path, normalize, relative.

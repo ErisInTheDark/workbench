@@ -1,20 +1,17 @@
 /*
  * Exports:
- * - startOrchestrator side effect: starts the Workbench bridge server, managed Next.js dev server, Browse cleanup supervisor, and bridge integrations. Keywords: orchestrator, next-dev, codex, copilot, opencode.
+ * - startOrchestrator side effect: starts the Workbench bridge server, Browse cleanup supervisor, and bridge integrations. Keywords: orchestrator, codex, copilot, opencode.
  *
  * Helpers:
- * - HTTP reload helpers: parse, proxy, queue, and report orchestrator reload scopes. Keywords: reload, next-dev, bridge.
+ * - HTTP reload helpers: parse, queue, and report orchestrator reload scopes. Keywords: reload, bridge.
  * - Reloadable feature handoff: label leased operations, enforce runtime-drain deadlines, and keep stable reload, health, and Browse ingress process-owned. Keywords: orchestrator, http, router, reload, feature, drain.
- * - Child process helpers: start, restart, and schedule managed process lifecycles. Keywords: process, restart, child.
  * - Bridge helpers: route websocket JSON-RPC messages across Codex, Copilot, and OpenCode harnesses. Keywords: websocket, harness, rpc.
- * - Health helpers: supervise the Next.js dev server and restart it after repeated 5xx health probes. Keywords: watchdog, turbopack, 500.
  * - Codex recovery helpers: replace and reinitialize a failed Codex bridge while a supervisor owns retry timing. Keywords: codex, recovery, retry, lifecycle.
  */
-import { spawn } from "node:child_process";
 import http from "node:http";
 import path from "node:path";
 
-import { WebSocketServer } from "next/dist/compiled/ws";
+import { WebSocketServer } from "ws";
 
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
@@ -32,15 +29,8 @@ import type CodexStdioBridge from "./CodexStdioBridge";
 import { CopilotBridge } from "./copilot-bridge";
 import type { OpenCodeBridge } from "./opencode-bridge";
 import {
-    createSpawnOptions,
-    getSpawnDescriptor,
-    killProcessTree,
-    killProcessTreeAsync,
     log,
     logError,
-    pipeChildStream,
-    type ProcessSpec,
-    type RunningProcess,
 } from "./process-helpers";
 import { ORCHESTRATOR_PROCESS_REQUIRED_REGISTRATIONS, type OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
@@ -56,13 +46,6 @@ const WEBAPP_ROOT = path.resolve(ORCHESTRATOR_ROOT, "..");
 const PROJECT_ROOT = path.resolve(WEBAPP_ROOT, "..");
 const DEFAULT_CODEX_BRIDGE_URL = "ws://0.0.0.0:4500";
 const CODEX_BRIDGE_URL = process.env.CODEX_APP_SERVER_URL ?? DEFAULT_CODEX_BRIDGE_URL;
-const NEXT_PORT = process.env.PORT ?? "3002";
-const RESTART_DELAY_MS = 1000;
-const NEXT_DEV_HEALTH_PATH = "/api/next-dev-health";
-const NEXT_DEV_HEALTH_INTERVAL_MS = 5000;
-const NEXT_DEV_HEALTH_REQUEST_TIMEOUT_MS = 2000;
-const NEXT_DEV_HEALTH_RESTART_COOLDOWN_MS = 30000;
-const NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD = 3;
 const ORCHESTRATOR_RELOAD_PATH = "/orchestrator/reload";
 const ORCHESTRATOR_BROWSE_PATH = "/orchestrator/browse";
 const ORCHESTRATOR_BROWSE_SESSIONS_PATH = "/orchestrator/browse/sessions";
@@ -74,11 +57,6 @@ const CODEX_HEALTH_REQUEST_TIMEOUT_MS = 10000;
 const CODEX_HEALTH_FAILURE_THRESHOLD = 10;
 const BROWSE_CONTROLLER_RELOAD_DRAIN_TIMEOUT_MS = 5000;
 
-function readNonEmptyEnv(value: string | undefined) {
-  const trimmedValue = value?.trim();
-  return trimmedValue ? trimmedValue : null;
-}
-
 function parseWebSocketPort(url: string) {
   const parsedUrl = new URL(url);
   if (parsedUrl.protocol !== "ws:" && parsedUrl.protocol !== "wss:") {
@@ -88,11 +66,6 @@ function parseWebSocketPort(url: string) {
   return parsedUrl.port || (parsedUrl.protocol === "wss:" ? "443" : "80");
 }
 
-const CODEX_PUBLIC_BRIDGE_URL = readNonEmptyEnv(process.env.NEXT_PUBLIC_CODEX_APP_SERVER_URL);
-const CODEX_PUBLIC_BRIDGE_PORT = readNonEmptyEnv(process.env.NEXT_PUBLIC_CODEX_APP_SERVER_PORT)
-  ?? parseWebSocketPort(CODEX_PUBLIC_BRIDGE_URL ?? CODEX_BRIDGE_URL);
-const LOCAL_WORKBENCH_ORIGIN = readNonEmptyEnv(process.env.NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN)
-  ?? `http://127.0.0.1:${NEXT_PORT}`;
 const LOCAL_ORCHESTRATOR_ORIGIN = `http://127.0.0.1:${parseWebSocketPort(CODEX_BRIDGE_URL)}`;
 const workbenchAgentCliEnvironment = new WorkbenchAgentCliEnvironment({
   origin: LOCAL_ORCHESTRATOR_ORIGIN,
@@ -100,19 +73,6 @@ const workbenchAgentCliEnvironment = new WorkbenchAgentCliEnvironment({
   shellSourcePath: path.join(WEBAPP_ROOT, "lib", "workbench", "cli", "workbench-agent-cli.sh"),
 });
 
-const nextDevEnv: NodeJS.ProcessEnv = {
-  ...process.env,
-  CODEX_APP_SERVER_URL: CODEX_BRIDGE_URL,
-  NEXT_PUBLIC_CODEX_APP_SERVER_PORT: CODEX_PUBLIC_BRIDGE_PORT,
-  NEXT_PUBLIC_LOCAL_WORKBENCH_ORIGIN: LOCAL_WORKBENCH_ORIGIN,
-  PORT: NEXT_PORT,
-};
-
-if (CODEX_PUBLIC_BRIDGE_URL) {
-  nextDevEnv.NEXT_PUBLIC_CODEX_APP_SERVER_URL = CODEX_PUBLIC_BRIDGE_URL;
-}
-
-const processes = new Map<string, RunningProcess>();
 const bridgeConnections = new Set<BridgeClient>();
 let bridgeServer: http.Server | null = null;
 let bridgeWebSocketServer: WebSocketServer | null = null;
@@ -157,15 +117,6 @@ const copilotBridge = new CopilotBridge({
 });
 
 codexRecoverySupervisor = createCodexRecoverySupervisor();
-
-const specs: ProcessSpec[] = [
-  {
-    name: "next-dev",
-    command: "pnpm",
-    args: ["run", "dev:next"],
-    env: nextDevEnv,
-  },
-];
 
 function sendJsonToClient(client: BridgeClient, message: unknown) {
   void featureHost.run(
@@ -236,11 +187,11 @@ function readRequestBody(request: http.IncomingMessage) {
 
 function createReloadResponse(scopes: OrchestratorReloadScope[]): OrchestratorReloadResponse {
   return {
-    appliedScopes: scopes.filter((scope) => scope !== "client:all" && scope !== "server:process"),
+    appliedScopes: scopes.filter((scope) => scope !== "server:process"),
     completedAt: null,
     error: null,
     ok: true,
-    queuedScopes: scopes.filter((scope) => scope === "client:all" || scope === "server:process"),
+    queuedScopes: scopes.filter((scope) => scope === "server:process"),
     requestedScopes: scopes,
     startedAt: Date.now(),
     state: "running",
@@ -265,12 +216,6 @@ async function stopAllChildren() {
   codexRecoverySupervisor.dispose();
   await featureHost.dispose();
 
-  for (const entry of processes.values()) {
-    if (entry.child && !entry.child.killed) {
-      killProcessTree(entry.child.pid);
-    }
-  }
-
   for (const client of bridgeConnections) {
     client.close();
   }
@@ -288,8 +233,6 @@ async function stopAllChildren() {
 }
 
 function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
-  const activeChildPids = Array.from(processes.values(), ({ child }) => child && !child.killed ? child.pid : undefined)
-    .filter((pid): pid is number => typeof pid === "number");
   return [
     {
       name: "process lifecycle",
@@ -310,33 +253,7 @@ function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
     },
     { name: "feature graph", notify: () => featureHost.beginHardShutdown() },
     { name: "Copilot bridge", notify: async () => await copilotBridge.stop() },
-    {
-      name: "managed child processes",
-      notify: async () => {
-        await Promise.all(activeChildPids.map(async (pid) => await killProcessTreeAsync(pid)));
-      },
-    },
   ];
-}
-
-function findProcessSpec(name: string) {
-  return specs.find((spec) => spec.name === name) ?? null;
-}
-
-function restartChild(spec: ProcessSpec) {
-  const existing = processes.get(spec.name);
-  if (existing?.restartTimer) {
-    clearTimeout(existing.restartTimer);
-    existing.restartTimer = null;
-  }
-
-  if (existing?.child && !existing.child.killed) {
-    killProcessTree(existing.child.pid);
-    return "scheduled";
-  }
-
-  startChild(spec);
-  return "started";
 }
 
 function createOrchestratorFeatureContext(): OrchestratorProcessContext {
@@ -411,20 +328,7 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
     harnessPorts: createHarnessPorts(),
     legacyMigrationProjectRoot: PROJECT_ROOT,
     localOrchestratorOrigin: LOCAL_ORCHESTRATOR_ORIGIN,
-    localWorkbenchOrigin: LOCAL_WORKBENCH_ORIGIN,
     logTurnRecovery: (message) => log("turn-recovery", message),
-    nextDevHealthOptions: {
-      healthUrl: new URL(NEXT_DEV_HEALTH_PATH, `http://localhost:${NEXT_PORT}`).toString(),
-      intervalMs: NEXT_DEV_HEALTH_INTERVAL_MS,
-      isRestartPending: () => Boolean(processes.get("next-dev")?.restartTimer),
-      isShuttingDown: () => shuttingDown,
-      log: (message) => log("next-dev-health", message),
-      logError: (message) => logError("next-dev-health", message),
-      requestTimeoutMs: NEXT_DEV_HEALTH_REQUEST_TIMEOUT_MS,
-      restartCooldownMs: NEXT_DEV_HEALTH_RESTART_COOLDOWN_MS,
-      restartNextDev: restartNextDevFromWatchdog,
-      serverErrorThreshold: NEXT_DEV_HEALTH_SERVER_ERROR_THRESHOLD,
-    },
     notifyThreadLifecycle: () => {
       featureHost.get("reloadController").notifyEligibilityChanged();
     },
@@ -466,12 +370,6 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
       );
     },
     refreshWorkbenchPromptFiles: ensureWorkbenchPromptFiles,
-    reloadClient: async () => {
-      const nextSpec = findProcessSpec("next-dev");
-      if (!nextSpec) throw new Error("Next.js dev process is not registered with the orchestrator.");
-      restartChild(nextSpec);
-      log("orchestrator", "queued Next.js dev restart");
-    },
     requestOrchestratorReload: async (body, signal) => {
       const record = asRecord(body);
       const harness = record?.callerHarness;
@@ -664,18 +562,6 @@ async function requestLiveCodexWithDeadline(request: JsonRpcRequest, timeoutMs =
   });
 }
 
-function restartNextDevFromWatchdog(reason: string) {
-  const nextSpec = findProcessSpec("next-dev");
-  if (!nextSpec) {
-    logError("next-dev-health", "Next.js dev process is not registered with the orchestrator.");
-    return false;
-  }
-
-  const result = restartChild(nextSpec);
-  log("next-dev-health", `${reason}; ${result} Next.js dev restart`);
-  return true;
-}
-
 async function ensureWorkbenchPromptFiles() {
   await featureHost.get("modules").workbenchPromptFiles.ensureWorkbenchPromptFiles();
 }
@@ -810,68 +696,6 @@ async function handleReloadHttpRequest(request: http.IncomingMessage, response: 
   queueReload(requestedScopes);
 }
 
-function scheduleRestart(spec: ProcessSpec) {
-  if (shuttingDown) {
-    return;
-  }
-
-  const existing = processes.get(spec.name);
-  if (existing?.restartTimer) {
-    return;
-  }
-
-  const restartTimer = setTimeout(() => {
-    const latest = processes.get(spec.name);
-    if (latest) {
-      latest.restartTimer = null;
-    }
-    startChild(spec);
-  }, RESTART_DELAY_MS);
-
-  processes.set(spec.name, {
-    ...(existing ?? { child: null }),
-    restartTimer,
-  });
-}
-
-function startChild(spec: ProcessSpec) {
-  const spawnDescriptor = getSpawnDescriptor(spec);
-  const child = spawn(spawnDescriptor.command, spawnDescriptor.args, {
-    ...createSpawnOptions(WEBAPP_ROOT, {
-      ...process.env,
-      FORCE_COLOR: process.env.FORCE_COLOR ?? "1",
-      ...spec.env,
-    }, false),
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  processes.set(spec.name, {
-    child,
-    restartTimer: null,
-  });
-
-  pipeChildStream(spec.name, child.stdout, (chunk) => process.stdout.write(chunk));
-  pipeChildStream(spec.name, child.stderr, (chunk) => process.stderr.write(chunk));
-
-  child.once("error", (error) => {
-    logError(spec.name, `failed to start: ${error instanceof Error ? error.message : String(error)}`);
-  });
-
-  child.once("exit", (code, signal) => {
-    log(spec.name, `exited (code=${code ?? "null"}, signal=${signal ?? "null"})`);
-
-    const existing = processes.get(spec.name);
-    processes.set(spec.name, {
-      child: null,
-      restartTimer: existing?.restartTimer ?? null,
-    });
-
-    if (!shuttingDown) {
-      scheduleRestart(spec);
-    }
-  });
-}
-
 async function handleClientMessage(client: BridgeClient, connectionId: string, data: Buffer) {
   await featureHost.run(
     "webSocketRequests",
@@ -1001,7 +825,7 @@ process.on("exit", () => {
 });
 
 async function startOrchestrator() {
-  log("orchestrator", `starting bridge at ${CODEX_BRIDGE_URL} and Next.js on port ${NEXT_PORT}`);
+  log("orchestrator", `starting bridge at ${CODEX_BRIDGE_URL}`);
   await workbenchAgentCliEnvironment.install();
   await ensureWorkbenchPromptFiles();
   await featureHost.start();
@@ -1023,9 +847,6 @@ async function startOrchestrator() {
         `Codex app-server startup readiness failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
-  for (const spec of specs) {
-    startChild(spec);
-  }
 }
 
 void startOrchestrator().catch((error) => {
