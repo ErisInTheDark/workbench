@@ -4,6 +4,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { createGitignoreMatcher } from "workbench-shared/source-pattern-matcher";
+
 import graph from "./orchestrator-root-node";
 import { readReloadNodeSourceState } from "./reload-node-source-map";
 import type ReloadableNode from "./ReloadableNode";
@@ -113,10 +115,13 @@ test("the production graph provides every registration consumed by the process s
   }
 });
 
-test("loaded modules generate narrow source ownership without mapping test files", () => {
+test("loaded modules and hostile boundaries generate narrow source ownership without mapping test files", () => {
   const descriptors = new Map(readReloadNodeSourceState().descriptors.map((descriptor) => [descriptor.scope, descriptor]));
   const owners = (sourcePath: string) => [...descriptors.values()]
-    .filter(({ paths }) => paths.includes(sourcePath))
+    .filter(({ boundaryPatterns, paths }) => (
+      paths.includes(sourcePath)
+      || createGitignoreMatcher((boundaryPatterns ?? []).join("\n")).matches(sourcePath)
+    ))
     .map(({ scope }) => scope)
     .sort();
 
@@ -124,6 +129,11 @@ test("loaded modules generate narrow source ownership without mapping test files
   assert.equal(descriptors.get("server:core")!.paths.includes("webapp/orchestrator/WorkbenchGitArcFeature.ts"), true);
   assert.equal(descriptors.get("server:commands")!.paths.includes("webapp/orchestrator/WorkbenchAgentCommandController.ts"), true);
   assert.deepEqual(owners("webapp/orchestrator/WorkbenchCodexInstructionAdapter.ts"), ["server:codex/instructions"]);
+  assert.deepEqual(
+    owners("webapp/orchestrator/database/transcript/WorkbenchTranscriptRepository.ts"),
+    ["server:database"],
+  );
+  assert.deepEqual(owners("webapp/orchestrator/CodexTranscriptStore.ts"), ["server:codex"]);
   assert.equal(descriptors.get("server:commands")!.paths.some((sourcePath) => sourcePath.endsWith(".test.ts")), false);
   assert.equal(descriptors.get("server:process")!.paths.includes("webapp/orchestrator/WorkbenchCoreNode.ts"), false);
 });

@@ -3,7 +3,7 @@
  * - ReloadableNodeLifecycle/ReloadableNodeAccess: node replacement and caller-access policies. Keywords: reload, lifecycle, access.
  * - ReloadableNodeLease/ReloadableNodeRuntimeDrainPending: generation fencing and bounded drain diagnostics. Keywords: lease, drain, diagnostics.
  * - ReloadableNodeInstance/ReloadableNodeBuild: runtime registration and construction contracts. Keywords: registry, factory, handoff.
- * - ReloadableNodeOptions/default ReloadableNode: parent-owned reloadable node definition. Keywords: graph, children, scope, sources.
+ * - ReloadableNodeOptions/default ReloadableNode: parent-owned reloadable node definition with explicit hostile-boundary sources. Keywords: graph, children, scope, sources, worker, dynamic.
  * - ReloadableNodeGraph/defineReloadableNodeGraph: direct-root graph definition loaded by the stable host. Keywords: roots, topology, loader.
  */
 import type { WorkbenchReloadScope } from "./workbench-reload.ts";
@@ -42,6 +42,7 @@ export interface ReloadableNodeBuild<TObjects extends object> {
 
 export interface ReloadableNodeOptions<TContext, TObjects extends object, TNotification> {
   access: ReloadableNodeAccess;
+  boundarySources?: string;
   children: readonly ReloadableNode<TContext, TObjects, TNotification>[];
   create(context: TContext, build: ReloadableNodeBuild<TObjects>): ReloadableNodeInstance<TObjects, TNotification>;
   description: string;
@@ -55,6 +56,7 @@ export interface ReloadableNodeOptions<TContext, TObjects extends object, TNotif
 
 export default class ReloadableNode<TContext, TObjects extends object, TNotification> {
   readonly access: ReloadableNodeAccess;
+  readonly boundarySources: string;
   readonly children: readonly ReloadableNode<TContext, TObjects, TNotification>[];
   readonly create: ReloadableNodeOptions<TContext, TObjects, TNotification>["create"];
   readonly description: string;
@@ -67,6 +69,7 @@ export default class ReloadableNode<TContext, TObjects extends object, TNotifica
 
   constructor(options: ReloadableNodeOptions<TContext, TObjects, TNotification>) {
     this.access = options.access;
+    this.boundarySources = options.boundarySources ?? "";
     this.children = Object.freeze([...options.children]);
     this.create = options.create;
     this.description = options.description;

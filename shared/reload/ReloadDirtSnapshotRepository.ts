@@ -27,6 +27,7 @@ function hasExitCode(error: unknown, code: number) {
 export interface ReloadDirtSnapshotRepositoryPort {
   createCommitFromTree(tree: string, parent: string, message: string): Promise<string>;
   listChangedPaths(from: string, to: string, paths: string[], signal?: AbortSignal): Promise<string[]>;
+  listWorktreePaths(signal?: AbortSignal): Promise<string[]>;
   readRef(ref: string): Promise<string | null>;
   updateRef(ref: string, newValue: string, oldValue?: string): Promise<void>;
   writeScopedWorktreeTree(paths: string[], baseTreeish?: string, signal?: AbortSignal): Promise<string>;
@@ -50,6 +51,12 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
     return parseNullPaths(await this.run([
       "diff", "--name-only", "-z", "--no-renames", from, to, "--",
       ...paths.map((candidate) => this.literalPathspec(candidate)),
+    ], process.env, signal)).sort((left, right) => left.localeCompare(right));
+  }
+
+  async listWorktreePaths(signal?: AbortSignal) {
+    return parseNullPaths(await this.run([
+      "ls-files", "-z", "--cached", "--others", "--exclude-standard",
     ], process.env, signal)).sort((left, right) => left.localeCompare(right));
   }
 

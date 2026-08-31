@@ -15,6 +15,10 @@ function record(value: unknown) {
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "agent",
+  boundarySources: [
+    "webapp/orchestrator/CodexTranscriptStore.ts",
+    "webapp/orchestrator/codex-transcript-*.ts",
+  ].join("\n"),
   children: [],
   create: (context, build) => {
     const parent = build.get("codexAppServer");
@@ -98,8 +102,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/orchestrator/CodexBridgeTransitionController.ts",
     "webapp/orchestrator/CodexRecoverySupervisor.ts",
     "webapp/orchestrator/CodexTranscriptRecordingController.ts",
-    "webapp/orchestrator/CodexTranscriptStore.ts",
-    "webapp/orchestrator/codex-transcript-*.ts",
     "webapp/orchestrator/copilot-bridge.ts",
     "webapp/orchestrator/copilot-thread-state.ts",
   ].join("\n"),

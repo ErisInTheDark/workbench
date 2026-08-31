@@ -53,6 +53,7 @@ export default new ReloadableNode<
   OrchestratorProviderNotification
 >({
   access: "agent",
+  boundarySources: "webapp/orchestrator/database/**",
   children: [WorkbenchCoreNode, CodexBridgeNode, WorkbenchWebSocketNode],
   create: (context) => {
     const { DatabaseController, TranscriptController } = loadDatabaseControllers();
@@ -100,8 +101,5 @@ export default new ReloadableNode<
   requires: [],
   safeAll: true,
   scope: "server:database",
-  sources: [
-    "webapp/orchestrator/WorkbenchDatabaseNode.ts",
-    "webapp/orchestrator/database/**",
-  ].join("\n"),
+  sources: "webapp/orchestrator/WorkbenchDatabaseNode.ts",
 });

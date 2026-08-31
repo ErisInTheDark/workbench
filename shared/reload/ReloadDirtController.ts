@@ -17,10 +17,12 @@ import type {
 import ReloadDirtSnapshotRepository, {
   type ReloadDirtSnapshotRepositoryPort,
 } from "./ReloadDirtSnapshotRepository.ts";
+import { createGitignoreMatcher } from "../source-pattern-matcher.ts";
 
 const MAX_ERROR_LENGTH = 500;
 
 export interface ReloadDirtSourceDescriptor extends WorkbenchReloadScopeDescriptor {
+  boundaryPatterns?: readonly string[];
   paths: readonly string[];
 }
 
@@ -85,14 +87,20 @@ function sameSnapshot(left: WorkbenchReloadDirtSnapshot, right: WorkbenchReloadD
     });
 }
 
-function mergeDescriptorPaths(
+function mergeDescriptorSources(
   previous: ReloadDirtSourceDescriptor | undefined,
   current: ReloadDirtSourceDescriptor,
 ) {
   return {
     ...current,
+    boundaryPatterns: current.boundaryPatterns ?? previous?.boundaryPatterns,
     paths: [...new Set([...previous?.paths ?? [], ...current.paths])].sort(),
   };
+}
+
+function boundaryMatcher(descriptor: ReloadDirtSourceDescriptor) {
+  const patterns = descriptor.boundaryPatterns ?? [];
+  return patterns.length ? createGitignoreMatcher(patterns.join("\n")) : null;
 }
 
 export default class ReloadDirtController {
@@ -145,7 +153,11 @@ export default class ReloadDirtController {
   }
 
   getCatalog() {
-    return [...this.requireState().descriptors.values()].map(({ paths: _paths, ...descriptor }) => descriptor);
+    return [...this.requireState().descriptors.values()].map(({
+      boundaryPatterns: _boundaryPatterns,
+      paths: _paths,
+      ...descriptor
+    }) => descriptor);
   }
 
   subscribe(listener: () => void) {
@@ -278,17 +290,31 @@ export default class ReloadDirtController {
       for (const descriptor of this.options.getSourceState().descriptors) {
         state.descriptors.set(
           descriptor.scope,
-          mergeDescriptorPaths(state.descriptors.get(descriptor.scope), descriptor),
+          mergeDescriptorSources(state.descriptors.get(descriptor.scope), descriptor),
         );
       }
       const dirtyScopes = [] as WorkbenchReloadDirtSnapshot["dirtyScopes"];
       const descriptors = [...state.descriptors.values()];
-      const gitDescriptors = descriptors.filter(({ paths }) => paths.length);
+      const hasBoundaryPatterns = descriptors.some(({ boundaryPatterns }) => boundaryPatterns?.length);
+      const worktreePaths = hasBoundaryPatterns
+        ? await this.repository.listWorktreePaths(signal)
+        : [];
+      const resolvedPaths = new Map(descriptors.map((descriptor) => {
+        const matcher = boundaryMatcher(descriptor);
+        return [
+          descriptor.scope,
+          [...new Set([
+            ...descriptor.paths,
+            ...(matcher ? worktreePaths.filter((sourcePath) => matcher.matches(sourcePath)) : []),
+          ])].sort(),
+        ] as const;
+      }));
+      const gitDescriptors = descriptors.filter(({ scope }) => resolvedPaths.get(scope)?.length);
       const pathsByBaseline = new Map<string, Set<string>>();
       for (const descriptor of gitDescriptors) {
         const baseline = state.baselines.get(descriptor.scope) ?? state.snapshotCommit;
         const paths = pathsByBaseline.get(baseline) ?? new Set<string>();
-        for (const sourcePath of descriptor.paths) paths.add(sourcePath);
+        for (const sourcePath of resolvedPaths.get(descriptor.scope) ?? []) paths.add(sourcePath);
         pathsByBaseline.set(baseline, paths);
       }
       const changedByBaseline = new Map<string, Set<string>>();
@@ -306,7 +332,9 @@ export default class ReloadDirtController {
       for (const descriptor of gitDescriptors) {
         const baseline = state.baselines.get(descriptor.scope) ?? state.snapshotCommit;
         const changed = changedByBaseline.get(baseline) ?? new Set<string>();
-        if (descriptor.paths.some((sourcePath) => changed.has(sourcePath))) dirtyScopeNames.add(descriptor.scope);
+        if (resolvedPaths.get(descriptor.scope)?.some((sourcePath) => changed.has(sourcePath))) {
+          dirtyScopeNames.add(descriptor.scope);
+        }
       }
       for (const source of this.options.externalDirtSources ?? []) {
         if (!state.descriptors.has(source.scope)) {
@@ -334,7 +362,10 @@ export default class ReloadDirtController {
   }
 
   private isObservedPath(sourcePath: string) {
-    return [...this.requireState().descriptors.values()].some(({ paths }) => paths.includes(sourcePath))
+    return [...this.requireState().descriptors.values()].some((descriptor) => (
+      descriptor.paths.includes(sourcePath)
+      || boundaryMatcher(descriptor)?.matchesPathOrDescendant(sourcePath)
+    ))
       || (this.options.externalDirtSources ?? []).some(({ path: externalPath }) => externalPath === sourcePath);
   }
 

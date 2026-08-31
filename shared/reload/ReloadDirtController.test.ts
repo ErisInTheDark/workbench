@@ -52,6 +52,7 @@ class ControlledRepository implements ReloadDirtSnapshotRepositoryPort {
 
   async createCommitFromTree() { return "snapshot-commit"; }
   async listChangedPaths(_from: string, to: string) { return to === "stale-tree" ? ["app/core.ts"] : []; }
+  async listWorktreePaths() { return []; }
   async readRef() { return "base-snapshot"; }
   async updateRef() { this.refUpdates += 1; }
   async writeWorktreeTree() { return "snapshot-tree"; }
@@ -161,6 +162,46 @@ test("Git content truth preserves unapplied owners and detects deletion plus rec
   await fs.writeFile(sourcePath, "export const value = 3;\n", "utf8");
   assert.deepEqual((await controller.refresh()).dirtyScopes.map(({ scope }) => scope), ["client:one", "client:two"]);
   assert.match((await git("rev-parse", snapshotRef)).stdout, /^[0-9a-f]{40}\s*$/u);
+});
+
+test("boundary source patterns detect unobserved files and respect exclusions", async (context) => {
+  const { git, repoRoot } = await gitFixture();
+  const excludedPath = path.join(repoRoot, "shared", "generated", "ignored.ts");
+  await fs.mkdir(path.dirname(excludedPath), { recursive: true });
+  await fs.writeFile(excludedPath, "export const ignored = 1;\n", "utf8");
+  await git("add", ".");
+  await git("commit", "-m", "add excluded source");
+
+  const boundaryDescriptor: ReloadDirtSourceDescriptor = {
+    access: "operator",
+    boundaryPatterns: ["shared/**", "!shared/generated/**"],
+    description: "Boundary",
+    destructive: false,
+    paths: [],
+    safeAll: false,
+    scope: "client:boundary",
+  };
+  const controller = new ReloadDirtController({
+    getSourceState: () => sourceState([boundaryDescriptor]),
+    repoRoot,
+    snapshotRef: "refs/worktree/workbench/shared-test-boundary-snapshot",
+  });
+  context.after(async () => {
+    await controller.dispose();
+    await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
+  });
+  await controller.start();
+
+  await fs.writeFile(excludedPath, "export const ignored = 2;\n", "utf8");
+  assert.deepEqual((await controller.refresh()).dirtyScopes, []);
+
+  const workerPath = path.join(repoRoot, "shared", "worker", "repository.ts");
+  await fs.mkdir(path.dirname(workerPath), { recursive: true });
+  await fs.writeFile(workerPath, "export const repository = 1;\n", "utf8");
+  assert.deepEqual(
+    (await controller.refresh()).dirtyScopes.map(({ scope }) => scope),
+    ["client:boundary"],
+  );
 });
 
 test("external dirt remains until its owner reloads after the marker is removed", async (context) => {

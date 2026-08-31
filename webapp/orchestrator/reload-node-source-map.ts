@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ReloadNodeSourceDescriptor/ReloadNodeSourceState: generated live source ownership and dependant metadata. Keywords: reload, source, graph, dirt.
- * - observeReloadNodeGraphSources: replace handwritten node source patterns with paths loaded by the candidate graph. Keywords: CommonJS, imports, ownership.
+ * - observeReloadNodeGraphSources: combine candidate-loaded module paths with explicit hostile-boundary patterns. Keywords: CommonJS, imports, worker, dynamic, ownership.
  * - activateReloadNodeSourceState/cancelReloadNodeSourceState: publish successful candidates or discard failed ones across module generations. Keywords: reload, activation, rollback.
  * - readReloadNodeSourceState: read active metadata without exposing an uncommitted candidate. Keywords: reload, generation, catalog.
  */
@@ -82,8 +82,10 @@ function walkModules(root: NodeModule, stop: ReadonlySet<NodeModule>, skipRoot =
 }
 
 function cloneGraphNode(node: GraphNode, sources: readonly string[], children: readonly GraphNode[]) {
+  const boundaryPatterns = readSourcePatterns(node.boundarySources);
   return new ReloadableNode<object, object, object>({
     access: node.access,
+    boundarySources: node.boundarySources,
     children,
     create: node.create,
     description: node.description,
@@ -92,8 +94,15 @@ function cloneGraphNode(node: GraphNode, sources: readonly string[], children: r
     requires: node.requires,
     safeAll: node.safeAll,
     scope: node.scope,
-    sources: sources.join("\n"),
+    sources: [...sources, ...boundaryPatterns].join("\n"),
   });
+}
+
+function readSourcePatterns(sources: string) {
+  return sources
+    .split(/\r?\n/u)
+    .map((source) => source.trim())
+    .filter(Boolean);
 }
 
 export function observeReloadNodeGraphSources<TContext, TObjects extends object, TNotification>(
@@ -158,6 +167,7 @@ export function observeReloadNodeGraphSources<TContext, TObjects extends object,
   const clonedRoots = originalRoots.map(clone);
   const descriptors: ReloadNodeSourceDescriptor[] = [...nodes.values()].map((node) => ({
     access: node.access,
+    boundaryPatterns: readSourcePatterns(node.boundarySources),
     description: node.description,
     destructive: DESTRUCTIVE_SCOPES.has(node.scope),
     paths: [...(pathsByScope.get(node.scope) ?? [])].sort(),
