@@ -61,7 +61,7 @@ CRITICAL INSTRUCTION EDITING RULES:
 
 ## Commands and Permission Boundaries
 
-Run project validation from `webapp/` unless a command says otherwise.
+Run project validation from `webapp/`. Run `pnpm typecheck` from the repository root.
 
 ### Allowed Validation
 

@@ -13,10 +13,10 @@ const projectRoot = path.resolve(path.dirname(scriptPath), "..");
 const tscPath = path.join(projectRoot, "node_modules", "typescript", "bin", "tsc");
 
 export const typecheckProjectConfigs = [
-  "tsconfig.typecheck.json",
-  "orchestrator/tsconfig.json",
-  "../app/tsconfig.json",
-  "../shared/tsconfig.json",
+  "webapp/tsconfig.typecheck.json",
+  "webapp/orchestrator/tsconfig.json",
+  "app/tsconfig.json",
+  "shared/tsconfig.json",
 ];
 
 function runCompiler(configPath) {
@@ -66,8 +66,11 @@ export async function runProjectTypechecks() {
   const outputs = [];
   for (const configPath of typecheckProjectConfigs) {
     const result = await runCompiler(configPath);
+    const passed = result.code === 0;
+    const status = passed ? "\x1b[32mpass\x1b[0m" : "\x1b[31mfail\x1b[0m";
+    process.stdout.write(`${configPath}: ${status}\n`);
     outputs.push(result.output);
-    failed ||= result.code !== 0;
+    failed ||= !passed;
   }
   const summary = summarizeTypecheckDiagnostics(outputs);
   if (summary.length > 0) process.stderr.write(`\nTypecheck diagnostics:\n${summary.join("\n")}\n`);
