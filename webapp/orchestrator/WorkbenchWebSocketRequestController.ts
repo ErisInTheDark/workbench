@@ -45,6 +45,7 @@ const ANSI_GREEN = "\u001b[32m";
 const ANSI_RED = "\u001b[31m";
 const ANSI_YELLOW = "\u001b[33m";
 const ANSI_RESET = "\u001b[0m";
+const MAX_ERROR_LOG_MESSAGE_LENGTH = 500;
 
 type RequestId = number | string | null;
 type Timer = ReturnType<typeof setTimeout>;
@@ -132,6 +133,16 @@ function readResponseId(message: unknown): RequestId | undefined {
 function responseIsError(message: unknown) {
   const record = asRecord(message);
   return Boolean(record && "error" in record && record.error !== undefined);
+}
+
+function readResponseErrorMessage(message: unknown) {
+  const error = asRecord(asRecord(message)?.error);
+  const rawMessage = typeof error?.message === "string" ? error.message : "";
+  const normalized = rawMessage.replace(/\s+/gu, " ").trim();
+  if (!normalized) return null;
+  return normalized.length <= MAX_ERROR_LOG_MESSAGE_LENGTH
+    ? normalized
+    : `${normalized.slice(0, MAX_ERROR_LOG_MESSAGE_LENGTH - 3)}...`;
 }
 
 export default class WorkbenchWebSocketRequestController {
@@ -322,6 +333,7 @@ export default class WorkbenchWebSocketRequestController {
     const deliveryMessage = streamEvent?.message ?? message;
     const responseId = readResponseId(message);
     const pending = responseId === undefined ? null : this.pending.get(client)?.get(responseId) ?? null;
+    const responseErrorMessage = readResponseErrorMessage(message);
     const serializeStartedAt = this.now();
     let serialized: string;
     try {
@@ -355,6 +367,7 @@ export default class WorkbenchWebSocketRequestController {
             jsonMs,
             this.now() - sentAt,
             outBytes,
+            error ? null : responseErrorMessage,
           );
         }
         if (error) reject(error);
@@ -567,14 +580,23 @@ export default class WorkbenchWebSocketRequestController {
     }, Math.max(0, request.nextWarningAt - this.now()));
   }
 
-  private complete(request: PendingRequest, outcome: CompletionOutcome, processMs: number, jsonMs: number, sendMs: number, outBytes: number) {
+  private complete(
+    request: PendingRequest,
+    outcome: CompletionOutcome,
+    processMs: number,
+    jsonMs: number,
+    sendMs: number,
+    outBytes: number,
+    errorMessage: string | null = null,
+  ) {
     if (request.timer) this.cancel(request.timer);
     const requests = this.pending.get(request.client);
     if (requests?.get(request.id) === request) requests.delete(request.id);
     if (requests?.size === 0) this.pending.delete(request.client);
     const totalMs = this.now() - request.startedAt;
     const detail = dimWebSocketDetail(`(process: ${formatDuration(processMs)}, json: ${formatDuration(jsonMs)}, send: ${formatDuration(sendMs)}, in: ${formatBytes(request.inBytes)}, out: ${formatBytes(outBytes)})`);
-    this.writeLine(` WS ${request.method} ${completionToken(outcome)} in ${formatDuration(totalMs)} ${detail}`);
+    const errorDetail = errorMessage ? ` ${dimWebSocketDetail(`(error: ${errorMessage})`)}` : "";
+    this.writeLine(` WS ${request.method} ${completionToken(outcome)} in ${formatDuration(totalMs)} ${detail}${errorDetail}`);
   }
 
   private assertActive() {

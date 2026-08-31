@@ -1186,6 +1186,35 @@ test("candidate reads still surface genuine provider failures", async () => {
   }, { onStatusMessage: (message) => statusMessages.push(message) });
 });
 
+test("failed opens return their exact failure without relabelling the current selection", async () => {
+  const statusMessages: string[] = [];
+  await withClient(async (client) => {
+    client.selectThreadPayload(activeThread("codex", "selected"));
+    FakeWebSocket.intercept = (socket, request) => {
+      if (request.method !== "workbench/thread/page/read" || request.params?.threadId !== "missing") {
+        return false;
+      }
+
+      queueMicrotask(() => socket.fail(request.id, "transcript ownership conflict"));
+      return true;
+    };
+
+    assert.deepEqual(
+      await client.openThread("missing", { harness: "codex" }),
+      {
+        failure: {
+          harness: "codex",
+          message: "transcript ownership conflict",
+          transientRollout: false,
+        },
+        kind: "failure",
+      },
+    );
+    assert.equal(client.getSnapshot().currentThread?.id, "selected");
+    assert.deepEqual(statusMessages, ["transcript ownership conflict"]);
+  }, { onStatusMessage: (message) => statusMessages.push(message) });
+});
+
 test("open-thread selection binding prevents a late open from replacing newer selection", async () => withClient(async (client, socket) => {
   client.selectThreadPayload(activeThread("codex", "b"));
   let openRequest: SocketRequest | null = null;
@@ -1200,7 +1229,7 @@ test("open-thread selection binding prevents a late open from replacing newer se
   await waitForRequest(socket, "workbench/thread/page/read");
   client.selectThreadPayload(activeThread("codex", "c"));
   socket.respond(openRequest!.id, { browseResultEntries: [], nextCursor: null, questionnaireEntries: [], steerEntries: [], thread: wireThread("a") });
-  await opening;
+  assert.deepEqual(await opening, { kind: "superseded" });
   assert.equal(client.getSnapshot().currentThread?.id, "c");
 }));
 

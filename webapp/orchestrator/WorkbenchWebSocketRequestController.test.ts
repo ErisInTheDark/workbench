@@ -193,6 +193,30 @@ test("warns every two seconds until the matching response send completes", async
   controller.dispose();
 });
 
+test("error completions log one bounded message without response data", async () => {
+  const clock = new FakeClock();
+  const { controller, lines } = createController({ clock });
+  const client = createClient();
+  await controller.handleMessage(client, "connection-1", frame("thread/read", 7), false);
+
+  const longTail = "x".repeat(1_000);
+  await controller.sendJsonToClient(client, {
+    error: {
+      code: -32000,
+      data: { secret: "never-log-response-data" },
+      message: `first line\nsecond line ${longTail}`,
+    },
+    id: 7,
+  });
+
+  assert.equal(lines.length, 1);
+  assert.match(lines[0] ?? "", /codex:thread\/read .*error.*error: first line second line/u);
+  assert.equal(lines[0]?.includes("\n"), false);
+  assert.equal(lines[0]?.includes("never-log-response-data"), false);
+  assert.ok((lines[0]?.length ?? Number.POSITIVE_INFINITY) < 1_000);
+  controller.dispose();
+});
+
 test("uses longer first-warning thresholds only for initialization and compaction", async () => {
   const initializeClock = new FakeClock();
   const initialize = createController({ clock: initializeClock });

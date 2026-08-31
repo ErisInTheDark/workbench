@@ -676,27 +676,26 @@ export async function WorkbenchClient(
       project?: WorkbenchProjectOption;
       source?: "open" | "reload";
     } = {},
-  ) {
-    if (source === "open" && threadId === sessionState.currentThreadId && !project) {
-      return true;
-    }
-
+  ): Promise<WorkbenchRouteLoadResult> {
     if (threadClient.isDraftThreadId(threadId)) {
       const draftThread = threadClient.createThread(harness ?? readInitialHarness(workbenchBindings.clientStateController), threadId, { entries, project });
       applyThreadPayloadToCurrentView(draftThread);
       emitExplorerStateChange();
-      return true;
+      return { ok: true };
     }
 
-    await threadClient.openThread(threadId, { entries, harness, project, source });
-    const payload = threadClient.getSnapshot().currentThread;
-    if (!payload) {
-      return false;
+    const outcome = await threadClient.openThread(threadId, { entries, harness, project, source });
+    if (outcome.kind === "failure") {
+      return {
+        error: `Unable to open ${outcome.failure.harness} thread ${threadId}: ${outcome.failure.message}`,
+        ok: false,
+      };
     }
+    if (outcome.kind === "superseded") return { ok: false };
 
-    applyThreadPayloadToCurrentView(payload, `Read thread ${new Date(payload.updatedAt * 1000).toLocaleString()}`);
+    applyThreadPayloadToCurrentView(outcome.payload, `Read thread ${new Date(outcome.payload.updatedAt * 1000).toLocaleString()}`);
     emitExplorerStateChange();
-    return true;
+    return { ok: true };
   }
 
   async function readThread(threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) {
@@ -954,7 +953,7 @@ export async function WorkbenchClient(
         return { ok: true };
       }
       const rootThreadId = target.kind === "subagent" ? target.parentThreadId : target.threadId;
-      const didOpen = await openThread(rootThreadId, {
+      const openResult = await openThread(rootThreadId, {
         entries: pinnedEntries,
         harness: target.harness,
         project: ownerProject,
@@ -963,7 +962,7 @@ export async function WorkbenchClient(
       if (!isRouteGenerationActive(route, routeGeneration)) {
         return { ok: false };
       }
-      return didOpen ? { ok: true } : { error: `Thread not found: ${rootThreadId}`, ok: false };
+      return openResult;
     }
 
     return { error: "Unknown route.", ok: false };

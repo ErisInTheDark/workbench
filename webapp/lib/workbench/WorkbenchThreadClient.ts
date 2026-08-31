@@ -236,7 +236,7 @@ interface WorkbenchThreadClient {
   isDraftThreadId: (threadId: string) => boolean;
   installSidebarSnapshot: (snapshot: WorkbenchThreadSidebarSnapshot | null) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
-  openThread: (threadId: string, options?: { entries?: readonly WorkbenchThreadSidebarEntry[]; harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" }) => Promise<void>;
+  openThread: (threadId: string, options?: { entries?: readonly WorkbenchThreadSidebarEntry[]; harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" }) => Promise<ThreadPayloadFetchOutcome>;
   onWorkbenchNotification: (listener: (notification: { method: "workbench/thread-state/reset" | "workbench/thread-state/updated"; params: unknown }) => void) => () => void;
   requestWorkbench: <TResponse>(method: string, params: unknown) => Promise<TResponse>;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
@@ -4291,18 +4291,27 @@ function WorkbenchThreadClient(
     const resolvedHarness = harness ?? getKnownThreadHarness(threadId) ?? "codex";
     const nextProjectId = project?.id ?? state.projectId;
     const selectedProjectId = selectedThreadProjectContext?.projectId ?? state.projectId;
-    if (source === "open" && threadId === state.currentThreadId && nextProjectId === selectedProjectId) {
-      return;
+    if (
+      source === "open"
+      && state.currentThread?.id === threadId
+      && state.currentThread.harness === resolvedHarness
+      && nextProjectId === selectedProjectId
+    ) {
+      return { kind: "success", payload: state.currentThread } satisfies ThreadPayloadFetchOutcome;
     }
     installSelectedThreadProjectContext(resolvedHarness, threadId, project, entries);
     if (source === "open") {
       messageAdmissionIntentRevision += 1;
     }
 
-    await fetchThreadPayloadFromCandidates(threadId, resolvedHarness, {}, (payload) => {
+    const outcome = await fetchThreadPayload(threadId, resolvedHarness, {}, (payload) => {
       setCurrentThread(payload);
       return state.currentThread;
     }, { selectionBound: source === "open" });
+    if (outcome.kind === "failure") {
+      emitStatusMessage(outcome.failure.message);
+    }
+    return outcome;
   }
 
   function selectThreadPayload(thread: ThreadPayload) {
