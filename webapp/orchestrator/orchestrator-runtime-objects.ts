@@ -9,6 +9,7 @@ import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
+import type { WorkbenchTranscriptSnapshot } from "../lib/workbench/database/transcript/workbench-transcript-contract";
 import type BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
@@ -85,7 +86,7 @@ export interface OrchestratorDatabaseRegistration {
 export interface OrchestratorTranscriptRegistration {
   dispose(): void;
   readonly failure: Error | null;
-  read(request: { threadId: string; beforeTurnIndex?: number; turnIds?: string[]; turnLimit: number }): Promise<object | null>;
+  read(request: { threadId: string; beforeTurnIndex?: number; turnIds?: string[]; turnLimit: number }): Promise<WorkbenchTranscriptSnapshot | null>;
   record(observations: readonly object[]): Promise<{ changedThreadIds: string[] }>;
   start(): Promise<void>;
   subscribe(subscription: {

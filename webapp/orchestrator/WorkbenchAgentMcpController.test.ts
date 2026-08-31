@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover typed MCP inventory, trusted identity, structured dispatch, bounded errors, and cancellation. Keywords: workbench, MCP, HTTP, tools, identity, cancellation, test.
+ * - No production exports; Node tests cover typed MCP inventory, paged Git diff input, trusted identity, structured dispatch, bounded errors, and cancellation. Keywords: workbench, MCP, HTTP, git, page, tools, identity, cancellation, test.
  */
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -185,6 +185,21 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
         responseKind,
       });
     }
+    const diffDefinition = eligible.find(({ words }) => words.join("_") === "git_arc_diff");
+    assert.ok(diffDefinition);
+    assert.equal("page" in (inventory.tools.find(({ name }) => name === "git_arc_diff")?.inputSchema.properties ?? {}), true);
+    assert.equal("page" in (inventory.tools.find(({ name }) => name === "git_arc_compare")?.inputSchema.properties ?? {}), false);
+    assert.deepEqual(await diffDefinition.buildRequestFromJson({ page: 3 }, {
+      callerHarness: "codex",
+      callerThreadId: "thread-1",
+      cwd: "C:/authoritative",
+      workbenchOrigin: null,
+    }), {
+      body: { action: "diff", cwd: "C:/authoritative", harness: "codex", page: 3, threadId: "thread-1" },
+      method: "POST",
+      path: "/api/git-checkpoint",
+      responseKind: "git-arc-diff",
+    });
 
     const release = inventory.tools.find(({ name }) => name === "git_arc_release");
     assert.ok(release);

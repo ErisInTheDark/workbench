@@ -124,6 +124,19 @@ test("plan and arc requests encode claimed-path defaults and successor refs", ()
   if (explicitCompare.data.action !== "compare") assert.fail("Expected a compare request.");
   assert.equal(explicitCompare.data.checkpointCommit, "a".repeat(40));
   assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "diff",
+    cwd: "C:/repo",
+    page: 2,
+    threadId: "thread-one",
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "diff",
+    cwd: "C:/repo",
+    page: 2,
+    paths: ["src/a.ts"],
+    threadId: "thread-one",
+  }).success, false);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "proposalCreate",
     cwd: "C:/repo",
     description: "",

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; feature tests prove repository-wide Git arc transition serialization, card-read coalescing, and typed failures. Keywords: git, arc, orchestrator, transition, cache, concurrency, test.
+ * - No production exports; feature tests prove repository-wide Git arc transition serialization, thread timestamp injection, card-read coalescing, and typed failures. Keywords: git, arc, orchestrator, timestamp, transition, cache, concurrency, test.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -19,6 +19,7 @@ import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoo
 
 function waitFeature() {
   return new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => ({
       lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
       title: "Waiting thread",
@@ -32,6 +33,7 @@ function waitFeature() {
 test("competing Git arc waits return one active owner and keep the loser waiting until release", async () => {
   const transitions = new WorkbenchThreadTransitionCoordinator();
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async (_projectId, _harness, threadId) => ({
       lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
       title: threadId,
@@ -147,6 +149,7 @@ test("Git arc wait stops on caller cancellation and feature disposal", async () 
 test("sibling thread card reads share the Git read lease instead of taking the writer lane", async () => {
   const keys: string[] = [];
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
@@ -182,6 +185,7 @@ test("exact concurrent proposal and claim card reads share one transition operat
     const dispatchGate = new Promise<void>((resolve) => { releaseDispatch = resolve; });
     let transitionCount = 0;
     const feature = new WorkbenchGitArcFeature({
+      getThreadCreatedAt: async () => 1,
       getThreadClaimContext: async () => null,
       refreshThreadGitArcState: async () => undefined,
       resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
@@ -230,6 +234,7 @@ test("a Git arc mutation fences later card reads from an older shared result", a
   const mutationQueued = new Promise<void>((resolve) => { reportMutationQueued = resolve; });
   let transitionCount = 0;
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
@@ -291,18 +296,27 @@ test("a Git arc mutation fences later card reads from an older shared result", a
 
 test("compare forwards an explicit checkpoint ref to the controller", async () => {
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 42,
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
   let receivedCheckpointCommit: string | undefined;
+  let receivedModifiedSince: number | undefined;
   const internal = (feature as unknown as {
-    controller: { compare: (input: { checkpointCommit?: string }) => Promise<object> };
+    controller: {
+      compare: (input: { checkpointCommit?: string }) => Promise<object>;
+      listUnclaimedWorkspaceDirt: (input: { modifiedSince: number }) => Promise<string[]>;
+    };
   }).controller;
   internal.compare = async (input) => {
     receivedCheckpointCommit = input.checkpointCommit;
     return {};
+  };
+  internal.listUnclaimedWorkspaceDirt = async (input) => {
+    receivedModifiedSince = input.modifiedSince;
+    return ["unclaimed.ts"];
   };
 
   const response = await feature.executeRequest({
@@ -315,10 +329,13 @@ test("compare forwards an explicit checkpoint ref to the controller", async () =
 
   assert.equal(response.status, 200);
   assert.equal(receivedCheckpointCommit, "a".repeat(40));
+  assert.equal(receivedModifiedSince, 42);
+  assert.deepEqual(await response.json(), { unclaimedDirtPaths: ["unclaimed.ts"] });
 });
 
 test("arc release forwards explicit dirty disown intent to the controller", async () => {
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
@@ -347,6 +364,7 @@ test("arc release forwards explicit dirty disown intent to the controller", asyn
 
 test("settled threads cannot start claims", async () => {
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => ({
       lifecycle: { kind: "completed", reason: "userCompleted", settled: true },
       title: "Finished thread",
@@ -368,6 +386,7 @@ test("settled threads cannot start claims", async () => {
 
 test("atomic claim collisions use structured owner and path diagnostics", async () => {
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async (_projectId, _harness, threadId) => ({
       lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
       title: threadId === "owner-thread" ? "Render ownership" : "Starting thread",
@@ -429,6 +448,7 @@ test("atomic claim collisions use structured owner and path diagnostics", async 
 
 test("missing arc refs return one typed message without unrelated recovery", async () => {
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => ({
       lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
       title: "Starting thread",
@@ -460,6 +480,7 @@ test("missing arc refs return one typed message without unrelated recovery", asy
 
 test("ignored path failures remain typed through workspace member wrappers", async () => {
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
@@ -495,6 +516,7 @@ test("ignored path failures remain typed through workspace member wrappers", asy
 
 test("accepted proposal receipts remain structured when a resolved arc cannot continue", async () => {
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => ({
       lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
       title: "Resolved thread",
@@ -563,6 +585,7 @@ test("known proposal and claim-set errors keep recovery typed", async () => {
 
   for (const item of cases) {
     const feature = new WorkbenchGitArcFeature({
+      getThreadCreatedAt: async () => 1,
       getThreadClaimContext: async () => null,
       refreshThreadGitArcState: async () => undefined,
       resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
@@ -584,6 +607,7 @@ test("known proposal and claim-set errors keep recovery typed", async () => {
 test("successful Git responses survive a failed thread claim refresh", async (context) => {
   const reported = context.mock.method(console, "error", () => undefined);
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => { throw new Error("projection exploded"); },
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
@@ -612,6 +636,7 @@ test("successful Git responses survive a failed thread claim refresh", async (co
 test("failed Git mutations still refresh durable arc projection once", async () => {
   let refreshCount = 0;
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => { refreshCount += 1; },
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
@@ -639,6 +664,7 @@ test("failed Git mutations still refresh durable arc projection once", async () 
 test("plan creation and applied arc moves refresh Git arc state while move previews do not", async () => {
   let refreshCount = 0;
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => { refreshCount += 1; },
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
@@ -674,6 +700,7 @@ test("plan creation and applied arc moves refresh Git arc state while move previ
 test("Git arc responses ignore legacy reload projections and admission claims", async () => {
   const feature = new WorkbenchGitArcFeature({
     getReloadScopesForPaths: () => ["server:mcp"],
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => null,
     refreshThreadGitArcState: async () => undefined,
     reloadScopeProjectRoot: "C:/Git/Project",
@@ -702,6 +729,7 @@ test("Git arc responses ignore legacy reload projections and admission claims", 
 test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actions", async () => {
   const calls: string[] = [];
   const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
     getThreadClaimContext: async () => ({
       lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
       title: "Thread",
@@ -714,6 +742,7 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
   for (const method of ["createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "startArc", "rescindProposal", "diff", "createProposal"] as const) {
     internal[method] = async () => { calls.push(method); return {}; };
   }
+  internal.listUnclaimedWorkspaceDirt = async () => [];
   const common = { cwd: "C:/Git/Project", harness: "codex" as const, threadId: "thread-one" };
   const requests = [
     { action: "plan", intentDescription: "", intentName: "draft", paths: [], ...common },

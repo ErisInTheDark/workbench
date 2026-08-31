@@ -27,6 +27,7 @@ import {
   shouldUseWorkbenchMcpSpecializedRenderer,
   parseGitCheckpointCompareOutput,
   parseGitCheckpointCommitCommand,
+  parseGitCheckpointDiffOutput,
   parseGitCheckpointProposalId,
   parseGitArcCommand,
   parseWorkbenchSubagentCommand,
@@ -844,6 +845,25 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
   });
   assert.equal(parseGitCheckpointCommitCommand("wb git arc propose -- src/one.ts"), null);
   assert.equal(parseGitCheckpointCommitCommand("wb git checkpoint commit --sha abc --m Title -- src/one.ts"), null);
+});
+
+test("Git arc diff parsing excludes the human inspection trailer", () => {
+  const changes = parseGitCheckpointDiffOutput([
+    "diff --git a/src/file.ts b/src/file.ts",
+    "--- a/src/file.ts",
+    "+++ b/src/file.ts",
+    "@@ -1 +1 @@",
+    "-old",
+    "+new",
+    "Workbench arc diff notes:",
+    "Unclaimed workspace dirt modified since this thread was created:",
+    "- src/unclaimed.ts",
+    "More diff files remain. Repeat this command with `--page 2`.",
+  ].join("\n"));
+
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0]?.path, "src/file.ts");
+  assert.doesNotMatch(changes[0]?.diff ?? "", /Unclaimed workspace dirt|--page 2/u);
 });
 
 test("current-plan and proposal-lifecycle commands expose route-only matcher claims", () => {

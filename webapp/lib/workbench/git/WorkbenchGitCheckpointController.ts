@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchGitCheckpointController: route plan and proposal owners while owning active claim mutation, compare, diff, and restore orchestration. Keywords: git, checkpoint, arc, claims, restore.
+ * - default WorkbenchGitCheckpointController: route plan and proposal owners while owning active claim mutation, compare, paged diff, unclaimed workspace dirt, and restore orchestration. Keywords: git, checkpoint, arc, claims, diff, mtime, restore.
  * - GitArcActiveClaim/GitArcPlanState/GitArcProposalStatus: expose active-claim, inactive-plan, and proposal lifecycle for thread-state projection. Keywords: git, arc, claim, plan, proposal, status.
  * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: identify paths rejected before an arc operation that cannot skip them. Keywords: git, checkpoint, dirty paths, ignored paths.
  * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult/GitArcRetentionResult: typed controller operation results. Keywords: git, checkpoint, arc, move, proposal, retention, result.
@@ -18,7 +18,15 @@ import type {
   GitCheckpointProposal,
 } from "./checkpoint-contracts";
 import { GitArcMissingClaimSetError } from "./git-arc-failures";
-import GitArcRegistry, { findGitArcCollisions, GitArcCollisionError, type GitArcCollision, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcRegistry, {
+  findGitArcCollisions,
+  getGitArcLiveClaimPaths,
+  GitArcCollisionError,
+  type GitArcCollision,
+  type GitArcRegistryEntry,
+} from "./GitArcRegistry";
+import { gitArcPathsOverlap } from "./git-arc-paths";
+import { createGitArcDiffPage, type GitArcDiffPage } from "./git-arc-diff-pages";
 import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
 import GitArcPlanController, {
   createGitArcNoopResult,
@@ -115,9 +123,7 @@ export interface GitCheckpointCompareResult {
   scopePaths: string[];
 }
 
-export interface GitCheckpointDiffResult extends GitCheckpointCompareResult {
-  diff: string;
-}
+export interface GitCheckpointDiffResult extends GitCheckpointCompareResult, GitArcDiffPage {}
 
 export interface GitArcMoveResult extends GitCheckpointCreateResult {
   additionalClaims: string[];
@@ -1108,11 +1114,36 @@ export default class WorkbenchGitCheckpointController {
     return await this.compareActiveArc(input);
   }
 
-  async diff(input: ControllerInput & { checkpointCommit?: string; paths?: string[] }): Promise<GitCheckpointDiffResult> {
+  async listUnclaimedWorkspaceDirt({ cwd, modifiedSince }: { cwd: string; modifiedSince: number }) {
+    const repository = await WorkbenchGitRepository.open(cwd);
+    const [head, entries] = await Promise.all([
+      repository.currentHead(),
+      new GitArcRegistry(repository).list(),
+    ]);
+    const worktreeTree = await repository.writeWorktreeTree();
+    const changedPaths = await repository.listAllChangedPaths(head, worktreeTree);
+    const liveClaims = entries.flatMap((entry) => getGitArcLiveClaimPaths(entry));
+    const unclaimedPaths = changedPaths.filter((candidate) => (
+      !liveClaims.some((claimedPath) => gitArcPathsOverlap(candidate, claimedPath))
+    ));
+    return await repository.listPathsModifiedSince(unclaimedPaths, modifiedSince);
+  }
+
+  async diff(input: ControllerInput & {
+    checkpointCommit?: string;
+    page?: number;
+    paths?: string[];
+  }): Promise<GitCheckpointDiffResult> {
     const result = await this.compare(input);
     return {
       ...result,
-      diff: result.changes.map((change) => change.diff).join(""),
+      ...createGitArcDiffPage(
+        result.changes.map((change) => ({ change, content: change.diff })),
+        {
+          ...(input.page !== undefined ? { page: input.page } : {}),
+          paginate: !input.paths?.length,
+        },
+      ),
     };
   }
 

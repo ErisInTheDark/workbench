@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceGitArcController: aggregate repo-local Git arc members, route proposal-owned amendments, and prune thread history across one workspace lifecycle. Keywords: git, arc, workspace, multi-root, proposal, retention.
+ * - default WorkbenchWorkspaceGitArcController: aggregate repo-local Git arc members, globally page inspection diffs, report workspace dirt, route proposal-owned amendments, and prune thread history. Keywords: git, arc, workspace, multi-root, diff, dirt, proposal, retention.
  * - WorkspaceGitArcMemberState: active repo-local member plus root identity. Keywords: git, arc, active, member.
  * - WorkspaceGitArcLifecycleState: active logical workspace projection. Keywords: git, arc, lifecycle, projection.
  * - WorkspaceGitArcPlanMemberState: planned repo-local member plus root identity. Keywords: git, arc, plan, member.
@@ -11,7 +11,13 @@ import path from "node:path";
 
 import type { ResolvedProjectRoot } from "../lib/project";
 import type { WorkbenchHarness } from "../lib/types";
-import type { GitCheckpointRequest, GitArcMemberRef, GitArcRootPaths } from "../lib/workbench/git/checkpoint-contracts";
+import type {
+  GitArcMemberRef,
+  GitArcRootPaths,
+  GitCheckpointFileChange,
+  GitCheckpointRequest,
+} from "../lib/workbench/git/checkpoint-contracts";
+import { createGitArcDiffPage } from "../lib/workbench/git/git-arc-diff-pages";
 import WorkbenchGitCheckpointController, {
   type GitArcLifecycleState,
   type GitArcPlanClaimCollisionResult,
@@ -308,7 +314,11 @@ export default class WorkbenchWorkspaceGitArcController {
     }), { prunedRefCount: 0, registryEntryRemoved: false });
   }
 
-  async execute(project: AgentEndpointProjectResolution, request: GitCheckpointRequest) {
+  async execute(
+    project: AgentEndpointProjectResolution,
+    request: GitCheckpointRequest,
+    options: { modifiedSince?: number } = {},
+  ) {
     const members = await this.resolveRepoMembers(project);
     switch (request.action) {
       case "plan":
@@ -324,7 +334,12 @@ export default class WorkbenchWorkspaceGitArcController {
       case "arcContinue": return await this.executeRefOperation(project, members, request);
       case "arcWait": return await this.findPlanClaimCollisions(project, request);
       case "compare":
-      case "diff": return await this.executeInspection(project, members, request);
+      case "diff": {
+        if (options.modifiedSince === undefined) {
+          throw new Error("Workspace Git arc inspection requires the managed thread creation timestamp.");
+        }
+        return await this.executeInspection(project, members, request, options.modifiedSince);
+      }
       case "arcMove": return await this.executeMove(project, members, request);
       case "proposalCreate": return await this.createProposal(project, members, request);
       case "proposalState":
@@ -643,6 +658,7 @@ export default class WorkbenchWorkspaceGitArcController {
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "compare" | "diff" }>,
+    modifiedSince: number,
   ) {
     const groups = this.groupRootPaths(project, members, request.paths ?? [], request.roots);
     const refs = this.refsByRepo(project, members, request.refs);
@@ -655,16 +671,57 @@ export default class WorkbenchWorkspaceGitArcController {
       selected = unique([...(lifecycle?.members ?? []), ...(plan?.members ?? [])].map(({ repoRoot }) => repoRoot))
         .map((repoRoot) => members.find((member) => member.repoRoot === repoRoot)!);
     }
-    const values = await this.runMembers(selected, async (member) => {
+    if (!selected.length) throw new Error("This workspace Git arc has no matching repository members.");
+    const selectedRepos = new Set(selected.map(({ repoRoot }) => repoRoot));
+    const values = await this.runMembers(members, async (member) => {
+      const unclaimedDirtPaths = await this.local.listUnclaimedWorkspaceDirt({
+        cwd: member.repoRoot,
+        modifiedSince,
+      });
+      if (!selectedRepos.has(member.repoRoot)) return { inspection: null, unclaimedDirtPaths };
       const group = groups.find((candidate) => candidate.member.repoRoot === member.repoRoot);
       const input = {
         cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
         ...(refs.get(member.repoRoot) ? { checkpointCommit: refs.get(member.repoRoot) } : {}),
         ...(group?.paths.length ? { paths: group.paths } : {}),
       };
-      return request.action === "compare" ? await this.local.compare(input) : await this.local.diff(input);
+      return {
+        inspection: await this.local.compare(input),
+        unclaimedDirtPaths,
+      };
     }, undefined, "read");
-    return this.aggregateResults(project, values);
+    const inspectionValues = values.flatMap(({ member, result }) => (
+      result.inspection ? [{ member, result: result.inspection }] : []
+    ));
+    const unclaimedDirtPaths = unique(values.flatMap(({ member, result }) => (
+      result.unclaimedDirtPaths.map((candidate) => this.qualify(project, member, candidate))
+    ))).sort((left, right) => left.localeCompare(right));
+    const aggregated = this.aggregateResults(project, inspectionValues);
+    if (request.action === "compare") return { ...aggregated, unclaimedDirtPaths };
+
+    const units = inspectionValues.flatMap(({ member, result }) => {
+      const decorated = this.decorateResult(project, member, result);
+      const changes = decorated.changes as GitCheckpointFileChange[];
+      const rootId = decorated.rootId as string;
+      return changes.map((change) => ({
+        change,
+        content: change.diff,
+        ...(project.project.roots.length > 1 ? { groupHeading: `### ${rootId}` } : {}),
+      }));
+    });
+    const page = createGitArcDiffPage(units, {
+      ...(request.page !== undefined ? { page: request.page } : {}),
+      paginate: !request.paths?.length && !request.roots.some(({ paths }) => paths.length > 0),
+    });
+    const aggregatedMembers = Array.isArray(aggregated.members)
+      ? aggregated.members.map((member) => ({ ...member, changes: [] }))
+      : aggregated.members;
+    return {
+      ...aggregated,
+      ...page,
+      members: aggregatedMembers,
+      unclaimedDirtPaths,
+    };
   }
 
   private translateMove(root: ResolvedProjectRoot, move: Extract<GitCheckpointRequest, { action: "arcMove" }>["move"]) {

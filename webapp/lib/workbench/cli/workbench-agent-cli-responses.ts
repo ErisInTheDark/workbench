@@ -7,6 +7,10 @@ import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands.ts
 import { renderSubagentListOutput, renderSubagentSettleOutput } from "../subagent/subagent-output";
 import type { WorkbenchSubagentSummary } from "../../types";
 import { formatGitArcFailureReceipt, GitArcFailureEnvelopeSchema } from "../git/git-arc-failures";
+import {
+  GIT_ARC_DIFF_PAGE_CHARACTER_LIMIT,
+  GIT_ARC_DIFF_TRAILER_PREFIX,
+} from "../git/git-arc-diff-pages";
 import { formatGitArcReceipt, type GitArcAction } from "../git/git-arc-receipts";
 import { normalizeOrchestratorReloadScopes } from "../orchestrator-reload";
 
@@ -107,6 +111,32 @@ function skippedIgnoredPathLines(payload: Record<string, unknown> | null) {
   if (!paths.length) return [];
   const subject = paths.length === 1 ? `File ${paths[0]}` : `Files ${joinPathList(paths)}`;
   return [`${subject} ${paths.length === 1 ? "was" : "were"} skipped because ${paths.length === 1 ? "it does" : "they do"} not need to be claimed: ${paths.length === 1 ? "it is" : "they are"} gitignored.`];
+}
+
+function unclaimedDirtLines(payload: Record<string, unknown> | null) {
+  const paths = readStringArray(payload, "unclaimedDirtPaths");
+  return [
+    "Unclaimed workspace dirt modified since this thread was created:",
+    ...(paths.length ? paths.map((filePath) => `- ${filePath}`) : ["- none"]),
+  ];
+}
+
+function gitArcDiffTrailerLines(payload: Record<string, unknown> | null) {
+  const oversizedPaths = readStringArray(payload, "oversizedDiffPaths");
+  const nextPage = readNumber(payload, "nextPage");
+  return [
+    GIT_ARC_DIFF_TRAILER_PREFIX,
+    ...unclaimedDirtLines(payload),
+    ...oversizedPaths.flatMap((filePath) => [
+      "",
+      `${filePath} was not included because its diff exceeds the ${GIT_ARC_DIFF_PAGE_CHARACTER_LIMIT.toLocaleString("en-US")}-character paged change limit.`,
+      `Inspect it directly with \`wb git arc diff -- ${JSON.stringify(filePath)}\` if needed.`,
+    ]),
+    ...(nextPage === null ? [] : [
+      "",
+      `More diff files remain. Repeat this command with \`--page ${nextPage}\`.`,
+    ]),
+  ];
 }
 
 export function adaptWorkbenchAgentCliResponse({
@@ -212,6 +242,7 @@ export function adaptWorkbenchAgentCliResponse({
           const deletions = typeof change.deletions === "number" ? change.deletions : 0;
           return `${kind || "M"}\t+${additions}\t-${deletions}\t${readString(change, "path")}`;
         }),
+        ...(action === "compare" ? ["", ...unclaimedDirtLines(payload)] : []),
       ], createArcReceipt(action, payload, request)).join("\n"));
     }
     case "git-arc-mv": {
@@ -244,6 +275,7 @@ export function adaptWorkbenchAgentCliResponse({
     case "git-arc-diff":
       return succeeded(appendArcReceipt([
         readString(payload, "diff"),
+        ...gitArcDiffTrailerLines(payload),
       ].filter(Boolean), createArcReceipt("diff", payload, request)).join("\n"));
     case "git-arc-propose": {
       const proposalId = readString(payload, "proposalId");

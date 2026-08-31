@@ -258,6 +258,7 @@ const release = defineWorkbenchAgentCommand({
 });
 
 function inspectionCommand(action: "compare" | "diff") {
+  const valueFlags = action === "diff" ? ["--ref", "--page"] : ["--ref"];
   return defineWorkbenchAgentCommand({
     description: action === "compare"
       ? "Show per-file change counts for an arc's claimed set or selected paths."
@@ -266,20 +267,38 @@ function inspectionCommand(action: "compare" | "diff") {
     helpGroups: ["git-arc"],
     mcpCodeModeEligible: true,
     words: ["git", "arc", action],
-    usage: `wb git arc ${action} [--ref <active-or-plan-ref>] [-- <path> [<path>...]]`,
+    usage: `wb git arc ${action} [--ref <active-or-plan-ref>]${action === "diff" ? " [--page <page>]" : ""} [-- <path> [<path>...]]`,
     inputSchema: z.object({
+      ...(action === "diff" ? { page: z.number().int().positive().optional() } : {}),
       paths: paths.default([]),
       ref: requiredText.optional().describe("The current active arc ref or an inactive or historical plan ref owned by this thread."),
       refs: z.array(memberRefSchema).default([]),
       roots: z.array(rootPathsSchema).default([]),
-    }).strict(),
+    }).strict().superRefine((input, context) => {
+      if (
+        action === "diff"
+        && "page" in input
+        && input.page !== undefined
+        && (input.paths.length || input.roots.some(({ paths: rootPaths }) => rootPaths.length > 0))
+      ) {
+        context.addIssue({ code: "custom", message: "Git arc diff page cannot be combined with selected paths." });
+      }
+    }),
     parseCliArgs(args) {
-      const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values: ["--ref"] }), { trailing: true, values: ["--ref"] });
-      return { paths: flags.trailing, ref: flags.optional("--ref") ?? undefined, refs: [], roots: [] };
+      const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values: valueFlags }), { trailing: true, values: valueFlags });
+      const page = action === "diff" ? flags.optionalNonNegativeInteger("--page") : null;
+      return {
+        ...(page !== null ? { page } : {}),
+        paths: flags.trailing,
+        ref: flags.optional("--ref") ?? undefined,
+        refs: [],
+        roots: [],
+      };
     },
     buildRequest(input, { callerHarness, callerThreadId, cwd }) {
       return postWorkbenchAgentCommand("/api/git-checkpoint", {
         action, ...baseBody(callerHarness, callerThreadId, cwd),
+        ...("page" in input && input.page !== undefined ? { page: input.page } : {}),
         ...(input.ref ? { checkpointCommit: input.ref } : {}),
         ...(input.paths.length ? { paths: input.paths } : {}),
         ...(input.refs.length ? { refs: input.refs } : {}),

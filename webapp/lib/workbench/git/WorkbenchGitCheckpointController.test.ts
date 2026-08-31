@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; serial shared-state tests and bounded concurrent copied-repository cases cover arc ownership, proposals, and publish state. Keywords: git, arc, registry, proposal, concurrency, test.
+ * - No production exports; serial shared-state tests and bounded concurrent copied-repository cases cover arc ownership, recent unclaimed dirt, proposals, and publish state. Keywords: git, arc, registry, mtime, proposal, concurrency, test.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -628,6 +628,47 @@ isolatedControllerTest("arc adopt claims dirty workspace paths from HEAD without
     paths: ["clean-missing.txt"],
     threadId: "adopt-thread",
   }), /Arc adopt paths must contain working-tree changes: clean-missing\.txt/u);
+});
+
+sharedControllerTest("workspace dirt reports only recent files outside every live claim", async (context) => {
+  await resetSharedRepository();
+  const { repository, source } = await createRepository(context);
+  const controller = new WorkbenchGitCheckpointController();
+  const plan = await controller.createPlan({
+    cwd: source,
+    intentName: "Own one file",
+    paths: ["one.txt"],
+    threadId: "owner-thread",
+  });
+  await controller.startArc({ checkpointCommit: plan.checkpointCommit, cwd: source, threadId: "owner-thread" });
+  await new GitArcRegistry(repository).claim({
+    checkpointCommit: await repository.currentHead(),
+    claimedPaths: ["sibling.txt"],
+    harness: "codex",
+    intentDescription: "",
+    intentName: "Sibling owner",
+    proposalId: null,
+    threadId: "sibling-thread",
+  });
+
+  const threadCreatedAt = Date.UTC(2026, 7, 30, 12);
+  await Promise.all([
+    fs.writeFile(path.join(source, "one.txt"), "owned current change\n", "utf8"),
+    fs.writeFile(path.join(source, "two.txt"), "old unclaimed change\n", "utf8"),
+    fs.writeFile(path.join(source, "recent.txt"), "recent unclaimed change\n", "utf8"),
+    fs.writeFile(path.join(source, "sibling.txt"), "sibling-owned change\n", "utf8"),
+  ]);
+  await Promise.all([
+    fs.utimes(path.join(source, "one.txt"), new Date(threadCreatedAt + 1_000), new Date(threadCreatedAt + 1_000)),
+    fs.utimes(path.join(source, "two.txt"), new Date(threadCreatedAt - 1_000), new Date(threadCreatedAt - 1_000)),
+    fs.utimes(path.join(source, "recent.txt"), new Date(threadCreatedAt + 2_000), new Date(threadCreatedAt + 2_000)),
+    fs.utimes(path.join(source, "sibling.txt"), new Date(threadCreatedAt + 3_000), new Date(threadCreatedAt + 3_000)),
+  ]);
+
+  assert.deepEqual(
+    await controller.listUnclaimedWorkspaceDirt({ cwd: source, modifiedSince: threadCreatedAt }),
+    ["recent.txt"],
+  );
 });
 
 isolatedControllerTest("failed arc adoption publishes neither a successor ref nor a replacement registry entry", async (context) => {

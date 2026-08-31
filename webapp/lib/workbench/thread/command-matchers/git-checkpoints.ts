@@ -7,13 +7,14 @@
  * - parseGitCheckpointCompareOutput: parse per-file checkpoint change counts. Keywords: checkpoint, compare, additions, deletions.
  * - parseGitCheckpointProposalId: parse the durable proposal id from CLI output. Keywords: checkpoint, proposal, commit.
  * - parseGitCheckpointCommitCommand/GitCheckpointCommitCommandIntent: read immediate proposal-card intent from canonical command arguments. Keywords: checkpoint, proposal, title, paths.
- * - parseGitCheckpointDiffArtifactId/parseGitCheckpointDiffOutput: preserve legacy and inline unified diff rendering. Keywords: checkpoint, diff, artifact.
+ * - parseGitCheckpointDiffArtifactId/parseGitCheckpointDiffOutput: preserve legacy and inline unified diff rendering while excluding inspection trailers. Keywords: checkpoint, diff, artifact, trailer.
  */
 import type { FileUpdateChange } from "../../../codex/generated/app-server/v2/FileUpdateChange";
 import {
   parseGitArcReceipt,
   type GitArcAction,
 } from "../../git/git-arc-receipts";
+import { GIT_ARC_DIFF_TRAILER_PREFIX } from "../../git/git-arc-diff-pages";
 import { parseGitArcMoveArguments, type GitArcMoveArguments } from "../../git/git-arc-move-arguments";
 import { parseUnifiedDiffFileChanges } from "../thread-file-diff";
 import { CommandMatcher } from "./core";
@@ -375,7 +376,10 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
 export { parseGitArcReceipt };
 
 export function parseGitCheckpointDiffOutput(output: string): FileUpdateChange[] {
-  return parseUnifiedDiffFileChanges(output).map((change) => ({
+  const lines = String(output ?? "").split(/\r?\n/u);
+  const trailerIndex = lines.findIndex((line) => line === GIT_ARC_DIFF_TRAILER_PREFIX);
+  const diff = (trailerIndex < 0 ? lines : lines.slice(0, trailerIndex)).join("\n");
+  return parseUnifiedDiffFileChanges(diff).map((change) => ({
     diff: change.diff,
     kind: change.kind.type === "update"
       ? { move_path: change.kind.movePath, type: "update" }

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - GitCheckpointRequestSchema/GitCheckpointRequest: validate every stateless checkpoint route action. Keywords: git, checkpoint, request, Zod.
+ * - GitCheckpointRequestSchema/GitCheckpointRequest: validate every stateless checkpoint route action, including unscoped diff pages. Keywords: git, checkpoint, request, diff, page, Zod.
  * - GitCheckpointFileChangeSchema/GitCheckpointFileChange: shared per-file compare and diff presentation. Keywords: git, checkpoint, file change.
  * - GitCheckpointProposalSchema/GitCheckpointProposal: shared durable proposal state shown in thread UI. Keywords: git, checkpoint, proposal, commit.
  * - GitArcMoveMappingSchema/GitArcMoveRequestSchema: validate bounded explicit and regex arc move requests. Keywords: git, arc, move, mapping.
@@ -137,6 +137,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("diff"),
     checkpointCommit: checkpointSha.optional(),
+    page: z.number().int().positive().optional(),
     paths: checkpointPaths.optional(),
     refs: z.array(GitArcMemberRefSchema).default([]),
     roots: z.array(GitArcRootPathsSchema).default([]),
@@ -194,6 +195,13 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     && !input.roots.length
   ) {
     context.addIssue({ code: "custom", message: "At least one path or root scope is required." });
+  }
+  if (
+    input.action === "diff"
+    && input.page !== undefined
+    && (Boolean(input.paths?.length) || input.roots.some(({ paths }) => paths.length > 0))
+  ) {
+    context.addIssue({ code: "custom", message: "Git arc diff page cannot be combined with selected paths." });
   }
 });
 

@@ -56,7 +56,7 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "10. Relinquish exact clean claims: wb git arc remove -- <claimed-path> [<claimed-path>...]",
   "11. Release every clean claim without changing files: wb git arc release. Use --disown only to release dirty ownership explicitly.",
   "12. Record successors returned by add, adopt, mv, remove, or continue for later continuation. Final clean removal releases the arc without an active successor.",
-  "13. Summarize or inspect the active arc: wb git arc compare [-- <path> [<path>...]] / wb git arc diff [-- <path> [<path>...]]",
+  "13. Summarize or inspect the active arc: wb git arc compare [-- <path> [<path>...]] / wb git arc diff [--page <page>] [-- <path> [<path>...]]",
   "14. Propose a normal commit: wb git arc propose [--root <root-id>] --title <fresh-title> [--description <optional-description>] [-- <claimed-path> [<claimed-path>...]]",
   "15. Propose title and description changes to an exact accepted commit without an active arc: wb git arc propose --amend <proposal-id> --title <replacement-title> [--description <replacement-description>]",
   "16. Amend current unpushed HEAD content from the active arc: wb git arc propose --amend [--title <replacement-title>] [--description <replacement-description>] -- <claimed-path> [...]",

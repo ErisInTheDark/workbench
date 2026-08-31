@@ -1,4 +1,4 @@
-/* No production exports. Tests protect workspace arc membership, patch claim coverage, ignored-path skips, root-qualified projection, repo deduplication, per-root proposals, and proposal-owned amendment routing. */
+/* No production exports. Tests protect workspace arc membership, global diff paging, workspace dirt, patch claim coverage, ignored-path skips, root-qualified projection, repo deduplication, per-root proposals, and amendment routing. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -19,6 +19,8 @@ class FakeLocalGitArcController {
   readonly blockedRoots = new Set<string>();
   readonly collisionCalls: Array<{ checkpointCommit?: string; cwd: string }> = [];
   readonly dirtyRoots = new Set<string>();
+  readonly diffContents = new Map<string, string>();
+  readonly unclaimedDirt = new Map<string, string[]>();
   readonly lifecycleFindCalls: string[] = [];
   readonly lifecycleListCalls: string[] = [];
   readonly proposalDetailCalls: string[] = [];
@@ -72,10 +74,20 @@ class FakeLocalGitArcController {
   async compare(input: { cwd: string }) {
     const state = this.states.get(input.cwd)!;
     return {
-      changes: state.claimedPaths.map((filePath) => ({ additions: 1, deletions: 0, kind: { type: "update" }, path: filePath })),
+      changes: state.claimedPaths.map((filePath) => ({
+        additions: 1,
+        deletions: 0,
+        diff: this.diffContents.get(`${input.cwd}:${filePath}`) ?? `diff --git a/${filePath} b/${filePath}\n`,
+        kind: { move_path: null, type: "update" },
+        path: filePath,
+      })),
       checkpointCommit: state.checkpointCommit, checkpointRef: `refs/${state.checkpointCommit}`, intentName: state.intentName,
       repoRoot: input.cwd, scopePaths: state.claimedPaths,
     };
+  }
+
+  async listUnclaimedWorkspaceDirt(input: { cwd: string }) {
+    return this.unclaimedDirt.get(input.cwd) ?? [];
   }
 
   async findLifecycleState(input: { cwd: string; harness: string; threadId: string }) {
@@ -426,7 +438,7 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
 
   const comparison = await controller.execute(project, {
     action: "compare", refs: [], roots: [], ...identity,
-  }) as { changes: Array<{ path: string }> };
+  }, { modifiedSince: 1 }) as { changes: Array<{ path: string }> };
   assert.deepEqual(comparison.changes.map(({ path: filePath }) => filePath), ["api:one.txt", "web:two.txt"]);
 
   await assert.rejects(controller.execute(project, {
@@ -502,6 +514,64 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
   }) as { releasedClaims: string[] };
   assert.deepEqual(released.releasedClaims, ["api:one.txt", "web:two.txt"]);
   assert.equal(await controller.findLifecycleState(project, "codex", identity.threadId), null);
+});
+
+test("workspace diff uses one packed page budget and reports dirt from every repository", async () => {
+  const apiRoot = "C:/workspace/api";
+  const webRoot = "C:/workspace/web";
+  const project = createWorkspace(apiRoot, webRoot);
+  const local = new FakeLocalGitArcController();
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async (rootPath) => rootPath,
+  );
+  const identity = { cwd: apiRoot, harness: "codex" as const, threadId: "paged-thread" };
+  const plan = await controller.execute(project, {
+    action: "plan",
+    adoptPaths: [],
+    intentDescription: "",
+    intentName: "Page workspace diff",
+    paths: [],
+    roots: [
+      { adoptPaths: [], paths: ["a.ts"], rootId: "api" },
+      { adoptPaths: [], paths: ["b.ts", "c.ts"], rootId: "web" },
+    ],
+    ...identity,
+  }) as unknown as { members: Array<{ checkpointCommit: string; rootId: string }> };
+  await controller.execute(project, {
+    action: "arcStart",
+    refs: plan.members.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })),
+    ...identity,
+  });
+
+  local.diffContents.set(`${apiRoot}:a.ts`, "a".repeat(8_000));
+  local.diffContents.set(`${webRoot}:b.ts`, "b".repeat(8_000));
+  local.diffContents.set(`${webRoot}:c.ts`, "c".repeat(6_000));
+  local.unclaimedDirt.set(apiRoot, ["loose-api.ts"]);
+  local.unclaimedDirt.set(webRoot, ["loose-web.ts"]);
+
+  const first = await controller.execute(project, {
+    action: "diff", refs: [], roots: [], ...identity,
+  }, { modifiedSince: 100 }) as {
+    changes: Array<{ path: string }>;
+    diff: string;
+    nextPage: number | null;
+    unclaimedDirtPaths: string[];
+  };
+  const second = await controller.execute(project, {
+    action: "diff", page: 2, refs: [], roots: [], ...identity,
+  }, { modifiedSince: 100 }) as {
+    changes: Array<{ path: string }>;
+    diff: string;
+    nextPage: number | null;
+  };
+
+  assert.deepEqual(first.changes.map(({ path: filePath }) => filePath), ["api:a.ts", "web:c.ts"]);
+  assert.deepEqual(second.changes.map(({ path: filePath }) => filePath), ["web:b.ts"]);
+  assert.equal(first.nextPage, 2);
+  assert.equal(second.nextPage, null);
+  assert.deepEqual(first.unclaimedDirtPaths, ["api:loose-api.ts", "web:loose-web.ts"]);
 });
 
 test("workspace roots in one repository share one member while keeping qualified root paths", async () => {

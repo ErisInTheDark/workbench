@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchGitRepository: own raw Git process, snapshot, path, tree, ref, index-normalized publication, and ancestry mechanics for one repository. Keywords: git, repository, snapshot, ref, index, transaction.
+ * - default WorkbenchGitRepository: own raw Git process, snapshot, path, tree, ref, worktree timestamps, index-normalized publication, and ancestry mechanics for one repository. Keywords: git, repository, snapshot, ref, mtime, index, transaction.
  * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit: typed Git history, ancestry, object-read, and atomic ref-update inputs. Keywords: git, commit, paths, head, object, ref, transaction.
  */
 import { execFile, spawn } from "node:child_process";
@@ -541,6 +541,22 @@ export default class WorkbenchGitRepository {
     return parseNullPaths(await this.run([
       "diff", "--name-only", "-z", "--no-renames", from, to,
     ], process.env, signal)).sort((left, right) => left.localeCompare(right));
+  }
+
+  async listPathsModifiedSince(paths: readonly string[], modifiedSince: number) {
+    if (!Number.isFinite(modifiedSince) || modifiedSince < 0) {
+      throw new Error("Git workspace dirt timestamp must be a finite non-negative number.");
+    }
+    const matches = await Promise.all(paths.map(async (candidate) => {
+      try {
+        const stats = await fs.lstat(this.resolvePath(candidate));
+        return stats.mtimeMs >= modifiedSince ? candidate : null;
+      } catch (error) {
+        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null;
+        throw error;
+      }
+    }));
+    return matches.filter((candidate): candidate is string => candidate !== null);
   }
 
   async listFirstParentCommitPathChanges(fromExclusive: string, toInclusive: string, paths: string[]): Promise<GitCommitPathChange[]> {

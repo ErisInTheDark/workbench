@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover wb parsing, transport, response text, and generated shims. Keywords: workbench, cli, test, output, shim, allowlist.
+ * - No production exports; Node tests cover wb parsing, paged arc output, transport, response text, and generated shims. Keywords: workbench, cli, git arc, page, test, output, shim, allowlist.
  */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
@@ -416,6 +416,20 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   ], gitOptions);
   assert.equal(checkpointDiff.kind, "request");
   assert.equal(checkpointDiff.request.responseKind, "git-arc-diff");
+  const pagedDiff = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "diff", "--page", "2",
+  ], gitOptions);
+  assert.equal(pagedDiff.kind, "request");
+  assert.deepEqual(pagedDiff.request.body, {
+    action: "diff",
+    cwd: "C:/workspace",
+    harness: "codex",
+    page: 2,
+    threadId: "thread-1",
+  });
+  assert.equal((await parseWorkbenchAgentCliCommand([
+    "git", "arc", "diff", "--page", "2", "--", "src/file.ts",
+  ], gitOptions)).kind, "error");
 
   const emptyAddition = await parseWorkbenchAgentCliCommand([
     "git", "arc", "add",
@@ -1177,6 +1191,25 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     version: 1,
   });
   assert.match(adapt("git-arc-add", { checkpointCommit: successorRef }, { action: "arcAdd" }).stdout, /^Created successor arc ref/u);
+  const compareResponse = adapt("git-arc-compare", {
+    changes: [],
+    checkpointCommit: planRef,
+    intentName: "Inspect arc",
+    scopePaths: ["src/one.ts"],
+    unclaimedDirtPaths: ["src/unclaimed.ts"],
+  }, { action: "compare" });
+  assert.match(compareResponse.stdout, /Unclaimed workspace dirt modified since this thread was created:[\s\S]*src\/unclaimed\.ts/u);
+  const diffResponse = adapt("git-arc-diff", {
+    checkpointCommit: planRef,
+    diff: "diff --git a/src/one.ts b/src/one.ts\n",
+    nextPage: 2,
+    oversizedDiffPaths: ["src/giant.ts"],
+    scopePaths: ["src/one.ts"],
+    unclaimedDirtPaths: [],
+  }, { action: "diff" });
+  assert.match(diffResponse.stdout, /Workbench arc diff notes:[\s\S]*- none/u);
+  assert.match(diffResponse.stdout, /src\/giant\.ts[\s\S]*wb git arc diff -- "src\/giant\.ts"/u);
+  assert.match(diffResponse.stdout, /--page 2/u);
   const releaseResponse = adapt("git-arc-release", {
     checkpointCommit: planRef,
     intentName: "Release owned work",

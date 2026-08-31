@@ -21,6 +21,7 @@ import type {
   OrchestratorDatabaseRegistration,
   OrchestratorReloadableModules,
   OrchestratorRuntimeObjects,
+  OrchestratorTranscriptRegistration,
   OrchestratorTranscriptShadowLog,
 } from "./orchestrator-runtime-objects";
 import ReloadableNode, { type ReloadableNodeLease } from "./ReloadableNode";
@@ -118,6 +119,7 @@ function createWorkbenchCoreFeature(
   reloadDirt: WorkbenchReloadDirtController,
   turnRecovery: WorkbenchTurnRecoveryController,
   database: OrchestratorDatabaseRegistration,
+  transcript: Pick<OrchestratorTranscriptRegistration, "read">,
   transcriptShadowLog: OrchestratorTranscriptShadowLog,
 ) {
   const modules = createModules();
@@ -136,6 +138,14 @@ function createWorkbenchCoreFeature(
   });
   const profileStore = new WorkbenchComposerProfileStore(context.legacyMigrationProjectRoot);
   const gitArc = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async (projectId, _harness, threadId) => {
+      const snapshot = await transcript.read({ threadId, turnLimit: 1 });
+      if (!snapshot) return null;
+      if (snapshot.thread.project_id !== projectId) {
+        throw new Error(`Managed thread ${threadId} does not belong to project ${projectId}.`);
+      }
+      return snapshot.thread.created_at;
+    },
     getThreadClaimContext: async (projectId, harness, threadId) => {
       if (!threadState) throw new Error("Thread state is not ready for Git arc ownership.");
       return await threadState.controller.getThreadClaimContext(projectId, harness, threadId);
@@ -306,6 +316,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     get("reloadDirt"),
     get("turnRecovery"),
     get("database"),
+    get("transcript"),
     get("transcriptShadowLog"),
   ),
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchGitArcFeatureOptions: project resolution and stable transition ports for reloadable Git arc work. Keywords: git, arc, feature, orchestrator.
+ * - WorkbenchGitArcFeatureOptions: project resolution, thread creation time, and stable transition ports for reloadable Git arc work. Keywords: git, arc, feature, orchestrator, timestamp.
  * - WorkbenchGitArcLifecycleState: active logical lifecycle plus derived reload scopes. Keywords: git, arc, lifecycle, reload.
  * - WorkbenchGitArcPlanState: inactive logical plan plus derived reload scopes. Keywords: git, arc, plan, reload.
  * - default WorkbenchGitArcFeature: own typed Git arc HTTP/direct dispatch inside the reloadable feature graph. Keywords: git, arc, controller, reload, HTTP.
@@ -32,6 +32,7 @@ const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
 export interface WorkbenchGitArcFeatureOptions {
   getReloadScopesForPaths?(paths: readonly string[]): string[];
+  getThreadCreatedAt(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<number | null>;
   getThreadClaimContext(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadClaimContext | null>;
   refreshThreadGitArcState(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
   onReloadEligibilityChanged?: () => void;
@@ -80,6 +81,11 @@ function liveCollisionOwner(entry: GitArcCollisionError["collisions"][number]["e
 function mutatesGitArcState(request: GitCheckpointRequest) {
   return GIT_ARC_STATE_MUTATION_ACTIONS.has(request.action)
     && !(request.action === "arcMove" && request.move.kind === "regex" && !request.move.confirm);
+}
+
+function requireInspectionModifiedSince(value: number | undefined) {
+  if (value === undefined) throw new Error("Git arc inspection requires the managed thread creation timestamp.");
+  return value;
 }
 
 function usesWorkspaceController(project: AgentEndpointProjectResolution, request: GitCheckpointRequest) {
@@ -201,6 +207,12 @@ export default class WorkbenchGitArcFeature {
     try {
       const project = await this.resolveProject(parsed.data.cwd);
       const request = { ...parsed.data, cwd: project.cwd };
+      const modifiedSince = request.action === "compare" || request.action === "diff"
+        ? await this.options.getThreadCreatedAt(project.project.id, request.harness, request.threadId)
+        : null;
+      if ((request.action === "compare" || request.action === "diff") && modifiedSince === null) {
+        throw new Error("The managed thread creation timestamp is unavailable for Git arc inspection.");
+      }
       if (request.action === "arcWait") {
         return Response.json(await this.waitForPlanAndStart(project, request, signal));
       }
@@ -217,11 +229,11 @@ export default class WorkbenchGitArcFeature {
             response = request.action === "readDiffArtifact"
               ? await this.dispatch(request)
               : usesWorkspaceController(project, request)
-                ? Response.json(await this.workspaceController.execute(project, request))
+                ? Response.json(await this.workspaceController.execute(project, request, { modifiedSince: modifiedSince ?? undefined }))
                 : mutatesGitArcState(request)
                   ? await this.options.transitions.run(project.cwd, async () => await this.dispatch(request))
                   : await (this.options.transitions.read ?? this.options.transitions.run)
-                    .call(this.options.transitions, project.cwd, async () => await this.dispatch(request));
+                    .call(this.options.transitions, project.cwd, async () => await this.dispatch(request, modifiedSince ?? undefined));
           } catch (error) {
             throw new GitArcFailureException(await this.createFailure(project.project.id, request, error));
           }
@@ -496,7 +508,7 @@ export default class WorkbenchGitArcFeature {
     }
   }
 
-  private async dispatch(input: GitCheckpointRequest) {
+  private async dispatch(input: GitCheckpointRequest, modifiedSince?: number) {
     const common = { cwd: input.cwd, harness: input.harness, threadId: input.threadId };
     switch (input.action) {
       case "plan": return Response.json(await this.controller.createPlan({
@@ -516,12 +528,27 @@ export default class WorkbenchGitArcFeature {
       case "arcMove": return Response.json(await this.controller.moveInArc({ ...common, move: input.move }));
       case "arcRemove": return Response.json(await this.controller.removeFromArc({ ...common, paths: input.paths }));
       case "arcRelease": return Response.json(await this.controller.releaseArc({ ...common, disown: input.disown }));
-      case "compare": return Response.json(await this.controller.compare({
-        ...common, ...(input.checkpointCommit ? { checkpointCommit: input.checkpointCommit } : {}), ...(input.paths ? { paths: input.paths } : {}),
-      }));
-      case "diff": return Response.json(await this.controller.diff({
-        ...common, ...(input.checkpointCommit ? { checkpointCommit: input.checkpointCommit } : {}), ...(input.paths ? { paths: input.paths } : {}),
-      }));
+      case "compare": return Response.json({
+        ...await this.controller.compare({
+          ...common, ...(input.checkpointCommit ? { checkpointCommit: input.checkpointCommit } : {}), ...(input.paths ? { paths: input.paths } : {}),
+        }),
+        unclaimedDirtPaths: await this.controller.listUnclaimedWorkspaceDirt({
+          cwd: input.cwd,
+          modifiedSince: requireInspectionModifiedSince(modifiedSince),
+        }),
+      });
+      case "diff": return Response.json({
+        ...await this.controller.diff({
+          ...common,
+          ...(input.page !== undefined ? { page: input.page } : {}),
+          ...(input.checkpointCommit ? { checkpointCommit: input.checkpointCommit } : {}),
+          ...(input.paths ? { paths: input.paths } : {}),
+        }),
+        unclaimedDirtPaths: await this.controller.listUnclaimedWorkspaceDirt({
+          cwd: input.cwd,
+          modifiedSince: requireInspectionModifiedSince(modifiedSince),
+        }),
+      });
       case "proposalCreate": return Response.json(await this.controller.createProposal({
         ...common, amend: input.amend, description: input.description,
         ...(input.amendProposalId ? { amendProposalId: input.amendProposalId } : {}),
