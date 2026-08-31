@@ -2992,10 +2992,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             <main
               ref={mainPaneRef}
               className={`explorer-scrollbar flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto${isDirectThreadSurface
-                ? " overflow-hidden px-0 pb-0 md:h-screen md:min-h-0 md:overflow-hidden md:px-6 md:pb-5"
+                ? " overflow-hidden px-0 pb-0 md:h-screen md:min-h-0 md:overflow-hidden md:px-6"
                 : showFullBleedMainView
-                  ? " overflow-y-auto px-5 pb-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
-                  : " overflow-y-auto px-5 pb-5 md:h-auto md:min-h-screen md:overflow-visible md:px-6 md:pb-5"
+                  ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
+                  : " overflow-y-auto px-5 md:h-auto md:min-h-screen md:overflow-visible md:px-6"
                 }`}
             >
               <ThreadScrollViewport
