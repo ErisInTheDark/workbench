@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchInstructionTokenCorpus: deterministic stripped instruction text plus its contributing source paths. Keywords: instructions, tokens, corpus, measurement.
- * - buildWorkbenchInstructionTokenCorpus: read runtime Markdown leaves and remove source-only control syntax before token counting. Keywords: instructions, tokens, comments, selectors.
+ * - buildWorkbenchInstructionTokenCorpus: read runtime Markdown leaves and remove source-only control syntax before token counting. Keywords: instructions, tokens, comments, selectors, imports.
  */
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -17,7 +17,7 @@ async function listMarkdownLeaves(root: string, directory = root): Promise<strin
     const entryPath = path.join(directory, entry.name);
     return entry.isDirectory()
       ? await listMarkdownLeaves(root, entryPath)
-      : entry.isFile() && entry.name.endsWith(".md") && !entry.name.endsWith("-template-prompt.md")
+      : entry.isFile() && entry.name.endsWith(".md") && !entry.name.endsWith(".template.md")
         ? [entryPath]
         : [];
   }));
@@ -33,6 +33,7 @@ function stripInstructionSourceSyntax(content: string) {
     .replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u, "")
     .replace(/<!--[\s\S]*?-->/gu, preserveLineBreaks)
     .replace(/<\/?[A-Za-z][^>]*>/gu, "")
+    .replace(/\{\.\/[^{}\r\n]+\}/gu, "")
     .replace(/\{\{?[a-z][a-z0-9 .-]*\}\}?/gu, "")
     .trim();
 }

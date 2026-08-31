@@ -20,6 +20,8 @@ You may propose new invariants or changes to existing invariants, but you must m
 
 - Codex start, resume, and fork rebuild one compact thread-owned Workbench payload from current sources. Unchanged sources and selections must produce identical payloads.
 - That payload owns one precedence-resolved self-closing skill catalog. Fresh slash-activated bodies travel only in a UI-hidden `<wb:activated-skills>` item on the triggering user input, never through native skill input or turn context.
+<!-- Prevent hidden instruction text from bypassing user ownership. -->
+- Keep live Workbench-owned instruction Markdown editable in the Workbench Library. Internal Markdown folders contain only instruction payloads. Every current internal Markdown path mirrors its emitted path. Generated bases refresh on instruction use; retired bases may remain. Active `AGENTS.md` loads only its recursive import graph. Adjacent `X.override.md` replaces `X.md` at every hop.
 
 ## Codex turn start
 

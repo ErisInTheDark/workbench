@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_LIBRARY_PROJECT_ID: stable project id for the external Workbench Library. Keywords: workbench library, project id.
- * - workbenchLibraryRoot: absolute root for personal Workbench skills, agents, workflows, and instructions. Keywords: workbench library, root.
+ * - workbenchLibraryRoot: absolute root for personal Workbench skills, agents, workflows, mechanics, and instructions. Keywords: workbench library, root.
  * - parseFrontmatterBlock: parse simple markdown frontmatter fields. Keywords: frontmatter, markdown, metadata.
  * - ensureWorkbenchLibrary: create the library root and standard folders. Keywords: workbench library, mkdir, scaffold.
  * - isExcludedWorkbenchLibraryFile: test whether a library file is documentation or a template ignored by scanners. Keywords: template, exclusion, scan.
@@ -9,7 +9,7 @@
  * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files. Keywords: agent, prompt, library.
  * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs. Keywords: instructions, universal, bootstrap, fingerprint.
  * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering. Keywords: bootstrap, dedupe, codex.
- * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build harness skill instructions, compact catalogs, activated skill bodies, and universal instruction content. Keywords: bootstrap, skills, catalog.
+ * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillBodyCatalog/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build harness skill instructions, body and compact catalogs, activated skill bodies, and universal instruction content. Keywords: bootstrap, skills, catalog.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -21,30 +21,29 @@ import {
   WORKBENCH_LIBRARY_PROJECT_ID,
   workbenchLibraryRoot,
 } from "./workbench-library-paths";
-import {
-  readWorkbenchBuiltinSkills,
-  readWorkbenchSkillTriggerAndPrecedenceInstructions,
-} from "./workbench/instructions/skills/workbench-builtin-skills";
+import { ensureWorkbenchInstructionSourceFiles } from "./workbench/instructions/instruction-source";
+import { createLibraryInstructionFileGeneration } from "./workbench/instructions/library-instruction-files";
 
 export { WORKBENCH_LIBRARY_PROJECT_ID, workbenchLibraryRoot };
 
 const libraryAgentPrefix = "library:";
-const standardDirectories = ["skills", "agents", "instructions", "workflows"];
+const standardDirectories = ["skills", "agents", "instructions", "wb/workflows", "wb/mechanics"];
 const TEMPLATE_FILE_SUFFIX = ".template.md";
 const README_FILE_NAME = "README.md";
 
 const readmeTemplate = `# Workbench Library
 
-This folder stores Workbench-wide skills, agents, workflows, and instructions outside any selected project.
+This folder stores Workbench-wide skills, agents, workflows, mechanics, and instructions outside any selected project.
 
 Live library files use these shapes:
 
 - \`skills/<name>/SKILL.md\`
 - \`agents/<name>.md\`
-- \`workflows/<name>.md\`
+- \`wb/workflows/<name>.md\`
+- \`wb/mechanics/<name>.md\`
 - \`instructions/<name>.md\`
 
-\`README.md\` and files ending in \`.template.md\` are ignored by Workbench scanners.
+\`X.override.md\` replaces adjacent generated \`X.md\`. \`README.md\` and files ending in \`.template.md\` are ignored by Workbench scanners.
 `;
 
 const skillTemplate = `---
@@ -212,24 +211,6 @@ async function writeFileIfMissing(relativePath: string, content: string) {
   }
 }
 
-async function writeGeneratedFile(relativePath: string, content: string) {
-  const absolutePath = safeResolveLibraryPath(relativePath);
-  const normalizedContent = `${content.trim()}\n`;
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  const currentContent = await readTextFile(absolutePath);
-  if (currentContent !== null && `${currentContent.trim()}\n` === normalizedContent) {
-    return;
-  }
-
-  await fs.writeFile(absolutePath, normalizedContent, "utf8");
-}
-
-async function writeBuiltinSkills() {
-  await Promise.all(readWorkbenchBuiltinSkills().map((skill) => (
-    writeGeneratedFile(skill.relativePath, skill.content)
-  )));
-}
-
 async function isDirectoryEmpty(directoryPath: string) {
   try {
     return (await fs.readdir(directoryPath)).length === 0;
@@ -252,6 +233,7 @@ export async function ensureWorkbenchLibrary() {
   await Promise.all(standardDirectories.map((directoryName) => (
     fs.mkdir(path.join(workbenchLibraryRoot, directoryName), { recursive: true })
   )));
+  await ensureWorkbenchInstructionSourceFiles();
   await writeFileIfMissing(README_FILE_NAME, readmeTemplate);
 
   if (await isUserSkillDirectoryEmpty()) {
@@ -260,8 +242,6 @@ export async function ensureWorkbenchLibrary() {
       writeFileIfMissing("skills/example/references/notes.template.md", skillReferenceTemplate),
     ]);
   }
-
-  await writeBuiltinSkills();
 
   if (await isDirectoryEmpty(path.join(workbenchLibraryRoot, "agents"))) {
     await writeFileIfMissing("agents/example.template.md", agentTemplate);
@@ -525,34 +505,29 @@ function escapeXmlAttribute(value: string) {
     .replace(/>/g, "&gt;");
 }
 
-function buildDetectedSkillInstructions(skills: WorkbenchSkillDefinition[]) {
+function buildDetectedSkillBodyCatalog(skills: readonly WorkbenchSkillDefinition[]) {
   if (!skills.length) {
     return null;
   }
 
-  return [
-    "Workbench provides additional skills from automatically detected Workbench Skill files.",
-    readWorkbenchSkillTriggerAndPrecedenceInstructions(),
-    "",
-    "The `<skill>` blocks below are automatically detected Workbench Skill files. Treat the full SKILL.md text in each block as CRITICAL workflow instructions when the user invokes or otherwise triggers that skill.",
-    "Automatic skill detection is not foolproof. If another skill path, skill name, or workflow appears necessary for the task, read that skill file before using it.",
-    "Triggered skill workflows are definitional for the request: follow them strictly unless the user explicitly says not to follow a specific skill requirement.",
-    "Do not treat casual follow-up wording, missing reminders, or ordinary task details as overriding a triggered skill workflow.",
-    "For automatically detected skills, resolve any relative references from the folder containing the `filename` on its `<skill>` block.",
-    "When you mention a Workbench Skill in user-visible thread text, use the slash form that Workbench can highlight, such as `/skill-name` or the directory alias from `skills/<alias>/SKILL.md`.",
-    "",
-    "Automatically detected Workbench Skills:",
-    ...skills.map((skill) => [
+  return skills.map((skill) => [
       `<skill filename="${escapeXmlAttribute(skill.path)}">`,
       skill.content,
       "</skill>",
-    ].join("\n")),
-  ].join("\n");
+    ].join("\n")).join("\n");
+}
+
+export async function buildWorkbenchSkillBodyCatalog(projectSkills: readonly WorkbenchSkillDefinition[] = []) {
+  const activeSkills = await listActiveWorkbenchSkillDefinitions(projectSkills);
+  return buildDetectedSkillBodyCatalog(activeSkills);
 }
 
 export async function buildWorkbenchSkillManifestInstructions(projectSkills: WorkbenchSkillDefinition[] = []) {
-  const activeSkills = await listActiveWorkbenchSkillDefinitions(projectSkills);
-  return buildDetectedSkillInstructions(activeSkills);
+  const catalog = await buildWorkbenchSkillBodyCatalog(projectSkills);
+  if (!catalog) return null;
+  return createLibraryInstructionFileGeneration().render("wb/mechanics/skills.md", {
+    "skills.catalog": catalog,
+  });
 }
 
 function normalizeSkillPathIdentity(value: string) {

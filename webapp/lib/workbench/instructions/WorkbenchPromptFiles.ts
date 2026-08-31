@@ -7,12 +7,12 @@
  * - default WorkbenchPromptFiles: stable public prompt API. Keywords: prompt, owner, generation.
  */
 
-import { loadFreshWorkbenchPromptAssembly } from "./assembly/workbench-prompt-generation";
-import type { WorkbenchPromptContext, WorkbenchPromptInstructions } from "./assembly/workbench-prompt-types";
-import { listWorkbenchInstructionMechanics } from "./mechanics/workbench-instruction-mechanics";
-import { filterWorkbenchInstructionContent } from "./selectors/instruction-context-filter";
+import { filterWorkbenchInstructionContent } from "./instruction-context-filter";
+import { listWorkbenchInstructionMechanics } from "./workbench-instruction-mechanics";
+import { loadFreshWorkbenchPromptAssembly } from "./workbench-prompt-generation";
+import type { WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
 
-export type { WorkbenchPromptContext, WorkbenchPromptInstructions } from "./assembly/workbench-prompt-types";
+export type { WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
 export { filterWorkbenchInstructionContent, listWorkbenchInstructionMechanics };
 
 export async function ensureWorkbenchPromptFiles() {
@@ -37,20 +37,8 @@ export async function buildWorkbenchThreadUtilityDeveloperInstructions(
   return await loadFreshWorkbenchPromptAssembly().buildWorkbenchThreadUtilityDeveloperInstructions(context);
 }
 
-export async function buildWorkbenchCollaborationDeveloperInstructions(
-  context: WorkbenchPromptContext = {},
-) {
-  return await loadFreshWorkbenchPromptAssembly().buildWorkbenchCollaborationDeveloperInstructions(context);
-}
-
-export function buildWorkbenchGitInstructions(context: WorkbenchPromptContext) {
-  return loadFreshWorkbenchPromptAssembly().buildWorkbenchGitInstructions(context);
-}
-
 const WorkbenchPromptFiles = {
   buildWorkbenchActivatedSkillCatalog,
-  buildWorkbenchCollaborationDeveloperInstructions,
-  buildWorkbenchGitInstructions,
   buildWorkbenchPromptInstructions,
   buildWorkbenchThreadUtilityDeveloperInstructions,
   ensureWorkbenchPromptFiles,

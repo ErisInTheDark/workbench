@@ -1,11 +1,11 @@
-/* No production exports. Tests protect per-use instruction-source freshness and Workbench Library override ownership. */
+/* No production exports. Tests protect per-use mirrored-source freshness, emitted overrides, workflows, mechanics, agents, and builtin skills. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-test("public instruction use refreshes generated files and preserves user-owned library content", async () => {
+test("public instruction use refreshes mirrored generated files and preserves active overrides", async () => {
   const originalCwd = process.cwd();
   const originalLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "instruction-loader-test-"));
@@ -20,73 +20,174 @@ test("public instruction use refreshes generated files and preserves user-owned 
     process.env.WORKBENCH_LIBRARY_ROOT = temporaryLibraryRoot;
     process.chdir(temporaryProjectRoot);
     const promptFiles = require("./WorkbenchPromptFiles") as typeof import("./WorkbenchPromptFiles");
-
-    await promptFiles.buildWorkbenchPromptInstructions({
-      harness: "codex",
+    const context = {
+      harness: "codex" as const,
+      instructionInjections: { "custom.runtime": "custom workflow runtime" },
       threadId: "freshness-thread",
       workbenchOrigin: "http://workbench.test",
       workflowIds: ["default"],
-    });
+    };
+
+    await promptFiles.buildWorkbenchPromptInstructions(context);
 
     const userAgent = `---
 name: User Agent
 description: User-owned default agent
 ---
 user-owned agent prompt
+{./agent-note}
 `;
-    await fs.writeFile(path.join(temporaryLibraryRoot, "agents", "default.md"), userAgent, "utf8");
-    await fs.writeFile(
-      path.join(temporaryLibraryRoot, "AGENTS.override.md"),
-      "user override\n\n{agent.definition}\n\n{workbench.skills}\n",
-      "utf8",
-    );
-
+    const agentsOverride = [
+      "user override",
+      "{./custom/root}",
+      "agent: {agent.prompt}",
+      "{subagent.identity}",
+      "workflow:",
+      "{workflow.content}",
+    ].join("\n\n");
+    const workflowOverride = "user workflow override: {custom.runtime}\n";
+    const gitOverride = "user git override\n";
+    await fs.mkdir(path.join(temporaryLibraryRoot, "custom", "nested"), { recursive: true });
     await Promise.all([
-      fs.writeFile(path.join(temporaryInstructionRoot, "base", "workbench-agents-prompt.md"), "generated base revision two\n", "utf8"),
-      fs.writeFile(path.join(temporaryInstructionRoot, "workflows", "default-workflow-prompt.md"), "generated workflow revision two\n", "utf8"),
-      fs.writeFile(path.join(temporaryInstructionRoot, "agents", "default-agent-prompt.md"), "generated agent revision two\n", "utf8"),
-      fs.writeFile(path.join(temporaryInstructionRoot, "mechanics", "workbench-git-instructions.md"), "git revision two\n", "utf8"),
-      fs.writeFile(path.join(temporaryInstructionRoot, "injections", "workbench-tools-injection.md"), "tools revision two\n", "utf8"),
-      fs.writeFile(path.join(temporaryInstructionRoot, "skills", "workbench-skill-precedence.md"), "skill precedence revision two\n", "utf8"),
-      fs.writeFile(path.join(temporaryInstructionRoot, "skills", "browse-builtin-skill.md"), "---\nname: browse\n---\nbuiltin skill revision two\n", "utf8"),
+      fs.writeFile(path.join(temporaryLibraryRoot, "agents", "default.md"), userAgent, "utf8"),
+      fs.writeFile(path.join(temporaryLibraryRoot, "agents", "agent-note.md"), "imported agent note\n", "utf8"),
+      fs.writeFile(path.join(temporaryLibraryRoot, "custom", "root.md"), "base custom root\n", "utf8"),
+      fs.writeFile(
+        path.join(temporaryLibraryRoot, "custom", "root.override.md"),
+        "custom root override\n{./nested/deep}\n",
+        "utf8",
+      ),
+      fs.writeFile(path.join(temporaryLibraryRoot, "custom", "nested", "deep.md"), "base deep note\n", "utf8"),
+      fs.writeFile(
+        path.join(temporaryLibraryRoot, "custom", "nested", "deep.override.md"),
+        "deep override revision one\n",
+        "utf8",
+      ),
+      fs.writeFile(
+        path.join(temporaryLibraryRoot, "agents", "alternate.md"),
+        "---\nname: Alternate\nuser-invocable: true\n---\nbase alternate\n",
+        "utf8",
+      ),
+      fs.writeFile(
+        path.join(temporaryLibraryRoot, "agents", "alternate.override.md"),
+        "---\nname: Alternate Override\nuser-invocable: true\n---\noverridden alternate\n{./agent-note}\n",
+        "utf8",
+      ),
+      fs.writeFile(path.join(temporaryLibraryRoot, "AGENTS.override.md"), agentsOverride, "utf8"),
+      fs.writeFile(path.join(temporaryLibraryRoot, "wb", "workflows", "DEFAULT.override.md"), workflowOverride, "utf8"),
+      fs.writeFile(path.join(temporaryLibraryRoot, "wb", "mechanics", "git.override.md"), gitOverride, "utf8"),
+      fs.writeFile(
+        path.join(temporaryInstructionRoot, "AGENTS.md"),
+        "generated base revision two\n{./wb/mechanics/*}\n{agent.prompt}\n{workflow.content}\n",
+        "utf8",
+      ),
+      fs.writeFile(path.join(temporaryInstructionRoot, "wb", "workflows", "DEFAULT.md"), "generated workflow revision two\n", "utf8"),
+      fs.writeFile(path.join(temporaryInstructionRoot, "agents", "default.md"), "generated agent revision two\n", "utf8"),
+      fs.writeFile(path.join(temporaryInstructionRoot, "wb", "mechanics", "git.md"), "generated git revision two\n", "utf8"),
+      fs.writeFile(path.join(temporaryInstructionRoot, "wb", "mechanics", "tools.md"), "generated tools revision two\n", "utf8"),
+      fs.writeFile(
+        path.join(temporaryInstructionRoot, "wb", "mechanics", "skills.md"),
+        "skill policy revision two\n{skills.catalog}\n",
+        "utf8",
+      ),
+      fs.writeFile(
+        path.join(temporaryInstructionRoot, "wb", "mechanics", "newly-discovered.md"),
+        "newly discovered mechanic\n",
+        "utf8",
+      ),
+      fs.writeFile(
+        path.join(temporaryInstructionRoot, "skills", "builtin", "browse", "SKILL.md"),
+        "---\nname: browse\n---\nbuiltin skill revision two\n",
+        "utf8",
+      ),
     ]);
 
-    const promptInstructions = await promptFiles.buildWorkbenchPromptInstructions({
-      harness: "codex",
-      threadId: "freshness-thread",
-      workbenchOrigin: "http://workbench.test",
-      workflowIds: ["default"],
-    });
-    const collaborationInstructions = await promptFiles.buildWorkbenchCollaborationDeveloperInstructions({
-      harness: "codex",
-      threadId: "freshness-thread",
-      workbenchOrigin: "http://workbench.test",
-      workflowIds: ["default"],
-    });
-
-    assert.match(promptInstructions.baseInstructions ?? "", /user override/u);
-    assert.match(promptInstructions.baseInstructions ?? "", /user-owned agent prompt/u);
-    assert.match(promptInstructions.baseInstructions ?? "", /skill precedence revision two/u);
-    assert.doesNotMatch(promptInstructions.baseInstructions ?? "", /builtin skill revision two/u);
-    assert.doesNotMatch(promptInstructions.developerInstructions ?? "", /builtin skill revision two/u);
-    const builtinSkillPath = path.join(temporaryLibraryRoot, "skills", "builtin", "browse", "SKILL.md");
-    assert.match(promptInstructions.baseInstructions ?? "", /skill precedence revision two/u);
-    assert.ok((promptInstructions.baseInstructions ?? "").includes(
-      `<skill filename="${builtinSkillPath.replaceAll("\\", "/")}" trigger="" />`,
-    ));
-    assert.equal(
-      (promptInstructions.baseInstructions ?? "").split("<workbench_skills>").length - 1,
-      1,
+    const promptInstructions = await promptFiles.buildWorkbenchPromptInstructions(context);
+    const baseInstructions = promptInstructions.baseInstructions ?? "";
+    assert.match(baseInstructions, /user override/u);
+    assert.match(baseInstructions, /custom root override/u);
+    assert.match(baseInstructions, /deep override revision one/u);
+    assert.match(baseInstructions, /user-owned agent prompt/u);
+    assert.match(baseInstructions, /imported agent note/u);
+    assert.match(baseInstructions, /user workflow override: custom workflow runtime/u);
+    assert.doesNotMatch(
+      baseInstructions,
+      /base custom root|base deep note|user git override|generated git revision two|generated tools revision two|newly discovered mechanic|skill policy revision two|generated workflow revision two/u,
     );
+    assert.doesNotMatch(baseInstructions, /builtin skill revision two/u);
+    assert.doesNotMatch(promptInstructions.developerInstructions ?? "", /builtin skill revision two|workbench_mechanics/u);
+    assert.doesNotMatch(baseInstructions, /<workbench_skills>/u);
+
+    const selectedLibraryAgent = await promptFiles.buildWorkbenchPromptInstructions({
+      ...context,
+      agentPath: "library:agents/alternate.md",
+    });
+    assert.match(selectedLibraryAgent.baseInstructions ?? "", /overridden alternate/u);
+    assert.match(selectedLibraryAgent.baseInstructions ?? "", /imported agent note/u);
+    assert.doesNotMatch(selectedLibraryAgent.baseInstructions ?? "", /base alternate/u);
+
+    const builtinSkillPath = path.join(temporaryLibraryRoot, "skills", "builtin", "browse", "SKILL.md");
     const activatedSkillCatalog = await promptFiles.buildWorkbenchActivatedSkillCatalog({
+      ...context,
       activatedSkillPaths: [builtinSkillPath],
-      harness: "codex",
-      threadId: "freshness-thread",
-      workbenchOrigin: "http://workbench.test",
-      workflowIds: ["default"],
     });
     assert.match(activatedSkillCatalog ?? "", /builtin skill revision two/u);
     assert.doesNotMatch(activatedSkillCatalog ?? "", /\nname: browse\n/u);
+
+    const threadUtilityInstructions = await promptFiles.buildWorkbenchThreadUtilityDeveloperInstructions(context);
+    assert.match(threadUtilityInstructions ?? "", /user git override/u);
+    assert.doesNotMatch(
+      threadUtilityInstructions ?? "",
+      /generated tools revision two|skill precedence revision two|<workbench_skills>/u,
+    );
+    assert.equal(
+      await fs.readFile(path.join(temporaryLibraryRoot, "wb", "mechanics", "newly-discovered.md"), "utf8"),
+      "newly discovered mechanic\n",
+    );
+    assert.equal(
+      await fs.readFile(path.join(temporaryLibraryRoot, "AGENTS.md"), "utf8"),
+      "generated base revision two\n{./wb/mechanics/*}\n{agent.prompt}\n{workflow.content}\n",
+    );
+    assert.equal(
+      await fs.readFile(path.join(temporaryLibraryRoot, "wb", "workflows", "DEFAULT.md"), "utf8"),
+      "generated workflow revision two\n",
+    );
+    assert.equal(
+      await fs.readFile(path.join(temporaryLibraryRoot, "wb", "workflows", "DEFAULT.override.md"), "utf8"),
+      workflowOverride,
+    );
+    assert.equal(
+      await fs.readFile(path.join(temporaryLibraryRoot, "wb", "mechanics", "git.md"), "utf8"),
+      "generated git revision two\n",
+    );
+    assert.equal(
+      await fs.readFile(path.join(temporaryLibraryRoot, "wb", "mechanics", "git.override.md"), "utf8"),
+      gitOverride,
+    );
+    assert.equal(
+      await fs.readFile(path.join(temporaryLibraryRoot, "custom", "root.override.md"), "utf8"),
+      "custom root override\n{./nested/deep}\n",
+    );
+    assert.equal(await fs.readFile(path.join(temporaryLibraryRoot, "agents", "default.md"), "utf8"), userAgent);
+    assert.match(
+      await fs.readFile(path.join(temporaryLibraryRoot, "skills", "builtin", "browse", "SKILL.md"), "utf8"),
+      /builtin skill revision two/u,
+    );
+
+    await fs.writeFile(
+      path.join(temporaryLibraryRoot, "custom", "nested", "deep.override.md"),
+      "deep override revision two\n",
+      "utf8",
+    );
+    const nextTurnInstructions = await promptFiles.buildWorkbenchPromptInstructions(context);
+    assert.match(nextTurnInstructions.baseInstructions ?? "", /deep override revision two/u);
+    assert.doesNotMatch(nextTurnInstructions.baseInstructions ?? "", /deep override revision one|base deep note/u);
+
+    const workbenchLibrary = require("../../workbench-library") as typeof import("../../workbench-library");
+    const skillManifest = await workbenchLibrary.buildWorkbenchSkillManifestInstructions();
+    assert.match(skillManifest ?? "", /skill policy revision two/u);
+    assert.match(skillManifest ?? "", /builtin skill revision two/u);
+
     const projectSkillPath = path.join(temporaryProjectRoot, ".agents", "skills", "browse", "SKILL.md");
     await fs.mkdir(path.dirname(projectSkillPath), { recursive: true });
     await fs.writeFile(projectSkillPath, "---\nname: browse\n---\nproject browse skill\n", "utf8");
@@ -97,54 +198,32 @@ user-owned agent prompt
       relativePath: "project",
       rootPath: temporaryProjectRoot,
     }];
-    const shadowedBuiltin = await promptFiles.buildWorkbenchActivatedSkillCatalog({
+    assert.equal(await promptFiles.buildWorkbenchActivatedSkillCatalog({
       activatedSkillPaths: [builtinSkillPath],
       harness: "codex",
       roots: projectRoots,
       threadId: "freshness-thread",
-    });
-    assert.equal(shadowedBuiltin, null);
-    const activatedProjectSkill = await promptFiles.buildWorkbenchActivatedSkillCatalog({
+    }), null);
+    assert.match(await promptFiles.buildWorkbenchActivatedSkillCatalog({
       activatedSkillPaths: [projectSkillPath],
       harness: "codex",
       roots: projectRoots,
       threadId: "freshness-thread",
-    });
-    assert.match(activatedProjectSkill ?? "", /project browse skill/u);
-    assert.doesNotMatch(activatedProjectSkill ?? "", /\nname: browse\n/u);
-    await fs.writeFile(
-      path.join(temporaryLibraryRoot, "AGENTS.override.md"),
-      "user override without a skill placeholder\n\n{agent.definition}\n",
-      "utf8",
-    );
-    const fallbackPromptInstructions = await promptFiles.buildWorkbenchPromptInstructions({
-      harness: "codex",
-      roots: projectRoots,
-      threadId: "freshness-thread",
-      workflowIds: ["default"],
-    });
-    assert.doesNotMatch(fallbackPromptInstructions.baseInstructions ?? "", /<workbench_skills>/u);
-    assert.equal(
-      (fallbackPromptInstructions.developerInstructions ?? "").split("<workbench_skills>").length - 1,
-      1,
-    );
-    assert.ok((fallbackPromptInstructions.developerInstructions ?? "").includes(
-      `<skill filename="${projectSkillPath.replaceAll("\\", "/")}" trigger="" />`,
-    ));
-    assert.match(collaborationInstructions ?? "", /tools revision two/u);
-    assert.equal(
-      promptFiles.buildWorkbenchGitInstructions({
-        harness: "codex",
-        threadId: "freshness-thread",
-        workbenchOrigin: "http://workbench.test",
-      }),
-      "git revision two",
-    );
+    }) ?? "", /project browse skill/u);
 
-    assert.equal(await fs.readFile(path.join(temporaryLibraryRoot, "AGENTS.md"), "utf8"), "generated base revision two\n");
-    assert.equal(await fs.readFile(path.join(temporaryLibraryRoot, "workflows", "DEFAULT.md"), "utf8"), "generated workflow revision two\n");
-    assert.match(await fs.readFile(path.join(temporaryLibraryRoot, "skills", "builtin", "browse", "SKILL.md"), "utf8"), /builtin skill revision two/u);
-    assert.equal(await fs.readFile(path.join(temporaryLibraryRoot, "agents", "default.md"), "utf8"), userAgent);
+    const removedCompositeSlots = [
+      "old override",
+      "{agent.definition}",
+      "{workflow.active}",
+      "{workbench.rendering}",
+      "{workbench.tools}",
+      "{workbench.skills}",
+      "{workspace.roots}",
+    ].join("\n");
+    await fs.writeFile(path.join(temporaryLibraryRoot, "AGENTS.override.md"), removedCompositeSlots, "utf8");
+    const unsupportedPrompt = await promptFiles.buildWorkbenchPromptInstructions(context);
+    assert.equal(unsupportedPrompt.baseInstructions, removedCompositeSlots);
+    assert.doesNotMatch(unsupportedPrompt.developerInstructions ?? "", /workbench_skills|workbench_mechanics/u);
   } finally {
     process.chdir(originalCwd);
     if (originalLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;

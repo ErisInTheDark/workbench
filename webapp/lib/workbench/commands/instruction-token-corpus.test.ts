@@ -18,6 +18,7 @@ test("builds one deterministic corpus without authoring or control syntax", asyn
       "<available:thing>",
       "Keep z.",
       "</available:thing>",
+      "{./nested/*}",
       "{workbench.rendering}",
     ].join("\n"));
     await writeFile(path.join(root, "nested", "a.md"), [
@@ -27,7 +28,7 @@ test("builds one deterministic corpus without authoring or control syntax", asyn
       "<custom-tag value=\"hidden\">Keep inner.</custom-tag>",
       "{{runtime.value}}",
     ].join("\n"));
-    await writeFile(path.join(root, "nested", "ignored-template-prompt.md"), "Do not count this authoring guide.");
+    await writeFile(path.join(root, "nested", "ignored.template.md"), "Do not count this authoring guide.");
     await writeFile(path.join(root, "ignored.txt"), "Do not count this file.");
 
     const corpus = await buildWorkbenchInstructionTokenCorpus(root);
@@ -41,7 +42,7 @@ test("builds one deterministic corpus without authoring or control syntax", asyn
       "",
       "Keep z.",
     ].join("\n"));
-    assert.doesNotMatch(corpus.content, /available|failure rationale|runtime\.value|workbench\.rendering|custom-tag|authoring guide|\{\}/u);
+    assert.doesNotMatch(corpus.content, /available|failure rationale|runtime\.value|workbench\.rendering|nested\/\*|custom-tag|authoring guide|\{\}/u);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
