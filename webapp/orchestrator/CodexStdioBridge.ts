@@ -2175,6 +2175,11 @@ export default class CodexStdioBridge {
   private handleUpstreamFileChangeApprovalRequest(
     request: Extract<ServerRequest, { method: "item/fileChange/requestApproval" }>,
   ) {
+    if (request.params.reason === "command failed; retry without sandbox?" && !request.params.grantRoot) {
+      // Codex misclassifies ordinary patch failures as possible sandbox denials.
+      this.send({ id: request.id, result: { decision: "decline" satisfies FileChangeApprovalDecision } });
+      return;
+    }
     const requestKey = String(request.id);
     const normalizedRequest = normalizeFileChangeApprovalRequest(requestKey, request.params);
     this.pendingUserInputRequests.set(requestKey, {

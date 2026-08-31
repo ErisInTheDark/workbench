@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover app-server generation handoff, reload-safe page recovery, bridge pending cleanup, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, reload, transcript, recovery, MCP, test.
+ * - No production exports; Node tests cover app-server generation handoff, reload-safe page recovery, bridge pending cleanup, approval classification, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, reload, transcript, recovery, approval, MCP, test.
  */
 
 import assert from "node:assert/strict";
@@ -108,6 +108,68 @@ function bridgeThread(items: ThreadItem[] = []) {
     updatedAt: 1,
   };
 }
+
+test("generic failed-patch retries are declined without hiding real file-change approvals", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-file-approval-"));
+  const upstreamMessages: unknown[] = [];
+  const notifications: unknown[] = [];
+  const pendingUserInputRequests = new Map();
+  const bridge = new CodexStdioBridge({
+    appServer: { send(message: unknown) { upstreamMessages.push(message); } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    initialState: {
+      initializeResult: {},
+      pendingResponses: new Map(),
+      pendingUserInputRequests,
+      requestIdAllocator: { next: 1 },
+      upstreamInitialized: true,
+    },
+    onNotification(notification) { notifications.push(notification); },
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    await bridge.handleUpstreamMessage({
+      id: 10,
+      method: "item/fileChange/requestApproval",
+      params: {
+        grantRoot: null,
+        itemId: "failed-patch",
+        reason: "command failed; retry without sandbox?",
+        startedAtMs: 1,
+        threadId: "thread",
+        turnId: "turn",
+      },
+    });
+    assert.deepEqual(upstreamMessages, [{ id: 10, result: { decision: "decline" } }]);
+    assert.equal(pendingUserInputRequests.size, 0);
+    assert.deepEqual(notifications, []);
+
+    await bridge.handleUpstreamMessage({
+      id: 11,
+      method: "item/fileChange/requestApproval",
+      params: {
+        grantRoot: "C:/outside",
+        itemId: "real-permission-request",
+        reason: "write outside the workspace",
+        startedAtMs: 2,
+        threadId: "thread",
+        turnId: "turn",
+      },
+    });
+    assert.equal(upstreamMessages.length, 1);
+    assert.equal(pendingUserInputRequests.size, 1);
+    assert.equal(
+      (notifications[0] as { method?: string } | undefined)?.method,
+      "questionnaire/requested",
+    );
+  } finally {
+    await bridge.dispose();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
 
 test("bridge-only reload preserves the initialized app-server generation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-capability-"));

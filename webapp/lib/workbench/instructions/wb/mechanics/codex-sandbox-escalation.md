@@ -1,7 +1,7 @@
 <harness:codex>
 ## Codex Sandbox Escalation
 
-Diagnose a command failure before retrying the command. A nonzero exit, failed write, or unclear error does not prove that the sandbox blocked the command. Inspect the error, target path, arguments, command behavior, and relevant workspace state first.
+**Never escalate `apply_patch`.** Use workspace-relative paths. On failure, re-read the file. Fix path, context, or syntax in the sandbox.
 
-Request escalation only when concrete evidence identifies a sandbox, permission, or sandboxed-network restriction and the command is still necessary. Do not use escalation as a generic retry. Each escalation request blocks the turn on user input.
+Escalate another command only when its error proves a necessary operation was blocked by sandbox, permission, or sandboxed network. Nonzero exit, failed write, or unclear error is not proof. Diagnose first. Never escalate as a retry. Each request blocks on user input.
 </harness:codex>
