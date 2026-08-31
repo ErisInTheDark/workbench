@@ -13,6 +13,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   children: [],
   create: (context, build) => {
     const router = new WorkbenchAppHttpRouter({
+      appPort: context.appPort,
       legacyOrigin: context.legacyOrigin,
       logger: context.logger,
       outputDirectoryPath: context.outputDirectoryPath,
@@ -33,7 +34,9 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   sources: [
     "app/runtime/AppHttpNode.ts",
     "app/runtime/WorkbenchAppHttpRouter.ts",
+    "app/runtime/WorkbenchAppPortRoutes.ts",
     "app/state/workbench-app-state-routes.ts",
+    "shared/http/workbench-app-port.ts",
     "shared/http/StaticHttpRequestController.ts",
   ].join("\n"),
 });

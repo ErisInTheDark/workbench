@@ -26,7 +26,7 @@ export interface WorkbenchComposerSettingsValue {
 export type WorkbenchGlobalPreference =
   | { key: "composerSpellCheck" | "editorSpellCheck" | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadLiveActivityOpen"; value: boolean }
   | { key: "editorFontFamily"; value: WorkbenchEditorFontFamilyValue }
-  | { key: "editorFontSize"; value: number }
+  | { key: "appPort" | "editorFontSize"; value: number }
   | { key: "fileOpenBehavior"; value: WorkbenchFileOpenBehaviorValue }
   | { key: "harness"; value: WorkbenchHarnessValue }
   | { key: "theme"; value: WorkbenchThemeValue };

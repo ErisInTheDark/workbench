@@ -9,8 +9,10 @@ import https from "node:https";
 import StaticHttpRequestController from "workbench-shared/http/StaticHttpRequestController";
 
 import type WorkbenchAppLogger from "../WorkbenchAppLogger.ts";
+import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import WorkbenchAppStateRoutes from "../state/workbench-app-state-routes.ts";
 import type WorkbenchAppStateController from "../state/WorkbenchAppStateController.ts";
+import WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
 
 const CLIENT_LOG_PATH = "/api/workbench-client-log";
 const MAX_CLIENT_LOG_BODY_BYTES = 128_000;
@@ -80,10 +82,12 @@ function parseClientLogs(value: unknown) {
 
 export default class WorkbenchAppHttpRouter {
   private readonly legacyOrigin: URL;
+  private readonly portRoutes: WorkbenchAppPortRoutes;
   private readonly stateRoutes: WorkbenchAppStateRoutes;
   private readonly staticRequests: StaticHttpRequestController;
 
   constructor(private readonly options: {
+    appPort: WorkbenchAppPortControl;
     legacyOrigin: string;
     logger: WorkbenchAppLogger;
     outputDirectoryPath: string;
@@ -93,6 +97,10 @@ export default class WorkbenchAppHttpRouter {
     if (this.legacyOrigin.protocol !== "http:" && this.legacyOrigin.protocol !== "https:") {
       throw new Error("Legacy Workbench origin must use HTTP or HTTPS.");
     }
+    this.portRoutes = new WorkbenchAppPortRoutes({
+      appPort: options.appPort,
+      onDiagnostic: (message) => options.logger.error("http", message),
+    });
     this.stateRoutes = new WorkbenchAppStateRoutes(options.state);
     this.staticRequests = new StaticHttpRequestController({
       rootDirectoryPath: options.outputDirectoryPath,
@@ -114,6 +122,7 @@ export default class WorkbenchAppHttpRouter {
       await this.handleClientLogs(request, response);
       return;
     }
+    if (await this.portRoutes.handle(request, response, url)) return;
     if (await this.stateRoutes.handle(request, response, url)) return;
     if (url.pathname === "/icon" || url.pathname.startsWith("/api/")) {
       await this.proxyLegacyRequest(request, response);

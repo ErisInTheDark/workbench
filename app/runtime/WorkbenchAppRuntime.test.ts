@@ -33,6 +33,20 @@ function runtime() {
     start: () => "registration",
   } as WorkbenchAppStateRepository;
   return new WorkbenchAppRuntime({
+    appPort: {
+      read: () => ({
+        appOrigin: "http://127.0.0.1:43210",
+        currentPort: 43_210,
+        editable: true,
+        source: "random",
+      }),
+      update: async () => ({
+        appOrigin: "http://127.0.0.1:43210",
+        currentPort: 43_210,
+        editable: true,
+        source: "setting",
+      }),
+    },
     createCompiler: () => compiler,
     createDatabase: () => database,
     legacyOrigin: "http://127.0.0.1:3002",
@@ -81,6 +95,7 @@ test("assigns every app server source to a reloadable node or the explicit proce
   assert.deepEqual(owners("app/package.json"), ["client:process"]);
   assert.deepEqual(owners("app/tsconfig.json"), ["client:process"]);
   assert.deepEqual(owners("shared/http/StaticHttpRequestController.ts"), ["client:http"]);
+  assert.deepEqual(owners("shared/http/workbench-app-port.ts"), ["client:http"]);
   assert.deepEqual(owners("shared/http/HttpServer.ts"), ["client:process"]);
   assert.deepEqual(owners("shared/package.json"), ["client:process"]);
 });

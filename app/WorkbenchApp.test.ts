@@ -6,6 +6,7 @@ import test from "node:test";
 
 import WorkbenchApp, {
   type WorkbenchAppLease,
+  type WorkbenchAppPortControl,
   type WorkbenchAppRuntime,
   type WorkbenchAppServer,
 } from "./WorkbenchApp.ts";
@@ -17,14 +18,24 @@ const address = {
 };
 
 function fixture(options: {
+  environmentPort?: number | null;
+  failMove?: boolean;
   failLeaseDispose?: boolean;
   failServerClose?: boolean;
   failServerStart?: boolean;
   failRuntimeClose?: boolean;
   failRuntimeStart?: boolean;
+  failWritePort?: boolean;
+  firstMoveGate?: Promise<void>;
   leaseAvailable?: boolean;
+  savedPort?: number | null;
 } = {}) {
   const events: string[] = [];
+  const addressChanges: typeof address[] = [];
+  let appPortControl: WorkbenchAppPortControl | null = null;
+  let createdPort: number | null = null;
+  let moveCount = 0;
+  let savedPort = options.savedPort ?? null;
   const lease: WorkbenchAppLease = {
     dispose: async () => {
       events.push("lease:dispose");
@@ -35,6 +46,19 @@ function fixture(options: {
     close: async () => {
       events.push("server:close");
       if (options.failServerClose) throw new Error("server close failed");
+    },
+    moveToPort: async (port, beforeActivate) => {
+      moveCount += 1;
+      events.push(`server:bind:${port}`);
+      if (options.failMove) {
+        const error = new Error("port unavailable") as NodeJS.ErrnoException;
+        error.code = "EADDRINUSE";
+        throw error;
+      }
+      if (moveCount === 1) await options.firstMoveGate;
+      await beforeActivate();
+      events.push(`server:activate:${port}`);
+      return { hostname: "127.0.0.1", port, url: `http://127.0.0.1:${port}` };
     },
     start: async () => {
       events.push("server:start");
@@ -48,9 +72,15 @@ function fixture(options: {
       if (options.failRuntimeClose) throw new Error("runtime close failed");
     },
     handleRequest: async () => {},
+    readAppPort: () => savedPort,
     start: async () => {
       events.push("runtime:start");
       if (options.failRuntimeStart) throw new Error("runtime start failed");
+    },
+    writeAppPort: async (port) => {
+      events.push(`runtime:write-port:${port}`);
+      if (options.failWritePort) throw new Error("port persistence failed");
+      savedPort = port;
     },
   };
   let serverCreations = 0;
@@ -60,13 +90,30 @@ function fixture(options: {
       return options.leaseAvailable === false ? null : lease;
     },
     callerThreadId: null,
-    createRuntime: () => runtime,
-    createServer: () => {
+    createRuntime: (control) => {
+      appPortControl = control;
+      return runtime;
+    },
+    createServer: (_runtime, port) => {
       serverCreations += 1;
+      createdPort = port;
       return server;
     },
+    environmentPort: options.environmentPort,
+    onAddressChange: (nextAddress) => addressChanges.push(nextAddress),
   });
-  return { app, events, get serverCreations() { return serverCreations; } };
+  return {
+    addressChanges,
+    app,
+    events,
+    get appPortControl() {
+      if (!appPortControl) throw new Error("app port control is unavailable");
+      return appPortControl;
+    },
+    get createdPort() { return createdPort; },
+    get savedPort() { return savedPort; },
+    get serverCreations() { return serverCreations; },
+  };
 }
 
 test("does not construct a server when another app owns the launch lease", async () => {
@@ -118,6 +165,117 @@ test("releases the lease after startup failure", async () => {
     "runtime:close",
     "lease:dispose",
   ]);
+});
+
+test("runtime startup failure releases the lease without constructing a listener", async () => {
+  const target = fixture({ failRuntimeStart: true });
+  await assert.rejects(target.app.start(), /runtime start failed/u);
+  assert.equal(target.serverCreations, 0);
+  assert.deepEqual(target.events, [
+    "lease:acquire",
+    "runtime:start",
+    "runtime:close",
+    "lease:dispose",
+  ]);
+});
+
+test("startup prefers the environment, then saved state, then a random port", async () => {
+  const environment = fixture({ environmentPort: 44_001, savedPort: 44_002 });
+  await environment.app.start();
+  assert.equal(environment.createdPort, 44_001);
+  assert.deepEqual(environment.appPortControl.read(), {
+    appOrigin: address.url,
+    currentPort: address.port,
+    editable: false,
+    source: "environment",
+  });
+
+  const saved = fixture({ savedPort: 44_002 });
+  await saved.app.start();
+  assert.equal(saved.createdPort, 44_002);
+  assert.equal(saved.appPortControl.read().source, "setting");
+
+  const random = fixture();
+  await random.app.start();
+  assert.equal(random.createdPort, 0);
+  assert.equal(random.appPortControl.read().source, "random");
+});
+
+test("moves the listener only after persistence and publishes the new origin", async () => {
+  const target = fixture();
+  await target.app.start();
+  const snapshot = await target.appPortControl.update(44_003);
+  assert.deepEqual(target.events.slice(-3), [
+    "server:bind:44003",
+    "runtime:write-port:44003",
+    "server:activate:44003",
+  ]);
+  assert.equal(target.savedPort, 44_003);
+  assert.deepEqual(snapshot, {
+    appOrigin: "http://127.0.0.1:44003",
+    currentPort: 44_003,
+    editable: true,
+    source: "setting",
+  });
+  assert.deepEqual(target.addressChanges, [{
+    hostname: "127.0.0.1",
+    port: 44_003,
+    url: "http://127.0.0.1:44003",
+  }]);
+});
+
+test("failed bind or persistence leaves the current listener truth unchanged", async () => {
+  const bindFailure = fixture({ failMove: true });
+  await bindFailure.app.start();
+  await assert.rejects(bindFailure.appPortControl.update(44_004), /port unavailable/u);
+  assert.equal(bindFailure.savedPort, null);
+  assert.deepEqual(bindFailure.appPortControl.read(), {
+    appOrigin: address.url,
+    currentPort: address.port,
+    editable: true,
+    source: "random",
+  });
+
+  const persistenceFailure = fixture({ failWritePort: true });
+  await persistenceFailure.app.start();
+  await assert.rejects(persistenceFailure.appPortControl.update(44_005), /persistence failed/u);
+  assert.equal(persistenceFailure.savedPort, null);
+  assert.deepEqual(persistenceFailure.appPortControl.read(), {
+    appOrigin: address.url,
+    currentPort: address.port,
+    editable: true,
+    source: "random",
+  });
+});
+
+test("serializes concurrent port moves and rejects edits owned by the environment", async () => {
+  let releaseFirstMove = () => {};
+  const firstMoveGate = new Promise<void>((resolve) => {
+    releaseFirstMove = resolve;
+  });
+  const target = fixture({ firstMoveGate });
+  await target.app.start();
+  const first = target.appPortControl.update(44_006);
+  const second = target.appPortControl.update(44_007);
+  await Promise.resolve();
+  assert.deepEqual(target.events.slice(-1), ["server:bind:44006"]);
+  releaseFirstMove();
+  await Promise.all([first, second]);
+  assert.deepEqual(target.events.slice(-6), [
+    "server:bind:44006",
+    "runtime:write-port:44006",
+    "server:activate:44006",
+    "server:bind:44007",
+    "runtime:write-port:44007",
+    "server:activate:44007",
+  ]);
+
+  const environment = fixture({ environmentPort: 44_008 });
+  await environment.app.start();
+  await assert.rejects(
+    environment.appPortControl.update(44_009),
+    /controlled by WORKBENCH_APP_PORT/u,
+  );
 });
 
 test("shutdown attempts every reverse-order owner and aggregates failures", async () => {

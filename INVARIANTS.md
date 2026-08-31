@@ -13,6 +13,10 @@ You may propose new invariants or changes to existing invariants, but you must m
 <!-- Prevent random connection ports or browser origins from redefining durable client state. -->
 - Store app-owned preferences and drafts in app SQLite, never browser storage.
 - Scope daemon-owned references through app daemon registrations. Ports and addresses are connection locations, never identity.
+<!-- Prevent app-port changes from racing persistence, stranding clients, or splitting runtime identity. -->
+- Move the app port by binding the replacement before retiring the old listener. Preserve app runtime and state identity. Update browser and desktop origins together.
+<!-- Prevent native release generation from requiring a running Workbench shutdown. -->
+- Keep the committed tray launcher path replaceable while it runs. Retire the loaded image by rename before promoting a validated replacement.
 <!-- Prevent wb command fallback from coupling the standalone orchestrator to Next.js. -->
 - Run Workbench CLI and MCP commands in the standalone orchestrator. Never route them through Next.js.
 

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const logger = new WorkbenchAppLogger();
 
 function configuredPort(value: string | undefined) {
-  if (!value?.trim()) return 0;
+  if (!value?.trim()) return null;
   const port = Number(value);
   if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) {
     throw new Error("WORKBENCH_APP_PORT must be an integer from 0 through 65535.");
@@ -36,8 +36,10 @@ async function main() {
     repositoryRootPath,
   });
   const outputDirectoryPath = createCompiler().outputDirectoryPath;
+  let protocol: WorkbenchAppProcessProtocol | null = null;
   const app = new WorkbenchApp({
-    createRuntime: () => new WorkbenchAppRuntime({
+    createRuntime: (appPort) => new WorkbenchAppRuntime({
+      appPort,
       createCompiler,
       createDatabase: () => new WorkbenchAppStateRepository(),
       legacyOrigin: legacyOrigin(),
@@ -45,12 +47,15 @@ async function main() {
       outputDirectoryPath,
       repositoryRootPath,
     }),
-    createServer: (runtime) => new WorkbenchFrontendServer({
+    createServer: (runtime, port) => new WorkbenchFrontendServer({
       hostname: process.env.WORKBENCH_APP_HOST?.trim() || "0.0.0.0",
       onDiagnostic: (message) => logger.error("http", message),
-      port: configuredPort(process.env.WORKBENCH_APP_PORT),
+      port,
       requests: runtime,
     }),
+    environmentPort: configuredPort(process.env.WORKBENCH_APP_PORT),
+    onAddressChange: (address) => protocol?.announceReady(address.url),
+    onDiagnostic: (message) => logger.error("app", message),
   });
   const result = await app.start();
   if (result.kind === "already-running") {
@@ -65,7 +70,6 @@ async function main() {
   logger.line("app", `listening at ${result.address.url}`);
 
   let closing: Promise<void> | null = null;
-  let protocol: WorkbenchAppProcessProtocol | null = null;
   const close = () => {
     closing ??= app.close()
       .then(() => protocol?.dispose())

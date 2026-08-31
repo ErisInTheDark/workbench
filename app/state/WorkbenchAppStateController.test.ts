@@ -53,6 +53,25 @@ test("mutations return a revision delta and survive controller restart", async (
   restarted.close();
 });
 
+test("numeric app port preferences survive through the global state owner", async (context) => {
+  const fixture = await controllerFixture(context);
+  assert.equal(fixture.controller.readGlobalPreference("appPort"), null);
+  await fixture.controller.mutate({
+    action: "put",
+    record: {
+      kind: "globalPreference",
+      preference: { key: "appPort", value: 43_210 },
+    },
+  });
+  assert.equal(fixture.controller.readGlobalPreference("appPort"), 43_210);
+  fixture.controller.close();
+
+  const restarted = fixture.create();
+  restarted.start();
+  assert.equal(restarted.readGlobalPreference("appPort"), 43_210);
+  restarted.close();
+});
+
 test("a future revision receives a complete snapshot instead of an invalid delta", async (context) => {
   const { controller } = await controllerFixture(context);
   const response = controller.read(Number.MAX_SAFE_INTEGER);

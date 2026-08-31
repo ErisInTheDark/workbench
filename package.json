@@ -2,7 +2,7 @@
   "name": "workbench-root",
   "private": true,
   "scripts": {
-    "build:tray": "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tray/build-release.ps1",
+    "build:tray": "node scripts/build-tray.mjs",
     "typecheck": "node scripts/typecheck.mjs"
   },
   "devDependencies": {

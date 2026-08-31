@@ -10,6 +10,7 @@ import { createReloadableNodeModuleLoader } from "workbench-shared/reload/reload
 import { WORKBENCH_RELOAD_SCOPE_PATTERN, type WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
 
 import type WorkbenchAppLogger from "../WorkbenchAppLogger.ts";
+import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
@@ -22,6 +23,7 @@ const requiredRegistrations = [
 ] as const satisfies readonly (keyof AppRuntimeObjects)[];
 
 export interface WorkbenchAppRuntimeOptions {
+  appPort: WorkbenchAppPortControl;
   createCompiler(): WorkbenchFrontendCompiler;
   createDatabase(): WorkbenchAppStateRepository;
   legacyOrigin: string;
@@ -68,6 +70,7 @@ export default class WorkbenchAppRuntime {
   constructor(private readonly options: WorkbenchAppRuntimeOptions) {
     let host!: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
     const context: AppProcessContext = {
+      appPort: options.appPort,
       createCompiler: options.createCompiler,
       createDatabase: options.createDatabase,
       executeReloadScopes: async (scopes) => {
@@ -149,6 +152,20 @@ export default class WorkbenchAppRuntime {
 
   async close() {
     await this.host.dispose();
+  }
+
+  readAppPort() {
+    return this.host.get("state").readGlobalPreference("appPort");
+  }
+
+  async writeAppPort(port: number) {
+    await this.host.get("state").mutate({
+      action: "put",
+      record: {
+        kind: "globalPreference",
+        preference: { key: "appPort", value: port },
+      },
+    });
   }
 
   async handleRequest(request: IncomingMessage, response: ServerResponse) {

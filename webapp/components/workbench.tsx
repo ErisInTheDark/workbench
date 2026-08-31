@@ -116,6 +116,7 @@ import ReloadNecessary from "./workbench/ReloadNecessary";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
 import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
+import WorkbenchAppPortSetting from "./workbench/WorkbenchAppPortSetting";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
@@ -3227,6 +3228,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           ? (
                             <>
                               {SETTINGS_ORDER.map((key) => renderGlobalSettingRow(key))}
+                              <WorkbenchAppPortSetting />
                               {renderLocalCapabilitySettings()}
                             </>
                           )

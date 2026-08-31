@@ -31,6 +31,26 @@ enum ManagerCommand {
     Quit,
 }
 
+#[derive(Debug, PartialEq)]
+enum AppOriginChange {
+    Moved,
+    Ready,
+    Unchanged,
+}
+
+fn update_app_origin(current: &mut Option<String>, next: String) -> AppOriginChange {
+    if current.as_ref() == Some(&next) {
+        return AppOriginChange::Unchanged;
+    }
+    let change = if current.is_some() {
+        AppOriginChange::Moved
+    } else {
+        AppOriginChange::Ready
+    };
+    *current = Some(next);
+    change
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 enum DesktopRecord {
@@ -224,14 +244,20 @@ impl DesktopAppController {
             } if valid_app_origin(&app_origin) => {
                 let mut current_origin =
                     self.app_origin.lock().expect("app origin lock poisoned");
-                if current_origin.is_some() {
-                    self.log_launcher("Rejected duplicate app readiness record.");
-                    return;
-                }
-                *current_origin = Some(app_origin.clone());
+                let change = update_app_origin(&mut current_origin, app_origin.clone());
                 drop(current_origin);
-                self.log_launcher(&format!("Workbench app ready at {app_origin}."));
-                self.open_browser(app);
+                match change {
+                    AppOriginChange::Ready => {
+                        self.log_launcher(&format!("Workbench app ready at {app_origin}."));
+                        self.open_browser(app);
+                    }
+                    AppOriginChange::Moved => {
+                        self.log_launcher(&format!("Workbench app moved to {app_origin}."));
+                    }
+                    AppOriginChange::Unchanged => {
+                        self.log_launcher(&format!("Workbench app remains at {app_origin}."));
+                    }
+                }
             }
             DesktopRecord::AlreadyRunning { .. } | DesktopRecord::Ready { .. } => {
                 self.log_launcher("Rejected unsupported app readiness record.");
@@ -398,7 +424,8 @@ fn write_launcher_log(log: &Arc<Mutex<RotatingLogWriter>>, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        quit_deadline_expired, valid_app_origin, DesktopAppController, DesktopRecord, ManagerCommand,
+        quit_deadline_expired, update_app_origin, valid_app_origin, AppOriginChange,
+        DesktopAppController, DesktopRecord, ManagerCommand,
     };
     use std::{
         sync::Arc,
@@ -427,6 +454,24 @@ mod tests {
                 version: 1,
             } if app_origin == "http://127.0.0.1:43210"
         ));
+    }
+
+    #[test]
+    fn later_readiness_replaces_the_tray_origin_without_restarting_startup() {
+        let mut origin = None;
+        assert_eq!(
+            update_app_origin(&mut origin, "http://127.0.0.1:43210".into()),
+            AppOriginChange::Ready
+        );
+        assert_eq!(
+            update_app_origin(&mut origin, "http://127.0.0.1:43211".into()),
+            AppOriginChange::Moved
+        );
+        assert_eq!(
+            update_app_origin(&mut origin, "http://127.0.0.1:43211".into()),
+            AppOriginChange::Unchanged
+        );
+        assert_eq!(origin.as_deref(), Some("http://127.0.0.1:43211"));
     }
 
     #[test]

@@ -33,6 +33,20 @@ async function fixtureRouter(errors: string[], legacyOrigin: string) {
     }),
   } as unknown as WorkbenchAppStateController;
   return new WorkbenchAppHttpRouter({
+    appPort: {
+      read: () => ({
+        appOrigin: "http://127.0.0.1:43210",
+        currentPort: 43_210,
+        editable: true,
+        source: "random",
+      }),
+      update: async () => ({
+        appOrigin: "http://127.0.0.1:43211",
+        currentPort: 43_211,
+        editable: true,
+        source: "setting",
+      }),
+    },
     legacyOrigin,
     logger: new WorkbenchAppLogger({ color: false, writeError: (value) => errors.push(value) }),
     outputDirectoryPath: output,

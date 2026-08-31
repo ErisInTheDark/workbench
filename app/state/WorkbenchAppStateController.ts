@@ -12,6 +12,7 @@ import {
   type WorkbenchProjectPreference,
   type WorkbenchSidebarPreference,
 } from "workbench-shared/state/workbench-client-state";
+import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import {
   deleteRows,
   insertRow,
@@ -25,6 +26,10 @@ import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
 import { appStateClientTables, appStateTables } from "workbench-shared/state/workbench-app-state-schema";
 
 type ScalarPreference = WorkbenchGlobalPreference | WorkbenchProjectPreference | WorkbenchSidebarPreference;
+type GlobalPreferenceForKey<TKey extends WorkbenchGlobalPreference["key"]> = Extract<
+  WorkbenchGlobalPreference,
+  { key: TKey }
+>;
 
 function scalarColumns(preference: ScalarPreference) {
   return {
@@ -99,6 +104,21 @@ export default class WorkbenchAppStateController {
       rows: this.#readRows(canUseDelta ? sinceRevision : -1),
       ...version,
     };
+  }
+
+  readGlobalPreference<TKey extends WorkbenchGlobalPreference["key"]>(
+    key: TKey,
+  ): GlobalPreferenceForKey<TKey>["value"] | null {
+    for (const change of projectWorkbenchClientStateRows(this.read().rows)) {
+      if (
+        change.change === "upsert"
+        && change.record.kind === "globalPreference"
+        && change.record.preference.key === key
+      ) {
+        return change.record.preference.value as GlobalPreferenceForKey<TKey>["value"];
+      }
+    }
+    return null;
   }
 
   mutate(mutation: WorkbenchClientStateMutation) {
