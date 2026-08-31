@@ -137,7 +137,7 @@ function gitArcDiffTrailerLines(payload: Record<string, unknown> | null) {
       `${filePath} was not included because its diff exceeds the ${GIT_ARC_DIFF_PAGE_CHARACTER_LIMIT.toLocaleString("en-US")}-character paged change limit.`,
       `Inspect it directly with \`wb git arc diff -- ${JSON.stringify(filePath)}\` if needed.`,
     ]),
-    ...(nextPage === null ? [] : [
+    ...(nextPage === undefined ? [] : [
       "",
       `More diff files remain. Repeat this command with \`--page ${nextPage}\`.`,
     ]),

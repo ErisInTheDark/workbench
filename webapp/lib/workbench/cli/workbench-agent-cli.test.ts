@@ -1220,6 +1220,15 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
   assert.match(diffResponse.stdout, /Workbench arc diff notes:[\s\S]*- none/u);
   assert.match(diffResponse.stdout, /src\/giant\.ts[\s\S]*wb git arc diff -- "src\/giant\.ts"/u);
   assert.match(diffResponse.stdout, /--page 2/u);
+  const terminalDiffResponse = adapt("git-arc-diff", {
+    checkpointCommit: planRef,
+    diff: "diff --git a/src/final.ts b/src/final.ts\n",
+    nextPage: null,
+    oversizedDiffPaths: [],
+    scopePaths: ["src/final.ts"],
+    unclaimedDirtPaths: [],
+  }, { action: "diff" });
+  assert.doesNotMatch(terminalDiffResponse.stdout, /More diff files remain|undefined/u);
   const releaseResponse = adapt("git-arc-release", {
     checkpointCommit: planRef,
     intentName: "Release owned work",
