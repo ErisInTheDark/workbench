@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect generated source-map path hygiene and destructive classification. Keywords: reload, source map, paths, destructive, test.
+ * No production exports. Tests protect generated path hygiene, destructive classification, and retired module-generation boundaries. Keywords: reload, source map, paths, destructive, generation, test.
  */
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -39,4 +39,29 @@ test("failed candidates cannot replace the active source generation", () => {
   const promoted = activateReloadNodeSourceState();
   assert.notEqual(promoted, active);
   assert.equal(readReloadNodeSourceState(), promoted);
+});
+
+test("retired graph generations stay behind the active root source boundary", () => {
+  const mainModule = require.main;
+  const rootModule = require.cache[require.resolve("./orchestrator-root-node")];
+  assert.ok(mainModule);
+  assert.ok(rootModule);
+  const retiredSourcePath = path.join(path.dirname(rootModule.filename), "retired-graph-generation.ts");
+  const retiredRoot = {
+    children: [{ children: [], filename: retiredSourcePath }],
+    filename: rootModule.filename,
+  } as NodeModule;
+  mainModule.children.push(retiredRoot);
+
+  try {
+    observeReloadNodeGraphSources(graph, rootModule, []);
+    const sourceState = activateReloadNodeSourceState();
+    const processDescriptor = sourceState.descriptors.find(({ scope }) => scope === "server:process");
+    assert.ok(processDescriptor);
+    assert.equal(processDescriptor.paths.includes("webapp/orchestrator/retired-graph-generation.ts"), false);
+  } finally {
+    const index = mainModule.children.indexOf(retiredRoot);
+    if (index >= 0) mainModule.children.splice(index, 1);
+    cancelReloadNodeSourceState();
+  }
 });

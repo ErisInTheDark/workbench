@@ -66,9 +66,10 @@ function workspacePath(filename: string) {
 
 function walkModules(root: NodeModule, stop: ReadonlySet<NodeModule>, skipRoot = false) {
   const visited = new Set<NodeModule>();
+  const stopFilenames = new Set([...stop].map(({ filename }) => filename));
   const paths = new Set<string>();
   const visit = (current: NodeModule, isRoot: boolean) => {
-    if (visited.has(current) || (!isRoot && stop.has(current))) return;
+    if (visited.has(current) || (!isRoot && stopFilenames.has(current.filename))) return;
     visited.add(current);
     if (!skipRoot || !isRoot) {
       const sourcePath = workspacePath(current.filename);
