@@ -12,6 +12,7 @@ const CHECKPOINT_COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu;
 export type CheckpointKind = "arc" | "implement" | "plan";
 export type GitArcHarness = "codex" | "copilot" | "opencode";
 export type GitArcProposalStatus = "committed" | "proposed" | "rescinded" | "superseded" | "unavailable";
+export type GitArcProposalUnavailableReasonCode = "committed-outside-proposal";
 
 export interface CheckpointMetadata {
   adoptedPaths?: string[];
@@ -42,6 +43,7 @@ export interface ProposalMetadata {
   supersededBySha: string | null;
   title: string;
   unavailableReason: string | null;
+  unavailableReasonCode?: GitArcProposalUnavailableReasonCode | null;
   version: 1 | 2;
 }
 

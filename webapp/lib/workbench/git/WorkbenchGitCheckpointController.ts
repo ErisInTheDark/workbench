@@ -118,6 +118,7 @@ export interface GitCheckpointCompareResult {
   changes: GitCheckpointFileChange[];
   checkpointCommit: string;
   checkpointRef: string;
+  hasUncommittedChanges?: boolean;
   intentName: string | null;
   proposalId?: string;
   repoRoot: string;
@@ -1074,10 +1075,15 @@ export default class WorkbenchGitCheckpointController {
       threadId,
     });
     const currentTree = await repository.writeScopedWorktreeTree(paths, baseline);
+    const currentHead = await repository.currentHead();
+    const currentWorktreeTree = currentHead === baseline
+      ? currentTree
+      : await repository.writeScopedWorktreeTree(paths, currentHead);
     return {
       changes: await repository.buildFileChanges(baseline, currentTree, paths),
       checkpointCommit: checkpoint.checkpointCommit,
       checkpointRef: checkpoint.checkpointRef,
+      hasUncommittedChanges: (await repository.listChangedPaths(currentHead, currentWorktreeTree, paths)).length > 0,
       intentName: metadata.intentName ?? null,
       repoRoot: repository.root,
       scopePaths: metadata.scopePaths,

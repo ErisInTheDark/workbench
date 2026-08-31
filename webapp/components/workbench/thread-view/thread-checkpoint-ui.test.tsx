@@ -1,8 +1,12 @@
-/* No production exports. Tests protect destructive claim-release choice and terminal thread-tail cleanup semantics. */
+/* No production exports. Tests protect proposal resolution, destructive claim-release choice, and terminal thread-tail cleanup semantics. */
 import assert from "node:assert/strict";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem";
+import type { GitCheckpointProposal } from "../../../lib/workbench/git/checkpoint-contracts";
+import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import getFinishedThreadTailHiddenItemIds from "./thread-finished-tail";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 
@@ -64,6 +68,40 @@ function messageItem(id: string): Extract<ThreadItem, { type: "agentMessage" }> 
   };
 }
 
+function renderUnavailableProposal(unavailableReasonCode?: "committed-outside-proposal") {
+  const proposal: GitCheckpointProposal = {
+    amendTargetSha: null,
+    baseCommit: "abcdef1",
+    changes: [],
+    committedSha: null,
+    description: "",
+    includeNewerAvailable: false,
+    mode: "commit",
+    paths: ["src/one.ts"],
+    proposalId: "proposal-one",
+    status: "unavailable",
+    supersededByProposalId: null,
+    supersededBySha: null,
+    title: "Proposal",
+    unavailableReason: "Unavailable",
+    ...(unavailableReasonCode ? { unavailableReasonCode } : {}),
+  };
+  return renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    committing: false,
+    description: "",
+    includeNewer: false,
+    onCommit: () => undefined,
+    onDescriptionChange: () => undefined,
+    onIncludeNewerChange: () => undefined,
+    onRetry: () => undefined,
+    onTitleChange: () => undefined,
+    paths: proposal.paths,
+    sourceItemId: "proposal-item",
+    state: { proposal, status: "loaded" },
+    title: proposal.title,
+  }));
+}
+
 function hiddenTailIds(
   itemGroups: readonly (readonly ThreadItem[])[],
   {
@@ -85,6 +123,19 @@ function hiddenTailIds(
 test("claim release restores dirty work and only unclaims clean work", () => {
   assert.equal(getGitArcClaimReleaseAction(0), "unclaim");
   assert.equal(getGitArcClaimReleaseAction(1), "restore");
+  assert.equal(getGitArcClaimReleaseAction(1, false), "unclaim");
+  assert.equal(getGitArcClaimReleaseAction(0, true), "restore");
+});
+
+test("proposals committed through another path render as resolved rather than failed", () => {
+  assert.match(
+    renderUnavailableProposal("committed-outside-proposal"),
+    /data-thread-checkpoint-committed-outside-proposal="true"/u,
+  );
+  assert.doesNotMatch(
+    renderUnavailableProposal(),
+    /data-thread-checkpoint-committed-outside-proposal/u,
+  );
 });
 
 test("finished tails hide terminal reasoning and hoisted proposals from shell and MCP routes", () => {

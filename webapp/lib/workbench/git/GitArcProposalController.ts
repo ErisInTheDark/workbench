@@ -332,6 +332,7 @@ async function buildProposalResult(
     supersededBySha: metadata.supersededBySha,
     title: metadata.title,
     unavailableReason: metadata.unavailableReason,
+    unavailableReasonCode: metadata.unavailableReasonCode ?? null,
   };
 }
 
@@ -346,14 +347,25 @@ async function resolveProposalState(repository: WorkbenchGitRepository, harness:
   const store = new GitCheckpointStore(repository);
   let proposal = await store.readProposal(harness, threadId, proposalId);
   let currentTree: string | null = null;
-  if (proposal.metadata.status === "proposed") {
+  const legacyCommittedHistoryReason = proposal.metadata.status === "unavailable"
+    && proposal.metadata.unavailableReason?.startsWith("Proposed paths changed in committed history:");
+  if (proposal.metadata.status === "proposed" || legacyCommittedHistoryReason) {
     const headMovement = await repository.classifyHeadMovement(proposal.metadata.liveBaseCommit, proposal.metadata.livePaths);
+    const committedOutsideProposal = headMovement.kind === "fast-forward"
+      && headMovement.changedPaths.length > 0
+      && !(await repository.listChangedPaths(
+        proposal.proposalCommit,
+        headMovement.currentHead,
+        proposal.metadata.livePaths,
+      )).length;
     let unavailableReason: string | null = headMovement.kind === "incompatible"
-      ? "The repository HEAD moved incompatibly after this proposal was created."
+      ? "The branch changed after this proposal was created, so it can no longer be committed as proposed."
+      : committedOutsideProposal
+        ? "These changes were committed outside this proposal."
       : headMovement.changedPaths.length
-        ? `Proposed paths changed in committed history: ${headMovement.changedPaths.join(", ")}`
+        ? "A newer commit changed files in this proposal, so it can no longer be committed as proposed."
         : null;
-    if (!unavailableReason && headMovement.kind === "fast-forward") {
+    if (proposal.metadata.status === "proposed" && !unavailableReason && headMovement.kind === "fast-forward") {
       if (proposal.metadata.mode === "commit") {
         const rebasedTree = await repository.writeTreeWithPathsFromSource(
           headMovement.currentHead,
@@ -372,7 +384,7 @@ async function resolveProposalState(repository: WorkbenchGitRepository, harness:
         });
       }
     }
-    if (!unavailableReason && !proposal.metadata.messageOnly) {
+    if (proposal.metadata.status === "proposed" && !unavailableReason && !proposal.metadata.messageOnly) {
       currentTree = await repository.writeScopedWorktreeTree(proposal.metadata.livePaths, proposal.metadata.liveBaseCommit);
       const changedNow = new Set(await repository.listChangedPaths(
         proposal.metadata.liveBaseCommit,
@@ -387,6 +399,7 @@ async function resolveProposalState(repository: WorkbenchGitRepository, harness:
         ...proposal.metadata,
         status: "unavailable",
         unavailableReason,
+        unavailableReasonCode: committedOutsideProposal ? "committed-outside-proposal" : null,
       });
     }
   }

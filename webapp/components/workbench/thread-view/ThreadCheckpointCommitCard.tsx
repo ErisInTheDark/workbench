@@ -71,6 +71,8 @@ export default function ThreadCheckpointCommitCard({
   const compactCanCommit = presentation === "compact-commit";
   const compactPreview = presentation === "compact-preview";
   const committedAmendable = proposal?.status === "committed" && proposal.amendability?.status === "available";
+  const committedOutsideProposal = proposal?.status === "unavailable"
+    && proposal.unavailableReasonCode === "committed-outside-proposal";
   const editable = !compactPreview && (!proposal || proposal.status === "proposed" || committedAmendable);
   const messageChanged = proposal?.status === "committed"
     && (title.trim() !== proposal.title.trim() || description.trim() !== proposal.description.trim());
@@ -196,6 +198,14 @@ export default function ThreadCheckpointCommitCard({
                   </span>
                 ) : proposal?.status === "superseded" ? (
                   <span className="text-[0.78em] text-muted">Superseded</span>
+                ) : committedOutsideProposal ? (
+                  <span
+                    className="inline-flex items-center gap-2 text-[0.78em] text-muted"
+                    data-thread-checkpoint-committed-outside-proposal="true"
+                  >
+                    <CheckIcon className="size-4 text-[color:var(--success)]" />
+                    <span>Committed outside proposal</span>
+                  </span>
                 ) : proposal?.status === "unavailable" ? (
                   <span className="text-[0.78em] text-[color:var(--danger)]">
                     {proposal.unavailableReason || "This proposal is no longer mechanically available."}

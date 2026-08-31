@@ -246,6 +246,7 @@ export const GitCheckpointCompareResultSchema = z.object({
   changes: z.array(GitCheckpointFileChangeSchema),
   checkpointCommit: checkpointSha,
   checkpointRef: nonEmptyString,
+  hasUncommittedChanges: z.boolean().optional(),
   intentName: z.string().nullable(),
   members: z.array(GitCheckpointCompareMemberSchema).optional(),
   proposalId: nonEmptyString.optional(),
@@ -274,6 +275,7 @@ export const GitCheckpointProposalSchema = z.object({
   supersededBySha: checkpointSha.nullable(),
   title: nonEmptyString,
   unavailableReason: z.string().nullable(),
+  unavailableReasonCode: z.enum(["committed-outside-proposal"]).nullable().optional(),
 });
 
 export type GitCheckpointProposal = z.infer<typeof GitCheckpointProposalSchema>;

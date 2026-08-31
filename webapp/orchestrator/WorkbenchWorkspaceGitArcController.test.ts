@@ -85,7 +85,8 @@ class FakeLocalGitArcController {
         kind: { move_path: null, type: "update" },
         path: filePath,
       })),
-      checkpointCommit: state.checkpointCommit, checkpointRef: `refs/${state.checkpointCommit}`, intentName: state.intentName,
+      checkpointCommit: state.checkpointCommit, checkpointRef: `refs/${state.checkpointCommit}`,
+      hasUncommittedChanges: this.dirtyRoots.has(input.cwd), intentName: state.intentName,
       ...(proposal ? { proposalId: proposal.proposalId } : {}),
       repoRoot: input.cwd, scopePaths,
     };
@@ -443,8 +444,15 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
 
   const comparison = await controller.execute(project, {
     action: "compare", refs: [], roots: [], ...identity,
-  }, { modifiedSince: 1 }) as { changes: Array<{ path: string }> };
+  }, { modifiedSince: 1 }) as { changes: Array<{ path: string }>; hasUncommittedChanges: boolean };
   assert.deepEqual(comparison.changes.map(({ path: filePath }) => filePath), ["api:one.txt", "web:two.txt"]);
+  assert.equal(comparison.hasUncommittedChanges, false);
+  local.dirtyRoots.add(webRoot);
+  const dirtyComparison = await controller.execute(project, {
+    action: "compare", refs: [], roots: [], ...identity,
+  }, { modifiedSince: 1 }) as { hasUncommittedChanges: boolean };
+  assert.equal(dirtyComparison.hasUncommittedChanges, true);
+  local.dirtyRoots.delete(webRoot);
 
   await assert.rejects(controller.execute(project, {
     action: "proposalCreate", amend: false, description: "", title: "ambiguous proposal", ...identity,

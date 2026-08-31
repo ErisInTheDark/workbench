@@ -70,7 +70,10 @@ export default function ThreadGitArcLifecycleCard({
     void (async () => {
       try {
         const comparison = await daemon.requestGitArc("git/arc/compare", { cwd, harness, refs: [], roots: [], threadId });
-        setChangeState(getGitArcClaimReleaseAction(comparison.changes.length) === "restore" ? "dirty" : "clean");
+        setChangeState(getGitArcClaimReleaseAction(
+          comparison.changes.length,
+          comparison.hasUncommittedChanges,
+        ) === "restore" ? "dirty" : "clean");
       } catch (compareError) {
         if (controller.signal.aborted) return;
         setChangeState("error");

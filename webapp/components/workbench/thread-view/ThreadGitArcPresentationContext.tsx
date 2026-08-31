@@ -26,7 +26,8 @@ export interface ThreadGitArcPresentation {
 
 type ReleaseAction = "restore" | "unclaim";
 
-export function getGitArcClaimReleaseAction(changeCount: number): ReleaseAction {
+export function getGitArcClaimReleaseAction(changeCount: number, hasUncommittedChanges?: boolean): ReleaseAction {
+  if (hasUncommittedChanges !== undefined) return hasUncommittedChanges ? "restore" : "unclaim";
   return changeCount > 0 ? "restore" : "unclaim";
 }
 

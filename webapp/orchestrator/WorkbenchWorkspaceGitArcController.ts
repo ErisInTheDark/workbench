@@ -526,6 +526,9 @@ export default class WorkbenchWorkspaceGitArcController {
       ...first,
       acquiredClaims: arrays("acquiredClaims"),
       changes: arrays("changes"),
+      ...(members.every((member) => typeof member.hasUncommittedChanges === "boolean") ? {
+        hasUncommittedChanges: members.some((member) => member.hasUncommittedChanges === true),
+      } : {}),
       members,
       noOp: members.length > 0 && members.every((member) => member.noOp === true),
       releasedClaims: arrays("releasedClaims"),

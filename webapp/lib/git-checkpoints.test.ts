@@ -693,6 +693,46 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
   assert.match(unavailable.unavailableReason ?? "", /no longer has working-tree changes/u);
 });
 
+checkpointTest("manual commits resolve exact proposals without treating committed history as worktree dirt", 7, async (context) => {
+  const { repoRoot } = await createRepository(context);
+  const threadId = "thread-manual-commit";
+  const plan = await createGitPlan({
+    cwd: repoRoot,
+    intentName: "Commit proposed work manually",
+    paths: ["selected.txt"],
+    threadId,
+  });
+  await startGitArc({ checkpointCommit: plan.checkpointCommit, cwd: repoRoot, threadId });
+  await write(repoRoot, "selected.txt", "proposed manual commit\n");
+  const proposal = await createGitCheckpointProposal({
+    cwd: repoRoot,
+    description: "",
+    threadId,
+    title: "Propose selected work",
+  });
+
+  await write(repoRoot, "unrelated.txt", "other committed work\n");
+  await git(repoRoot, ["add", "--", "selected.txt", "unrelated.txt"]);
+  await git(repoRoot, ["commit", "-m", "commit proposal with other work"]);
+
+  const resolved = await readGitCheckpointProposal({
+    cwd: repoRoot,
+    includeNewer: false,
+    proposalId: proposal.proposalId,
+    threadId,
+  });
+  assert.equal(resolved.status, "unavailable");
+  assert.equal(resolved.unavailableReasonCode, "committed-outside-proposal");
+
+  const cleanComparison = await compareGitCheckpoint({ cwd: repoRoot, threadId });
+  assert.deepEqual(cleanComparison.changes.map((change) => change.path), ["selected.txt"]);
+  assert.equal(cleanComparison.hasUncommittedChanges, false);
+
+  await write(repoRoot, "selected.txt", "later uncommitted work\n");
+  const dirtyComparison = await compareGitCheckpoint({ cwd: repoRoot, threadId });
+  assert.equal(dirtyComparison.hasUncommittedChanges, true);
+});
+
 checkpointTest("proposals rebase across compatible commits and reject selected or incompatible history", 7, async (context) => {
   const fixture = await fixtureCache.copy(CHECKPOINT_REBASE_READY_FIXTURE);
   context.after(fixture.dispose);
@@ -737,7 +777,8 @@ checkpointTest("proposals rebase across compatible commits and reject selected o
     threadId: conflictThreadId,
   });
   assert.equal(conflicted.status, "unavailable");
-  assert.match(conflicted.unavailableReason ?? "", /Proposed paths changed in committed history: deleted\.txt/u);
+  assert.equal(conflicted.unavailableReasonCode ?? null, null);
+  assert.match(conflicted.unavailableReason ?? "", /newer commit changed files/u);
 
   await git(repoRoot, ["checkout", "--quiet", "--detach", rootCommit]);
   await write(repoRoot, "branch-only.txt", "alternate advance\n");
@@ -750,7 +791,7 @@ checkpointTest("proposals rebase across compatible commits and reject selected o
     threadId: incompatibleThreadId,
   });
   assert.equal(incompatible.status, "unavailable");
-  assert.match(incompatible.unavailableReason ?? "", /HEAD moved incompatibly/u);
+  assert.match(incompatible.unavailableReason ?? "", /branch changed/u);
 });
 
 test("Git checkpoint controller operations", { concurrency: true }, async (context) => {

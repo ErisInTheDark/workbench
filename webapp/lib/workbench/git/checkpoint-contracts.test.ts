@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
   GitCheckpointRequestSchema,
 } from "./checkpoint-contracts.ts";
@@ -322,6 +323,22 @@ test("proposal contracts accept only complete backend amendability results", () 
   }).success, true);
   assert.equal(GitCheckpointProposalSchema.safeParse({ ...proposal, amendability: { status: "unavailable" } }).success, false);
   assert.equal(GitCheckpointProposalSchema.safeParse({ ...proposal, amendability: { reason: "", status: "unavailable" } }).success, false);
+});
+
+test("compare contracts keep worktree dirt additive across reload order", () => {
+  const comparison = {
+    changes: [],
+    checkpointCommit: "abcdef1",
+    checkpointRef: "refs/worktree/checkpoint",
+    intentName: "Inspect changes",
+    repoRoot: "C:/workspace",
+    scopePaths: ["src/a.ts"],
+  };
+  assert.equal(GitCheckpointCompareResultSchema.safeParse(comparison).success, true);
+  assert.equal(GitCheckpointCompareResultSchema.safeParse({
+    ...comparison,
+    hasUncommittedChanges: false,
+  }).success, true);
 });
 
 test("accepted proposal receipt ledgers remap both target and resulting HEAD commits", () => {
