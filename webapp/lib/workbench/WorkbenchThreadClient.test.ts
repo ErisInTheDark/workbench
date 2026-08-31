@@ -837,7 +837,7 @@ test("Copilot and OpenCode user notifications keep their provider-owned turn his
   }
 }));
 
-test("project reset and a newer canonical notification fence stale reads before source installation", async () => withClient(async (client, socket) => {
+test("project reset rejects stale reads while newer canonical notifications merge into valid reads", async () => withClient(async (client, socket) => {
   const source = activeThread();
   client.selectThreadPayload(source);
   let deferred: SocketRequest | null = null;
@@ -864,8 +864,8 @@ test("project reset and a newer canonical notification fence stale reads before 
     item: { clientId: null, content: [{ text: "new", text_elements: [], type: "text" }], id: "new-item", type: "userMessage" },
     threadId: "thread", turnId: "turn",
   });
-  socket.respond(deferred!.id, { browseResultEntries: [], nextCursor: null, questionnaireEntries: [], steerEntries: [], thread: wireThread("thread") });
-  assert.equal(await racedRead, null);
+  socket.respond(deferred!.id, { browseResultEntries: [], nextCursor: null, questionnaireEntries: [], steerEntries: [], thread: wireThread("thread", "turn") });
+  assert.ok(await racedRead);
   assert.deepEqual(client.getSnapshot().currentThread?.turns[0]?.items.map((item) => item.id), ["new-item"]);
 }));
 
@@ -1139,33 +1139,75 @@ test("previous Codex pages reject an empty body when history names a predecessor
   assert.deepEqual(client.getSnapshot().currentThread?.turns.map((turn) => turn.id), ["turn"]);
 }));
 
-test("candidate reads keep superseded ownership fences silent", async () => {
-  const statusMessages: string[] = [];
-  await withClient(async (client) => {
-    FakeWebSocket.intercept = (socket, request) => {
-      if (request.method !== "workbench/thread/page/read") {
-        return false;
-      }
-
-      client.selectThreadPayload({
-        ...activeThread("codex", "superseded"),
-        updatedAt: 2,
-      });
-      queueMicrotask(() => socket.respond(request.id, {
-        browseResultEntries: [],
-        nextCursor: null,
-        questionnaireEntries: [],
-        steerEntries: [],
-        thread: wireThread("superseded"),
-      }));
+test("newest pages commit complete history while live transcript owners advance", async () => withClient(async (client, socket) => {
+  const source = activeThread();
+  client.selectThreadPayload(source);
+  let pageRequest: SocketRequest | null = null;
+  let questionnaireRequest: SocketRequest | null = null;
+  let browseRequest: SocketRequest | null = null;
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method === "workbench/thread/page/read") {
+      pageRequest = request;
       return true;
-    };
+    }
+    if (request.method === "questionnaire/history/list") {
+      questionnaireRequest = request;
+      return true;
+    }
+    if (request.method === "browse/result/list") {
+      browseRequest = request;
+      return true;
+    }
+    return false;
+  };
 
-    assert.equal(await client.readThread("superseded"), null);
-    assert.equal(client.getSnapshot().threadsError, "");
-    assert.deepEqual(statusMessages, []);
-  }, { onStatusMessage: (message) => statusMessages.push(message) });
-});
+  const read = client.readThread("thread", "codex");
+  await waitForRequest(socket, "workbench/thread/page/read");
+  socket.notify("item/started", {
+    item: { clientId: null, content: [{ text: "live", text_elements: [], type: "text" }], id: "live-item", type: "userMessage" },
+    threadId: "thread",
+    turnId: "turn",
+  });
+  socket.notify("thread/status/changed", { status: { type: "idle" }, threadId: "thread" });
+  client.setCurrentThreadAgent("thread", "library:agents/live.md");
+  client.setCurrentThreadModel("thread", "live-model");
+
+  socket.notify("questionnaire/resolved", { requestKey: "live", threadId: "thread", turnId: "turn" });
+  await waitForRequest(socket, "questionnaire/history/list");
+  socket.respond(questionnaireRequest!.id, { data: [questionnaireEntry("turn", "live-questionnaire")] });
+  socket.notify("browse/result/recorded", { threadId: "thread" });
+  await waitForRequest(socket, "browse/result/list");
+  socket.respond(browseRequest!.id, { data: [browseEntry("live-browse", "turn")] });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const completeThread = wireThread("thread");
+  completeThread.turns[0]!.items = [{
+    id: "complete-plan",
+    memoryCitation: null,
+    phase: "commentary",
+    text: "complete plan",
+    type: "agentMessage",
+  }];
+  socket.respond(pageRequest!.id, {
+    browseResultEntries: [browseEntry("stored-browse", "turn")],
+    nextCursor: null,
+    questionnaireEntries: [questionnaireEntry("turn", "stored-questionnaire")],
+    steerEntries: [],
+    thread: completeThread,
+  });
+
+  const result = await read;
+  assert.ok(result);
+  const itemIds = result.turns.flatMap((turn) => turn.items.map((item) => item.id));
+  assert.equal(itemIds.includes("complete-plan"), true);
+  assert.equal(itemIds.includes("live-item"), true);
+  assert.equal(itemIds.some((itemId) => itemId.includes("stored-questionnaire")), true);
+  assert.equal(itemIds.some((itemId) => itemId.includes("live-questionnaire")), true);
+  assert.deepEqual(result.browseResultEntries?.map((entry) => entry.entryKey), ["stored-browse", "live-browse"]);
+  assert.equal(result.status, "idle");
+  assert.equal(result.agentPath, "library:agents/live.md");
+  assert.equal(result.model, "live-model");
+}));
 
 test("candidate reads still surface genuine provider failures", async () => {
   const statusMessages: string[] = [];

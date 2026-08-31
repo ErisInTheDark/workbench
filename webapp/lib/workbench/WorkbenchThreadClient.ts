@@ -570,6 +570,24 @@ function mergeScopedThreadContextEntries<TEntry extends { turnId: string }>(
     .map(({ entry }) => entry);
 }
 
+function mergeThreadContextEntriesByKey<TEntry extends { entryKey: string }>(
+  incomingEntries: TEntry[],
+  currentEntries: TEntry[],
+) {
+  const merged = [...incomingEntries];
+  const indexByKey = new Map(merged.map((entry, index) => [entry.entryKey, index]));
+  for (const entry of currentEntries) {
+    const existingIndex = indexByKey.get(entry.entryKey);
+    if (existingIndex === undefined) {
+      indexByKey.set(entry.entryKey, merged.length);
+      merged.push(entry);
+    } else {
+      merged[existingIndex] = entry;
+    }
+  }
+  return merged;
+}
+
 function isOpenCodePendingTurn(turn: Turn) {
   return /^opencode:turn:[^:]+:pending:\d+$/u.test(turn.id);
 }
@@ -1626,6 +1644,14 @@ function WorkbenchThreadClient(
       && threadSources.has(fence.threadKey);
   }
 
+  function isThreadReadFenceCurrent(fence: ThreadOperationFence) {
+    if (!isThreadOperationIdentityCurrent(fence)) {
+      return false;
+    }
+    return fence.sourceRevision === threadSources.getRevision(fence.threadKey)
+      || threadSources.has(fence.threadKey);
+  }
+
   function captureProjectOperationIdentity(): ProjectOperationIdentity {
     return {
       projectContextGeneration,
@@ -1698,17 +1724,43 @@ function WorkbenchThreadClient(
       return commit(historicalPayload);
     }
 
-    return commitThreadOperation(fence, result.payload, () => {
-      if (result.serviceTierToPersist) {
-        persistThreadServiceTier(
-          result.serviceTierToPersist.harness,
-          result.serviceTierToPersist.threadId,
-          result.serviceTierToPersist.serviceTier,
-        );
-      }
-      setThreadContextReadEntries(result.payload.id, result.pageResponse, result.payload.turnHistory);
-      return commit(mergeLiveStreamingThreadSnapshot(result.payload));
-    });
+    if (
+      getThreadSourceKey(result.payload) !== fence.threadKey
+      || !isThreadReadFenceCurrent(fence)
+    ) {
+      return null;
+    }
+    const currentSource = threadSources.get(fence.threadKey);
+    const stablePreferenceAdvanced = fence.stablePreferenceRevision !== getStablePreferenceRevision(fence.threadKey);
+    const statusAdvanced = fence.statusRevision !== getStatusRevision(fence.threadKey);
+    let payload = mergeLiveStreamingThreadSnapshot(result.payload);
+    if (stablePreferenceAdvanced && currentSource) {
+      payload = {
+        ...payload,
+        agentNickname: currentSource.agentNickname,
+        agentPath: currentSource.agentPath,
+        agentRole: currentSource.agentRole,
+        model: currentSource.model,
+        reasoningEffort: currentSource.reasoningEffort,
+        serviceTier: currentSource.serviceTier,
+        tokenUsage: currentSource.tokenUsage,
+      };
+    }
+    if (statusAdvanced && currentSource) {
+      payload = {
+        ...payload,
+        status: statusRecordsByKey.get(fence.threadKey)?.status ?? currentSource.status,
+      };
+    }
+    if (result.serviceTierToPersist && !stablePreferenceAdvanced) {
+      persistThreadServiceTier(
+        result.serviceTierToPersist.harness,
+        result.serviceTierToPersist.threadId,
+        result.serviceTierToPersist.serviceTier,
+      );
+    }
+    setThreadContextReadEntries(payload.id, result.pageResponse, payload.turnHistory, fence);
+    return commit(payload);
   }
 
   function installAuthoritativeThreadSource(thread: ThreadPayload) {
@@ -3113,17 +3165,39 @@ function WorkbenchThreadClient(
     threadId: string,
     response: WorkbenchThreadPageResponse,
     turnHistory: WorkbenchThreadTurnHistoryEntry[],
+    readFence?: ThreadOperationFence,
   ) {
     const turnIds = response.entryScope?.mode === "turns" ? response.entryScope.turnIds : null;
-    const browseResultEntries = turnIds
+    let browseResultEntries = turnIds
       ? mergeScopedThreadContextEntries(state.browseResultEntriesByThreadId.get(threadId) ?? [], response.browseResultEntries, turnIds, turnHistory)
       : response.browseResultEntries;
-    const questionnaireEntries = turnIds
+    let questionnaireEntries = turnIds
       ? mergeScopedThreadContextEntries(state.questionnaireHistoryByThreadId.get(threadId) ?? [], response.questionnaireEntries, turnIds, turnHistory)
       : response.questionnaireEntries;
-    const steerEntries = turnIds
+    let steerEntries = turnIds
       ? mergeScopedThreadContextEntries(state.steerHistoryByThreadId.get(threadId) ?? [], response.steerEntries, turnIds, turnHistory)
       : response.steerEntries;
+    if (readFence && !turnIds) {
+      const currentOverlay = getOverlayRevisionRecord(readFence.threadKey);
+      if (readFence.overlayRevisions.browseResultRevision !== currentOverlay.browseResultRevision) {
+        browseResultEntries = mergeThreadContextEntriesByKey(
+          browseResultEntries,
+          state.browseResultEntriesByThreadId.get(threadId) ?? [],
+        );
+      }
+      if (readFence.overlayRevisions.questionnaireRevision !== currentOverlay.questionnaireRevision) {
+        questionnaireEntries = mergeQuestionnaireHistoryEntries(
+          questionnaireEntries,
+          state.questionnaireHistoryByThreadId.get(threadId) ?? [],
+        );
+      }
+      if (readFence.overlayRevisions.steerRevision !== currentOverlay.steerRevision) {
+        steerEntries = mergeThreadContextEntriesByKey(
+          steerEntries,
+          state.steerHistoryByThreadId.get(threadId) ?? [],
+        );
+      }
+    }
     const browseChanged = setBrowseResultEntries(threadId, browseResultEntries);
     const questionnaireChanged = setQuestionnaireHistoryEntries(threadId, questionnaireEntries);
     const steerChanged = setSteerHistoryEntries(threadId, steerEntries);
@@ -3341,7 +3415,7 @@ function WorkbenchThreadClient(
 
       if (projectRootPaths.length && !isProjectCodexThreadAtExpectedCwd(pageResponse.thread, projectRootPaths, options.cwd)) {
         const message = `That ${harness} thread doesn't belong to this project.`;
-        if (!isThreadOperationFenceCurrent(operationFence)) {
+        if (!isThreadOperationIdentityCurrent(operationFence)) {
           return { kind: "superseded" };
         }
         return {
@@ -3381,7 +3455,7 @@ function WorkbenchThreadClient(
         ? { kind: "success", payload }
         : { kind: "superseded" };
     } catch (error) {
-      if (!isThreadOperationFenceCurrent(operationFence)) {
+      if (!isThreadOperationIdentityCurrent(operationFence)) {
         return { kind: "superseded" };
       }
       if (harness === "codex" && isTransientRolloutReadError(error)) {
