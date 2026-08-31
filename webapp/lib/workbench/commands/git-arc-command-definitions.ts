@@ -267,11 +267,11 @@ function inspectionCommand(action: "compare" | "diff") {
     helpGroups: ["git-arc"],
     mcpCodeModeEligible: true,
     words: ["git", "arc", action],
-    usage: `wb git arc ${action} [--ref <active-or-plan-ref>]${action === "diff" ? " [--page <page>]" : ""} [-- <path> [<path>...]]`,
+    usage: `wb git arc ${action} [--ref <arc-sha|proposal-id>]${action === "diff" ? " [--page <page>]" : ""} [-- <path> [<path>...]]`,
     inputSchema: z.object({
       ...(action === "diff" ? { page: z.number().int().positive().optional() } : {}),
       paths: paths.default([]),
-      ref: requiredText.optional().describe("The current active arc ref or an inactive or historical plan ref owned by this thread."),
+      ref: requiredText.optional().describe("An arc SHA or proposal ID owned by this thread."),
       refs: z.array(memberRefSchema).default([]),
       roots: z.array(rootPathsSchema).default([]),
     }).strict().superRefine((input, context) => {
@@ -299,7 +299,7 @@ function inspectionCommand(action: "compare" | "diff") {
       return postWorkbenchAgentCommand("/api/git-checkpoint", {
         action, ...baseBody(callerHarness, callerThreadId, cwd),
         ...("page" in input && input.page !== undefined ? { page: input.page } : {}),
-        ...(input.ref ? { checkpointCommit: input.ref } : {}),
+        ...(input.ref ? { ref: input.ref } : {}),
         ...(input.paths.length ? { paths: input.paths } : {}),
         ...(input.refs.length ? { refs: input.refs } : {}),
         ...(input.roots.length ? { roots: input.roots } : {}),

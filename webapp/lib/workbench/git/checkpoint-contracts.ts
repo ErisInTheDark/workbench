@@ -1,9 +1,13 @@
 /*
  * Exports:
+ * - GitArcRootPathsSchema/GitArcRootPaths and GitArcPlanRootSchema/GitArcPlanRoot: validate root-qualified path selections. Keywords: git, arc, root, paths, plan.
+ * - GitArcMemberRefSchema/GitArcMemberRef and GitArcInspectionMemberRefSchema/GitArcInspectionMemberRef: validate lifecycle SHA refs and broader inspection refs. Keywords: git, arc, ref, proposal, workspace.
+ * - GitArcMoveMappingSchema/GitArcMoveRequestSchema: validate bounded explicit and regex arc move requests. Keywords: git, arc, move, mapping.
+ * - GitArcMoveMapping/GitArcMoveRequest: expose validated move request types. Keywords: git, arc, move, type.
  * - GitCheckpointRequestSchema/GitCheckpointRequest: validate every stateless checkpoint route action, including unscoped diff pages. Keywords: git, checkpoint, request, diff, page, Zod.
  * - GitCheckpointFileChangeSchema/GitCheckpointFileChange: shared per-file compare and diff presentation. Keywords: git, checkpoint, file change.
+ * - GitCheckpointCompareResultSchema/GitCheckpointCompareResult: validate repo-local and workspace inspection results. Keywords: git, checkpoint, compare, proposal.
  * - GitCheckpointProposalSchema/GitCheckpointProposal: shared durable proposal state shown in thread UI. Keywords: git, checkpoint, proposal, commit.
- * - GitArcMoveMappingSchema/GitArcMoveRequestSchema: validate bounded explicit and regex arc move requests. Keywords: git, arc, move, mapping.
  */
 import { z } from "zod";
 
@@ -27,9 +31,15 @@ export const GitArcMemberRefSchema = z.object({
   rootId,
 }).strict();
 
+export const GitArcInspectionMemberRefSchema = z.object({
+  ref: nonEmptyString,
+  rootId,
+}).strict();
+
 export type GitArcRootPaths = z.infer<typeof GitArcRootPathsSchema>;
 export type GitArcPlanRoot = z.infer<typeof GitArcPlanRootSchema>;
 export type GitArcMemberRef = z.infer<typeof GitArcMemberRefSchema>;
+export type GitArcInspectionMemberRef = z.infer<typeof GitArcInspectionMemberRefSchema>;
 
 export const GitArcMoveMappingSchema = z.object({
   destination: nonEmptyString,
@@ -128,18 +138,18 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   }),
   z.object({
     action: z.literal("compare"),
-    checkpointCommit: checkpointSha.optional(),
     paths: checkpointPaths.optional(),
-    refs: z.array(GitArcMemberRefSchema).default([]),
+    ref: nonEmptyString.optional(),
+    refs: z.array(GitArcInspectionMemberRefSchema).default([]),
     roots: z.array(GitArcRootPathsSchema).default([]),
     ...checkpointBaseRequest,
   }),
   z.object({
     action: z.literal("diff"),
-    checkpointCommit: checkpointSha.optional(),
     page: z.number().int().positive().optional(),
     paths: checkpointPaths.optional(),
-    refs: z.array(GitArcMemberRefSchema).default([]),
+    ref: nonEmptyString.optional(),
+    refs: z.array(GitArcInspectionMemberRefSchema).default([]),
     roots: z.array(GitArcRootPathsSchema).default([]),
     ...checkpointBaseRequest,
   }),
@@ -226,6 +236,7 @@ const GitCheckpointCompareMemberSchema = z.object({
   checkpointCommit: checkpointSha,
   checkpointRef: nonEmptyString,
   intentName: z.string().nullable(),
+  proposalId: nonEmptyString.optional(),
   repoRoot: nonEmptyString,
   rootId,
   scopePaths: checkpointPaths,
@@ -237,6 +248,7 @@ export const GitCheckpointCompareResultSchema = z.object({
   checkpointRef: nonEmptyString,
   intentName: z.string().nullable(),
   members: z.array(GitCheckpointCompareMemberSchema).optional(),
+  proposalId: nonEmptyString.optional(),
   repoRoot: nonEmptyString,
   scopePaths: checkpointPaths,
 });

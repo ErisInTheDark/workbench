@@ -12,7 +12,6 @@ import path from "node:path";
 import type { ResolvedProjectRoot } from "../lib/project";
 import type { WorkbenchHarness } from "../lib/types";
 import type {
-  GitArcMemberRef,
   GitArcRootPaths,
   GitCheckpointFileChange,
   GitCheckpointRequest,
@@ -439,7 +438,7 @@ export default class WorkbenchWorkspaceGitArcController {
     return [...grouped.values()].map((group) => ({ ...group, adoptPaths: unique(group.adoptPaths), paths: unique(group.paths) }));
   }
 
-  private refsByRepo(project: AgentEndpointProjectResolution, members: readonly RepoMember[], refs: readonly GitArcMemberRef[]) {
+  private refsByRepo(project: AgentEndpointProjectResolution, members: readonly RepoMember[], refs: readonly { ref: string; rootId: string }[]) {
     const result = new Map<string, string>();
     for (const entry of refs) {
       const member = this.memberForRoot(members, this.findRoot(project, entry.rootId));
@@ -662,7 +661,7 @@ export default class WorkbenchWorkspaceGitArcController {
   ) {
     const groups = this.groupRootPaths(project, members, request.paths ?? [], request.roots);
     const refs = this.refsByRepo(project, members, request.refs);
-    if (request.checkpointCommit) refs.set(this.memberForRoot(members, project.root).repoRoot, request.checkpointCommit);
+    if (request.ref) refs.set(this.memberForRoot(members, project.root).repoRoot, request.ref);
     let selected = unique([...groups.map(({ member }) => member.repoRoot), ...refs.keys()])
       .map((repoRoot) => members.find((member) => member.repoRoot === repoRoot)!);
     if (!selected.length) {
@@ -682,8 +681,8 @@ export default class WorkbenchWorkspaceGitArcController {
       const group = groups.find((candidate) => candidate.member.repoRoot === member.repoRoot);
       const input = {
         cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
-        ...(refs.get(member.repoRoot) ? { checkpointCommit: refs.get(member.repoRoot) } : {}),
         ...(group?.paths.length ? { paths: group.paths } : {}),
+        ...(refs.get(member.repoRoot) ? { ref: refs.get(member.repoRoot) } : {}),
       };
       return {
         inspection: await this.local.compare(input),

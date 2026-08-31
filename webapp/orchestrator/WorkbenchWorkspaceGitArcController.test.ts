@@ -18,6 +18,7 @@ const execFileAsync = promisify(execFile);
 class FakeLocalGitArcController {
   readonly blockedRoots = new Set<string>();
   readonly collisionCalls: Array<{ checkpointCommit?: string; cwd: string }> = [];
+  readonly compareCalls: Array<{ cwd: string; ref?: string }> = [];
   readonly dirtyRoots = new Set<string>();
   readonly diffContents = new Map<string, string>();
   readonly unclaimedDirt = new Map<string, string[]>();
@@ -71,10 +72,13 @@ class FakeLocalGitArcController {
     return { checkpointCommit: plan.checkpointCommit, checkpointRef: `refs/${plan.checkpointCommit}`, changes: [], intentName: plan.intentName, repoRoot: input.cwd, scopePaths: plan.scopePaths };
   }
 
-  async compare(input: { cwd: string }) {
+  async compare(input: { cwd: string; ref?: string }) {
+    this.compareCalls.push(input);
     const state = this.states.get(input.cwd)!;
+    const proposal = input.ref ? this.proposals.get(input.ref) : null;
+    const scopePaths = proposal?.paths ?? state.claimedPaths;
     return {
-      changes: state.claimedPaths.map((filePath) => ({
+      changes: scopePaths.map((filePath) => ({
         additions: 1,
         deletions: 0,
         diff: this.diffContents.get(`${input.cwd}:${filePath}`) ?? `diff --git a/${filePath} b/${filePath}\n`,
@@ -82,7 +86,8 @@ class FakeLocalGitArcController {
         path: filePath,
       })),
       checkpointCommit: state.checkpointCommit, checkpointRef: `refs/${state.checkpointCommit}`, intentName: state.intentName,
-      repoRoot: input.cwd, scopePaths: state.claimedPaths,
+      ...(proposal ? { proposalId: proposal.proposalId } : {}),
+      repoRoot: input.cwd, scopePaths,
     };
   }
 
@@ -452,6 +457,20 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
   }) as { proposalId: string; rootId: string };
   assert.equal(apiProposal.rootId, "api");
   assert.equal(webProposal.rootId, "web");
+  const compareCallCount = local.compareCalls.length;
+  await controller.execute(project, {
+    action: "compare",
+    refs: [
+      { ref: apiProposal.proposalId, rootId: "api" },
+      { ref: webProposal.proposalId, rootId: "web" },
+    ],
+    roots: [],
+    ...identity,
+  }, { modifiedSince: 1 });
+  assert.deepEqual(local.compareCalls.slice(compareCallCount), [
+    { cwd: apiRoot, harness: "codex", ref: apiProposal.proposalId, threadId: identity.threadId },
+    { cwd: webRoot, harness: "codex", ref: webProposal.proposalId, threadId: identity.threadId },
+  ]);
   const messageAmendment = await controller.execute(project, {
     action: "proposalCreate", amend: false, amendProposalId: webProposal.proposalId,
     description: "Replacement description", title: "Replacement title", ...identity,

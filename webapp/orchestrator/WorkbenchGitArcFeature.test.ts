@@ -294,7 +294,7 @@ test("a Git arc mutation fences later card reads from an older shared result", a
   assert.deepEqual(transitionActions, ["proposalState", "proposalRescind", "proposalState"]);
 });
 
-test("compare forwards an explicit checkpoint ref to the controller", async () => {
+test("compare forwards an explicit inspection ref to the controller", async () => {
   const feature = new WorkbenchGitArcFeature({
     getThreadCreatedAt: async () => 42,
     getThreadClaimContext: async () => null,
@@ -302,16 +302,16 @@ test("compare forwards an explicit checkpoint ref to the controller", async () =
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: "project" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
-  let receivedCheckpointCommit: string | undefined;
+  let receivedRef: string | undefined;
   let receivedModifiedSince: number | undefined;
   const internal = (feature as unknown as {
     controller: {
-      compare: (input: { checkpointCommit?: string }) => Promise<object>;
+      compare: (input: { ref?: string }) => Promise<object>;
       listUnclaimedWorkspaceDirt: (input: { modifiedSince: number }) => Promise<string[]>;
     };
   }).controller;
   internal.compare = async (input) => {
-    receivedCheckpointCommit = input.checkpointCommit;
+    receivedRef = input.ref;
     return {};
   };
   internal.listUnclaimedWorkspaceDirt = async (input) => {
@@ -321,14 +321,14 @@ test("compare forwards an explicit checkpoint ref to the controller", async () =
 
   const response = await feature.executeRequest({
     action: "compare",
-    checkpointCommit: "a".repeat(40),
     cwd: "C:/Git/Project",
     harness: "codex",
+    ref: "proposal-one",
     threadId: "thread-one",
   });
 
   assert.equal(response.status, 200);
-  assert.equal(receivedCheckpointCommit, "a".repeat(40));
+  assert.equal(receivedRef, "proposal-one");
   assert.equal(receivedModifiedSince, 42);
   assert.deepEqual(await response.json(), { unclaimedDirtPaths: ["unclaimed.ts"] });
 });
@@ -752,7 +752,7 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
     { action: "planStart", intentDescription: "", intentName: "start", paths: ["src/a.ts"], ...common },
     { action: "arcStart", ...common },
     { action: "proposalRescind", proposalId: "proposal-one", ...common },
-    { action: "diff", checkpointCommit: "abcdef1", paths: ["src/a.ts"], ...common },
+    { action: "diff", paths: ["src/a.ts"], ref: "abcdef1", ...common },
     { action: "proposalCreate", amendProposalId: "proposal-one", description: "", title: "amend", ...common },
   ];
   const statuses = await Promise.all(requests.map(async (request) => (await feature.executeRequest(request)).status));

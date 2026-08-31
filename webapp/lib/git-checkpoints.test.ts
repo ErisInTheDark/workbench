@@ -275,15 +275,15 @@ checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snaps
   });
   assert.deepEqual(arcComparison.changes.map((change) => change.path), ["selected.txt"]);
   const explicitPlanComparison = await compareGitCheckpoint({
-    checkpointCommit: refreshedCheckpoint.checkpointCommit,
     cwd: repoRoot,
+    ref: refreshedCheckpoint.checkpointCommit,
     threadId: "thread-one",
   });
   assert.equal(explicitPlanComparison.checkpointCommit, refreshedCheckpoint.checkpointCommit);
   assert.deepEqual(explicitPlanComparison.changes.map((change) => change.path), ["selected.txt"]);
   await assert.rejects(compareGitCheckpoint({
-    checkpointCommit: started.checkpointCommit,
     cwd: repoRoot,
+    ref: started.checkpointCommit,
     threadId: "thread-one",
   }));
   const comparison = await compareGitCheckpoint({
@@ -306,6 +306,22 @@ checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snaps
   });
   assert.deepEqual(proposal.paths, ["selected.txt"]);
   assert.equal("changes" in proposal, false);
+  await write(repoRoot, "selected.txt", "after proposal\n");
+  const proposalComparison = await compareGitCheckpoint({
+    cwd: repoRoot,
+    ref: proposal.proposalId,
+    threadId: "thread-one",
+  });
+  assert.equal(proposalComparison.proposalId, proposal.proposalId);
+  assert.deepEqual(proposalComparison.changes.map((change) => change.path), ["selected.txt"]);
+  assert.match(proposalComparison.changes[0]?.diff ?? "", /after proposal/u);
+  const proposalDiff = await diffGitCheckpoint({
+    cwd: repoRoot,
+    ref: proposal.proposalId,
+    threadId: "thread-one",
+  });
+  assert.equal(proposalDiff.proposalId, proposal.proposalId);
+  assert.match(proposalDiff.diff, /after proposal/u);
 });
 
 checkpointTest("plans reject dirty unclaimed paths unless adoption is explicit", 1, async (context) => {

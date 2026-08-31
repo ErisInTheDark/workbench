@@ -119,6 +119,7 @@ export interface GitCheckpointCompareResult {
   checkpointCommit: string;
   checkpointRef: string;
   intentName: string | null;
+  proposalId?: string;
   repoRoot: string;
   scopePaths: string[];
 }
@@ -1083,11 +1084,27 @@ export default class WorkbenchGitCheckpointController {
     };
   }
 
-  async compare(input: ControllerInput & { checkpointCommit?: string; paths?: string[] }): Promise<GitCheckpointCompareResult> {
-    if (input.checkpointCommit) {
+  async compare(input: ControllerInput & { paths?: string[]; ref?: string }): Promise<GitCheckpointCompareResult> {
+    if (input.ref && !/^[a-f0-9]{7,64}$/iu.test(input.ref)) {
+      const repository = await WorkbenchGitRepository.open(input.cwd);
+      const harness = normalizeHarness(input.harness);
+      const proposal = await new GitCheckpointStore(repository).readProposal(harness, input.threadId, input.ref);
+      const paths = input.paths?.length ? repository.normalizePaths(input.paths) : repository.normalizePaths(proposal.metadata.paths);
+      const currentTree = await repository.writeScopedWorktreeTree(paths, proposal.proposalCommit);
+      return {
+        changes: await repository.buildFileChanges(proposal.proposalCommit, currentTree, paths),
+        checkpointCommit: proposal.proposalCommit,
+        checkpointRef: proposal.proposalRef,
+        intentName: null,
+        proposalId: proposal.metadata.proposalId,
+        repoRoot: repository.root,
+        scopePaths: proposal.metadata.paths,
+      };
+    }
+    if (input.ref) {
       const repoRoot = await resolveRepoRoot(input.cwd);
       const harness = normalizeHarness(input.harness);
-      const checkpoint = await readCheckpoint(repoRoot, harness, input.threadId, input.checkpointCommit);
+      const checkpoint = await readCheckpoint(repoRoot, harness, input.threadId, input.ref);
       const metadata = checkpoint.metadata;
       if (metadata?.kind === "arc") {
         const active = await new GitArcRegistry(new WorkbenchGitRepository(repoRoot)).find({ harness, threadId: input.threadId });
@@ -1130,9 +1147,9 @@ export default class WorkbenchGitCheckpointController {
   }
 
   async diff(input: ControllerInput & {
-    checkpointCommit?: string;
     page?: number;
     paths?: string[];
+    ref?: string;
   }): Promise<GitCheckpointDiffResult> {
     const result = await this.compare(input);
     return {

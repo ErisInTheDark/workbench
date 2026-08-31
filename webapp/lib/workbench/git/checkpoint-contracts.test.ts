@@ -115,14 +115,27 @@ test("plan and arc requests encode claimed-path defaults and successor refs", ()
   }).success, true);
   const explicitCompare = GitCheckpointRequestSchema.safeParse({
     action: "compare",
-    checkpointCommit: "a".repeat(40),
     cwd: "C:/repo",
+    ref: "a".repeat(40),
     threadId: "thread-one",
   });
   assert.equal(explicitCompare.success, true);
   if (!explicitCompare.success) assert.fail("Expected the explicit compare ref to pass validation.");
   if (explicitCompare.data.action !== "compare") assert.fail("Expected a compare request.");
-  assert.equal(explicitCompare.data.checkpointCommit, "a".repeat(40));
+  assert.equal(explicitCompare.data.ref, "a".repeat(40));
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "compare",
+    cwd: "C:/repo",
+    ref: "proposal-one",
+    refs: [{ ref: "proposal-two", rootId: "web" }],
+    threadId: "thread-one",
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcStart",
+    checkpointCommit: "proposal-one",
+    cwd: "C:/repo",
+    threadId: "thread-one",
+  }).success, false);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "diff",
     cwd: "C:/repo",
@@ -212,8 +225,8 @@ test("proposal and plan diagnostics encode explicit lifecycle targets", () => {
   const common = { cwd: "C:/repo", threadId: "thread-one" };
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "diff",
-    checkpointCommit: "abcdef1",
     paths: ["src/reported.ts"],
+    ref: "abcdef1",
     ...common,
   }).success, true);
   assert.equal(GitCheckpointRequestSchema.safeParse({

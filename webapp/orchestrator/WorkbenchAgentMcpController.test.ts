@@ -200,6 +200,17 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       path: "/api/git-checkpoint",
       responseKind: "git-arc-diff",
     });
+    assert.deepEqual(await diffDefinition.buildRequestFromJson({ ref: "proposal-one" }, {
+      callerHarness: "codex",
+      callerThreadId: "thread-1",
+      cwd: "C:/authoritative",
+      workbenchOrigin: null,
+    }), {
+      body: { action: "diff", cwd: "C:/authoritative", harness: "codex", ref: "proposal-one", threadId: "thread-1" },
+      method: "POST",
+      path: "/api/git-checkpoint",
+      responseKind: "git-arc-diff",
+    });
 
     const release = inventory.tools.find(({ name }) => name === "git_arc_release");
     assert.ok(release);

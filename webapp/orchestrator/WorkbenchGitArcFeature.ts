@@ -530,7 +530,7 @@ export default class WorkbenchGitArcFeature {
       case "arcRelease": return Response.json(await this.controller.releaseArc({ ...common, disown: input.disown }));
       case "compare": return Response.json({
         ...await this.controller.compare({
-          ...common, ...(input.checkpointCommit ? { checkpointCommit: input.checkpointCommit } : {}), ...(input.paths ? { paths: input.paths } : {}),
+          ...common, ...(input.paths ? { paths: input.paths } : {}), ...(input.ref ? { ref: input.ref } : {}),
         }),
         unclaimedDirtPaths: await this.controller.listUnclaimedWorkspaceDirt({
           cwd: input.cwd,
@@ -541,8 +541,8 @@ export default class WorkbenchGitArcFeature {
         ...await this.controller.diff({
           ...common,
           ...(input.page !== undefined ? { page: input.page } : {}),
-          ...(input.checkpointCommit ? { checkpointCommit: input.checkpointCommit } : {}),
           ...(input.paths ? { paths: input.paths } : {}),
+          ...(input.ref ? { ref: input.ref } : {}),
         }),
         unclaimedDirtPaths: await this.controller.listUnclaimedWorkspaceDirt({
           cwd: input.cwd,

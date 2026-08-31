@@ -25,6 +25,11 @@ function createArcReceipt(
   payload: Record<string, unknown> | null,
   request: WorkbenchAgentCliRequest,
 ) {
+  const inspectsProposal = (action === "compare" || action === "diff") && (
+    Boolean(readString(payload, "proposalId"))
+    || (Array.isArray(payload?.members) && payload.members.filter(isRecord).some((member) => Boolean(readString(member, "proposalId"))))
+  );
+  if (inspectsProposal) return null;
   const ref = readString(payload, action === "propose" ? "sourceCheckpoint" : "checkpointCommit");
   if (!ref) return null;
   const selectedPaths = action === "propose"

@@ -399,7 +399,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   assert.equal(continuedArc.request.responseKind, "git-arc-continue");
 
   const compare = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "compare", "--", "src/file.ts",
+    "git", "arc", "compare", "--ref", "proposal-one", "--", "src/file.ts",
   ], gitOptions);
   assert.equal(compare.kind, "request");
   assert.deepEqual(compare.request.body, {
@@ -407,6 +407,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     cwd: "C:/workspace",
     harness: "codex",
     paths: ["src/file.ts"],
+    ref: "proposal-one",
     threadId: "thread-1",
   });
   assert.equal(compare.request.responseKind, "git-arc-compare");
@@ -1199,6 +1200,15 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     unclaimedDirtPaths: ["src/unclaimed.ts"],
   }, { action: "compare" });
   assert.match(compareResponse.stdout, /Unclaimed workspace dirt modified since this thread was created:[\s\S]*src\/unclaimed\.ts/u);
+  const proposalCompareResponse = adapt("git-arc-compare", {
+    changes: [],
+    checkpointCommit: planRef,
+    intentName: null,
+    proposalId: "proposal-one",
+    scopePaths: ["src/one.ts"],
+    unclaimedDirtPaths: [],
+  }, { action: "compare", ref: "proposal-one" });
+  assert.equal(parseGitArcReceipt(proposalCompareResponse.stdout), null);
   const diffResponse = adapt("git-arc-diff", {
     checkpointCommit: planRef,
     diff: "diff --git a/src/one.ts b/src/one.ts\n",
@@ -1398,7 +1408,7 @@ test("parses combined plan start and ref-free start", async () => {
 test("parses explicit plan-ref diff and targeted amend", async () => {
   const diff = await parseWorkbenchAgentCliCommand(["git", "arc", "diff", "--ref", "abcdef1", "--", "src/a.ts"], gitArcOptions);
   assert.equal(diff.kind, "request");
-  assert.equal(diff.request.body?.checkpointCommit, "abcdef1");
+  assert.equal(diff.request.body?.ref, "abcdef1");
   const amend = await parseWorkbenchAgentCliCommand([
     "git", "arc", "propose", "--amend", "proposal-one", "--title", "Replacement title", "--description", "Replacement description",
   ], gitArcOptions);
