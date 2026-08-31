@@ -2,7 +2,7 @@
  * Exports:
  * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: resolve a recorded wb MCP call and keep failed Recall calls on the generic MCP error surface. Keywords: workbench, MCP, command, route, failure.
  * - getWorkbenchMcpCommandDisplay: match a simple recorded wb MCP call to its shared summary presentation. Keywords: workbench, MCP, command, rendering.
- * - getWorkbenchMcpShellCommandItem: derive valid wb shell evidence into the ordinary command presentation shape. Keywords: workbench, MCP, shell, command, presentation.
+ * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive valid wb shell evidence and its matcher shell into the ordinary command presentation shape. Keywords: workbench, MCP, shell, command, presentation.
  */
 import type { JsonValue } from "../../../codex/generated/app-server/serde_json/JsonValue";
 import type { ThreadItem } from "../../../codex/generated/app-server/v2/ThreadItem";
@@ -12,7 +12,7 @@ import {
   WorkbenchShellResultSchema,
 } from "../../commands/workbench-shell-command";
 
-import type { ThreadCommandSummaryDisplay } from "./types";
+import type { CommandShell, ThreadCommandSummaryDisplay } from "./types";
 import {
   getWorkbenchCommandRoute,
   getWorkbenchCommandSummaryDisplay,
@@ -30,15 +30,22 @@ interface WorkbenchMcpCommandInput {
 
 type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 type CommandExecutionItem = Extract<ThreadItem, { type: "commandExecution" }>;
+export type WorkbenchMcpShellCommandItem = CommandExecutionItem & { shell: CommandShell };
 
 function isWorkbenchMcpServer(server: string) {
   return server === "wb" || server === "wbex";
 }
 
+function inferWorkbenchShellFromCwd(cwd: string): CommandShell {
+  if (/^(?:[A-Za-z]:[\\/]|\\\\)/u.test(cwd)) return "pwsh";
+  if (cwd.startsWith("/")) return "shell";
+  return null;
+}
+
 export function getWorkbenchMcpShellCommandItem(
   item: McpToolCallItem,
   fallbackCwd = ".",
-): CommandExecutionItem | null {
+): WorkbenchMcpShellCommandItem | null {
   if (!isWorkbenchMcpServer(item.server) || item.tool !== "shell") return null;
   const input = WorkbenchShellInputSchema.safeParse(item.arguments);
   if (!input.success) return null;
@@ -70,6 +77,9 @@ export function getWorkbenchMcpShellCommandItem(
     pluginId: item.pluginId,
     processId: null,
     scriptPath: null,
+    shell: result.success
+      ? result.data.shell ?? inferWorkbenchShellFromCwd(cwd)
+      : inferWorkbenchShellFromCwd(cwd),
     source: "agent",
     status: item.status,
     type: "commandExecution",

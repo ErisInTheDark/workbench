@@ -54,6 +54,7 @@ test("carries the exact sandbox state through Windows without cmd.exe argument l
   assert.deepEqual(result, {
     cwd: path.resolve(workspace, "child"),
     exitCode: 5,
+    shell: "pwsh",
     stderr: "denied\n",
     stdout: "partial\n",
   });
@@ -98,11 +99,12 @@ test("launches Codex directly outside Windows", async () => {
     shellEnvironment: { NODE_ENV: "test", SHELL: "/bin/bash" },
   });
 
-  await controller.execute({
+  const result = await controller.execute({
     command: "printf '%s' 'quoted value'",
     login: false,
   }, sandboxMeta(workspace), new AbortController().signal);
 
+  assert.equal(result.shell, "bash");
   const execution = executions[0]!;
   assert.deepEqual(execution.command.slice(0, 2), ["codex", "sandbox"]);
   assert.deepEqual(execution.command.slice(4), [

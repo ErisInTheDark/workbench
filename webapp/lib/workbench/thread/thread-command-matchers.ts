@@ -74,6 +74,7 @@ import {
     THREAD_CONTEXT_COMMAND_MATCHERS,
 } from "./command-matchers/thread-context";
 import type {
+    CommandShell,
     CommandDisplayContext,
     ParsedCommandDisplayContext,
     ThreadCommandDetailRow,
@@ -241,6 +242,7 @@ export { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute, getWorkbenc
 export { getWorkbenchCommandRouteSummaryDisplay } from "./command-matchers/workbench-command-rendering";
 export type { WorkbenchCommandRoute, WorkbenchSpecializedOperation } from "./command-matchers/workbench-command-rendering";
 export type {
+    CommandShell,
     GitArcCommandAction,
     GitArcCommandIntent,
     GitCheckpointCommitCommandIntent,
@@ -292,9 +294,11 @@ export function getThreadCommandDisplay({
   cwd,
   knownSkills,
   projectRootPath,
+  shell: shellHint,
   workspaceRoots,
 }: CommandDisplayContext): ThreadCommandDisplay {
   const shellResult = unwrapShellCommand(command);
+  const shell = shellResult.shell ?? shellHint ?? null;
   const context: ParsedCommandDisplayContext = {
     command,
     commandActions,
@@ -302,8 +306,8 @@ export function getThreadCommandDisplay({
     cwdDisplay: formatThreadCommandPath(cwd, { projectRootPath, workspaceRoots }),
     knownSkills,
     projectRootPath,
-    shell: shellResult.shell,
-    shellGroup: getCommandShellGroup(shellResult.shell),
+    shell,
+    shellGroup: getCommandShellGroup(shell),
     unwrappedCommand: shellResult.command,
     workspaceRoots,
   };
@@ -378,7 +382,7 @@ export function getThreadCommandBlockDisplay({
   workspaceRoots,
 }: {
   items: Array<
-    | Pick<CommandDisplayContext, "command" | "commandActions" | "cwd">
+    | Pick<CommandDisplayContext, "command" | "commandActions" | "cwd" | "shell">
     | { display: ThreadCommandSummaryDisplay }
   >;
   knownSkills?: CommandDisplayContext["knownSkills"];
@@ -398,6 +402,7 @@ export function getThreadCommandBlockDisplay({
         cwd: item.cwd,
         knownSkills,
         projectRootPath,
+        shell: item.shell,
         workspaceRoots,
       });
     for (const key of getKnownCommandSummaryCategoryKeys(display.summaryStats)) {

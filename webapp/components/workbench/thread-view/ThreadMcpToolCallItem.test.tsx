@@ -164,6 +164,7 @@ test("wb shell calls render through the ordinary command execution surface", () 
       structuredContent: {
         cwd: "C:/workspace",
         exitCode: 5,
+        shell: "pwsh",
         stderr: "denied\n",
         stdout: "partial\n",
       },
@@ -187,6 +188,7 @@ test("wb shell calls render through the ordinary command execution surface", () 
   }));
 
   assert.match(html, /Failed/u);
+  assert.match(html, /title="src"/u);
   assert.match(html, /Get-ChildItem src/u);
   assert.match(html, /partial\s*denied/u);
   assert.doesNotMatch(html, /mcp__wb__shell/u);
@@ -236,7 +238,7 @@ test("adjacent wb rg and shell calls share one derived command block", () => {
   }));
   const visibleText = html.replace(/<[^>]+>/gu, "");
 
-  assert.match(visibleText, /Searched 1 file, ran 1 other command/u);
+  assert.match(visibleText, /Searched 1 file, listed files/u);
   assert.match(visibleText, /Search for needle in webapp/u);
   assert.match(html, /Get-ChildItem src/u);
   assert.match(html, /file\.ts/u);

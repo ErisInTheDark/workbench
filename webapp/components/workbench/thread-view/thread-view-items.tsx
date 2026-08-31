@@ -64,6 +64,7 @@ import {
   type ThreadCommandSummaryDisplay,
   type ThreadCommandDetailRow,
   type ThreadCommandDetailTarget,
+  type CommandShell,
 } from "../../../lib/workbench/thread/thread-command-matchers";
 import {
   getSubagentSummary,
@@ -131,11 +132,11 @@ const LIVE_RENDER_BLOCK_TAIL_ITEM_COUNT = 8;
 const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 const EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS: ReadonlySet<string> = new Set();
 
-type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
+type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & { shell?: CommandShell };
 type McpCommandItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 type CommandSequenceItem = CommandItem | McpCommandItem;
 type CommandBlockItem =
-  | Pick<CommandItem, "command" | "commandActions" | "cwd">
+  | Pick<CommandItem, "command" | "commandActions" | "cwd" | "shell">
   | { display: ThreadCommandSummaryDisplay };
 type FileChangeItem = Extract<ThreadItem, { type: "fileChange" }>;
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
@@ -1425,6 +1426,7 @@ function isBrowseCommandItem({
     cwd: item.cwd,
     knownSkills,
     projectRootPath,
+    shell: item.shell,
     workspaceRoots,
   });
   return isBrowseCommandMatcherClaim(display.claimedBy);
@@ -1447,6 +1449,7 @@ function isThreadContextCommandItem({
     cwd: item.cwd,
     knownSkills,
     projectRootPath,
+    shell: item.shell,
     workspaceRoots,
   });
   return isThreadContextMatcherClaim(display.claimedBy);
@@ -1532,6 +1535,7 @@ function buildCommandSequenceRenderSegments({
       cwd: item.cwd,
       knownSkills,
       projectRootPath,
+      shell: item.shell,
       workspaceRoots,
     });
     const threadTitleCommand = isWorkbenchThreadTitleSetMatcherClaim(commandDisplay.claimedBy)
@@ -1765,8 +1769,9 @@ function ThreadCommandExecutionDetails ({
     cwd: item.cwd,
     knownSkills,
     projectRootPath,
+    shell: item.shell,
     workspaceRoots,
-  }), [item.command, item.commandActions, item.cwd, knownSkills, projectRootPath, workspaceRoots]);
+  }), [item.command, item.commandActions, item.cwd, item.shell, knownSkills, projectRootPath, workspaceRoots]);
   const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
   const outcomeCommandDisplay = useMemo(
     () => getThreadCommandOutcomeDisplay(commandDisplay, commandOutcome),
@@ -2215,6 +2220,7 @@ function ThreadRegularCommandSequence ({
         command: item.command,
         commandActions: item.commandActions,
         cwd: item.cwd,
+        shell: item.shell,
       }];
     }
     const display = getWorkbenchMcpCommandDisplay({

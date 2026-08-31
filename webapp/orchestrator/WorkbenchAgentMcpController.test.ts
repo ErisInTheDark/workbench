@@ -87,7 +87,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     shell: {
       execute: async (input, meta) => {
         shellCalls.push({ input, meta });
-        return { cwd: "C:/authoritative/child", exitCode: 3, stderr: "sandbox denial\n", stdout: "partial\n" };
+        return { cwd: "C:/authoritative/child", exitCode: 3, shell: "pwsh", stderr: "sandbox denial\n", stdout: "partial\n" };
       },
     },
   });
@@ -146,7 +146,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const shell = inventory.tools.find(({ name }) => name === "shell");
     assert.ok(shell);
     assert.deepEqual(Object.keys(shell.inputSchema.properties ?? {}).sort(), ["command", "login", "timeout_ms", "workdir"]);
-    assert.deepEqual(Object.keys(shell.outputSchema?.properties ?? {}).sort(), ["cwd", "exitCode", "stderr", "stdout"]);
+    assert.deepEqual(Object.keys(shell.outputSchema?.properties ?? {}).sort(), ["cwd", "exitCode", "shell", "stderr", "stdout"]);
     assert.match(shell.description ?? "", /never escalates.*direct shell_command/u);
 
     const shellMeta = {
@@ -163,6 +163,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.deepEqual(shellResult.structuredContent, {
       cwd: "C:/authoritative/child",
       exitCode: 3,
+      shell: "pwsh",
       stderr: "sandbox denial\n",
       stdout: "partial\n",
     });

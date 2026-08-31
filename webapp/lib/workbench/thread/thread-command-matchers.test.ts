@@ -262,8 +262,19 @@ test("wb shell MCP evidence derives ordinary command execution presentation", ()
   assert.equal(running.type, "commandExecution");
   assert.equal(running.command, "Get-ChildItem src");
   assert.equal(running.cwd, PROJECT_ROOT);
+  assert.equal(running.shell, "pwsh");
   assert.equal(running.status, "inProgress");
   assert.equal(running.exitCode, null);
+  const runningDisplay = getThreadCommandDisplay({
+    command: running.command,
+    commandActions: running.commandActions,
+    cwd: running.cwd,
+    projectRootPath: PROJECT_ROOT,
+    shell: running.shell,
+  });
+  assert.equal(runningDisplay.claimedBy, "powershell.list-files");
+  assert.equal(runningDisplay.summaryStats.listedFiles, 1);
+  assert.deepEqual(pathOperands(runningDisplay.summaryParts), ["src"]);
   assert.ok(getWorkbenchMcpShellCommandItem(shellMcpItem({ server: "wbex" }), PROJECT_ROOT));
   assert.equal(getWorkbenchMcpShellCommandItem(shellMcpItem({ server: "other" }), PROJECT_ROOT), null);
 
@@ -275,6 +286,7 @@ test("wb shell MCP evidence derives ordinary command execution presentation", ()
       structuredContent: {
         cwd: "C:/git/web/workbench/child",
         exitCode: 5,
+        shell: "pwsh",
         stderr: "denied\n",
         stdout: "partial\n",
       },
@@ -284,6 +296,7 @@ test("wb shell MCP evidence derives ordinary command execution presentation", ()
   assert.ok(completed);
   assert.equal(completed.cwd, "C:/git/web/workbench/child");
   assert.equal(completed.exitCode, 5);
+  assert.equal(completed.shell, "pwsh");
   assert.equal(completed.aggregatedOutput, "partial\ndenied\n");
   assert.equal(completed.durationMs, 42);
 
@@ -303,6 +316,17 @@ test("wb shell MCP evidence derives ordinary command execution presentation", ()
     },
     status: "completed",
   }), PROJECT_ROOT), null);
+});
+
+test("explicit shell launchers override command display hints", () => {
+  const display = getThreadCommandDisplay({
+    command: "bash -lc 'find src -type f'",
+    commandActions: [],
+    cwd: PROJECT_ROOT,
+    shell: "pwsh",
+  });
+
+  assert.equal(display.shell, "bash");
 });
 
 test("failed Recall MCP calls use the generic error renderer", () => {

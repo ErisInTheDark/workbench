@@ -149,6 +149,7 @@ export interface CommandDisplayContext {
   cwd: string;
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
+  shell?: CommandShell;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 

@@ -10,7 +10,10 @@ import path from "node:path";
 import { z } from "zod";
 
 import type { JsonValue } from "../lib/workbench/commands/workbench-agent-command-definition";
-import { WorkbenchShellInputSchema } from "../lib/workbench/commands/workbench-shell-command";
+import {
+  WorkbenchShellInputSchema,
+  type WorkbenchShell,
+} from "../lib/workbench/commands/workbench-shell-command";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexCommandExecController from "./CodexCommandExecController";
 
@@ -54,11 +57,31 @@ function readSandboxState(meta: Record<string, unknown> | undefined) {
   return result.data;
 }
 
+function readPosixShell(executable: string): WorkbenchShell {
+  const shell = path.basename(executable).toLowerCase();
+  switch (shell) {
+    case "bash":
+    case "fish":
+    case "sh":
+    case "zsh":
+      return shell;
+    default:
+      return "shell";
+  }
+}
+
 function hostShellCommand(command: string, login: boolean, platform: NodeJS.Platform, environment: NodeJS.ProcessEnv) {
   if (platform === "win32") {
-    return ["pwsh", ...(login ? [] : ["-NoProfile"]), "-Command", command];
+    return {
+      command: ["pwsh", ...(login ? [] : ["-NoProfile"]), "-Command", command],
+      shell: "pwsh" as const,
+    };
   }
-  return [environment.SHELL?.trim() || "/bin/sh", login ? "-lc" : "-c", command];
+  const executable = environment.SHELL?.trim() || "/bin/sh";
+  return {
+    command: [executable, login ? "-lc" : "-c", command],
+    shell: readPosixShell(executable),
+  };
 }
 
 function codexSandboxLaunch(codexArgs: string[], platform: NodeJS.Platform) {
@@ -101,7 +124,7 @@ export default class WorkbenchShellController {
       "--sandbox-state-json",
       JSON.stringify(commandState),
       "--",
-      ...shellCommand,
+      ...shellCommand.command,
     ], this.platform);
 
     const result = await this.commandExec.execute({
@@ -110,6 +133,6 @@ export default class WorkbenchShellController {
       sandboxPolicy: { type: "dangerFullAccess" },
       ...(request.timeout_ms === undefined ? {} : { timeoutMs: request.timeout_ms }),
     }, signal);
-    return { ...result, cwd: commandCwd };
+    return { ...result, cwd: commandCwd, shell: shellCommand.shell };
   }
 }
