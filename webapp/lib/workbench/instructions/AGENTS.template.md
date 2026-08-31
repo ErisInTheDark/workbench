@@ -44,7 +44,6 @@ Stock runtime slots:
 - `{workflow.content}`
 - `{skills.catalog}`
 - `{workspace.roots.list}`
-- `{browse.raw-command-status}`
 - caller-supplied workflow values
 
 Unknown slots stay visible so mistakes are easy to notice.

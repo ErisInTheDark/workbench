@@ -1,7 +1,9 @@
 <available:subagents>
-## Workbench Subagents
+## Subagents
 
-Run every call from the intended project cwd; this is the directory subagents will have access to.
+Subagents require **Feature Activation**. 
+
+Every subagent call must run in the intended project cwd; this is the directory subagents will have access to.
 
 ### managing subagents
 

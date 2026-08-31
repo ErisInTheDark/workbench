@@ -32,6 +32,7 @@ const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|harness|shell)(?::|\s|>)/u;
 const AVAILABLE_VALUE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
 const KNOWN_AVAILABLE_VALUES = new Set([
   "browse",
+  "browse-raw",
   "long-waits",
   "multi-root",
   "subagents",

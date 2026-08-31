@@ -99,7 +99,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     const promptContext = readWorkbenchPromptContext(message);
     if (!promptContext) return message;
     const params = asRecord(message.params);
-    const available = workbenchPromptFiles.listWorkbenchInstructionMechanics({ ...promptContext, harness: "codex" });
+    const available = await workbenchPromptFiles.listWorkbenchInstructionMechanics({ ...promptContext, harness: "codex" });
     const filter = (value: string | null, field: string) => workbenchPromptFiles.filterWorkbenchInstructionContent(value, {
       available,
       field,

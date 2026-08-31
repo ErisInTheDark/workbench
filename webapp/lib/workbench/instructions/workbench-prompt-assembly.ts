@@ -39,7 +39,6 @@ import {
 } from "./library-instruction-files";
 import {
   listWorkbenchInstructionMechanics,
-  readWorkbenchBrowseRawCommandStatus,
 } from "./workbench-instruction-mechanics";
 import { filterWorkbenchInstructionContent } from "./instruction-context-filter";
 import type { WorkbenchPromptContext, WorkbenchPromptInstructions } from "./workbench-prompt-types";
@@ -242,18 +241,16 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
   await ensureWorkbenchPromptFiles();
 
   const instructionFiles = createLibraryInstructionFileGeneration();
-  const [agentDefinition, projectSkills, instructionPacks, browseRawCommandStatus] = await Promise.all([
+  const [agentDefinition, projectSkills, instructionPacks] = await Promise.all([
     readSelectedAgentDefinition(context, instructionFiles),
     listProjectSkillDefinitionsForPrompt(context),
     listWorkbenchLibraryInstructions(),
-    context.workbenchOrigin?.trim() ? readWorkbenchBrowseRawCommandStatus() : Promise.resolve(""),
   ]);
   const skillManifest = context.harness === "codex"
     ? await buildWorkbenchSkillCatalog(projectSkills)
     : await buildWorkbenchSkillBodyCatalog(projectSkills);
   const slots: Record<string, string> = {
     ...buildAgentRuntimeSlots(agentDefinition),
-    "browse.raw-command-status": browseRawCommandStatus,
     "skills.catalog": skillManifest?.trim() || "No additional Workbench skills were detected.",
     "subagent.identity": buildSubagentIdentity(context),
     "workflow.content": buildWorkflowContent(context, instructionFiles),
@@ -287,9 +284,6 @@ export async function buildWorkbenchThreadUtilityDeveloperInstructions(
   await ensureWorkbenchPromptFiles();
 
   const instructionFiles = createLibraryInstructionFileGeneration();
-  const browseRawCommandStatus = context.workbenchOrigin?.trim()
-    ? await readWorkbenchBrowseRawCommandStatus()
-    : "";
   const utilityMechanics = new Set([
     "browse",
     "git",
@@ -304,9 +298,7 @@ export async function buildWorkbenchThreadUtilityDeveloperInstructions(
     instructionFiles
       .list("wb/mechanics")
       .filter((file) => utilityMechanics.has(file.key))
-      .map((file) => instructionFiles.render(file.relativePath, {
-        "browse.raw-command-status": browseRawCommandStatus,
-      })),
+      .map((file) => instructionFiles.render(file.relativePath)),
   );
 }
 

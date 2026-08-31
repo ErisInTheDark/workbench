@@ -1,6 +1,6 @@
 ## Questionnaires
 
-Trigger criterion:
+Trigger criteria:
 - need clarification
 - need user decision
 - need user action

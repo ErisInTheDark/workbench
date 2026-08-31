@@ -740,7 +740,7 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
       workbenchLibraryInstructions,
     ]);
     const filterPromptContext = resolvedPromptContext ?? { harness: "copilot" as const, threadId, workbenchOrigin };
-    const available = this.getReloadableModules().workbenchPromptFiles.listWorkbenchInstructionMechanics(filterPromptContext);
+    const available = await this.getReloadableModules().workbenchPromptFiles.listWorkbenchInstructionMechanics(filterPromptContext);
     const filteredContent = this.getReloadableModules().workbenchPromptFiles.filterWorkbenchInstructionContent(content, {
       available,
       field: "copilot.systemMessage",

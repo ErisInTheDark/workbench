@@ -3,7 +3,7 @@
  * - WorkbenchPromptContext/WorkbenchPromptInstructions: stable prompt assembly contracts. Keywords: prompt, context, instructions.
  * - ensure/build Workbench prompt functions: delegate each source-consuming call through one fresh assembly generation. Keywords: prompt, markdown, reload.
  * - buildWorkbenchActivatedSkillCatalog: load fresh bodies for validated slash-activated skills. Keywords: skills, slash, input.
- * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: source-free selector and availability helpers. Keywords: selector, mechanics.
+ * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: final selector filtering and capability-backed availability helpers. Keywords: selector, mechanics.
  * - default WorkbenchPromptFiles: stable public prompt API. Keywords: prompt, owner, generation.
  */
 

@@ -47,8 +47,11 @@ test("multi-root availability keeps workspace-only instructions out of single-ro
   assert.equal(filter(value, "codex", "pwsh", new Set(["thread-recall", "multi-root"])).output, "before\nworkspace arc\nafter");
 });
 
-test("long-wait and thread-refresh selectors use their exact availability", () => {
+test("capability selectors use their exact availability", () => {
   const value = [
+    "<available:browse-raw>",
+    "raw Browse",
+    "</available:browse-raw>",
     "<available:long-waits>",
     "wait",
     "</available:long-waits>",
@@ -56,6 +59,7 @@ test("long-wait and thread-refresh selectors use their exact availability", () =
     "refresh",
     "</available:thread-refresh>",
   ].join("\n");
+  assert.equal(filter(value, "codex", "pwsh", new Set(["browse-raw"])).output, "raw Browse");
   assert.equal(filter(value, "codex", "pwsh", new Set(["long-waits"])).output, "wait");
   assert.equal(filter(value, "codex", "pwsh", new Set(["thread-refresh"])).output, "refresh");
 });

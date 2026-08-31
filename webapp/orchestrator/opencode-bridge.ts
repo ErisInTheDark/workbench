@@ -901,8 +901,9 @@ export class OpenCodeBridge {
     } else {
       systemPrompt = null;
     }
+    const available = await this.getReloadableModules().workbenchPromptFiles.listWorkbenchInstructionMechanics(promptContext);
     return this.getReloadableModules().workbenchPromptFiles.filterWorkbenchInstructionContent(systemPrompt, {
-      available: this.getReloadableModules().workbenchPromptFiles.listWorkbenchInstructionMechanics(promptContext),
+      available,
       field: "opencode.systemPrompt",
       harness: "opencode",
       onWarning: (warning) => logError("instruction-filter", `\u001b[31m${warning.field}:${warning.line} ${warning.recovery}: ${warning.source}\u001b[0m`),
