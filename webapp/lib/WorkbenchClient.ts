@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - initWorkbench: wire the workbench DOM, one bridge transport, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket.
  * - areExplorerSnapshotsEquivalent: compare root-visible explorer semantics while excluding sidebar-only activity ordering. Keywords: explorer, equality, render boundary.
  * - openWorkbenchThreadStateObservation: negotiate atomic v3 bootstrap with v2/versionless reload-window fallback and browser-only schema conformance. Keywords: thread state, protocol, compatibility, conformance.
  * - requestWorkbenchReload: send and conform one typed socket reload admission. Keywords: reload, WebSocket, Zod, boundary.
+ * - WorkbenchClient: wire the workbench DOM, one reconnecting bridge transport, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket, resume.
  */
 
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
@@ -58,6 +58,7 @@ import conformWorkbenchThreadStateOpenResult from "./workbench/thread/browser-th
 import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateOpenResultSchema, WorkbenchThreadStateSnapshotSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
 import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
 import reportClientSchemaError from "./workbench/report-client-schema-error";
+import WorkbenchBrowserResumeController from "./workbench/WorkbenchBrowserResumeController";
 
 type MountedWorkbenchControls = WorkbenchControls & {
   createFilePanelClient: (
@@ -355,6 +356,7 @@ export async function WorkbenchClient(
     workbenchBindings.clientStateController,
     (message) => reportStatusMessage(message),
   );
+  const mountedFilePanelClients = new Set<ReturnType<typeof WorkbenchFilePanelClient>>();
   let activeFilePath = "";
   let activeProjectId = projectClient.getSnapshot().currentProjectId;
   coordinatorLifecycle.addUnsubscribe(projectClient.subscribe((snapshot) => {
@@ -412,6 +414,43 @@ export async function WorkbenchClient(
       emitExplorerStateChange();
     }
   }));
+  const reportConnectionRecoveryFailure = (summary: string, error: unknown) => {
+    const detail = error instanceof Error ? error.message.slice(0, 500) : "Unknown reconnect recovery failure.";
+    console.error(summary, detail);
+    reportStatusMessage(`${summary} ${detail}`);
+  };
+  let connectionRecoveryPending = false;
+  let connectionRecoveryTask: Promise<void> | null = null;
+  const requestConnectionRecovery = () => {
+    connectionRecoveryPending = true;
+    if (connectionRecoveryTask) return;
+    connectionRecoveryTask = (async () => {
+      while (connectionRecoveryPending && !coordinatorLifecycle.isDisposed) {
+        connectionRecoveryPending = false;
+        try {
+          projectClient.resetObservation();
+          threadClient.resetConnectionState();
+          await threadSidebarClient.reopen();
+          if (coordinatorLifecycle.isDisposed) return;
+          await applyRoute(activeRoute);
+          if (activeRoute.view === "thread") await refreshRateLimits();
+          const fileRefreshes = await Promise.allSettled(
+            [...mountedFilePanelClients].map(async (client) => await client.refreshCurrentFileFromDiskIfSafe()),
+          );
+          const failedFileRefresh = fileRefreshes.find((result) => result.status === "rejected");
+          if (failedFileRefresh?.status === "rejected") {
+            reportConnectionRecoveryFailure("Unable to refresh a file after reconnecting.", failedFileRefresh.reason);
+          }
+        } catch (error) {
+          reportConnectionRecoveryFailure("Unable to rebuild Workbench state after reconnecting.", error);
+        }
+      }
+    })().finally(() => {
+      connectionRecoveryTask = null;
+      if (connectionRecoveryPending && !coordinatorLifecycle.isDisposed) requestConnectionRecovery();
+    });
+  };
+  coordinatorLifecycle.addUnsubscribe(threadClient.onReconnect(requestConnectionRecovery));
 
   document.execCommand?.("defaultParagraphSeparator", false, "p");
 
@@ -986,29 +1025,35 @@ export async function WorkbenchClient(
   const controls: MountedWorkbenchControls = {
     applyRoute,
     daemon,
-    createFilePanelClient: (surfaces, filePanelOptions = {}) => WorkbenchFilePanelClient({
-      ...filePanelOptions,
-      clearThreadSelection: () => {
-        threadClient.clearThreadSelection();
-        applyCurrentThreadSelection(null);
-      },
-      draftStore,
-      fileTransport: {
-        read: async (projectId, path) => await daemon.request("project/file/read", { path, projectId }),
-        reset: async (projectId, path, expectedMtimeMs, force) => await daemon.request("project/file/reset", { expectedMtimeMs, force, path, projectId }),
-        save: async (projectId, path, content, expectedMtimeMs, force) => await daemon.request("project/file/save", { content, expectedMtimeMs, force, path, projectId }),
-      },
-      emitExplorerStateChange,
-      expandProjectPath: (filePath) => {
-        projectClient.expandPath(filePath);
-      },
-      getProjectChangeSummary: (path) => projectClient.getSnapshot().changes[path] ?? null,
-      getProjectId: () => projectClient.getSnapshot().currentProjectId,
-      refreshProject: async () => {
-        await projectClient.refreshProject();
-      },
-      surfaces,
-    }),
+    createFilePanelClient: (surfaces, filePanelOptions = {}) => {
+      const panelLifecycle = new LifecycleScope();
+      const client = WorkbenchFilePanelClient({
+        ...filePanelOptions,
+        clearThreadSelection: () => {
+          threadClient.clearThreadSelection();
+          applyCurrentThreadSelection(null);
+        },
+        draftStore,
+        fileTransport: {
+          read: async (projectId, path) => await daemon.request("project/file/read", { path, projectId }),
+          reset: async (projectId, path, expectedMtimeMs, force) => await daemon.request("project/file/reset", { expectedMtimeMs, force, path, projectId }),
+          save: async (projectId, path, content, expectedMtimeMs, force) => await daemon.request("project/file/save", { content, expectedMtimeMs, force, path, projectId }),
+        },
+        emitExplorerStateChange,
+        expandProjectPath: (filePath) => {
+          projectClient.expandPath(filePath);
+        },
+        getProjectChangeSummary: (path) => projectClient.getSnapshot().changes[path] ?? null,
+        getProjectId: () => projectClient.getSnapshot().currentProjectId,
+        refreshProject: async () => {
+          await projectClient.refreshProject();
+        },
+        surfaces,
+      }, panelLifecycle);
+      mountedFilePanelClients.add(client);
+      panelLifecycle.addUnsubscribe(() => mountedFilePanelClients.delete(client));
+      return client;
+    },
     createThreadDraft: (harness, draftOptions = {}) => {
       const draftThread = threadClient.createThread(harness, draftOptions.threadId, {
         select: draftOptions.select,
@@ -1128,6 +1173,14 @@ export async function WorkbenchClient(
   if (sessionState.currentThreadId || activeRoute.view === "thread") {
     void refreshRateLimits();
   }
+  const browserResume = new WorkbenchBrowserResumeController({
+    onError: (error) => {
+      reportConnectionRecoveryFailure("Unable to reconnect after resuming Workbench.", error);
+    },
+    reconnect: async () => await threadClient.reconnect(),
+  });
+  browserResume.start();
+  coordinatorLifecycle.addUnsubscribe(() => browserResume.dispose());
   return () => {
     threadSidebarClient.bestEffortFlush();
     void threadSidebarClient.close();

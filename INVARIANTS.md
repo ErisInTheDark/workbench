@@ -13,6 +13,8 @@ You may propose new invariants or changes to existing invariants, but you must m
 <!-- Prevent random connection ports or browser origins from redefining durable client state. -->
 - Store app-owned preferences and drafts in app SQLite, never browser storage.
 - Scope daemon-owned references through app daemon registrations. Ports and addresses are connection locations, never identity.
+<!-- Prevent suspended mobile tabs from trusting an unreplayable WebSocket stream. -->
+- Treat browser visibility suspension as loss of live stream continuity. On resume, replace the browser WebSocket and rebuild pushed observations plus visible route state from authoritative owners.
 <!-- Prevent app-port changes from racing persistence, stranding clients, or splitting runtime identity. -->
 - Move the app port by binding the replacement before retiring the old listener. Preserve app runtime and state identity. Update browser and desktop origins together.
 <!-- Prevent native release generation from requiring a running Workbench shutdown. -->

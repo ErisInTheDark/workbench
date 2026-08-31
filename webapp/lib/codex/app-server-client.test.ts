@@ -201,6 +201,54 @@ test("shared transcript notifications and connection closure reach their Workben
   }
 });
 
+test("reconnect replaces and fences the old socket before announcing fresh continuity", async () => {
+  const originalWebSocket = globalThis.WebSocket;
+  const sockets: FakeWebSocket[] = [];
+  globalThis.WebSocket = class extends FakeWebSocket {
+    constructor(url: string) {
+      super(url);
+      sockets.push(this);
+    }
+  } as unknown as typeof WebSocket;
+  try {
+    const client = new CodexAppServerClient();
+    const notifications: string[] = [];
+    let closes = 0;
+    let reconnects = 0;
+    client.onConnectionClose(() => { closes += 1; });
+    client.onNotification((notification) => { notifications.push(notification.method); });
+    client.onReconnect(() => { reconnects += 1; });
+    await client.connect("ws://test");
+
+    const oldSocket = sockets[0]!;
+    const oldRequest = client.sendRequest({ id: 42, method: "old/request" });
+    const oldRequestRejected = assert.rejects(oldRequest, /connection replaced/u);
+    await client.reconnect();
+    await oldRequestRejected;
+
+    assert.equal(sockets.length, 2);
+    assert.equal(oldSocket.closeCalls, 1);
+    assert.equal(closes, 1);
+    assert.equal(reconnects, 1);
+
+    oldSocket.notify({
+      method: "thread/started",
+      params: { thread: {} },
+      workbenchHarness: "codex",
+    });
+    assert.deepEqual(notifications, []);
+
+    const freshSocket = sockets[1]!;
+    const freshRequest = client.sendRequest<{ owner: string }>({ id: 43, method: "fresh/request" });
+    oldSocket.respond(43, { owner: "old" });
+    freshSocket.respond(43, { owner: "fresh" });
+    assert.deepEqual(await freshRequest, { id: 43, result: { owner: "fresh" } });
+    client.close();
+  } finally {
+    globalThis.WebSocket = originalWebSocket;
+  }
+});
+
 test("default receipt timers preserve the browser global receiver", async () => {
   const originalClearTimeout = globalThis.clearTimeout;
   const originalSetTimeout = globalThis.setTimeout;

@@ -5,7 +5,6 @@
  * - WorkbenchThreadListener: subscriber signature for thread client state changes. Keywords: workbench, thread, subscribe.
  * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator. Keywords: workbench, thread, sidebar, intent.
  * - WorkbenchThreadClientOptions: creation options for the thread client manager hooks. Keywords: workbench, thread, status, callbacks.
- * - WorkbenchThreadClient: public surface for thread transport, draft threads, and notification handling. Keywords: workbench, thread, client, dispose.
  * - default WorkbenchThreadClient: create the thread sub-client that owns Codex, Copilot, or OpenCode thread state and notifications. Keywords: workbench, thread, codex, copilot, opencode, default export.
  */
 
@@ -230,8 +229,11 @@ interface WorkbenchThreadClient {
   installSidebarSnapshot: (snapshot: WorkbenchThreadSidebarSnapshot | null) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   openThread: (threadId: string, options?: { entries?: readonly WorkbenchThreadSidebarEntry[]; harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" }) => Promise<ThreadPayloadFetchOutcome>;
+  onReconnect: (listener: () => void) => () => void;
   onWorkbenchNotification: (listener: (notification: { method: "workbench/thread-state/reset" | "workbench/thread-state/updated"; params: unknown }) => void) => () => void;
+  reconnect: () => Promise<void>;
   requestWorkbench: <TResponse>(method: string, params: unknown) => Promise<TResponse>;
+  resetConnectionState: () => void;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   selectThreadPayload: (thread: ThreadPayload) => void;
   refreshRateLimits: () => Promise<void>;
@@ -894,6 +896,14 @@ function WorkbenchThreadClient(
     return codexClient.onWorkbenchNotification(listener);
   }
 
+  function onReconnect(listener: () => void) {
+    return codexClient.onReconnect(listener);
+  }
+
+  async function reconnect() {
+    await codexClient.reconnect();
+  }
+
   let transcriptConformanceReportFailureLogged = false;
   const transcripts = new WorkbenchTranscriptClient({
     reportConformance: (report) => {
@@ -1171,6 +1181,10 @@ function WorkbenchThreadClient(
     if (emitChange) {
       emit();
     }
+  }
+
+  function resetConnectionState() {
+    resetProjectThreadState();
   }
 
   function setProjectContext(context: { projectId?: string; root: string; rootPath: string; roots?: WorkbenchProjectRoot[] }) {
@@ -5776,9 +5790,12 @@ function WorkbenchThreadClient(
     isDraftThreadId,
     listModels,
     openThread,
+    onReconnect,
     onWorkbenchNotification,
+    reconnect,
     requestWorkbench,
     readThread,
+    resetConnectionState,
     selectThreadPayload,
     refreshRateLimits,
     sendThreadMessage,

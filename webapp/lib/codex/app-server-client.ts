@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - CodexAppServerClient: persistent typed WebSocket client for the local stdio bridge and app-server notifications. Keywords: codex, websocket, stdio, notifications.
+ * - CodexAppServerClient: persistent typed WebSocket client with fenced reconnects for the local stdio bridge and app-server notifications. Keywords: codex, websocket, reconnect, stdio, notifications.
  */
 import type { WorkbenchHarness } from "../types";
 import { workbenchTranscriptNotifications } from "../workbench/database/transcript/workbench-transcript-contract";
@@ -57,9 +57,11 @@ export class CodexAppServerClient {
   private readonly pendingResponses = new Map<number, PendingResponseHandler>();
   private readonly workbenchNotificationListeners = new Set<(notification: WorkbenchNotification) => void>();
   private readonly connectionCloseListeners = new Set<() => void>();
+  private readonly reconnectListeners = new Set<() => void>();
   private readonly nextRequestId = createRequestIdGenerator();
   private connectPromise: Promise<void> | null = null;
   private socketPromise: Promise<void> | null = null;
+  private hasOpenedSocket = false;
   private initialized = false;
   private lastConsumedEventStreamSequence = 0;
   private disposed = false;
@@ -93,11 +95,12 @@ export class CodexAppServerClient {
     }
 
     this.url = url;
-    this.connectPromise = this.initializeProvider();
+    const connectPromise = this.initializeProvider();
+    this.connectPromise = connectPromise;
     try {
-      await this.connectPromise;
+      await connectPromise;
     } finally {
-      this.connectPromise = null;
+      if (this.connectPromise === connectPromise) this.connectPromise = null;
     }
   }
 
@@ -106,8 +109,13 @@ export class CodexAppServerClient {
     this.url = url;
     if (this.socket?.readyState === WebSocket.OPEN) return;
     if (this.socketPromise) return await this.socketPromise;
-    this.socketPromise = this.openSocket(url);
-    try { await this.socketPromise; } finally { this.socketPromise = null; }
+    const socketPromise = this.openSocket(url);
+    this.socketPromise = socketPromise;
+    try {
+      await socketPromise;
+    } finally {
+      if (this.socketPromise === socketPromise) this.socketPromise = null;
+    }
   }
 
   private async initializeProvider() {
@@ -127,35 +135,43 @@ export class CodexAppServerClient {
     this.socket = socket;
 
     socket.addEventListener("message", (event) => {
+      if (this.socket !== socket) return;
       this.handleIncomingMessage(event.data);
     });
 
     socket.addEventListener("close", () => {
-      for (const pending of this.pendingResponses.values()) {
-        pending.reject(new Error("Codex app-server connection closed."));
-      }
-      this.pendingResponses.clear();
-      this.initialized = false;
-      if (this.socket === socket) {
-        this.clearEventStreamReceiptState();
-        this.socket = null;
-        for (const listener of this.connectionCloseListeners) listener();
-      }
+      if (!this.retireSocket(socket, new Error("Codex app-server connection closed."))) return;
       if (!this.disposed) this.scheduleReconnect();
     });
 
     await new Promise<void>((resolve, reject) => {
-      socket.addEventListener("open", () => resolve(), { once: true });
+      let opened = false;
+      socket.addEventListener("open", () => {
+        opened = true;
+        resolve();
+      }, { once: true });
       socket.addEventListener("error", () => {
+        if (opened) return;
         if (this.socket === socket) this.socket = null;
         socket.close();
         reject(new Error("Failed to connect to Codex app-server."));
       }, {
         once: true,
       });
+      socket.addEventListener("close", () => {
+        if (!opened) reject(new Error("Failed to connect to Codex app-server."));
+      }, { once: true });
     });
 
+    if (this.socket !== socket) {
+      throw new Error("Codex app-server connection was replaced before opening.");
+    }
+    const reconnected = this.hasOpenedSocket;
+    this.hasOpenedSocket = true;
     this.reconnectAttempt = 0;
+    if (reconnected) {
+      for (const listener of this.reconnectListeners) listener();
+    }
   }
 
   private scheduleReconnect() {
@@ -168,22 +184,55 @@ export class CodexAppServerClient {
     }, delay);
   }
 
-  close(code?: number, reason?: string) {
-    this.disposed = true;
-    this.clearEventStreamReceiptState();
+  async reconnect() {
+    if (this.disposed) throw new Error("Codex app-server client is disposed.");
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    this.socket?.close(code, reason);
+
+    const socket = this.socket;
+    if (socket) {
+      this.retireSocket(socket, new Error("Codex app-server connection replaced."));
+      socket.close(1000, "Browser resumed.");
+    }
+    this.connectPromise = null;
+    this.socketPromise = null;
+
+    try {
+      await this.connect(this.url);
+    } catch (error) {
+      this.scheduleReconnect();
+      throw error;
+    }
+  }
+
+  close(code?: number, reason?: string) {
+    this.disposed = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    const socket = this.socket;
+    if (socket) {
+      this.retireSocket(socket, new Error("Codex app-server client closed."));
+      socket.close(code, reason);
+    } else {
+      for (const pending of this.pendingResponses.values()) pending.reject(new Error("Codex app-server client closed."));
+      this.pendingResponses.clear();
+      this.clearEventStreamReceiptState();
+    }
   }
 
   dispose() {
     this.disposed = true;
-    this.clearEventStreamReceiptState();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    this.socket?.close();
-    for (const pending of this.pendingResponses.values()) pending.reject(new Error("Codex app-server client disposed."));
-    this.pendingResponses.clear();
+    const socket = this.socket;
+    if (socket) {
+      this.retireSocket(socket, new Error("Codex app-server client disposed."));
+      socket.close();
+    } else {
+      for (const pending of this.pendingResponses.values()) pending.reject(new Error("Codex app-server client disposed."));
+      this.pendingResponses.clear();
+      this.clearEventStreamReceiptState();
+    }
   }
 
   onWorkbenchNotification(listener: (notification: WorkbenchNotification) => void) {
@@ -194,6 +243,11 @@ export class CodexAppServerClient {
   onConnectionClose(listener: () => void) {
     this.connectionCloseListeners.add(listener);
     return () => this.connectionCloseListeners.delete(listener);
+  }
+
+  onReconnect(listener: () => void) {
+    this.reconnectListeners.add(listener);
+    return () => this.reconnectListeners.delete(listener);
   }
 
   onNotification(listener: (
@@ -306,5 +360,16 @@ export class CodexAppServerClient {
     this.eventStreamAckTimer = null;
     this.lastConsumedEventStreamSequence = 0;
     this.pendingEventStreamAckSequence = null;
+  }
+
+  private retireSocket(socket: WebSocket, error: Error) {
+    if (this.socket !== socket) return false;
+    this.socket = null;
+    this.initialized = false;
+    this.clearEventStreamReceiptState();
+    for (const pending of this.pendingResponses.values()) pending.reject(error);
+    this.pendingResponses.clear();
+    for (const listener of this.connectionCloseListeners) listener();
+    return true;
   }
 }
