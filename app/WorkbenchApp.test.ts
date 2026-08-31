@@ -142,7 +142,7 @@ test("rejects a managed thread before acquiring app resources", async () => {
 
 test("closes the server before releasing the app lease", async () => {
   const target = fixture();
-  assert.deepEqual(await target.app.start(), { address, kind: "started" });
+  assert.deepEqual(await target.app.start(), { address, kind: "started", portSource: "random" });
   await target.app.close();
   assert.deepEqual(target.events, [
     "lease:acquire",
@@ -181,8 +181,9 @@ test("runtime startup failure releases the lease without constructing a listener
 
 test("startup prefers the environment, then saved state, then a random port", async () => {
   const environment = fixture({ environmentPort: 44_001, savedPort: 44_002 });
-  await environment.app.start();
+  const environmentResult = await environment.app.start();
   assert.equal(environment.createdPort, 44_001);
+  assert.equal(environmentResult.kind === "started" ? environmentResult.portSource : null, "environment");
   assert.deepEqual(environment.appPortControl.read(), {
     appOrigin: address.url,
     currentPort: address.port,
@@ -191,13 +192,15 @@ test("startup prefers the environment, then saved state, then a random port", as
   });
 
   const saved = fixture({ savedPort: 44_002 });
-  await saved.app.start();
+  const savedResult = await saved.app.start();
   assert.equal(saved.createdPort, 44_002);
+  assert.equal(savedResult.kind === "started" ? savedResult.portSource : null, "setting");
   assert.equal(saved.appPortControl.read().source, "setting");
 
   const random = fixture();
-  await random.app.start();
+  const randomResult = await random.app.start();
   assert.equal(random.createdPort, 0);
+  assert.equal(randomResult.kind === "started" ? randomResult.portSource : null, "random");
   assert.equal(random.appPortControl.read().source, "random");
 });
 

@@ -29,9 +29,16 @@ fn quit_deadline_expired(deadline: Option<Instant>, now: Instant) -> bool {
 
 enum ManagerCommand {
     Quit,
+    Restart,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ShutdownIntent {
+    Quit,
+    Restart,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum AppOriginChange {
     Moved,
     Ready,
@@ -51,6 +58,10 @@ fn update_app_origin(current: &mut Option<String>, next: String) -> AppOriginCha
     change
 }
 
+fn should_open_browser(change: &AppOriginChange, requested: bool) -> bool {
+    requested && *change == AppOriginChange::Ready
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 enum DesktopRecord {
@@ -58,8 +69,11 @@ enum DesktopRecord {
     Ready {
         #[serde(rename = "appOrigin")]
         app_origin: String,
+        #[serde(rename = "openBrowser")]
+        open_browser: bool,
         version: u8,
     },
+    Restart { version: u8 },
 }
 
 pub struct DesktopAppController {
@@ -68,8 +82,8 @@ pub struct DesktopAppController {
     command_receiver: Mutex<Option<Receiver<ManagerCommand>>>,
     exit_allowed: AtomicBool,
     log: Arc<Mutex<RotatingLogWriter>>,
-    quit_started: AtomicBool,
     repository_root_path: PathBuf,
+    shutdown_started: AtomicBool,
     started: AtomicBool,
 }
 
@@ -89,8 +103,8 @@ impl DesktopAppController {
             command_receiver: Mutex::new(Some(command_receiver)),
             exit_allowed: AtomicBool::new(false),
             log: Arc::new(Mutex::new(log)),
-            quit_started: AtomicBool::new(false),
             repository_root_path,
+            shutdown_started: AtomicBool::new(false),
             started: AtomicBool::new(false),
         })
     }
@@ -122,11 +136,25 @@ impl DesktopAppController {
     }
 
     pub fn request_quit(&self) {
-        if self.quit_started.swap(true, Ordering::SeqCst) {
+        self.request_shutdown(
+            ManagerCommand::Quit,
+            "Unable to deliver Quit to the Workbench app process manager.",
+        );
+    }
+
+    fn request_restart(&self) {
+        self.request_shutdown(
+            ManagerCommand::Restart,
+            "Unable to deliver Restart to the Workbench app process manager.",
+        );
+    }
+
+    fn request_shutdown(&self, command: ManagerCommand, failure: &str) {
+        if self.shutdown_started.swap(true, Ordering::SeqCst) {
             return;
         }
-        if self.command_sender.send(ManagerCommand::Quit).is_err() {
-            self.log_launcher("Unable to deliver Quit to the Workbench app process manager.");
+        if self.command_sender.send(command).is_err() {
+            self.log_launcher(failure);
         }
     }
 
@@ -240,6 +268,7 @@ impl DesktopAppController {
             }
             DesktopRecord::Ready {
                 app_origin,
+                open_browser,
                 version: 1,
             } if valid_app_origin(&app_origin) => {
                 let mut current_origin =
@@ -249,7 +278,9 @@ impl DesktopAppController {
                 match change {
                     AppOriginChange::Ready => {
                         self.log_launcher(&format!("Workbench app ready at {app_origin}."));
-                        self.open_browser(app);
+                        if should_open_browser(&change, open_browser) {
+                            self.open_browser(app);
+                        }
                     }
                     AppOriginChange::Moved => {
                         self.log_launcher(&format!("Workbench app moved to {app_origin}."));
@@ -259,7 +290,13 @@ impl DesktopAppController {
                     }
                 }
             }
-            DesktopRecord::AlreadyRunning { .. } | DesktopRecord::Ready { .. } => {
+            DesktopRecord::Restart { version: 1 } => {
+                self.log_launcher("Workbench app requested a full native restart.");
+                self.request_restart();
+            }
+            DesktopRecord::AlreadyRunning { .. }
+            | DesktopRecord::Ready { .. }
+            | DesktopRecord::Restart { .. } => {
                 self.log_launcher("Rejected unsupported app readiness record.");
             }
         }
@@ -287,22 +324,21 @@ impl DesktopAppController {
         stdout_thread: thread::JoinHandle<()>,
         stderr_thread: thread::JoinHandle<()>,
     ) {
-        let mut quit_deadline = None;
+        let mut shutdown_deadline = None;
+        let mut shutdown_intent = None;
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    let expected = quit_deadline.is_some();
-                    if stdout_thread.join().is_err() {
-                        self.log_launcher("Workbench app stdout reader failed unexpectedly.");
-                    }
-                    if stderr_thread.join().is_err() {
-                        self.log_launcher("Workbench app stderr reader failed unexpectedly.");
-                    }
+                    self.join_child_logs(stdout_thread, stderr_thread);
                     self.log_launcher(&format!(
                         "Workbench app exited with status {}.",
                         status.code().map_or_else(|| "unknown".into(), |code| code.to_string())
                     ));
-                    self.finish(&app, if expected && status.success() { 0 } else { 1 });
+                    match shutdown_intent {
+                        Some(ShutdownIntent::Restart) => self.finish_restart(&app),
+                        Some(ShutdownIntent::Quit) if status.success() => self.finish(&app, 0),
+                        Some(ShutdownIntent::Quit) | None => self.finish(&app, 1),
+                    }
                     return;
                 }
                 Ok(None) => {}
@@ -311,51 +347,131 @@ impl DesktopAppController {
                     let _ = job.terminate();
                     let _ = child.kill();
                     let _ = child.wait();
+                    self.join_child_logs(stdout_thread, stderr_thread);
                     self.finish(&app, 1);
                     return;
                 }
             }
 
-            if quit_deadline_expired(quit_deadline, Instant::now()) {
-                self.log_launcher(
-                    "Workbench app missed the 10-second Quit deadline; terminating its process tree.",
-                );
+            if quit_deadline_expired(shutdown_deadline, Instant::now()) {
+                let intent = shutdown_intent.expect("shutdown deadline requires an intent");
+                self.log_launcher(match intent {
+                    ShutdownIntent::Quit => {
+                        "Workbench app missed the 10-second Quit deadline; terminating its process tree."
+                    }
+                    ShutdownIntent::Restart => {
+                        "Workbench app missed the 10-second Restart deadline; terminating its process tree."
+                    }
+                });
                 let _ = job.terminate();
                 let _ = child.kill();
                 let _ = child.wait();
-                self.finish(&app, 1);
+                self.join_child_logs(stdout_thread, stderr_thread);
+                match intent {
+                    ShutdownIntent::Restart => self.finish_restart(&app),
+                    ShutdownIntent::Quit => self.finish(&app, 1),
+                }
                 return;
             }
 
             match receiver.recv_timeout(PROCESS_POLL_INTERVAL) {
-                Ok(ManagerCommand::Quit) if quit_deadline.is_none() => {
-                    self.log_launcher("Requesting graceful Workbench app shutdown.");
+                Ok(command) if shutdown_deadline.is_none() => {
+                    let intent = match command {
+                        ManagerCommand::Quit => ShutdownIntent::Quit,
+                        ManagerCommand::Restart => ShutdownIntent::Restart,
+                    };
+                    self.log_launcher(match intent {
+                        ShutdownIntent::Quit => "Requesting graceful Workbench app shutdown.",
+                        ShutdownIntent::Restart => {
+                            "Requesting graceful Workbench app shutdown before native restart."
+                        }
+                    });
                     if writeln!(stdin, r#"{{"type":"quit","version":1}}"#)
                         .and_then(|_| stdin.flush())
                         .is_err()
                     {
-                        self.log_launcher(
-                            "Unable to send graceful Quit; terminating the Workbench app process tree.",
-                        );
+                        self.log_launcher(match intent {
+                            ShutdownIntent::Quit => {
+                                "Unable to send graceful Quit; terminating the Workbench app process tree."
+                            }
+                            ShutdownIntent::Restart => {
+                                "Unable to send graceful Restart shutdown; terminating the Workbench app process tree."
+                            }
+                        });
                         let _ = job.terminate();
                         let _ = child.kill();
                         let _ = child.wait();
-                        self.finish(&app, 1);
+                        self.join_child_logs(stdout_thread, stderr_thread);
+                        match intent {
+                            ShutdownIntent::Restart => self.finish_restart(&app),
+                            ShutdownIntent::Quit => self.finish(&app, 1),
+                        }
                         return;
                     }
-                    quit_deadline = Some(Instant::now() + QUIT_DEADLINE);
+                    shutdown_intent = Some(intent);
+                    shutdown_deadline = Some(Instant::now() + QUIT_DEADLINE);
                 }
-                Ok(ManagerCommand::Quit) | Err(RecvTimeoutError::Timeout) => {}
+                Ok(ManagerCommand::Quit | ManagerCommand::Restart)
+                | Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
                     self.log_launcher("Workbench app process manager command channel disconnected.");
                     let _ = job.terminate();
                     let _ = child.kill();
                     let _ = child.wait();
+                    self.join_child_logs(stdout_thread, stderr_thread);
                     self.finish(&app, 1);
                     return;
                 }
             }
         }
+    }
+
+    fn finish_restart(&self, app: &AppHandle) {
+        match self.spawn_replacement() {
+            Ok(()) => {
+                self.log_launcher("Started replacement Workbench tray.");
+                self.finish(app, 0);
+            }
+            Err(error) => {
+                self.log_launcher(&error);
+                self.finish(app, 1);
+            }
+        }
+    }
+
+    fn join_child_logs(
+        &self,
+        stdout_thread: thread::JoinHandle<()>,
+        stderr_thread: thread::JoinHandle<()>,
+    ) {
+        if stdout_thread.join().is_err() {
+            self.log_launcher("Workbench app stdout reader failed unexpectedly.");
+        }
+        if stderr_thread.join().is_err() {
+            self.log_launcher("Workbench app stderr reader failed unexpectedly.");
+        }
+    }
+
+    fn spawn_replacement(&self) -> Result<(), String> {
+        let launcher_path = self
+            .repository_root_path
+            .join("tray")
+            .join("bin")
+            .join("windows-x64")
+            .join("workbench-tray.exe");
+        require_file(&launcher_path)?;
+        Command::new(&launcher_path)
+            .arg("--workbench-root")
+            .arg(&self.repository_root_path)
+            .arg("--restart-after-pid")
+            .arg(std::process::id().to_string())
+            .current_dir(&self.repository_root_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("Unable to start replacement Workbench tray: {error}"))
     }
 
     fn spawn_child(&self) -> Result<Child, String> {
@@ -424,8 +540,8 @@ fn write_launcher_log(log: &Arc<Mutex<RotatingLogWriter>>, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        quit_deadline_expired, update_app_origin, valid_app_origin, AppOriginChange,
-        DesktopAppController, DesktopRecord, ManagerCommand,
+        quit_deadline_expired, should_open_browser, update_app_origin, valid_app_origin,
+        AppOriginChange, DesktopAppController, DesktopRecord, ManagerCommand,
     };
     use std::{
         sync::Arc,
@@ -444,15 +560,20 @@ mod tests {
     #[test]
     fn readiness_parses_the_versioned_desktop_wire_record() {
         let record = serde_json::from_str::<DesktopRecord>(
-            r#"{"appOrigin":"http://127.0.0.1:43210","type":"ready","version":1}"#,
+            r#"{"appOrigin":"http://127.0.0.1:43210","openBrowser":false,"type":"ready","version":1}"#,
         )
         .expect("ready record");
         assert!(matches!(
             record,
             DesktopRecord::Ready {
                 app_origin,
+                open_browser: false,
                 version: 1,
             } if app_origin == "http://127.0.0.1:43210"
+        ));
+        assert!(matches!(
+            serde_json::from_str::<DesktopRecord>(r#"{"type":"restart","version":1}"#),
+            Ok(DesktopRecord::Restart { version: 1 })
         ));
     }
 
@@ -472,6 +593,9 @@ mod tests {
             AppOriginChange::Unchanged
         );
         assert_eq!(origin.as_deref(), Some("http://127.0.0.1:43211"));
+        assert!(should_open_browser(&AppOriginChange::Ready, true));
+        assert!(!should_open_browser(&AppOriginChange::Ready, false));
+        assert!(!should_open_browser(&AppOriginChange::Moved, true));
     }
 
     #[test]
@@ -494,6 +618,31 @@ mod tests {
         controller.request_quit();
         controller.request_quit();
         assert!(matches!(receiver.recv(), Ok(ManagerCommand::Quit)));
+        assert!(receiver.try_recv().is_err());
+        drop(controller);
+        std::fs::remove_dir_all(root).expect("remove controller fixture");
+    }
+
+    #[test]
+    fn first_restart_or_quit_request_owns_shutdown() {
+        let root = std::env::temp_dir().join(format!(
+            "workbench-tray-restart-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let controller = Arc::new(DesktopAppController::new(root.clone()).expect("controller"));
+        let receiver = controller
+            .command_receiver
+            .lock()
+            .expect("receiver lock")
+            .take()
+            .expect("receiver");
+        controller.request_restart();
+        controller.request_quit();
+        assert!(matches!(receiver.recv(), Ok(ManagerCommand::Restart)));
         assert!(receiver.try_recv().is_err());
         drop(controller);
         std::fs::remove_dir_all(root).expect("remove controller fixture");

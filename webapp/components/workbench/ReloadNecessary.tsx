@@ -10,7 +10,6 @@ import type { OrchestratorReloadResponse, OrchestratorReloadScope, WorkbenchAppR
 import ChevronIcon from "./ChevronIcon";
 import PrimaryButton from "./PrimaryButton";
 import {
-  getDirectlyReloadableScopes,
   getReloadAllHoldMs,
   getReloadScopeHoldMs,
   mergeReloadDirt,
@@ -44,7 +43,7 @@ export default function ReloadNecessary ({
   if (!dirt || (!dirt.dirtyScopes.length && !dirt.error)) return null;
 
   const pending = new Set(dirt.pendingScopes);
-  const reloadableScopes = getDirectlyReloadableScopes(dirt.dirtyScopes);
+  const reloadableScopes = dirt.dirtyScopes;
   const reload = async (scopes: readonly WorkbenchReloadDirtScope[]) => {
     const selected = scopes.map(({ scope }) => scope);
     setRequestError("");
@@ -109,9 +108,7 @@ export default function ReloadNecessary ({
               return (
                 <div className="flex items-center justify-between gap-2" key={scope.scope}>
                   <p className="m-0 min-w-0 truncate text-[0.8rem] font-medium text-text">{scope.scope}</p>
-                  {restartRequired ? (
-                    <span className="shrink-0 text-[0.74rem] font-medium text-danger">Restart required</span>
-                  ) : <PrimaryButton
+                  <PrimaryButton
                     className="!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px]"
                     disabled={busy}
                     holdToConfirmMs={getReloadScopeHoldMs(scope)}
@@ -119,8 +116,8 @@ export default function ReloadNecessary ({
                     pendingHalo={busy}
                     tone={scope.destructive ? "danger" : "default"}
                   >
-                    Reload
-                  </PrimaryButton>}
+                    {restartRequired ? "Restart" : "Reload"}
+                  </PrimaryButton>
                 </div>
               );
             })}

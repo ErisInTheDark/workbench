@@ -2,7 +2,7 @@
  * Exports:
  * - NORMAL_RELOAD_HOLD_MS/DESTRUCTIVE_RELOAD_HOLD_MS: user-confirmation durations for ordinary and destructive scopes. Keywords: reload, confirmation, duration.
  * - getReloadScopeHoldMs/getReloadAllHoldMs: derive user-confirmation duration from destructive scope metadata. Keywords: reload, confirmation, destructive.
- * - getDirectlyReloadableScopes/mergeReloadDirt/partitionReloadScopes: exclude app-process restarts, combine snapshots, and route scopes to their owner. Keywords: reload, client, server.
+ * - mergeReloadDirt/partitionReloadScopes: combine snapshots and route scopes while full app restart subsumes client-node reloads. Keywords: reload, client, server.
  */
 import type { WorkbenchReloadDirtScope, WorkbenchReloadDirtSnapshot } from "../../lib/types";
 
@@ -15,10 +15,6 @@ export function getReloadScopeHoldMs(scope: WorkbenchReloadDirtScope) {
 
 export function getReloadAllHoldMs(scopes: readonly WorkbenchReloadDirtScope[]) {
   return Math.max(NORMAL_RELOAD_HOLD_MS, ...scopes.map(getReloadScopeHoldMs));
-}
-
-export function getDirectlyReloadableScopes<TScope extends { scope: string }>(scopes: readonly TScope[]) {
-  return scopes.filter(({ scope }) => scope !== "client:process");
 }
 
 export function mergeReloadDirt(
@@ -37,8 +33,9 @@ export function mergeReloadDirt(
 }
 
 export function partitionReloadScopes(scopes: readonly string[]) {
+  const client = scopes.filter((scope) => scope.startsWith("client:"));
   return {
-    client: scopes.filter((scope) => scope.startsWith("client:")),
+    client: client.includes("client:process") ? ["client:process"] : client,
     server: scopes.filter((scope) => !scope.startsWith("client:")),
   };
 }

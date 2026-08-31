@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect structured desktop startup state, bounded command rejection, and one-owner Quit.
+ * No production exports. Node tests protect structured desktop state, restart requests, bounded command rejection, and one-owner Quit.
  */
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
@@ -18,10 +18,28 @@ test("announces structured loopback readiness", () => {
     onQuit: async () => {},
     output,
   });
-  protocol.announceReady("http://127.0.0.1:43210");
+  protocol.announceReady("http://127.0.0.1:43210", true);
   assert.equal(
     written,
-    '\u001eWORKBENCH_DESKTOP_V1 {"appOrigin":"http://127.0.0.1:43210","type":"ready","version":1}\n',
+    '\u001eWORKBENCH_DESKTOP_V1 {"appOrigin":"http://127.0.0.1:43210","openBrowser":true,"type":"ready","version":1}\n',
+  );
+});
+
+test("requests one versioned native process restart", () => {
+  const output = new PassThrough();
+  let written = "";
+  output.on("data", (chunk) => {
+    written += chunk.toString();
+  });
+  const protocol = new WorkbenchAppProcessProtocol({
+    input: new PassThrough(),
+    onQuit: async () => {},
+    output,
+  });
+  protocol.requestRestart();
+  assert.equal(
+    written,
+    '\u001eWORKBENCH_DESKTOP_V1 {"type":"restart","version":1}\n',
   );
 });
 

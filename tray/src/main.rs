@@ -6,6 +6,7 @@
 mod desktop_app_controller;
 mod rotating_log_writer;
 mod windows_child_job;
+mod windows_process_wait;
 
 use desktop_app_controller::DesktopAppController;
 use std::{
@@ -19,28 +20,66 @@ use tauri::{
     Manager, RunEvent,
 };
 
-fn repository_root_from_inputs(
+#[derive(Debug, PartialEq)]
+struct LauncherInputs {
+    repository_root_path: PathBuf,
+    restart_after_process_id: Option<u32>,
+}
+
+fn launcher_inputs(
     arguments: impl IntoIterator<Item = OsString>,
     executable_path: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<LauncherInputs, String> {
     let mut arguments = arguments.into_iter();
-    let Some(flag) = arguments.next() else {
+    let mut repository_root_path = None;
+    let mut restart_after_process_id = None;
+    while let Some(flag) = arguments.next() {
+        if flag == "--workbench-root" {
+            if repository_root_path.is_some() {
+                return Err("Workbench tray received --workbench-root more than once.".into());
+            }
+            repository_root_path = Some(PathBuf::from(
+                arguments
+                    .next()
+                    .ok_or("Workbench tray requires a checkout root path.")?,
+            ));
+            continue;
+        }
+        if flag == "--restart-after-pid" {
+            if restart_after_process_id.is_some() {
+                return Err("Workbench tray received --restart-after-pid more than once.".into());
+            }
+            let raw_process_id = arguments
+                .next()
+                .ok_or("Workbench tray requires a predecessor process id.")?;
+            let process_id = raw_process_id
+                .to_string_lossy()
+                .parse::<u32>()
+                .map_err(|_| "Workbench tray received an invalid predecessor process id.")?;
+            if process_id == 0 {
+                return Err("Workbench tray received an invalid predecessor process id.".into());
+            }
+            restart_after_process_id = Some(process_id);
+            continue;
+        }
+        return Err(format!(
+            "Workbench tray received an unexpected argument: {}.",
+            flag.to_string_lossy()
+        ));
+    }
+    let root = if let Some(root) = repository_root_path {
+        root
+    } else {
         let root = executable_path
             .ancestors()
             .nth(4)
             .ok_or("Workbench tray could not derive its checkout root from its executable path.")?;
-        return validate_repository_root(root.to_path_buf());
+        root.to_path_buf()
     };
-    if flag != "--workbench-root" {
-        return Err("Workbench tray requires --workbench-root <path>.".into());
-    }
-    let root = arguments
-        .next()
-        .ok_or("Workbench tray requires a checkout root path.")?;
-    if arguments.next().is_some() {
-        return Err("Workbench tray received unexpected arguments.".into());
-    }
-    validate_repository_root(PathBuf::from(root))
+    Ok(LauncherInputs {
+        repository_root_path: validate_repository_root(root)?,
+        restart_after_process_id,
+    })
 }
 
 fn validate_repository_root(root: PathBuf) -> Result<PathBuf, String> {
@@ -56,9 +95,11 @@ fn validate_repository_root(root: PathBuf) -> Result<PathBuf, String> {
 fn run() -> Result<(), String> {
     let executable_path = std::env::current_exe()
         .map_err(|error| format!("Workbench tray could not locate its executable: {error}"))?;
-    let repository_root_path =
-        repository_root_from_inputs(std::env::args_os().skip(1), &executable_path)?;
-    let controller = Arc::new(DesktopAppController::new(repository_root_path)?);
+    let inputs = launcher_inputs(std::env::args_os().skip(1), &executable_path)?;
+    if let Some(process_id) = inputs.restart_after_process_id {
+        windows_process_wait::wait_for_process_exit(process_id)?;
+    }
+    let controller = Arc::new(DesktopAppController::new(inputs.repository_root_path)?);
     let setup_controller = Arc::clone(&controller);
     let event_controller = Arc::clone(&controller);
     let app = tauri::Builder::default()
@@ -164,7 +205,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::repository_root_from_inputs;
+    use super::{launcher_inputs, LauncherInputs};
     use std::{
         ffi::OsString,
         fs,
@@ -194,9 +235,15 @@ mod tests {
             .join("bin")
             .join("windows-x64")
             .join("workbench-tray.exe");
-        let actual = repository_root_from_inputs(Vec::<OsString>::new(), &executable_path)
-            .expect("derived checkout root");
-        assert_eq!(actual, root);
+        let actual =
+            launcher_inputs(Vec::<OsString>::new(), &executable_path).expect("derived checkout root");
+        assert_eq!(
+            actual,
+            LauncherInputs {
+                repository_root_path: root.clone(),
+                restart_after_process_id: None,
+            }
+        );
         fs::remove_dir_all(root).expect("remove checkout fixture");
     }
 
@@ -204,7 +251,7 @@ mod tests {
     fn explicit_checkout_argument_remains_supported() {
         let root = fixture_root();
         let executable_path = PathBuf::from("unused.exe");
-        let actual = repository_root_from_inputs(
+        let actual = launcher_inputs(
             [
                 OsString::from("--workbench-root"),
                 root.clone().into_os_string(),
@@ -212,7 +259,46 @@ mod tests {
             &executable_path,
         )
         .expect("explicit checkout root");
-        assert_eq!(actual, root);
+        assert_eq!(
+            actual,
+            LauncherInputs {
+                repository_root_path: root.clone(),
+                restart_after_process_id: None,
+            }
+        );
+        fs::remove_dir_all(root).expect("remove checkout fixture");
+    }
+
+    #[test]
+    fn restart_handoff_accepts_one_nonzero_predecessor_process_id() {
+        let root = fixture_root();
+        let actual = launcher_inputs(
+            [
+                OsString::from("--restart-after-pid"),
+                OsString::from("43210"),
+                OsString::from("--workbench-root"),
+                root.clone().into_os_string(),
+            ],
+            &PathBuf::from("unused.exe"),
+        )
+        .expect("restart inputs");
+        assert_eq!(
+            actual,
+            LauncherInputs {
+                repository_root_path: root.clone(),
+                restart_after_process_id: Some(43_210),
+            }
+        );
+        assert!(launcher_inputs(
+            [
+                OsString::from("--workbench-root"),
+                root.clone().into_os_string(),
+                OsString::from("--restart-after-pid"),
+                OsString::from("0"),
+            ],
+            &PathBuf::from("unused.exe"),
+        )
+        .is_err());
         fs::remove_dir_all(root).expect("remove checkout fixture");
     }
 }

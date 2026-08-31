@@ -17,6 +17,8 @@ You may propose new invariants or changes to existing invariants, but you must m
 - Treat browser visibility suspension as loss of live stream continuity. On resume, replace the browser WebSocket and rebuild pushed observations plus visible route state from authoritative owners.
 <!-- Prevent app-port changes from racing persistence, stranding clients, or splitting runtime identity. -->
 - Move the app port by binding the replacement before retiring the old listener. Preserve app runtime and state identity. Update browser and desktop origins together.
+<!-- Prevent full app reload from racing the native singleton or opening duplicate static-port tabs. -->
+- Full app reload launches the committed native tray replacement and waits for the previous tray to exit before singleton startup. Auto-open the browser only for random-port startup.
 <!-- Prevent native release generation from requiring a running Workbench shutdown. -->
 - Keep the committed tray launcher path replaceable while it runs. Retire the loaded image by rename before promoting a validated replacement.
 <!-- Prevent wb command fallback from coupling the standalone orchestrator to the app server. -->

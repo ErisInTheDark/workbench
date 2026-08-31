@@ -29,6 +29,7 @@ export interface WorkbenchAppRuntimeOptions {
   logger: WorkbenchAppLogger;
   outputDirectoryPath: string;
   repositoryRootPath: string;
+  requestProcessRestart?: () => Promise<void> | void;
 }
 
 function sendJson(response: ServerResponse, status: number, value: object) {
@@ -123,6 +124,8 @@ export default class WorkbenchAppRuntime {
           "shared/reload/ReloadableNodeHost.ts",
           "shared/reload/workbench-reload.ts",
           "shared/source-pattern-matcher.ts",
+          "tray/**",
+          "!tray/target/**",
         ].join("\n"),
       },
       requiredRegistrations,
@@ -174,7 +177,25 @@ export default class WorkbenchAppRuntime {
     }
     if (url.pathname === RUNTIME_PATH && request.method === "POST") {
       try {
-        sendJson(response, 202, this.host.get("reloadController").admit(await readReloadScopes(request)));
+        const admission = this.host.get("reloadController").admit(
+          await readReloadScopes(request),
+          this.options.requestProcessRestart,
+        );
+        let acknowledged = false;
+        response.once("finish", () => {
+          acknowledged = true;
+          void admission.start().catch((error) => {
+            this.options.logger.error(
+              "app",
+              `reload execution failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        });
+        response.once("close", () => {
+          if (acknowledged || response.writableFinished) return;
+          admission.cancel();
+        });
+        sendJson(response, 202, admission.response);
       } catch (error) {
         sendJson(response, 400, {
           error: error instanceof Error ? error.message.slice(0, 500) : "App reload request failed.",

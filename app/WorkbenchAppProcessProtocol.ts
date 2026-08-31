@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAppProcessProtocolOptions: desktop stdio protocol ports. Keywords: app, desktop, process, protocol.
- * - default WorkbenchAppProcessProtocol: announce app startup state and route one desktop Quit command. Keywords: app, lifecycle, stdio.
+ * - default WorkbenchAppProcessProtocol: announce app state, request native restart, and route one desktop Quit command. Keywords: app, lifecycle, stdio.
  */
 import type { Readable, Writable } from "node:stream";
 
@@ -48,14 +48,22 @@ export default class WorkbenchAppProcessProtocol {
     });
   }
 
-  announceReady(appOrigin: string) {
+  announceReady(appOrigin: string, openBrowser: boolean) {
     const origin = new URL(appOrigin);
     if (origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || !origin.port) {
       throw new Error("Desktop app readiness requires a loopback HTTP origin with a bound port.");
     }
     this.writeRecord({
       appOrigin: origin.origin,
+      openBrowser,
       type: "ready",
+      version: 1,
+    });
+  }
+
+  requestRestart() {
+    this.writeRecord({
+      type: "restart",
       version: 1,
     });
   }
@@ -106,7 +114,9 @@ export default class WorkbenchAppProcessProtocol {
     });
   }
 
-  private writeRecord(record: { appOrigin?: string; type: "alreadyRunning" | "ready"; version: 1 }) {
+  private writeRecord(record:
+    | { type: "alreadyRunning" | "restart"; version: 1 }
+    | { appOrigin: string; openBrowser: boolean; type: "ready"; version: 1 }) {
     this.output.write(`${RECORD_PREFIX}${JSON.stringify(record)}\n`);
   }
 }

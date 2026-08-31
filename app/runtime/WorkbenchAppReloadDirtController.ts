@@ -17,7 +17,7 @@ import type {
 } from "workbench-shared/reload/workbench-reload";
 
 const APP_RELOAD_SNAPSHOT_REF = "refs/worktree/workbench/app-reload-snapshot";
-const SOURCE_ROOTS = ["app", "shared", "static"] as const;
+const SOURCE_ROOTS = ["app", "shared", "static", "tray"] as const;
 
 export type WorkbenchAppReloadDirtControllerState = ReloadDirtControllerState;
 
@@ -30,7 +30,7 @@ export interface WorkbenchAppReloadDirtControllerOptions {
 }
 
 function isProductionSourcePath(sourcePath: string) {
-  return !sourcePath.split("/").some((segment) => segment === "node_modules")
+  return !sourcePath.split("/").some((segment) => segment === "node_modules" || segment === "target")
     && !/(?:^|\/)[^/]+\.test\.[^/]+$/u.test(sourcePath);
 }
 
@@ -38,7 +38,7 @@ function listProductionSourcePaths(repositoryRootPath: string) {
   const sourcePaths: string[] = [];
   const visit = (absoluteDirectoryPath: string, relativeDirectoryPath: string) => {
     for (const entry of readdirSync(absoluteDirectoryPath, { withFileTypes: true })) {
-      if (entry.name === "node_modules") continue;
+      if (entry.name === "node_modules" || entry.name === "target") continue;
       const sourcePath = path.posix.join(relativeDirectoryPath, entry.name);
       if (entry.isDirectory()) {
         visit(path.join(absoluteDirectoryPath, entry.name), sourcePath);

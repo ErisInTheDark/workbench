@@ -6,7 +6,6 @@ import { test } from "node:test";
 
 import {
   DESTRUCTIVE_RELOAD_HOLD_MS,
-  getDirectlyReloadableScopes,
   getReloadAllHoldMs,
   getReloadScopeHoldMs,
   mergeReloadDirt,
@@ -37,7 +36,14 @@ test("merges app and daemon dirt while routing each namespace to its owner", () 
   });
 });
 
-test("keeps the stable app process visible but out of direct reload batches", () => {
+test("full app restart subsumes client reloads without swallowing daemon scopes", () => {
   const process = { description: "Process", destructive: true, scope: "client:process" };
-  assert.deepEqual(getDirectlyReloadableScopes([process, regular]), [regular]);
+  assert.deepEqual(partitionReloadScopes([
+    "client:http",
+    process.scope,
+    regular.scope,
+  ]), {
+    client: ["client:process"],
+    server: ["server:core"],
+  });
 });

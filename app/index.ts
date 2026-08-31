@@ -24,6 +24,7 @@ function configuredPort(value: string | undefined) {
 
 async function main() {
   const repositoryRootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const desktopProtocolEnabled = process.env.WORKBENCH_DESKTOP_PROTOCOL === "1";
   const createCompiler = () => new WorkbenchFrontendCompiler({
     logger,
     onDiagnostic: (message) => logger.error("tailwind", message),
@@ -39,6 +40,14 @@ async function main() {
       logger,
       outputDirectoryPath,
       repositoryRootPath,
+      ...(desktopProtocolEnabled
+        ? {
+            requestProcessRestart: () => {
+              if (!protocol) throw new Error("Full app restart requires the Workbench desktop tray.");
+              protocol.requestRestart();
+            },
+          }
+        : {}),
     }),
     createServer: (runtime, port) => new WorkbenchFrontendServer({
       hostname: process.env.WORKBENCH_APP_HOST?.trim() || "0.0.0.0",
@@ -47,13 +56,13 @@ async function main() {
       requests: runtime,
     }),
     environmentPort: configuredPort(process.env.WORKBENCH_APP_PORT),
-    onAddressChange: (address) => protocol?.announceReady(address.url),
+    onAddressChange: (address) => protocol?.announceReady(address.url, false),
     onDiagnostic: (message) => logger.error("app", message),
   });
   const result = await app.start();
   if (result.kind === "already-running") {
     logger.line("app", "already running");
-    if (process.env.WORKBENCH_DESKTOP_PROTOCOL === "1") {
+    if (desktopProtocolEnabled) {
       new WorkbenchAppProcessProtocol({
         onQuit: async () => {},
       }).announceAlreadyRunning();
@@ -72,13 +81,13 @@ async function main() {
       });
     return closing;
   };
-  if (process.env.WORKBENCH_DESKTOP_PROTOCOL === "1") {
+  if (desktopProtocolEnabled) {
     protocol = new WorkbenchAppProcessProtocol({
       onDiagnostic: (message) => logger.error("app", message),
       onQuit: close,
     });
     protocol.start();
-    protocol.announceReady(result.address.url);
+    protocol.announceReady(result.address.url, result.portSource === "random");
   }
   process.once("SIGINT", () => void close());
   process.once("SIGTERM", () => void close());

@@ -45,7 +45,7 @@ export interface WorkbenchAppOptions {
 
 export type WorkbenchAppStartResult =
   | { kind: "already-running" }
-  | { address: HttpServerAddress; kind: "started" };
+  | { address: HttpServerAddress; kind: "started"; portSource: WorkbenchAppPortSnapshot["source"] };
 
 function currentThreadId() {
   return process.env.WORKBENCH_THREAD_ID?.trim()
@@ -107,12 +107,13 @@ export default class WorkbenchApp {
       this.runtime = runtime;
       this.server = server;
       this.address = address;
-      this.portSource = this.environmentPort !== null
+      const portSource = this.environmentPort !== null
         ? "environment"
         : savedPort !== null
           ? "setting"
           : "random";
-      return { address, kind: "started" };
+      this.portSource = portSource;
+      return { address, kind: "started", portSource };
     } catch (error) {
       const failures = [error];
       if (server) {
