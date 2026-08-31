@@ -1577,21 +1577,54 @@ test("managed admission steers a provider-confirmed active turn without changing
   }
 });
 
-test("managed admission rejects provider system errors before lifecycle mutation", async () => {
+test("managed admission attempts a prepared turn start from provider system errors", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-system-error-start-"));
   const upstreamRequests: JsonRpcRequest[] = [];
   let prepared = false;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const failedTurn = {
+    ...bridgeThread().turns[0]!,
+    completedAt: 2,
+    error: {
+      additionalDetails: null,
+      codexErrorInfo: null,
+      message: "provider failed",
+    },
+    id: "failed-turn",
+    status: "failed" as const,
+  };
+  const failedThread = {
+    ...bridgeThread(),
+    status: { type: "systemError" as const },
+    turns: [failedTurn],
+  };
+  const startedTurn = {
+    ...bridgeThread().turns[0]!,
+    id: "recovery-turn",
+  };
   const appServer = {
     send(message: JsonRpcRequest) {
       upstreamRequests.push(message);
+      const result = message.method === "thread/read"
+        ? { thread: failedThread }
+        : message.method === "thread/unsubscribe"
+          ? { status: "unsubscribed" }
+          : message.method === "thread/resume"
+            ? {
+              initialTurnsPage: {
+                backwardsCursor: null,
+                data: [failedTurn],
+                nextCursor: null,
+              },
+              thread: failedThread,
+            }
+            : message.method === "turn/start"
+              ? { turn: startedTurn }
+              : null;
       queueMicrotask(() => {
-        void bridge.handleUpstreamMessage({
-          id: message.id ?? null,
-          result: {
-            thread: { ...bridgeThread(), status: { type: "systemError" }, turns: [] },
-          },
-        });
+        void bridge.handleUpstreamMessage(result
+          ? { id: message.id ?? null, result }
+          : { error: { code: -32000, message: `unexpected ${message.method}` }, id: message.id ?? null });
       });
     },
   } as unknown as CodexAppServer;
@@ -1615,7 +1648,7 @@ test("managed admission rejects provider system errors before lifecycle mutation
           method: "turn/start",
           params: {
             clientUserMessageId: "message-id",
-            input: [{ text: "do not start", text_elements: [], type: "text" }],
+            input: [{ text: "try recovery", text_elements: [], type: "text" }],
             threadId: "thread",
           },
         },
@@ -1623,9 +1656,14 @@ test("managed admission rejects provider system errors before lifecycle mutation
         threadId: "thread",
       },
     });
-    assert.match(response?.error?.message ?? "", /systemError/u);
-    assert.deepEqual(upstreamRequests.map(({ method }) => method), ["thread/read"]);
-    assert.equal(prepared, false);
+    assert.deepEqual(response?.result, { kind: "started", turn: startedTurn });
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), [
+      "thread/read",
+      "thread/unsubscribe",
+      "thread/resume",
+      "turn/start",
+    ]);
+    assert.equal(prepared, true);
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();

@@ -2803,7 +2803,11 @@ export default class CodexStdioBridge {
     if (activeTurn) {
       return await this.dispatchManagedMessageSteer(requestId, threadId, activeTurn, startRequest, steerRequest);
     }
-    if (readThread.status.type !== "idle" && readThread.status.type !== "notLoaded") {
+    if (
+      readThread.status.type !== "idle"
+      && readThread.status.type !== "notLoaded"
+      && readThread.status.type !== "systemError"
+    ) {
       return { id: requestId, error: { code: -32000, message: `The Codex thread is ${readThread.status.type}, not inactive.` } };
     }
 
@@ -2831,7 +2835,7 @@ export default class CodexStdioBridge {
       if (resumedActiveTurn) {
         return await this.dispatchManagedMessageSteer(requestId, threadId, resumedActiveTurn, startRequest, steerRequest);
       }
-      if (resumedThread.status.type !== "idle") {
+      if (resumedThread.status.type !== "idle" && resumedThread.status.type !== "systemError") {
         return { id: requestId, error: { code: -32000, message: `The resumed Codex thread is ${resumedThread.status.type}, not inactive.` } };
       }
     }

@@ -89,6 +89,7 @@ import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadGoalControl from "./ThreadGoalControl";
 import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
@@ -1735,6 +1736,7 @@ export default memo(function ThreadView ({
             workspaceRoots={workspaceFileLinkRoots}
           />
         ) : null}
+        {activeThread && !isDraftThreadView ? <ThreadErrorCard thread={activeThread} /> : null}
         {activeThread?.harness === "codex" && threadGoalControls ? (
           <ThreadGoalControl controls={threadGoalControls} thread={activeThread}>
             {agentTabs}
