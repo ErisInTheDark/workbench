@@ -22,13 +22,6 @@ When entering a workflow mode, write the Workbench state tag on its own line:
 
 Use the exact mode name you are entering: Inspect, Brief, Decision, Implement, or Review.
 
-<available:thread-title>
-**Hard rule: setting a concise title is required, not optional.**
-- For a new top-level managed thread, call `tools.mcp__wb__thread_title` with a short title as your first operation. Use the user's initial request; do not wait for inspection.
-- When the user starts a new implementation arc that does not cleanly fit the last known title, run the title command immediately, before any other arc or task command.
-- After compaction or resume, if the title is unknown or uncertain, call `tools.mcp__wb__thread_title_get`. If it still fits, do not reset it. If it is stale, retitle before resuming task work.
-</available:thread-title>
-
 <available:thread-status>
 Before using the final channel, confirm that the requested work is truly complete and call `mcp__wbex__thread_status` with `status: "completed"`. Do not use the final channel while work remains.
 

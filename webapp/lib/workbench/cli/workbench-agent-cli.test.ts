@@ -179,11 +179,11 @@ after(async () => {
 
 test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", async () => {
   const title = await parseWorkbenchAgentCliCommand([
-    "thread", "title", "--title", "A title",
+    "thread", "title", "--title", "A title", "--current-title", "Current title",
   ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
   assert.equal(title.kind, "request");
   assert.deepEqual(title.request, {
-    body: { action: "set", callerThreadId: "thread/1", cwd: "C:/workspace", title: "A title" },
+    body: { action: "set", callerThreadId: "thread/1", currentTitle: "Current title", cwd: "C:/workspace", title: "A title" },
     method: "POST",
     path: "/api/thread-title",
     responseKind: "thread-title",

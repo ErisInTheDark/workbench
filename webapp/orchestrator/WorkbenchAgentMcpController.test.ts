@@ -134,6 +134,11 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const refresh = inventory.tools.find(({ name }) => name === "thread_refresh");
     assert.ok(refresh);
     assert.deepEqual(refresh.inputSchema.properties, {});
+    const title = inventory.tools.find(({ name }) => name === "thread_title");
+    assert.ok(title);
+    assert.deepEqual(Object.keys(title.inputSchema.properties ?? {}).sort(), ["currentTitle", "title"]);
+    assert.equal(title.inputSchema.required?.includes("title") ?? false, true);
+    assert.equal(title.inputSchema.required?.includes("currentTitle") ?? false, false);
     const ripgrep = inventory.tools.find(({ name }) => name === "rg");
     assert.ok(ripgrep);
     assert.deepEqual(Object.keys(ripgrep.inputSchema.properties ?? {}), ["args"]);
@@ -273,6 +278,24 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       method: "POST",
       path: "/api/thread-title",
       responseKind: "thread-title-get",
+    });
+    const titleSet = await client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: { currentTitle: "Typed Workbench", title: "Preserve overarching titles" },
+      name: "thread_title",
+    });
+    assert.equal(titleSet.isError, false);
+    assert.deepEqual(executed.at(-1), {
+      body: {
+        action: "set",
+        callerThreadId: "thread-1",
+        currentTitle: "Typed Workbench",
+        cwd: "C:/authoritative",
+        title: "Preserve overarching titles",
+      },
+      method: "POST",
+      path: "/api/thread-title",
+      responseKind: "thread-title",
     });
     assert.ok(server.getReleasedRequestCount() >= 3);
   } finally {

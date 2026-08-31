@@ -21,6 +21,6 @@ test("Codex bootstrap preserves shared instructions without injecting thread-tit
 
 test("managed thread title instructions expose set and get commands", () => {
   const value = buildThreadTitleBootstrapInstructions();
-  assert.match(value, /wb thread title --title "<short title>"/u);
+  assert.match(value, /wb thread title --title "<short title>" \[--current-title "<exact current title>"\]/u);
   assert.match(value, /wb thread title get/u);
 });

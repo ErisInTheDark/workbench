@@ -39,18 +39,25 @@ const titleGet = defineWorkbenchAgentCommand({
 });
 
 const title = defineWorkbenchAgentCommand({
-  description: "Set a concise title for a managed thread.",
+  description: "Set a concise title for a managed thread only when the supplied current title matches.",
   helpGroups: ["thread"],
   mcpCodeModeEligible: true,
   words: ["thread", "title"],
-  usage: "wb thread title --title <text>",
-  inputSchema: z.object({ title: requiredText }).strict(),
+  usage: "wb thread title --title <text> [--current-title <text>]",
+  inputSchema: z.object({
+    currentTitle: z.string().min(1).optional().describe("Exact current thread title. Omit only when no title is set."),
+    title: requiredText,
+  }).strict(),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--title"] });
-    return { title: flags.required("--title") };
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--current-title", "--title"] });
+    return { currentTitle: flags.optional("--current-title") ?? undefined, title: flags.required("--title") };
   },
-  buildRequest({ title: nextTitle }, { callerThreadId, cwd }) {
-    return postWorkbenchAgentCommand("/api/thread-title", { action: "set", callerThreadId: requireCallerThreadId(callerThreadId), cwd, title: nextTitle }, "thread-title");
+  buildRequest({ currentTitle, title: nextTitle }, { callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/thread-title", {
+      action: "set", callerThreadId: requireCallerThreadId(callerThreadId),
+      ...(currentTitle !== undefined ? { currentTitle } : {}),
+      cwd, title: nextTitle,
+    }, "thread-title");
   },
 });
 

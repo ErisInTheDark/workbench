@@ -486,9 +486,11 @@ test("deep provider pages serialize across projects while both newest pages star
   await fs.rm(storageRoot, { force: true, recursive: true });
 });
 
-test("managed title reads use the validated provider thread without mirrored title state", async () => {
+test("managed title commands use the validated provider title as the mutation precondition", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-managed-title-"));
   const requests: Array<{ harness: string; method: string; params: unknown }> = [];
+  let providerName: string | null = "Current task";
+  let providerPreview: string | null = "Initial request";
   const feature = new WorkbenchThreadStateFeature({
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
@@ -502,14 +504,18 @@ test("managed title reads use the validated provider thread without mirrored tit
     harnesses: createHarnesses(async (harness, request) => {
       requests.push({ harness, method: request.method, params: request.params });
       if (harness !== "codex") return { id: request.id ?? null, error: { code: -32000, message: "Not found" } };
+      if (request.method === "thread/name/set") {
+        providerName = String((request.params as { name?: unknown }).name ?? "");
+        return { id: request.id ?? null, result: {} };
+      }
       return {
         id: request.id ?? null,
         result: {
           thread: {
             cwd: "C:/workspace",
             id: "thread-one",
-            name: "Current task",
-            preview: "Initial request",
+            name: providerName,
+            preview: providerPreview,
           },
         },
       };
@@ -541,6 +547,62 @@ test("managed title reads use the validated provider thread without mirrored tit
     { harness: "copilot", method: "thread/list" },
     { harness: "opencode", method: "thread/list" },
   ]);
+
+  requests.length = 0;
+  const missingCurrentTitle = await feature.handleManagedThreadRequest({
+    id: 2,
+    method: "workbench/thread/title",
+    params: { action: "set", callerThreadId: "thread-one", cwd: "C:/workspace", title: "Narrow sidequest" },
+  });
+  assert.equal(missingCurrentTitle.id, 2);
+  assert.equal(missingCurrentTitle.error?.code, -32000);
+  assert.match(missingCurrentTitle.error?.message ?? "", /Current title: "Current task"/u);
+
+  const staleCurrentTitle = await feature.handleManagedThreadRequest({
+    id: 3,
+    method: "workbench/thread/title",
+    params: {
+      action: "set",
+      callerThreadId: "thread-one",
+      currentTitle: "Wrong title",
+      cwd: "C:/workspace",
+      title: "Narrow sidequest",
+    },
+  });
+  assert.equal(staleCurrentTitle.id, 3);
+  assert.equal(staleCurrentTitle.error?.code, -32000);
+  assert.match(staleCurrentTitle.error?.message ?? "", /Current title: "Current task"/u);
+  assert.equal(requests.some(({ method }) => method === "thread/name/set"), false);
+
+  const renamed = await feature.handleManagedThreadRequest({
+    id: 4,
+    method: "workbench/thread/title",
+    params: {
+      action: "set",
+      callerThreadId: "thread-one",
+      currentTitle: "Current task",
+      cwd: "C:/workspace",
+      title: "New overarching task",
+    },
+  });
+  assert.deepEqual(renamed, {
+    id: 4,
+    result: { harness: "codex", threadId: "thread-one", title: "New overarching task" },
+  });
+  assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, 1);
+
+  providerName = "New thread";
+  providerPreview = null;
+  const initiallyNamed = await feature.handleManagedThreadRequest({
+    id: 5,
+    method: "workbench/thread/title",
+    params: { action: "set", callerThreadId: "thread-one", cwd: "C:/workspace", title: "First useful title" },
+  });
+  assert.deepEqual(initiallyNamed, {
+    id: 5,
+    result: { harness: "codex", threadId: "thread-one", title: "First useful title" },
+  });
+  assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, 2);
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
 });

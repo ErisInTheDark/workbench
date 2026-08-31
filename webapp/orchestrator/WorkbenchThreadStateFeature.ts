@@ -304,6 +304,21 @@ export default class WorkbenchThreadStateFeature {
         if (params.action !== "set") throw new Error("A thread title action is required.");
         const title = normalizeThreadTitle(typeof params.title === "string" ? params.title : null);
         if (!title) throw new Error("--title requires non-empty text.");
+        if (params.currentTitle !== undefined && typeof params.currentTitle !== "string") {
+          throw new Error("currentTitle must be exact non-empty text when supplied.");
+        }
+        const currentTitle = resolveWorkbenchThreadTitle({
+          fallback: "",
+          id: resolved.thread.id,
+          name: resolved.thread.name,
+          preview: resolved.thread.preview,
+        });
+        const expectedCurrentTitle = typeof params.currentTitle === "string" ? params.currentTitle : null;
+        if (expectedCurrentTitle !== (currentTitle || null)) {
+          throw new Error(currentTitle
+            ? `Thread title mismatch. Current title: ${JSON.stringify(currentTitle)}. Retry with currentTitle set to this exact text.`
+            : "Thread title mismatch. No current title is set. Retry without currentTitle.");
+        }
         await this.setProviderThreadTitle(resolved.harness, resolved.thread.id, title, resolved.cwd);
         await this.controller.setTitle(resolved.projectId, resolved.harness, resolved.thread.id, title);
         return { id, result: { harness: resolved.harness, threadId: resolved.thread.id, title } };

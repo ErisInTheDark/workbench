@@ -100,7 +100,7 @@ export function buildThreadTitleBootstrapInstructions() {
   return `
 ## Workbench Thread Title CLI
 
-\`wb thread title --title "<short title>"\`
+\`wb thread title --title "<short title>" [--current-title "<exact current title>"]\`
 
 \`wb thread title get\`
 
