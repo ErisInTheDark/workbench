@@ -243,9 +243,9 @@ export default class WorkbenchProjectCatalogController {
     };
   }
 
-  private async refreshCatalog() {
+  private refreshCatalog() {
     this.assertActive();
-    return await (this.refreshInFlight ?? this.startRefresh());
+    return this.refreshInFlight ?? this.startRefresh();
   }
 
   private refreshInBackground() {

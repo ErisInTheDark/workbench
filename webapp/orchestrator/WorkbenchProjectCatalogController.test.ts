@@ -32,8 +32,12 @@ class FakeWatcher {
 
 function deferred<TValue>() {
   let resolve!: (value: TValue) => void;
-  const promise = new Promise<TValue>((nextResolve) => { resolve = nextResolve; });
-  return { promise, resolve };
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<TValue>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, reject, resolve };
 }
 
 function createProject(id: string): WorkbenchProjectOption {
@@ -222,13 +226,22 @@ test("soft TTL expiry serves stale HTTP data while one background refresh runs",
   gate.resolve([createProject("alpha")]);
 });
 
-test("failed background refresh logs once and preserves the last-good catalog", async () => {
+test("coalesced failed background refresh logs once and preserves the last-good catalog", async () => {
   const harness = createHarness();
   await harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/src");
   harness.setNow(2_000);
-  harness.setReader(async () => { throw new Error("refresh exploded at C:/private/project"); });
+  const gate = deferred<WorkbenchProjectOption[]>();
+  harness.setReader(async () => await gate.promise);
 
-  assert.equal((await harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/src")).project.id, "alpha");
+  const first = harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/src");
+  const second = harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/test");
+  assert.deepEqual(
+    (await Promise.all([first, second])).map((resolution) => resolution.project.id),
+    ["alpha", "alpha"],
+  );
+  assert.equal(harness.discoveryReads, 2);
+
+  gate.reject(new Error("refresh exploded at C:/private/project"));
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.equal(harness.loggedErrors.length, 1);
