@@ -4,6 +4,7 @@
  * - WorkbenchClientStateRows/WorkbenchClientStateResponse: schema-derived selected rows in a complete snapshot or revision delta. Keywords: app, state, revision, HTTP.
  * - WorkbenchClientStateMutation: focused state mutation payload admitted by app state routes. Keywords: app, state, mutation.
  * - workbenchClientStateMutationPath/workbenchClientStateMutationKinds: shared focused-route registry for browser and app. Keywords: app, state, HTTP, route.
+ * - WORKBENCH_BROWSER_STATE_HEADER/isWorkbenchBrowserStateId: browser namespace HTTP boundary. Keywords: browser, state, UUID, HTTP.
  * - WorkbenchComposerSettingsValue: exact durable custom composer settings. Keywords: composer, profile, settings.
  */
 import { appStateClientTables } from "./workbench-app-state-schema.ts";
@@ -139,6 +140,13 @@ export type WorkbenchClientStateResponse =
 export type WorkbenchClientStateMutation =
   | { action: "put"; record: WorkbenchClientStateRecord }
   | { action: "delete"; identity: WorkbenchClientStateIdentity };
+
+export const WORKBENCH_BROWSER_STATE_HEADER = "x-workbench-browser-state-id";
+const WORKBENCH_BROWSER_STATE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+export function isWorkbenchBrowserStateId(value: string): boolean {
+  return WORKBENCH_BROWSER_STATE_ID_PATTERN.test(value);
+}
 
 const mutationPathByKind = {
   composerDraft: "/api/workbench-client-state/composer-draft",

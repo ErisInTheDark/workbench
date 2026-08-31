@@ -10,7 +10,10 @@ import type {
   WorkbenchClientStateRecord,
   WorkbenchClientStateResponse,
 } from "workbench-shared/state/workbench-client-state";
-import { workbenchClientStateMutationPath } from "workbench-shared/state/workbench-client-state";
+import {
+  WORKBENCH_BROWSER_STATE_HEADER,
+  workbenchClientStateMutationPath,
+} from "workbench-shared/state/workbench-client-state";
 import {
   projectWorkbenchClientStateRows,
   workbenchClientStateRecordIdentity,
@@ -26,6 +29,7 @@ export interface WorkbenchClientStateSnapshot {
 }
 
 export interface WorkbenchClientStateControllerOptions {
+  browserStateId?: string;
   fetcher?: typeof fetch;
   mode?: "http" | "memory";
   pollDelayMs?: number;
@@ -69,10 +73,13 @@ function browserVisibility(): WorkbenchClientStateControllerOptions["visibility"
 }
 
 export default class WorkbenchClientStateController {
+  readonly #browserStateId: string | undefined;
   readonly #cancelSchedule: (id: number) => void;
   readonly #fetcher: typeof fetch;
   readonly #listeners = new Set<() => void>();
   readonly #mode: "http" | "memory";
+  readonly #mutationQueues = new Map<string, Promise<void>>();
+  readonly #optimistic = new Map<string, { generation: number; mutation: WorkbenchClientStateMutation }>();
   readonly #pollDelayMs: number;
   readonly #records = new Map<string, WorkbenchClientStateRecord>();
   readonly #schedule: (callback: () => void, delayMs: number) => number;
@@ -80,6 +87,7 @@ export default class WorkbenchClientStateController {
   #daemonRegistrationId = "memory";
   #disposed = false;
   #error = "";
+  #mutationGeneration = 0;
   #polling = false;
   #revision = 0;
   #scheduledPoll: number | null = null;
@@ -87,6 +95,7 @@ export default class WorkbenchClientStateController {
   #unsubscribeVisibility: (() => void) | null = null;
 
   constructor(options: WorkbenchClientStateControllerOptions = {}) {
+    this.#browserStateId = options.browserStateId;
     this.#mode = options.mode ?? "memory";
     const fetcher = options.fetcher ?? globalThis.fetch;
     this.#fetcher = (input, init) => fetcher.call(globalThis, input, init);
@@ -153,15 +162,44 @@ export default class WorkbenchClientStateController {
       this.#publish();
       return this.#snapshot;
     }
-    const response = await this.#request(
-      mutation.action === "put" ? "PUT" : "DELETE",
-      workbenchClientStateMutationPath(
-        mutation.action === "put" ? mutation.record.kind : mutation.identity.kind,
-      ),
-      mutation,
-    );
-    this.#apply(response);
-    return this.#snapshot;
+    const identity = mutation.action === "put"
+      ? workbenchClientStateRecordIdentity(mutation.record)
+      : mutation.identity;
+    const key = identityKey(identity);
+    const generation = ++this.#mutationGeneration;
+    this.#optimistic.set(key, { generation, mutation });
+    this.#publish();
+    const previous = this.#mutationQueues.get(key) ?? Promise.resolve();
+    const operation = previous.then(async () => {
+      try {
+        const response = await this.#request(
+          mutation.action === "put" ? "PUT" : "DELETE",
+          workbenchClientStateMutationPath(
+            mutation.action === "put" ? mutation.record.kind : mutation.identity.kind,
+          ),
+          mutation,
+        );
+        this.#apply(response);
+        this.#applyConfirmedMutation(mutation);
+        if (this.#optimistic.get(key)?.generation === generation) {
+          this.#optimistic.delete(key);
+          this.#publish();
+        }
+        return this.#snapshot;
+      } catch (error) {
+        if (this.#optimistic.get(key)?.generation === generation) {
+          this.#optimistic.delete(key);
+          this.#publish();
+        }
+        throw error;
+      }
+    });
+    const queued = operation.then(() => undefined, () => undefined);
+    this.#mutationQueues.set(key, queued);
+    void queued.finally(() => {
+      if (this.#mutationQueues.get(key) === queued) this.#mutationQueues.delete(key);
+    });
+    return await operation;
   }
 
   async #poll() {
@@ -199,7 +237,11 @@ export default class WorkbenchClientStateController {
       ? mutation.action === "put" ? mutation.record : mutation.identity
       : undefined;
     const response = await this.#fetcher(url, {
-      ...(body ? { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } } : {}),
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      headers: {
+        ...(body ? { "Content-Type": "application/json" } : {}),
+        ...(this.#browserStateId ? { [WORKBENCH_BROWSER_STATE_HEADER]: this.#browserStateId } : {}),
+      },
       method,
     });
     if (!response.ok) {
@@ -244,11 +286,27 @@ export default class WorkbenchClientStateController {
     this.#publish();
   }
 
+  #applyConfirmedMutation(mutation: WorkbenchClientStateMutation) {
+    if (mutation.action === "put") {
+      this.#records.set(
+        identityKey(workbenchClientStateRecordIdentity(mutation.record)),
+        mutation.record,
+      );
+    } else {
+      this.#records.delete(identityKey(mutation.identity));
+    }
+  }
+
   #publish() {
+    const projectedRecords = new Map(this.#records);
+    for (const [key, { mutation }] of this.#optimistic) {
+      if (mutation.action === "put") projectedRecords.set(key, mutation.record);
+      else projectedRecords.delete(key);
+    }
     this.#snapshot = {
       daemonRegistrationId: this.#daemonRegistrationId,
       error: this.#error,
-      records: [...this.#records.values()],
+      records: [...projectedRecords.values()],
       revision: this.#revision,
     };
     for (const listener of this.#listeners) listener();

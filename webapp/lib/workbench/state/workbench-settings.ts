@@ -6,9 +6,9 @@
  * - WorkbenchProjectSidebarPreferences: project-local sidebar display state. Keywords: settings, project, sidebar, disclosure, folders.
  * - WORKBENCH_SETTING_DEFINITIONS: labels and option metadata for settings UI rendering. Keywords: settings, registry, UI.
  * - createDefaultGlobalWorkbenchSettings/createDefaultWorkbenchProjectSidebarPreferences: create agentic global and sidebar defaults. Keywords: settings, defaults, sidebar, agentic.
- * - readGlobalWorkbenchSettings/writeGlobalWorkbenchSettings: project global settings from and write them through the app-state controller. Keywords: settings, app state, global.
- * - readProjectWorkbenchSettings/writeProjectWorkbenchSettings: project explicit project override slots from and write them through app state. Keywords: settings, app state, project.
- * - readWorkbenchProjectSidebarPreferences/writeWorkbenchProjectSidebarPreferences: project and persist relational sidebar preferences and folder collections. Keywords: settings, app state, project, sidebar.
+ * - readGlobalWorkbenchSettings/writeGlobalWorkbenchSetting: project global settings and write one setting intent. Keywords: settings, app state, global.
+ * - readProjectWorkbenchSettings/writeProjectWorkbenchSetting: project explicit project override slots and write one override intent. Keywords: settings, app state, project.
+ * - readWorkbenchProjectSidebarPreferences/writeWorkbenchProjectSidebarPreference/setWorkbenchProjectSidebarFolderOpen: project sidebar state and focused writes. Keywords: settings, app state, project, sidebar.
  * - resolveWorkbenchSettings: merge project overrides over global settings. Keywords: settings, inheritance, overrides.
  */
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
@@ -238,7 +238,10 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
     case "editorFontFamily":
       return { enabled, value: normalizeEditorFontFamily(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "fileOpenBehavior":
-      return { enabled, value: normalizeFileOpenBehavior(candidate.value) } as WorkbenchProjectSettingOverride<K>;
+      return {
+        enabled,
+        value: normalizeFileOpenBehavior(candidate.value ?? defaultValue),
+      } as WorkbenchProjectSettingOverride<K>;
     case "editorFontSize":
       return { enabled, value: clampEditorFontSize(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "editorSpellCheck":
@@ -307,17 +310,19 @@ export function readGlobalWorkbenchSettings(records: readonly WorkbenchClientSta
   return normalizeGlobalWorkbenchSettings(values);
 }
 
-export async function writeGlobalWorkbenchSettings(
+export async function writeGlobalWorkbenchSetting<K extends WorkbenchSettingKey>(
   controller: WorkbenchClientStateController,
-  settings: WorkbenchGlobalSettings,
+  key: K,
+  value: WorkbenchGlobalSettings[K],
 ) {
-  const normalizedSettings = normalizeGlobalWorkbenchSettings(settings);
-  await Promise.all((Object.keys(normalizedSettings) as WorkbenchSettingKey[]).map((key) => (
-    controller.put({ kind: "globalPreference", preference: { key, value: normalizedSettings[key] } } as Extract<
-      WorkbenchClientStateRecord,
-      { kind: "globalPreference" }
-    >)
-  )));
+  const normalizedValue = normalizeGlobalWorkbenchSettings({
+    ...createDefaultGlobalWorkbenchSettings(),
+    [key]: value,
+  })[key];
+  await controller.put({
+    kind: "globalPreference",
+    preference: { key, value: normalizedValue },
+  } as Extract<WorkbenchClientStateRecord, { kind: "globalPreference" }>);
 }
 
 export function readProjectWorkbenchSettings(
@@ -344,19 +349,18 @@ export function readProjectWorkbenchSettings(
   } satisfies WorkbenchProjectSettings;
 }
 
-export async function writeProjectWorkbenchSettings(
+export async function writeProjectWorkbenchSetting<K extends WorkbenchSettingKey>(
   controller: WorkbenchClientStateController,
   projectId: string,
-  settings: WorkbenchProjectSettings,
+  key: K,
+  override: WorkbenchProjectSettingOverride<K>,
 ) {
-  await Promise.all((Object.keys(settings) as WorkbenchSettingKey[]).map((key) => (
-    controller.put({
-      daemonRegistrationId: controller.daemonRegistrationId,
-      kind: "projectPreference",
-      preference: { ...normalizeProjectOverride(key, settings[key]), key } as never,
-      projectId,
-    })
-  )));
+  await controller.put({
+    daemonRegistrationId: controller.daemonRegistrationId,
+    kind: "projectPreference",
+    preference: { ...normalizeProjectOverride(key, override), key } as never,
+    projectId,
+  });
 }
 
 export function readWorkbenchProjectSidebarPreferences(
@@ -391,46 +395,44 @@ export function readWorkbenchProjectSidebarPreferences(
   return preferences;
 }
 
-export async function writeWorkbenchProjectSidebarPreferences(
+type WorkbenchProjectSidebarScalarKey = Exclude<
+  keyof WorkbenchProjectSidebarPreferences,
+  "pinnedFolderIds" | "threadFolderIds"
+>;
+
+export async function writeWorkbenchProjectSidebarPreference(
   controller: WorkbenchClientStateController,
   projectId: string,
-  preferences: WorkbenchProjectSidebarPreferences,
+  key: WorkbenchProjectSidebarScalarKey,
+  value: WorkbenchProjectSidebarPreferences[WorkbenchProjectSidebarScalarKey],
 ) {
-  const daemonRegistrationId = controller.daemonRegistrationId;
-  const scalarEntries = Object.entries(preferences).filter(([key]) => (
-    key !== "pinnedFolderIds" && key !== "threadFolderIds"
-  )) as Array<[Exclude<keyof WorkbenchProjectSidebarPreferences, "pinnedFolderIds" | "threadFolderIds">, boolean | number]>;
-  const operations: Promise<unknown>[] = scalarEntries.map(([key, value]) => controller.put({
-    daemonRegistrationId,
+  await controller.put({
+    daemonRegistrationId: controller.daemonRegistrationId,
     kind: "sidebarPreference",
     preference: { key, value } as never,
     projectId,
-  }));
-  for (const scope of ["pinned", "thread"] as const) {
-    const desired = new Set(scope === "pinned" ? preferences.pinnedFolderIds : preferences.threadFolderIds);
-    const current = controller.records("sidebarFolder").filter((record) => (
-      record.daemonRegistrationId === daemonRegistrationId
-      && record.projectId === projectId
-      && record.scope === scope
-    ));
-    for (const record of current) {
-      if (!desired.delete(record.folderId)) operations.push(controller.delete({
-        daemonRegistrationId,
-        folderId: record.folderId,
-        kind: "sidebarFolder",
-        projectId,
-        scope,
-      }));
-    }
-    for (const folderId of desired) operations.push(controller.put({
-      daemonRegistrationId,
-      folderId,
-      kind: "sidebarFolder",
-      projectId,
-      scope,
-    }));
+  });
+}
+
+export async function setWorkbenchProjectSidebarFolderOpen(
+  controller: WorkbenchClientStateController,
+  projectId: string,
+  scope: "pinned" | "thread",
+  folderId: string,
+  open: boolean,
+) {
+  const identity = {
+    daemonRegistrationId: controller.daemonRegistrationId,
+    folderId,
+    kind: "sidebarFolder" as const,
+    projectId,
+    scope,
+  };
+  if (open) {
+    await controller.put(identity);
+  } else {
+    await controller.delete(identity);
   }
-  await Promise.all(operations);
 }
 
 export function resolveWorkbenchSettings(

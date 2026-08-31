@@ -4,7 +4,7 @@
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 
-import WorkbenchAppStateController from "../state/WorkbenchAppStateController.ts";
+import WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import AppHttpNode from "./AppHttpNode.ts";
@@ -12,10 +12,12 @@ import AppHttpNode from "./AppHttpNode.ts";
 export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   access: "operator",
   children: [AppHttpNode],
-  create: (_context, build) => {
-    const state = new WorkbenchAppStateController(build.get("database"));
+  create: (context, build) => {
+    const state = new WorkbenchBrowserStateRegistry(build.get("database"), {
+      onDiagnostic: (message) => context.logger.error("app", message),
+    });
     return {
-      dispose: () => {},
+      dispose: async () => await state.close(),
       registrations: { state },
       start: () => {},
     };
@@ -29,6 +31,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   sources: [
     "app/runtime/AppStateNode.ts",
     "app/state/WorkbenchAppStateController.ts",
+    "app/state/WorkbenchBrowserStateRegistry.ts",
     "shared/state/**",
     "shared/database/**",
   ].join("\n"),

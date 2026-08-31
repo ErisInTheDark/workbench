@@ -13,6 +13,12 @@ You may propose new invariants or changes to existing invariants, but you must m
 <!-- Prevent random connection ports or browser origins from redefining durable client state. -->
 - Store app-owned preferences and drafts in app SQLite, never browser storage.
 - Scope daemon-owned references through app daemon registrations. Ports and addresses are connection locations, never identity.
+<!-- Prevent ports, devices, and tabs from collapsing distinct browser state. -->
+- Stable-port browser state uses one localStorage UUID per browser profile and one SQLite database per UUID. Random-port mode uses shared app state and stores no browser UUID. New browser databases seed from shared portable settings.
+<!-- Prevent browser defaults from becoming stale or importing unfinished work. -->
+- Successful stable-browser setting mutations refresh the shared seed. Draft content stays browser-owned and never enters that seed.
+<!-- Prevent echoed persistence from replaying stale UI state. -->
+- The browser client-state controller owns optimistic projection and per-identity mutation order. Consumers derive persisted state from its snapshot. They do not mirror and write back hydrated state.
 <!-- Prevent suspended mobile tabs from trusting an unreplayable WebSocket stream. -->
 - Treat browser visibility suspension as loss of live stream continuity. On resume, replace the browser WebSocket and rebuild pushed observations plus visible route state from authoritative owners.
 <!-- Prevent app-port changes from racing persistence, stranding clients, or splitting runtime identity. -->

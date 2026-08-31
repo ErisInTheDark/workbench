@@ -49,6 +49,7 @@ import PlaintextEditable from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
+import ThreadComposerDraftSyncController from "./ThreadComposerDraftSyncController";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadModelPicker from "./ThreadModelPicker";
 import ThreadProfilePicker from "./ThreadProfilePicker";
@@ -88,12 +89,6 @@ interface ComposerImageAttachment {
   url: string;
 }
 
-interface HydratedComposerDraftSnapshot {
-  attachments: ComposerImageAttachment[];
-  draftKey: string;
-  text: string;
-}
-
 function createAttachmentId () {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -107,20 +102,6 @@ function cloneComposerImageAttachments(attachments: readonly ComposerImageAttach
     id: attachment.id,
     url: attachment.url,
   }));
-}
-
-function areComposerImageAttachmentsEqual(
-  left: readonly ComposerImageAttachment[],
-  right: readonly ComposerImageAttachment[],
-) {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every((attachment, index) => {
-    const candidate = right[index];
-    return Boolean(candidate && attachment.id === candidate.id && attachment.url === candidate.url);
-  });
 }
 
 export default function ThreadComposer ({
@@ -176,8 +157,8 @@ export default function ThreadComposer ({
     options?: { activatedSkillPaths?: string[] },
   ) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
-  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft, reason?: "autosave" | "submission") => void;
-  onThreadComposerDraftClear: (threadId: string) => void;
+  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft, reason?: "autosave" | "submission") => Promise<void> | void;
+  onThreadComposerDraftClear: (threadId: string) => Promise<void> | void;
   onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
   onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
   onSubmitUserInputRequest: (
@@ -241,14 +222,13 @@ export default function ThreadComposer ({
   const [isRecoveringInterruptedTurn, setIsRecoveringInterruptedTurn] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
-  const acknowledgedDraftKeyRef = useRef(`${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`);
-  const hydratedDraftSnapshotRef = useRef<HydratedComposerDraftSnapshot | null>(threadComposerDraft
-    ? {
-      attachments: cloneComposerImageAttachments(threadComposerDraft.attachments),
-      draftKey: `${thread.id}:${threadComposerDraft.updatedAt}`,
-      text: threadComposerDraft.text,
-    }
-    : null);
+  const draftSyncControllerRef = useRef<ThreadComposerDraftSyncController | null>(null);
+  draftSyncControllerRef.current ??= new ThreadComposerDraftSyncController(
+    thread.id,
+    `${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`,
+  );
+  const hasDurableComposerDraftRef = useRef(Boolean(threadComposerDraft));
+  hasDurableComposerDraftRef.current = Boolean(threadComposerDraft);
   const agentLoadGenerationRef = useRef(0);
   const modelLoadGenerationRef = useRef(0);
   const agentRefreshCooldownTimeoutRef = useRef<number | null>(null);
@@ -535,70 +515,54 @@ export default function ThreadComposer ({
   }, []);
 
   useEffect(() => {
-    if (isSending) {
-      return;
-    }
-
     const draftKey = `${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`;
-    if (acknowledgedDraftKeyRef.current === draftKey) {
-      return;
-    }
-
-    const hydratedDraftSnapshot = hydratedDraftSnapshotRef.current;
-
-    const isStillAtHydratedDraft = Boolean(
-      hydratedDraftSnapshot
-      && value === hydratedDraftSnapshot.text
-      && areComposerImageAttachmentsEqual(attachments, hydratedDraftSnapshot.attachments),
-    );
-    if ((value.trim() || attachments.length) && threadComposerDraft && !isStillAtHydratedDraft) {
-      acknowledgedDraftKeyRef.current = draftKey;
-      return;
-    }
-
+    if (isSending || !draftSyncControllerRef.current?.acceptHydration(thread.id, draftKey)) return;
     const nextText = threadComposerDraft?.text ?? "";
     const nextAttachments = cloneComposerImageAttachments(threadComposerDraft?.attachments ?? []);
-    acknowledgedDraftKeyRef.current = draftKey;
-    hydratedDraftSnapshotRef.current = {
-      attachments: nextAttachments,
-      draftKey,
-      text: nextText,
-    };
     setValue(nextText);
     setAttachments(nextAttachments);
-  }, [attachments, isSending, thread.id, threadComposerDraft, value]);
+  }, [isSending, thread.id, threadComposerDraft]);
 
-  const hasDurableComposerDraft = Boolean(threadComposerDraft);
   useEffect(() => {
     if (hasPendingUserInputRequest || isSending) {
       return;
     }
 
+    const save = draftSyncControllerRef.current?.beginSave();
+    if (!save) return;
     const timeoutId = window.setTimeout(() => {
-      if (!value.trim() && attachments.length === 0) {
-        if (hasDurableComposerDraft && !thread.isDraft) {
-          onThreadComposerDraftClearRef.current(thread.id);
-        } else if (hasDurableComposerDraft) {
-          onThreadComposerDraftChangeRef.current(thread.id, {
-            attachments: [],
-            text: "",
+      void (async () => {
+        try {
+          if (!value.trim() && attachments.length === 0) {
+            if (hasDurableComposerDraftRef.current && !thread.isDraft) {
+              await onThreadComposerDraftClearRef.current(thread.id);
+            } else if (hasDurableComposerDraftRef.current) {
+              await onThreadComposerDraftChangeRef.current(thread.id, {
+                attachments: [],
+                text: "",
+                updatedAt: Date.now(),
+              });
+            }
+            draftSyncControllerRef.current?.completeSave(save);
+            return;
+          }
+
+          await onThreadComposerDraftChangeRef.current(thread.id, {
+            attachments,
+            text: value,
             updatedAt: Date.now(),
           });
+          draftSyncControllerRef.current?.completeSave(save);
+        } catch (draftError) {
+          console.error("Workbench composer draft persistence failed.", draftError);
         }
-        return;
-      }
-
-      onThreadComposerDraftChangeRef.current(thread.id, {
-        attachments,
-        text: value,
-        updatedAt: Date.now(),
-      });
+      })();
     }, 260);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [attachments, hasDurableComposerDraft, hasPendingUserInputRequest, isSending, thread.id, value]);
+  }, [attachments, hasPendingUserInputRequest, isSending, thread.id, thread.isDraft, value]);
 
   useEffect(() => {
     setActivePicker(null);
@@ -670,7 +634,7 @@ export default function ThreadComposer ({
     setValue("");
     setAttachments([]);
     try {
-      await runThreadComposerSubmission({
+      const sent = await runThreadComposerSubmission({
         clearDurableDraft: () => onThreadComposerDraftClearRef.current(thread.id),
         preserveDurableDraft: () => onThreadComposerDraftChangeRef.current(thread.id, {
           attachments: submittedAttachments,
@@ -686,6 +650,7 @@ export default function ThreadComposer ({
         }),
         showError: setError,
       });
+      if (sent) draftSyncControllerRef.current?.completeSubmission(thread.id);
     } finally {
       setIsSending(false);
     }
@@ -756,6 +721,7 @@ export default function ThreadComposer ({
           id: createAttachmentId(),
           url: image.url,
         }));
+        if (nextAttachments.length) draftSyncControllerRef.current?.noteEdit();
         setAttachments((current) => [...current, ...nextAttachments]);
       } catch (pasteError) {
         setError(pasteError instanceof Error ? pasteError.message : "Unable to attach the pasted image.");
@@ -942,6 +908,7 @@ export default function ThreadComposer ({
                 spellCheck={composerSpellCheck}
                 value={value}
                 onChange={(nextValue) => {
+                  draftSyncControllerRef.current?.noteEdit();
                   setValue(nextValue);
                   if (error) {
                     setError("");
@@ -974,6 +941,7 @@ export default function ThreadComposer ({
                             title="Remove attached image"
                             className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                             onClick={() => {
+                              draftSyncControllerRef.current?.noteEdit();
                               setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
                             }}
                           >

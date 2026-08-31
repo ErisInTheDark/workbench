@@ -49,12 +49,13 @@ test("rejects malformed browser-boundary responses", async () => {
   }
 });
 
-test("redirects to the new origin without losing route, query, or hash", () => {
+test("redirects to the new origin without losing route, query, hash, or stable browser identity", () => {
   assert.equal(
     createWorkbenchAppPortRedirectUrl(
       "http://127.0.0.1:43210/project/workbench/settings/global?panel=app#port",
       "http://127.0.0.1:43211",
+      "10000000-0000-4000-8000-000000000001",
     ),
-    "http://127.0.0.1:43211/project/workbench/settings/global?panel=app#port",
+    "http://127.0.0.1:43211/project/workbench/settings/global?panel=app&workbenchBrowserStateId=10000000-0000-4000-8000-000000000001#port",
   );
 });

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect client-log admission, SPA serving, launch restoration, and API ownership.
+ * No production exports. Tests protect client-log admission, SPA and launch serving, and API ownership.
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
@@ -10,7 +10,7 @@ import test from "node:test";
 import HttpServer from "workbench-shared/http/HttpServer";
 
 import WorkbenchAppLogger from "../WorkbenchAppLogger.ts";
-import type WorkbenchAppStateController from "../state/WorkbenchAppStateController.ts";
+import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppHttpRouter from "./WorkbenchAppHttpRouter.ts";
 
 async function fixtureRouter(
@@ -21,11 +21,7 @@ async function fixtureRouter(
   await mkdir(path.join(output, "tab-icons"), { recursive: true });
   await writeFile(path.join(output, "index.html"), "<main>app</main>", "utf8");
   await writeFile(path.join(output, "tab-icons", "default-256.png"), "icon", "utf8");
-  const state = {
-    read: () => ({
-      rows: { lastLaunchTarget: [{ daemon_registration_id: "daemon", deleted: 0, id: "singleton", project_id: "web/workbench", revision: 1 }] },
-    }),
-  } as unknown as WorkbenchAppStateController;
+  const state = {} as WorkbenchBrowserStateRegistry;
   return new WorkbenchAppHttpRouter({
     appPort: {
       read: () => ({
@@ -81,7 +77,8 @@ test("serves SPA and launch routes while unknown APIs return not found", async (
   assert.equal(icon.headers.get("content-type"), "image/png");
   assert.equal(await icon.text(), "icon");
   const launch = await fetch(`${url}/launch`, { redirect: "manual" });
-  assert.equal(launch.headers.get("location"), "/web/workbench");
+  assert.equal(launch.headers.get("location"), null);
+  assert.equal(await launch.text(), "<main>app</main>");
   const missingApi = await fetch(`${url}/api/projects`);
   assert.equal(missingApi.status, 404);
   assert.deepEqual(await missingApi.json(), { error: "Workbench app route not found." });

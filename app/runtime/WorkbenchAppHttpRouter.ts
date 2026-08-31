@@ -9,7 +9,7 @@ import StaticHttpRequestController from "workbench-shared/http/StaticHttpRequest
 import type WorkbenchAppLogger from "../WorkbenchAppLogger.ts";
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import WorkbenchAppStateRoutes from "../state/workbench-app-state-routes.ts";
-import type WorkbenchAppStateController from "../state/WorkbenchAppStateController.ts";
+import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
 
 const CLIENT_LOG_PATH = "/api/workbench-client-log";
@@ -68,7 +68,7 @@ export default class WorkbenchAppHttpRouter {
     appPort: WorkbenchAppPortControl;
     logger: WorkbenchAppLogger;
     outputDirectoryPath: string;
-    state: WorkbenchAppStateController;
+    state: WorkbenchBrowserStateRegistry;
   }) {
     this.portRoutes = new WorkbenchAppPortRoutes({
       appPort: options.appPort,

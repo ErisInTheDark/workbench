@@ -6,16 +6,15 @@
 
 import {
   useCallback,
-  useEffect,
   useMemo,
-  useState,
   type ReactNode,
 } from "react";
 
 import {
   createDefaultWorkbenchProjectSidebarPreferences,
   readWorkbenchProjectSidebarPreferences,
-  writeWorkbenchProjectSidebarPreferences,
+  setWorkbenchProjectSidebarFolderOpen,
+  writeWorkbenchProjectSidebarPreference,
   type WorkbenchProjectSidebarPreferences,
 } from "../../lib/workbench/state/workbench-settings";
 import {
@@ -27,11 +26,6 @@ import {
   useWorkbenchClientStateSnapshot,
 } from "./workbench-client-state-context";
 
-interface WorkbenchSidebarPreferencesState {
-  readonly preferences: WorkbenchProjectSidebarPreferences;
-  readonly projectId: string;
-}
-
 export default function WorkbenchSidebarPreferencesProvider({
   children,
   projectId,
@@ -41,83 +35,73 @@ export default function WorkbenchSidebarPreferencesProvider({
 }) {
   const controller = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
-  const defaultPreferences = useMemo(createDefaultWorkbenchProjectSidebarPreferences, [projectId]);
-  const [state, setState] = useState<WorkbenchSidebarPreferencesState>(() => ({
-    preferences: defaultPreferences,
-    projectId,
-  }));
-  const preferences = state.projectId === projectId ? state.preferences : defaultPreferences;
-  useEffect(() => {
-    setState({
-      preferences: projectId
-        ? readWorkbenchProjectSidebarPreferences(clientState.daemonRegistrationId, projectId, clientState.records)
-        : defaultPreferences,
-      projectId,
-    });
-  }, [clientState.daemonRegistrationId, clientState.records, defaultPreferences, projectId]);
+  const preferences = useMemo(() => {
+    return projectId
+      ? readWorkbenchProjectSidebarPreferences(clientState.daemonRegistrationId, projectId, clientState.records)
+      : createDefaultWorkbenchProjectSidebarPreferences();
+  }, [clientState.daemonRegistrationId, clientState.records, projectId]);
 
-  const update = useCallback((
-    transform: (current: WorkbenchProjectSidebarPreferences) => WorkbenchProjectSidebarPreferences,
+  const persistPreference = useCallback((
+    key: Exclude<keyof WorkbenchProjectSidebarPreferences, "pinnedFolderIds" | "threadFolderIds">,
+    value: boolean | number,
   ) => {
-    setState((currentState) => {
-      const current = currentState.projectId === projectId ? currentState.preferences : defaultPreferences;
-      const next = transform(current);
-      if (projectId) {
-        void writeWorkbenchProjectSidebarPreferences(controller, projectId, next).catch((error) => {
-          console.error("Workbench sidebar preference persistence failed.", error);
-        });
-      }
-      return {
-        preferences: next,
-        projectId,
-      };
+    if (!projectId || preferences[key] === value) return;
+    void writeWorkbenchProjectSidebarPreference(controller, projectId, key, value).catch((error) => {
+      console.error("Workbench sidebar preference persistence failed.", error);
     });
-  }, [controller, defaultPreferences, projectId]);
+  }, [controller, preferences, projectId]);
   const setDisclosureOpen = useCallback<WorkbenchSidebarPreferencesValue["setDisclosureOpen"]>(
-    (key, open) => update((current) => current[key] === open ? current : { ...current, [key]: open }),
-    [update],
+    (key, open) => persistPreference(key, open),
+    [persistPreference],
   );
   const setFolderOpen = useCallback<WorkbenchSidebarPreferencesValue["setFolderOpen"]>((scope, folderId, open) => {
     const key = scope === "pinned" ? "pinnedFolderIds" : "threadFolderIds";
-    update((current) => {
-      const folderIds = current[key];
-      const hasFolder = folderIds.includes(folderId);
-      if (hasFolder === open) return current;
-      return {
-        ...current,
-        [key]: open
-          ? [...folderIds, folderId].slice(-500)
-          : folderIds.filter((candidate) => candidate !== folderId),
-      };
+    if (!projectId || preferences[key].includes(folderId) === open) return;
+    const storedScope = scope === "pinned" ? "pinned" : "thread";
+    const operation = async () => {
+      if (open && preferences[key].length >= 500) {
+        const oldestFolderId = preferences[key][0];
+        if (oldestFolderId) {
+          await setWorkbenchProjectSidebarFolderOpen(
+            controller,
+            projectId,
+            storedScope,
+            oldestFolderId,
+            false,
+          );
+        }
+      }
+      await setWorkbenchProjectSidebarFolderOpen(
+        controller,
+        projectId,
+        storedScope,
+        folderId,
+        open,
+      );
+    };
+    void operation().catch((error) => {
+      console.error("Workbench sidebar folder persistence failed.", error);
     });
-  }, [update]);
+  }, [controller, preferences, projectId]);
   const value = useMemo<WorkbenchSidebarPreferencesValue>(() => ({
     preferences,
     setDisclosureOpen,
     setFolderOpen,
     setProjectTimeGroupCount: (count) => {
       const boundedCount = Math.max(1, Math.min(100, Math.floor(count)));
-      update((current) => current.projectTimeGroupCount === boundedCount
-        ? current
-        : { ...current, projectTimeGroupCount: boundedCount });
+      persistPreference("projectTimeGroupCount", boundedCount);
     },
-    setReloadNecessaryOpen: (open) => update((current) => current.reloadNecessaryOpen === open
-      ? current
-      : { ...current, reloadNecessaryOpen: open }),
+    setReloadNecessaryOpen: (open) => persistPreference("reloadNecessaryOpen", open),
     setSettledThreadItemLimit: (limit) => {
       const boundedLimit = Math.max(50, Math.min(5_000, Math.floor(limit)));
-      update((current) => current.settledThreadItemLimit === boundedLimit
-        ? current
-        : { ...current, settledThreadItemLimit: boundedLimit });
+      persistPreference("settledThreadItemLimit", boundedLimit);
     },
-    setSidebarCollapsed: (collapsed) => update((current) => current.sidebarCollapsed === collapsed
-      ? current
-      : { ...current, sidebarCollapsed: collapsed }),
+    setSidebarCollapsed: (collapsed) => persistPreference("sidebarCollapsed", collapsed),
     setStatusCountsExpanded: (scope, expanded) => {
       const key = scope === "pinned" ? "pinnedStatusCountsExpanded" : "projectStatusCountsExpanded";
-      update((current) => current[key] === expanded ? current : { ...current, [key]: expanded });
+      persistPreference(key, expanded);
     },
-  }), [preferences, setDisclosureOpen, setFolderOpen, update]);
+  }), [persistPreference, preferences, setDisclosureOpen, setFolderOpen]);
 
   return (
     <WorkbenchSidebarPreferencesContext.Provider value={value}>

@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchAppPortClientSnapshot: server snapshot plus old-process compatibility state for the browser.
  * - readWorkbenchAppPort/updateWorkbenchAppPort: typed same-origin app-port HTTP client.
- * - createWorkbenchAppPortRedirectUrl: replace only the origin while preserving the current browser route.
+ * - createWorkbenchAppPortRedirectUrl: replace the origin, preserve the browser route, and optionally transfer browser state identity.
  */
 import {
   WORKBENCH_APP_PORT_PATH,
@@ -11,6 +11,7 @@ import {
 import { z } from "zod";
 
 import reportClientSchemaError from "../report-client-schema-error";
+import { WORKBENCH_BROWSER_STATE_TRANSFER_PARAMETER } from "../state/workbench-browser-state-identity";
 
 const WorkbenchAppPortSnapshotSchema = z.object({
   appOrigin: z.string().url().refine((value) => {
@@ -92,10 +93,15 @@ export async function updateWorkbenchAppPort(
   return await snapshotResponse(response);
 }
 
-export function createWorkbenchAppPortRedirectUrl(currentHref: string, appOrigin: string) {
+export function createWorkbenchAppPortRedirectUrl(
+  currentHref: string,
+  appOrigin: string,
+  browserStateId?: string,
+) {
   const current = new URL(currentHref);
   const destination = new URL(appOrigin);
   current.protocol = destination.protocol;
   current.host = destination.host;
+  if (browserStateId) current.searchParams.set(WORKBENCH_BROWSER_STATE_TRANSFER_PARAMETER, browserStateId);
   return current.toString();
 }

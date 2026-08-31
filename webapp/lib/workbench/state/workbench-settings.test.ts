@@ -9,10 +9,25 @@ import {
   createDefaultWorkbenchProjectSidebarPreferences,
   readProjectWorkbenchSettings,
   readWorkbenchProjectSidebarPreferences,
-  writeProjectWorkbenchSettings,
-  writeWorkbenchProjectSidebarPreferences,
+  setWorkbenchProjectSidebarFolderOpen,
+  writeGlobalWorkbenchSetting,
+  writeProjectWorkbenchSetting,
+  writeWorkbenchProjectSidebarPreference,
 } from "./workbench-settings";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
+
+test("each focused setting intent writes one app-state identity", async () => {
+  const controller = new WorkbenchClientStateController({ mode: "memory" });
+  await writeGlobalWorkbenchSetting(controller, "theme", "winter");
+  assert.equal(controller.getSnapshot().records.length, 1);
+  await writeProjectWorkbenchSetting(controller, "alpha", "theme", {
+    enabled: true,
+    value: "magical-girl",
+  });
+  assert.equal(controller.getSnapshot().records.length, 2);
+  await writeWorkbenchProjectSidebarPreference(controller, "alpha", "threadsOpen", false);
+  assert.equal(controller.getSnapshot().records.length, 3);
+});
 
 test("sidebar preferences project scalar and collection records without crossing projects", async () => {
   const controller = new WorkbenchClientStateController({ mode: "memory" });
@@ -21,11 +36,10 @@ test("sidebar preferences project scalar and collection records without crossing
     pinnedFolderIds: ["one", "two"],
     threadsOpen: false,
   };
-  await writeWorkbenchProjectSidebarPreferences(controller, "alpha", alpha);
-  await writeWorkbenchProjectSidebarPreferences(controller, "beta", {
-    ...createDefaultWorkbenchProjectSidebarPreferences(),
-    projectsOpen: true,
-  });
+  await writeWorkbenchProjectSidebarPreference(controller, "alpha", "threadsOpen", false);
+  await setWorkbenchProjectSidebarFolderOpen(controller, "alpha", "pinned", "one", true);
+  await setWorkbenchProjectSidebarFolderOpen(controller, "alpha", "pinned", "two", true);
+  await writeWorkbenchProjectSidebarPreference(controller, "beta", "projectsOpen", true);
 
   assert.deepEqual(
     readWorkbenchProjectSidebarPreferences("memory", "alpha", controller.getSnapshot().records),
@@ -51,8 +65,9 @@ test("sidebar and ordinary project settings coexist as separate app-state record
   settings.showUnopenableFiles = { enabled: true, value: true };
   settings.theme = { enabled: true, value: "magical-girl" };
 
-  await writeWorkbenchProjectSidebarPreferences(controller, "alpha", sidebar);
-  await writeProjectWorkbenchSettings(controller, "alpha", settings);
+  await writeWorkbenchProjectSidebarPreference(controller, "alpha", "settledThreadItemLimit", 150);
+  await writeProjectWorkbenchSetting(controller, "alpha", "showUnopenableFiles", settings.showUnopenableFiles);
+  await writeProjectWorkbenchSetting(controller, "alpha", "theme", settings.theme);
 
   assert.deepEqual(
     readWorkbenchProjectSidebarPreferences("memory", "alpha", controller.getSnapshot().records),

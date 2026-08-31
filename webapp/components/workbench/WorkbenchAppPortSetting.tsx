@@ -12,6 +12,7 @@ import {
   updateWorkbenchAppPort,
   type WorkbenchAppPortClientSnapshot,
 } from "../../lib/workbench/app/workbench-app-port-client";
+import { readWorkbenchBrowserStateTransferId } from "../../lib/workbench/state/workbench-browser-state-identity";
 
 function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : "Unable to read the Workbench app port.").slice(0, 500);
@@ -70,7 +71,11 @@ export default function WorkbenchAppPortSetting() {
       const nextSnapshot = await updateWorkbenchAppPort(port);
       setSnapshot(nextSnapshot);
       setDraft(String(nextSnapshot.currentPort));
-      window.location.assign(createWorkbenchAppPortRedirectUrl(window.location.href, nextSnapshot.appOrigin));
+      window.location.assign(createWorkbenchAppPortRedirectUrl(
+        window.location.href,
+        nextSnapshot.appOrigin,
+        readWorkbenchBrowserStateTransferId(snapshot),
+      ));
     } catch (applyError) {
       setError(boundedError(applyError));
       setIsApplying(false);

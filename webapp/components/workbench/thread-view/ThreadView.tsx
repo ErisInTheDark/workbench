@@ -686,28 +686,20 @@ export default memo(function ThreadView ({
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
   const [previousTurnLoadStates, dispatchPreviousTurnLoad] = useReducer(previousTurnLoadReducer, {});
-  const [isLiveActivityOpen, setIsLiveActivityOpen] = useState(() => {
-    const preference = clientState.records.find((record) => (
-      record.kind === "globalPreference" && record.preference.key === "threadLiveActivityOpen"
-    ));
-    return preference?.kind === "globalPreference" && typeof preference.preference.value === "boolean"
-      ? preference.preference.value
-      : true;
-  });
-  useEffect(() => {
-    const preference = clientState.records.find((record) => (
-      record.kind === "globalPreference" && record.preference.key === "threadLiveActivityOpen"
-    ));
-    if (preference?.kind === "globalPreference" && typeof preference.preference.value === "boolean") {
-      setIsLiveActivityOpen(preference.preference.value);
-    }
-  }, [clientState.records]);
+  const liveActivityPreference = clientState.records.find((record) => (
+    record.kind === "globalPreference" && record.preference.key === "threadLiveActivityOpen"
+  ));
+  const isLiveActivityOpen = liveActivityPreference?.kind === "globalPreference"
+    && typeof liveActivityPreference.preference.value === "boolean"
+    ? liveActivityPreference.preference.value
+    : true;
   const persistLiveActivityOpen = useCallback((open: boolean) => {
+    if (open === isLiveActivityOpen) return;
     void clientStateController.put({
       kind: "globalPreference",
       preference: { key: "threadLiveActivityOpen", value: open },
     });
-  }, [clientStateController]);
+  }, [clientStateController, isLiveActivityOpen]);
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const historySentinelRef = useRef<HTMLDivElement>(null);
@@ -1666,7 +1658,6 @@ export default memo(function ThreadView ({
                   open={isLiveActivityOpen}
                   onToggle={(event) => {
                     const nextIsOpen = event.currentTarget.open;
-                    setIsLiveActivityOpen(nextIsOpen);
                     persistLiveActivityOpen(nextIsOpen);
                   }}
                   summary={<span className="thread-thinking-text">{liveActivity.title}</span>}
@@ -1689,7 +1680,6 @@ export default memo(function ThreadView ({
                 open={isLiveActivityOpen}
                 onToggle={(event) => {
                   const nextIsOpen = event.currentTarget.open;
-                  setIsLiveActivityOpen(nextIsOpen);
                   persistLiveActivityOpen(nextIsOpen);
                 }}
                 summaryClassName="text-[0.92em] font-medium leading-[1.6]"

@@ -12,6 +12,9 @@ async function start() {
     { ReactScan },
     { default: WorkbenchClientStateController },
     { default: WorkbenchAppRuntimeClient },
+    { readWorkbenchAppPort },
+    { resolveWorkbenchBrowserStateIdentity },
+    { createWorkbenchProjectHref },
     { installBrowserNavigationEvents },
     { default: WorkbenchBrowserApp },
   ] = await Promise.all([
@@ -19,16 +22,34 @@ async function start() {
     import("../webapp/components/ReactScan.tsx"),
     import("../webapp/lib/workbench/state/WorkbenchClientStateController.ts"),
     import("../webapp/lib/workbench/app/WorkbenchAppRuntimeClient.ts"),
+    import("../webapp/lib/workbench/app/workbench-app-port-client.ts"),
+    import("../webapp/lib/workbench/state/workbench-browser-state-identity.ts"),
+    import("../shared/navigation/workbench-route-path.ts"),
     import("../webapp/lib/workbench/navigation/browser-navigation.ts"),
     import("./WorkbenchBrowserApp.tsx"),
   ]);
   installBrowserNavigationEvents();
   const rootElement = document.getElementById("root");
   if (!rootElement) throw new Error("Workbench app root is unavailable.");
-  const controller = new WorkbenchClientStateController({ mode: "http" });
   const runtime = new WorkbenchAppRuntimeClient();
+  let controller: InstanceType<typeof WorkbenchClientStateController> | null = null;
   try {
+    const portSnapshot = await readWorkbenchAppPort();
+    const identity = resolveWorkbenchBrowserStateIdentity(portSnapshot);
+    if (identity.cleanedHref) window.history.replaceState(window.history.state, "", identity.cleanedHref);
+    controller = new WorkbenchClientStateController({
+      browserStateId: identity.browserStateId,
+      mode: "http",
+    });
     await Promise.all([controller.bootstrap(), runtime.bootstrap()]);
+    if (window.location.pathname === "/launch") {
+      const target = controller.records("lastLaunchTarget")[0];
+      window.history.replaceState(
+        window.history.state,
+        "",
+        target ? createWorkbenchProjectHref(target.projectId) : "/",
+      );
+    }
     const theme = controller.records("globalPreference").find((record) => (
       record.preference.key === "theme"
     ))?.preference.value;
@@ -47,7 +68,7 @@ async function start() {
       </>,
     );
   } catch (error) {
-    controller.dispose();
+    controller?.dispose();
     runtime.dispose();
     document.documentElement.dataset.workbenchTheme = "default";
     rootElement.textContent = error instanceof Error

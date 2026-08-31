@@ -73,6 +73,10 @@ export default class WorkbenchAppStateRepository {
     database?.close();
   }
 
+  async backupTo(destinationPath: string) {
+    await this.#requireDatabase().backup(destinationPath);
+  }
+
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]) {
     const database = this.#requireDatabase();
     if (statements.length === 0) return 0;

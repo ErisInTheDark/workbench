@@ -8,6 +8,7 @@ import type {
   WorkbenchClientStateResponse,
   WorkbenchClientStateRows,
 } from "workbench-shared/state/workbench-client-state";
+import { WORKBENCH_BROWSER_STATE_HEADER } from "workbench-shared/state/workbench-client-state";
 
 import { conformWorkbenchClientStateResponse } from "./workbench-client-state-conformance";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
@@ -120,12 +121,17 @@ test("app-state conformance rejects a missing required current-table column", ()
   }
 });
 
-test("HTTP bootstrap invokes fetch with the browser global receiver", async () => {
-  const fetcher: typeof fetch = function (this: typeof globalThis) {
+test("HTTP state requests carry browser identity and use the browser global receiver", async () => {
+  const browserStateId = "10000000-0000-4000-8000-000000000001";
+  const methods: string[] = [];
+  const fetcher: typeof fetch = function (this: typeof globalThis, _input, init) {
     assert.equal(this, globalThis);
-    return Promise.resolve(Response.json(response("snapshot", 0, emptyRows())));
+    assert.equal(new Headers(init?.headers).get(WORKBENCH_BROWSER_STATE_HEADER), browserStateId);
+    methods.push(init?.method ?? "GET");
+    return Promise.resolve(Response.json(response("snapshot", methods.length - 1, emptyRows())));
   };
   const controller = new WorkbenchClientStateController({
+    browserStateId,
     cancelSchedule: () => undefined,
     fetcher,
     mode: "http",
@@ -134,7 +140,161 @@ test("HTTP bootstrap invokes fetch with the browser global receiver", async () =
   });
 
   await controller.bootstrap();
+  await controller.put({
+    kind: "globalPreference",
+    preference: { key: "composerSpellCheck", value: true },
+  });
+  await controller.delete({ key: "composerSpellCheck", kind: "globalPreference" });
   assert.equal(controller.getSnapshot().daemonRegistrationId, "registration");
+  assert.deepEqual(methods, ["GET", "PUT", "DELETE"]);
+  controller.dispose();
+});
+
+test("same-identity mutations stay ordered and old responses remain behind the newest optimistic draft", async () => {
+  const firstResponse = deferred<Response>();
+  const secondResponse = deferred<Response>();
+  let requestCount = 0;
+  const draftResponse = (revision: number, text: string) => {
+    const rows = emptyRows();
+    rows.composerDrafts.push({
+      daemon_registration_id: "registration",
+      deleted: 0,
+      project_id: "project",
+      revision,
+      text,
+      thread_id: "thread",
+      updated_at: revision,
+    });
+    return response("delta", revision, rows);
+  };
+  const controller = new WorkbenchClientStateController({
+    cancelSchedule: () => undefined,
+    fetcher: async () => {
+      requestCount += 1;
+      if (requestCount === 1) return Response.json(response("snapshot", 0, emptyRows()));
+      if (requestCount === 2) return await firstResponse.promise;
+      return await secondResponse.promise;
+    },
+    mode: "http",
+    schedule: () => 1,
+    visibility: { hidden: () => false, subscribe: () => () => undefined },
+  });
+  await controller.bootstrap();
+  const base = {
+    daemonRegistrationId: "registration",
+    kind: "composerDraft" as const,
+    projectId: "project",
+    threadId: "thread",
+  };
+  const firstMutation = controller.put({
+    ...base,
+    value: { attachments: [], text: "first", updatedAt: 1 },
+  });
+  const secondMutation = controller.put({
+    ...base,
+    value: { attachments: [], text: "second", updatedAt: 2 },
+  });
+  await Promise.resolve();
+  assert.equal(controller.records("composerDraft")[0]?.value.text, "second");
+  assert.equal(requestCount, 2);
+
+  firstResponse.resolve(Response.json(draftResponse(1, "first")));
+  await firstMutation;
+  await Promise.resolve();
+  assert.equal(controller.records("composerDraft")[0]?.value.text, "second");
+  assert.equal(requestCount, 3);
+
+  secondResponse.resolve(Response.json(draftResponse(2, "second")));
+  await secondMutation;
+  assert.equal(controller.records("composerDraft")[0]?.value.text, "second");
+  controller.dispose();
+});
+
+test("a failed latest mutation removes only its optimistic value", async () => {
+  const rows = emptyRows();
+  rows.globalPreferences.push({
+    boolean_value: 1,
+    deleted: 0,
+    integer_value: null,
+    key: "composerSpellCheck",
+    revision: 1,
+    text_value: null,
+  });
+  let requestCount = 0;
+  const controller = new WorkbenchClientStateController({
+    cancelSchedule: () => undefined,
+    fetcher: async () => {
+      requestCount += 1;
+      if (requestCount === 1) return Response.json(response("snapshot", 1, rows));
+      throw new Error("write failed");
+    },
+    mode: "http",
+    schedule: () => 1,
+    visibility: { hidden: () => false, subscribe: () => () => undefined },
+  });
+  await controller.bootstrap();
+  const mutation = controller.put({
+    kind: "globalPreference",
+    preference: { key: "composerSpellCheck", value: false },
+  });
+  assert.equal(controller.records("globalPreference")[0]?.preference.value, false);
+  await assert.rejects(mutation, /write failed/u);
+  assert.equal(controller.records("globalPreference")[0]?.preference.value, true);
+  controller.dispose();
+});
+
+test("crossed responses for unrelated identities retain both confirmed mutations", async () => {
+  const firstResponse = deferred<Response>();
+  const secondResponse = deferred<Response>();
+  let requestCount = 0;
+  const mutationResponse = (
+    revision: number,
+    key: "composerSpellCheck" | "editorSpellCheck",
+    value: 0 | 1,
+  ) => {
+    const rows = emptyRows();
+    rows.globalPreferences.push({
+      boolean_value: value,
+      deleted: 0,
+      integer_value: null,
+      key,
+      revision,
+      text_value: null,
+    });
+    return response("delta", revision, rows);
+  };
+  const controller = new WorkbenchClientStateController({
+    cancelSchedule: () => undefined,
+    fetcher: async () => {
+      requestCount += 1;
+      if (requestCount === 1) return Response.json(response("snapshot", 0, emptyRows()));
+      if (requestCount === 2) return await firstResponse.promise;
+      return await secondResponse.promise;
+    },
+    mode: "http",
+    schedule: () => 1,
+    visibility: { hidden: () => false, subscribe: () => () => undefined },
+  });
+  await controller.bootstrap();
+  const firstMutation = controller.put({
+    kind: "globalPreference",
+    preference: { key: "composerSpellCheck", value: true },
+  });
+  const secondMutation = controller.put({
+    kind: "globalPreference",
+    preference: { key: "editorSpellCheck", value: true },
+  });
+  await Promise.resolve();
+  assert.equal(requestCount, 3);
+
+  secondResponse.resolve(Response.json(mutationResponse(2, "editorSpellCheck", 1)));
+  await secondMutation;
+  firstResponse.resolve(Response.json(mutationResponse(1, "composerSpellCheck", 1)));
+  await firstMutation;
+  assert.deepEqual(
+    controller.records("globalPreference").map((record) => record.preference.key).sort(),
+    ["composerSpellCheck", "editorSpellCheck"],
+  );
   controller.dispose();
 });
 

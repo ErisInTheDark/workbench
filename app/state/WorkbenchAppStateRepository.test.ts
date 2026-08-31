@@ -6,7 +6,11 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 
 import Database from "better-sqlite3";
-import { insertRow } from "workbench-shared/database/workbench-database-statements";
+import {
+  insertRow,
+  selectRows,
+  updateRows,
+} from "workbench-shared/database/workbench-database-statements";
 import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
 
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
@@ -57,4 +61,46 @@ test("checked scalar families reject value columns that do not match their key",
     ) VALUES ('theme', 1, NULL, NULL, 0, 1)
   `).run(), /CHECK constraint failed/u);
   database.close();
+});
+
+test("backup creates a complete independent app-state database", async (context) => {
+  const sourcePath = await temporaryDatabase(context);
+  const backupPath = path.join(path.dirname(sourcePath), "backup.sqlite3");
+  const source = new WorkbenchAppStateRepository({ databasePath: sourcePath });
+  source.start();
+  source.commit((revision) => [
+    insertRow(appStateTables.globalPreferences, {
+      boolean_value: 1,
+      deleted: 0,
+      integer_value: null,
+      key: "composerSpellCheck",
+      revision,
+      text_value: null,
+    }),
+  ]);
+
+  await source.backupTo(backupPath);
+  const backup = new WorkbenchAppStateRepository({ databasePath: backupPath });
+  backup.start();
+  assert.deepEqual(backup.currentVersion(), source.currentVersion());
+  assert.equal(
+    backup.query(selectRows(appStateTables.globalPreferences, {
+      where: { key: "composerSpellCheck" },
+    }))[0]?.boolean_value,
+    1,
+  );
+
+  source.commit((revision) => [updateRows(
+    appStateTables.globalPreferences,
+    { boolean_value: 0, revision },
+    { key: "composerSpellCheck" },
+  )]);
+  assert.equal(
+    backup.query(selectRows(appStateTables.globalPreferences, {
+      where: { key: "composerSpellCheck" },
+    }))[0]?.boolean_value,
+    1,
+  );
+  backup.close();
+  source.close();
 });

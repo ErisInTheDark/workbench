@@ -1,17 +1,17 @@
 /*
  * Exports:
- * - default WorkbenchAppStateRoutes: own the app-state HTTP namespace, bounded JSON admission, and launch redirect. Keywords: app, state, HTTP, routes.
+ * - default WorkbenchAppStateRoutes: own the app-state HTTP namespace and bounded JSON admission. Keywords: app, state, HTTP, routes.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import {
+  WORKBENCH_BROWSER_STATE_HEADER,
   workbenchClientStateMutationKinds,
   type WorkbenchClientStateIdentity,
   type WorkbenchClientStateRecord,
 } from "workbench-shared/state/workbench-client-state";
-import { createWorkbenchProjectHref } from "workbench-shared/navigation/workbench-route-path";
 
-import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
+import WorkbenchBrowserStateRegistry from "./WorkbenchBrowserStateRegistry.ts";
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -40,23 +40,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export default class WorkbenchAppStateRoutes {
-  readonly #controller: WorkbenchAppStateController;
+  readonly #registry: WorkbenchBrowserStateRegistry;
 
-  constructor(controller: WorkbenchAppStateController) {
-    this.#controller = controller;
+  constructor(registry: WorkbenchBrowserStateRegistry) {
+    this.#registry = registry;
   }
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL) {
-    if (url.pathname === "/launch" && request.method === "GET") {
-      const snapshot = this.#controller.read();
-      const target = snapshot.rows.lastLaunchTarget.find((row) => row.deleted === 0);
-      response.writeHead(307, {
-        "Cache-Control": "private, no-store",
-        Location: target ? createWorkbenchProjectHref(target.project_id) : "/",
-      });
-      response.end();
-      return true;
-    }
     const isReadRoute = url.pathname === "/api/workbench-client-state";
     const mutationKinds = workbenchClientStateMutationKinds(url.pathname);
     if (!isReadRoute && !mutationKinds) {
@@ -65,6 +55,9 @@ export default class WorkbenchAppStateRoutes {
       return true;
     }
     try {
+      const rawBrowserStateId = request.headers[WORKBENCH_BROWSER_STATE_HEADER];
+      if (Array.isArray(rawBrowserStateId)) throw new Error("Workbench browser state ID is invalid.");
+      const browserStateId = rawBrowserStateId || undefined;
       if (isReadRoute && request.method === "GET") {
         const rawRevision = url.searchParams.get("sinceRevision");
         const sinceRevision = rawRevision === null ? undefined : Number(rawRevision);
@@ -72,7 +65,7 @@ export default class WorkbenchAppStateRoutes {
           sendJson(response, 400, { error: "sinceRevision must be a non-negative integer." });
           return true;
         }
-        sendJson(response, 200, this.#controller.read(sinceRevision));
+        sendJson(response, 200, await this.#registry.readBrowser(browserStateId, sinceRevision));
         return true;
       }
       if (mutationKinds && (request.method === "PUT" || request.method === "DELETE")) {
@@ -84,7 +77,7 @@ export default class WorkbenchAppStateRoutes {
         const mutation = request.method === "PUT"
           ? { action: "put" as const, record: value as WorkbenchClientStateRecord }
           : { action: "delete" as const, identity: value as WorkbenchClientStateIdentity };
-        sendJson(response, 200, await this.#controller.mutate(mutation));
+        sendJson(response, 200, await this.#registry.mutateBrowser(browserStateId, mutation));
         return true;
       }
       response.writeHead(405, { Allow: isReadRoute ? "GET" : "DELETE, PUT" });
