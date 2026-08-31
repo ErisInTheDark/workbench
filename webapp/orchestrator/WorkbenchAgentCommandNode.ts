@@ -60,8 +60,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       },
       executeTokenCount: async (body, signal) => await tokens.execute(body, signal),
       executeSessionRequest: context.executeBrowseSessionRequest,
-      getReloadDirt: async (signal) => await reloadDirt.refresh(signal),
       getReloadScopeCatalog: () => reloadDirt.getCatalog(),
+      readReloadDirtSnapshot: () => reloadDirt.getSnapshot(),
       requestCodex: async (request) => await harnesses.request("codex", request),
       requestSubagent: async (request) => request.method?.startsWith("workbench/thread/")
         ? await threadState.handleManagedThreadRequest(request)

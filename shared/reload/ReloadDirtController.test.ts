@@ -1,8 +1,9 @@
 /*
- * No production exports. Tests protect transferred pending state, stale-refresh cancellation, Git-backed partial baselines, deletion, and external dirt.
+ * No production exports. Tests protect transferred pending state, stale-refresh cancellation, watcher coalescing, Git-backed partial baselines, deletion, and external dirt.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { watch as fsWatch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -116,6 +117,52 @@ test("a user reload aborts stale reconciliation and rejects its late result", as
   await assert.rejects(staleRefresh, (error) => error === staleSignal.reason);
   assert.deepEqual(controller.getSnapshot(), { dirtyScopes: [], error: null, pendingScopes: [] });
   await controller.dispose();
+});
+
+test("watcher events during reconciliation collapse into one trailing refresh", async (context) => {
+  const repository = new ControlledRepository();
+  const watcherEvents: {
+    observe?: (eventType: string, filename: string | Buffer | null) => void;
+  } = {};
+  const watcher = {
+    close: () => undefined,
+    on: () => watcher,
+  } as unknown as FSWatcher;
+  const controller = new ReloadDirtController({
+    getSourceState: sourceState,
+    repoRoot: "C:/repo",
+    repository,
+    snapshotRef: "refs/worktree/workbench/test-reload-snapshot",
+    watchSource: ((_root, _options, listener) => {
+      watcherEvents.observe = listener as typeof watcherEvents.observe;
+      return watcher;
+    }) as typeof fsWatch,
+  }, transferredState());
+  let first: ReturnType<ControlledRepository["blockNextScopedTree"]> | null = null;
+  let trailing: ReturnType<ControlledRepository["blockNextScopedTree"]> | null = null;
+  context.after(async () => {
+    first?.release("fresh-tree");
+    trailing?.release("fresh-tree");
+    await controller.dispose();
+  });
+  await controller.start();
+  assert.equal(repository.scopedTreeWrites, 1);
+
+  first = repository.blockNextScopedTree();
+  watcherEvents.observe?.("change", "app/core.ts");
+  await first.started;
+  for (let event = 0; event < 5; event += 1) {
+    watcherEvents.observe?.("change", "app/core.ts");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  trailing = repository.blockNextScopedTree();
+  first.release("fresh-tree");
+  await trailing.started;
+  assert.equal(repository.scopedTreeWrites, 3);
+  trailing.release("fresh-tree");
+  await controller.dispose();
+  assert.equal(repository.scopedTreeWrites, 3);
 });
 
 async function gitFixture() {

@@ -107,12 +107,13 @@ export default class ReloadDirtController {
   private attached = true;
   private clearSourceObserver: (() => void) | null = null;
   private refreshAbort: AbortController;
-  private refreshQueued = false;
   private readonly repository: ReloadDirtSnapshotRepositoryPort;
   private readonly listeners = new Set<() => void>();
   private snapshot: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
   private tail: Promise<void>;
   private watcher: FSWatcher | null = null;
+  private watcherRefreshPending = false;
+  private watcherRefreshRunning = false;
 
   constructor(
     private readonly options: ReloadDirtControllerOptions,
@@ -382,17 +383,34 @@ export default class ReloadDirtController {
   }
 
   private queueRefresh() {
-    if (!this.attached || this.refreshQueued || this.requireState().pendingScopes.length) return;
-    this.refreshQueued = true;
-    setImmediate(() => {
-      this.refreshQueued = false;
-      if (!this.attached || this.requireState().pendingScopes.length) return;
-      const expectedSignal = this.refreshAbort.signal;
-      void this.refresh().catch((error: unknown) => {
-        if (expectedSignal.aborted && error === expectedSignal.reason) return;
-        this.publishError(error);
-      });
-    });
+    if (!this.attached || this.requireState().pendingScopes.length) return;
+    this.watcherRefreshPending = true;
+    if (this.watcherRefreshRunning) return;
+    this.watcherRefreshRunning = true;
+    setImmediate(() => { void this.runWatcherRefreshes(); });
+  }
+
+  private async runWatcherRefreshes() {
+    const expectedSignal = this.refreshAbort.signal;
+    try {
+      while (
+        this.attached
+        && !this.requireState().pendingScopes.length
+        && this.watcherRefreshPending
+      ) {
+        this.watcherRefreshPending = false;
+        await this.refresh();
+      }
+    } catch (error) {
+      if (!(expectedSignal.aborted && error === expectedSignal.reason)) this.publishError(error);
+    } finally {
+      this.watcherRefreshRunning = false;
+      if (!this.attached || this.requireState().pendingScopes.length) {
+        this.watcherRefreshPending = false;
+      } else if (this.watcherRefreshPending) {
+        this.queueRefresh();
+      }
+    }
   }
 
   private supersedeRefreshes() {

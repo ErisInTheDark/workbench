@@ -31,8 +31,8 @@ interface WorkbenchAgentDirectPort {
   executeThreadRecallRequest?: (request: WorkbenchAgentCliRequest, signal: AbortSignal) => Promise<Response>;
   executeTokenCount?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
-  getReloadDirt?: (signal?: AbortSignal) => Promise<WorkbenchReloadDirtSnapshot>;
   getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
+  readReloadDirtSnapshot?: () => WorkbenchReloadDirtSnapshot;
   requestCodex?: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   requestSubagent?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
   workbenchProjectRoot?: string;
@@ -322,8 +322,8 @@ export default class WorkbenchAgentCommandController {
 
   private async dispatchRequest(request: WorkbenchAgentCliRequest, signal: AbortSignal) {
     if (request.path === "/api/orchestrator/reload" && request.body?.all === true) {
-      if (!this.direct.getReloadDirt) throw new Error("Reload dirt is not configured.");
-      const dirt = await this.direct.getReloadDirt(signal);
+      if (!this.direct.readReloadDirtSnapshot) throw new Error("Reload dirt is not configured.");
+      const dirt = this.direct.readReloadDirtSnapshot();
       const includeDestructive = request.body.unsafe === true;
       const scopes = [
         ...new Set([
@@ -361,8 +361,8 @@ export default class WorkbenchAgentCommandController {
       return await this.direct.executeTokenCount(request.body, signal);
     }
     if (request.path === "/api/orchestrator/dirt") {
-      if (!this.direct.getReloadDirt) throw new Error("Reload dirt is not configured.");
-      return Response.json(await this.direct.getReloadDirt(signal));
+      if (!this.direct.readReloadDirtSnapshot) throw new Error("Reload dirt is not configured.");
+      return Response.json(this.direct.readReloadDirtSnapshot());
     }
     if (request.path === "/api/orchestrator/reload" && request.body) {
       const admission = await this.fetchRequest(this.resolveUrl(request.path), this.buildRequestInit(request, signal));

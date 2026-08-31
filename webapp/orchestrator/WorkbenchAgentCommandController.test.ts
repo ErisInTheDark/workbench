@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover direct Browse/subagent/thread dispatch, response adaptation, and caller cancellation. Keywords: workbench, agent, command, browse, subagent, thread, cancellation, transport, test.
+ * - No production exports; Node tests cover direct Browse/subagent/thread dispatch, snapshot-owned reload dirt, response adaptation, and caller cancellation. Keywords: workbench, agent, command, browse, subagent, thread, dirt, cancellation, transport, test.
  */
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -68,7 +68,7 @@ function createBrowsePort(executeBrowseRequest: (body: Buffer, signal: AbortSign
   return {
     executeBrowseRequest,
     executeSessionRequest: async () => Response.json({ generatedAt: new Date(0).toISOString(), projectId: null, sessions: [] }),
-    getReloadDirt: async () => ({ dirtyScopes: [], error: null, pendingScopes: [] }),
+    readReloadDirtSnapshot: () => ({ dirtyScopes: [], error: null, pendingScopes: [] }),
     getReloadScopeCatalog: () => reloadCatalog,
   };
 }
@@ -601,46 +601,6 @@ test("reload admission releases the handler before terminal polling completes", 
   }
 });
 
-test("ordinary command admission releases the handler and runtime drain cancels dirt", async () => {
-  const handled = deferred<void>();
-  const dirtStarted = deferred<void>();
-  const dirtCancelled = deferred<Error>();
-  const controller = new WorkbenchAgentCommandController(
-    "http://127.0.0.1:4500",
-    {
-      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
-      getReloadDirt: async (signal) => await new Promise((_, reject) => {
-        dirtStarted.resolve();
-        signal?.addEventListener("abort", () => {
-          const reason = signal.reason instanceof Error ? signal.reason : new Error("missing cancellation reason");
-          dirtCancelled.resolve(reason);
-          reject(reason);
-        }, { once: true });
-      }),
-    },
-  );
-  const server = await startController(controller, () => handled.resolve());
-  try {
-    const client = fetch(`${server.origin}/orchestrator/agent-command`, {
-      body: agentCommandBody(["dirt"]),
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      method: "POST",
-    });
-    await dirtStarted.promise;
-    await handled.promise;
-
-    controller.beginRuntimeDrain();
-    assert.match((await dirtCancelled.promise).message, /user-authorized reload/u);
-    const response = await client;
-    assert.equal(response.status, 503);
-    assert.match(await response.text(), /user-authorized reload/u);
-    await controller.dispose();
-    assert.deepEqual(controller.listRuntimeDrainPending(), []);
-  } finally {
-    await server.close();
-  }
-});
-
 test("caller metadata cannot convert a user reload into managed admission", async () => {
   const requests: Record<string, unknown>[] = [];
   const controller = new WorkbenchAgentCommandController(
@@ -680,7 +640,7 @@ test("dirt and all share the live dirt snapshot while unsafe remains explicit", 
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
-      getReloadDirt: async () => ({
+      readReloadDirtSnapshot: () => ({
         dirtyScopes: [
           { description: "Core", destructive: false, scope: "server:core" },
           { description: "Codex harness", destructive: true, scope: "harness:codex" },
