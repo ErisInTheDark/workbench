@@ -13,6 +13,7 @@ import type { WorkbenchTranscriptItemLifecycle } from "./workbench-transcript-ty
 
 export interface WorkbenchTranscriptItemTransformContext {
   item: ThreadItem | WorkbenchFileChangeItem;
+  itemId: number;
   lifecycle: WorkbenchTranscriptItemLifecycle;
   sourceRevision: number;
 }

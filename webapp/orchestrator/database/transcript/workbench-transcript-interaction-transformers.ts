@@ -1,5 +1,7 @@
 /*
  * transformInteractionTranscriptItem: convert provider web-search items to typed relational rows. Keywords: transcript, transform, web search.
+ * resolveQuestionnaireTranscriptSourceId: derive one settled questionnaire's renderer identity. Keywords: transcript, questionnaire, identity.
+ * resolveSteerTranscriptSourceId: derive one settled steer's renderer identity. Keywords: transcript, steer, identity.
  * transformQuestionnaireEntry: convert one settled Workbench interaction to typed relational rows. Keywords: transcript, questionnaire, approval.
  * transformSteerEntry: convert one settled Workbench steer to a canonical user-message row. Keywords: transcript, steer, user message.
  */
@@ -23,7 +25,16 @@ import type {
 } from "./workbench-transcript-transform-registry.ts";
 
 export interface WorkbenchInteractionTransform extends WorkbenchTranscriptItemTransform {
-  itemId: string;
+}
+
+export function resolveQuestionnaireTranscriptSourceId(entry: WorkbenchQuestionnaireHistoryEntry) {
+  return resolveQuestionnaireHistoryItemId(entry);
+}
+
+export function resolveSteerTranscriptSourceId(entry: WorkbenchSteerHistoryEntry) {
+  return entry.status === "sent"
+    ? entry.canonicalItemId ?? entry.clientUserMessageId ?? `workbench-steer:${entry.threadId}:${entry.entryKey}`
+    : createSyntheticSteerHistoryItemId(entry);
 }
 
 function actionFields(action: Extract<ThreadItem, { type: "webSearch" }>["action"]) {
@@ -51,7 +62,7 @@ function actionFields(action: Extract<ThreadItem, { type: "webSearch" }>["action
 }
 
 export function transformInteractionTranscriptItem(
-  { item, lifecycle }: WorkbenchTranscriptItemTransformContext,
+  { item, itemId, lifecycle }: WorkbenchTranscriptItemTransformContext,
 ): WorkbenchTranscriptItemTransform | null {
   if (item.type !== "webSearch") return null;
   const queries = item.action?.type === "search"
@@ -60,12 +71,12 @@ export function transformInteractionTranscriptItem(
   return {
     itemType: "webSearch",
     cleanup: [
-      deleteRows(interactionTables.threadWebSearchQueries, { item_id: item.id }),
-      deleteRows(interactionTables.threadWebSearchResults, { item_id: item.id }),
+      deleteRows(interactionTables.threadWebSearchQueries, { item_id: itemId }),
+      deleteRows(interactionTables.threadWebSearchResults, { item_id: itemId }),
     ],
     mutations: [
       upsertRow(interactionTables.threadItemWebSearches, {
-        item_id: item.id,
+        item_id: itemId,
         state: lifecycle === "streaming" ? "inProgress" : lifecycle === "completed" ? "completed" : "failed",
         query: item.query,
         ...actionFields(item.action),
@@ -75,12 +86,12 @@ export function transformInteractionTranscriptItem(
         updateColumns: ["state", "query", "action_kind", "action_query", "url", "pattern", "error_text"],
       }),
       ...queries.map((query, queryIndex) => insertRow(interactionTables.threadWebSearchQueries, {
-        item_id: item.id,
+        item_id: itemId,
         query_index: queryIndex,
         query,
       })),
       ...(item.results ?? []).map((result, resultIndex) => insertRow(interactionTables.threadWebSearchResults, {
-        item_id: item.id,
+        item_id: itemId,
         result_index: resultIndex,
         opaque_json: JSON.stringify(result),
       })),
@@ -90,8 +101,8 @@ export function transformInteractionTranscriptItem(
 
 export function transformQuestionnaireEntry(
   entry: WorkbenchQuestionnaireHistoryEntry,
+  itemId: number,
 ): WorkbenchInteractionTransform {
-  const itemId = resolveQuestionnaireHistoryItemId(entry);
   const command = entry.request.approval?.command;
   const itemType = command ? "approval" : "questionnaire";
   const mutations: WorkbenchDatabaseMutation[] = [
@@ -175,7 +186,6 @@ export function transformQuestionnaireEntry(
     }
   }
   return {
-    itemId,
     itemType,
     cleanup: [
       deleteRows(interactionTables.threadInteractionAnswers, { item_id: itemId }),
@@ -187,14 +197,13 @@ export function transformQuestionnaireEntry(
   };
 }
 
-export function transformSteerEntry(entry: WorkbenchSteerHistoryEntry): WorkbenchInteractionTransform | null {
+export function transformSteerEntry(
+  entry: WorkbenchSteerHistoryEntry,
+  itemId: number,
+): WorkbenchInteractionTransform | null {
   if (entry.status === "pending") return null;
-  const itemId = entry.status === "sent"
-    ? entry.canonicalItemId ?? entry.clientUserMessageId ?? `workbench-steer:${entry.threadId}:${entry.entryKey}`
-    : createSyntheticSteerHistoryItemId(entry);
   if (entry.input.some((part) => part.type === "audio" || part.type === "localAudio")) {
     return {
-      itemId,
       itemType: "unknown",
       cleanup: [],
       mutations: [
@@ -210,7 +219,6 @@ export function transformSteerEntry(entry: WorkbenchSteerHistoryEntry): Workbenc
     };
   }
   return {
-    itemId,
     itemType: "userMessage",
     cleanup: [deleteRows(itemTables.threadUserMessageParts, { item_id: itemId })],
     mutations: [

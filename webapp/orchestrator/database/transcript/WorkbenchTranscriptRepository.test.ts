@@ -42,7 +42,7 @@ function turnObservation(
   turnId: string,
   turnIndex: number,
   threadId = "thread",
-): WorkbenchTranscriptAtomicObservation {
+): Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }> {
   return {
     kind: "turn",
     threadId,
@@ -67,7 +67,7 @@ function canonicalWindow(
 ): WorkbenchTranscriptObservation {
   return {
     kind: "canonicalWindow",
-    contentVersion: 2,
+    contentVersion: 3,
     materializedTurnIds,
     observations,
     threadId,
@@ -102,7 +102,7 @@ test("standalone provider turns establish a readable live materialization", () =
     }]);
     assert.deepEqual(
       repository.read({ threadId: "thread", turnIds: ["live"], turnLimit: 1 })?.rows.threadItems
-        .map(({ id }) => id),
+        .map(({ source_id }) => source_id),
       ["message"],
     );
   } finally {
@@ -110,7 +110,7 @@ test("standalone provider turns establish a readable live materialization", () =
   }
 });
 
-test("repeated same-thread items keep their earliest turn owner regardless of observation order", () => {
+test("source ids stay thread-scoped while repeated same-thread items keep their earliest turn owner", () => {
   const { database, repository } = createRepository();
   const item = (threadId: string, turnId: string, text: string): WorkbenchTranscriptAtomicObservation => ({
     kind: "item",
@@ -139,7 +139,7 @@ test("repeated same-thread items keep their earliest turn owner regardless of ob
     const snapshot = repository.read({ threadId: "thread", turnLimit: 2 });
     assert.ok(snapshot);
     assert.deepEqual(
-      snapshot.rows.threadItems.map(({ id, item_position, turn_id }) => [id, turn_id, item_position]),
+      snapshot.rows.threadItems.map(({ source_id, item_position, turn_id }) => [source_id, turn_id, item_position]),
       [["carried", "earlier", 0]],
     );
 
@@ -147,9 +147,128 @@ test("repeated same-thread items keep their earliest turn owner regardless of ob
       threadObservation("other"),
       turnObservation("other-turn", 0, "other"),
     ]);
-    assert.throws(
-      () => repository.settle([item("other", "other-turn", "different thread")]),
-      /changed thread or turn owner/u,
+    repository.settle([item("other", "other-turn", "different thread")]);
+    const otherSnapshot = repository.read({ threadId: "other", turnLimit: 1 });
+    assert.ok(otherSnapshot);
+    assert.deepEqual(
+      otherSnapshot.rows.threadItems.map(({ source_id, turn_id }) => [source_id, turn_id]),
+      [["carried", "other-turn"]],
+    );
+    assert.notEqual(snapshot.rows.threadItems[0]?.id, otherSnapshot.rows.threadItems[0]?.id);
+  } finally {
+    database.close();
+  }
+});
+
+test("atomic lifecycle facts merge without erasing richer item or turn timing", () => {
+  const { database, repository } = createRepository();
+  const message = (sourceId: string, observedAt: number, timeline?: Extract<
+    WorkbenchTranscriptAtomicObservation,
+    { kind: "item" }
+  >["timeline"]): WorkbenchTranscriptAtomicObservation => ({
+    item: {
+      id: sourceId,
+      memoryCitation: null,
+      phase: "commentary",
+      text: sourceId,
+      type: "agentMessage",
+    },
+    kind: "item",
+    lifecycle: timeline?.completedAt ? "completed" : "streaming",
+    observedAt,
+    ...(timeline ? { timeline } : {}),
+    threadId: "thread",
+    turnId: "turn",
+  });
+  try {
+    repository.settle([
+      threadObservation(),
+      {
+        ...turnObservation("turn", 0),
+        durationMs: null,
+        endedAt: null,
+        startedAt: 10,
+        state: "inProgress",
+      },
+    ]);
+    repository.settle([message("first", 10, {
+      aliases: ["shared-alias"],
+      completedAt: null,
+      firstSeenAt: 10,
+      itemId: "first",
+      lastSeenAt: 10,
+      startedAt: 10,
+    })]);
+    repository.settle([message("first", 15)]);
+    repository.settle([message("first", 20, {
+      completedAt: 20,
+      firstSeenAt: 20,
+      itemId: "first",
+      lastSeenAt: 20,
+      startedAt: null,
+    })]);
+    repository.settle([message("second", 12, {
+      aliases: ["shared-alias"],
+      completedAt: 12,
+      firstSeenAt: 12,
+      itemId: "second",
+      lastSeenAt: 12,
+      startedAt: null,
+    })]);
+    repository.settle([{
+      ...turnObservation("turn", 0),
+      durationMs: 10,
+      endedAt: 20,
+      startedAt: 10,
+      state: "completed",
+    }]);
+    repository.settle([{
+      ...turnObservation("turn", 0),
+      durationMs: null,
+      endedAt: null,
+      startedAt: null,
+      state: "inProgress",
+    }]);
+
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
+    assert.ok(snapshot);
+    assert.deepEqual(
+      snapshot.turns.map(({ duration_ms, ended_at, started_at, state }) => ({
+        duration_ms,
+        ended_at,
+        started_at,
+        state,
+      })),
+      [{ duration_ms: 10, ended_at: 20, started_at: 10, state: "completed" }],
+    );
+    const sourceIdsByItemId = new Map(snapshot.rows.threadItems.map(({ id, source_id }) => [id, source_id]));
+    assert.deepEqual(
+      snapshot.rows.threadItemTimelines
+        .map(({ item_id, ...timeline }) => ({ sourceId: sourceIdsByItemId.get(item_id), ...timeline }))
+        .sort((left, right) => left.sourceId!.localeCompare(right.sourceId!)),
+      [{
+        completed_at: 20,
+        first_seen_at: 10,
+        last_seen_at: 20,
+        sourceId: "first",
+        started_at: 10,
+      }, {
+        completed_at: 12,
+        first_seen_at: 12,
+        last_seen_at: 12,
+        sourceId: "second",
+        started_at: null,
+      }],
+    );
+    assert.deepEqual(
+      snapshot.rows.threadItemTimelineAliases.map(({ alias, item_id }) => ({
+        alias,
+        sourceId: sourceIdsByItemId.get(item_id),
+      })),
+      [
+        { alias: "shared-alias", sourceId: "first" },
+        { alias: "shared-alias", sourceId: "second" },
+      ],
     );
   } finally {
     database.close();
@@ -350,7 +469,9 @@ test("source replacement keeps canonical identity and Browse enrichment while re
 
     const snapshot = repository.read({ threadId: "thread", turnLimit: 10 });
     assert.ok(snapshot);
-    assert.deepEqual(snapshot.rows.threadItems.map(({ id, item_position }) => [id, item_position]), [
+    const commandItemId = snapshot.rows.threadItems.find(({ source_id }) => source_id === "command")?.id;
+    assert.ok(commandItemId);
+    assert.deepEqual(snapshot.rows.threadItems.map(({ source_id, item_position }) => [source_id, item_position]), [
       ["reasoning", 0],
       ["command", 1],
     ]);
@@ -377,7 +498,7 @@ test("source replacement keeps canonical identity and Browse enrichment while re
     })), [{
       asset_digest: browseAsset.digest,
       entry_key: "browse-entry",
-      item_id: "command",
+      item_id: commandItemId,
     }]);
     assert.deepEqual(snapshot.rows.transcriptAssets, [{
       byte_length: browseAsset.byteLength,
@@ -438,7 +559,7 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
     const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
     assert.ok(snapshot);
     assert.deepEqual(
-      snapshot.rows.threadItems.map(({ id }) => id),
+      snapshot.rows.threadItems.map(({ source_id }) => source_id),
       entries.map(createSyntheticSteerHistoryItemId),
     );
     assert.deepEqual(snapshot.rows.threadItemUserMessages.map((row) => ({
@@ -498,10 +619,11 @@ test("settled questionnaires may reuse one provider request key across turns", (
 
     const snapshot = repository.read({ threadId: "thread", turnLimit: 2 });
     assert.ok(snapshot);
+    const sourceIdsByItemId = new Map(snapshot.rows.threadItems.map(({ id, source_id }) => [id, source_id]));
     assert.deepEqual(
       snapshot.rows.threadItemInteractions
-        .map(({ item_id, request_key }) => [item_id, request_key])
-        .sort(([left], [right]) => left.localeCompare(right)),
+        .map(({ item_id, request_key }) => [sourceIdsByItemId.get(item_id), request_key])
+        .sort(([left], [right]) => String(left).localeCompare(String(right))),
       [
         ["question-newer", "reused"],
         ["question-older", "reused"],
@@ -509,7 +631,7 @@ test("settled questionnaires may reuse one provider request key across turns", (
     );
     assert.deepEqual(
       snapshot.rows.threadItems
-        .map(({ id, turn_id }) => [id, turn_id])
+        .map(({ source_id, turn_id }) => [source_id, turn_id])
         .sort(([left], [right]) => left.localeCompare(right)),
       [
         ["question-newer", "newer"],
@@ -549,19 +671,19 @@ test("hydration pages keep full turn metadata and load only the requested immuta
     assert.ok(latest);
     assert.deepEqual(latest.turns.map(({ id }) => id), ["turn-0", "turn-1", "turn-2"]);
     assert.deepEqual(latest.loadedTurnIds, ["turn-2"]);
-    assert.deepEqual(latest.rows.threadItems.map(({ id, item_position }) => [id, item_position]), [["message-2", 0]]);
+    assert.deepEqual(latest.rows.threadItems.map(({ source_id, item_position }) => [source_id, item_position]), [["message-2", 0]]);
     assert.equal(latest.hasPreviousTurns, true);
 
     const previous = repository.read({ threadId: "thread", beforeTurnIndex: 2, turnLimit: 1 });
     assert.ok(previous);
     assert.deepEqual(previous.loadedTurnIds, ["turn-1"]);
-    assert.deepEqual(previous.rows.threadItems.map(({ id, item_position }) => [id, item_position]), [["message-1", 0]]);
+    assert.deepEqual(previous.rows.threadItems.map(({ source_id, item_position }) => [source_id, item_position]), [["message-1", 0]]);
     assert.equal(previous.hasPreviousTurns, true);
 
     const exact = repository.read({ threadId: "thread", turnIds: ["turn-0", "turn-2"], turnLimit: 1 });
     assert.ok(exact);
     assert.deepEqual(exact.loadedTurnIds, ["turn-0", "turn-2"]);
-    assert.deepEqual(exact.rows.threadItems.map(({ id }) => id), ["message-0", "message-2"]);
+    assert.deepEqual(exact.rows.threadItems.map(({ source_id }) => source_id), ["message-0", "message-2"]);
     assert.equal(exact.hasPreviousTurns, false);
   } finally {
     database.close();
@@ -592,7 +714,7 @@ test("JIT windows materialize independent turns and replace one turn's local pos
     const first = repository.read({ threadId: "thread", turnIds: ["turn-8"], turnLimit: 1 });
     assert.ok(first);
     assert.deepEqual(
-      first.rows.threadItems.map(({ id, item_position }) => [id, item_position]),
+      first.rows.threadItems.map(({ source_id, item_position }) => [source_id, item_position]),
       [["opening", 0], ["answer", 1]],
     );
     assert.equal(repository.read({ threadId: "thread", turnIds: ["turn-0"], turnLimit: 1 }), null);
@@ -643,11 +765,11 @@ test("JIT windows materialize independent turns and replace one turn's local pos
 
     const inserted = repository.read({ threadId: "thread", turnIds: ["turn-8"], turnLimit: 1 });
     assert.ok(inserted);
-    const insertedPositions = new Map(inserted.rows.threadItems.map(({ id, item_position }) => [id, item_position]));
+    const insertedPositions = new Map(inserted.rows.threadItems.map(({ source_id, item_position }) => [source_id, item_position]));
     const insertedItemId = [...insertedPositions.keys()].find((id) => id !== "opening" && id !== "answer");
     assert.ok(insertedItemId);
     assert.deepEqual(
-      inserted.rows.threadItems.map(({ id, item_position }) => [id, item_position]),
+      inserted.rows.threadItems.map(({ source_id, item_position }) => [source_id, item_position]),
       [["opening", 0], [insertedItemId, 1], ["answer", 2]],
     );
 
@@ -666,8 +788,8 @@ test("JIT windows materialize independent turns and replace one turn's local pos
     const afterAncestor = repository.read({ threadId: "thread", turnIds: ["turn-8"], turnLimit: 1 });
     assert.ok(afterAncestor);
     assert.deepEqual(
-      afterAncestor.rows.threadItems.map(({ id, item_position }) => [id, item_position]),
-      inserted.rows.threadItems.map(({ id, item_position }) => [id, item_position]),
+      afterAncestor.rows.threadItems.map(({ source_id, item_position }) => [source_id, item_position]),
+      inserted.rows.threadItems.map(({ source_id, item_position }) => [source_id, item_position]),
     );
   } finally {
     database.close();
@@ -699,7 +821,7 @@ test("complete version-one shadow import replaces only that thread atomically an
 
     repository.settle([{
       kind: "canonicalWindow",
-      contentVersion: 2,
+      contentVersion: 3,
       materializedTurnIds: ["older", "newer"],
       threadId: "thread",
       observations: [
@@ -726,22 +848,24 @@ test("complete version-one shadow import replaces only that thread atomically an
     }]);
     const snapshot = repository.read({ threadId: "thread", turnIds: ["older"], turnLimit: 1 });
     assert.ok(snapshot);
-    assert.equal(snapshot.thread.transcript_content_version, 2);
+    assert.equal(snapshot.thread.transcript_content_version, 3);
     assert.deepEqual(snapshot.turns.map(({ id, turn_index }) => [id, turn_index]), [["older", 0], ["newer", 1]]);
-    assert.deepEqual(snapshot.rows.threadItems.map(({ id, item_position }) => [id, item_position]), [["message", 0]]);
+    assert.deepEqual(snapshot.rows.threadItems.map(({ source_id, item_position }) => [source_id, item_position]), [["message", 0]]);
+    const messageItemId = snapshot.rows.threadItems[0]?.id;
+    assert.ok(messageItemId);
     assert.deepEqual(snapshot.rows.threadItemTimelines, [{
-      item_id: "message",
+      item_id: messageItemId,
       first_seen_at: 10,
       last_seen_at: 20,
       started_at: 11,
       completed_at: 20,
     }]);
-    assert.deepEqual(snapshot.rows.threadItemTimelineAliases, [{ alias: "message-alias", item_id: "message" }]);
+    assert.deepEqual(snapshot.rows.threadItemTimelineAliases, [{ alias: "message-alias", item_id: messageItemId }]);
     assert.ok(repository.read({ threadId: "other", turnLimit: 1 }));
 
     assert.throws(() => repository.settle([{
       kind: "canonicalWindow",
-      contentVersion: 2,
+      contentVersion: 3,
       materializedTurnIds: ["missing"],
       threadId: "other",
       observations: [

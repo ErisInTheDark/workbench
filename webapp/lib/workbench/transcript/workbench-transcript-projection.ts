@@ -133,12 +133,17 @@ function indexedRows<Row>(
   return ordered;
 }
 
-function byItem<Row extends { item_id: string }>(rows: readonly Row[]) {
+function byItem<Row extends { item_id: number }>(
+  rows: readonly Row[],
+  sourceIdsByItemId: ReadonlyMap<number, string>,
+) {
   const result = new Map<string, Row[]>();
   for (const row of rows) {
-    const itemRows = result.get(row.item_id) ?? [];
+    const sourceId = sourceIdsByItemId.get(row.item_id);
+    if (!sourceId) fail("invalidReference", "itemAugmentation", String(row.item_id));
+    const itemRows = result.get(sourceId) ?? [];
     itemRows.push(row);
-    result.set(row.item_id, itemRows);
+    result.set(sourceId, itemRows);
   }
   return result;
 }
@@ -424,7 +429,7 @@ function projectItem(
   root: Rows["threadItems"][number],
   indexes: ReturnType<typeof createIndexes>,
 ): WorkbenchProjectedTranscriptItem {
-  const itemId = root.id;
+  const itemId = root.source_id;
   switch (root.type) {
     case "userMessage":
       return userMessage(itemId, indexes);
@@ -526,38 +531,38 @@ function projectItem(
   }
 }
 
-function createIndexes(rows: Rows) {
+function createIndexes(rows: Rows, sourceIdsByItemId: ReadonlyMap<number, string>) {
   return {
-    approvalActions: byItem(rows.threadApprovalCommandActions),
-    approvalContexts: byItem(rows.threadApprovalCommandContexts),
-    assistantMessages: byItem(rows.threadItemAssistantMessages),
-    callableSources: byItem(rows.threadOperationCallableToolSources),
-    collaborationReceivers: byItem(rows.threadCollaborationReceivers),
-    collaborationSources: byItem(rows.threadOperationCollaborationToolSources),
-    collaborationStates: byItem(rows.threadCollaborationAgentStates),
-    contextCompactions: byItem(rows.threadItemContextCompactions),
-    dynamicContent: byItem(rows.threadCallableDynamicContent),
-    fileChangeItems: byItem(rows.threadItemFileChanges),
-    fileChanges: byItem(rows.threadFileChanges),
-    interactionAnswers: byItem(rows.threadInteractionAnswers),
-    interactions: byItem(rows.threadItemInteractions),
-    interactionOptions: byItem(rows.threadInteractionOptions),
-    interactionQuestions: byItem(rows.threadInteractionQuestions),
-    mcpContent: byItem(rows.threadCallableMcpResultContent),
-    mcpResults: byItem(rows.threadCallableMcpResults),
-    operations: byItem(rows.threadItemOperations),
-    plans: byItem(rows.threadItemPlans),
-    processActions: byItem(rows.threadProcessCommandActions),
-    processSources: byItem(rows.threadOperationProcessSources),
-    reasoning: byItem(rows.threadItemReasoning),
-    reasoningSections: byItem(rows.threadReasoningSections),
-    toolSources: byItem(rows.threadOperationToolSources),
-    unknownItems: byItem(rows.threadItemUnknown),
-    userMessages: byItem(rows.threadItemUserMessages),
-    userMessageParts: byItem(rows.threadUserMessageParts),
-    webSearchItems: byItem(rows.threadItemWebSearches),
-    webSearchQueries: byItem(rows.threadWebSearchQueries),
-    webSearchResults: byItem(rows.threadWebSearchResults),
+    approvalActions: byItem(rows.threadApprovalCommandActions, sourceIdsByItemId),
+    approvalContexts: byItem(rows.threadApprovalCommandContexts, sourceIdsByItemId),
+    assistantMessages: byItem(rows.threadItemAssistantMessages, sourceIdsByItemId),
+    callableSources: byItem(rows.threadOperationCallableToolSources, sourceIdsByItemId),
+    collaborationReceivers: byItem(rows.threadCollaborationReceivers, sourceIdsByItemId),
+    collaborationSources: byItem(rows.threadOperationCollaborationToolSources, sourceIdsByItemId),
+    collaborationStates: byItem(rows.threadCollaborationAgentStates, sourceIdsByItemId),
+    contextCompactions: byItem(rows.threadItemContextCompactions, sourceIdsByItemId),
+    dynamicContent: byItem(rows.threadCallableDynamicContent, sourceIdsByItemId),
+    fileChangeItems: byItem(rows.threadItemFileChanges, sourceIdsByItemId),
+    fileChanges: byItem(rows.threadFileChanges, sourceIdsByItemId),
+    interactionAnswers: byItem(rows.threadInteractionAnswers, sourceIdsByItemId),
+    interactions: byItem(rows.threadItemInteractions, sourceIdsByItemId),
+    interactionOptions: byItem(rows.threadInteractionOptions, sourceIdsByItemId),
+    interactionQuestions: byItem(rows.threadInteractionQuestions, sourceIdsByItemId),
+    mcpContent: byItem(rows.threadCallableMcpResultContent, sourceIdsByItemId),
+    mcpResults: byItem(rows.threadCallableMcpResults, sourceIdsByItemId),
+    operations: byItem(rows.threadItemOperations, sourceIdsByItemId),
+    plans: byItem(rows.threadItemPlans, sourceIdsByItemId),
+    processActions: byItem(rows.threadProcessCommandActions, sourceIdsByItemId),
+    processSources: byItem(rows.threadOperationProcessSources, sourceIdsByItemId),
+    reasoning: byItem(rows.threadItemReasoning, sourceIdsByItemId),
+    reasoningSections: byItem(rows.threadReasoningSections, sourceIdsByItemId),
+    toolSources: byItem(rows.threadOperationToolSources, sourceIdsByItemId),
+    unknownItems: byItem(rows.threadItemUnknown, sourceIdsByItemId),
+    userMessages: byItem(rows.threadItemUserMessages, sourceIdsByItemId),
+    userMessageParts: byItem(rows.threadUserMessageParts, sourceIdsByItemId),
+    webSearchItems: byItem(rows.threadItemWebSearches, sourceIdsByItemId),
+    webSearchQueries: byItem(rows.threadWebSearchQueries, sourceIdsByItemId),
+    webSearchResults: byItem(rows.threadWebSearchResults, sourceIdsByItemId),
   };
 }
 
@@ -571,7 +576,7 @@ function seconds(value: number | null) {
 
 function browseEntries(
   snapshot: WorkbenchTranscriptSnapshot,
-  itemRootsById: ReadonlyMap<string, Rows["threadItems"][number]>,
+  itemRootsById: ReadonlyMap<number, Rows["threadItems"][number]>,
 ): WorkbenchBrowseResultEntry[] {
   const assetsByDigest = new Map(snapshot.rows.transcriptAssets.map((asset) => [asset.digest, asset]));
   if (assetsByDigest.size !== snapshot.rows.transcriptAssets.length) {
@@ -581,7 +586,7 @@ function browseEntries(
     .sort((left, right) => left.recorded_at - right.recorded_at || left.action_index - right.action_index)
     .map((entry) => {
       const root = itemRootsById.get(entry.item_id);
-      if (!root) return fail("invalidReference", "threadBrowseEntries", entry.item_id);
+      if (!root) return fail("invalidReference", "threadBrowseEntries", String(entry.item_id));
       const asset = entry.asset_digest ? assetsByDigest.get(entry.asset_digest) : null;
       if (entry.asset_digest && !asset) {
         return fail("invalidReference", "threadBrowseEntries", entry.entry_key);
@@ -590,7 +595,7 @@ function browseEntries(
         action: entry.action,
         actionIndex: entry.action_index,
         assetUrl: asset?.storage_key ?? null,
-        commandItemId: entry.item_id,
+        commandItemId: root.source_id,
         detailKind: entry.detail_kind,
         detailLabel: entry.detail_label,
         detailText: entry.detail_text,
@@ -617,11 +622,14 @@ export function projectWorkbenchTranscript(
 
     const itemRootsById = new Map(snapshot.rows.threadItems.map((item) => [item.id, item]));
     if (itemRootsById.size !== snapshot.rows.threadItems.length) fail("duplicateRow", "threadItems");
+    const sourceIdsByItemId = new Map(snapshot.rows.threadItems.map((item) => [item.id, item.source_id]));
+    const itemRootsBySourceId = new Map(snapshot.rows.threadItems.map((item) => [item.source_id, item]));
+    if (itemRootsBySourceId.size !== snapshot.rows.threadItems.length) fail("duplicateRow", "threadItems");
     for (const root of snapshot.rows.threadItems) {
-      if (!loadedTurnIds.has(root.turn_id)) fail("invalidReference", "threadItems", root.id);
-      if (root.thread_id !== snapshot.thread.id) fail("invalidReference", "threadItems", root.id);
+      if (!loadedTurnIds.has(root.turn_id)) fail("invalidReference", "threadItems", root.source_id);
+      if (root.thread_id !== snapshot.thread.id) fail("invalidReference", "threadItems", root.source_id);
     }
-    const indexes = createIndexes(snapshot.rows);
+    const indexes = createIndexes(snapshot.rows, sourceIdsByItemId);
     const projectedItems = snapshot.rows.threadItems
       .map((root) => ({ payload: projectItem(root, indexes), root }))
       .sort((left, right) => (
@@ -635,12 +643,20 @@ export function projectWorkbenchTranscript(
       projectedItemsByTurn.set(root.turn_id, turnItems);
     }
 
-    const timelinesByItemId = new Map(snapshot.rows.threadItemTimelines.map((entry) => [entry.item_id, entry]));
+    const timelinesByItemId = new Map<string, Rows["threadItemTimelines"][number]>();
+    for (const entry of snapshot.rows.threadItemTimelines) {
+      const sourceId = sourceIdsByItemId.get(entry.item_id);
+      if (!sourceId) fail("invalidReference", "threadItemTimelines", String(entry.item_id));
+      if (timelinesByItemId.has(sourceId)) fail("duplicateRow", "threadItemTimelines", sourceId);
+      timelinesByItemId.set(sourceId, entry);
+    }
     const aliasesByItemId = new Map<string, string[]>();
     for (const entry of snapshot.rows.threadItemTimelineAliases) {
-      const aliases = aliasesByItemId.get(entry.item_id) ?? [];
+      const sourceId = sourceIdsByItemId.get(entry.item_id);
+      if (!sourceId) fail("invalidReference", "threadItemTimelineAliases", String(entry.item_id));
+      const aliases = aliasesByItemId.get(sourceId) ?? [];
       aliases.push(entry.alias);
-      aliasesByItemId.set(entry.item_id, aliases);
+      aliasesByItemId.set(sourceId, aliases);
     }
     const orderedTurns = [...snapshot.turns].sort((left, right) => left.turn_index - right.turn_index);
     const projectedTurns: WorkbenchProjectedTranscriptTurn[] = orderedTurns
@@ -693,7 +709,7 @@ export function projectWorkbenchTranscript(
     });
     const display = planCanonicalTranscriptDisplay({
       items: projectedItems.map(({ payload, root }, itemIndex) => ({
-        itemId: root.id,
+        itemId: root.source_id,
         itemIndex,
         payload,
         turnId: root.turn_id,

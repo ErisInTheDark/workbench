@@ -79,23 +79,37 @@ export function createCodexTranscriptProviderTurnObservation({
 }
 
 export function createCodexTranscriptProviderItemObservation({
+  completedAtMs,
   item,
   lifecycle,
   observedAt,
+  startedAtMs,
   threadId,
   turnId,
 }: {
+  completedAtMs?: number | null;
   item: ThreadItem;
   lifecycle: WorkbenchTranscriptItemLifecycle;
   observedAt: number;
+  startedAtMs?: number | null;
   threadId: string;
   turnId: string;
 }): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> {
+  const hasTimeline = startedAtMs !== undefined || completedAtMs !== undefined;
   return {
     item,
     kind: "item",
     lifecycle,
     observedAt,
+    ...(hasTimeline ? {
+      timeline: {
+        completedAt: completedAtMs ?? null,
+        firstSeenAt: startedAtMs ?? completedAtMs ?? observedAt,
+        itemId: item.id,
+        lastSeenAt: completedAtMs ?? startedAtMs ?? observedAt,
+        startedAt: startedAtMs ?? null,
+      },
+    } : {}),
     threadId,
     turnId,
   };
@@ -123,6 +137,7 @@ export function createCodexTranscriptProviderDynamicToolObservation(
     }),
     lifecycle: "streaming",
     observedAt,
+    startedAtMs: observedAt,
     threadId,
     turnId,
   });

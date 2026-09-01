@@ -38,7 +38,7 @@ function initialHistory<Table extends TableDefinition>(table: Table) {
 }
 
 const threadItemWebSearchesV1 = defineTable("thread_item_web_searches", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("webSearch").notNull().default("webSearch"),
   state: enumText("inProgress", "completed", "failed").notNull(),
   query: text().notNull(),
@@ -58,7 +58,7 @@ const threadItemWebSearchesHistory = initialHistory(threadItemWebSearchesV1);
 export const threadItemWebSearches = threadItemWebSearchesHistory.current;
 
 const threadWebSearchQueriesV1 = defineTable("thread_web_search_queries", {
-  item_id: text().notNull().references("thread_item_web_searches", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_item_web_searches", "item_id", { onDelete: "CASCADE" }),
   query_index: integer().notNull(),
   query: text().notNull(),
 }, (table) => ({
@@ -68,7 +68,7 @@ const threadWebSearchQueriesHistory = initialHistory(threadWebSearchQueriesV1);
 export const threadWebSearchQueries = threadWebSearchQueriesHistory.current;
 
 const threadWebSearchResultsV1 = defineTable("thread_web_search_results", {
-  item_id: text().notNull().references("thread_item_web_searches", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_item_web_searches", "item_id", { onDelete: "CASCADE" }),
   result_index: integer().notNull(),
   opaque_json: jsonText().notNull(),
 }, (table) => ({
@@ -78,7 +78,7 @@ const threadWebSearchResultsHistory = initialHistory(threadWebSearchResultsV1);
 export const threadWebSearchResults = threadWebSearchResultsHistory.current;
 
 const threadItemInteractionsV1 = defineTable("thread_item_interactions", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("questionnaire", "approval").notNull(),
   thread_id: text().notNull(),
   request_key: text().notNull(),
@@ -102,7 +102,7 @@ const threadItemInteractionsHistory = initialHistory(threadItemInteractionsV1);
 export const threadItemInteractions = threadItemInteractionsHistory.current;
 
 const threadInteractionQuestionsV1 = defineTable("thread_interaction_questions", {
-  item_id: text().notNull().references("thread_item_interactions", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_item_interactions", "item_id", { onDelete: "CASCADE" }),
   question_index: integer().notNull(),
   question_id: text().notNull(),
   header: text().notNull(),
@@ -119,7 +119,7 @@ const threadInteractionQuestionsHistory = initialHistory(threadInteractionQuesti
 export const threadInteractionQuestions = threadInteractionQuestionsHistory.current;
 
 const threadInteractionOptionsV1 = defineTable("thread_interaction_options", {
-  item_id: text().notNull(),
+  item_id: integer().notNull(),
   question_index: integer().notNull(),
   option_index: integer().notNull(),
   label: text().notNull(),
@@ -138,7 +138,7 @@ const threadInteractionOptionsHistory = initialHistory(threadInteractionOptionsV
 export const threadInteractionOptions = threadInteractionOptionsHistory.current;
 
 const threadInteractionAnswersV1 = defineTable("thread_interaction_answers", {
-  item_id: text().notNull().references("thread_item_interactions", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_item_interactions", "item_id", { onDelete: "CASCADE" }),
   question_id: text().notNull(),
   answer_index: integer().notNull(),
   answer: text().notNull(),
@@ -156,7 +156,7 @@ const threadInteractionAnswersHistory = initialHistory(threadInteractionAnswersV
 export const threadInteractionAnswers = threadInteractionAnswersHistory.current;
 
 const threadApprovalCommandContextsV1 = defineTable("thread_approval_command_contexts", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("approval").notNull().default("approval"),
   command: text().notNull(),
   cwd: text().notNull(),
@@ -171,7 +171,7 @@ const threadApprovalCommandContextsHistory = initialHistory(threadApprovalComman
 export const threadApprovalCommandContexts = threadApprovalCommandContextsHistory.current;
 
 const threadApprovalCommandActionsV1 = defineTable("thread_approval_command_actions", {
-  item_id: text().notNull().references("thread_approval_command_contexts", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_approval_command_contexts", "item_id", { onDelete: "CASCADE" }),
   action_index: integer().notNull().nonNegative(),
   action_kind: enumText("read", "listFiles", "search", "unknown").notNull(),
   command: text().notNull(),

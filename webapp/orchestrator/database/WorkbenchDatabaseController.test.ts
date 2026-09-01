@@ -92,48 +92,48 @@ test("schema constraints reject invalid thread state and mismatched item augment
         id,thread_id,turn_index,harness_id,native_location,native_thread_id,state,created_at
       ) VALUES ('terminal-without-provider-times','thread',1,'codex','C:/project','native','completed',1)
     `).run();
-    database.prepare(`
-      INSERT INTO thread_items(id,thread_id,turn_id,item_position,type,created_at,updated_at)
+    const itemId = Number(database.prepare(`
+      INSERT INTO thread_items(source_id,thread_id,turn_id,item_position,type,created_at,updated_at)
       VALUES ('item','thread','turn',0,'plan',1,1)
-    `).run();
+    `).run().lastInsertRowid);
     assert.throws(
-      () => database.prepare("INSERT INTO thread_item_assistant_messages(item_id,state,phase,text) VALUES ('item','completed','commentary','nope')").run(),
+      () => database.prepare("INSERT INTO thread_item_assistant_messages(item_id,state,phase,text) VALUES (?,'completed','commentary','nope')").run(itemId),
       /FOREIGN KEY constraint failed/,
     );
 
-    database.prepare(`
-      INSERT INTO thread_items(id,thread_id,turn_id,item_position,type,created_at,updated_at)
+    const operationId = Number(database.prepare(`
+      INSERT INTO thread_items(source_id,thread_id,turn_id,item_position,type,created_at,updated_at)
       VALUES ('operation','thread','turn',1,'operation',1,1)
-    `).run();
-    database.prepare("INSERT INTO thread_item_operations(item_id,source_kind,source_revision) VALUES ('operation','tool',2)").run();
+    `).run().lastInsertRowid);
+    database.prepare("INSERT INTO thread_item_operations(item_id,source_kind,source_revision) VALUES (?,'tool',2)").run(operationId);
     assert.throws(() => database.prepare(`
       INSERT INTO thread_operation_tool_sources(item_id,source_revision,tool_kind,state,tool_name)
-      VALUES ('operation',1,'callable','completed','test')
-    `).run(), /FOREIGN KEY constraint failed/);
+      VALUES (?,1,'callable','completed','test')
+    `).run(operationId), /FOREIGN KEY constraint failed/);
 
     database.prepare(`
       INSERT INTO thread_operation_tool_sources(item_id,source_revision,tool_kind,state,tool_name)
-      VALUES ('operation',2,'callable','completed','test')
-    `).run();
+      VALUES (?,2,'callable','completed','test')
+    `).run(operationId);
     assert.throws(() => database.prepare(`
       INSERT INTO thread_operation_callable_tool_sources(
         item_id,source_revision,state,tool_name,callable_kind,server_name,arguments_json
-      ) VALUES ('operation',2,'completed','test','dynamic','mcp-only','{}')
-    `).run(), /CHECK constraint failed/);
+      ) VALUES (?,2,'completed','test','dynamic','mcp-only','{}')
+    `).run(operationId), /CHECK constraint failed/);
 
-    database.prepare(`
-      INSERT INTO thread_items(id,thread_id,turn_id,item_position,type,created_at,updated_at)
+    const processId = Number(database.prepare(`
+      INSERT INTO thread_items(source_id,thread_id,turn_id,item_position,type,created_at,updated_at)
       VALUES ('process','thread','turn',2,'operation',1,1)
-    `).run();
-    database.prepare("INSERT INTO thread_item_operations(item_id,source_kind,source_revision) VALUES ('process','process',0)").run();
+    `).run().lastInsertRowid);
+    database.prepare("INSERT INTO thread_item_operations(item_id,source_kind,source_revision) VALUES (?,'process',0)").run(processId);
     database.prepare(`
       INSERT INTO thread_operation_process_sources(item_id,source_revision,state,command,cwd)
-      VALUES ('process',0,'completed','cat file','C:/project')
-    `).run();
+      VALUES (?,0,'completed','cat file','C:/project')
+    `).run(processId);
     assert.throws(() => database.prepare(`
       INSERT INTO thread_process_command_actions(item_id,action_index,action_kind,command,name,path,query)
-      VALUES ('process',0,'read','cat file',NULL,NULL,'illegal')
-    `).run(), /CHECK constraint failed/);
+      VALUES (?,0,'read','cat file',NULL,NULL,'illegal')
+    `).run(processId), /CHECK constraint failed/);
   } finally {
     database.close();
   }
@@ -249,7 +249,7 @@ test("terminal transcript turns may preserve missing native timestamps without p
   try {
     await controller.settleTranscript([{
       kind: "canonicalWindow",
-      contentVersion: 2,
+      contentVersion: 3,
       materializedTurnIds: ["turn"],
       threadId: "thread",
       observations: [

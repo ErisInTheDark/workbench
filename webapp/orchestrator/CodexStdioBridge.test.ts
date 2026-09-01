@@ -10,6 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 
+import Database from "better-sqlite3";
+
 import type CodexAppServer from "./CodexAppServer";
 import type CodexTranscriptStore from "./CodexTranscriptStore";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
@@ -21,6 +23,8 @@ import {
 } from "../lib/workbench/thread/workbench-file-change";
 import type { WorkbenchThreadPageResponse } from "../lib/workbench/thread/workbench-thread-page";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
+import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
+import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
 import type { WorkbenchTranscriptObservation } from "./database/transcript/workbench-transcript-types";
 
 const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
@@ -736,7 +740,12 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
 
 test("live transcript recording survives throwing compatibility readers across reload", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-live-transcript-"));
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  const repository = new WorkbenchTranscriptRepository(database);
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
+  const sqliteFailures: Error[] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
   let compatibilityReads = 0;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
@@ -758,6 +767,12 @@ test("live transcript recording survives throwing compatibility readers across r
     onNotification() {},
     recordSqliteTranscript: async (observations) => {
       sqliteBatches.push([...observations]);
+      try {
+        repository.settle(observations);
+      } catch (error) {
+        sqliteFailures.push(error instanceof Error ? error : new Error(String(error)));
+        throw error;
+      }
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
@@ -817,11 +832,34 @@ test("live transcript recording survives throwing compatibility readers across r
     });
     await bridge.handleUpstreamMessage({
       method: "item/started",
-      params: { item, threadId: "thread", turnId: "turn" },
+      params: { item, startedAtMs: 1_000, threadId: "thread", turnId: "turn" },
     });
     await bridge.handleUpstreamMessage({
       method: "item/completed",
       params: { completedAtMs: 2_000, item, threadId: "thread", turnId: "turn" },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "item/completed",
+      params: {
+        completedAtMs: 2_100,
+        item: {
+          aggregatedOutput: "done",
+          command: "browse",
+          commandActions: [],
+          cwd: "C:/repo",
+          durationMs: 100,
+          exitCode: 0,
+          id: "command",
+          pluginId: null,
+          processId: "process",
+          scriptPath: null,
+          source: "agent",
+          status: "completed",
+          type: "commandExecution",
+        },
+        threadId: "thread",
+        turnId: "turn",
+      },
     });
     await bridge.handleUpstreamMessage({
       id: "dynamic",
@@ -978,8 +1016,30 @@ test("live transcript recording survives throwing compatibility readers across r
     assert.equal(sqliteBatches.some((batch) => (
       batch.length === 1 && batch[0]?.kind === "thread"
     )), true);
+    assert.deepEqual(sqliteFailures, []);
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
+    assert.ok(snapshot);
+    assert.ok(snapshot.rows.threadItems.some(({ source_id }) => source_id === "message"));
+    assert.ok(snapshot.rows.threadItems.some(({ source_id }) => source_id === "dynamic-call"));
+    assert.ok(snapshot.rows.threadItems.some(({ source_id }) => source_id === "command"));
+    assert.equal(snapshot.rows.threadItemInteractions.length, 1);
+    assert.equal(snapshot.rows.threadBrowseEntries.length, 1);
+    assert.deepEqual(snapshot.rows.transcriptAssets.map(({ digest }) => digest), [assetDigest]);
+    const messageItemId = snapshot.rows.threadItems.find(({ source_id }) => source_id === "message")?.id;
+    assert.ok(messageItemId);
+    assert.deepEqual(
+      snapshot.rows.threadItemTimelines.find(({ item_id }) => item_id === messageItemId),
+      {
+        completed_at: 2_000,
+        first_seen_at: 1_000,
+        item_id: messageItemId,
+        last_seen_at: 2_000,
+        started_at: 1_000,
+      },
+    );
   } finally {
     await bridge.disposeImmediately();
+    database.close();
     await fs.rm(root, { force: true, recursive: true });
   }
 });

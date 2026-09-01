@@ -37,7 +37,7 @@ const transcriptNativeRecordsV1 = defineTable("transcript_native_records", {
   link_kind: enumText("orphan", "turn", "item").notNull(),
   thread_id: text(),
   turn_id: text(),
-  item_id: text(),
+  item_id: integer(),
   harness_id: text().notNull().references("workbench_harnesses", "id"),
   native_location: text().notNull(),
   native_thread_id: text(),
@@ -83,7 +83,7 @@ export const transcriptAssets = transcriptAssetsHistory.current;
 
 const threadBrowseEntriesV1 = defineTable("thread_browse_entries", {
   entry_key: text().primaryKey(),
-  item_id: text().notNull().references("thread_item_operations", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_item_operations", "item_id", { onDelete: "CASCADE" }),
   action_index: integer().notNull(),
   action: text().notNull(),
   state: enumText("queued", "inProgress", "completed", "failed").notNull(),
@@ -103,7 +103,7 @@ export const threadBrowseEntries = threadBrowseEntriesHistory.current;
 const transcriptAssetRefsV1 = defineTable("transcript_asset_refs", {
   id: text().primaryKey(),
   thread_id: text().references("workbench_threads", "id", { onDelete: "CASCADE" }),
-  item_id: text().references("thread_items", "id", { onDelete: "CASCADE" }),
+  item_id: integer().references("thread_items", "id", { onDelete: "CASCADE" }),
   owner_kind: enumText("thread", "item").notNull(),
   role: text().notNull(),
   ref_index: integer().notNull(),

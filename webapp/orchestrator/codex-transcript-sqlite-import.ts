@@ -144,7 +144,7 @@ export function createCodexTranscriptSqliteImport({
   }
   return {
     kind: "canonicalWindow",
-    contentVersion: 2,
+    contentVersion: 3,
     materializedTurnIds: payload.turns.map(({ id }) => id),
     threadId: thread.id,
     observations,

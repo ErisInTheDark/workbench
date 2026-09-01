@@ -19,17 +19,20 @@ function itemLifecycleState(lifecycle: WorkbenchTranscriptItemTransformContext["
   return lifecycle;
 }
 
-function childCleanup(itemId: string, table: Parameters<typeof deleteRows>[0]) {
+function childCleanup(itemId: number, table: Parameters<typeof deleteRows>[0]) {
   return deleteRows(table, { item_id: itemId });
 }
 
-function unknownItem(item: ThreadItem | WorkbenchFileChangeItem): WorkbenchTranscriptItemTransform {
+function unknownItem(
+  item: ThreadItem | WorkbenchFileChangeItem,
+  itemId: number,
+): WorkbenchTranscriptItemTransform {
   return {
     itemType: "unknown",
     cleanup: [],
     mutations: [
       upsertRow(itemTables.threadItemUnknown, {
-        item_id: item.id,
+        item_id: itemId,
         native_type: item.type,
         safe_json: JSON.stringify(item),
       }, {
@@ -41,14 +44,14 @@ function unknownItem(item: ThreadItem | WorkbenchFileChangeItem): WorkbenchTrans
 }
 
 export function transformCoreTranscriptItem(
-  { item, lifecycle }: WorkbenchTranscriptItemTransformContext,
+  { item, itemId, lifecycle }: WorkbenchTranscriptItemTransformContext,
 ): WorkbenchTranscriptItemTransform | null {
   if (item.type === "userMessage") {
-    if (item.content.some((part) => part.type === "audio" || part.type === "localAudio")) return unknownItem(item);
+    if (item.content.some((part) => part.type === "audio" || part.type === "localAudio")) return unknownItem(item, itemId);
     const parts: WorkbenchDatabaseMutation[] = item.content.map((part, partIndex) => {
       if (part.type === "text") {
         return insertRow(itemTables.threadUserMessageParts, {
-          item_id: item.id,
+          item_id: itemId,
           part_index: partIndex,
           part_type: "text",
           text: part.text,
@@ -56,7 +59,7 @@ export function transformCoreTranscriptItem(
       }
       if (part.type === "image") {
         return insertRow(itemTables.threadUserMessageParts, {
-          item_id: item.id,
+          item_id: itemId,
           part_index: partIndex,
           part_type: "image",
           url: part.url,
@@ -65,7 +68,7 @@ export function transformCoreTranscriptItem(
       }
       if (part.type === "localImage") {
         return insertRow(itemTables.threadUserMessageParts, {
-          item_id: item.id,
+          item_id: itemId,
           part_index: partIndex,
           part_type: "localImage",
           path: part.path,
@@ -74,7 +77,7 @@ export function transformCoreTranscriptItem(
       }
       if (part.type === "skill" || part.type === "mention") {
         return insertRow(itemTables.threadUserMessageParts, {
-          item_id: item.id,
+          item_id: itemId,
           part_index: partIndex,
           part_type: part.type,
           path: part.path,
@@ -85,10 +88,10 @@ export function transformCoreTranscriptItem(
     });
     return {
       itemType: "userMessage",
-      cleanup: [childCleanup(item.id, itemTables.threadUserMessageParts)],
+      cleanup: [childCleanup(itemId, itemTables.threadUserMessageParts)],
       mutations: [
         upsertRow(itemTables.threadItemUserMessages, {
-          item_id: item.id,
+          item_id: itemId,
           delivery_state: lifecycle === "interrupted" ? "interrupted" : "delivered",
           client_id: item.clientId,
         }, {
@@ -106,7 +109,7 @@ export function transformCoreTranscriptItem(
       cleanup: [],
       mutations: [
         upsertRow(itemTables.threadItemAssistantMessages, {
-          item_id: item.id,
+          item_id: itemId,
           state: itemLifecycleState(lifecycle),
           phase: item.phase === "final_answer" ? "finalAnswer" : item.phase ?? "unknown",
           text: item.text,
@@ -124,7 +127,7 @@ export function transformCoreTranscriptItem(
       cleanup: [],
       mutations: [
         upsertRow(itemTables.threadItemPlans, {
-          item_id: item.id,
+          item_id: itemId,
           text: item.text,
         }, {
           conflictColumns: ["item_id"],
@@ -138,17 +141,17 @@ export function transformCoreTranscriptItem(
     const visibleSections = item.summary.some((section) => section.trim()) ? item.summary : item.content;
     return {
       itemType: "reasoning",
-      cleanup: [childCleanup(item.id, itemTables.threadReasoningSections)],
+      cleanup: [childCleanup(itemId, itemTables.threadReasoningSections)],
       mutations: [
         upsertRow(itemTables.threadItemReasoning, {
-          item_id: item.id,
+          item_id: itemId,
           state: itemLifecycleState(lifecycle),
         }, {
           conflictColumns: ["item_id"],
           updateColumns: ["state"],
         }),
         ...visibleSections.map((text, sectionIndex) => insertRow(itemTables.threadReasoningSections, {
-          item_id: item.id,
+          item_id: itemId,
           section_index: sectionIndex,
           text,
         })),
@@ -160,10 +163,10 @@ export function transformCoreTranscriptItem(
     const workbenchItem = item as WorkbenchFileChangeItem;
     return {
       itemType: "fileChange",
-      cleanup: [childCleanup(item.id, itemTables.threadFileChanges)],
+      cleanup: [childCleanup(itemId, itemTables.threadFileChanges)],
       mutations: [
         upsertRow(itemTables.threadItemFileChanges, {
-          item_id: item.id,
+          item_id: itemId,
           state: item.status,
           error_text: null,
           workbench_failure_kind: workbenchItem.workbenchFailureKind ?? null,
@@ -172,7 +175,7 @@ export function transformCoreTranscriptItem(
           updateColumns: ["state", "error_text", "workbench_failure_kind"],
         }),
         ...workbenchItem.changes.map((change, changeIndex) => insertRow(itemTables.threadFileChanges, {
-          item_id: item.id,
+          item_id: itemId,
           change_index: changeIndex,
           path: change.path,
           change_kind: change.kind.type,
@@ -191,7 +194,7 @@ export function transformCoreTranscriptItem(
       cleanup: [],
       mutations: [
         upsertRow(itemTables.threadItemContextCompactions, {
-          item_id: item.id,
+          item_id: itemId,
           state: lifecycle === "streaming" ? "inProgress" : lifecycle === "completed" ? "completed" : "failed",
           error_text: lifecycle === "interrupted" ? "Context compaction was interrupted." : null,
         }, {
@@ -211,5 +214,5 @@ export function transformCoreTranscriptItem(
     "enteredReviewMode",
     "exitedReviewMode",
   ]);
-  return coreUnsupported.has(item.type) ? unknownItem(item) : null;
+  return coreUnsupported.has(item.type) ? unknownItem(item, itemId) : null;
 }

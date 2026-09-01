@@ -99,6 +99,7 @@ test("one provider snapshot becomes direct ordered thread, turn, and item facts"
     turnId: "turn",
     turnIndex: 0,
   });
+  assert.equal(observations[2]?.kind === "item" ? observations[2].timeline : null, undefined);
 });
 
 test("complete provider snapshots keep carried items with their first turn", () => {
@@ -151,6 +152,32 @@ test("one provider item lifecycle becomes one atomic observation", () => {
   });
 });
 
+test("provider item lifecycle timestamps remain direct durable facts", () => {
+  const item = {
+    id: "answer",
+    memoryCitation: null,
+    phase: "commentary" as const,
+    text: "done",
+    type: "agentMessage" as const,
+  };
+  const observation = createCodexTranscriptProviderItemObservation({
+    completedAtMs: 2_000,
+    item,
+    lifecycle: "completed",
+    observedAt: 2_100,
+    startedAtMs: 1_000,
+    threadId: "thread",
+    turnId: "turn",
+  });
+  assert.deepEqual(observation.timeline, {
+    completedAt: 2_000,
+    firstSeenAt: 1_000,
+    itemId: "answer",
+    lastSeenAt: 2_000,
+    startedAt: 1_000,
+  });
+});
+
 test("one provider dynamic-tool request becomes one direct operation item", () => {
   const observation = createCodexTranscriptProviderDynamicToolObservation({
     id: 10,
@@ -167,4 +194,5 @@ test("one provider dynamic-tool request becomes one direct operation item", () =
   assert.equal(observation?.kind, "item");
   assert.equal(observation?.item.id, "call");
   assert.equal(observation?.item.type, "dynamicToolCall");
+  assert.equal(observation?.timeline?.startedAt, 3_000);
 });

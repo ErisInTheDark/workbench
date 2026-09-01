@@ -40,7 +40,7 @@ function initialHistory<Table extends TableDefinition>(table: Table) {
 }
 
 const threadItemOperationsV1 = defineTable("thread_item_operations", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("operation").notNull().default("operation"),
   source_kind: enumText("process", "tool").notNull(),
   source_revision: integer().notNull().nonNegative(),
@@ -59,7 +59,7 @@ const threadItemOperationsHistory = initialHistory(threadItemOperationsV1);
 export const threadItemOperations = threadItemOperationsHistory.current;
 
 const threadOperationProcessSourcesV1 = defineTable("thread_operation_process_sources", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("operation").notNull().default("operation"),
   source_kind: enumText("process").notNull().default("process"),
   source_revision: integer().notNull(),
@@ -84,7 +84,7 @@ const threadOperationProcessSourcesHistory = initialHistory(threadOperationProce
 export const threadOperationProcessSources = threadOperationProcessSourcesHistory.current;
 
 const threadProcessCommandActionsV1 = defineTable("thread_process_command_actions", {
-  item_id: text().notNull().references("thread_operation_process_sources", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_operation_process_sources", "item_id", { onDelete: "CASCADE" }),
   action_index: integer().notNull().nonNegative(),
   action_kind: enumText("read", "listFiles", "search", "unknown").notNull(),
   command: text().notNull(),
@@ -106,7 +106,7 @@ const threadProcessCommandActionsHistory = initialHistory(threadProcessCommandAc
 export const threadProcessCommandActions = threadProcessCommandActionsHistory.current;
 
 const threadOperationToolSourcesV1 = defineTable("thread_operation_tool_sources", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("operation").notNull().default("operation"),
   source_kind: enumText("tool").notNull().default("tool"),
   source_revision: integer().notNull(),
@@ -128,7 +128,7 @@ const threadOperationToolSourcesHistory = initialHistory(threadOperationToolSour
 export const threadOperationToolSources = threadOperationToolSourcesHistory.current;
 
 const threadOperationCallableToolSourcesV1 = defineTable("thread_operation_callable_tool_sources", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   tool_kind: enumText("callable").notNull().default("callable"),
   source_revision: integer().notNull(),
   state: enumText("inProgress", "completed", "failed").notNull(),
@@ -167,7 +167,7 @@ const threadOperationCallableToolSourcesHistory = initialHistory(threadOperation
 export const threadOperationCallableToolSources = threadOperationCallableToolSourcesHistory.current;
 
 const threadCallableDynamicContentV1 = defineTable("thread_callable_dynamic_content", {
-  item_id: text().notNull(),
+  item_id: integer().notNull(),
   content_index: integer().notNull(),
   source_revision: integer().notNull(),
   callable_kind: enumText("dynamic").notNull().default("dynamic"),
@@ -192,7 +192,7 @@ const threadCallableDynamicContentHistory = initialHistory(threadCallableDynamic
 export const threadCallableDynamicContent = threadCallableDynamicContentHistory.current;
 
 const threadCallableMcpResultsV1 = defineTable("thread_callable_mcp_results", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   source_revision: integer().notNull(),
   callable_kind: enumText("mcp").notNull().default("mcp"),
   structured_content_json: jsonText(),
@@ -211,7 +211,7 @@ const threadCallableMcpResultsHistory = initialHistory(threadCallableMcpResultsV
 export const threadCallableMcpResults = threadCallableMcpResultsHistory.current;
 
 const threadCallableMcpResultContentV1 = defineTable("thread_callable_mcp_result_content", {
-  item_id: text().notNull(),
+  item_id: integer().notNull(),
   source_revision: integer().notNull(),
   content_index: integer().notNull(),
   content_kind: enumText("text", "opaque").notNull(),
@@ -235,7 +235,7 @@ const threadCallableMcpResultContentHistory = initialHistory(threadCallableMcpRe
 export const threadCallableMcpResultContent = threadCallableMcpResultContentHistory.current;
 
 const threadOperationCollaborationToolSourcesV1 = defineTable("thread_operation_collaboration_tool_sources", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   tool_kind: enumText("collaboration").notNull().default("collaboration"),
   source_revision: integer().notNull(),
   state: enumText("inProgress", "completed", "failed").notNull(),
@@ -255,7 +255,7 @@ const threadOperationCollaborationToolSourcesHistory = initialHistory(threadOper
 export const threadOperationCollaborationToolSources = threadOperationCollaborationToolSourcesHistory.current;
 
 const threadCollaborationReceiversV1 = defineTable("thread_collaboration_receivers", {
-  item_id: text().notNull().references("thread_operation_collaboration_tool_sources", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_operation_collaboration_tool_sources", "item_id", { onDelete: "CASCADE" }),
   receiver_index: integer().notNull(),
   receiver_thread_id: text().notNull(),
 }, (table) => ({
@@ -265,7 +265,7 @@ const threadCollaborationReceiversHistory = initialHistory(threadCollaborationRe
 export const threadCollaborationReceivers = threadCollaborationReceiversHistory.current;
 
 const threadCollaborationAgentStatesV1 = defineTable("thread_collaboration_agent_states", {
-  item_id: text().notNull().references("thread_operation_collaboration_tool_sources", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_operation_collaboration_tool_sources", "item_id", { onDelete: "CASCADE" }),
   agent_thread_id: text().notNull(),
   status: enumText("pendingInit", "running", "interrupted", "completed", "errored", "shutdown", "notFound").notNull(),
   message: text(),

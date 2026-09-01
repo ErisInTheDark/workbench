@@ -18,7 +18,7 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
     await controller.start();
     await controller.record([{
       kind: "canonicalWindow",
-      contentVersion: 2,
+      contentVersion: 3,
       materializedTurnIds: ["turn"],
       threadId: "thread",
       observations: [
@@ -60,7 +60,7 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
     });
     await controller.record([{
       kind: "canonicalWindow",
-      contentVersion: 2,
+      contentVersion: 3,
       materializedTurnIds: ["turn"],
       threadId: "thread",
       observations: [{
@@ -102,10 +102,13 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
       }],
     }]);
     assert.deepEqual(published, [0, 1]);
+    const snapshot = await controller.read({ threadId: "thread", turnLimit: 10 });
+    const messageItemId = snapshot?.rows.threadItems.find(({ source_id }) => source_id === "message")?.id;
+    assert.ok(messageItemId);
     assert.deepEqual(
-      (await controller.read({ threadId: "thread", turnLimit: 10 }))?.rows.threadItemAssistantMessages,
+      snapshot?.rows.threadItemAssistantMessages,
       [{
-        item_id: "message",
+        item_id: messageItemId,
         item_type: "assistantMessage",
         state: "completed",
         phase: "finalAnswer",

@@ -2995,10 +2995,16 @@ export default class CodexStdioBridge {
     if (notification.method === "item/started" || notification.method === "item/completed") {
       const item = extractItem(notification);
       if (!item?.id) return [];
+      const providerObservedAt = notification.method === "item/started"
+        ? readNotificationNumberParam(notification, "startedAtMs")
+        : readNotificationNumberParam(notification, "completedAtMs");
+      const observedAt = providerObservedAt ?? Date.now();
       return [createCodexTranscriptProviderItemObservation({
+        completedAtMs: notification.method === "item/completed" ? observedAt : undefined,
         item,
         lifecycle: notification.method === "item/started" ? "streaming" : "completed",
-        observedAt: Date.now(),
+        observedAt,
+        startedAtMs: notification.method === "item/started" ? observedAt : undefined,
         threadId,
         turnId,
       })];

@@ -24,7 +24,7 @@ function record(value: JsonValue) {
     : null;
 }
 
-function sourceCleanup(itemId: string): WorkbenchDatabaseMutation[] {
+function sourceCleanup(itemId: number): WorkbenchDatabaseMutation[] {
   return [
     deleteRows(operationSourceTables.threadOperationProcessSources, { item_id: itemId }),
     deleteRows(operationSourceTables.threadOperationToolSources, { item_id: itemId }),
@@ -32,15 +32,15 @@ function sourceCleanup(itemId: string): WorkbenchDatabaseMutation[] {
 }
 
 export function transformOperationTranscriptItem(
-  { item, sourceRevision }: WorkbenchTranscriptItemTransformContext,
+  { item, itemId, sourceRevision }: WorkbenchTranscriptItemTransformContext,
 ): WorkbenchTranscriptItemTransform {
   if (item.type === "commandExecution") {
     return {
       itemType: "operation",
-      cleanup: sourceCleanup(item.id),
+      cleanup: sourceCleanup(itemId),
       mutations: [
         upsertRow(operationSourceTables.threadItemOperations, {
-          item_id: item.id,
+          item_id: itemId,
           source_kind: "process",
           source_revision: sourceRevision,
         }, {
@@ -48,7 +48,7 @@ export function transformOperationTranscriptItem(
           updateColumns: ["source_kind", "source_revision"],
         }),
         insertRow(operationSourceTables.threadOperationProcessSources, {
-          item_id: item.id,
+          item_id: itemId,
           source_revision: sourceRevision,
           state: item.status,
           command: item.command,
@@ -64,7 +64,7 @@ export function transformOperationTranscriptItem(
         ...item.commandActions.map((action, actionIndex) => insertRow(
           operationSourceTables.threadProcessCommandActions,
           {
-            item_id: item.id,
+            item_id: itemId,
             action_index: actionIndex,
             action_kind: action.type,
             command: action.command,
@@ -83,7 +83,7 @@ export function transformOperationTranscriptItem(
     const resultMutations: WorkbenchDatabaseMutation[] = [];
     if (item.result) {
       resultMutations.push(insertRow(operationSourceTables.threadCallableMcpResults, {
-        item_id: item.id,
+        item_id: itemId,
         source_revision: sourceRevision,
         structured_content_json: json(item.result.structuredContent),
         meta_json: json(item.result._meta),
@@ -94,7 +94,7 @@ export function transformOperationTranscriptItem(
           ? contentRecord.text
           : null;
         resultMutations.push(insertRow(operationSourceTables.threadCallableMcpResultContent, {
-          item_id: item.id,
+          item_id: itemId,
           source_revision: sourceRevision,
           content_index: contentIndex,
           content_kind: text === null ? "opaque" : "text",
@@ -105,10 +105,10 @@ export function transformOperationTranscriptItem(
     }
     return {
       itemType: "operation",
-      cleanup: sourceCleanup(item.id),
+      cleanup: sourceCleanup(itemId),
       mutations: [
         upsertRow(operationSourceTables.threadItemOperations, {
-          item_id: item.id,
+          item_id: itemId,
           source_kind: "tool",
           source_revision: sourceRevision,
         }, {
@@ -116,7 +116,7 @@ export function transformOperationTranscriptItem(
           updateColumns: ["source_kind", "source_revision"],
         }),
         insertRow(operationSourceTables.threadOperationToolSources, {
-          item_id: item.id,
+          item_id: itemId,
           source_revision: sourceRevision,
           tool_kind: "callable",
           state: item.status,
@@ -124,7 +124,7 @@ export function transformOperationTranscriptItem(
           duration_ms: item.durationMs,
         }),
         insertRow(operationSourceTables.threadOperationCallableToolSources, {
-          item_id: item.id,
+          item_id: itemId,
           source_revision: sourceRevision,
           state: item.status,
           tool_name: item.tool,
@@ -151,10 +151,10 @@ export function transformOperationTranscriptItem(
   if (item.type === "dynamicToolCall") {
     return {
       itemType: "operation",
-      cleanup: sourceCleanup(item.id),
+      cleanup: sourceCleanup(itemId),
       mutations: [
         upsertRow(operationSourceTables.threadItemOperations, {
-          item_id: item.id,
+          item_id: itemId,
           source_kind: "tool",
           source_revision: sourceRevision,
         }, {
@@ -162,7 +162,7 @@ export function transformOperationTranscriptItem(
           updateColumns: ["source_kind", "source_revision"],
         }),
         insertRow(operationSourceTables.threadOperationToolSources, {
-          item_id: item.id,
+          item_id: itemId,
           source_revision: sourceRevision,
           tool_kind: "callable",
           state: item.status,
@@ -170,7 +170,7 @@ export function transformOperationTranscriptItem(
           duration_ms: item.durationMs,
         }),
         insertRow(operationSourceTables.threadOperationCallableToolSources, {
-          item_id: item.id,
+          item_id: itemId,
           source_revision: sourceRevision,
           state: item.status,
           tool_name: item.tool,
@@ -184,7 +184,7 @@ export function transformOperationTranscriptItem(
         ...(item.contentItems ?? []).map((content, contentIndex) => insertRow(
           operationSourceTables.threadCallableDynamicContent,
           {
-            item_id: item.id,
+            item_id: itemId,
             source_revision: sourceRevision,
             content_index: contentIndex,
             content_kind: content.type,
@@ -199,10 +199,10 @@ export function transformOperationTranscriptItem(
   if (item.type === "collabAgentToolCall") {
     return {
       itemType: "operation",
-      cleanup: sourceCleanup(item.id),
+      cleanup: sourceCleanup(itemId),
       mutations: [
         upsertRow(operationSourceTables.threadItemOperations, {
-          item_id: item.id,
+          item_id: itemId,
           source_kind: "tool",
           source_revision: sourceRevision,
         }, {
@@ -210,7 +210,7 @@ export function transformOperationTranscriptItem(
           updateColumns: ["source_kind", "source_revision"],
         }),
         insertRow(operationSourceTables.threadOperationToolSources, {
-          item_id: item.id,
+          item_id: itemId,
           source_revision: sourceRevision,
           tool_kind: "collaboration",
           state: item.status,
@@ -218,7 +218,7 @@ export function transformOperationTranscriptItem(
           duration_ms: null,
         }),
         insertRow(operationSourceTables.threadOperationCollaborationToolSources, {
-          item_id: item.id,
+          item_id: itemId,
           source_revision: sourceRevision,
           state: item.status,
           tool_name: item.tool,
@@ -230,7 +230,7 @@ export function transformOperationTranscriptItem(
         ...item.receiverThreadIds.map((receiverThreadId, receiverIndex) => insertRow(
           operationSourceTables.threadCollaborationReceivers,
           {
-            item_id: item.id,
+            item_id: itemId,
             receiver_index: receiverIndex,
             receiver_thread_id: receiverThreadId,
           },
@@ -238,7 +238,7 @@ export function transformOperationTranscriptItem(
         ...Object.entries(item.agentsStates).flatMap(([agentThreadId, state]) => (
           state
             ? [insertRow(operationSourceTables.threadCollaborationAgentStates, {
-              item_id: item.id,
+              item_id: itemId,
               agent_thread_id: agentThreadId,
               status: state.status,
               message: state.message,

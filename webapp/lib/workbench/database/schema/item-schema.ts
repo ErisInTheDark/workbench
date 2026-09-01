@@ -40,7 +40,8 @@ function initialHistory<Table extends TableDefinition>(table: Table) {
 }
 
 const threadItemsV1 = defineTable("thread_items", {
-  id: text().primaryKey(),
+  id: integer().primaryKey({ autoincrement: true }),
+  source_id: text().notNull(),
   thread_id: text().notNull(),
   turn_id: text().notNull(),
   item_position: integer().notNull().nonNegative(),
@@ -62,6 +63,7 @@ const threadItemsV1 = defineTable("thread_items", {
 }, (table) => ({
   constraints: [
     unique([table.turn_id, table.item_position]),
+    unique([table.thread_id, table.source_id]),
     unique([table.id, table.type]),
     unique([table.id, table.thread_id, table.type]),
     unique([table.id, table.thread_id, table.turn_id]),
@@ -76,7 +78,7 @@ const threadItemsHistory = initialHistory(threadItemsV1);
 export const threadItems = threadItemsHistory.current;
 
 const threadItemUserMessagesV1 = defineTable("thread_item_user_messages", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("userMessage").notNull().default("userMessage"),
   delivery_state: enumText("delivered", "interrupted", "failed").notNull(),
   client_id: text(),
@@ -98,7 +100,7 @@ const threadItemUserMessagesHistory = initialHistory(threadItemUserMessagesV1);
 export const threadItemUserMessages = threadItemUserMessagesHistory.current;
 
 const threadUserMessagePartsV1 = defineTable("thread_user_message_parts", {
-  item_id: text().notNull().references("thread_item_user_messages", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_item_user_messages", "item_id", { onDelete: "CASCADE" }),
   part_index: integer().notNull(),
   part_type: enumText("text", "image", "localImage", "skill", "mention").notNull(),
   text: text(),
@@ -121,7 +123,7 @@ const threadUserMessagePartsHistory = initialHistory(threadUserMessagePartsV1);
 export const threadUserMessageParts = threadUserMessagePartsHistory.current;
 
 const threadItemAssistantMessagesV1 = defineTable("thread_item_assistant_messages", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("assistantMessage").notNull().default("assistantMessage"),
   state: enumText("streaming", "completed", "interrupted").notNull(),
   phase: enumText("commentary", "finalAnswer", "unknown").notNull(),
@@ -137,7 +139,7 @@ const threadItemAssistantMessagesHistory = initialHistory(threadItemAssistantMes
 export const threadItemAssistantMessages = threadItemAssistantMessagesHistory.current;
 
 const threadItemPlansV1 = defineTable("thread_item_plans", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("plan").notNull().default("plan"),
   text: text().notNull(),
 }, (table) => ({
@@ -151,7 +153,7 @@ const threadItemPlansHistory = initialHistory(threadItemPlansV1);
 export const threadItemPlans = threadItemPlansHistory.current;
 
 const threadItemReasoningV1 = defineTable("thread_item_reasoning", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("reasoning").notNull().default("reasoning"),
   state: enumText("streaming", "completed", "interrupted").notNull(),
 }, (table) => ({
@@ -165,7 +167,7 @@ const threadItemReasoningHistory = initialHistory(threadItemReasoningV1);
 export const threadItemReasoning = threadItemReasoningHistory.current;
 
 const threadReasoningSectionsV1 = defineTable("thread_reasoning_sections", {
-  item_id: text().notNull().references("thread_item_reasoning", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_item_reasoning", "item_id", { onDelete: "CASCADE" }),
   section_index: integer().notNull(),
   text: text().notNull(),
 }, (table) => ({
@@ -175,7 +177,7 @@ const threadReasoningSectionsHistory = initialHistory(threadReasoningSectionsV1)
 export const threadReasoningSections = threadReasoningSectionsHistory.current;
 
 const threadItemFileChangesV1 = defineTable("thread_item_file_changes", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("fileChange").notNull().default("fileChange"),
   state: enumText("inProgress", "completed", "failed", "declined").notNull(),
   error_text: text(),
@@ -194,7 +196,7 @@ const threadItemFileChangesHistory = initialHistory(threadItemFileChangesV1);
 export const threadItemFileChanges = threadItemFileChangesHistory.current;
 
 const threadFileChangesV1 = defineTable("thread_file_changes", {
-  item_id: text().notNull().references("thread_item_file_changes", "item_id", { onDelete: "CASCADE" }),
+  item_id: integer().notNull().references("thread_item_file_changes", "item_id", { onDelete: "CASCADE" }),
   change_index: integer().notNull(),
   path: text().notNull(),
   change_kind: enumText("add", "delete", "update").notNull(),
@@ -216,7 +218,7 @@ const threadFileChangesHistory = initialHistory(threadFileChangesV1);
 export const threadFileChanges = threadFileChangesHistory.current;
 
 const threadItemContextCompactionsV1 = defineTable("thread_item_context_compactions", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("contextCompaction").notNull().default("contextCompaction"),
   state: enumText("inProgress", "completed", "failed").notNull(),
   error_text: text(),
@@ -234,7 +236,7 @@ const threadItemContextCompactionsHistory = initialHistory(threadItemContextComp
 export const threadItemContextCompactions = threadItemContextCompactionsHistory.current;
 
 const threadItemUnknownV1 = defineTable("thread_item_unknown", {
-  item_id: text().primaryKey(),
+  item_id: integer().primaryKey(),
   item_type: enumText("unknown").notNull().default("unknown"),
   native_type: text().notNull(),
   safe_json: jsonText().notNull(),
@@ -249,7 +251,7 @@ const threadItemUnknownHistory = initialHistory(threadItemUnknownV1);
 export const threadItemUnknown = threadItemUnknownHistory.current;
 
 const threadItemTimelinesV1 = defineTable("thread_item_timelines", {
-  item_id: text().primaryKey().references("thread_items", "id", { onDelete: "CASCADE" }),
+  item_id: integer().primaryKey().references("thread_items", "id", { onDelete: "CASCADE" }),
   first_seen_at: integer(),
   last_seen_at: integer(),
   started_at: integer(),
@@ -259,10 +261,10 @@ const threadItemTimelinesHistory = initialHistory(threadItemTimelinesV1);
 export const threadItemTimelines = threadItemTimelinesHistory.current;
 
 const threadItemTimelineAliasesV1 = defineTable("thread_item_timeline_aliases", {
-  item_id: text().notNull().references("thread_item_timelines", "item_id", { onDelete: "CASCADE" }),
-  alias: text().primaryKey(),
+  item_id: integer().notNull().references("thread_item_timelines", "item_id", { onDelete: "CASCADE" }),
+  alias: text().notNull(),
 }, (table) => ({
-  constraints: [unique([table.item_id, table.alias])],
+  constraints: [primaryKey([table.item_id, table.alias])],
 }));
 const threadItemTimelineAliasesHistory = initialHistory(threadItemTimelineAliasesV1);
 export const threadItemTimelineAliases = threadItemTimelineAliasesHistory.current;

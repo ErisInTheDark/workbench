@@ -79,7 +79,7 @@ function canonicalWindow(
   materializedTurnIds: string[],
 ): WorkbenchTranscriptObservation {
   return {
-    contentVersion: 2,
+    contentVersion: 3,
     kind: "canonicalWindow",
     materializedTurnIds,
     observations,
@@ -363,7 +363,10 @@ test("projection fails closed when a canonical root loses its required augmentat
       turn("turn-0", 0),
       item("turn-0", { id: "plan", text: "planned", type: "plan" }, 2_000),
     ], ["turn-0"])]);
-    database.prepare("DELETE FROM thread_item_plans WHERE item_id = 'plan'").run();
+    database.prepare(`
+      DELETE FROM thread_item_plans
+      WHERE item_id = (SELECT id FROM thread_items WHERE thread_id = 'thread' AND source_id = 'plan')
+    `).run();
     const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
     assert.ok(snapshot);
     assert.deepEqual(projectWorkbenchTranscript(snapshot), {
