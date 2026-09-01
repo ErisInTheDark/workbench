@@ -276,6 +276,16 @@ type CoalescedTranscriptNotification = {
   notification: JsonRpcNotification;
 };
 
+type PendingCompatibilityWindowImport = {
+  thread: Thread;
+};
+
+function transcriptCompatibilityWindowKey(thread: Thread) {
+  return [thread.id, ...thread.turns.map(({ id }) => id)]
+    .map((part) => `${part.length}:${part}`)
+    .join("|");
+}
+
 function isJsonRpcResponse(message: unknown): message is JsonRpcResponse {
   return !!message
     && typeof message === "object"
@@ -1000,6 +1010,7 @@ export default class CodexStdioBridge {
   private transcriptQueue: Promise<void> = Promise.resolve();
   private readonly transcriptTasks = new Set<Promise<void>>();
   private readonly transcriptPendingTasks = new Map<number, { label: string; startedAt: number }>();
+  private readonly pendingCompatibilityWindowImports = new Map<string, PendingCompatibilityWindowImport>();
   private readonly transcriptInstrumentationTimer: NodeJS.Timeout;
   private readonly coalescedTranscriptNotifications = new Map<string, JsonRpcNotification>();
   private coalescedTranscriptFlushTimer: NodeJS.Timeout | null = null;
@@ -2514,9 +2525,7 @@ export default class CodexStdioBridge {
       throw new Error("thread/context/read did not receive a readable thread.");
     }
     if (!isSubagentBackgroundRead && hydration && thread.turns.length) {
-      await this.captureTranscript("sqlite-compatibility-window", () => (
-        this.importSqliteCompatibilityWindow(thread, transcriptStore)
-      ));
+      this.scheduleSqliteCompatibilityWindowImport(thread, transcriptStore);
     }
 
     let browseResultEntries: WorkbenchThreadContextReadResponse["browseResultEntries"] = [];
@@ -3139,6 +3148,27 @@ export default class CodexStdioBridge {
     await this.transcriptRecording.importCompatibilityWindow(async () => [
       await this.loadSqliteCompatibilityWindow({ ...thread, turns: missingTurns }, transcriptStore),
     ]);
+  }
+
+  private scheduleSqliteCompatibilityWindowImport(
+    thread: Thread,
+    transcriptStore: CodexTranscriptStoreInstance,
+  ) {
+    const key = transcriptCompatibilityWindowKey(thread);
+    const existing = this.pendingCompatibilityWindowImports.get(key);
+    if (existing) {
+      existing.thread = thread;
+      return;
+    }
+    const pending: PendingCompatibilityWindowImport = { thread };
+    this.pendingCompatibilityWindowImports.set(key, pending);
+    void this.captureTranscript("sqlite-compatibility-window", () => (
+      this.importSqliteCompatibilityWindow(pending.thread, transcriptStore)
+    )).finally(() => {
+      if (this.pendingCompatibilityWindowImports.get(key) === pending) {
+        this.pendingCompatibilityWindowImports.delete(key);
+      }
+    });
   }
 
   private async resolveTranscriptThreadContext(

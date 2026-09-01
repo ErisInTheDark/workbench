@@ -12,6 +12,14 @@ import WorkbenchTranscriptCaptureGapController from "./WorkbenchTranscriptCaptur
 import WorkbenchTranscriptController from "./WorkbenchTranscriptController.ts";
 import type { WorkbenchTranscriptObservation } from "./workbench-transcript-types.ts";
 
+function deferred<Value>() {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 function observationsFor(threadId: string): WorkbenchTranscriptObservation[] {
   return [{
     activityAt: 1,
@@ -48,6 +56,10 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
       markerPath: join(directory, "capture-gap.json"),
     }),
   );
+  const projectionStarted = deferred<void>();
+  const releaseProjection = deferred<void>();
+  const projectionCompleted = deferred<void>();
+  let blockProjection = false;
   try {
     await controller.start();
     await controller.record([{
@@ -88,11 +100,17 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
     await controller.subscribe({
       id: "latest",
       request: { threadId: "thread", turnLimit: 10 },
-      publish: (snapshot) => {
+      publish: async (snapshot) => {
+        if (blockProjection) {
+          projectionStarted.resolve();
+          await releaseProjection.promise;
+        }
         published.push(snapshot?.rows.threadItems.length ?? -1);
+        if (blockProjection) projectionCompleted.resolve();
       },
     });
-    await controller.record([{
+    blockProjection = true;
+    const recording = controller.record([{
       kind: "canonicalWindow",
       contentVersion: 3,
       materializedTurnIds: ["turn"],
@@ -135,6 +153,17 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
         },
       }],
     }], { source: "compatibility" });
+    await projectionStarted.promise;
+    let recordingSettled = false;
+    void recording.then(() => {
+      recordingSettled = true;
+    });
+    await Promise.resolve();
+    assert.equal(recordingSettled, true);
+    await recording;
+    assert.deepEqual(published, [0]);
+    releaseProjection.resolve();
+    await projectionCompleted.promise;
     assert.deepEqual(published, [0, 1]);
     const snapshot = await controller.read({ threadId: "thread", turnLimit: 10 });
     const messageItemId = snapshot?.rows.threadItems.find(({ source_id }) => source_id === "message")?.id;
@@ -153,6 +182,7 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
     controller.dispose();
     await assert.rejects(controller.read({ threadId: "thread", turnLimit: 10 }), /disposed/u);
   } finally {
+    releaseProjection.resolve();
     controller.dispose();
     await database.close();
     await rm(directory, { recursive: true, force: true });

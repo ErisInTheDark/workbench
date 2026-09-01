@@ -1,6 +1,7 @@
 /*
  * WorkbenchTranscriptController: owns transcript readiness, recording, reads, active subscriptions, and disposal above the database worker. Keywords: transcript, controller, lifecycle.
  */
+import { logError } from "../../process-helpers.ts";
 import type WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 import WorkbenchTranscriptCaptureGapController from "./WorkbenchTranscriptCaptureGapController.ts";
 import WorkbenchTranscriptRecorder from "./WorkbenchTranscriptRecorder.ts";
@@ -45,6 +46,14 @@ function observationIdentity(observations: readonly WorkbenchTranscriptObservati
   };
 }
 
+function reportSubscriptionFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  logError(
+    "workbench-transcript-subscription",
+    `latest-window refresh failed: ${message.slice(0, 500)}`,
+  );
+}
+
 export default class WorkbenchTranscriptController {
   readonly #captureGaps: WorkbenchTranscriptCaptureGapController;
   readonly #database: Pick<
@@ -65,7 +74,10 @@ export default class WorkbenchTranscriptController {
     this.#database = database;
     this.#captureGaps = captureGaps;
     this.#recorder = new WorkbenchTranscriptRecorder(database);
-    this.#subscriptions = new WorkbenchTranscriptSubscriptionController((request) => this.read(request));
+    this.#subscriptions = new WorkbenchTranscriptSubscriptionController(
+      (request) => this.read(request),
+      reportSubscriptionFailure,
+    );
   }
 
   get failure() {
@@ -140,7 +152,7 @@ export default class WorkbenchTranscriptController {
           ...identity,
         });
       }
-      await this.#subscriptions.settle(settlement.changedThreadIds);
+      this.#subscriptions.settle(settlement.changedThreadIds);
       return settlement;
     }
     let settlement: WorkbenchTranscriptSettlement;
@@ -154,7 +166,7 @@ export default class WorkbenchTranscriptController {
         ...identity,
       });
     }
-    await this.#subscriptions.settle(settlement.changedThreadIds);
+    this.#subscriptions.settle(settlement.changedThreadIds);
     return settlement;
   }
 

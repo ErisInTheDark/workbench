@@ -2198,13 +2198,14 @@ test("context reads bypass the operation queue and negotiate scoped entries with
   }
 });
 
-test("bounded page reads single-flight and wait for one compatibility import", async () => {
+test("bounded page reads return before one deduplicated compatibility import", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-known-window-"));
   const compatibilityImportStarted = deferred<void>();
   const releaseCompatibilityImport = deferred<void>();
   const materializedTurnIds = new Set<string>();
   const sqliteBatches: object[][] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
+  let materializationReads = 0;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
     send(message: JsonRpcRequest) {
@@ -2241,9 +2242,10 @@ test("bounded page reads single-flight and wait for one compatibility import", a
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
-    readSqliteTranscriptMaterializedTurnIds: async (_threadId, turnIds) => (
-      turnIds.filter((turnId) => materializedTurnIds.has(turnId))
-    ),
+    readSqliteTranscriptMaterializedTurnIds: async (_threadId, turnIds) => {
+      materializationReads += 1;
+      return turnIds.filter((turnId) => materializedTurnIds.has(turnId));
+    },
     recordSqliteTranscript: async (observations) => {
       sqliteBatches.push([...observations]);
       const compatibilityWindow = observations.find(({ kind }) => kind === "canonicalWindow");
@@ -2290,10 +2292,8 @@ test("bounded page reads single-flight and wait for one compatibility import", a
       params: { cursor: null, threadId: "thread" },
     });
     await compatibilityImportStarted.promise;
-    let responseSettled = false;
-    void responseTask.then(() => { responseSettled = true; });
-    await Promise.resolve();
-    assert.equal(responseSettled, false);
+    const [response, duplicateResponse] = await Promise.all([responseTask, duplicateResponseTask]);
+    assert.deepEqual(duplicateResponse?.result, response?.result);
     assert.deepEqual(upstreamRequests.map((request) => request.method), [
       "thread/read",
       "thread/turns/list",
@@ -2304,14 +2304,24 @@ test("bounded page reads single-flight and wait for one compatibility import", a
       sortDirection: "desc",
       threadId: "thread",
     });
+    const sameWindowResponse = await bridge.handleBridgeRequest({
+      id: 120,
+      method: "thread/context/read",
+      params: { includeTurns: false, threadId: "thread" },
+      workbenchThreadContextEntries: { mode: "hydratedTurns" },
+      workbenchThreadHydration: { mode: "latest" },
+    });
+    assert.deepEqual(
+      ((sameWindowResponse?.result as { thread: Thread }).thread.turns).map((turn) => turn.id),
+      ["turn"],
+    );
     releaseCompatibilityImport.resolve();
-    const [response, duplicateResponse] = await Promise.all([responseTask, duplicateResponseTask]);
-    assert.deepEqual(duplicateResponse?.result, response?.result);
     assert.deepEqual(
       ((response?.result as { thread: Thread }).thread.turns).map((turn) => turn.id),
       ["turn"],
     );
     await bridge.waitForIdle();
+    assert.equal(materializationReads, 1);
     const compatibilityWindow = sqliteBatches.flat().find((observation) => (
       (observation as { kind?: string }).kind === "canonicalWindow"
     )) as { materializedTurnIds?: string[] } | undefined;
