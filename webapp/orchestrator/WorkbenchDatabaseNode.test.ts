@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
+import { recoverCodexAfterSqliteTranscriptCaptureGap } from "./CodexBridgeNode";
 import WorkbenchDatabaseNode from "./WorkbenchDatabaseNode";
 
 async function exists(filePath: string) {
@@ -51,9 +52,79 @@ test("the database node proves readiness before exposing transcript work and clo
   }
 });
 
+test("Codex recovery settles every provider gap before harness availability", async () => {
+  const pendingThreadIds = ["thread-a", "thread-b"];
+  const calls: string[] = [];
+  await recoverCodexAfterSqliteTranscriptCaptureGap({
+    recoverSqliteTranscriptThread: async (threadId) => {
+      calls.push(`recover:${threadId}`);
+      assert.equal(pendingThreadIds.shift(), threadId);
+    },
+  }, {
+    get cutoverFailure() { return null; },
+    get pendingRecoveryThreadIds() { return [...pendingThreadIds]; },
+  }, (threadId) => {
+    calls.push(`failure:${threadId ?? "cutover"}`);
+  }, async () => {
+    calls.push("available");
+  });
+  assert.deepEqual(calls, [
+    "recover:thread-a",
+    "recover:thread-b",
+    "available",
+  ]);
+});
+
+test("Codex recovery reports a partial failure and still makes the harness available", async () => {
+  const pendingThreadIds = ["thread-a", "thread-b"];
+  const calls: string[] = [];
+  await recoverCodexAfterSqliteTranscriptCaptureGap({
+    recoverSqliteTranscriptThread: async (threadId) => {
+      calls.push(`recover:${threadId}`);
+      if (threadId === "thread-a") throw new Error("provider read failed");
+      pendingThreadIds.splice(pendingThreadIds.indexOf(threadId), 1);
+    },
+  }, {
+    get cutoverFailure() { return new Error("transcript recovery is required"); },
+    get pendingRecoveryThreadIds() { return [...pendingThreadIds]; },
+  }, (threadId, error) => {
+    calls.push(`failure:${threadId}:${error instanceof Error ? error.message : String(error)}`);
+  }, async () => {
+    calls.push("available");
+  });
+  assert.deepEqual(pendingThreadIds, ["thread-a"]);
+  assert.deepEqual(calls, [
+    "recover:thread-a",
+    "failure:thread-a:provider read failed",
+    "recover:thread-b",
+    "available",
+  ]);
+});
+
+test("an unrecoverable gap reports cutover health without blocking harness availability", async () => {
+  const calls: string[] = [];
+  await recoverCodexAfterSqliteTranscriptCaptureGap({
+    recoverSqliteTranscriptThread: async (threadId) => {
+      calls.push(`unexpected-recovery:${threadId}`);
+    },
+  }, {
+    get cutoverFailure() { return new Error("one unrecoverable gap"); },
+    get pendingRecoveryThreadIds() { return []; },
+  }, (threadId, error) => {
+    calls.push(`failure:${threadId ?? "cutover"}:${error instanceof Error ? error.message : String(error)}`);
+  }, async () => {
+    calls.push("available");
+  });
+  assert.deepEqual(calls, [
+    "failure:cutover:one unrecoverable gap",
+    "available",
+  ]);
+});
+
 test("the replacement database node consumes one reset request before opening SQLite", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-node-reset-"));
   const storage = join(directory, ".workbench");
+  const captureGapMarkerPath = join(storage, "workbench-transcript-capture-gap.json");
   const resetRequestPath = join(storage, "reset-workbench-sqlite");
   const shadowLogPath = join(storage, "logs", "workbench-transcript-shadow.jsonl");
   const preserved = join(storage, "transcripts.json");
@@ -75,6 +146,7 @@ test("the replacement database node consumes one reset request before opening SQ
     await active.start();
     active.registrations.transcriptShadowLog!.write({ event: "before-reset", level: "info", source: "test" });
     await writeFile(preserved, "keep", "utf8");
+    await writeFile(captureGapMarkerPath, "discarded shadow marker", "utf8");
     await writeFile(resetRequestPath, "workbench-sqlite-shadow-reset-v1\n", "utf8");
 
     assert.ok(active.detachForReload);
@@ -95,6 +167,7 @@ test("the replacement database node consumes one reset request before opening SQ
     );
     await replacement.start();
     replacement.registrations.database!.assertReady();
+    assert.equal(await exists(captureGapMarkerPath), false);
     assert.equal(await exists(resetRequestPath), false);
     assert.equal(await exists(shadowLogPath), false);
     assert.equal(await readFile(preserved, "utf8"), "keep");

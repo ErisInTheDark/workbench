@@ -945,3 +945,39 @@ test("unsupported items remain opaque and a later invalid observation rolls back
     database.close();
   }
 });
+
+test("capture-gap settlement records one closed thread-owned failure interval", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([
+      threadObservation(),
+      turnObservation("turn", 0),
+      {
+        closedAt: 20,
+        errorText: "settlement failed",
+        gapId: "gap",
+        kind: "captureGap",
+        openedAt: 10,
+        reason: "sqlite transcript settlement failed",
+        state: "reconciled",
+        threadId: "thread",
+        turnId: "turn",
+      },
+    ]);
+    assert.deepEqual(
+      database.prepare("SELECT * FROM transcript_capture_gaps WHERE id = ?").get("gap"),
+      {
+        closed_at: 20,
+        error_text: "settlement failed",
+        id: "gap",
+        opened_at: 10,
+        reason: "sqlite transcript settlement failed",
+        state: "reconciled",
+        thread_id: "thread",
+        turn_id: "turn",
+      },
+    );
+  } finally {
+    database.close();
+  }
+});

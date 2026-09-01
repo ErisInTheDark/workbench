@@ -1,5 +1,9 @@
 /*
+ * WorkbenchTranscriptItemLifecycle: durable lifecycle values shared by item transforms. Keywords: transcript, item, lifecycle.
+ * WorkbenchTranscriptAtomicObservation: one source-owned semantic transcript fact. Keywords: transcript, observation, atomic.
+ * WorkbenchTranscriptCaptureGapObservation: one closed failed-capture interval. Keywords: transcript, capture gap, recovery.
  * WorkbenchTranscriptObservation: harness-neutral durable transcript input accepted in queue order. Keywords: transcript, observation, recorder.
+ * WorkbenchTranscriptRecordingContext: fact ownership and provider-recovery boundary for one settlement. Keywords: transcript, recording, recovery.
  * WorkbenchTranscriptSettlement: semantic commit result used to refresh subscriptions. Keywords: transcript, settlement, subscription.
  * WorkbenchTranscriptReadRequest/WorkbenchTranscriptSnapshot/WorkbenchTranscriptSnapshotRows: shared hydration-bounded relational read contract re-exports. Keywords: transcript, snapshot, hydration.
  */
@@ -97,8 +101,21 @@ export type WorkbenchTranscriptAtomicObservation =
     itemId: string | null;
   };
 
+export interface WorkbenchTranscriptCaptureGapObservation {
+  closedAt: number;
+  errorText: string;
+  gapId: string;
+  kind: "captureGap";
+  openedAt: number;
+  reason: string;
+  state: "reconciled" | "unrecoverable";
+  threadId: string;
+  turnId: string | null;
+}
+
 export type WorkbenchTranscriptObservation =
   | WorkbenchTranscriptAtomicObservation
+  | WorkbenchTranscriptCaptureGapObservation
   | {
     kind: "canonicalWindow";
     contentVersion: number;
@@ -106,6 +123,11 @@ export type WorkbenchTranscriptObservation =
     threadId: string;
     observations: readonly WorkbenchTranscriptAtomicObservation[];
   };
+
+export interface WorkbenchTranscriptRecordingContext {
+  recoveryBoundary?: boolean;
+  source: "compatibility" | "provider" | "workbench";
+}
 
 export interface WorkbenchTranscriptSettlement {
   changedThreadIds: string[];

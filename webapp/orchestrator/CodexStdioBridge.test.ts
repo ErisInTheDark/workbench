@@ -651,6 +651,178 @@ test("JSON records first and blocked SQLite recording holds bridge detach", asyn
   }
 });
 
+test("only explicit SQLite recovery reads close the exact provider gap after settlement", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-recovery-"));
+  const contexts: Array<{ recoveryBoundary?: boolean; source: string }> = [];
+  const upstreamMessages: JsonRpcRequest[] = [];
+  const sqliteStarted = deferred<void>();
+  const releaseSqlite = deferred<void>();
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamMessages.push(message);
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage({
+          id: message.id ?? null,
+          result: { thread: bridgeThread() },
+        });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    recordSqliteTranscript: async (_observations, context) => {
+      contexts.push(context);
+      sqliteStarted.resolve();
+      await releaseSqlite.promise;
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    let requestSettled = false;
+    const request = bridge.recoverSqliteTranscriptThread("thread").then(() => {
+      requestSettled = true;
+    });
+    await sqliteStarted.promise;
+    await Promise.resolve();
+    assert.equal(requestSettled, false);
+    releaseSqlite.resolve();
+    await request;
+    await bridge.waitForIdle();
+    await bridge.handleServerRequest({
+      id: "ordinary-read",
+      method: "thread/read",
+      params: { includeTurns: true, threadId: "thread" },
+    });
+    await bridge.waitForIdle();
+    assert.equal(upstreamMessages.length, 2);
+    assert.equal(upstreamMessages[0]?.method, "thread/read");
+    assert.deepEqual(upstreamMessages[0]?.params, { includeTurns: true, threadId: "thread" });
+    assert.deepEqual(contexts, [
+      { recoveryBoundary: true, source: "provider" },
+      { source: "provider" },
+    ]);
+  } finally {
+    releaseSqlite.resolve();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("SQLite transcript failure does not block steer or questionnaire side effects", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-failed-"));
+  const upstreamMessages: unknown[] = [];
+  const client: BridgeClient = {
+    OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
+  };
+  const bridge = new CodexStdioBridge({
+    appServer: { send(message: unknown) { upstreamMessages.push(message); } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    recordSqliteTranscript: async () => { throw new Error("SQLite transcript failed"); },
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    await bridge.forwardRequest({
+      id: "steer",
+      method: "turn/steer",
+      params: {
+        expectedTurnId: "turn",
+        input: [{ text: "hello", text_elements: [], type: "text" }],
+        threadId: "thread",
+      },
+    }, client, "steer");
+    assert.equal((upstreamMessages[0] as { method?: string } | undefined)?.method, "turn/steer");
+
+    await bridge.handleUpstreamMessage({
+      id: "questionnaire",
+      method: "item/tool/requestUserInput",
+      params: {
+        itemId: "tool",
+        questions: [{
+          allowOther: false,
+          header: "choice",
+          id: "choice",
+          isSecret: false,
+          options: [{ description: "continue", label: "yes" }],
+          question: "continue?",
+        }],
+        threadId: "thread",
+        turnId: "turn",
+      },
+    });
+    const response = await bridge.handleBridgeRequest({
+      id: "answer",
+      method: "questionnaire/respond",
+      params: {
+        requestKey: "questionnaire",
+        response: { answers: { choice: { answers: ["yes"] } } },
+        threadId: "thread",
+        turnId: "turn",
+      },
+    });
+    assert.equal(response?.error, undefined);
+    assert.deepEqual(response?.result, { ok: true });
+    assert.equal((upstreamMessages[1] as { id?: string } | undefined)?.id, "questionnaire");
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("repeated provider misses report one SQLite capture failure", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-report-"));
+  const records: Array<{ event?: string }> = [];
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    recordSqliteTranscript: async () => { throw new Error("SQLite transcript failed"); },
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+    transcriptShadowLog: {
+      flush: async () => undefined,
+      write: (record) => { records.push(record); },
+    },
+  });
+  const item = {
+    id: "message",
+    memoryCitation: null,
+    phase: "commentary" as const,
+    text: "hello",
+    type: "agentMessage" as const,
+  };
+  try {
+    await bridge.handleUpstreamMessage({
+      method: "item/started",
+      params: { item, threadId: "thread", turnId: "turn" },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "item/completed",
+      params: { item, threadId: "thread", turnId: "turn" },
+    });
+    await bridge.waitForIdle();
+    assert.equal(records.filter(({ event }) => event === "capture-failed").length, 1);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("Browse settlement verifies Workbench transcript assets before forwarding their SQLite observation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-browse-asset-"));
   const observations: object[] = [];
@@ -732,6 +904,46 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
     );
     assert.equal(observations.length, 1);
     assert.equal(notifications.length, 1);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("SQLite transcript failure does not block Browse settlement", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-browse-sqlite-failure-"));
+  const notifications: object[] = [];
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification(notification) { notifications.push(notification); },
+    recordSqliteTranscript: async () => { throw new Error("SQLite transcript failed"); },
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    await bridge.recordBrowseResultForBrowse({
+      action: "click",
+      actionIndex: 0,
+      assetUrl: null,
+      commandItemId: "command",
+      detailKind: "result",
+      detailLabel: "Clicked",
+      detailText: "button",
+      durationMs: 12,
+      entryKey: "browse-entry",
+      recordedAt: 100,
+      session: "research",
+      state: "completed",
+      threadId: "thread",
+      turnId: "turn",
+    });
+    assert.deepEqual(notifications, [{
+      method: "browse/result/recorded",
+      params: { threadId: "thread", turnId: "turn" },
+    }]);
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });

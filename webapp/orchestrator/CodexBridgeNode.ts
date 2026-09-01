@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - recoverCodexAfterSqliteTranscriptCaptureGap: attempt marked provider recovery without blocking later harness availability. Keywords: codex, transcript, recovery.
  * - default CodexBridgeNode: own reloadable Codex bridge code while preserving the parent app-server process. Keywords: codex, bridge, handoff.
  */
 import CodexStdioBridge from "./CodexStdioBridge";
@@ -11,6 +12,30 @@ import ReloadableNode from "./ReloadableNode";
 
 function record(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+export async function recoverCodexAfterSqliteTranscriptCaptureGap(
+  bridge: Pick<CodexStdioBridge, "recoverSqliteTranscriptThread">,
+  transcript: Pick<OrchestratorRuntimeObjects["transcript"], "cutoverFailure" | "pendingRecoveryThreadIds">,
+  reportFailure: (threadId: string | null, error: unknown) => void,
+  recoverAvailable: () => Promise<void>,
+) {
+  let reportedRecoveryFailure = false;
+  for (const threadId of transcript.pendingRecoveryThreadIds) {
+    try {
+      await bridge.recoverSqliteTranscriptThread(threadId);
+      if (transcript.pendingRecoveryThreadIds.includes(threadId)) {
+        throw new Error(`SQLite transcript recovery did not settle thread ${threadId}.`);
+      }
+    } catch (error) {
+      reportedRecoveryFailure = true;
+      reportFailure(threadId, error);
+    }
+  }
+  if (!reportedRecoveryFailure && transcript.cutoverFailure) {
+    reportFailure(null, transcript.cutoverFailure);
+  }
+  await recoverAvailable();
 }
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
@@ -50,8 +75,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
       instructions: codexInstructions,
       prepareTurnStart,
-      recordSqliteTranscript: async (observations) => {
-        await transcript.record(observations);
+      recordSqliteTranscript: async (observations, recordingContext) => {
+        await transcript.record(observations, recordingContext);
       },
       restartingAppServer: build.isReplacing("harness:codex"),
       transcriptShadowLog: build.get("transcriptShadowLog"),
@@ -63,7 +88,23 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       activate: async () => {
         if (build.mode === "replacement") codexMcpGeneration.bump();
         activated = true;
-        await harnesses.recoverAvailable("codex");
+        await recoverCodexAfterSqliteTranscriptCaptureGap(
+          bridge,
+          transcript,
+          (threadId, error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            build.get("transcriptShadowLog").write({
+              event: "capture-recovery-failed",
+              fields: {
+                ...(threadId ? { threadId } : {}),
+                message: message.slice(0, 500),
+              },
+              level: "error",
+              source: "codex-transcript",
+            });
+          },
+          () => harnesses.recoverAvailable("codex"),
+        );
       },
       detachForReload: async (replacement) => {
         const restartingAppServer = replacement.isReplacing("harness:codex");

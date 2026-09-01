@@ -22,9 +22,16 @@ type DatabaseControllerConstructor = new (
   options: { databasePath: string },
 ) => OrchestratorDatabaseRegistration;
 
+type CaptureGapController = import("./database/transcript/WorkbenchTranscriptCaptureGapController").default;
+
 type TranscriptControllerConstructor = new (
   database: OrchestratorDatabaseRegistration,
+  captureGaps: CaptureGapController,
 ) => OrchestratorTranscriptRegistration;
+
+type CaptureGapControllerConstructor = new (
+  options: { markerPath: string },
+) => CaptureGapController;
 
 const SQLITE_RESET_REQUEST = "workbench-sqlite-shadow-reset-v1\n";
 
@@ -44,7 +51,10 @@ function loadDatabaseControllers() {
   const TranscriptController = (
     require("./database/transcript/WorkbenchTranscriptController") as { default: TranscriptControllerConstructor }
   ).default;
-  return { DatabaseController, TranscriptController };
+  const CaptureGapController = (
+    require("./database/transcript/WorkbenchTranscriptCaptureGapController") as { default: CaptureGapControllerConstructor }
+  ).default;
+  return { CaptureGapController, DatabaseController, TranscriptController };
 }
 
 export default new ReloadableNode<
@@ -56,12 +66,18 @@ export default new ReloadableNode<
   boundarySources: "webapp/orchestrator/database/**",
   children: [WorkbenchCoreNode, CodexBridgeNode, WorkbenchWebSocketNode],
   create: (context) => {
-    const { DatabaseController, TranscriptController } = loadDatabaseControllers();
+    const { CaptureGapController, DatabaseController, TranscriptController } = loadDatabaseControllers();
     const databasePath = join(context.legacyMigrationProjectRoot, ".workbench", "workbench.sqlite3");
+    const captureGapMarkerPath = join(
+      context.legacyMigrationProjectRoot,
+      ".workbench",
+      "workbench-transcript-capture-gap.json",
+    );
     const resetRequestPath = join(context.legacyMigrationProjectRoot, ".workbench", "reset-workbench-sqlite");
     const shadowLogPath = join(context.legacyMigrationProjectRoot, ".workbench", "logs", "workbench-transcript-shadow.jsonl");
     const database = new DatabaseController({ databasePath });
-    const transcript = new TranscriptController(database);
+    const captureGaps = new CaptureGapController({ markerPath: captureGapMarkerPath });
+    const transcript = new TranscriptController(database, captureGaps);
     const transcriptShadowLog = new WorkbenchTranscriptShadowLog(shadowLogPath, (error) => {
       logError("workbench-transcript-shadow", `internal diagnostic log failed: ${error.message}`);
     });
@@ -83,7 +99,13 @@ export default new ReloadableNode<
           if (resetRequest !== SQLITE_RESET_REQUEST) {
             throw new Error(`Unexpected SQLite reset request: ${resetRequestPath}`);
           }
-          for (const target of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`, shadowLogPath]) {
+          for (const target of [
+            databasePath,
+            `${databasePath}-wal`,
+            `${databasePath}-shm`,
+            captureGapMarkerPath,
+            shadowLogPath,
+          ]) {
             await rm(target, { force: true });
           }
         }

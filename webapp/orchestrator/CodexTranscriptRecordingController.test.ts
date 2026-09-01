@@ -4,8 +4,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import CodexTranscriptRecordingController from "./CodexTranscriptRecordingController.ts";
-import type { WorkbenchTranscriptObservation } from "./database/transcript/workbench-transcript-types.ts";
+import CodexTranscriptRecordingController, {
+  CodexTranscriptSqliteRecordingFailure,
+} from "./CodexTranscriptRecordingController.ts";
+import type {
+  WorkbenchTranscriptObservation,
+  WorkbenchTranscriptRecordingContext,
+} from "./database/transcript/workbench-transcript-types.ts";
 
 const observation: WorkbenchTranscriptObservation = {
   activityAt: 1,
@@ -75,4 +80,97 @@ test("historical compatibility import records its explicitly loaded window", asy
   });
   await controller.importCompatibilityWindow(async () => [observation]);
   assert.deepEqual(batches, [[observation]]);
+});
+
+test("provider recovery context reaches SQLite after legacy recording", async () => {
+  const order: string[] = [];
+  const contexts: WorkbenchTranscriptRecordingContext[] = [];
+  const controller = new CodexTranscriptRecordingController({
+    recordSqlite: async (_observations, context) => {
+      order.push("sqlite");
+      contexts.push(context);
+    },
+  });
+  await controller.recordProviderFact({
+    observations: [observation],
+    recoveryBoundary: true,
+    recordLegacy: async () => { order.push("json"); },
+  });
+  assert.deepEqual(order, ["json", "sqlite"]);
+  assert.deepEqual(contexts, [{ recoveryBoundary: true, source: "provider" }]);
+});
+
+test("provider facts and crossed Workbench facts settle together as unrecoverable", async () => {
+  const order: string[] = [];
+  const batches: WorkbenchTranscriptObservation[][] = [];
+  const contexts: WorkbenchTranscriptRecordingContext[] = [];
+  const controller = new CodexTranscriptRecordingController({
+    recordSqlite: async (observations, context) => {
+      order.push("sqlite");
+      batches.push([...observations]);
+      contexts.push(context);
+    },
+  });
+  const workbenchObservation = { ...observation, updatedAt: 2 };
+  await controller.recordProviderFact({
+    observations: [observation],
+    recordCrossedWorkbenchFacts: async () => {
+      order.push("workbench-json");
+      return [workbenchObservation];
+    },
+    recordLegacy: async () => { order.push("provider-json"); },
+  });
+  assert.deepEqual(order, ["provider-json", "workbench-json", "sqlite"]);
+  assert.deepEqual(batches, [[observation, workbenchObservation]]);
+  assert.deepEqual(contexts, [{ source: "workbench" }]);
+});
+
+test("a Workbench mutation records JSON before reporting SQLite rejection", async () => {
+  const order: string[] = [];
+  const controller = new CodexTranscriptRecordingController({
+    recordSqlite: async () => {
+      order.push("sqlite");
+      throw new Error("capture failed");
+    },
+  });
+  await assert.rejects(controller.recordWorkbenchMutation({
+    observations: [observation],
+    recordLegacy: async () => { order.push("json"); },
+  }), (error) => (
+    error instanceof CodexTranscriptSqliteRecordingFailure
+    && error.message === "capture failed"
+  ));
+  assert.deepEqual(order, ["json", "sqlite"]);
+});
+
+test("a Workbench fact beyond its external boundary still attempts SQLite recording", async () => {
+  const order: string[] = [];
+  const contexts: WorkbenchTranscriptRecordingContext[] = [];
+  const controller = new CodexTranscriptRecordingController({
+    recordSqlite: async (_observations, context) => {
+      order.push("sqlite");
+      contexts.push(context);
+    },
+  });
+  await controller.recordCrossedWorkbenchMutation({
+    observations: [observation],
+    recordLegacy: async () => { order.push("json"); },
+  });
+  assert.deepEqual(order, ["json", "sqlite"]);
+  assert.deepEqual(contexts, [{ source: "workbench" }]);
+});
+
+test("SQLite rejection remains distinct from source-owned legacy failure", async () => {
+  let legacyRecorded = false;
+  const controller = new CodexTranscriptRecordingController({
+    recordSqlite: async () => { throw new Error("sqlite failed"); },
+  });
+  await assert.rejects(controller.recordProviderFact({
+    observations: [observation],
+    recordLegacy: async () => { legacyRecorded = true; },
+  }), (error) => (
+    error instanceof CodexTranscriptSqliteRecordingFailure
+    && error.message === "sqlite failed"
+  ));
+  assert.equal(legacyRecorded, true);
 });

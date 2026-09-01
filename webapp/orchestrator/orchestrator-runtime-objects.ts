@@ -2,7 +2,11 @@
  * Exports:
  * - OrchestratorReloadableModules: helper modules consumed dynamically by persistent provider bridges. Keywords: bridge, module, reload.
  * - OrchestratorProviderNotification: provider event routed into the core node. Keywords: provider, notification, thread state.
- * - OrchestratorCodexAppServerRuntime/OrchestratorBrowseExecution: provider and Browse registrations. Keywords: runtime, lifecycle, registration.
+ * - OrchestratorCodexAppServerRuntime: persistent Codex app-server registration. Keywords: codex, runtime, lifecycle.
+ * - OrchestratorBrowseExecution: warm Browse execution registration. Keywords: browse, runtime, lifecycle.
+ * - OrchestratorDatabaseRegistration: mandatory SQLite lifecycle registration. Keywords: database, readiness, lifecycle.
+ * - OrchestratorTranscriptRegistration: SQLite transcript recording and recovery registration. Keywords: transcript, recovery, subscription.
+ * - OrchestratorTranscriptShadowLog: bounded transcript diagnostic log registration. Keywords: transcript, diagnostics, log.
  * - OrchestratorRuntimeObjects: centralized live object registry contract populated by reloadable nodes. Keywords: registry, ownership, graph.
  */
 import * as project from "../lib/project";
@@ -10,6 +14,10 @@ import * as threadBootstrap from "../lib/thread-bootstrap";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
 import type { WorkbenchTranscriptSnapshot } from "../lib/workbench/database/transcript/workbench-transcript-contract";
+import type {
+  WorkbenchTranscriptObservation,
+  WorkbenchTranscriptRecordingContext,
+} from "./database/transcript/workbench-transcript-types";
 import type BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
@@ -83,10 +91,17 @@ export interface OrchestratorDatabaseRegistration {
 }
 
 export interface OrchestratorTranscriptRegistration {
+  assertCutoverReady(): void;
+  assertReady(): void;
+  readonly cutoverFailure: Error | null;
   dispose(): void;
   readonly failure: Error | null;
+  readonly pendingRecoveryThreadIds: readonly string[];
   read(request: { threadId: string; beforeTurnIndex?: number; turnIds?: string[]; turnLimit: number }): Promise<WorkbenchTranscriptSnapshot | null>;
-  record(observations: readonly object[]): Promise<{ changedThreadIds: string[] }>;
+  record(
+    observations: readonly WorkbenchTranscriptObservation[],
+    context: WorkbenchTranscriptRecordingContext,
+  ): Promise<{ changedThreadIds: string[] }>;
   start(): Promise<void>;
   subscribe(subscription: {
     id: string;

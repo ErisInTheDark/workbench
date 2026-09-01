@@ -39,6 +39,7 @@ import {
 } from "./workbench-transcript-transform-registry.ts";
 import type {
   WorkbenchTranscriptAtomicObservation,
+  WorkbenchTranscriptCaptureGapObservation,
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptSettlement,
@@ -231,7 +232,7 @@ export default class WorkbenchTranscriptRepository {
   }
 
   #settleObservation(
-    observation: WorkbenchTranscriptAtomicObservation,
+    observation: WorkbenchTranscriptAtomicObservation | WorkbenchTranscriptCaptureGapObservation,
     insideCanonicalWindow = false,
   ) {
     if (observation.kind === "thread") {
@@ -347,6 +348,23 @@ export default class WorkbenchTranscriptRepository {
     if (observation.kind === "browse") {
       this.#writeBrowseEntry(observation, insideCanonicalWindow);
       return observation.entry.threadId;
+    }
+    if (observation.kind === "captureGap") {
+      this.#requiredThread(observation.threadId);
+      this.#run(upsertRow(evidenceTables.transcriptCaptureGaps, {
+        id: observation.gapId,
+        thread_id: observation.threadId,
+        turn_id: observation.turnId,
+        state: observation.state,
+        reason: observation.reason,
+        opened_at: observation.openedAt,
+        closed_at: observation.closedAt,
+        error_text: observation.errorText,
+      }, {
+        conflictColumns: ["id"],
+        updateColumns: ["state", "reason", "closed_at", "error_text"],
+      }));
+      return observation.threadId;
     }
     this.#writeNativeEvidence(observation);
     return observation.threadId;
