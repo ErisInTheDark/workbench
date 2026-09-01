@@ -14,7 +14,6 @@ import type {
   ThreadPayload,
   WorkbenchBrowseResultEntry,
   WorkbenchComposerInputDraft,
-  WorkbenchComposerProfileSlot,
   WorkbenchComposerSettings,
   WorkbenchHarness,
   WorkbenchListModelsOptions,
@@ -58,6 +57,7 @@ import {
   type InlineMentionHighlightSources,
 } from "../../../lib/workbench/thread/inline-mention-highlights";
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
+import resolveThreadComposerProfileSlot from "../../../lib/workbench/thread/thread-composer-profile-slot";
 import { ThreadMessageNotSentError } from "../../../lib/workbench/thread/thread-message-submission";
 import { isWorkbenchQuestionnaireResponseInput } from "../../../lib/workbench/thread/thread-recovery-message";
 import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadLifecycle, WorkbenchThreadStateRequest, WorkbenchThreadTarget } from "../../../lib/workbench/thread/thread-state";
@@ -617,6 +617,7 @@ export default memo(function ThreadView ({
   threadSidebarStore,
   threadQuestionnaireDraftsByKey,
   thread,
+  threadTarget,
   viewInstanceKey = thread.id,
 }: {
   composerSpellCheck: boolean;
@@ -675,6 +676,7 @@ export default memo(function ThreadView ({
   threadSidebarStore: WorkbenchThreadSidebarStore | null;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
   thread: ThreadPayload;
+  threadTarget: WorkbenchThreadTarget | null;
   viewInstanceKey?: string;
 }) {
   const daemon = useWorkbenchDaemonClient();
@@ -760,13 +762,9 @@ export default memo(function ThreadView ({
     getActiveGitArcSelection,
     getActiveGitArcSelection,
   );
-  const activeProfileSlot = useMemo<WorkbenchComposerProfileSlot | null>(() => activeThread
-    ? activeThread.isDraft
-      ? activeThread.id.startsWith("draft:")
-        ? { draftId: activeThread.id.slice("draft:".length), harness: activeThread.harness, kind: "draft", projectId }
-        : { kind: "new-thread", projectId }
-      : { harness: activeThread.harness, kind: "thread", projectId, threadId: activeThread.id }
-    : null, [activeThread?.harness, activeThread?.id, activeThread?.isDraft, projectId]);
+  const activeProfileSlot = useMemo(() => activeThread
+    ? resolveThreadComposerProfileSlot(projectId, threadTarget, activeThread)
+    : null, [activeThread?.harness, activeThread?.id, projectId, threadTarget]);
   const profileResolvedActiveThread = activeThread && activeProfileSlot
     ? composerProfileController.resolveThread(activeProfileSlot, activeThread)
     : activeThread;
