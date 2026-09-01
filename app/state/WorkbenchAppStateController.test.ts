@@ -1,4 +1,4 @@
-/* No production exports. Real SQLite wards protect revisioned app-state mutation, profile replacement, and structured draft hydration. */
+/* No production exports. Real SQLite wards protect revisioned app-state mutation and structured draft hydration. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -76,45 +76,6 @@ test("a future revision receives a complete snapshot instead of an invalid delta
   const { controller } = await controllerFixture(context);
   const response = controller.read(Number.MAX_SAFE_INTEGER);
   assert.equal(response.kind, "snapshot");
-  controller.close();
-});
-
-test("profile choices replace custom settings with a daemon-owned profile reference", async (context) => {
-  const { controller, daemonRegistrationId } = await controllerFixture(context);
-  await controller.mutate({
-    action: "put",
-    record: {
-      daemonRegistrationId,
-      kind: "newThreadProfilePreference",
-      projectId: "project",
-      value: {
-        kind: "custom",
-        settings: {
-          agentPath: null,
-          agentSource: null,
-          harness: "codex",
-          model: "model",
-          reasoningEffort: "high",
-          serviceTier: "fast",
-        },
-      },
-    },
-  });
-  await controller.mutate({
-    action: "put",
-    record: {
-      daemonRegistrationId,
-      kind: "newThreadProfilePreference",
-      projectId: "project",
-      value: { kind: "daemon-profile", profileId: "profile-id" },
-    },
-  });
-  const snapshot = controller.read();
-  assert.ok(snapshot.kind === "snapshot" && projectedRecords(snapshot).some((record) => (
-    record.kind === "newThreadProfilePreference"
-    && record.value.kind === "daemon-profile"
-    && record.value.profileId === "profile-id"
-  )));
   controller.close();
 });
 

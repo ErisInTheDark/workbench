@@ -40,9 +40,6 @@ export function workbenchClientStateRecordIdentity(
     case "harnessPreference": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind };
     case "modelEffort": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind, model: record.model };
     case "threadServiceTier": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind, threadId: record.threadId };
-    case "newThreadProfilePreference": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId };
-    case "draftProfilePreference": return { daemonRegistrationId: record.daemonRegistrationId, draftId: record.draftId, harness: record.harness, kind: record.kind, projectId: record.projectId };
-    case "threadProfilePreference": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind, threadId: record.threadId };
     case "fileDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, path: record.path, projectId: record.projectId };
     case "composerDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, threadId: record.threadId };
     case "questionnaireDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, requestKey: record.requestKey, threadId: record.threadId };
@@ -169,51 +166,6 @@ export function projectWorkbenchClientStateRows(
       kind: "lastLaunchTarget",
       projectId: row.project_id,
     }, identity);
-  }
-
-  const settings = new Map(rows.composerSettings.map((row) => [row.id, {
-    agentPath: row.agent_path,
-    agentSource: row.agent_source,
-    harness: row.harness,
-    model: row.model,
-    reasoningEffort: row.reasoning_effort,
-    serviceTier: row.service_tier,
-  }] as const));
-  const profileValue = (kind: "custom" | "daemon-profile", customId: string | null, profileId: string | null) => {
-    if (kind === "daemon-profile" && profileId) return { kind, profileId } as const;
-    const custom = customId ? settings.get(customId) : undefined;
-    if (!custom) throw new Error("App profile preference references missing custom settings.");
-    return { kind: "custom" as const, settings: custom };
-  };
-  for (const row of rows.newThreadProfilePreferences) {
-    const identity = {
-      daemonRegistrationId: row.daemon_registration_id,
-      kind: "newThreadProfilePreference" as const,
-      projectId: row.project_id,
-    };
-    if (row.deleted) remove(row.revision, identity);
-    else add(row.revision, 0, { ...identity, value: profileValue(row.kind, row.custom_settings_id, row.daemon_profile_id) });
-  }
-  for (const row of rows.draftProfilePreferences) {
-    const identity = {
-      daemonRegistrationId: row.daemon_registration_id,
-      draftId: row.draft_id,
-      harness: row.harness,
-      kind: "draftProfilePreference" as const,
-      projectId: row.project_id,
-    };
-    if (row.deleted) remove(row.revision, identity);
-    else add(row.revision, 0, { ...identity, value: profileValue(row.kind, row.custom_settings_id, row.daemon_profile_id) });
-  }
-  for (const row of rows.threadProfilePreferences) {
-    const identity = {
-      daemonRegistrationId: row.daemon_registration_id,
-      harness: row.harness,
-      kind: "threadProfilePreference" as const,
-      threadId: row.thread_id,
-    };
-    if (row.deleted) remove(row.revision, identity);
-    else add(row.revision, 0, { ...identity, value: profileValue(row.kind, row.custom_settings_id, row.daemon_profile_id) });
   }
 
   for (const row of rows.fileDrafts) {

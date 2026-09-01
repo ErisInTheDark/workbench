@@ -49,27 +49,10 @@ function recordIdentity(record: WorkbenchClientStateRecord): WorkbenchClientStat
     case "harnessPreference": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind };
     case "modelEffort": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind, model: record.model };
     case "threadServiceTier": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind, threadId: record.threadId };
-    case "newThreadProfilePreference": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId };
-    case "draftProfilePreference": return { daemonRegistrationId: record.daemonRegistrationId, draftId: record.draftId, harness: record.harness, kind: record.kind, projectId: record.projectId };
-    case "threadProfilePreference": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind, threadId: record.threadId };
     case "fileDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, path: record.path, projectId: record.projectId };
     case "composerDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, threadId: record.threadId };
     case "questionnaireDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, requestKey: record.requestKey, threadId: record.threadId };
     case "lastLaunchTarget": return { kind: record.kind };
-  }
-}
-
-function customSettingsId(identity: WorkbenchClientStateIdentity) {
-  const part = (value: string) => encodeURIComponent(value);
-  switch (identity.kind) {
-    case "newThreadProfilePreference":
-      return `new:${part(identity.daemonRegistrationId)}:${part(identity.projectId)}`;
-    case "draftProfilePreference":
-      return `draft:${part(identity.daemonRegistrationId)}:${part(identity.projectId)}:${part(identity.harness)}:${part(identity.draftId)}`;
-    case "threadProfilePreference":
-      return `thread:${part(identity.daemonRegistrationId)}:${part(identity.harness)}:${part(identity.threadId)}`;
-    default:
-      throw new Error("Custom settings require a profile preference identity.");
   }
 }
 
@@ -140,14 +123,11 @@ export default class WorkbenchAppStateController {
     return {
       composerDraftAttachments: this.#repository.query(selectRows(appStateClientTables.composerDraftAttachments)),
       composerDrafts: changed(this.#repository.query(selectRows(appStateClientTables.composerDrafts))),
-      composerSettings: this.#repository.query(selectRows(appStateClientTables.composerSettings)),
-      draftProfilePreferences: changed(this.#repository.query(selectRows(appStateClientTables.draftProfilePreferences))),
       fileDrafts: changed(this.#repository.query(selectRows(appStateClientTables.fileDrafts))),
       globalPreferences: changed(this.#repository.query(selectRows(appStateClientTables.globalPreferences))),
       harnessModelEfforts: changed(this.#repository.query(selectRows(appStateClientTables.harnessModelEfforts))),
       harnessPreferences: changed(this.#repository.query(selectRows(appStateClientTables.harnessPreferences))),
       lastLaunchTarget: changed(this.#repository.query(selectRows(appStateClientTables.lastLaunchTarget))),
-      newThreadProfilePreferences: changed(this.#repository.query(selectRows(appStateClientTables.newThreadProfilePreferences))),
       projectExpandedDirectories: changed(this.#repository.query(selectRows(appStateClientTables.projectExpandedDirectories))),
       projectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectPreferences))),
       projectSidebarFolders: changed(this.#repository.query(selectRows(appStateClientTables.projectSidebarFolders))),
@@ -156,7 +136,6 @@ export default class WorkbenchAppStateController {
       questionnaireDraftAttachments: this.#repository.query(selectRows(appStateClientTables.questionnaireDraftAttachments)),
       questionnaireDraftSelections: this.#repository.query(selectRows(appStateClientTables.questionnaireDraftSelections)),
       questionnaireDrafts: changed(this.#repository.query(selectRows(appStateClientTables.questionnaireDrafts))),
-      threadProfilePreferences: changed(this.#repository.query(selectRows(appStateClientTables.threadProfilePreferences))),
       threadServiceTiers: changed(this.#repository.query(selectRows(appStateClientTables.threadServiceTiers))),
     };
   }
@@ -225,10 +204,6 @@ export default class WorkbenchAppStateController {
           daemon_registration_id: record.daemonRegistrationId, deleted: 0, id: "singleton",
           project_id: record.projectId, revision,
         }, { conflictColumns: ["id"], updateColumns: ["daemon_registration_id", "project_id", "deleted", "revision"] })];
-      case "newThreadProfilePreference":
-      case "draftProfilePreference":
-      case "threadProfilePreference":
-        return this.#putProfile(record, revision);
       case "fileDraft":
         return [upsertRow(appStateTables.fileDrafts, {
           baseline_content: record.value.baselineContent,
@@ -334,10 +309,6 @@ export default class WorkbenchAppStateController {
         return [updateRows(appStateTables.threadServiceTiers, { deleted: 1, revision, service_tier: null }, {
           daemon_registration_id: identity.daemonRegistrationId, harness: identity.harness, thread_id: identity.threadId,
         })];
-      case "newThreadProfilePreference":
-      case "draftProfilePreference":
-      case "threadProfilePreference":
-        return this.#deleteProfile(identity, revision);
       case "fileDraft":
         return [updateRows(appStateTables.fileDrafts, {
           baseline_content: null, content: null, deleted: 1, expected_mtime_ms: null,
@@ -361,72 +332,6 @@ export default class WorkbenchAppStateController {
           }),
         ];
     }
-  }
-
-  #putProfile(
-    record: Extract<WorkbenchClientStateRecord, { kind: "draftProfilePreference" | "newThreadProfilePreference" | "threadProfilePreference" }>,
-    revision: number,
-  ): WorkbenchDatabaseMutation[] {
-    const identity = recordIdentity(record);
-    const settingsId = customSettingsId(identity);
-    const settingsBefore: WorkbenchDatabaseMutation[] = record.value.kind === "custom"
-      ? [upsertRow(appStateTables.composerSettings, {
-        agent_path: record.value.settings.agentPath,
-        agent_source: record.value.settings.agentSource,
-        harness: record.value.settings.harness,
-        id: settingsId,
-        model: record.value.settings.model,
-        reasoning_effort: record.value.settings.reasoningEffort,
-        revision,
-        service_tier: record.value.settings.serviceTier,
-      }, { conflictColumns: ["id"], updateColumns: ["agent_path", "agent_source", "harness", "model", "reasoning_effort", "service_tier", "revision"] })]
-      : [];
-    const cleanupAfter: WorkbenchDatabaseMutation[] = record.value.kind === "daemon-profile"
-      ? [deleteRows(appStateTables.composerSettings, { id: settingsId })]
-      : [];
-    const values = {
-      custom_settings_id: record.value.kind === "custom" ? settingsId : null,
-      daemon_profile_id: record.value.kind === "daemon-profile" ? record.value.profileId : null,
-      daemon_registration_id: record.daemonRegistrationId,
-      deleted: 0 as const,
-      kind: record.value.kind,
-      revision,
-    };
-    if (record.kind === "newThreadProfilePreference") {
-      return [...settingsBefore, upsertRow(appStateTables.newThreadProfilePreferences, {
-        ...values, project_id: record.projectId,
-      }, { conflictColumns: ["daemon_registration_id", "project_id"], updateColumns: ["kind", "custom_settings_id", "daemon_profile_id", "deleted", "revision"] }), ...cleanupAfter];
-    }
-    if (record.kind === "draftProfilePreference") {
-      return [...settingsBefore, upsertRow(appStateTables.draftProfilePreferences, {
-        ...values, draft_id: record.draftId, harness: record.harness, project_id: record.projectId,
-      }, { conflictColumns: ["daemon_registration_id", "project_id", "harness", "draft_id"], updateColumns: ["kind", "custom_settings_id", "daemon_profile_id", "deleted", "revision"] }), ...cleanupAfter];
-    }
-    return [...settingsBefore, upsertRow(appStateTables.threadProfilePreferences, {
-      ...values, harness: record.harness, thread_id: record.threadId,
-    }, { conflictColumns: ["daemon_registration_id", "harness", "thread_id"], updateColumns: ["kind", "custom_settings_id", "daemon_profile_id", "deleted", "revision"] }), ...cleanupAfter];
-  }
-
-  #deleteProfile(
-    identity: Extract<WorkbenchClientStateIdentity, { kind: "draftProfilePreference" | "newThreadProfilePreference" | "threadProfilePreference" }>,
-    revision: number,
-  ): WorkbenchDatabaseMutation[] {
-    const changes = { custom_settings_id: null, daemon_profile_id: null, deleted: 1 as const, revision };
-    const cleanup = deleteRows(appStateTables.composerSettings, { id: customSettingsId(identity) });
-    if (identity.kind === "newThreadProfilePreference") {
-      return [updateRows(appStateTables.newThreadProfilePreferences, changes, {
-        daemon_registration_id: identity.daemonRegistrationId, project_id: identity.projectId,
-      }), cleanup];
-    }
-    if (identity.kind === "draftProfilePreference") {
-      return [updateRows(appStateTables.draftProfilePreferences, changes, {
-        daemon_registration_id: identity.daemonRegistrationId, draft_id: identity.draftId,
-        harness: identity.harness, project_id: identity.projectId,
-      }), cleanup];
-    }
-    return [updateRows(appStateTables.threadProfilePreferences, changes, {
-      daemon_registration_id: identity.daemonRegistrationId, harness: identity.harness, thread_id: identity.threadId,
-    }), cleanup];
   }
 
   #deleteQuestionnaireChildren(identity: Extract<

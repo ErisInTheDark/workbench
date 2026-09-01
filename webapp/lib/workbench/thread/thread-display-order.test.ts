@@ -59,7 +59,7 @@ function draft(id: string, createdAt: number, options: { pinned?: boolean; snooz
   return {
     activityAt: createdAt,
     draft: {
-      agent: null, attachments: [], clientUpdatedAt: createdAt, composerSettings: {}, createdAt,
+      agent: null, attachments: [], clientUpdatedAt: createdAt, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt,
       draftId: id, harness: "codex", model: null, profileId: null, projectId: "project", prompt: id,
       reasoningEffort: null, serviceTier: null, updatedAt: createdAt,
     },

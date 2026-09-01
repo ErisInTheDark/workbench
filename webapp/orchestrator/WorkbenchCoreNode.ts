@@ -162,6 +162,10 @@ function createWorkbenchCoreFeature(
     gitArc,
     nativeFiles: new WorkbenchNativeFileController(projectCatalog),
     profiles: profileStore,
+    profileTargets: {
+      readComposerProfileTarget: async (slot) => await requireThreadState().controller.readComposerProfileTarget(slot),
+      setComposerProfileTarget: async (slot, selection) => await requireThreadState().controller.setComposerProfileTarget(slot, selection),
+    },
     projects: projectCatalog,
     settings: new WorkbenchServerSettings(),
   });

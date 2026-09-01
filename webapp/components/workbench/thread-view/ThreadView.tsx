@@ -760,13 +760,13 @@ export default memo(function ThreadView ({
     getActiveGitArcSelection,
     getActiveGitArcSelection,
   );
-  const activeProfileSlot: WorkbenchComposerProfileSlot | null = activeThread
+  const activeProfileSlot = useMemo<WorkbenchComposerProfileSlot | null>(() => activeThread
     ? activeThread.isDraft
       ? activeThread.id.startsWith("draft:")
         ? { draftId: activeThread.id.slice("draft:".length), harness: activeThread.harness, kind: "draft", projectId }
         : { kind: "new-thread", projectId }
-      : { harness: activeThread.harness, kind: "thread", threadId: activeThread.id }
-    : null;
+      : { harness: activeThread.harness, kind: "thread", projectId, threadId: activeThread.id }
+    : null, [activeThread?.harness, activeThread?.id, activeThread?.isDraft, projectId]);
   const profileResolvedActiveThread = activeThread && activeProfileSlot
     ? composerProfileController.resolveThread(activeProfileSlot, activeThread)
     : activeThread;
@@ -781,6 +781,9 @@ export default memo(function ThreadView ({
     }
     : profileResolvedActiveThread;
   void composerProfileSnapshot;
+  useEffect(() => {
+    if (activeProfileSlot) void composerProfileController.loadSelection(activeProfileSlot);
+  }, [activeProfileSlot, composerProfileController]);
   const activeThreadRenderProjection = useMemo(
     () => activeThread ? projectThreadRenderTurns(activeThread) : null,
     [activeThread],
@@ -1191,6 +1194,14 @@ export default memo(function ThreadView ({
       throw new ThreadMessageNotSentError();
     }
 
+    await composerProfileController.synchronizeSelection(activeProfileSlot, {
+      agentPath: resolvedActiveThread.agentPath,
+      agentSource: null,
+      harness: resolvedActiveThread.harness,
+      model: resolvedActiveThread.model ?? "",
+      reasoningEffort: resolvedActiveThread.reasoningEffort,
+      serviceTier: resolvedActiveThread.serviceTier === "fast" ? "fast" : null,
+    });
     const payload = await onSendMessage(resolvedActiveThread, input, {
       ...options,
       composerProfileSlot: activeProfileSlot,
@@ -1202,7 +1213,7 @@ export default memo(function ThreadView ({
         [resolvedActiveThread.id]: payload,
       }));
     }
-  }, [activeProfileSlot, onSendMessage, resolvedActiveThread, thread.id]);
+  }, [activeProfileSlot, composerProfileController, onSendMessage, resolvedActiveThread, thread.id]);
 
   const handleStopThread = useCallback(async () => {
     if (!activeThread) {
@@ -1334,19 +1345,6 @@ export default memo(function ThreadView ({
     });
   }, [onThreadSettingsChange, thread.id]);
 
-  useEffect(() => {
-    if (!activeThread || !activeProfileSlot) {
-      return;
-    }
-    const selection = composerProfileController.getSelection(activeProfileSlot);
-    if (selection.kind !== "custom" || !selection.pendingSettings) {
-      return;
-    }
-
-    handleThreadSettingsChange(activeThread.id, selection.pendingSettings);
-    composerProfileController.acknowledgePendingSettings(activeProfileSlot);
-  }, [activeProfileSlot, activeThread, composerProfileController, composerProfileSnapshot, handleThreadSettingsChange]);
-
   const syncCodeBlockWrapDomState = useCallback((nextValue: boolean) => {
     const root = threadViewRef.current;
     if (!root) {
@@ -1437,8 +1435,9 @@ export default memo(function ThreadView ({
     const harnesses: WorkbenchHarness[] = ["codex", "copilot", "opencode"];
     const nextHarness = harnesses[(harnesses.indexOf(activeThread.harness) + 1) % harnesses.length] ?? "codex";
     if (activeProfileSlot && resolvedActiveThread?.model && composerProfileController.getSelection(activeProfileSlot).kind === "profile") {
-      handleThreadSettingsChange(activeThread.id, { agentPath: resolvedActiveThread.agentPath, agentSource: null, harness: resolvedActiveThread.harness, model: resolvedActiveThread.model, reasoningEffort: resolvedActiveThread.reasoningEffort, serviceTier: resolvedActiveThread.serviceTier === "fast" ? "fast" : null });
-      composerProfileController.selectCustom(activeProfileSlot);
+      const settings = { agentPath: resolvedActiveThread.agentPath, agentSource: null, harness: resolvedActiveThread.harness, model: resolvedActiveThread.model, reasoningEffort: resolvedActiveThread.reasoningEffort, serviceTier: resolvedActiveThread.serviceTier === "fast" ? "fast" as const : null };
+      handleThreadSettingsChange(activeThread.id, settings);
+      composerProfileController.selectCustom(activeProfileSlot, settings);
     }
     onDraftHarnessChange(nextHarness);
   };

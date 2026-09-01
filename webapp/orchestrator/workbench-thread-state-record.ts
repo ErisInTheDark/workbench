@@ -9,8 +9,10 @@ import { z } from "zod";
 
 import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
 import {
+  WorkbenchComposerProfileSelectionSchema,
   WorkbenchHarnessSchema,
   WorkbenchThreadSidebarEntrySchema,
+  type WorkbenchComposerProfileSelectionState,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadLifecycle,
 } from "../lib/workbench/thread/thread-state";
@@ -22,6 +24,7 @@ type WorkbenchProviderThreadEntry = WithoutWaiting<WorkbenchProviderSidebarEntry
 export type WorkbenchThreadStateRecord = WorkbenchProviderThreadEntry & {
   gitHistoryCleanedAt: number | null;
   mcpGeneration: string | null;
+  profile: WorkbenchComposerProfileSelectionState | null;
   providerObserved: boolean;
   settledAt: number | null;
 };
@@ -119,9 +122,10 @@ function storedRecordDefaults(
 
 function internalFields(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { gitHistoryCleanedAt: null, mcpGeneration: null, providerObserved: true, settledAt: null };
+    return { gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, providerObserved: true, settledAt: null };
   }
   const record = value as Record<string, unknown>;
+  const profile = WorkbenchComposerProfileSelectionSchema.safeParse(record.profile);
   return {
     gitHistoryCleanedAt: typeof record.gitHistoryCleanedAt === "number" && Number.isFinite(record.gitHistoryCleanedAt) && record.gitHistoryCleanedAt >= 0
       ? Math.trunc(record.gitHistoryCleanedAt)
@@ -129,6 +133,7 @@ function internalFields(value: unknown) {
     mcpGeneration: typeof record.mcpGeneration === "string" && record.mcpGeneration.trim()
       ? record.mcpGeneration.trim()
       : null,
+    profile: profile.success ? profile.data : null,
     providerObserved: record.providerObserved !== false,
     settledAt: typeof record.settledAt === "number" && Number.isFinite(record.settledAt) && record.settledAt >= 0
       ? Math.trunc(record.settledAt)
@@ -140,7 +145,7 @@ export function safeParseWorkbenchThreadStateEntry(value: unknown):
   | { data: WorkbenchThreadStateEntry; success: true }
   | { error: unknown; success: false } {
   const publicCandidate = value && typeof value === "object" && !Array.isArray(value)
-    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, settledAt: _settledAt, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
+    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
     : value;
   const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(publicCandidate);
   if (!parsed.success) return { error: parsed.error, success: false };
@@ -160,7 +165,7 @@ export function conformStoredWorkbenchThreadStateRecord(
   projectId: string,
 ): StoredWorkbenchThreadStateRecordConformance {
   const publicCandidate = value && typeof value === "object" && !Array.isArray(value)
-    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, settledAt: _settledAt, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
+    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
     : value;
   const locator = StoredRecordLocatorSchema.safeParse(publicCandidate);
   if (!locator.success) return { error: locator.error, success: false };
@@ -184,6 +189,6 @@ export function conformStoredWorkbenchThreadStateRecord(
 export function projectWorkbenchThreadStateEntry(entry: WorkbenchThreadStateEntry): WorkbenchThreadSidebarEntry | null {
   if (entry.entryKind === "draft") return entry;
   if (!entry.providerObserved) return null;
-  const { gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, providerObserved: _providerObserved, settledAt: _settledAt, ...projected } = entry;
+  const { gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, ...projected } = entry;
   return WorkbenchThreadSidebarEntrySchema.parse(projected);
 }

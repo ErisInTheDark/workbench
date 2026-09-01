@@ -735,9 +735,9 @@ export default function ThreadComposer ({
     nextSettings: WorkbenchComposerSettings,
     applyCustomChange: () => void,
   ) => {
-    if (profileSelection.kind === "profile" && profileSlot && onThreadSettingsChange) {
+    if (profileSlot && onThreadSettingsChange) {
       onThreadSettingsChange(thread.id, nextSettings);
-      composerProfileController.selectCustom(profileSlot);
+      composerProfileController.selectCustom(profileSlot, nextSettings);
       return;
     }
 

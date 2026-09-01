@@ -85,7 +85,7 @@
  * - WorkbenchSubagentSummary: subagent summary alias.
  * - WorkbenchSubagentPage: paginated subagent response.
  * - WorkbenchComposerProfileSlot: composer profile slot identity.
- * - WorkbenchComposerProfileSelection: composer profile selection.
+ * - WorkbenchComposerProfileSelection/WorkbenchComposerProfileTargetSelection: unloaded browser selection and exact durable target selection.
  * - WorkbenchListModelsOptions: model-list options.
  * - ChangeSummary: file-change summary.
  * - ThreadSummary: thread-list summary.
@@ -767,11 +767,15 @@ export interface WorkbenchSubagentPage {
 export type WorkbenchComposerProfileSlot =
   | { draftId: string; harness: WorkbenchHarness; kind: "draft"; projectId: string }
   | { kind: "new-thread"; projectId: string }
-  | { harness: WorkbenchHarness; kind: "thread"; threadId: string };
+  | { harness: WorkbenchHarness; kind: "thread"; projectId: string; threadId: string };
 
 export type WorkbenchComposerProfileSelection =
-  | { kind: "custom"; pendingSettings?: WorkbenchComposerSettings }
-  | { kind: "profile"; profileId: string };
+  | { kind: "custom"; settings?: WorkbenchComposerSettings }
+  | { kind: "profile"; profileId: string; settings: WorkbenchComposerSettings };
+
+export type WorkbenchComposerProfileTargetSelection =
+  | { kind: "custom"; settings: WorkbenchComposerSettings }
+  | { kind: "profile"; profileId: string; settings: WorkbenchComposerSettings };
 
 export interface WorkbenchListModelsOptions {
   forceRefresh?: boolean;

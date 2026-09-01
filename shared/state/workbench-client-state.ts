@@ -5,7 +5,6 @@
  * - WorkbenchClientStateMutation: focused state mutation payload admitted by app state routes. Keywords: app, state, mutation.
  * - workbenchClientStateMutationPath/workbenchClientStateMutationKinds: shared focused-route registry for browser and app. Keywords: app, state, HTTP, route.
  * - WORKBENCH_BROWSER_STATE_HEADER/isWorkbenchBrowserStateId: browser namespace HTTP boundary. Keywords: browser, state, UUID, HTTP.
- * - WorkbenchComposerSettingsValue: exact durable custom composer settings. Keywords: composer, profile, settings.
  */
 import { appStateClientTables } from "./workbench-app-state-schema.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
@@ -14,15 +13,6 @@ export type WorkbenchHarnessValue = "codex" | "copilot" | "opencode";
 export type WorkbenchThemeValue = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamilyValue = "mono" | "sans" | "serif";
 export type WorkbenchFileOpenBehaviorValue = "vscode" | "workbench" | "workbench-or-vscode";
-
-export interface WorkbenchComposerSettingsValue {
-  agentPath: string | null;
-  agentSource: "library" | "project" | null;
-  harness: WorkbenchHarnessValue;
-  model: string;
-  reasoningEffort: string | null;
-  serviceTier: "fast" | null;
-}
 
 export type WorkbenchGlobalPreference =
   | { key: "composerSpellCheck" | "editorSpellCheck" | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadLiveActivityOpen"; value: boolean }
@@ -85,10 +75,6 @@ export interface WorkbenchQuestionnaireDraftValue {
   updatedAt: number;
 }
 
-export type WorkbenchProfilePreferenceValue =
-  | { kind: "custom"; settings: WorkbenchComposerSettingsValue }
-  | { kind: "daemon-profile"; profileId: string };
-
 export type WorkbenchClientStateRecord =
   | { kind: "globalPreference"; preference: WorkbenchGlobalPreference }
   | (ProjectScoped & { kind: "projectPreference"; preference: WorkbenchProjectPreference })
@@ -98,9 +84,6 @@ export type WorkbenchClientStateRecord =
   | (DaemonScoped & { agentPath: string | null; harness: WorkbenchHarnessValue; kind: "harnessPreference"; model: string | null; serviceTier: "fast" | null })
   | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "modelEffort"; model: string; reasoningEffort: string | null })
   | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "threadServiceTier"; serviceTier: "fast" | null; threadId: string })
-  | (ProjectScoped & { kind: "newThreadProfilePreference"; value: WorkbenchProfilePreferenceValue })
-  | (ProjectScoped & { draftId: string; harness: WorkbenchHarnessValue; kind: "draftProfilePreference"; value: WorkbenchProfilePreferenceValue })
-  | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "threadProfilePreference"; threadId: string; value: WorkbenchProfilePreferenceValue })
   | (ProjectScoped & { kind: "fileDraft"; path: string; value: WorkbenchFileDraftValue })
   | (ProjectScoped & { kind: "composerDraft"; threadId: string; value: WorkbenchComposerDraftValue })
   | (ProjectScoped & { kind: "questionnaireDraft"; requestKey: string; threadId: string; value: WorkbenchQuestionnaireDraftValue })
@@ -115,9 +98,6 @@ export type WorkbenchClientStateIdentity =
   | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "harnessPreference" })
   | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "modelEffort"; model: string })
   | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "threadServiceTier"; threadId: string })
-  | (ProjectScoped & { kind: "newThreadProfilePreference" })
-  | (ProjectScoped & { draftId: string; harness: WorkbenchHarnessValue; kind: "draftProfilePreference" })
-  | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "threadProfilePreference"; threadId: string })
   | (ProjectScoped & { kind: "fileDraft"; path: string })
   | (ProjectScoped & { kind: "composerDraft"; threadId: string })
   | (ProjectScoped & { kind: "questionnaireDraft"; requestKey: string; threadId: string })
@@ -150,19 +130,16 @@ export function isWorkbenchBrowserStateId(value: string): boolean {
 
 const mutationPathByKind = {
   composerDraft: "/api/workbench-client-state/composer-draft",
-  draftProfilePreference: "/api/workbench-client-state/profile-preference",
   expandedDirectory: "/api/workbench-client-state/expanded-directory",
   fileDraft: "/api/workbench-client-state/file-draft",
   globalPreference: "/api/workbench-client-state/global-preference",
   harnessPreference: "/api/workbench-client-state/harness-preference",
   lastLaunchTarget: "/api/workbench-client-state/launch-target",
   modelEffort: "/api/workbench-client-state/model-effort",
-  newThreadProfilePreference: "/api/workbench-client-state/profile-preference",
   projectPreference: "/api/workbench-client-state/project-preference",
   questionnaireDraft: "/api/workbench-client-state/questionnaire-draft",
   sidebarFolder: "/api/workbench-client-state/sidebar-folder",
   sidebarPreference: "/api/workbench-client-state/sidebar-preference",
-  threadProfilePreference: "/api/workbench-client-state/profile-preference",
   threadServiceTier: "/api/workbench-client-state/thread-service-tier",
 } as const satisfies Record<WorkbenchClientStateRecord["kind"], string>;
 

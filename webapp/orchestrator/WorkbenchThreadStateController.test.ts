@@ -7,7 +7,7 @@ import test from "node:test";
 import WorkbenchThreadStateControllerOwner, { type WorkbenchThreadStateControllerOptions } from "./WorkbenchThreadStateController";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import type { WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
-import type { WorkbenchReloadDirtSnapshot } from "../lib/types";
+import type { WorkbenchComposerProfileTargetSelection, WorkbenchReloadDirtSnapshot } from "../lib/types";
 import { getProjectQualifiedThreadDisplayKey } from "../lib/workbench/thread/thread-display-layout";
 import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 
@@ -84,6 +84,15 @@ function pinnedRecord(threadId: string, title: string) {
     title,
   };
 }
+
+const EMPTY_CODEX_SETTINGS = {
+  agentPath: null,
+  agentSource: null,
+  harness: "codex" as const,
+  model: "",
+  reasoningEffort: null,
+  serviceTier: null,
+};
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, message: string) {
   const deadline = Date.now() + 1_000;
@@ -578,7 +587,7 @@ test("project-local and old central thread state stay read-only until a real mut
   const fileName = (projectId: string) => `${encodeTranscriptPathSegment(projectId)}.json`;
   const statePath = (root: string, projectId: string) => path.join(root, ".workbench", "runtime", "thread-state", fileName(projectId));
   const draft = (projectId: string, draftId: string, prompt: string) => ({
-    agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: {}, createdAt: 1,
+    agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 1,
     draftId, harness: "codex" as const, model: null, profileId: null, projectId, prompt,
     reasoningEffort: null, serviceTier: null, updatedAt: 1,
   });
@@ -641,7 +650,7 @@ test("project-local and old central thread state stay read-only until a real mut
     projectId: "migrated",
   });
   const lazilyWritten = JSON.parse(await fs.readFile(statePath(storageRoot, "migrated"), "utf8")) as { drafts: Array<{ pinned?: boolean }>; version?: number };
-  assert.equal(lazilyWritten.version, 3);
+  assert.equal(lazilyWritten.version, 4);
   assert.equal(lazilyWritten.drafts[0]?.pinned, true);
   assert.deepEqual(JSON.parse(await fs.readFile(statePath(legacyRoot, "migrated"), "utf8")), { drafts: [migratedDraft], threads: [], version: 1 });
   await controller.dispose();
@@ -784,6 +793,108 @@ test("stored state repairs invalid leaves without erasing thread or draft siblin
   await fs.rm(root, { force: true, recursive: true });
 });
 
+test("daemon thread state owns profile migration, draft defaults, materialization, and reconciliation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-profiles-"));
+  const stateFile = threadStatePath(root, "project");
+  const draftId = "11111111-1111-4111-8111-111111111111";
+  await fs.mkdir(path.dirname(stateFile), { recursive: true });
+  await fs.writeFile(stateFile, JSON.stringify({
+    drafts: [{
+      agent: "legacy-agent.md",
+      attachments: [],
+      clientUpdatedAt: 1,
+      composerSettings: {},
+      createdAt: 1,
+      draftId,
+      harness: "codex",
+      model: "legacy-model",
+      profileId: "legacy-profile",
+      projectId: "project",
+      prompt: "Profile draft",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      updatedAt: 2,
+    }],
+    records: [],
+    version: 3,
+  }), "utf8");
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+  });
+  await controller.open("observer", "project");
+
+  const migrated = {
+    kind: "profile",
+    profileId: "legacy-profile",
+    settings: {
+      agentPath: "legacy-agent.md",
+      agentSource: null,
+      harness: "codex",
+      model: "legacy-model",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+    },
+  } satisfies WorkbenchComposerProfileTargetSelection;
+  assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId: "project" }), migrated);
+  assert.deepEqual(await controller.readComposerProfileTarget({ draftId, harness: "codex", kind: "draft", projectId: "project" }), migrated);
+
+  const selected = {
+    kind: "profile",
+    profileId: "current-profile",
+    settings: {
+      agentPath: ".agents/agents/project.md",
+      agentSource: "project",
+      harness: "codex",
+      model: "current-model",
+      reasoningEffort: "medium",
+      serviceTier: null,
+    },
+  } satisfies WorkbenchComposerProfileTargetSelection;
+  assert.equal(
+    await controller.setComposerProfileTarget({ draftId, harness: "codex", kind: "draft", projectId: "project" }, selected),
+    true,
+  );
+  assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId: "project" }), selected);
+
+  await controller.acceptIntent("observer", {
+    draftId,
+    harness: "codex",
+    projectId: "project",
+    threadId: "materialized",
+    title: "Profile draft",
+    turnId: "turn",
+  });
+  const providerEntry: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> = {
+    activityAt: 3,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "materialized" },
+    lifecycle: { agent: { agentStatus: "working", turnId: "turn" }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Provider title",
+  };
+  await controller.ensureProviderEntry("project", providerEntry);
+  const threadSlot = { harness: "codex" as const, kind: "thread" as const, projectId: "project", threadId: "materialized" };
+  assert.deepEqual(await controller.readComposerProfileTarget(threadSlot), selected);
+
+  const stored = JSON.parse(await fs.readFile(stateFile, "utf8")) as {
+    drafts: unknown[];
+    newThreadProfile: WorkbenchComposerProfileTargetSelection;
+    records: Array<{ identity: { threadId: string }; profile: WorkbenchComposerProfileTargetSelection | null }>;
+    version: number;
+  };
+  assert.equal(stored.version, 4);
+  assert.deepEqual(stored.drafts, []);
+  assert.deepEqual(stored.newThreadProfile, selected);
+  assert.deepEqual(stored.records.find((record) => record.identity.threadId === "materialized")?.profile, selected);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
 test("an unidentified stored record cannot reconcile or overwrite its source file", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-unidentified-"));
   const stateFile = threadStatePath(root, "project");
@@ -901,7 +1012,7 @@ test("legacy settled thread metadata receives a fresh persisted retention grace 
   assert.equal(await controller.getMcpGeneration("project", "codex", "legacy-thread"), "legacy:4");
   assert.equal((await controller.getSnapshot("project")).entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "legacy-thread"), false);
   const migrated = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ gitHistoryCleanedAt?: number | null; mcpGeneration?: string | null; settledAt?: number | null }>; version?: number };
-  assert.equal(migrated.version, 3);
+  assert.equal(migrated.version, 4);
   assert.deepEqual(migrated.records.map(({ gitHistoryCleanedAt, mcpGeneration, settledAt }) => ({ gitHistoryCleanedAt, mcpGeneration, settledAt })), [{ gitHistoryCleanedAt: null, mcpGeneration: "legacy:4", settledAt: 1_234 }]);
   await controller.ensureProviderEntry("project", {
     activityAt: 1,
@@ -912,7 +1023,7 @@ test("legacy settled thread metadata receives a fresh persisted retention grace 
     title: "Legacy thread",
   });
   const stored = JSON.parse(await fs.readFile(statePath, "utf8")) as { records: Array<{ gitHistoryCleanedAt?: number | null; mcpGeneration?: string | null; providerObserved?: boolean; settledAt?: number | null }>; version?: number };
-  assert.equal(stored.version, 3);
+  assert.equal(stored.version, 4);
   assert.deepEqual(stored.records.map(({ gitHistoryCleanedAt, mcpGeneration, providerObserved, settledAt }) => ({ gitHistoryCleanedAt, mcpGeneration, providerObserved, settledAt })), [{ gitHistoryCleanedAt: null, mcpGeneration: "legacy:4", providerObserved: true, settledAt: 1_234 }]);
   await controller.dispose();
   await fs.rm(root, { force: true, recursive: true });
@@ -1254,7 +1365,7 @@ test("draft priority survives autosave and controller restart without a storage 
   const original = createController();
   await original.open("observer", "project");
   const value = {
-    agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: {}, createdAt: 1,
+    agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 1,
     draftId, harness: "codex" as const, model: null, profileId: null, projectId: "project", prompt: "Priority draft",
     reasoningEffort: null, serviceTier: null, updatedAt: 1,
   };
@@ -1272,7 +1383,7 @@ test("draft priority survives autosave and controller restart without a storage 
   assert.equal(entry?.entryKind === "draft" ? entry.draft.prompt : null, "Updated priority draft");
   assert.deepEqual(entry?.entryKind === "draft" ? entry.metadata : null, { archived: false, pinned: true, snoozed: true });
   const stored = JSON.parse(await fs.readFile(path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`), "utf8")) as { drafts: Array<{ pinned?: boolean; snoozed?: boolean }>; version?: number };
-  assert.equal(stored.version, 3);
+  assert.equal(stored.version, 4);
   assert.deepEqual(stored.drafts.map(({ pinned, snoozed }) => ({ pinned, snoozed })), [{ pinned: true, snoozed: true }]);
   await reopened.dispose();
 });
@@ -1305,7 +1416,7 @@ test("accepted intent survives provider discovery lag and releases after its lif
   const draftId = "00000000-0000-4000-8000-000000000001";
   await controller.handleRequest("observer", {
     draft: {
-      agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: {}, createdAt: 1,
+      agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 1,
       draftId, harness: "codex", model: null, profileId: null, projectId: "project",
       prompt: "First user message", reasoningEffort: null, serviceTier: null, updatedAt: 2,
     },
@@ -1908,7 +2019,7 @@ test("thread folders persist across restart and reconcile members that leave the
   const draftId = "00000000-0000-4000-8000-000000000031";
   const drafted = await controller.handleRequest("observer", {
     draft: {
-      agent: null, attachments: [], clientUpdatedAt: 3, composerSettings: {}, createdAt: 3,
+      agent: null, attachments: [], clientUpdatedAt: 3, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 3,
       draftId, harness: "codex", model: null, profileId: null, projectId: "project", prompt: "folder draft",
       reasoningEffort: null, serviceTier: null, updatedAt: 3,
     },

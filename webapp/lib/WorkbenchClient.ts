@@ -679,11 +679,11 @@ export async function WorkbenchClient(
     options: { entries?: readonly WorkbenchThreadSidebarEntry[]; project?: WorkbenchProjectOption } = {},
   ) {
     const draft = {
-      ...threadClient.createThread(entry.draft.harness, `draft:${entry.draft.draftId}`, options),
-      agentPath: entry.draft.agent,
-      model: entry.draft.model,
-      reasoningEffort: entry.draft.reasoningEffort,
-      serviceTier: entry.draft.serviceTier,
+      ...threadClient.createThread(entry.draft.composerSettings.harness, `draft:${entry.draft.draftId}`, options),
+      agentPath: entry.draft.composerSettings.agentPath,
+      model: entry.draft.composerSettings.model || null,
+      reasoningEffort: entry.draft.composerSettings.reasoningEffort,
+      serviceTier: entry.draft.composerSettings.serviceTier,
     };
     applyThreadPayloadToCurrentView(draft);
     emitExplorerStateChange();

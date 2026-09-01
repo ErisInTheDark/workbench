@@ -79,7 +79,7 @@ import {
 } from "../lib/workbench/navigation/workbench-route";
 import ProjectTreeFileIndex from "../lib/workbench/project/ProjectTreeFileIndex";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
-import { createComposerProfilePersistence } from "../lib/workbench/state/composer-profile-api";
+import { createComposerProfilePersistence, createComposerProfileTargetPersistence } from "../lib/workbench/state/composer-profile-api";
 import {
   getPreferredMobilePane,
   MOBILE_MEDIA_QUERY,
@@ -503,7 +503,7 @@ function pruneResolvedUserInputRequestKeys (
 export default function Workbench ({ appRuntime = null }: { appRuntime?: WorkbenchAppRuntimeStore | null }) {
   const clientStateController = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
-  const [composerProfileController] = useState(() => new WorkbenchComposerProfileController(clientStateController));
+  const [composerProfileController] = useState(() => new WorkbenchComposerProfileController());
   const { navigateToRoute, route } = useWorkbenchRoute();
   const currentRouteRef = useRef<WorkbenchRoute>(route);
   currentRouteRef.current = route;
@@ -523,6 +523,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [controls]);
   useEffect(() => {
     if (!controls) return;
+    composerProfileController.initializeTargetPersistence(createComposerProfileTargetPersistence(controls.daemon));
     void composerProfileController.initializePersistence(createComposerProfilePersistence(controls.daemon));
     return () => { composerProfileController.dispose(); };
   }, [composerProfileController, controls]);
@@ -1578,34 +1579,44 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       ? { draftId, harness: currentThread?.harness ?? existing?.harness ?? "codex", kind: "draft" as const, projectId: selectedThreadProjectId }
       : { kind: "new-thread" as const, projectId: selectedThreadProjectId };
     const profileSelection = composerProfileController.getSelection(profileSlot);
-    const harness = currentThread?.harness ?? existing?.harness ?? "codex";
-    const model = currentThread?.model ?? existing?.model ?? null;
+    const customSettings: WorkbenchComposerSettings = currentThread
+      ? {
+        agentPath: currentThread.agentPath,
+        agentSource: null,
+        harness: currentThread.harness,
+        model: currentThread.model ?? "",
+        reasoningEffort: currentThread.reasoningEffort,
+        serviceTier: currentThread.serviceTier === "fast" ? "fast" : null,
+      }
+      : existing?.composerSettings ?? {
+        agentPath: null,
+        agentSource: null,
+        harness: "codex",
+        model: "",
+        reasoningEffort: null,
+        serviceTier: null,
+      };
+    const settings = composerProfileController.resolveSettings(profileSlot, customSettings) ?? customSettings;
+    const model = settings.model || null;
     const threadDraft: WorkbenchThreadDraft = {
-      agent: currentThread?.agentPath ?? existing?.agent ?? null,
+      agent: settings.agentPath,
       attachments: draft.attachments.map((attachment) => ({ id: attachment.id, url: attachment.url })) as WorkbenchThreadDraft["attachments"],
       clientUpdatedAt: now,
-      composerSettings: {
-        agentPath: currentThread?.agentPath ?? null,
-        agentSource: null,
-        harness,
-        model: model ?? "",
-        reasoningEffort: currentThread?.reasoningEffort ?? null,
-        serviceTier: currentThread?.serviceTier === "fast" ? "fast" : null,
-      },
+      composerSettings: settings,
       createdAt: existing?.createdAt ?? now,
       draftId,
-      harness,
+      harness: settings.harness,
       model,
-      profileId: profileSelection.kind === "profile" ? profileSelection.profileId : existing?.profileId ?? null,
+      profileId: profileSelection.kind === "profile" ? profileSelection.profileId : null,
       projectId: selectedThreadProjectId,
       prompt: draft.text,
-      reasoningEffort: currentThread?.reasoningEffort ?? existing?.reasoningEffort ?? null,
-      serviceTier: currentThread?.serviceTier ?? existing?.serviceTier ?? null,
+      reasoningEffort: settings.reasoningEffort,
+      serviceTier: settings.serviceTier,
       updatedAt: now,
     };
     controls.editThreadDraft(threadDraft, target.kind === "new" && target.folderId ? { folderId: target.folderId } : undefined);
     if (target.kind === "new") {
-      composerProfileController.materializeDraftSelection(profileSlot, draftId, harness, selectedThreadProjectId);
+      composerProfileController.materializeDraftSelection(profileSlot, draftId, settings.harness, selectedThreadProjectId);
       navigateToRoute(createThreadRoute(selectedThreadProjectId, { draftId, kind: "draft" }), { replace: true });
     }
   }, [

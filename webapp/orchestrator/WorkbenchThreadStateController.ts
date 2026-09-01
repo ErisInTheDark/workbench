@@ -5,8 +5,9 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
-import type { WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot } from "../lib/types";
+import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot } from "../lib/types";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import { mergeQuestionnaireHistoryEntries } from "../lib/workbench/thread/thread-questionnaire-identity";
@@ -33,6 +34,9 @@ import {
 import {
   areAllUnsnoozedThreadEntriesSettlementReady,
   createWorkbenchProjectThreadSummary,
+  WorkbenchComposerProfileSelectionSchema,
+  WorkbenchComposerSettingsSchema,
+  WorkbenchHarnessSchema,
   WorkbenchThreadDraftSchema,
   WorkbenchThreadSidebarEntrySchema,
   WorkbenchThreadStateRequestSchema,
@@ -44,6 +48,7 @@ import {
   reduceWorkbenchThreadLifecycle,
   resolveWorkbenchThreadTitle,
   type WorkbenchLifecycleEvent,
+  type WorkbenchComposerProfileSelectionState,
   type WorkbenchDurableQuestionnaire,
   type WorkbenchQuestionnaireHistoryEntryState,
   type WorkbenchThreadLifecycle,
@@ -76,7 +81,8 @@ type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: bo
 type ProjectObservation = { pinnedThreadKeys: Set<string>; projectId: string; version: 1 | 2 | 3 };
 interface StoredProjectStateV1 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
 interface StoredProjectStateV2 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
-interface StoredProjectState { displayOrder?: WorkbenchThreadDisplayOrder; drafts: StoredThreadDraft[]; records: WorkbenchThreadStateRecord[]; version: 3 }
+interface StoredProjectStateV3 { displayOrder?: WorkbenchThreadDisplayOrder; drafts: StoredThreadDraft[]; records: WorkbenchThreadStateRecord[]; version: 3 }
+interface StoredProjectState { displayOrder?: WorkbenchThreadDisplayOrder; drafts: StoredThreadDraft[]; newThreadProfile: WorkbenchComposerProfileSelectionState | null; records: WorkbenchThreadStateRecord[]; version: 4 }
 type QuestionnaireStateMutation =
   | { kind: "clear"; requestKey: string }
   | { kind: "set"; questionnaire: WorkbenchDurableQuestionnaire };
@@ -170,6 +176,7 @@ interface ProjectState {
   error: string | null;
   freshness: WorkbenchThreadSidebarSnapshot["freshness"];
   generation: number;
+  newThreadProfile: WorkbenchComposerProfileSelectionState | null;
   observers: Set<string>;
   reconcilePromise: Promise<void> | null;
   revision: number;
@@ -181,7 +188,10 @@ function entryKey(entry: WorkbenchThreadStateEntry | WorkbenchThreadSidebarEntry
   return `${entry.identity.harness}:${entry.identity.threadId}`;
 }
 
-const StoredDraftIdentitySchema = WorkbenchThreadDraftSchema.pick({ draftId: true, harness: true }).strip();
+const StoredDraftIdentitySchema = z.object({
+  draftId: z.uuid(),
+  harness: WorkbenchHarnessSchema,
+}).strip();
 
 function parseStoredDraft(candidate: unknown, projectId: string) {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
@@ -190,11 +200,22 @@ function parseStoredDraft(candidate: unknown, projectId: string) {
   const { pinned, snoozed, ...draftCandidate } = candidate as Record<string, unknown>;
   const identity = StoredDraftIdentitySchema.safeParse(draftCandidate);
   if (!identity.success) return { error: identity.error, success: false as const };
+  const storedSettings = WorkbenchComposerSettingsSchema.safeParse(draftCandidate.composerSettings);
+  const composerSettings = storedSettings.success
+    ? storedSettings.data
+    : {
+      agentPath: typeof draftCandidate.agent === "string" ? draftCandidate.agent : null,
+      agentSource: null,
+      harness: identity.data.harness,
+      model: typeof draftCandidate.model === "string" ? draftCandidate.model : "",
+      reasoningEffort: typeof draftCandidate.reasoningEffort === "string" ? draftCandidate.reasoningEffort : null,
+      serviceTier: draftCandidate.serviceTier === "fast" ? "fast" as const : null,
+    };
   const conformed = conformToZodSchema(WorkbenchThreadDraftSchema, { ...draftCandidate, projectId }, {
     agent: null,
     attachments: [],
     clientUpdatedAt: 0,
-    composerSettings: {},
+    composerSettings,
     createdAt: 0,
     draftId: identity.data.draftId,
     harness: identity.data.harness,
@@ -457,16 +478,21 @@ export default class WorkbenchThreadStateController {
       throw new Error("The accepted intent does not belong to this connection's observed or pinned thread project.");
     }
     let draftPinned = false;
+    let profile: WorkbenchComposerProfileSelectionState | null = null;
     if (input.draftId) {
       const state = await this.getProject(input.projectId);
       const draftKey = `draft:${input.draftId}`;
       const draftEntry = state.entries.get(draftKey);
       draftPinned = draftEntry?.entryKind === "draft" ? draftEntry.metadata.pinned : false;
+      const draft = state.drafts.get(input.draftId);
+      profile = draft ? this.profileFromDraft(draft) : null;
       state.displayOrder = replaceWorkbenchThreadFolderMember(state.displayOrder, draftKey, `${input.harness}:${input.threadId}`);
       const pinnedLayoutUpdate = await this.pinnedLayout.replace(input.projectId, draftKey, `${input.harness}:${input.threadId}`);
       if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
       state.drafts.delete(input.draftId);
       state.entries.delete(draftKey);
+    } else {
+      profile = (await this.getProject(input.projectId)).newThreadProfile;
     }
     const acceptedAt = this.now();
     const providerEntry: WorkbenchThreadSidebarEntry = {
@@ -474,7 +500,7 @@ export default class WorkbenchThreadStateController {
       lifecycle: { agent: { agentStatus: "working", turnId: input.turnId }, kind: "working", reason: "acceptedIntent", settled: false },
       metadata: { archived: false, pinned: draftPinned, snoozed: false }, orderAt: acceptedAt, title: input.title?.trim() || input.threadId,
     };
-    const entry = await this.applyLifecycle(input.projectId, input.harness, input.threadId, { kind: "acceptedIntent", turnId: input.turnId }, providerEntry);
+    const entry = await this.applyLifecycle(input.projectId, input.harness, input.threadId, { kind: "acceptedIntent", turnId: input.turnId }, providerEntry, undefined, profile);
     if (!entry) throw new Error("The accepted intent does not identify a known provider thread.");
     return { accepted: true, revision: (await this.getSnapshot(input.projectId)).revision };
   }
@@ -521,6 +547,56 @@ export default class WorkbenchThreadStateController {
     });
   }
 
+  async readComposerProfileTarget(slot: WorkbenchComposerProfileSlot): Promise<WorkbenchComposerProfileTargetSelection | null> {
+    const state = await this.getProject(slot.projectId);
+    if (slot.kind === "new-thread") return state.newThreadProfile;
+    if (slot.kind === "draft") {
+      const draft = state.drafts.get(slot.draftId);
+      return draft && draft.harness === slot.harness ? this.profileFromDraft(draft) : null;
+    }
+    const entry = state.entries.get(`${slot.harness}:${slot.threadId}`);
+    return entry && entry.entryKind !== "draft" ? entry.profile : null;
+  }
+
+  async setComposerProfileTarget(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection) {
+    const parsed = WorkbenchComposerProfileSelectionSchema.parse(selection);
+    const state = await this.getProject(slot.projectId);
+    const key = slot.kind === "new-thread"
+      ? `${slot.projectId}:profile:new`
+      : slot.kind === "draft"
+        ? `${slot.projectId}:draft:${slot.draftId}`
+        : `${slot.projectId}:thread:${slot.harness}:${slot.threadId}`;
+    return await this.enqueue(key, async () => {
+      if (slot.kind === "new-thread") {
+        state.newThreadProfile = parsed;
+      } else if (slot.kind === "draft") {
+        const draft = state.drafts.get(slot.draftId);
+        if (!draft || draft.harness !== slot.harness || parsed.settings.harness !== slot.harness) return false;
+        const next = {
+          ...draft,
+          agent: parsed.settings.agentPath,
+          composerSettings: parsed.settings,
+          model: parsed.settings.model || null,
+          profileId: parsed.kind === "profile" ? parsed.profileId : null,
+          reasoningEffort: parsed.settings.reasoningEffort,
+          serviceTier: parsed.settings.serviceTier,
+        };
+        state.drafts.set(slot.draftId, next);
+        const currentEntry = state.entries.get(`draft:${slot.draftId}`);
+        state.entries.set(`draft:${slot.draftId}`, this.draftEntry(next, currentEntry?.entryKind === "draft" ? currentEntry.metadata : undefined));
+        state.newThreadProfile = parsed;
+      } else {
+        const threadKey = `${slot.harness}:${slot.threadId}`;
+        const entry = state.entries.get(threadKey);
+        if (!entry || entry.entryKind === "draft" || parsed.settings.harness !== slot.harness) return false;
+        state.entries.set(threadKey, { ...entry, profile: parsed });
+      }
+      await this.persist(slot.projectId, state);
+      this.publish(slot.projectId, state);
+      return true;
+    });
+  }
+
   async applyLifecycle(
     projectId: string,
     harness: "codex" | "copilot" | "opencode",
@@ -528,6 +604,7 @@ export default class WorkbenchThreadStateController {
     event: WorkbenchLifecycleEvent,
     providerEntry?: WorkbenchThreadSidebarEntry,
     questionnaireMutation?: QuestionnaireStateMutation,
+    profile?: WorkbenchComposerProfileSelectionState | null,
   ) {
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
@@ -560,11 +637,12 @@ export default class WorkbenchThreadStateController {
       ) return existing;
       const activityAt = event.kind === "acceptedIntent" && providerEntry?.entryKind === "thread" ? providerEntry.activityAt : this.now();
       const lifecycleEntry = existing.entryKind === "subagent"
-        ? { ...existing, activityAt, lifecycle }
+        ? { ...existing, activityAt, lifecycle, ...(event.kind === "acceptedIntent" && profile ? { profile } : {}) }
         : {
           ...existing,
           activityAt,
           lifecycle,
+          ...(event.kind === "acceptedIntent" && profile ? { profile } : {}),
           metadata: existing.metadata.archived
             ? { archived: true as const, pinned: false as const, snoozed: false as const }
             : { ...existing.metadata, snoozed: shouldUnsnooze ? false : existing.metadata.snoozed },
@@ -803,7 +881,7 @@ export default class WorkbenchThreadStateController {
       for (const record of stored.records) {
         entries.set(entryKey(record), record);
       }
-      const state: ProjectState = { abort: null, displayOrder: stored.displayOrder ?? {}, drafts, entries, error: null, freshness: "loading", generation: 0, observers: new Set(), reconcilePromise: null, revision: 0, stopProjectObservation: null };
+      const state: ProjectState = { abort: null, displayOrder: stored.displayOrder ?? {}, drafts, entries, error: null, freshness: "loading", generation: 0, newThreadProfile: stored.newThreadProfile, observers: new Set(), reconcilePromise: null, revision: 0, stopProjectObservation: null };
       const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state);
       state.stopProjectObservation = this.options.projectState.observe(projectId, (update) => this.publishUpdate(state, update));
       this.projects.set(projectId, state);
@@ -825,13 +903,13 @@ export default class WorkbenchThreadStateController {
       const canonicalPath = this.filePath(projectId);
       const canonicalExists = await this.fileExists(canonicalPath);
       if (canonicalExists) {
-        const stored = await this.json.read<StoredProjectState | StoredProjectStateV2 | StoredProjectStateV1>(canonicalPath, { drafts: [], records: [], version: 3 });
+        const stored = await this.json.read<StoredProjectState | StoredProjectStateV3 | StoredProjectStateV2 | StoredProjectStateV1>(canonicalPath, { drafts: [], newThreadProfile: null, records: [], version: 4 });
         return this.decodeStoredProjectState(stored, projectId);
       }
 
       const projectRoot = await this.options.resolveProjectRoot(projectId);
       const legacyPath = this.legacyFilePath(projectRoot, projectId);
-      if (!await this.fileExists(legacyPath)) return { drafts: [], records: [], version: 3 };
+      if (!await this.fileExists(legacyPath)) return { drafts: [], newThreadProfile: null, records: [], version: 4 };
       const legacy = await this.json.read<StoredProjectStateV1>(legacyPath, { drafts: [], threads: [], version: 1 });
       return this.decodeStoredProjectState(legacy, projectId);
     });
@@ -944,8 +1022,8 @@ export default class WorkbenchThreadStateController {
     this.summaryHydrationPromises.add(hydrationPromise);
   }
 
-  private decodeStoredProjectState(stored: Partial<StoredProjectState | StoredProjectStateV2 | StoredProjectStateV1>, projectId: string): StoredProjectState {
-    const records = stored.version === 3 && Array.isArray(stored.records)
+  private decodeStoredProjectState(stored: Partial<StoredProjectState | StoredProjectStateV3 | StoredProjectStateV2 | StoredProjectStateV1>, projectId: string): StoredProjectState {
+    const records = (stored.version === 3 || stored.version === 4) && Array.isArray(stored.records)
       ? stored.records.map((entry) => {
         const parsed = conformStoredWorkbenchThreadStateRecord(entry, projectId);
         if (!parsed.success) throw new Error("Stored thread state contains a provider record without a recoverable identity.");
@@ -968,13 +1046,20 @@ export default class WorkbenchThreadStateController {
         return { ...parsed.draft, pinned: parsed.metadata.pinned, snoozed: parsed.metadata.snoozed };
       })
       : [];
+    const storedNewThreadProfile = "newThreadProfile" in stored
+      ? WorkbenchComposerProfileSelectionSchema.safeParse(stored.newThreadProfile)
+      : null;
+    const latestDraft = [...drafts].sort((left, right) => right.updatedAt - left.updatedAt)[0];
     return {
       ...("displayOrder" in stored && !isWorkbenchThreadDisplayOrderEmpty(stored.displayOrder)
         ? { displayOrder: normalizeWorkbenchThreadDisplayOrder(stored.displayOrder) }
         : {}),
       drafts,
+      newThreadProfile: storedNewThreadProfile?.success
+        ? storedNewThreadProfile.data
+        : latestDraft ? this.profileFromDraft(latestDraft) : null,
       records,
-      version: 3,
+      version: 4,
     };
   }
 
@@ -990,6 +1075,12 @@ export default class WorkbenchThreadStateController {
   private filePath(projectId: string) { return path.join(this.options.storageRoot, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`); }
   private legacyFilePath(projectRoot: string, projectId: string) { return path.join(projectRoot, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`); }
   private draftEntry(draft: WorkbenchThreadDraft, metadata = { archived: false as const, pinned: false, snoozed: false }): Extract<WorkbenchThreadStateEntry, { entryKind: "draft" }> { return { activityAt: draft.updatedAt, draft, entryKind: "draft", metadata, title: draft.prompt.trim().split(/\r?\n/u).find(Boolean)?.trim().replace(/\s+/gu, " ") || "Draft" }; }
+
+  private profileFromDraft(draft: WorkbenchThreadDraft): WorkbenchComposerProfileSelectionState {
+    return draft.profileId
+      ? { kind: "profile", profileId: draft.profileId, settings: draft.composerSettings }
+      : { kind: "custom", settings: draft.composerSettings };
+  }
   private naturallyOrderedEntries(state: ProjectState) {
     const entries = [...state.entries.values()].flatMap((entry) => {
       const projected = projectWorkbenchThreadStateEntry(entry);
@@ -1168,6 +1259,7 @@ export default class WorkbenchThreadStateController {
           gitHistoryCleanedAt: existing.gitHistoryCleanedAt,
           lifecycle: gitArcPreventsThreadSettlement(providerEntry.gitArc) && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
           mcpGeneration: existing.mcpGeneration,
+          profile: existing.profile,
           ...(existing.pendingQuestionnaire ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
           pinned: existing.entryKind === "subagent" ? existing.pinned : existing.metadata.pinned,
           providerObserved: true,
@@ -1187,6 +1279,7 @@ export default class WorkbenchThreadStateController {
           ? { ...lifecycle, settled: false as const }
           : lifecycle,
         mcpGeneration: existing.mcpGeneration,
+        profile: existing.profile,
         metadata,
         ...(existing.entryKind === "thread" && existing.orderAt !== undefined ? { orderAt: existing.orderAt } : {}),
         ...(existing.pendingQuestionnaire ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
@@ -1289,6 +1382,7 @@ export default class WorkbenchThreadStateController {
       const timestamp = this.now();
       const accepted = WorkbenchThreadDraftSchema.parse({ ...draft, createdAt: current?.createdAt ?? timestamp, projectId, updatedAt: timestamp });
       state.drafts.set(accepted.draftId, accepted);
+      state.newThreadProfile = this.profileFromDraft(accepted);
       const existingEntry = state.entries.get(`draft:${accepted.draftId}`);
       const metadata = existingEntry?.entryKind === "draft"
         ? existingEntry.metadata
@@ -1475,8 +1569,9 @@ export default class WorkbenchThreadStateController {
       await this.json.write(this.filePath(projectId), {
         ...(!isWorkbenchThreadDisplayOrderEmpty(state.displayOrder) ? { displayOrder: state.displayOrder } : {}),
         drafts,
+        newThreadProfile: state.newThreadProfile,
         records,
-        version: 3,
+        version: 4,
       } satisfies StoredProjectState);
     });
   }

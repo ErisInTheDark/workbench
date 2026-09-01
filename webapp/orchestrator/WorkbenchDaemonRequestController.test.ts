@@ -9,6 +9,8 @@ import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController
 
 function createController(options: { gitArcResponse?: Response } = {}) {
   const fileWrites: object[] = [];
+  const targetReads: object[] = [];
+  const targetWrites: object[] = [];
   const controller = new WorkbenchDaemonRequestController({
     agents: {
       listAgents: async () => ({ data: [] }),
@@ -32,13 +34,23 @@ function createController(options: { gitArcResponse?: Response } = {}) {
       mutate: async () => ({ profiles: [] }),
       read: async () => ({ profiles: [] }),
     },
+    profileTargets: {
+      readComposerProfileTarget: async (slot) => {
+        targetReads.push(slot);
+        return null;
+      },
+      setComposerProfileTarget: async (slot, selection) => {
+        targetWrites.push({ selection, slot });
+        return true;
+      },
+    },
     projects: { readCatalog: async () => ({ data: [], rootPath: "" }) },
     settings: {
       readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
       updateLocalCapabilities: async (update) => update({ browseRawCommandsEnabled: false }),
     },
   });
-  return { controller, fileWrites };
+  return { controller, fileWrites, targetReads, targetWrites };
 }
 
 test("dispatch validates semantic parameters without corrupting valid empty file content", async () => {
@@ -91,6 +103,42 @@ test("Browse registration swaps atomically and stale disposal cannot remove its 
   assert.match(
     (await controller.handle({ id: 3, method: "browse/sessions/read", params: {} })).error?.message ?? "",
     /reloading/u,
+  );
+});
+
+test("profile target dispatch preserves exact slot and settings contracts", async () => {
+  const { controller, targetReads, targetWrites } = createController();
+  const slot = { draftId: "draft", harness: "codex", kind: "draft", projectId: "project" };
+  const selection = {
+    kind: "profile",
+    profileId: "profile",
+    settings: {
+      agentPath: "library:agents/lily.md",
+      agentSource: "library",
+      harness: "codex",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+    },
+  };
+
+  assert.deepEqual(
+    (await controller.handle({ id: 1, method: "profiles/target/read", params: { slot } })).result,
+    { selection: null },
+  );
+  assert.deepEqual(
+    (await controller.handle({ id: 2, method: "profiles/target/set", params: { selection, slot } })).result,
+    { ok: true },
+  );
+  assert.deepEqual(targetReads, [slot]);
+  assert.deepEqual(targetWrites, [{ selection, slot }]);
+  assert.equal(
+    (await controller.handle({
+      id: 3,
+      method: "profiles/target/set",
+      params: { selection: { kind: "custom", settings: {} }, slot },
+    })).error?.code,
+    -32602,
   );
 });
 

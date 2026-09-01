@@ -11,6 +11,8 @@ import type WorkbenchNativeFileController from "./WorkbenchNativeFileController"
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
+import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotSchema } from "../lib/workbench/thread/thread-state";
+import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import {
   GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
@@ -41,7 +43,7 @@ const METHODS = new Set([
   ...Object.keys(WORKBENCH_GIT_ARC_ACTION_BY_METHOD),
   "local-capabilities/read", "local-capabilities/update",
   "native/file/link-roots", "native/file/open", "native/file/reveal",
-  "profiles/delete", "profiles/read", "profiles/upsert",
+  "profiles/delete", "profiles/read", "profiles/target/read", "profiles/target/set", "profiles/upsert",
   "project/catalog/read",
   "project/file/read", "project/file/reset", "project/file/save",
   "skills/read",
@@ -119,6 +121,7 @@ export default class WorkbenchDaemonRequestController {
     gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;
     nativeFiles: Pick<WorkbenchNativeFileController, "linkRoots" | "open" | "reveal">;
     profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
+    profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
     projects: Pick<WorkbenchProjectCatalogController, "readCatalog">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
   }) {}
@@ -174,6 +177,25 @@ export default class WorkbenchDaemonRequestController {
         } satisfies RevealProjectEntryRequest); break;
         case "native/file/link-roots": result = await this.owners.nativeFiles.linkRoots(linkRootsRequest(params)); break;
         case "profiles/read": result = await this.owners.profiles.read(); break;
+        case "profiles/target/read": {
+          const slot = WorkbenchComposerProfileSlotSchema.safeParse(params.slot);
+          if (!slot.success) throw new InvalidParamsError("slot must identify a composer profile target.");
+          result = { selection: await this.owners.profileTargets.readComposerProfileTarget(slot.data) };
+          break;
+        }
+        case "profiles/target/set": {
+          const slot = WorkbenchComposerProfileSlotSchema.safeParse(params.slot);
+          const selection = WorkbenchComposerProfileSelectionSchema.safeParse(params.selection);
+          if (!slot.success) throw new InvalidParamsError("slot must identify a composer profile target.");
+          if (!selection.success) throw new InvalidParamsError("selection must contain exact composer settings.");
+          const ok = await this.owners.profileTargets.setComposerProfileTarget(
+            slot.data,
+            selection.data,
+          );
+          if (!ok) throw new InvalidParamsError("The composer profile target does not exist or rejects these settings.");
+          result = { ok: true };
+          break;
+        }
         case "profiles/delete": result = await this.owners.profiles.mutate({
           kind: "delete",
           profileId: requiredString(params, "profileId"),

@@ -24,6 +24,7 @@ import {
 } from "../git/git-arc-failures";
 import reportClientSchemaError from "../report-client-schema-error";
 import { WorkbenchProjectsPayloadSchema } from "../project/project-state";
+import { WorkbenchComposerProfileSelectionSchema } from "../thread/thread-state";
 
 export interface WorkbenchDaemonTransport {
   request<TResponse>(method: string, params: object): Promise<TResponse>;
@@ -68,6 +69,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "profiles/delete":
     case "profiles/read":
     case "profiles/upsert": return z.object({ profiles: z.array(recordSchema) }).passthrough();
+    case "profiles/target/read": return z.object({ selection: WorkbenchComposerProfileSelectionSchema.nullable() }).strict();
+    case "profiles/target/set": return z.object({ ok: z.literal(true) }).strict();
     case "git/arc/compare": return GitCheckpointCompareResultSchema;
     case "git/arc/proposal/commit":
     case "git/arc/proposal/read": return GitCheckpointProposalSchema;

@@ -51,9 +51,6 @@ function identityKey(identity: WorkbenchClientStateIdentity) {
     case "harnessPreference": return `harness:${identity.daemonRegistrationId}:${identity.harness}`;
     case "modelEffort": return `effort:${identity.daemonRegistrationId}:${identity.harness}:${identity.model}`;
     case "threadServiceTier": return `tier:${identity.daemonRegistrationId}:${identity.harness}:${identity.threadId}`;
-    case "newThreadProfilePreference": return `profile:new:${identity.daemonRegistrationId}:${identity.projectId}`;
-    case "draftProfilePreference": return `profile:draft:${identity.daemonRegistrationId}:${identity.projectId}:${identity.harness}:${identity.draftId}`;
-    case "threadProfilePreference": return `profile:thread:${identity.daemonRegistrationId}:${identity.harness}:${identity.threadId}`;
     case "fileDraft": return `file:${identity.daemonRegistrationId}:${identity.projectId}:${identity.path}`;
     case "composerDraft": return `composer:${identity.daemonRegistrationId}:${identity.projectId}:${identity.threadId}`;
     case "questionnaireDraft": return `questionnaire:${identity.daemonRegistrationId}:${identity.projectId}:${identity.threadId}:${identity.requestKey}`;

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity. Keywords: route, draft, provider, subagent.
+ * - WorkbenchComposerProfileSlotSchema/WorkbenchComposerSettingsSchema/WorkbenchComposerProfileSelectionSchema: strict daemon target-profile contracts. Keywords: composer, profile, settings, daemon.
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, plan, questionnaire, sidebar.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchThreadActivityUpdateSchema: full sidebar state and tiny activity delta contracts. Keywords: sidebar, websocket, revision.
  * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity with direct-child lifecycle projection. Keywords: project, status, summary, pinned, subagent, activity.
@@ -17,6 +18,7 @@
 
 import { z } from "zod";
 
+import type { WorkbenchComposerProfileTargetSelection, WorkbenchComposerSettings } from "../../types";
 import { areDeeplyEqual } from "../deep-equality";
 import { gitArcPathsOverlap } from "../git/git-arc-paths";
 import { ORCHESTRATOR_RELOAD_SCOPE_PATTERN } from "../orchestrator-reload";
@@ -30,6 +32,12 @@ import {
 
 export const WorkbenchHarnessSchema = z.enum(["codex", "copilot", "opencode"]);
 export type WorkbenchHarnessId = z.infer<typeof WorkbenchHarnessSchema>;
+
+export const WorkbenchComposerProfileSlotSchema = z.discriminatedUnion("kind", [
+  z.object({ draftId: z.string().min(1), harness: WorkbenchHarnessSchema, kind: z.literal("draft"), projectId: z.string().trim().min(1) }).strict(),
+  z.object({ kind: z.literal("new-thread"), projectId: z.string().trim().min(1) }).strict(),
+  z.object({ harness: WorkbenchHarnessSchema, kind: z.literal("thread"), projectId: z.string().trim().min(1), threadId: z.string().trim().min(1) }).strict(),
+]);
 
 type JsonPrimitive = null | boolean | number | string;
 interface JsonArray extends Array<JsonValue> {}
@@ -50,6 +58,22 @@ const ThreadIdentitySchema = z.object({
   threadId: z.string().trim().min(1),
 }).strict();
 
+export const WorkbenchComposerSettingsSchema = z.object({
+  agentPath: z.string().nullable(),
+  agentSource: z.enum(["library", "project"]).nullable(),
+  harness: WorkbenchHarnessSchema,
+  model: z.string(),
+  reasoningEffort: z.string().nullable(),
+  serviceTier: z.literal("fast").nullable(),
+}).strict() as z.ZodType<WorkbenchComposerSettings>;
+export type WorkbenchComposerSettingsState = WorkbenchComposerSettings;
+
+export const WorkbenchComposerProfileSelectionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("custom"), settings: WorkbenchComposerSettingsSchema }).strict(),
+  z.object({ kind: z.literal("profile"), profileId: z.string().trim().min(1), settings: WorkbenchComposerSettingsSchema }).strict(),
+]) as z.ZodType<WorkbenchComposerProfileTargetSelection>;
+export type WorkbenchComposerProfileSelectionState = WorkbenchComposerProfileTargetSelection;
+
 export const WorkbenchThreadTargetSchema = z.discriminatedUnion("kind", [
   z.object({ folderId: CanonicalUuidSchema.optional(), kind: z.literal("new") }).strict(),
   z.object({ draftId: CanonicalUuidSchema, kind: z.literal("draft") }).strict(),
@@ -58,11 +82,11 @@ export const WorkbenchThreadTargetSchema = z.discriminatedUnion("kind", [
 ]);
 export type WorkbenchThreadTarget = z.infer<typeof WorkbenchThreadTargetSchema>;
 
-export const WorkbenchThreadDraftSchema = z.object({
+const WorkbenchThreadDraftInputSchema = z.object({
   agent: z.string().nullable(),
   attachments: z.array(JsonValueSchema),
   clientUpdatedAt: z.number().int().nonnegative(),
-  composerSettings: z.record(z.string(), JsonValueSchema),
+  composerSettings: z.union([WorkbenchComposerSettingsSchema, z.record(z.string(), JsonValueSchema)]),
   createdAt: z.number().int().nonnegative(),
   draftId: CanonicalUuidSchema,
   harness: WorkbenchHarnessSchema,
@@ -74,6 +98,23 @@ export const WorkbenchThreadDraftSchema = z.object({
   serviceTier: z.string().nullable(),
   updatedAt: z.number().int().nonnegative(),
 }).strict();
+
+export const WorkbenchThreadDraftSchema = WorkbenchThreadDraftInputSchema.transform((draft) => {
+  const settings = WorkbenchComposerSettingsSchema.safeParse(draft.composerSettings);
+  return {
+    ...draft,
+    composerSettings: settings.success
+      ? settings.data
+      : {
+        agentPath: draft.agent,
+        agentSource: null,
+        harness: draft.harness,
+        model: draft.model ?? "",
+        reasoningEffort: draft.reasoningEffort,
+        serviceTier: draft.serviceTier === "fast" ? "fast" as const : null,
+      },
+  };
+});
 export type WorkbenchThreadDraft = z.infer<typeof WorkbenchThreadDraftSchema>;
 
 const AgentTurnSchema = z.object({

@@ -1,25 +1,21 @@
 /*
  * Exports:
- * - default WorkbenchComposerProfileController: own daemon profile definitions and app-owned profile selections. Keywords: composer, profile, controller, daemon, app state.
+ * - default WorkbenchComposerProfileController: own daemon profile definitions and guarded daemon-target projections. Keywords: composer, profile, controller, daemon, projection.
  * - WorkbenchComposerProfileSnapshot: immutable React-facing profile, selection, and failure snapshot. Keywords: composer, profile, snapshot, error.
  */
 import type {
   WorkbenchComposerProfile,
   WorkbenchComposerProfileSelection,
   WorkbenchComposerProfileSlot,
+  WorkbenchComposerProfileTargetSelection,
   WorkbenchComposerSettings,
   WorkbenchHarness,
   ThreadPayload,
 } from "../../types";
-import type {
-  WorkbenchClientStateIdentity,
-  WorkbenchProfilePreferenceValue,
-} from "workbench-shared/state/workbench-client-state";
-import type { ComposerProfilePersistence } from "./composer-profile-api";
+import type { ComposerProfilePersistence, ComposerProfileTargetPersistence } from "./composer-profile-api";
 import {
   normalizeComposerProfile,
 } from "./composer-profile-state";
-import type WorkbenchClientStateController from "./WorkbenchClientStateController";
 
 const EMPTY_CUSTOM_SELECTION: WorkbenchComposerProfileSelection = { kind: "custom" };
 
@@ -36,7 +32,7 @@ function createProfileId() {
 }
 
 function getSlotKey(slot: WorkbenchComposerProfileSlot) {
-  if (slot.kind === "thread") return `thread:${slot.harness}:${slot.threadId}`;
+  if (slot.kind === "thread") return `thread:${slot.projectId}:${slot.harness}:${slot.threadId}`;
   if (slot.kind === "draft") return `draft:${slot.projectId}:${slot.harness}:${slot.draftId}`;
   return `${slot.kind}:${slot.projectId}`;
 }
@@ -53,24 +49,22 @@ function cloneSettings(settings: WorkbenchComposerSettings): WorkbenchComposerSe
 }
 
 export default class WorkbenchComposerProfileController {
-  private readonly clientStateController: WorkbenchClientStateController;
   private error = "";
   private readonly listeners = new Set<() => void>();
   private persistence: ComposerProfilePersistence | null = null;
   private profileMutationQueue: Promise<void> = Promise.resolve();
   private profiles: WorkbenchComposerProfile[] = [];
+  private profilesLoaded = false;
+  private readonly selectionGenerations = new Map<string, number>();
+  private readonly selectionMutationQueues = new Map<string, Promise<void>>();
+  private readonly slots = new Map<string, WorkbenchComposerProfileSlot>();
+  private readonly stableSelections = new Map<string, WorkbenchComposerProfileTargetSelection>();
   private selections: Record<string, WorkbenchComposerProfileSelection> = {};
   private snapshot: WorkbenchComposerProfileSnapshot;
-  private readonly unsubscribeClientState: () => void;
+  private targetPersistence: ComposerProfileTargetPersistence | null = null;
 
-  constructor(clientStateController: WorkbenchClientStateController) {
-    this.clientStateController = clientStateController;
-    this.syncSelections();
+  constructor() {
     this.snapshot = this.createSnapshot();
-    this.unsubscribeClientState = clientStateController.subscribe(() => {
-      this.syncSelections();
-      this.publish();
-    });
   }
 
   async initializePersistence(persistence: ComposerProfilePersistence) {
@@ -78,14 +72,18 @@ export default class WorkbenchComposerProfileController {
     await this.enqueueProfileMutation(async () => {
       const payload = await persistence.read();
       this.profiles = [...payload.profiles];
+      this.profilesLoaded = true;
       this.error = "";
       this.publish();
       return true;
     });
   }
 
+  initializeTargetPersistence(persistence: ComposerProfileTargetPersistence) {
+    this.targetPersistence = persistence;
+  }
+
   dispose() {
-    this.unsubscribeClientState();
     this.listeners.clear();
   }
 
@@ -107,9 +105,10 @@ export default class WorkbenchComposerProfileController {
     if (selection.kind === "profile") {
       const profile = this.getProfile(selection.profileId);
       if (profile) return cloneSettings(profile);
+      return cloneSettings(selection.settings);
     }
-    return selection.kind === "custom" && selection.pendingSettings
-      ? cloneSettings(selection.pendingSettings)
+    return selection.kind === "custom" && selection.settings
+      ? cloneSettings(selection.settings)
       : customSettings ? cloneSettings(customSettings) : null;
   }
 
@@ -175,139 +174,162 @@ export default class WorkbenchComposerProfileController {
       this.error = "";
       this.publish();
       await Promise.all(affectedSlots.map(async ({ slot }) => {
-        await this.persistSelection(slot, { kind: "custom", pendingSettings: cloneSettings(profile) });
+        await this.persistSelection(slot, { kind: "custom", settings: cloneSettings(profile) });
       }));
       return profile;
     });
   }
 
-  selectCustom(slot: WorkbenchComposerProfileSlot, pendingSettings?: WorkbenchComposerSettings) {
-    void this.persistSelection(slot, pendingSettings ? { kind: "custom", pendingSettings: cloneSettings(pendingSettings) } : EMPTY_CUSTOM_SELECTION);
+  selectCustom(slot: WorkbenchComposerProfileSlot, settings: WorkbenchComposerSettings) {
+    void this.persistSelection(slot, { kind: "custom", settings: cloneSettings(settings) });
   }
   selectProfile(slot: WorkbenchComposerProfileSlot, profileId: string) {
     const profile = this.getProfile(profileId);
     if (!profile || ((slot.kind === "thread" || slot.kind === "draft") && profile.harness !== slot.harness)) return false;
-    void this.persistSelection(slot, { kind: "profile", profileId });
+    void this.persistSelection(slot, { kind: "profile", profileId, settings: cloneSettings(profile) });
     return true;
-  }
-  acknowledgePendingSettings(slot: WorkbenchComposerProfileSlot) {
-    const selection = this.getSelection(slot);
-    if (selection.kind === "custom" && selection.pendingSettings) this.selectCustom(slot);
   }
   materializeSelection(sourceSlot: WorkbenchComposerProfileSlot, threadId: string, harness: WorkbenchHarness) {
     const selection = this.getSelection(sourceSlot);
-    if (selection.kind === "profile" && this.getProfile(selection.profileId)?.harness === harness) {
-      void this.persistSelection({ harness, kind: "thread", threadId }, selection);
-    }
+    const settings = selection.settings;
+    if (!settings || settings.harness !== harness) return;
+    const slot = { harness, kind: "thread" as const, projectId: sourceSlot.projectId, threadId };
+    this.installStableSelection(slot, selection.kind === "profile"
+      ? { kind: "profile", profileId: selection.profileId, settings }
+      : { kind: "custom", settings });
   }
 
   materializeDraftSelection(sourceSlot: WorkbenchComposerProfileSlot, draftId: string, harness: WorkbenchHarness, projectId: string) {
     const selection = this.getSelection(sourceSlot);
-    if (selection.kind === "profile" && this.getProfile(selection.profileId)?.harness === harness) {
-      void this.persistSelection({ draftId, harness, kind: "draft", projectId }, selection);
-    } else if (selection.kind === "custom" && selection.pendingSettings?.harness === harness) {
-      void this.persistSelection({ draftId, harness, kind: "draft", projectId }, selection);
-    }
+    const settings = selection.settings;
+    if (settings?.harness !== harness) return;
+    const slot = { draftId, harness, kind: "draft" as const, projectId };
+    this.installStableSelection(slot, selection.kind === "profile"
+      ? { kind: "profile", profileId: selection.profileId, settings }
+      : { kind: "custom", settings });
   }
 
-  private async persistSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileSelection) {
+  async loadSelection(slot: WorkbenchComposerProfileSlot) {
+    const key = getSlotKey(slot);
+    this.slots.set(key, slot);
+    const generation = this.selectionGenerations.get(key) ?? 0;
     try {
-      const identity = this.selectionIdentity(slot);
-      if (selection.kind === "custom" && !selection.pendingSettings) {
-        await this.clientStateController.delete(identity);
-      } else {
-        const value: WorkbenchProfilePreferenceValue = selection.kind === "profile"
-          ? { kind: "daemon-profile", profileId: selection.profileId }
-          : { kind: "custom", settings: cloneSettings(selection.pendingSettings!) };
-        if (slot.kind === "thread") {
-          await this.clientStateController.put({
-            daemonRegistrationId: this.clientStateController.daemonRegistrationId,
-            harness: slot.harness,
-            kind: "threadProfilePreference",
-            threadId: slot.threadId,
-            value,
-          });
-        } else if (slot.kind === "draft") {
-          await this.clientStateController.put({
-            daemonRegistrationId: this.clientStateController.daemonRegistrationId,
-            draftId: slot.draftId,
-            harness: slot.harness,
-            kind: "draftProfilePreference",
-            projectId: slot.projectId,
-            value,
-          });
-        } else {
-          await this.clientStateController.put({
-            daemonRegistrationId: this.clientStateController.daemonRegistrationId,
-            kind: "newThreadProfilePreference",
-            projectId: slot.projectId,
-            value,
-          });
-        }
+      const selection = await this.requireTargetPersistence().read(slot);
+      if ((this.selectionGenerations.get(key) ?? 0) !== generation) return;
+      if (selection) {
+        this.installStableSelection(slot, selection, false);
+      }
+      else if (!this.selections[key]) {
+        this.stableSelections.delete(key);
+        const { [key]: _removed, ...rest } = this.selections;
+        this.selections = rest;
       }
       this.error = "";
       this.publish();
     } catch (error) {
-      this.fail(error instanceof Error ? error.message : "Unable to persist the composer profile selection.");
+      this.fail(error instanceof Error ? error.message : "Unable to read the composer profile target.");
     }
   }
 
-  private selectionIdentity(slot: WorkbenchComposerProfileSlot): Extract<
-    WorkbenchClientStateIdentity,
-    { kind: "newThreadProfilePreference" | "draftProfilePreference" | "threadProfilePreference" }
-  > {
-    const daemonRegistrationId = this.clientStateController.daemonRegistrationId;
-    if (slot.kind === "thread") {
-      return { daemonRegistrationId, harness: slot.harness, kind: "threadProfilePreference" as const, threadId: slot.threadId };
+  async synchronizeSelection(slot: WorkbenchComposerProfileSlot, fallbackSettings: WorkbenchComposerSettings) {
+    const current = this.getSelection(slot);
+    const profile = current.kind === "profile" ? this.getProfile(current.profileId) : null;
+    const selection: WorkbenchComposerProfileTargetSelection = current.kind === "profile"
+      ? profile
+        ? {
+          kind: "profile",
+          profileId: current.profileId,
+          settings: cloneSettings(profile),
+        }
+        : !this.profilesLoaded
+          ? {
+            kind: "profile",
+            profileId: current.profileId,
+            settings: cloneSettings(current.settings),
+          }
+          : { kind: "custom", settings: cloneSettings(current.settings) }
+      : { kind: "custom", settings: cloneSettings(current.settings ?? fallbackSettings) };
+    if (!await this.persistSelection(slot, selection)) {
+      throw new Error(this.error || "Unable to persist the composer profile selection.");
     }
-    if (slot.kind === "draft") {
-      return { daemonRegistrationId, draftId: slot.draftId, harness: slot.harness, kind: "draftProfilePreference" as const, projectId: slot.projectId };
+    return selection;
+  }
+
+  private async persistSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection): Promise<boolean> {
+    const key = getSlotKey(slot);
+    const generation = (this.selectionGenerations.get(key) ?? 0) + 1;
+    this.selectionGenerations.set(key, generation);
+    this.installSelection(slot, selection, false);
+    this.publish();
+    const priorMutation = this.selectionMutationQueues.get(key) ?? Promise.resolve();
+    const operation = priorMutation.then(async () => {
+      await this.requireTargetPersistence().write(slot, selection);
+    });
+    const queued = operation.catch(() => undefined);
+    this.selectionMutationQueues.set(key, queued);
+    try {
+      await operation;
+      this.stableSelections.set(key, this.cloneTargetSelection(selection));
+      this.error = "";
+      this.publish();
+      return true;
+    } catch (error) {
+      if ((this.selectionGenerations.get(key) ?? 0) === generation) {
+        const stable = this.stableSelections.get(key);
+        if (stable) this.installSelection(slot, stable, false);
+        else {
+          const { [key]: _removed, ...rest } = this.selections;
+          this.selections = rest;
+        }
+      }
+      this.fail(error instanceof Error ? error.message : "Unable to persist the composer profile selection.");
+      return false;
+    } finally {
+      if (this.selectionMutationQueues.get(key) === queued) this.selectionMutationQueues.delete(key);
     }
-    return { daemonRegistrationId, kind: "newThreadProfilePreference" as const, projectId: slot.projectId };
+  }
+
+  private installStableSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection, publish = true) {
+    this.stableSelections.set(getSlotKey(slot), this.cloneTargetSelection(selection));
+    this.installSelection(slot, selection, publish);
+  }
+
+  private cloneTargetSelection(selection: WorkbenchComposerProfileTargetSelection): WorkbenchComposerProfileTargetSelection {
+    return selection.kind === "profile"
+      ? { kind: "profile", profileId: selection.profileId, settings: cloneSettings(selection.settings) }
+      : { kind: "custom", settings: cloneSettings(selection.settings) };
+  }
+
+  private installSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileSelection, publish = true) {
+    const key = getSlotKey(slot);
+    this.slots.set(key, slot);
+    this.selections = {
+      ...this.selections,
+      [key]: selection.kind === "profile"
+        ? { kind: "profile", profileId: selection.profileId, settings: cloneSettings(selection.settings) }
+        : selection.settings ? { kind: "custom", settings: cloneSettings(selection.settings) } : EMPTY_CUSTOM_SELECTION,
+    };
+    if (publish) this.publish();
   }
 
   private readSelectionSlots(): Array<{
     selection: WorkbenchComposerProfileSelection;
     slot: WorkbenchComposerProfileSlot;
   }> {
-    const daemonRegistrationId = this.clientStateController.daemonRegistrationId;
-    const entries: Array<{
-      selection: WorkbenchComposerProfileSelection;
-      slot: WorkbenchComposerProfileSlot;
-    }> = [];
-    for (const record of this.clientStateController.getSnapshot().records) {
-      if (!("daemonRegistrationId" in record) || record.daemonRegistrationId !== daemonRegistrationId) continue;
-      if (record.kind === "newThreadProfilePreference") {
-        entries.push({ selection: this.selectionFromValue(record.value), slot: { kind: "new-thread", projectId: record.projectId } });
-        continue;
-      }
-      if (record.kind === "draftProfilePreference") {
-        entries.push({ selection: this.selectionFromValue(record.value), slot: { draftId: record.draftId, harness: record.harness, kind: "draft", projectId: record.projectId } });
-        continue;
-      }
-      if (record.kind === "threadProfilePreference") {
-        entries.push({ selection: this.selectionFromValue(record.value), slot: { harness: record.harness, kind: "thread", threadId: record.threadId } });
-      }
-    }
-    return entries;
-  }
-
-  private selectionFromValue(value: WorkbenchProfilePreferenceValue): WorkbenchComposerProfileSelection {
-    return value.kind === "daemon-profile"
-      ? { kind: "profile", profileId: value.profileId }
-      : { kind: "custom", pendingSettings: cloneSettings(value.settings) };
-  }
-
-  private syncSelections() {
-    this.selections = Object.fromEntries(this.readSelectionSlots().map(({ selection, slot }) => [
-      getSlotKey(slot),
-      selection,
-    ]));
+    return Object.entries(this.selections).flatMap(([key, selection]) => {
+      const slot = this.slots.get(key);
+      return slot ? [{ selection, slot }] : [];
+    });
   }
 
   private requirePersistence() {
     if (!this.persistence) throw new Error("Composer profiles are not connected to the daemon.");
     return this.persistence;
+  }
+
+  private requireTargetPersistence() {
+    if (!this.targetPersistence) throw new Error("Composer profile targets are not connected to the daemon.");
+    return this.targetPersistence;
   }
 
   private async enqueueProfileMutation<Result>(operation: () => Promise<Result>) {

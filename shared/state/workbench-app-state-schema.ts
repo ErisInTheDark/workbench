@@ -20,7 +20,6 @@ import {
   unique,
   type SelectRow,
   type ColumnDefinition,
-  type ColumnMap,
   type TableDefinition,
 } from "../database/schema/schema-definition.ts";
 import {
@@ -264,68 +263,6 @@ const threadServiceTiersHistory = initialHistory(defineTable("thread_service_tie
   constraints: [primaryKey([table.daemon_registration_id, table.harness, table.thread_id])],
 })));
 
-const composerSettingsHistory = initialHistory(defineTable("composer_settings", {
-  id: text().primaryKey(),
-  agent_path: text(),
-  agent_source: enumText("library", "project"),
-  harness: enumText("codex", "copilot", "opencode").notNull(),
-  model: text().notNull(),
-  reasoning_effort: text(),
-  service_tier: enumText("fast"),
-  revision: integer().notNull().nonNegative(),
-}, (table) => ({
-  constraints: [
-    check(sql`
-      (${table.agent_path} IS NULL AND ${table.agent_source} IS NULL)
-      OR (${table.agent_path} IS NOT NULL AND ${table.agent_source} IS NOT NULL)
-    `),
-  ],
-})));
-
-function profilePreferenceTable<
-  const Name extends "draft_profile_preferences" | "new_thread_profile_preferences" | "thread_profile_preferences",
-  const Identity extends ColumnMap,
->(
-  name: Name,
-  identity: Identity,
-) {
-  return defineTable(name, {
-    daemon_registration_id: registrationForeignKey(),
-    ...identity,
-    kind: enumText("custom", "daemon-profile").notNull(),
-    custom_settings_id: text().references("composer_settings", "id", { onDelete: "RESTRICT" }),
-    daemon_profile_id: text(),
-    ...revisionColumns(),
-  }, (table) => ({
-    constraints: [
-      primaryKey([
-        table.daemon_registration_id,
-        ...Object.keys(identity).map((key) => table[key as keyof typeof table]),
-      ]),
-      check(sql`
-        (${table.deleted} = ${literal(1)} AND ${table.custom_settings_id} IS NULL AND ${table.daemon_profile_id} IS NULL)
-        OR (${table.deleted} = ${literal(0)} AND (
-          (${table.kind} = ${literal("custom")} AND ${table.custom_settings_id} IS NOT NULL AND ${table.daemon_profile_id} IS NULL)
-          OR (${table.kind} = ${literal("daemon-profile")} AND ${table.custom_settings_id} IS NULL AND ${table.daemon_profile_id} IS NOT NULL)
-        ))
-      `),
-    ],
-  }));
-}
-
-const newThreadProfilePreferencesHistory = initialHistory(profilePreferenceTable("new_thread_profile_preferences", {
-  project_id: text().notNull(),
-}));
-const draftProfilePreferencesHistory = initialHistory(profilePreferenceTable("draft_profile_preferences", {
-  draft_id: text().notNull(),
-  harness: enumText("codex", "copilot", "opencode").notNull(),
-  project_id: text().notNull(),
-}));
-const threadProfilePreferencesHistory = initialHistory(profilePreferenceTable("thread_profile_preferences", {
-  harness: enumText("codex", "copilot", "opencode").notNull(),
-  thread_id: text().notNull(),
-}));
-
 const fileDraftsHistory = initialHistory(defineTable("file_drafts", {
   daemon_registration_id: registrationForeignKey(),
   project_id: text().notNull(),
@@ -475,10 +412,6 @@ const histories = [
   harnessPreferencesHistory,
   harnessModelEffortsHistory,
   threadServiceTiersHistory,
-  composerSettingsHistory,
-  newThreadProfilePreferencesHistory,
-  draftProfilePreferencesHistory,
-  threadProfilePreferencesHistory,
   fileDraftsHistory,
   composerDraftsHistory,
   composerDraftAttachmentsHistory,
@@ -491,14 +424,11 @@ const histories = [
 export const appStateClientTables = Object.freeze({
   composerDraftAttachments: composerDraftAttachmentsHistory.current,
   composerDrafts: composerDraftsHistory.current,
-  composerSettings: composerSettingsHistory.current,
-  draftProfilePreferences: draftProfilePreferencesHistory.current,
   fileDrafts: fileDraftsHistory.current,
   globalPreferences: globalPreferencesHistory.current,
   harnessModelEfforts: harnessModelEffortsHistory.current,
   harnessPreferences: harnessPreferencesHistory.current,
   lastLaunchTarget: lastLaunchTargetHistory.current,
-  newThreadProfilePreferences: newThreadProfilePreferencesHistory.current,
   projectExpandedDirectories: projectExpandedDirectoriesHistory.current,
   projectPreferences: projectPreferencesHistory.current,
   projectSidebarFolders: projectSidebarFoldersHistory.current,
@@ -507,7 +437,6 @@ export const appStateClientTables = Object.freeze({
   questionnaireDraftAttachments: questionnaireDraftAttachmentsHistory.current,
   questionnaireDraftSelections: questionnaireDraftSelectionsHistory.current,
   questionnaireDrafts: questionnaireDraftsHistory.current,
-  threadProfilePreferences: threadProfilePreferencesHistory.current,
   threadServiceTiers: threadServiceTiersHistory.current,
 });
 

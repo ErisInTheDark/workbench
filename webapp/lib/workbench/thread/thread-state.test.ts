@@ -1,7 +1,16 @@
 /* No production exports. Tests protect strict lifecycle, grouping, cross-project pin summaries, folder mutation, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+
+const EMPTY_CODEX_SETTINGS = {
+  agentPath: null,
+  agentSource: null,
+  harness: "codex" as const,
+  model: "",
+  reasoningEffort: null,
+  serviceTier: null,
+};
 
 test("live claims and proposed commit proposals prevent thread settlement", () => {
   const resolved = {
@@ -40,7 +49,7 @@ test("settlement is available only for unsettled terminal rows without Git block
   const draft: WorkbenchThreadSidebarEntry = {
     activityAt: 2,
     draft: {
-      agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: {}, createdAt: 2,
+      agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 2,
       draftId: "draft", harness: "codex", model: null, profileId: null, projectId: "project", prompt: "Draft",
       reasoningEffort: null, serviceTier: null, updatedAt: 2,
     },
@@ -133,7 +142,7 @@ test("draft priority requests use draft identity and drive shared grouping and o
   const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> = {
     activityAt: 1,
     draft: {
-      agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: {}, createdAt: 1,
+      agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 1,
       draftId, harness: "codex", model: null, profileId: null, projectId: "project", prompt: "Pinned draft",
       reasoningEffort: null, serviceTier: null, updatedAt: 1,
     },
@@ -143,6 +152,33 @@ test("draft priority requests use draft identity and drive shared grouping and o
   };
   assert.equal(getThreadSidebarGroup(entry), "snoozed");
   assert.equal(entry.metadata.pinned, true);
+});
+
+test("legacy draft settings conform from reload-compatible flattened fields", () => {
+  const draft = WorkbenchThreadDraftSchema.parse({
+    agent: "legacy-agent.md",
+    attachments: [],
+    clientUpdatedAt: 2,
+    composerSettings: {},
+    createdAt: 1,
+    draftId: "00000000-0000-4000-8000-000000000002",
+    harness: "codex",
+    model: "legacy-model",
+    profileId: "legacy-profile",
+    projectId: "project",
+    prompt: "Legacy draft",
+    reasoningEffort: "high",
+    serviceTier: "fast",
+    updatedAt: 2,
+  });
+  assert.deepEqual(draft.composerSettings, {
+    agentPath: "legacy-agent.md",
+    agentSource: null,
+    harness: "codex",
+    model: "legacy-model",
+    reasoningEffort: "high",
+    serviceTier: "fast",
+  });
 });
 
 test("pinned context requests preserve full target identity and responses admit full durable drafts", () => {
@@ -162,7 +198,7 @@ test("pinned context requests preserve full target identity and responses admit 
           agent: null,
           attachments: [{ id: "attachment", url: "data:text/plain,hello" }],
           clientUpdatedAt: 2,
-          composerSettings: {},
+          composerSettings: EMPTY_CODEX_SETTINGS,
           createdAt: 1,
           draftId,
           harness: "codex",
@@ -195,7 +231,7 @@ test("display-order moves require a reorderable section and explicit insertion k
 test("folder mutations require canonical ids, durable thread keys, and non-empty bounded names", () => {
   const folderId = "00000000-0000-4000-8000-000000000020";
   const folderDraft = {
-    agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: {}, createdAt: 2,
+    agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 2,
     draftId: "00000000-0000-4000-8000-000000000021", harness: "codex", model: null,
     profileId: null, projectId: "project", prompt: "folder draft", reasoningEffort: null, serviceTier: null, updatedAt: 2,
   };
@@ -633,7 +669,7 @@ test("project summaries expose ordered unsnoozed pins without draft bodies", () 
         agent: null,
         attachments: [{ private: "attachment body" }],
         clientUpdatedAt: 3,
-        composerSettings: {},
+        composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null },
         createdAt: 1,
         draftId,
         harness: "codex",

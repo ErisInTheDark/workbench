@@ -5,7 +5,7 @@ import ThreadSidebarClient from "./ThreadSidebarClient.ts";
 import type { WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSummary, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot } from "./thread-state.ts";
 
 const draft = (prompt: string, clientUpdatedAt: number): WorkbenchThreadDraft => ({
-  agent: null, attachments: [], clientUpdatedAt, composerSettings: {}, createdAt: 1,
+  agent: null, attachments: [], clientUpdatedAt, composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 1,
   draftId: "00000000-0000-4000-8000-000000000001", harness: "codex", model: null,
   profileId: null, projectId: "project", prompt, reasoningEffort: null, serviceTier: null, updatedAt: clientUpdatedAt,
 });
