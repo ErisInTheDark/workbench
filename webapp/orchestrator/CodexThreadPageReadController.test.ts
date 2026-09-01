@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect exact background single-flight and reload drain ownership. Keywords: codex, thread, page, read, reload, test.
+ * No production exports. Node tests protect exact-key single-flight and reload drain ownership. Keywords: codex, thread, page, read, reload, test.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -26,31 +26,31 @@ function page(threadId: string): WorkbenchThreadPageResponse {
   };
 }
 
-test("identical background reads share one active operation while foreground reads stay distinct", async () => {
+test("identical keyed reads share one active operation while distinct keys stay independent", async () => {
   const controller = new CodexThreadPageReadController();
-  const background = deferred<WorkbenchThreadPageResponse>();
-  let backgroundCalls = 0;
-  let foregroundCalls = 0;
+  const shared = deferred<WorkbenchThreadPageResponse>();
+  let sharedCalls = 0;
+  let distinctCalls = 0;
 
   const first = controller.run(async () => {
-    backgroundCalls += 1;
-    return await background.promise;
-  }, { backgroundKey: "thread" });
+    sharedCalls += 1;
+    return await shared.promise;
+  }, { key: "thread" });
   const second = controller.run(async () => {
-    backgroundCalls += 1;
+    sharedCalls += 1;
     return page("wrong");
-  }, { backgroundKey: "thread" });
-  const foreground = controller.run(async () => {
-    foregroundCalls += 1;
-    return page("foreground");
-  });
+  }, { key: "thread" });
+  const distinct = controller.run(async () => {
+    distinctCalls += 1;
+    return page("distinct");
+  }, { key: "other-thread" });
 
   assert.equal(first, second);
-  assert.equal((await foreground).thread.id, "foreground");
-  assert.equal(foregroundCalls, 1);
-  background.resolve(page("background"));
-  assert.equal((await first).thread.id, "background");
-  assert.equal(backgroundCalls, 1);
+  assert.equal((await distinct).thread.id, "distinct");
+  assert.equal(distinctCalls, 1);
+  shared.resolve(page("shared"));
+  assert.equal((await first).thread.id, "shared");
+  assert.equal(sharedCalls, 1);
 });
 
 test("reload drain rejects new reads, waits for active reads, and reopens after failure", async () => {

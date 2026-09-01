@@ -6,6 +6,7 @@ import type Database from "better-sqlite3";
 import type {
   ColumnDefinition,
   CurrentTableDefinition,
+  SelectRow,
 } from "workbench-shared/database/schema/schema-definition";
 import {
   coreTables,
@@ -48,6 +49,24 @@ import type {
 } from "./workbench-transcript-types.ts";
 
 const CURRENT_TRANSCRIPT_CONTENT_VERSION = 3;
+const SQLITE_ITEM_ID_BATCH_SIZE = 500;
+
+type TableRow<Table extends CurrentTableDefinition> = SelectRow<Table>;
+type TranscriptThreadRow = TableRow<typeof coreTables.workbenchThreads>;
+type TranscriptTurnRow = TableRow<typeof coreTables.threadTurns>;
+type TranscriptItemRow = TableRow<typeof itemTables.threadItems>;
+type TranscriptTimelineRow = TableRow<typeof itemTables.threadItemTimelines>;
+
+interface CanonicalSettlementIndex {
+  readonly itemsBySourceId: Map<string, TranscriptItemRow>;
+  readonly itemsByTurnId: Map<string, Map<number, TranscriptItemRow>>;
+  readonly materializedTurnIds: Set<string>;
+  readonly operationRevisionsByItemId: Map<number, number>;
+  thread: TranscriptThreadRow;
+  readonly timelineAliasesByItemId: Map<number, string[]>;
+  readonly timelinesByItemId: Map<number, TranscriptTimelineRow>;
+  readonly turnsById: Map<string, TranscriptTurnRow>;
+}
 
 function earliestTimestamp(left: number | null, right: number | null) {
   if (left === null) return right;
@@ -134,6 +153,68 @@ export default class WorkbenchTranscriptRepository {
     })();
   }
 
+  #createCanonicalSettlementIndex(threadId: string): CanonicalSettlementIndex {
+    const thread = this.#requiredThread(threadId);
+    const turns = this.#all(selectRows(coreTables.threadTurns, { where: { thread_id: threadId } }));
+    const items = this.#all(selectRows(itemTables.threadItems, { where: { thread_id: threadId } }));
+    const itemIds = items.map(({ id }) => id);
+    const operations = this.#rowsByItemIds(operationSourceTables.threadItemOperations, itemIds);
+    const timelines = this.#rowsByItemIds(itemTables.threadItemTimelines, itemIds);
+    const aliases = this.#rowsByItemIds(itemTables.threadItemTimelineAliases, itemIds);
+    const itemsByTurnId = new Map<string, Map<number, TranscriptItemRow>>();
+    for (const item of items) {
+      const turnItems = itemsByTurnId.get(item.turn_id) ?? new Map<number, TranscriptItemRow>();
+      turnItems.set(item.id, item);
+      itemsByTurnId.set(item.turn_id, turnItems);
+    }
+    const timelineAliasesByItemId = new Map<number, string[]>();
+    for (const alias of aliases) {
+      const itemAliases = timelineAliasesByItemId.get(alias.item_id) ?? [];
+      itemAliases.push(alias.alias);
+      timelineAliasesByItemId.set(alias.item_id, itemAliases);
+    }
+    return {
+      itemsBySourceId: new Map(items.map((item) => [item.source_id, item])),
+      itemsByTurnId,
+      materializedTurnIds: new Set(this.#all(selectRows(coreTables.threadTurnMaterializations, {
+        where: { thread_id: threadId },
+      })).map(({ turn_id }) => turn_id)),
+      operationRevisionsByItemId: new Map(operations.map((operation) => [
+        operation.item_id,
+        operation.source_revision,
+      ])),
+      thread,
+      timelineAliasesByItemId,
+      timelinesByItemId: new Map(timelines.map((timeline) => [timeline.item_id, timeline])),
+      turnsById: new Map(turns.map((turn) => [turn.id, turn])),
+    };
+  }
+
+  #replaceCanonicalItem(
+    index: CanonicalSettlementIndex,
+    existing: TranscriptItemRow,
+    changes: Partial<TranscriptItemRow>,
+  ) {
+    const replacement = { ...existing, ...changes };
+    index.itemsBySourceId.set(replacement.source_id, replacement);
+    if (existing.turn_id !== replacement.turn_id) {
+      index.itemsByTurnId.get(existing.turn_id)?.delete(existing.id);
+    }
+    const turnItems = index.itemsByTurnId.get(replacement.turn_id) ?? new Map<number, TranscriptItemRow>();
+    turnItems.set(replacement.id, replacement);
+    index.itemsByTurnId.set(replacement.turn_id, turnItems);
+    return replacement;
+  }
+
+  #deleteCanonicalItem(index: CanonicalSettlementIndex, item: TranscriptItemRow) {
+    this.#run(deleteRows(itemTables.threadItems, { id: item.id }));
+    index.itemsBySourceId.delete(item.source_id);
+    index.itemsByTurnId.get(item.turn_id)?.delete(item.id);
+    index.operationRevisionsByItemId.delete(item.id);
+    index.timelinesByItemId.delete(item.id);
+    index.timelineAliasesByItemId.delete(item.id);
+  }
+
   #settleCanonicalWindow(
     window: Extract<WorkbenchTranscriptObservation, { kind: "canonicalWindow" }>,
   ) {
@@ -179,6 +260,7 @@ export default class WorkbenchTranscriptRepository {
     }
     this.#settleObservation(window.observations[0]!, true);
     for (const observation of turnObservations) this.#settleObservation(observation, true);
+    const index = this.#createCanonicalSettlementIndex(window.threadId);
 
     for (const turnId of window.materializedTurnIds) {
       const itemObservations = window.observations.filter((observation) => (
@@ -193,10 +275,10 @@ export default class WorkbenchTranscriptRepository {
         throw new Error(`Canonical transcript turn ${turnId} contains duplicate item ids`);
       }
       const desiredSourceIdSet = new Set(desiredSourceIds);
-      const existingItems = this.#all(selectRows(itemTables.threadItems, { where: { turn_id: turnId } }));
+      const existingItems = [...(index.itemsByTurnId.get(turnId)?.values() ?? [])];
       for (const existingItem of existingItems) {
         if (!desiredSourceIdSet.has(existingItem.source_id)) {
-          this.#run(deleteRows(itemTables.threadItems, { id: existingItem.id }));
+          this.#deleteCanonicalItem(index, existingItem);
         }
       }
       const temporaryPositionBase = Math.max(
@@ -209,11 +291,14 @@ export default class WorkbenchTranscriptRepository {
         this.#run(updateRows(itemTables.threadItems, {
           item_position: temporaryPositionBase + offset,
         }, { id: existingItem.id }));
+        this.#replaceCanonicalItem(index, existingItem, {
+          item_position: temporaryPositionBase + offset,
+        });
       }
       for (const [itemPosition, { observation }] of identifiedItems.entries()) {
-        this.#settleObservation(this.#withItemPosition(observation, itemPosition), true);
+        this.#settleObservation(this.#withItemPosition(observation, itemPosition), true, index);
       }
-      this.#materializeTurn(window.threadId, turnId);
+      this.#materializeTurn(window.threadId, turnId, index);
     }
 
     for (const observation of window.observations) {
@@ -222,7 +307,7 @@ export default class WorkbenchTranscriptRepository {
         && observation.kind !== "turn"
         && !this.#itemObservationTurnId(observation)
       ) {
-        this.#settleObservation(observation, true);
+        this.#settleObservation(observation, true, index);
       }
     }
     this.#run(updateRows(coreTables.workbenchThreads, {
@@ -234,6 +319,7 @@ export default class WorkbenchTranscriptRepository {
   #settleObservation(
     observation: WorkbenchTranscriptAtomicObservation | WorkbenchTranscriptCaptureGapObservation,
     insideCanonicalWindow = false,
+    canonicalIndex?: CanonicalSettlementIndex,
   ) {
     if (observation.kind === "thread") {
       this.#run(upsertRow(coreTables.workbenchThreads, {
@@ -311,6 +397,7 @@ export default class WorkbenchTranscriptRepository {
         threadId: observation.threadId,
         turnId: observation.turnId,
         allowUnmaterializedTurn: insideCanonicalWindow,
+        canonicalIndex,
       });
       return observation.threadId;
     }
@@ -324,6 +411,7 @@ export default class WorkbenchTranscriptRepository {
         threadId: observation.entry.threadId,
         turnId: observation.entry.turnId,
         allowUnmaterializedTurn: insideCanonicalWindow,
+        canonicalIndex,
       });
       return observation.entry.threadId;
     }
@@ -342,11 +430,12 @@ export default class WorkbenchTranscriptRepository {
         threadId: observation.entry.threadId,
         turnId: observation.entry.turnId,
         allowUnmaterializedTurn: insideCanonicalWindow,
+        canonicalIndex,
       });
       return observation.entry.threadId;
     }
     if (observation.kind === "browse") {
-      this.#writeBrowseEntry(observation, insideCanonicalWindow);
+      this.#writeBrowseEntry(observation, insideCanonicalWindow, canonicalIndex);
       return observation.entry.threadId;
     }
     if (observation.kind === "captureGap") {
@@ -366,7 +455,7 @@ export default class WorkbenchTranscriptRepository {
       }));
       return observation.threadId;
     }
-    this.#writeNativeEvidence(observation);
+    this.#writeNativeEvidence(observation, canonicalIndex);
     return observation.threadId;
   }
 
@@ -380,8 +469,10 @@ export default class WorkbenchTranscriptRepository {
     threadId,
     turnId,
     allowUnmaterializedTurn = false,
+    canonicalIndex,
   }: {
     allowUnmaterializedTurn?: boolean;
+    canonicalIndex?: CanonicalSettlementIndex;
     createTransform: (itemId: number, sourceRevision: number) => WorkbenchTranscriptItemTransform;
     itemPosition?: number;
     observedAt: number;
@@ -391,20 +482,29 @@ export default class WorkbenchTranscriptRepository {
     threadId: string;
     turnId: string;
   }) {
-    const turn = this.#one(selectRows(coreTables.threadTurns, { where: { id: turnId } }));
+    const turn = canonicalIndex
+      ? canonicalIndex.turnsById.get(turnId) ?? null
+      : this.#one(selectRows(coreTables.threadTurns, { where: { id: turnId } }));
     if (!turn || turn.thread_id !== threadId) {
       throw new Error(`Transcript item ${sourceId} references an unknown turn owner`);
     }
-    if (!allowUnmaterializedTurn && !this.#isTurnMaterialized(threadId, turnId)) {
+    const isTurnMaterialized = canonicalIndex
+      ? canonicalIndex.materializedTurnIds.has(turnId)
+      : this.#isTurnMaterialized(threadId, turnId);
+    if (!allowUnmaterializedTurn && !isTurnMaterialized) {
       throw new Error(`Transcript item ${sourceId} references an unmaterialized turn`);
     }
-    const existing = this.#one(selectRows(itemTables.threadItems, {
-      where: { source_id: sourceId, thread_id: threadId },
-    }));
+    const existing = canonicalIndex
+      ? canonicalIndex.itemsBySourceId.get(sourceId) ?? null
+      : this.#one(selectRows(itemTables.threadItems, {
+        where: { source_id: sourceId, thread_id: threadId },
+      }));
     const existingOwnerTurn = existing?.turn_id === turnId
       ? turn
       : existing
-        ? this.#one(selectRows(coreTables.threadTurns, { where: { id: existing.turn_id } }))
+        ? canonicalIndex
+          ? canonicalIndex.turnsById.get(existing.turn_id) ?? null
+          : this.#one(selectRows(coreTables.threadTurns, { where: { id: existing.turn_id } }))
         : null;
     const stableTurnId = existingOwnerTurn && existingOwnerTurn.turn_index <= turn.turn_index
       ? existingOwnerTurn.id
@@ -414,19 +514,27 @@ export default class WorkbenchTranscriptRepository {
       && (turnId !== stableTurnId || itemPosition === undefined)
       ? existing.item_position
       : itemPosition ?? (() => {
-      const turnItems = this.#all(selectRows(itemTables.threadItems, {
-        where: { turn_id: stableTurnId },
-        orderBy: [{ column: "item_position" }],
-      }));
-      return (turnItems.at(-1)?.item_position ?? -1) + 1;
+      const turnItems = canonicalIndex
+        ? [...(canonicalIndex.itemsByTurnId.get(stableTurnId)?.values() ?? [])]
+        : this.#all(selectRows(itemTables.threadItems, {
+          where: { turn_id: stableTurnId },
+          orderBy: [{ column: "item_position" }],
+        }));
+      return Math.max(-1, ...turnItems.map(({ item_position }) => item_position)) + 1;
     })();
     if (!existing) {
-      const thread = this.#requiredThread(threadId);
+      const thread = canonicalIndex?.thread ?? this.#requiredThread(threadId);
+      const updatedAt = Math.max(thread.updated_at, observedAt);
+      const activityAt = Math.max(thread.activity_at, observedAt);
       this.#run(updateRows(coreTables.workbenchThreads, {
-        updated_at: Math.max(thread.updated_at, observedAt),
-        activity_at: Math.max(thread.activity_at, observedAt),
+        updated_at: updatedAt,
+        activity_at: activityAt,
       }, { id: threadId }));
+      if (canonicalIndex) {
+        canonicalIndex.thread = { ...thread, updated_at: updatedAt, activity_at: activityAt };
+      }
     }
+    let indexedItem = existing;
     const itemId = existing?.id ?? (() => {
       const result = this.#run(insertRow(itemTables.threadItems, {
         source_id: sourceId,
@@ -441,12 +549,26 @@ export default class WorkbenchTranscriptRepository {
       if (!Number.isSafeInteger(allocatedId) || allocatedId <= 0) {
         throw new Error(`Transcript item ${sourceId} received an invalid relational id`);
       }
+      if (canonicalIndex) {
+        indexedItem = this.#replaceCanonicalItem(canonicalIndex, {
+          id: allocatedId,
+          source_id: sourceId,
+          thread_id: threadId,
+          turn_id: stableTurnId,
+          item_position: stableItemPosition,
+          type: "unknown",
+          created_at: observedAt,
+          updated_at: observedAt,
+        }, {});
+      }
       return allocatedId;
     })();
-    const existingOperation = this.#one(selectRows(operationSourceTables.threadItemOperations, {
-      where: { item_id: itemId },
-    }));
-    const transform = createTransform(itemId, (existingOperation?.source_revision ?? -1) + 1);
+    const existingOperationRevision = canonicalIndex
+      ? canonicalIndex.operationRevisionsByItemId.get(itemId) ?? null
+      : this.#one(selectRows(operationSourceTables.threadItemOperations, {
+        where: { item_id: itemId },
+      }))?.source_revision ?? null;
+    const transform = createTransform(itemId, (existingOperationRevision ?? -1) + 1);
     if (existing && existing.type !== transform.itemType) {
       throw new Error(`Transcript item ${sourceId} changed type from ${existing.type} to ${transform.itemType}`);
     }
@@ -456,23 +578,52 @@ export default class WorkbenchTranscriptRepository {
       type: transform.itemType,
       updated_at: observedAt,
     }, { id: itemId }));
-    this.#writeItemTimeline(itemId, timeline, replaceTimeline);
+    if (canonicalIndex && indexedItem) {
+      indexedItem = this.#replaceCanonicalItem(canonicalIndex, indexedItem, {
+        turn_id: stableTurnId,
+        item_position: stableItemPosition,
+        type: transform.itemType,
+        updated_at: observedAt,
+      });
+    }
+    this.#writeItemTimeline(itemId, timeline, replaceTimeline, canonicalIndex);
     this.#runAll(transform.cleanup);
     this.#runAll(transform.mutations);
+    if (canonicalIndex) {
+      for (const mutation of transform.mutations) {
+        if (
+          mutation.tableName === operationSourceTables.threadItemOperations.name
+          && (mutation.kind === "insert" || mutation.kind === "upsert")
+        ) {
+          const revision = mutation.values.find(([column]) => column === "source_revision")?.[1];
+          if (typeof revision === "number") {
+            canonicalIndex.operationRevisionsByItemId.set(itemId, revision);
+          }
+          break;
+        }
+      }
+    }
   }
 
   #writeItemTimeline(
     itemId: number,
     timeline: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }>["timeline"],
     replace: boolean,
+    canonicalIndex?: CanonicalSettlementIndex,
   ) {
     if (!timeline && !replace) return;
-    const existing = this.#one(selectRows(itemTables.threadItemTimelines, { where: { item_id: itemId } }));
+    const existing = canonicalIndex
+      ? canonicalIndex.timelinesByItemId.get(itemId) ?? null
+      : this.#one(selectRows(itemTables.threadItemTimelines, { where: { item_id: itemId } }));
     const existingAliases = existing
-      ? this.#all(selectRows(itemTables.threadItemTimelineAliases, { where: { item_id: itemId } }))
-        .map(({ alias }) => alias)
+      ? canonicalIndex
+        ? canonicalIndex.timelineAliasesByItemId.get(itemId) ?? []
+        : this.#all(selectRows(itemTables.threadItemTimelineAliases, { where: { item_id: itemId } }))
+          .map(({ alias }) => alias)
       : [];
     this.#run(deleteRows(itemTables.threadItemTimelines, { item_id: itemId }));
+    canonicalIndex?.timelinesByItemId.delete(itemId);
+    canonicalIndex?.timelineAliasesByItemId.delete(itemId);
     if (!timeline) return;
     const merged = replace || !existing
       ? {
@@ -494,6 +645,13 @@ export default class WorkbenchTranscriptRepository {
       started_at: merged.startedAt,
       completed_at: merged.completedAt,
     }));
+    canonicalIndex?.timelinesByItemId.set(itemId, {
+      item_id: itemId,
+      first_seen_at: merged.firstSeenAt,
+      last_seen_at: merged.lastSeenAt,
+      started_at: merged.startedAt,
+      completed_at: merged.completedAt,
+    });
     const aliases = replace
       ? timeline.aliases ?? []
       : Array.from(new Set([...existingAliases, ...(timeline.aliases ?? [])]));
@@ -503,18 +661,25 @@ export default class WorkbenchTranscriptRepository {
         alias,
       }));
     }
+    canonicalIndex?.timelineAliasesByItemId.set(itemId, aliases);
   }
 
   #writeBrowseEntry(
     observation: Extract<WorkbenchTranscriptObservation, { kind: "browse" }>,
     allowUnmaterializedTurn = false,
+    canonicalIndex?: CanonicalSettlementIndex,
   ) {
     const { asset, entry } = observation;
-    const turn = this.#one(selectRows(coreTables.threadTurns, { where: { id: entry.turnId } }));
+    const turn = canonicalIndex
+      ? canonicalIndex.turnsById.get(entry.turnId) ?? null
+      : this.#one(selectRows(coreTables.threadTurns, { where: { id: entry.turnId } }));
     if (!turn || turn.thread_id !== entry.threadId) {
       throw new Error(`Browse entry ${entry.entryKey} references an unknown turn owner`);
     }
-    if (!allowUnmaterializedTurn && !this.#isTurnMaterialized(entry.threadId, entry.turnId)) {
+    const isTurnMaterialized = canonicalIndex
+      ? canonicalIndex.materializedTurnIds.has(entry.turnId)
+      : this.#isTurnMaterialized(entry.threadId, entry.turnId);
+    if (!allowUnmaterializedTurn && !isTurnMaterialized) {
       throw new Error(`Browse entry ${entry.entryKey} references an unmaterialized turn`);
     }
     if (asset) {
@@ -537,12 +702,16 @@ export default class WorkbenchTranscriptRepository {
       }
     }
     const sourceItem = entry.commandItemId
-      ? this.#one(selectRows(itemTables.threadItems, {
-        where: { source_id: entry.commandItemId, thread_id: entry.threadId },
-      }))
+      ? canonicalIndex
+        ? canonicalIndex.itemsBySourceId.get(entry.commandItemId) ?? null
+        : this.#one(selectRows(itemTables.threadItems, {
+          where: { source_id: entry.commandItemId, thread_id: entry.threadId },
+        }))
       : null;
     const operation = sourceItem
-      ? this.#one(selectRows(operationSourceTables.threadItemOperations, { where: { item_id: sourceItem.id } }))
+      ? canonicalIndex
+        ? canonicalIndex.operationRevisionsByItemId.has(sourceItem.id)
+        : this.#one(selectRows(operationSourceTables.threadItemOperations, { where: { item_id: sourceItem.id } }))
       : null;
     if (!entry.commandItemId || !sourceItem || !operation) {
       this.#writeNativeEvidence({
@@ -592,13 +761,18 @@ export default class WorkbenchTranscriptRepository {
     }));
   }
 
-  #writeNativeEvidence(observation: Extract<WorkbenchTranscriptObservation, { kind: "nativeEvidence" }>) {
+  #writeNativeEvidence(
+    observation: Extract<WorkbenchTranscriptObservation, { kind: "nativeEvidence" }>,
+    canonicalIndex?: CanonicalSettlementIndex,
+  ) {
     this.#ensureHarness(observation.harnessId);
     const linkKind = observation.itemId ? "item" : observation.turnId ? "turn" : "orphan";
     const item = observation.itemId && observation.threadId
-      ? this.#one(selectRows(itemTables.threadItems, {
-        where: { source_id: observation.itemId, thread_id: observation.threadId },
-      }))
+      ? canonicalIndex
+        ? canonicalIndex.itemsBySourceId.get(observation.itemId) ?? null
+        : this.#one(selectRows(itemTables.threadItems, {
+          where: { source_id: observation.itemId, thread_id: observation.threadId },
+        }))
       : null;
     if (linkKind === "item" && !item) {
       throw new Error(`Native transcript evidence references unknown item ${observation.itemId}`);
@@ -627,11 +801,7 @@ export default class WorkbenchTranscriptRepository {
       Table extends CurrentTableDefinition & {
         columns: { item_id: ColumnDefinition<number, boolean, boolean> };
       },
-    >(table: Table) => (
-      this.#all(selectRows(table, {
-        whereIn: { item_id: itemIds } as WorkbenchDatabaseRowInFilter<Table>,
-      }))
-    );
+    >(table: Table) => this.#rowsByItemIds(table, itemIds);
     const transcriptAssetRefs = [
       ...this.#all(selectRows(evidenceTables.transcriptAssetRefs, { where: { thread_id: threadId } })),
       ...itemRows(evidenceTables.transcriptAssetRefs),
@@ -685,6 +855,22 @@ export default class WorkbenchTranscriptRepository {
     };
   }
 
+  #rowsByItemIds<
+    Table extends CurrentTableDefinition & {
+      columns: { item_id: ColumnDefinition<number, boolean, boolean> };
+    },
+  >(table: Table, itemIds: number[]) {
+    const rows: SelectRow<Table>[] = [];
+    for (let offset = 0; offset < itemIds.length; offset += SQLITE_ITEM_ID_BATCH_SIZE) {
+      rows.push(...this.#all(selectRows(table, {
+        whereIn: {
+          item_id: itemIds.slice(offset, offset + SQLITE_ITEM_ID_BATCH_SIZE),
+        } as WorkbenchDatabaseRowInFilter<Table>,
+      })));
+    }
+    return rows;
+  }
+
   #ensureHarness(harnessId: string) {
     const existing = this.#one(selectRows(coreTables.workbenchHarnesses, { where: { id: harnessId } }));
     if (!existing) this.#run(insertRow(coreTables.workbenchHarnesses, { id: harnessId }));
@@ -708,7 +894,11 @@ export default class WorkbenchTranscriptRepository {
     })) !== null;
   }
 
-  #materializeTurn(threadId: string, turnId: string) {
+  #materializeTurn(
+    threadId: string,
+    turnId: string,
+    canonicalIndex?: CanonicalSettlementIndex,
+  ) {
     this.#run(upsertRow(coreTables.threadTurnMaterializations, {
       turn_id: turnId,
       thread_id: threadId,
@@ -717,6 +907,7 @@ export default class WorkbenchTranscriptRepository {
       conflictColumns: ["turn_id"],
       updateColumns: ["materialized_at"],
     }));
+    canonicalIndex?.materializedTurnIds.add(turnId);
   }
 
   #itemObservationId(observation: WorkbenchTranscriptAtomicObservation) {

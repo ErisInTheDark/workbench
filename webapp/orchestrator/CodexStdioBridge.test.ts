@@ -2165,8 +2165,10 @@ test("context reads bypass the operation queue and negotiate scoped entries with
   }
 });
 
-test("bounded context reads use one stored turn without calling the provider catalog", async () => {
+test("bounded page reads single-flight and wait for one compatibility import", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-known-window-"));
+  const compatibilityImportStarted = deferred<void>();
+  const releaseCompatibilityImport = deferred<void>();
   const sqliteBatches: object[][] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
@@ -2207,6 +2209,10 @@ test("bounded context reads use one stored turn without calling the provider cat
     onNotification() {},
     recordSqliteTranscript: async (observations) => {
       sqliteBatches.push([...observations]);
+      if (observations.some(({ kind }) => kind === "canonicalWindow")) {
+        compatibilityImportStarted.resolve();
+        await releaseCompatibilityImport.promise;
+      }
     },
     resolveProjectFromCwd: async () => ({
       cwd: "C:/repo",
@@ -2226,13 +2232,21 @@ test("bounded context reads use one stored turn without calling the provider cat
     });
     await owner.ensureTranscriptStore().recordProviderTurnPage(metadata, latest, null);
 
-    const response = await bridge.handleBridgeRequest({
+    const responseTask = bridge.handleBridgeRequest({
       id: 20,
-      method: "thread/context/read",
-      params: { includeTurns: false, threadId: "thread" },
-      workbenchThreadContextEntries: { mode: "hydratedTurns" },
-      workbenchThreadHydration: { mode: "latest" },
+      method: "workbench/thread/page/read",
+      params: { cursor: null, threadId: "thread" },
     });
+    const duplicateResponseTask = bridge.handleBridgeRequest({
+      id: 21,
+      method: "workbench/thread/page/read",
+      params: { cursor: null, threadId: "thread" },
+    });
+    await compatibilityImportStarted.promise;
+    let responseSettled = false;
+    void responseTask.then(() => { responseSettled = true; });
+    await Promise.resolve();
+    assert.equal(responseSettled, false);
     assert.deepEqual(upstreamRequests.map((request) => request.method), [
       "thread/read",
       "thread/turns/list",
@@ -2243,6 +2257,9 @@ test("bounded context reads use one stored turn without calling the provider cat
       sortDirection: "desc",
       threadId: "thread",
     });
+    releaseCompatibilityImport.resolve();
+    const [response, duplicateResponse] = await Promise.all([responseTask, duplicateResponseTask]);
+    assert.deepEqual(duplicateResponse?.result, response?.result);
     assert.deepEqual(
       ((response?.result as { thread: Thread }).thread.turns).map((turn) => turn.id),
       ["turn"],

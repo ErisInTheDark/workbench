@@ -191,10 +191,9 @@ function fileChangeTurnKey(threadId: string, turnId: string) {
   return `${threadId}\0${turnId}`;
 }
 
-function backgroundThreadPageReadKey(message: JsonRpcRequest) {
+function threadPageReadKey(message: JsonRpcRequest) {
   const params = WorkbenchThreadPageReadParamsSchema.parse(message.params);
-  if (params.readScope !== "subagentBackground") return undefined;
-  const fields = [params.threadId, params.cursor ?? "", params.cwd ?? "", params.readScope];
+  const fields = [params.threadId, params.cursor ?? "", params.cwd ?? "", params.readScope ?? ""];
   return fields.map((field) => `${field.length}:${field}`).join("|");
 }
 
@@ -1416,7 +1415,7 @@ export default class CodexStdioBridge {
         id: requestId,
         result: await this.threadPageReads.run(
           () => this.readThreadPage(message),
-          { backgroundKey: backgroundThreadPageReadKey(message) },
+          { key: threadPageReadKey(message) },
         ),
       };
     } catch (error) {
@@ -2469,7 +2468,7 @@ export default class CodexStdioBridge {
       throw new Error("thread/context/read did not receive a readable thread.");
     }
     if (!isSubagentBackgroundRead && hydration && thread.turns.length) {
-      void this.captureTranscript("sqlite-compatibility-window", () => (
+      await this.captureTranscript("sqlite-compatibility-window", () => (
         this.importSqliteCompatibilityWindow(thread, transcriptStore)
       ));
     }

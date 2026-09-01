@@ -15,8 +15,10 @@ import type {
   WorkbenchTranscriptObservation,
 } from "./workbench-transcript-types.ts";
 
-function createRepository() {
-  const database = new Database(":memory:");
+function createRepository(options: { onStatement?: (sql: string) => void } = {}) {
+  const database = options.onStatement
+    ? new Database(":memory:", { verbose: options.onStatement })
+    : new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
   return {
@@ -58,6 +60,39 @@ function turnObservation(
     endedAt: turnIndex + 3,
     durationMs: 1_000,
   };
+}
+
+function canonicalWindowSelectCount(itemCount: number) {
+  const statements: string[] = [];
+  const { database, repository } = createRepository({
+    onStatement: (sql) => statements.push(sql),
+  });
+  try {
+    const window = canonicalWindow([
+      threadObservation(),
+      turnObservation("turn", 0),
+      ...Array.from({ length: itemCount }, (_, index): WorkbenchTranscriptAtomicObservation => ({
+        kind: "item",
+        threadId: "thread",
+        turnId: "turn",
+        lifecycle: "completed",
+        observedAt: index + 3,
+        item: {
+          id: `message-${index}`,
+          memoryCitation: null,
+          phase: "commentary",
+          text: `message ${index}`,
+          type: "agentMessage",
+        },
+      })),
+    ], ["turn"]);
+    repository.settle([window]);
+    statements.length = 0;
+    repository.settle([window]);
+    return statements.filter((sql) => /^\s*select\b/iu.test(sql)).length;
+  } finally {
+    database.close();
+  }
 }
 
 function canonicalWindow(
@@ -108,6 +143,15 @@ test("standalone provider turns establish a readable live materialization", () =
   } finally {
     database.close();
   }
+});
+
+test("canonical window relational reads stay bounded as item count grows", () => {
+  const oneItemSelects = canonicalWindowSelectCount(1);
+  const manyItemSelects = canonicalWindowSelectCount(40);
+  assert.ok(
+    manyItemSelects <= oneItemSelects + 2,
+    `Canonical settlement SELECTs grew with item count: one=${oneItemSelects}, many=${manyItemSelects}`,
+  );
 });
 
 test("source ids stay thread-scoped while repeated same-thread items keep their earliest turn owner", () => {
