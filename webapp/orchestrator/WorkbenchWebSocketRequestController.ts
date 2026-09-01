@@ -45,7 +45,6 @@ const ANSI_GREEN = "\u001b[32m";
 const ANSI_RED = "\u001b[31m";
 const ANSI_YELLOW = "\u001b[33m";
 const ANSI_RESET = "\u001b[0m";
-const MAX_ERROR_LOG_MESSAGE_LENGTH = 500;
 
 type RequestId = number | string | null;
 type Timer = ReturnType<typeof setTimeout>;
@@ -138,11 +137,7 @@ function responseIsError(message: unknown) {
 function readResponseErrorMessage(message: unknown) {
   const error = asRecord(asRecord(message)?.error);
   const rawMessage = typeof error?.message === "string" ? error.message : "";
-  const normalized = rawMessage.replace(/\s+/gu, " ").trim();
-  if (!normalized) return null;
-  return normalized.length <= MAX_ERROR_LOG_MESSAGE_LENGTH
-    ? normalized
-    : `${normalized.slice(0, MAX_ERROR_LOG_MESSAGE_LENGTH - 3)}...`;
+  return rawMessage.trim() ? rawMessage : null;
 }
 
 export default class WorkbenchWebSocketRequestController {
@@ -595,8 +590,8 @@ export default class WorkbenchWebSocketRequestController {
     if (requests?.size === 0) this.pending.delete(request.client);
     const totalMs = this.now() - request.startedAt;
     const detail = dimWebSocketDetail(`(process: ${formatDuration(processMs)}, json: ${formatDuration(jsonMs)}, send: ${formatDuration(sendMs)}, in: ${formatBytes(request.inBytes)}, out: ${formatBytes(outBytes)})`);
-    const errorDetail = errorMessage ? ` ${dimWebSocketDetail(`(error: ${errorMessage})`)}` : "";
-    this.writeLine(` WS ${request.method} ${completionToken(outcome)} in ${formatDuration(totalMs)} ${detail}${errorDetail}`);
+    this.writeLine(` WS ${request.method} ${completionToken(outcome)} in ${formatDuration(totalMs)} ${detail}`);
+    if (errorMessage) this.writeLine(`${ANSI_RED} WS ${request.method} ${errorMessage}${ANSI_RESET}`);
   }
 
   private assertActive() {

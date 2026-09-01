@@ -193,7 +193,7 @@ test("warns every two seconds until the matching response send completes", async
   controller.dispose();
 });
 
-test("error completions log one bounded message without response data", async () => {
+test("error completions log the full multiline message in a red follow-up entry without response data", async () => {
   const clock = new FakeClock();
   const { controller, lines } = createController({ clock });
   const client = createClient();
@@ -209,11 +209,11 @@ test("error completions log one bounded message without response data", async ()
     id: 7,
   });
 
-  assert.equal(lines.length, 1);
-  assert.match(lines[0] ?? "", /codex:thread\/read .*error.*error: first line second line/u);
-  assert.equal(lines[0]?.includes("\n"), false);
-  assert.equal(lines[0]?.includes("never-log-response-data"), false);
-  assert.ok((lines[0]?.length ?? Number.POSITIVE_INFINITY) < 1_000);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0] ?? "", /codex:thread\/read .*error.*process:.*json:.*send:.*in:.*out:/u);
+  assert.equal(lines[0]?.includes("first line"), false);
+  assert.equal(lines[1], `\u001b[31m WS codex:thread/read first line\nsecond line ${longTail}\u001b[0m`);
+  assert.equal(lines.join("\n").includes("never-log-response-data"), false);
   controller.dispose();
 });
 
