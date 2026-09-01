@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - recoverCodexAfterSqliteTranscriptCaptureGap: attempt marked provider recovery without blocking later harness availability. Keywords: codex, transcript, recovery.
+ * - recoverCodexSqliteTranscriptBeforeAvailability: settle marked recovery and active provider baselines before reopening Codex. Keywords: codex, transcript, recovery, baseline.
  * - default CodexBridgeNode: own reloadable Codex bridge code while preserving the parent app-server process. Keywords: codex, bridge, handoff.
  */
 import CodexStdioBridge from "./CodexStdioBridge";
@@ -14,14 +14,21 @@ function record(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-export async function recoverCodexAfterSqliteTranscriptCaptureGap(
+export async function recoverCodexSqliteTranscriptBeforeAvailability(
   bridge: Pick<CodexStdioBridge, "recoverSqliteTranscriptThread">,
   transcript: Pick<OrchestratorRuntimeObjects["transcript"], "cutoverFailure" | "pendingRecoveryThreadIds">,
   reportFailure: (threadId: string | null, error: unknown) => void,
   recoverAvailable: () => Promise<void>,
+  activeBaseline?: {
+    captureGap(threadId: string, error: unknown): Promise<Error>;
+    readThread(threadId: string): Promise<void>;
+    threadIds: readonly string[];
+  },
 ) {
   let reportedRecoveryFailure = false;
-  for (const threadId of transcript.pendingRecoveryThreadIds) {
+  const recoveryThreadIds = [...transcript.pendingRecoveryThreadIds];
+  const attemptedThreadIds = new Set(recoveryThreadIds);
+  for (const threadId of recoveryThreadIds) {
     try {
       await bridge.recoverSqliteTranscriptThread(threadId);
       if (transcript.pendingRecoveryThreadIds.includes(threadId)) {
@@ -30,6 +37,22 @@ export async function recoverCodexAfterSqliteTranscriptCaptureGap(
     } catch (error) {
       reportedRecoveryFailure = true;
       reportFailure(threadId, error);
+    }
+  }
+  for (const threadId of new Set(activeBaseline?.threadIds ?? [])) {
+    if (attemptedThreadIds.has(threadId)) continue;
+    try {
+      await activeBaseline!.readThread(threadId);
+    } catch (error) {
+      reportedRecoveryFailure = true;
+      try {
+        reportFailure(threadId, await activeBaseline!.captureGap(threadId, error));
+      } catch (captureError) {
+        reportFailure(
+          threadId,
+          new AggregateError([error, captureError], `SQLite transcript baseline and gap capture failed for ${threadId}.`),
+        );
+      }
     }
   }
   if (!reportedRecoveryFailure && transcript.cutoverFailure) {
@@ -75,6 +98,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
       instructions: codexInstructions,
       prepareTurnStart,
+      readSqliteTranscriptMaterializedTurnIds: (threadId, turnIds) => (
+        transcript.readMaterializedTurnIds(threadId, turnIds)
+      ),
       recordSqliteTranscript: async (observations, recordingContext) => {
         await transcript.record(observations, recordingContext);
       },
@@ -88,7 +114,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       activate: async () => {
         if (build.mode === "replacement") codexMcpGeneration.bump();
         activated = true;
-        await recoverCodexAfterSqliteTranscriptCaptureGap(
+        await recoverCodexSqliteTranscriptBeforeAvailability(
           bridge,
           transcript,
           (threadId, error) => {
@@ -104,6 +130,13 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
             });
           },
           () => harnesses.recoverAvailable("codex"),
+          build.isReplacing("server:database")
+            ? {
+                captureGap: (threadId, error) => transcript.captureProviderGap(threadId, error),
+                readThread: (threadId) => bridge.baselineSqliteTranscriptThread(threadId),
+                threadIds: bridge.activeSqliteTranscriptThreadIds,
+              }
+            : undefined,
         );
       },
       detachForReload: async (replacement) => {

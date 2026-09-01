@@ -93,11 +93,13 @@ export interface OrchestratorDatabaseRegistration {
 export interface OrchestratorTranscriptRegistration {
   assertCutoverReady(): void;
   assertReady(): void;
+  captureProviderGap(threadId: string, error: unknown): Promise<Error>;
   readonly cutoverFailure: Error | null;
   dispose(): void;
   readonly failure: Error | null;
   readonly pendingRecoveryThreadIds: readonly string[];
   read(request: { threadId: string; beforeTurnIndex?: number; turnIds?: string[]; turnLimit: number }): Promise<WorkbenchTranscriptSnapshot | null>;
+  readMaterializedTurnIds(threadId: string, turnIds: readonly string[]): Promise<string[]>;
   record(
     observations: readonly WorkbenchTranscriptObservation[],
     context: WorkbenchTranscriptRecordingContext,

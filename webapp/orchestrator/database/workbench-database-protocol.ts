@@ -36,6 +36,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "query"; statement: WorkbenchDatabaseQuery }
   | { type: "settleTranscript"; observations: readonly WorkbenchTranscriptObservation[] }
   | { type: "readTranscript"; request: WorkbenchTranscriptReadRequest }
+  | { type: "readTranscriptMaterializedTurnIds"; threadId: string; turnIds: readonly string[] }
   | { type: "close" };
 
 export type WorkbenchDatabaseRequest = WorkbenchDatabaseRequestPayload & { id: number };
@@ -47,6 +48,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "queryResult"; rows: WorkbenchDatabaseRow[] }
   | { id: number; type: "transcriptSettlement"; settlement: WorkbenchTranscriptSettlement }
   | { id: number; type: "transcriptSnapshot"; snapshot: WorkbenchTranscriptSnapshot | null }
+  | { id: number; type: "transcriptMaterializedTurnIds"; turnIds: string[] }
   | { id: number; type: "closed" }
   | { id: number; type: "requestFailure"; message: string }
   | { id: number; type: "fatalFailure"; message: string };

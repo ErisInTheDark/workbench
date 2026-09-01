@@ -47,13 +47,19 @@ function observationIdentity(observations: readonly WorkbenchTranscriptObservati
 
 export default class WorkbenchTranscriptController {
   readonly #captureGaps: WorkbenchTranscriptCaptureGapController;
-  readonly #database: Pick<WorkbenchDatabaseController, "failure" | "readTranscript" | "settleTranscript" | "start">;
+  readonly #database: Pick<
+    WorkbenchDatabaseController,
+    "failure" | "readTranscript" | "settleTranscript" | "start"
+  > & Partial<Pick<WorkbenchDatabaseController, "readTranscriptMaterializedTurnIds">>;
   readonly #recorder: WorkbenchTranscriptRecorder;
   readonly #subscriptions: WorkbenchTranscriptSubscriptionController;
   #disposed = false;
 
   constructor(
-    database: Pick<WorkbenchDatabaseController, "failure" | "readTranscript" | "settleTranscript" | "start">,
+    database: Pick<
+      WorkbenchDatabaseController,
+      "failure" | "readTranscript" | "settleTranscript" | "start"
+    > & Partial<Pick<WorkbenchDatabaseController, "readTranscriptMaterializedTurnIds">>,
     captureGaps: WorkbenchTranscriptCaptureGapController,
   ) {
     this.#database = database;
@@ -155,6 +161,24 @@ export default class WorkbenchTranscriptController {
   async read(request: WorkbenchTranscriptReadRequest) {
     this.#assertActive();
     return this.#database.readTranscript(request);
+  }
+
+  async readMaterializedTurnIds(threadId: string, turnIds: readonly string[]) {
+    this.#assertActive();
+    if (!this.#database.readTranscriptMaterializedTurnIds) {
+      throw new Error("Workbench transcript materialization reads are not configured");
+    }
+    return this.#database.readTranscriptMaterializedTurnIds(threadId, turnIds);
+  }
+
+  captureProviderGap(threadId: string, error: unknown) {
+    this.#assertActive();
+    return this.#captureGaps.captureFailure({
+      error,
+      recoverability: "provider",
+      threadId,
+      turnId: null,
+    });
   }
 
   async subscribe(subscription: WorkbenchTranscriptSubscription) {

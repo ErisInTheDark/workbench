@@ -135,6 +135,16 @@ export default class WorkbenchDatabaseController {
     return response.snapshot;
   }
 
+  async readTranscriptMaterializedTurnIds(threadId: string, turnIds: readonly string[]) {
+    await this.start();
+    if (turnIds.length === 0) return [];
+    const response = await this.#request({ type: "readTranscriptMaterializedTurnIds", threadId, turnIds });
+    if (response.type !== "transcriptMaterializedTurnIds") {
+      throw new WorkbenchDatabaseFailure(`Unexpected transcript materialization response: ${response.type}`);
+    }
+    return response.turnIds;
+  }
+
   async close() {
     if (this.#state === "closed") return;
     if (this.#state === "starting" && this.#startPromise === null) {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover app-server generation handoff, reload-safe page recovery, bridge pending cleanup, approval classification, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, reload, transcript, recovery, approval, MCP, test.
+ * - No production exports; Node tests cover app-server generation handoff, active transcript baselines, reload-safe page recovery, bridge pending cleanup, approval classification, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, reload, transcript, recovery, approval, MCP, test.
  */
 
 import assert from "node:assert/strict";
@@ -512,7 +512,7 @@ test("background thread pages repair inactive provider turns directly into both 
   }
 });
 
-test("live provider observations stay ordered across a bridge reload", async () => {
+test("live provider observations and active baselines stay ordered across a bridge reload", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-sqlite-transcript-"));
   const batches: object[][] = [];
   let activeRecords = 0;
@@ -520,7 +520,17 @@ test("live provider observations stay ordered across a bridge reload", async () 
   const createBridge = (
     initialState?: import("./CodexStdioBridge").CodexStdioBridgeReloadState,
   ) => new CodexStdioBridge({
-    appServer: { send() {} } as unknown as CodexAppServer,
+    appServer: {
+      send(message: JsonRpcRequest) {
+        if (message.method !== "thread/read") return;
+        queueMicrotask(() => {
+          void bridge.handleUpstreamMessage({
+            id: message.id ?? null,
+            result: { thread: bridgeThread() },
+          });
+        });
+      },
+    } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState,
@@ -551,13 +561,18 @@ test("live provider observations stay ordered across a bridge reload", async () 
     bridge = createBridge();
     await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: bridgeThread([]) } });
     await bridge.handleUpstreamMessage({
+      method: "turn/started",
+      params: { threadId: "thread", turn: bridgeThread([]).turns[0] },
+    });
+    assert.deepEqual(bridge.activeSqliteTranscriptThreadIds, ["thread"]);
+    await bridge.handleUpstreamMessage({
       method: "item/completed",
       params: { completedAtMs: 2_000, item, threadId: "thread", turnId: "turn" },
     });
     await bridge.waitForIdle();
     assert.deepEqual(batches.flatMap((batch) => batch.map((observation) => (
       (observation as { kind: string }).kind
-    ))), ["thread", "turn", "item"]);
+    ))), ["thread", "turn", "turn", "item"]);
     const bootstrap = batches[0] as Array<{ kind: string; turnIndex?: number }>;
     assert.deepEqual(
       bootstrap.map(({ kind, turnIndex }) => ({ kind, turnIndex })),
@@ -566,6 +581,14 @@ test("live provider observations stay ordered across a bridge reload", async () 
 
     const state = await bridge.detachForReload();
     bridge = createBridge(state);
+    assert.deepEqual(bridge.activeSqliteTranscriptThreadIds, ["thread"]);
+    const batchesBeforeBaseline = batches.length;
+    await bridge.baselineSqliteTranscriptThread("thread");
+    assert.ok(batches.length > batchesBeforeBaseline);
+    assert.deepEqual(
+      batches.at(-1)?.map((observation) => (observation as { kind?: string }).kind),
+      ["thread", "turn"],
+    );
     await bridge.handleUpstreamMessage({
       method: "turn/completed",
       params: {
@@ -580,6 +603,7 @@ test("live provider observations stay ordered across a bridge reload", async () 
       },
     });
     await bridge.waitForIdle();
+    assert.deepEqual(bridge.activeSqliteTranscriptThreadIds, []);
     assert.equal((batches.at(-1)?.[0] as { kind?: string })?.kind, "turn");
 
     const replacementState = await bridge.detachForReload();
@@ -977,6 +1001,9 @@ test("live transcript recording survives throwing compatibility readers across r
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState,
     onNotification() {},
+    readSqliteTranscriptMaterializedTurnIds: async (threadId, turnIds) => (
+      repository.readMaterializedTurnIds(threadId, turnIds)
+    ),
     recordSqliteTranscript: async (observations) => {
       sqliteBatches.push([...observations]);
       try {
@@ -994,17 +1021,15 @@ test("live transcript recording survives throwing compatibility readers across r
     sendToClient() {},
     storageRoot: root,
   });
-  const guardCompatibilityReaders = () => {
+  const guardSqliteCompatibilityReader = () => {
     const owner = bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore };
     const store = owner.ensureTranscriptStore() as CodexTranscriptStore & {
-      readStoredThreadWindow: () => Promise<never>;
       readThreadContextEntries: () => Promise<never>;
     };
     const fail = async (): Promise<never> => {
       compatibilityReads += 1;
       throw new Error("legacy compatibility reader crossed the live boundary");
     };
-    store.readStoredThreadWindow = fail;
     store.readThreadContextEntries = fail;
   };
   const item: ThreadItem = {
@@ -1033,7 +1058,7 @@ test("live transcript recording survives throwing compatibility readers across r
 
   try {
     bridge = createBridge();
-    guardCompatibilityReaders();
+    guardSqliteCompatibilityReader();
     await bridge.handleUpstreamMessage({
       method: "thread/started",
       params: { thread: { ...bridgeThread(), turns: [] } },
@@ -1164,7 +1189,7 @@ test("live transcript recording survives throwing compatibility readers across r
     const reloadState = await bridge.detachForReload();
     assert.equal(reloadState.transcriptSteers?.size, 1);
     bridge = createBridge(reloadState);
-    guardCompatibilityReaders();
+    guardSqliteCompatibilityReader();
     await bridge.handleUpstreamMessage({
       method: "turn/completed",
       params: {
@@ -1190,6 +1215,14 @@ test("live transcript recording survives throwing compatibility readers across r
       result: { thread: { ...bridgeThread(), turns: [], updatedAt: 5 } },
     });
     await bridge.waitForIdle();
+    const compatibilityOwner = bridge as unknown as {
+      ensureTranscriptStore(): CodexTranscriptStore;
+      importSqliteCompatibilityWindow(thread: Thread, transcriptStore: CodexTranscriptStore): Promise<void>;
+    };
+    await compatibilityOwner.importSqliteCompatibilityWindow(
+      bridgeThread(),
+      compatibilityOwner.ensureTranscriptStore(),
+    );
 
     const observations = sqliteBatches.flat();
     assert.equal(compatibilityReads, 0);
@@ -2169,6 +2202,7 @@ test("bounded page reads single-flight and wait for one compatibility import", a
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-known-window-"));
   const compatibilityImportStarted = deferred<void>();
   const releaseCompatibilityImport = deferred<void>();
+  const materializedTurnIds = new Set<string>();
   const sqliteBatches: object[][] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
@@ -2207,11 +2241,16 @@ test("bounded page reads single-flight and wait for one compatibility import", a
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
+    readSqliteTranscriptMaterializedTurnIds: async (_threadId, turnIds) => (
+      turnIds.filter((turnId) => materializedTurnIds.has(turnId))
+    ),
     recordSqliteTranscript: async (observations) => {
       sqliteBatches.push([...observations]);
-      if (observations.some(({ kind }) => kind === "canonicalWindow")) {
+      const compatibilityWindow = observations.find(({ kind }) => kind === "canonicalWindow");
+      if (compatibilityWindow?.kind === "canonicalWindow") {
         compatibilityImportStarted.resolve();
         await releaseCompatibilityImport.promise;
+        for (const turnId of compatibilityWindow.materializedTurnIds) materializedTurnIds.add(turnId);
       }
     },
     resolveProjectFromCwd: async () => ({
@@ -2226,10 +2265,18 @@ test("bounded page reads single-flight and wait for one compatibility import", a
   try {
     const metadata = { ...bridgeThread(), turns: [] } as Thread;
     const latest = bridgeThread().turns[0]!;
-    await owner.ensureTranscriptStore().recordProviderTurnCatalog(metadata, [latest], {
+    const earlier = {
+      ...latest,
+      completedAt: 1,
+      id: "earlier",
+      startedAt: 0,
+      status: "completed" as const,
+    };
+    await owner.ensureTranscriptStore().recordProviderTurnCatalog(metadata, [earlier, latest], {
       cursor: null,
       turnId: latest.id,
     });
+    await owner.ensureTranscriptStore().recordProviderTurnPage(metadata, earlier, null);
     await owner.ensureTranscriptStore().recordProviderTurnPage(metadata, latest, null);
 
     const responseTask = bridge.handleBridgeRequest({
@@ -2272,7 +2319,7 @@ test("bounded page reads single-flight and wait for one compatibility import", a
 
     sqliteBatches.length = 0;
     const fullResponse = await bridge.handleBridgeRequest({
-      id: 21,
+      id: 22,
       method: "thread/context/read",
       params: { includeTurns: true, threadId: "thread" },
       workbenchThreadContextEntries: { mode: "hydratedTurns" },
@@ -2280,12 +2327,44 @@ test("bounded page reads single-flight and wait for one compatibility import", a
     });
     assert.deepEqual(
       ((fullResponse?.result as { thread: Thread }).thread.turns).map((turn) => turn.id),
-      ["turn"],
+      ["earlier", "turn"],
     );
     await bridge.waitForIdle();
-    assert.ok(sqliteBatches.flat().some((observation) => (
+    const partialWindow = sqliteBatches.flat().find((observation) => (
       (observation as { kind?: string }).kind === "canonicalWindow"
-    )));
+    )) as {
+      materializedTurnIds: string[];
+      observations: Array<{ kind: string; turnId?: string; turnIndex?: number }>;
+    } | undefined;
+    assert.deepEqual(partialWindow?.materializedTurnIds, ["earlier"]);
+    assert.deepEqual(
+      partialWindow?.observations
+        .filter(({ kind }) => kind === "turn")
+        .map(({ turnId, turnIndex }) => ({ turnId, turnIndex })),
+      [
+        { turnId: "earlier", turnIndex: 0 },
+        { turnId: "turn", turnIndex: 1 },
+      ],
+    );
+
+    const store = owner.ensureTranscriptStore() as CodexTranscriptStore & {
+      readThreadContextEntries(): Promise<never>;
+    };
+    store.readThreadContextEntries = async () => {
+      throw new Error("materialized turns must not reach the compatibility reader");
+    };
+    sqliteBatches.length = 0;
+    const compatibilityOwner = bridge as unknown as {
+      importSqliteCompatibilityWindow(thread: Thread, transcriptStore: CodexTranscriptStore): Promise<void>;
+    };
+    await compatibilityOwner.importSqliteCompatibilityWindow(
+      (fullResponse?.result as { thread: Thread }).thread,
+      store,
+    );
+    await bridge.waitForIdle();
+    assert.equal(sqliteBatches.flat().some((observation) => (
+      (observation as { kind?: string }).kind === "canonicalWindow"
+    )), false);
   } finally {
     await bridge.dispose();
     await fs.rm(root, { force: true, recursive: true });

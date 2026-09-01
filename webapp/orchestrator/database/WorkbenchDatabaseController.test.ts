@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, and relational discriminator constraints. Keywords: database, worker, schema, test.
+ * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, transcript materialization reads, and relational discriminator constraints. Keywords: database, worker, schema, transcript, test.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rename, rm } from "node:fs/promises";
@@ -247,6 +247,10 @@ test("terminal transcript turns may preserve missing native timestamps without p
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-native-turns-"));
   const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   try {
+    assert.deepEqual(
+      await controller.readTranscriptMaterializedTurnIds("thread", ["turn", "missing"]),
+      [],
+    );
     await controller.settleTranscript([{
       kind: "canonicalWindow",
       contentVersion: 3,
@@ -281,6 +285,10 @@ test("terminal transcript turns may preserve missing native timestamps without p
       ],
     }]);
     assert.equal(controller.state, "ready");
+    assert.deepEqual(
+      await controller.readTranscriptMaterializedTurnIds("thread", ["missing", "turn", "turn"]),
+      ["turn"],
+    );
     assert.deepEqual(
       (await controller.readTranscript({ threadId: "thread", turnLimit: 1 }))?.turns.map((turn) => ({
         state: turn.state,

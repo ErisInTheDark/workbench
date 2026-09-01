@@ -132,6 +132,15 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     });
     return;
   }
+  if (request.type === "readTranscriptMaterializedTurnIds") {
+    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
+    post({
+      id: request.id,
+      type: "transcriptMaterializedTurnIds",
+      turnIds: transcriptRepository.readMaterializedTurnIds(request.threadId, request.turnIds),
+    });
+    return;
+  }
   if (!database) throw new Error("Workbench database is not initialized");
   database.close();
   transcriptRepository = null;

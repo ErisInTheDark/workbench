@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
-import { recoverCodexAfterSqliteTranscriptCaptureGap } from "./CodexBridgeNode";
+import { recoverCodexSqliteTranscriptBeforeAvailability } from "./CodexBridgeNode";
 import WorkbenchDatabaseNode from "./WorkbenchDatabaseNode";
 
 async function exists(filePath: string) {
@@ -55,7 +55,7 @@ test("the database node proves readiness before exposing transcript work and clo
 test("Codex recovery settles every provider gap before harness availability", async () => {
   const pendingThreadIds = ["thread-a", "thread-b"];
   const calls: string[] = [];
-  await recoverCodexAfterSqliteTranscriptCaptureGap({
+  await recoverCodexSqliteTranscriptBeforeAvailability({
     recoverSqliteTranscriptThread: async (threadId) => {
       calls.push(`recover:${threadId}`);
       assert.equal(pendingThreadIds.shift(), threadId);
@@ -78,7 +78,7 @@ test("Codex recovery settles every provider gap before harness availability", as
 test("Codex recovery reports a partial failure and still makes the harness available", async () => {
   const pendingThreadIds = ["thread-a", "thread-b"];
   const calls: string[] = [];
-  await recoverCodexAfterSqliteTranscriptCaptureGap({
+  await recoverCodexSqliteTranscriptBeforeAvailability({
     recoverSqliteTranscriptThread: async (threadId) => {
       calls.push(`recover:${threadId}`);
       if (threadId === "thread-a") throw new Error("provider read failed");
@@ -103,7 +103,7 @@ test("Codex recovery reports a partial failure and still makes the harness avail
 
 test("an unrecoverable gap reports cutover health without blocking harness availability", async () => {
   const calls: string[] = [];
-  await recoverCodexAfterSqliteTranscriptCaptureGap({
+  await recoverCodexSqliteTranscriptBeforeAvailability({
     recoverSqliteTranscriptThread: async (threadId) => {
       calls.push(`unexpected-recovery:${threadId}`);
     },
@@ -117,6 +117,42 @@ test("an unrecoverable gap reports cutover health without blocking harness avail
   });
   assert.deepEqual(calls, [
     "failure:cutover:one unrecoverable gap",
+    "available",
+  ]);
+});
+
+test("database replacement baselines each exact active Codex thread after marked recovery", async () => {
+  const pendingThreadIds = ["recovery-thread"];
+  const calls: string[] = [];
+  await recoverCodexSqliteTranscriptBeforeAvailability({
+    recoverSqliteTranscriptThread: async (threadId) => {
+      calls.push(`recover:${threadId}`);
+      pendingThreadIds.splice(pendingThreadIds.indexOf(threadId), 1);
+    },
+  }, {
+    get cutoverFailure() { return null; },
+    get pendingRecoveryThreadIds() { return [...pendingThreadIds]; },
+  }, (threadId, error) => {
+    calls.push(`failure:${threadId}:${error instanceof Error ? error.message : String(error)}`);
+  }, async () => {
+    calls.push("available");
+  }, {
+    captureGap: async (threadId, error) => {
+      calls.push(`gap:${threadId}:${error instanceof Error ? error.message : String(error)}`);
+      return error instanceof Error ? error : new Error(String(error));
+    },
+    readThread: async (threadId) => {
+      calls.push(`baseline:${threadId}`);
+      if (threadId === "failed-thread") throw new Error("provider baseline failed");
+    },
+    threadIds: ["recovery-thread", "active-thread", "active-thread", "failed-thread"],
+  });
+  assert.deepEqual(calls, [
+    "recover:recovery-thread",
+    "baseline:active-thread",
+    "baseline:failed-thread",
+    "gap:failed-thread:provider baseline failed",
+    "failure:failed-thread:provider baseline failed",
     "available",
   ]);
 });

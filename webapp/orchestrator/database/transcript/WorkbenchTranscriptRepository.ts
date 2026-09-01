@@ -153,6 +153,17 @@ export default class WorkbenchTranscriptRepository {
     })();
   }
 
+  readMaterializedTurnIds(threadId: string, turnIds: readonly string[]) {
+    const requestedTurnIds = [...new Set(turnIds)];
+    if (requestedTurnIds.length === 0) return [];
+    const materializations = this.#all(selectRows(coreTables.threadTurnMaterializations, {
+      where: { thread_id: threadId },
+      whereIn: { turn_id: requestedTurnIds },
+    }));
+    const materializedTurnIds = new Set(materializations.map(({ turn_id }) => turn_id));
+    return requestedTurnIds.filter((turnId) => materializedTurnIds.has(turnId));
+  }
+
   #createCanonicalSettlementIndex(threadId: string): CanonicalSettlementIndex {
     const thread = this.#requiredThread(threadId);
     const turns = this.#all(selectRows(coreTables.threadTurns, { where: { thread_id: threadId } }));
