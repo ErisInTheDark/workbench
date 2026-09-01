@@ -34,6 +34,7 @@ import {
   FlagIcon,
   MoreVerticalIcon,
   NeedsAttentionThreadIcon,
+  PinIcon,
   ProposedCommitThreadIcon,
   RestoreThreadIcon,
   SettleThreadIcon,
@@ -134,6 +135,7 @@ export default function WorkbenchThreadListItem({
   role,
   selected = false,
   showActions = false,
+  showPinPriorityIcon = false,
   showTooltip = true,
   tabIndex,
   tooltipDetails,
@@ -160,6 +162,7 @@ export default function WorkbenchThreadListItem({
   role?: "tab";
   selected?: boolean;
   showActions?: boolean;
+  showPinPriorityIcon?: boolean;
   showTooltip?: boolean;
   tabIndex?: number;
   tooltipDetails?: ReactNode;
@@ -205,6 +208,8 @@ export default function WorkbenchThreadListItem({
         ? "stopped"
         : "completed";
   const statusClassName = entry.entryKind === "draft" ? "text-muted" : getWorkbenchThreadStatusClassName(statusTone);
+  const priority = group === "snoozed" ? "snoozed" : showPinPriorityIcon && pinned ? "pinned" : null;
+  const PriorityIcon = priority === "snoozed" ? SnoozedThreadIcon : priority === "pinned" ? PinIcon : null;
   const ActionIcon = action === "discard" ? DiscardDraftIcon : action === "restore" ? RestoreThreadIcon : action === "wake" ? UnsnoozeThreadIcon : SettleThreadIcon;
   const actionLabel = action === "complete" ? "Completed" : action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Wake";
   const projectName = project ? `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
@@ -289,7 +294,7 @@ export default function WorkbenchThreadListItem({
           metadata={(
             <span className="grid grid-cols-[auto_auto] items-center gap-1.5">
               {claimedFileCount ? <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true"><FlagIcon className="size-3.5" /><span>{claimedFileCount}</span></span> : null}
-              {group === "snoozed" ? <span data-role="thread-priority-icon" className="inline-flex size-4 items-center justify-center"><SnoozedThreadIcon className="size-3.5" /></span> : null}
+              {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 items-center justify-center"><PriorityIcon className="size-3.5" /></span> : null}
             </span>
           )}
           statusIcon={<Icon className={`size-3.5 ${statusClassName}`} />}

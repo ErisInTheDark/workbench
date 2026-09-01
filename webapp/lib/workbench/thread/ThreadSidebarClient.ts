@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - ThreadSidebarTransport/ThreadSidebarClientOptions/ThreadSidebarAcceptedIntent: pushed snapshot, mutation ports, and provider-confirmed local admission. Keywords: browser, websocket, drafts, intent.
- * - default ThreadSidebarClient: subscribable browser observation, cross-project status and pin projection, revision, optimistic draft, and leave-safe queue owner. Keywords: sidebar, project, pinned, status, external store, debounce, flush.
+ * - ThreadSidebarTransport/ThreadSidebarClientOptions/ThreadSidebarAcceptedIntent: project and global observation, mutation ports, and provider-confirmed local admission. Keywords: browser, websocket, drafts, intent.
+ * - default ThreadSidebarClient: subscribable project/global sidebar map, cross-project pin projection, revision, optimistic draft, and leave-safe project-qualified queue owner. Keywords: sidebar, project, pinned, status, external store, debounce, flush.
  */
 import type { WorkbenchThreadSidebarStore } from "../../types";
 import { areDeeplyEqual } from "../deep-equality";
 import { findWorkbenchThreadFolder, moveWorkbenchThreadDisplayItem, replaceWorkbenchThreadFolderMember, resolveWorkbenchThreadDisplayOrder, sortThreadSidebarEntries } from "./thread-display-order";
-import { createDraftTitle, createWorkbenchProjectThreadSummary, type WorkbenchHarnessId, type WorkbenchPinnedThreadLayoutSnapshot, type WorkbenchProjectThreadSummaries, type WorkbenchProjectThreadSummary, type WorkbenchProjectThreadSummaryUpdate, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
+import { createDraftTitle, createWorkbenchProjectThreadSummary, type WorkbenchHarnessId, type WorkbenchHomeThreadDisplayOrderSnapshot, type WorkbenchPinnedThreadLayoutSnapshot, type WorkbenchProjectThreadSidebars, type WorkbenchProjectThreadSidebarUpdate, type WorkbenchProjectThreadSummaries, type WorkbenchProjectThreadSummary, type WorkbenchProjectThreadSummaryUpdate, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
 
 export interface ThreadSidebarOpenResult {
   pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot;
@@ -14,10 +14,19 @@ export interface ThreadSidebarOpenResult {
   sidebar: WorkbenchThreadSidebarSnapshot;
 }
 
+export interface ThreadSidebarGlobalOpenResult {
+  homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshot | null;
+  pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot;
+  projectSidebars: WorkbenchProjectThreadSidebars;
+}
+
 export interface ThreadSidebarTransport {
   close(projectId: string): Promise<void>;
+  closeGlobal?(): Promise<void>;
   deleteDraft(projectId: string, draftId: string, clientUpdatedAt: number): Promise<void>;
+  moveDraft?(sourceProjectId: string, destinationProjectId: string, draftId: string): Promise<void>;
   open(projectId: string): Promise<ThreadSidebarOpenResult | WorkbenchThreadSidebarSnapshot>;
+  openGlobal?(): Promise<ThreadSidebarGlobalOpenResult>;
   upsertDraft(projectId: string, draft: WorkbenchThreadDraft, folderId?: string): Promise<void>;
 }
 export interface ThreadSidebarClientOptions {
@@ -28,6 +37,7 @@ export interface ThreadSidebarAcceptedIntent {
   activityAt?: number;
   draftId?: string;
   identity: { harness: WorkbenchHarnessId; threadId: string };
+  projectId?: string;
   title: string;
   turnId: string;
 }
@@ -36,14 +46,19 @@ interface DraftQueue {
   draft: WorkbenchThreadDraft | null;
   folderId: string | null;
   inFlight: Promise<void> | null;
+  projectId: string;
   retired: boolean;
   timer: ReturnType<typeof setTimeout> | null;
 }
 
 export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore {
   private isOpen = false;
+  private homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshot = { displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder" };
+  private homeThreadDisplayOrderSupported = false;
+  private mode: "closed" | "global" | "project" = "closed";
   private pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot = { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" };
   private projectId: string | null = null;
+  private projectThreadSidebars: WorkbenchProjectThreadSidebars = { projects: [] };
   private projectThreadSummaries: WorkbenchProjectThreadSummaries = { projects: [] };
   private revision = -1;
   private snapshot: WorkbenchThreadSidebarSnapshot | null = null;
@@ -52,7 +67,10 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   constructor(private readonly options: ThreadSidebarClientOptions) {}
 
   readonly getSnapshot = () => this.snapshot;
+  readonly getHomeThreadDisplayOrder = () => this.homeThreadDisplayOrder;
+  readonly getHomeThreadDisplayOrderSupported = () => this.homeThreadDisplayOrderSupported;
   readonly getPinnedThreadLayout = () => this.pinnedThreadLayout;
+  readonly getProjectThreadSidebars = () => this.projectThreadSidebars;
   readonly getProjectThreadSummaries = () => this.projectThreadSummaries;
   readonly subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -62,8 +80,9 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   };
 
   async open(projectId: string) {
-    if (this.projectId === projectId && this.snapshot && this.isOpen) return true;
-    if (this.projectId && this.projectId !== projectId) await this.close();
+    if (this.mode === "project" && this.projectId === projectId && this.snapshot && this.isOpen) return true;
+    if (this.mode !== "closed") await this.close();
+    this.mode = "project";
     this.projectId = projectId;
     this.isOpen = false;
     this.revision = -1;
@@ -79,7 +98,52 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       return false;
     }
   }
-  accept(snapshot: WorkbenchThreadSidebarSnapshot) { if (snapshot.projectId === this.projectId && snapshot.revision > this.revision) this.install(snapshot); }
+  async openGlobal() {
+    if (this.mode === "global" && this.isOpen) return true;
+    if (this.mode !== "closed") await this.close();
+    this.mode = "global";
+    this.projectId = null;
+    this.snapshot = null;
+    this.homeThreadDisplayOrderSupported = false;
+    this.revision = -1;
+    this.projectThreadSidebars = { projects: [] };
+    this.publish();
+    try {
+      if (!this.options.transport.openGlobal) throw new Error("Global thread observation is unavailable.");
+      const result = await this.options.transport.openGlobal();
+      this.homeThreadDisplayOrder = result.homeThreadDisplayOrder ?? { displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder" };
+      this.homeThreadDisplayOrderSupported = Boolean(result.homeThreadDisplayOrder);
+      this.pinnedThreadLayout = result.pinnedThreadLayout;
+      for (const sidebar of result.projectSidebars.projects) this.installProjectSidebar(sidebar);
+      this.isOpen = true;
+      this.publish();
+      return true;
+    } catch (error) {
+      this.mode = "closed";
+      this.isOpen = false;
+      this.homeThreadDisplayOrderSupported = false;
+      this.projectThreadSidebars = { projects: [] };
+      this.projectThreadSummaries = { projects: [] };
+      this.publish();
+      throw error;
+    }
+  }
+  accept(snapshot: WorkbenchThreadSidebarSnapshot) {
+    if (this.mode === "global") {
+      if (this.installProjectSidebar(snapshot)) this.publish();
+      return;
+    }
+    if (snapshot.projectId === this.projectId && snapshot.revision > this.revision) this.install(snapshot);
+  }
+  acceptProjectThreadSidebar(update: WorkbenchProjectThreadSidebarUpdate) {
+    if (this.mode === "global" && this.installProjectSidebar(update.sidebar)) this.publish();
+  }
+  acceptHomeThreadDisplayOrder(update: WorkbenchHomeThreadDisplayOrderSnapshot) {
+    if (this.mode !== "global" || update.revision <= this.homeThreadDisplayOrder.revision) return;
+    this.homeThreadDisplayOrder = update;
+    this.homeThreadDisplayOrderSupported = true;
+    this.publish();
+  }
   acceptProjectThreadSummaries(snapshot: WorkbenchProjectThreadSummaries) {
     const changed = snapshot.projects.reduce((didChange, summary) => this.setProjectThreadSummary(summary) || didChange, false);
     if (changed) this.publish();
@@ -93,33 +157,45 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.publish();
   }
   acceptActivity(update: WorkbenchThreadActivityUpdate) {
-    if (update.projectId !== this.projectId || update.revision <= this.revision || !this.snapshot) return;
-    const entries = this.snapshot.entries.map((entry) => entry.entryKind !== "draft" && entry.identity.harness === update.identity.harness && entry.identity.threadId === update.identity.threadId
+    const current = this.mode === "global"
+      ? this.projectThreadSidebars.projects.find(({ projectId }) => projectId === update.projectId) ?? null
+      : update.projectId === this.projectId ? this.snapshot : null;
+    if (!current || update.revision <= current.revision) return;
+    const entries = current.entries.map((entry) => entry.entryKind !== "draft" && entry.identity.harness === update.identity.harness && entry.identity.threadId === update.identity.threadId
       ? entry.entryKind === "thread" && update.orderAt !== undefined
         ? { ...entry, activityAt: update.activityAt, orderAt: update.orderAt }
         : { ...entry, activityAt: update.activityAt }
       : entry);
-    this.revision = update.revision;
-    const resolved = resolveWorkbenchThreadDisplayOrder(entries, update.displayOrder ?? this.snapshot.displayOrder);
-    this.snapshot = { ...this.snapshot, ...resolved, revision: update.revision };
+    const resolved = resolveWorkbenchThreadDisplayOrder(entries, update.displayOrder ?? current.displayOrder);
+    const next = { ...current, ...resolved, revision: update.revision };
+    if (this.mode === "global") this.replaceProjectSidebar(next);
+    else {
+      this.revision = update.revision;
+      this.snapshot = next;
+    }
+    this.syncProjectThreadSummary(next);
     this.publish();
   }
   edit(draft: WorkbenchThreadDraft, options: { folderId?: string } = {}) {
-    if (draft.projectId !== this.projectId) throw new Error("The draft does not belong to the observed project.");
-    const queue = this.queues.get(draft.draftId) ?? { draft: null, folderId: null, inFlight: null, retired: false, timer: null };
+    if (this.mode === "project" && draft.projectId !== this.projectId) throw new Error("The draft does not belong to the observed project.");
+    if (this.mode === "closed") throw new Error("The draft sidebar is not observed.");
+    const queueKey = this.queueKey(draft.projectId, draft.draftId);
+    const queue = this.queues.get(queueKey) ?? { draft: null, folderId: null, inFlight: null, projectId: draft.projectId, retired: false, timer: null };
     if (queue.retired) return;
     if (options.folderId) queue.folderId = options.folderId;
     queue.draft = draft;
     if (queue.timer) clearTimeout(queue.timer);
     queue.timer = setTimeout(() => {
       queue.timer = null;
-      void this.flushQueue(draft.draftId, queue).catch(() => undefined);
+      void this.flushQueue(queueKey, queue).catch(() => undefined);
     }, 500);
-    this.queues.set(draft.draftId, queue);
+    this.queues.set(queueKey, queue);
     this.installOptimisticDraft(draft, queue.folderId);
   }
   acceptIntent(intent: ThreadSidebarAcceptedIntent) {
-    const queue = intent.draftId ? this.queues.get(intent.draftId) : null;
+    const projectId = intent.projectId ?? this.projectId ?? (intent.draftId ? this.findDraftProjectId(intent.draftId) : null);
+    const queueKey = intent.draftId && projectId ? this.queueKey(projectId, intent.draftId) : null;
+    const queue = queueKey ? this.queues.get(queueKey) : null;
     if (queue?.timer) clearTimeout(queue.timer);
     if (queue) {
       queue.draft = null;
@@ -129,16 +205,17 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     const inFlight = queue?.inFlight?.catch(() => undefined) ?? Promise.resolve();
     if (intent.draftId && queue) {
       void inFlight.finally(() => {
-        if (this.queues.get(intent.draftId!) === queue) this.queues.delete(intent.draftId!);
+        if (queueKey && this.queues.get(queueKey) === queue) this.queues.delete(queueKey);
       });
     }
-    if (this.snapshot) {
+    const current = projectId ? this.getProjectSidebar(projectId) : null;
+    if (current) {
       const activityAt = intent.activityAt ?? Date.now();
-      const existing = this.snapshot.entries.find((entry) => entry.entryKind === "thread"
+      const existing = current.entries.find((entry) => entry.entryKind === "thread"
         && entry.identity.harness === intent.identity.harness
         && entry.identity.threadId === intent.identity.threadId);
       const sourceDraft = intent.draftId
-        ? this.snapshot.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === intent.draftId)
+        ? current.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === intent.draftId)
         : null;
       const entry = {
         activityAt,
@@ -154,51 +231,112 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
         title: existing?.entryKind === "thread" ? existing.title : intent.title,
       };
       const displayOrder = intent.draftId
-        ? replaceWorkbenchThreadFolderMember(this.snapshot.displayOrder, `draft:${intent.draftId}`, `${intent.identity.harness}:${intent.identity.threadId}`)
-        : this.snapshot.displayOrder;
+        ? replaceWorkbenchThreadFolderMember(current.displayOrder, `draft:${intent.draftId}`, `${intent.identity.harness}:${intent.identity.threadId}`)
+        : current.displayOrder;
       const resolved = resolveWorkbenchThreadDisplayOrder([
-          ...this.snapshot.entries.filter((candidate) => {
+          ...current.entries.filter((candidate) => {
             if (candidate.entryKind === "draft") return candidate.draft.draftId !== intent.draftId;
             if (candidate.entryKind === "subagent") return true;
             return candidate.identity.harness !== intent.identity.harness || candidate.identity.threadId !== intent.identity.threadId;
           }),
           entry,
         ], displayOrder);
-      this.snapshot = { ...this.snapshot, ...resolved };
-      this.syncSelectedProjectThreadSummary();
+      this.replaceProjectSidebar({ ...current, ...resolved });
+      this.syncProjectThreadSummary({ ...current, ...resolved });
       this.publish();
     }
     return inFlight;
   }
-  async delete(draftId: string, clientUpdatedAt = Date.now()) {
-    const queue = this.queues.get(draftId);
+  async delete(draftId: string, clientUpdatedAt = Date.now(), projectId = this.projectId ?? this.findDraftProjectId(draftId)) {
+    if (!projectId) return;
+    const queueKey = this.queueKey(projectId, draftId);
+    const queue = this.queues.get(queueKey);
     if (queue?.timer) clearTimeout(queue.timer);
     if (queue) { queue.timer = null; queue.draft = null; await queue.inFlight; }
-    if (!this.projectId) return;
-    await this.options.transport.deleteDraft(this.projectId, draftId, clientUpdatedAt);
-    this.queues.delete(draftId);
-    if (this.snapshot) {
+    await this.options.transport.deleteDraft(projectId, draftId, clientUpdatedAt);
+    this.queues.delete(queueKey);
+    const current = this.getProjectSidebar(projectId);
+    if (current) {
       const resolved = resolveWorkbenchThreadDisplayOrder(
-        this.snapshot.entries.filter((entry) => entry.entryKind !== "draft" || entry.draft.draftId !== draftId),
-        this.snapshot.displayOrder,
+        current.entries.filter((entry) => entry.entryKind !== "draft" || entry.draft.draftId !== draftId),
+        current.displayOrder,
       );
-      this.snapshot = { ...this.snapshot, ...resolved };
+      this.replaceProjectSidebar({ ...current, ...resolved });
       this.publish();
     }
+  }
+  async moveDraft(sourceProjectId: string, destinationProjectId: string, draftId: string) {
+    const queueKey = this.queueKey(sourceProjectId, draftId);
+    const queue = this.queues.get(queueKey);
+    if (queue) await this.flushQueue(queueKey, queue);
+    if (!this.options.transport.moveDraft) throw new Error("Draft moves are unavailable.");
+    await this.options.transport.moveDraft(sourceProjectId, destinationProjectId, draftId);
+    this.queues.delete(queueKey);
+
+    const source = this.getProjectSidebar(sourceProjectId);
+    const destination = this.getProjectSidebar(destinationProjectId);
+    const sourceEntry = source?.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === draftId);
+    if (!source || !destination || sourceEntry?.entryKind !== "draft") return;
+    const movedEntry = {
+      ...sourceEntry,
+      draft: { ...sourceEntry.draft, projectId: destinationProjectId },
+    };
+    const resolvedSource = resolveWorkbenchThreadDisplayOrder(
+      source.entries.filter((entry) => entry.entryKind !== "draft" || entry.draft.draftId !== draftId),
+      source.displayOrder,
+    );
+    const resolvedDestination = resolveWorkbenchThreadDisplayOrder(
+      [...destination.entries.filter((entry) => entry.entryKind !== "draft" || entry.draft.draftId !== draftId), movedEntry],
+      destination.displayOrder,
+    );
+    this.replaceProjectSidebar({ ...source, ...resolvedSource });
+    this.replaceProjectSidebar({ ...destination, ...resolvedDestination });
+    this.publish();
   }
   async flush() { for (const [id, queue] of this.queues) await this.flushQueue(id, queue); }
   async guardNavigation(action: () => void | Promise<void>) { await this.flush(); await action(); }
   bestEffortFlush() { void this.flush().catch(() => undefined); }
   async reopen() {
-    if (!this.projectId) return;
-    this.revision = -1;
-    this.installOpenResult(await this.options.transport.open(this.projectId));
+    if (this.mode === "global") {
+      if (!this.options.transport.openGlobal) throw new Error("Global thread observation is unavailable.");
+      const result = await this.options.transport.openGlobal();
+      this.homeThreadDisplayOrder = result.homeThreadDisplayOrder ?? { displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder" };
+      this.homeThreadDisplayOrderSupported = Boolean(result.homeThreadDisplayOrder);
+      this.pinnedThreadLayout = result.pinnedThreadLayout;
+      this.projectThreadSidebars = { projects: [] };
+      for (const sidebar of result.projectSidebars.projects) this.installProjectSidebar(sidebar);
+      this.publish();
+      return;
+    }
+    if (this.mode === "project" && this.projectId) {
+      this.revision = -1;
+      this.installOpenResult(await this.options.transport.open(this.projectId));
+    }
   }
-  async close() { if (!this.projectId) return; await this.flush(); const projectId = this.projectId; this.projectId = null; this.isOpen = false; this.snapshot = null; this.publish(); await this.options.transport.close(projectId).catch((error: unknown) => { console.warn("Unable to close the thread sidebar observation.", error); }); }
+  async close() {
+    if (this.mode === "closed") return;
+    await this.flush();
+    const mode = this.mode;
+    const projectId = this.projectId;
+    this.mode = "closed";
+    this.projectId = null;
+    this.isOpen = false;
+    this.snapshot = null;
+    this.homeThreadDisplayOrderSupported = false;
+    this.projectThreadSidebars = { projects: [] };
+    this.publish();
+    const close = mode === "global"
+      ? this.options.transport.closeGlobal?.() ?? Promise.resolve()
+      : projectId ? this.options.transport.close(projectId) : Promise.resolve();
+    await close.catch((error: unknown) => {
+      console.warn("Unable to close the thread sidebar observation.", error);
+    });
+  }
   private install(snapshot: WorkbenchThreadSidebarSnapshot) {
     if (snapshot.revision <= this.revision) return;
     this.revision = snapshot.revision;
     this.snapshot = { ...snapshot, ...resolveWorkbenchThreadDisplayOrder(snapshot.entries, snapshot.displayOrder) };
+    this.replaceProjectSidebar(this.snapshot);
     this.syncSelectedProjectThreadSummary();
     this.publish();
   }
@@ -222,18 +360,49 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   }
   private syncSelectedProjectThreadSummary() {
     if (!this.snapshot) return;
+    this.syncProjectThreadSummary(this.snapshot);
+  }
+  private syncProjectThreadSummary(snapshot: WorkbenchThreadSidebarSnapshot) {
     this.setProjectThreadSummary(createWorkbenchProjectThreadSummary(
-      this.snapshot.projectId,
-      this.snapshot.entries,
-      this.snapshot.revision,
-      this.snapshot.displayOrder,
+      snapshot.projectId,
+      snapshot.entries,
+      snapshot.revision,
+      snapshot.displayOrder,
     ));
   }
+  private installProjectSidebar(snapshot: WorkbenchThreadSidebarSnapshot) {
+    const current = this.projectThreadSidebars.projects.find(({ projectId }) => projectId === snapshot.projectId);
+    if (current && current.revision >= snapshot.revision) return false;
+    const resolved = { ...snapshot, ...resolveWorkbenchThreadDisplayOrder(snapshot.entries, snapshot.displayOrder) };
+    this.replaceProjectSidebar(resolved);
+    this.syncProjectThreadSummary(resolved);
+    return true;
+  }
+  private replaceProjectSidebar(snapshot: WorkbenchThreadSidebarSnapshot) {
+    const index = this.projectThreadSidebars.projects.findIndex(({ projectId }) => projectId === snapshot.projectId);
+    const projects = [...this.projectThreadSidebars.projects];
+    if (index === -1) projects.push(snapshot);
+    else projects[index] = snapshot;
+    this.projectThreadSidebars = { projects };
+    if (this.mode === "project" && this.projectId === snapshot.projectId) this.snapshot = snapshot;
+  }
+  private getProjectSidebar(projectId: string) {
+    return this.projectThreadSidebars.projects.find((snapshot) => snapshot.projectId === projectId) ?? null;
+  }
+  private findDraftProjectId(draftId: string) {
+    return this.projectThreadSidebars.projects.find(({ entries }) => entries.some((entry) => (
+      entry.entryKind === "draft" && entry.draft.draftId === draftId
+    )))?.projectId ?? null;
+  }
+  private queueKey(projectId: string, draftId: string) {
+    return `${encodeURIComponent(projectId)}:${draftId}`;
+  }
   private installOptimisticDraft(draft: WorkbenchThreadDraft, folderId: string | null) {
-    if (!this.snapshot) return;
-    const existing = this.snapshot.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === draft.draftId);
-    const currentFolder = findWorkbenchThreadFolder(this.snapshot.displayOrder, `draft:${draft.draftId}`);
-    const targetFolder = folderId ? this.snapshot.displayOrder?.folders?.find((candidate) => candidate.folderId === folderId) : null;
+    const current = this.getProjectSidebar(draft.projectId);
+    if (!current) return;
+    const existing = current.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === draft.draftId);
+    const currentFolder = findWorkbenchThreadFolder(current.displayOrder, `draft:${draft.draftId}`);
+    const targetFolder = folderId ? current.displayOrder?.folders?.find((candidate) => candidate.folderId === folderId) : null;
     const entry = {
       activityAt: draft.updatedAt,
       draft,
@@ -244,14 +413,14 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       title: createDraftTitle(draft.prompt),
     };
     const entries = [
-        ...this.snapshot.entries.filter((candidate) => candidate.entryKind !== "draft" || candidate.draft.draftId !== draft.draftId),
+        ...current.entries.filter((candidate) => candidate.entryKind !== "draft" || candidate.draft.draftId !== draft.draftId),
         entry,
       ];
     const displayOrder = targetFolder && currentFolder?.folderId !== targetFolder.folderId
-      ? moveWorkbenchThreadDisplayItem(sortThreadSidebarEntries(entries), this.snapshot.displayOrder, targetFolder.section, `draft:${draft.draftId}`, targetFolder.folderId, targetFolder.threadKeys[0] ?? null) ?? this.snapshot.displayOrder
-      : this.snapshot.displayOrder;
+      ? moveWorkbenchThreadDisplayItem(sortThreadSidebarEntries(entries), current.displayOrder, targetFolder.section, `draft:${draft.draftId}`, targetFolder.folderId, targetFolder.threadKeys[0] ?? null) ?? current.displayOrder
+      : current.displayOrder;
     const resolved = resolveWorkbenchThreadDisplayOrder(entries, displayOrder);
-    this.snapshot = { ...this.snapshot, ...resolved };
+    this.replaceProjectSidebar({ ...current, ...resolved });
     this.publish();
   }
   private async flushQueue(id: string, queue: DraftQueue) {
@@ -259,8 +428,8 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     if (queue.timer) { clearTimeout(queue.timer); queue.timer = null; }
     if (queue.inFlight) await queue.inFlight;
     if (queue.retired) return;
-    const draft = queue.draft; const projectId = this.projectId;
-    if (!draft || !projectId) return;
+    const draft = queue.draft; const projectId = queue.projectId;
+    if (!draft) return;
     queue.draft = null;
     const folderId = queue.folderId ?? undefined;
     queue.inFlight = this.options.transport.upsertDraft(projectId, draft, folderId).then(() => {
@@ -268,17 +437,19 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     }).finally(() => { queue.inFlight = null; });
     try {
       await queue.inFlight;
-      if (this.snapshot?.error?.startsWith("Draft save failed:")) {
-        this.snapshot = { ...this.snapshot, error: null };
+      const current = this.getProjectSidebar(projectId);
+      if (current?.error?.startsWith("Draft save failed:")) {
+        this.replaceProjectSidebar({ ...current, error: null });
         this.publish();
       }
     } catch (error) {
       if (queue.retired) return;
       const queuedDraft = readQueuedDraft();
       if (!queuedDraft || queuedDraft.clientUpdatedAt < draft.clientUpdatedAt) queue.draft = draft;
-      if (this.snapshot) {
+      const current = this.getProjectSidebar(projectId);
+      if (current) {
         const message = error instanceof Error ? error.message : "Unable to save this draft.";
-        this.snapshot = { ...this.snapshot, error: `Draft save failed: ${message}`.slice(0, 500), freshness: "partial" };
+        this.replaceProjectSidebar({ ...current, error: `Draft save failed: ${message}`.slice(0, 500), freshness: "partial" });
         this.publish();
       }
       const retryDraft = readQueuedDraft();

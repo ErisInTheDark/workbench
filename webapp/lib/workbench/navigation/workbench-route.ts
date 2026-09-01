@@ -1,11 +1,11 @@
 /*
  * Exports:
  * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
- * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, project, file, thread, settings, mosaic.
- * - createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createSettingsRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder, pinned, owner.
+ * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, home, project, file, thread, settings, mosaic.
+ * - createHomeRoute/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder, home, pinned, owner.
  * - getWorkbenchDraftIdFromThreadId/getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive durable draft, parent hydration, materialized mosaic roots, selected tab identity, and sidebar selection. Keywords: thread, draft, subagent, parent, mosaic.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
- * - createWorkbenchHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createSettingsHref: build canonical hrefs. Keywords: links, URL, encode, pinned.
+ * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref: build canonical hrefs. Keywords: links, URL, encode, home, pinned.
  * - isSameWorkbenchRoute/routeHasSelection/isWorkbenchRouteOwnerOfThread: compare, classify, and fence route-owned thread transitions. Keywords: route equality, active selection, draft promotion.
  */
 
@@ -28,7 +28,7 @@ const LEGACY_FILE_SEARCH_PARAM = "file";
 const LEGACY_THREAD_SEARCH_PARAM = "thread";
 const DEFAULT_SETTINGS_SCOPE: WorkbenchSettingsScope = "global";
 
-export type WorkbenchRouteView = "project" | "file" | "thread" | "settings" | "mosaic" | "invalid";
+export type WorkbenchRouteView = "home" | "project" | "file" | "thread" | "settings" | "mosaic" | "invalid";
 export type WorkbenchSettingsScope = "global" | "project";
 
 export interface WorkbenchRoute {
@@ -51,8 +51,18 @@ type WorkbenchLocationLike = {
   search: string;
 };
 
-function emptyProjectRoute(): WorkbenchRoute {
-  return createProjectRoute("");
+export function createHomeRoute(): WorkbenchRoute {
+  return {
+    error: "",
+    filePath: "",
+    mosaicNode: null,
+    projectId: "",
+    settingsScope: DEFAULT_SETTINGS_SCOPE,
+    threadId: "",
+    threadOwnerProjectId: "",
+    threadTarget: null,
+    view: "home",
+  };
 }
 
 export function createProjectRoute(projectId: string): WorkbenchRoute {
@@ -110,6 +120,13 @@ export function createPinnedThreadRoute(
     projectId,
     threadOwnerProjectId,
   };
+}
+
+export function createHomeThreadRoute(
+  threadOwnerProjectId: string,
+  target: string | WorkbenchThreadTarget,
+): WorkbenchRoute {
+  return createPinnedThreadRoute("", threadOwnerProjectId, target);
 }
 
 export function getWorkbenchThreadTargetRootId(target: WorkbenchThreadTarget) {
@@ -258,6 +275,38 @@ function parseSearch(search = "") {
   }
 }
 
+function parseThreadTargetSegments(
+  valueSegments: string[],
+  projectId: string,
+  allowHomeFolderShape = false,
+): WorkbenchRoute {
+  if (valueSegments[0] === "new") {
+    if (valueSegments.length === 1) return createThreadRoute(projectId, { kind: "new" });
+    if (valueSegments.length === 2) {
+      const draft = WorkbenchThreadTargetSchema.safeParse({ draftId: valueSegments[1], kind: "draft" });
+      return draft.success ? createThreadRoute(projectId, draft.data) : createInvalidWorkbenchRoute("Invalid durable draft route.", projectId);
+    }
+    return createInvalidWorkbenchRoute("Unexpected durable draft route value.", projectId);
+  }
+  if (
+    allowHomeFolderShape
+    && valueSegments.length === 4
+    && valueSegments[0] === "folder"
+    && valueSegments[2] === "thread"
+    && valueSegments[3] === "new"
+  ) {
+    const target = WorkbenchThreadTargetSchema.safeParse({ folderId: valueSegments[1], kind: "new" });
+    return target.success ? createThreadRoute(projectId, target.data) : createInvalidWorkbenchRoute("Invalid thread folder route.", projectId);
+  }
+  if (valueSegments.length === 3 && valueSegments[1] === "sub" && valueSegments[0] && valueSegments[2]) {
+    return createThreadRoute(projectId, { kind: "subagent", parentThreadId: valueSegments[0], threadId: valueSegments[2] });
+  }
+  const value = valueSegments.join("/");
+  return valueSegments.length === 1 && value
+    ? createThreadRoute(projectId, { kind: "provider", threadId: value })
+    : createInvalidWorkbenchRoute("Provider thread IDs must use one segment, or a subagent route must use parent/sub/child.", projectId);
+}
+
 function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearchParams): WorkbenchRoute {
   const markerIndex = segments.indexOf(WORKBENCH_ROUTE_MARKER);
   if (markerIndex >= 0) {
@@ -268,6 +317,28 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
 
     const mode = segments[markerIndex + 1] ?? "";
     const projectId = projectSegments.value.join("/");
+    if (!projectId && !mode && segments.length === 1) {
+      return createHomeRoute();
+    }
+    if (!projectId && mode === "thread") {
+      const ownerMarkerIndex = segments.indexOf(WORKBENCH_ROUTE_MARKER, markerIndex + 2);
+      if (ownerMarkerIndex < markerIndex + 3) {
+        return createInvalidWorkbenchRoute("Home thread routes must identify one owning project.");
+      }
+      const ownerSegments = decodeRouteSegments(segments.slice(markerIndex + 2, ownerMarkerIndex));
+      if (ownerSegments.ok === false) {
+        return createInvalidWorkbenchRoute(ownerSegments.error);
+      }
+      const threadOwnerProjectId = ownerSegments.value.join("/");
+      const targetSegments = decodeRouteSegments(segments.slice(ownerMarkerIndex + 1));
+      if (targetSegments.ok === false) {
+        return createInvalidWorkbenchRoute(targetSegments.error);
+      }
+      const parsedTarget = parseThreadTargetSegments(targetSegments.value, threadOwnerProjectId, true);
+      return parsedTarget.view === "thread" && parsedTarget.threadTarget
+        ? createHomeThreadRoute(threadOwnerProjectId, parsedTarget.threadTarget)
+        : createInvalidWorkbenchRoute(parsedTarget.error || "Invalid home thread target.");
+    }
     if (mode === "pin") {
       const pinnedRoute = parseLegacyRouteFromSegments(segments.slice(markerIndex + 2), new URLSearchParams());
       if (
@@ -299,18 +370,7 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
       return createFileRoute(projectId, value);
     }
     if (mode === "thread") {
-      if (valueSegments.value[0] === "new") {
-        if (valueSegments.value.length === 1) return createThreadRoute(projectId, { kind: "new" });
-        if (valueSegments.value.length === 2) {
-          const draft = WorkbenchThreadTargetSchema.safeParse({ draftId: valueSegments.value[1], kind: "draft" });
-          return draft.success ? createThreadRoute(projectId, draft.data) : createInvalidWorkbenchRoute("Invalid durable draft route.", projectId);
-        }
-        return createInvalidWorkbenchRoute("Unexpected durable draft route value.", projectId);
-      }
-      if (valueSegments.value.length === 3 && valueSegments.value[1] === "sub" && valueSegments.value[0] && valueSegments.value[2]) {
-        return createThreadRoute(projectId, { kind: "subagent", parentThreadId: valueSegments.value[0], threadId: valueSegments.value[2] });
-      }
-      return valueSegments.value.length === 1 && value ? createThreadRoute(projectId, { kind: "provider", threadId: value }) : createInvalidWorkbenchRoute("Provider thread IDs must use one segment, or a subagent route must use parent/sub/child.", projectId);
+      return parseThreadTargetSegments(valueSegments.value, projectId);
     }
     if (mode === "folder") {
       if (valueSegments.value.length !== 3 || valueSegments.value[1] !== "thread" || valueSegments.value[2] !== "new") {
@@ -368,7 +428,7 @@ export function parseWorkbenchRouteFromPath(pathname: string, search = ""): Work
     if (legacyFilePath) {
       return createFileRoute("", legacyFilePath);
     }
-    return emptyProjectRoute();
+    return createHomeRoute();
   }
 
   return parseLegacyRouteFromSegments(segments, searchParams);
@@ -389,12 +449,24 @@ export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike 
 
 export function createWorkbenchHref(route: WorkbenchRoute): string {
   const projectPath = encodeWorkbenchRoutePath(route.projectId);
+  if (route.view === "home") {
+    return `/${WORKBENCH_ROUTE_MARKER}/`;
+  }
   if (route.view === "file") {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/file/${encodeWorkbenchRoutePath(route.filePath)}`;
   }
   if (route.view === "thread") {
     const target = route.threadTarget ?? (route.threadId === "new" ? { kind: "new" as const } : { kind: "provider" as const, threadId: route.threadId });
     const threadOwnerProjectId = route.threadOwnerProjectId || route.projectId;
+    if (!route.projectId && threadOwnerProjectId) {
+      const ownerPath = encodeWorkbenchRoutePath(threadOwnerProjectId);
+      if (target.kind === "new") return target.folderId
+        ? `/${WORKBENCH_ROUTE_MARKER}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/folder/${target.folderId}/thread/new`
+        : `/${WORKBENCH_ROUTE_MARKER}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/new`;
+      if (target.kind === "draft") return `/${WORKBENCH_ROUTE_MARKER}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/new/${target.draftId}`;
+      if (target.kind === "subagent") return `/${WORKBENCH_ROUTE_MARKER}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
+      return `/${WORKBENCH_ROUTE_MARKER}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/${encodeRouteSegment(target.threadId)}`;
+    }
     if (threadOwnerProjectId !== route.projectId) {
       return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/pin${createWorkbenchHref(createThreadRoute(threadOwnerProjectId, target))}`;
     }
@@ -419,6 +491,10 @@ export function createProjectHref(projectId: string) {
   return createWorkbenchProjectHref(projectId);
 }
 
+export function createHomeHref() {
+  return createWorkbenchHref(createHomeRoute());
+}
+
 export function createFileHref(projectId: string, filePath: string) {
   return createWorkbenchHref(createFileRoute(projectId, filePath));
 }
@@ -429,6 +505,10 @@ export function createThreadHref(projectId: string, target: string | WorkbenchTh
 
 export function createPinnedThreadHref(projectId: string, threadOwnerProjectId: string, target: string | WorkbenchThreadTarget) {
   return createWorkbenchHref(createPinnedThreadRoute(projectId, threadOwnerProjectId, target));
+}
+
+export function createHomeThreadHref(threadOwnerProjectId: string, target: string | WorkbenchThreadTarget) {
+  return createWorkbenchHref(createHomeThreadRoute(threadOwnerProjectId, target));
 }
 
 export function createSettingsHref(projectId: string, settingsScope: WorkbenchSettingsScope = DEFAULT_SETTINGS_SCOPE) {

@@ -121,7 +121,7 @@ import type {
 } from "./transcript/workbench-transcript-projection";
 
 const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
-const ACTIVE_TURN_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
+const RATE_LIMIT_AUTO_REFRESH_INTERVAL_MS = 15_000;
 const AUTO_REFRESH_REQUEST_SOURCE = "autoRefresh";
 const WORKBENCH_PROMPT_CONTEXT_FIELD = "workbenchPromptContext";
 const DEFAULT_TURN_REASONING_SUMMARY = "detailed" as const;
@@ -1003,6 +1003,7 @@ function WorkbenchThreadClient(
   let selectedThreadProjectContext: SelectedThreadProjectContext | null = null;
   let messageAdmissionIntentRevision = 0;
   let rateLimitGeneration = 0;
+  const rateLimitRefreshStartedAtByHarness = new Map<WorkbenchHarness, number>();
   const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
   const pendingUserInputRequestGenerationsByHarness = new Map<WorkbenchHarness, number>();
   const questionnaireListSyncPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
@@ -1864,22 +1865,24 @@ function WorkbenchThreadClient(
     }
 
     const previousThread = state.currentThread;
-    if (!previousThread || !nextThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness) {
+    const selectionChanged = !previousThread || !nextThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness;
+    if (selectionChanged) {
       streamingReconciler.clearClientCreatedItemKeys();
     }
     state.currentThread = nextThread;
     state.currentThreadId = nextThread?.id ?? "";
+    if (selectionChanged) {
+      state.rateLimits = nextThread ? state.rateLimitsByHarness.get(nextThread.harness) ?? null : null;
+    }
     emit();
     scheduleActiveTurnRateLimitRefresh();
 
     if (!nextThread) {
-      setRateLimits(null);
       return;
     }
 
-    if (!previousThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness) {
-      setRateLimits(null);
-      void refreshRateLimits(nextThread.harness);
+    if (selectionChanged) {
+      void refreshRateLimitsIfStale(nextThread.harness);
     }
   }
 
@@ -2086,15 +2089,15 @@ function WorkbenchThreadClient(
       return;
     }
 
-    void refreshRateLimits(harness);
+    void refreshRateLimitsIfStale(harness);
 
-    lifecycle.scheduleRepeat(RATE_LIMIT_REFRESH_TASK_ID, ACTIVE_TURN_RATE_LIMIT_REFRESH_INTERVAL_MS, () => {
+    lifecycle.scheduleRepeat(RATE_LIMIT_REFRESH_TASK_ID, RATE_LIMIT_AUTO_REFRESH_INTERVAL_MS, () => {
       if (disposed || state.currentThread?.harness !== harness || !getCurrentInProgressTurn(state.currentThread)) {
         lifecycle.cancel(RATE_LIMIT_REFRESH_TASK_ID);
         return;
       }
 
-      return refreshRateLimits(harness);
+      return refreshRateLimitsIfStale(harness);
     });
   }
 
@@ -3603,6 +3606,22 @@ function WorkbenchThreadClient(
     return null;
   }
 
+  async function refreshRateLimitsIfStale(harness: WorkbenchHarness) {
+    const existingRefresh = refreshRateLimitsPromisesByHarness.get(harness);
+    if (existingRefresh) {
+      await existingRefresh;
+      return;
+    }
+
+    const lastStartedAt = rateLimitRefreshStartedAtByHarness.get(harness);
+    const elapsedMs = lastStartedAt === undefined ? null : Date.now() - lastStartedAt;
+    if (elapsedMs !== null && elapsedMs >= 0 && elapsedMs < RATE_LIMIT_AUTO_REFRESH_INTERVAL_MS) {
+      return;
+    }
+
+    await refreshRateLimits(harness);
+  }
+
   async function refreshRateLimits(harness = state.currentThread?.harness ?? "codex") {
     const existingRefresh = refreshRateLimitsPromisesByHarness.get(harness);
     if (existingRefresh) {
@@ -3610,6 +3629,7 @@ function WorkbenchThreadClient(
       return;
     }
 
+    rateLimitRefreshStartedAtByHarness.set(harness, Date.now());
     const projectGeneration = projectContextGeneration;
     const readGeneration = ++rateLimitGeneration;
     let refreshPromise: Promise<void>;

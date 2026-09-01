@@ -7,7 +7,7 @@ import test from "node:test";
 
 import type { WorkbenchProjectOption } from "../../lib/types";
 import type { WorkbenchProjectThreadSummary } from "../../lib/workbench/thread/thread-state";
-import { groupSidebarProjects } from "./project-sidebar-groups";
+import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./project-sidebar-groups";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW_MS = 200 * DAY_MS;
@@ -100,4 +100,19 @@ test("thread activity overrides commit activity and catalog order breaks equal-d
     "tie-a",
     "tie-b",
   ]);
+});
+
+test("project rotation uses the exact first rendered project group", () => {
+  const promoted = groupSidebarProjects([
+    project("recent", 1),
+    project("library", null, "workbench-library"),
+    project("working", 100),
+  ], [summary("working", 2)], NOW_MS);
+  assert.deepEqual(getFirstSidebarProjectGroup(promoted).map(({ project: entry }) => entry.id), ["library", "working"]);
+
+  const recencyOnly = groupSidebarProjects([
+    project("month", 20),
+    project("recent", 1),
+  ], [], NOW_MS);
+  assert.deepEqual(getFirstSidebarProjectGroup(recencyOnly).map(({ project: entry }) => entry.id), ["recent"]);
 });

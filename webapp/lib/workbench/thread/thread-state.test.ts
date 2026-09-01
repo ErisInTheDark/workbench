@@ -24,6 +24,33 @@ test("live claims and proposed commit proposals prevent thread settlement", () =
   assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "accepted", status: "committed" }] }), false);
 });
 
+test("global observation and draft moves use distinct strict version 4 requests", () => {
+  assert.deepEqual(WorkbenchThreadStateRequestSchema.parse({
+    method: "workbench/thread-state/global/open",
+    version: 4,
+  }), {
+    method: "workbench/thread-state/global/open",
+    version: 4,
+  });
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    method: "workbench/thread-state/global/open",
+    projectId: "must-not-select",
+    version: 4,
+  }).success, false);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    destinationProjectId: "beta",
+    draftId: "22222222-2222-4222-8222-222222222222",
+    method: "workbench/thread-state/draft/move",
+    sourceProjectId: "alpha",
+  }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    destinationProjectId: "alpha",
+    draftId: "22222222-2222-4222-8222-222222222222",
+    method: "workbench/thread-state/draft/move",
+    sourceProjectId: "alpha",
+  }).success, false);
+});
+
 test("settlement is available only for unsettled terminal rows without Git blockers", () => {
   const completed = {
     activityAt: 1,
@@ -96,6 +123,9 @@ test("multiplexed updates strictly distinguish sidebar, activity, and project pa
   assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
     activityAt: 10, identity: { harness: "codex", threadId: "thread" }, orderAt: 9, projectId: "project", revision: 2, updateKind: "activity",
   }).success, true);
+  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
+    displayOrder: {}, revision: 2, updateKind: "homeThreadDisplayOrder",
+  }).success, true);
   const projectUpdate = WorkbenchThreadStateSnapshotSchema.safeParse({
     projectId: "project",
     revision: 3,
@@ -152,6 +182,19 @@ test("draft priority requests use draft identity and drive shared grouping and o
   };
   assert.equal(getThreadSidebarGroup(entry), "snoozed");
   assert.equal(entry.metadata.pinned, true);
+});
+
+test("home display-order request requires qualified source and optional destination keys", () => {
+  const request = {
+    beforeKey: "beta/codex%3Ab",
+    destinationFolderKey: null,
+    method: "workbench/thread-state/home-display-order/move",
+    section: "pinned",
+    sourceKey: "alpha/codex%3Aa",
+  };
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse(request).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, sourceKey: "" }).success, false);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, section: "main" }).success, false);
 });
 
 test("legacy draft settings conform from reload-compatible flattened fields", () => {

@@ -61,6 +61,10 @@ import {
 } from "../lib/workbench/navigation/workbench-mosaic-route";
 import {
   createFileRoute,
+  createHomeHref,
+  createHomeRoute,
+  createHomeThreadHref,
+  createHomeThreadRoute,
   createMosaicRoute,
   createPinnedThreadHref,
   createPinnedThreadRoute,
@@ -114,7 +118,6 @@ import PrimaryButton from "./workbench/PrimaryButton";
 import ReloadNecessary from "./workbench/ReloadNecessary";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
-import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
 import WorkbenchAppPortSetting from "./workbench/WorkbenchAppPortSetting";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
@@ -150,6 +153,7 @@ import {
   FileMoveIcon,
   FolderOpenIcon,
   GearIcon,
+  HomeIcon,
   ReloadIcon,
   SaveIcon,
   SidebarCollapseIcon,
@@ -173,9 +177,13 @@ import {
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
+import WorkbenchAllProjectsThreadSidebar from "./workbench/WorkbenchAllProjectsThreadSidebar";
+import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
+import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
 import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
 import WorkbenchThreadSidebarActionsProvider from "./workbench/WorkbenchThreadSidebarActions";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
+import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./workbench/project-sidebar-groups";
 
 installBrowserRandomUuidPolyfill();
 
@@ -204,6 +212,7 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   workbenchStorageRootPath: "",
 };
 const EMPTY_THREAD_SIDEBAR_SUBSCRIBE = (_listener: () => void) => () => {};
+const EMPTY_PROJECT_THREAD_SUMMARIES = { projects: [] };
 
 const EMPTY_THREAD_DOCUMENT_SNAPSHOT: WorkbenchThreadDocumentSnapshot = {
   documentsByKey: {},
@@ -509,12 +518,26 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   currentRouteRef.current = route;
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const [threadSidebarStore, setThreadSidebarStore] = useState<WorkbenchThreadSidebarStore | null>(null);
+  const projectThreadSummaries = useSyncExternalStore(
+    threadSidebarStore?.subscribe ?? EMPTY_THREAD_SIDEBAR_SUBSCRIBE,
+    threadSidebarStore?.getProjectThreadSummaries ?? (() => EMPTY_PROJECT_THREAD_SUMMARIES),
+    () => EMPTY_PROJECT_THREAD_SUMMARIES,
+  );
+  const groupedSidebarProjects = useMemo(
+    () => groupSidebarProjects(explorer.projects, projectThreadSummaries.projects),
+    [explorer.projects, projectThreadSummaries.projects],
+  );
+  const firstSidebarProjectGroup = useMemo(
+    () => getFirstSidebarProjectGroup(groupedSidebarProjects).map(({ project }) => project),
+    [groupedSidebarProjects],
+  );
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
   const [threadDocuments, setThreadDocuments] = useState<WorkbenchThreadDocumentSnapshot>(EMPTY_THREAD_DOCUMENT_SNAPSHOT);
   const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
   const [harnessUserInputRequestsByThreadId, setHarnessUserInputRequestsByThreadId] = useState<Record<string, WorkbenchPendingUserInputRequest>>({});
   const [locallyResolvedUserInputRequestKeysByThreadId, setLocallyResolvedUserInputRequestKeysByThreadId] = useState<Record<string, string | undefined>>({});
   const [selectionError, setSelectionError] = useState("");
+  const [isProjectRotationPending, setIsProjectRotationPending] = useState(false);
   const [rateLimits, setRateLimits] = useState<RateLimitSnapshot | null>(null);
   const [controls, setControls] = useState<WorkbenchControls | null>(null);
   const updateThreadState: WorkbenchControls["updateThreadState"] = useCallback((request) => {
@@ -827,7 +850,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return createFileRoute(route.projectId, route.filePath);
     }
     if (route.view === "thread") {
-      return route.threadOwnerProjectId && route.threadOwnerProjectId !== route.projectId
+      return !route.projectId && route.threadOwnerProjectId
+        ? createHomeThreadRoute(route.threadOwnerProjectId, route.threadTarget ?? route.threadId)
+        : route.threadOwnerProjectId && route.threadOwnerProjectId !== route.projectId
         ? createPinnedThreadRoute(route.projectId, route.threadOwnerProjectId, route.threadTarget ?? route.threadId)
         : createThreadRoute(route.projectId, route.threadTarget ?? route.threadId);
     }
@@ -959,9 +984,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       parentThreadId,
       threadId: providerTarget.threadId,
     };
-    navigateToRoute(ownerProjectId === route.projectId
-      ? createThreadRoute(route.projectId, target)
-      : createPinnedThreadRoute(route.projectId, ownerProjectId, target), { replace: true });
+    navigateToRoute(!route.projectId
+      ? createHomeThreadRoute(ownerProjectId, target)
+      : ownerProjectId === route.projectId
+        ? createThreadRoute(route.projectId, target)
+        : createPinnedThreadRoute(route.projectId, ownerProjectId, target), { replace: true });
   }, [explorer.subagents, navigateToRoute, route.projectId, route.threadOwnerProjectId, route.threadTarget, route.view]);
   const projectFileLinkRoots = useMemo(
     () => createProjectFileLinkRoots(explorer.projects, activeProjectId, explorer.roots),
@@ -1279,9 +1306,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return true;
     }
 
-    navigateToRoute(targetProjectId === viewedProjectId
-      ? createThreadRoute(viewedProjectId, target)
-      : createPinnedThreadRoute(viewedProjectId, targetProjectId, target));
+    navigateToRoute(!viewedProjectId
+      ? createHomeThreadRoute(targetProjectId, target)
+      : targetProjectId === viewedProjectId
+        ? createThreadRoute(viewedProjectId, target)
+        : createPinnedThreadRoute(viewedProjectId, targetProjectId, target));
     return true;
   }, [explorer.currentProjectId, navigateToRoute, route]);
   const updateBrowseSession = useCallback(async (session: WorkbenchBrowseSessionSummary, action: "forget" | "stop", options: { force?: boolean } = {}) => {
@@ -1445,9 +1474,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       }
 
       const ownerProjectId = currentRoute.threadOwnerProjectId || currentRoute.projectId;
-      navigateToRoute(ownerProjectId === currentRoute.projectId
-        ? createThreadRoute(currentRoute.projectId, materializedThread.id)
-        : createPinnedThreadRoute(currentRoute.projectId, ownerProjectId, materializedThread.id), { replace: true });
+      navigateToRoute(!currentRoute.projectId
+        ? createHomeThreadRoute(ownerProjectId, materializedThread.id)
+        : ownerProjectId === currentRoute.projectId
+          ? createThreadRoute(currentRoute.projectId, materializedThread.id)
+          : createPinnedThreadRoute(currentRoute.projectId, ownerProjectId, materializedThread.id), { replace: true });
       return true;
     };
 
@@ -1456,7 +1487,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         ...options,
         onThreadCreated: (materializedThread) => {
           createdThreadRef.current = materializedThread;
-          const projectId = submittedRoute.projectId || explorer.currentProjectId;
+          const projectId = submittedRoute.threadOwnerProjectId || submittedRoute.projectId || explorer.currentProjectId;
           const submittedThreadKey = `${projectId}:${thread.harness}:${thread.id}`;
           const materializedThreadKey = `${projectId}:${materializedThread.harness}:${materializedThread.id}`;
           threadViewInstanceKeysByThreadIdRef.current.set(
@@ -1617,7 +1648,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     controls.editThreadDraft(threadDraft, target.kind === "new" && target.folderId ? { folderId: target.folderId } : undefined);
     if (target.kind === "new") {
       composerProfileController.materializeDraftSelection(profileSlot, draftId, settings.harness, selectedThreadProjectId);
-      navigateToRoute(createThreadRoute(selectedThreadProjectId, { draftId, kind: "draft" }), { replace: true });
+      navigateToRoute(!route.projectId
+        ? createHomeThreadRoute(selectedThreadProjectId, { draftId, kind: "draft" })
+        : createThreadRoute(selectedThreadProjectId, { draftId, kind: "draft" }), { replace: true });
     }
   }, [
     activeRouteDraft,
@@ -1791,20 +1824,27 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showThreadView = route.view === "thread" || mobileMosaicFallbackTarget?.kind === "thread";
   const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
   const showSettingsView = route.view === "settings";
+  const sidebarCreateProjectId = activeProjectId || firstSidebarProjectGroup[0]?.id || "";
   const showFullBleedMainView = showMosaicView;
-  const createThreadFromSidebar = useCallback((folderId?: string) => {
+  const createThreadFromSidebar = useCallback((ownerProjectId: string, folderId?: string) => {
     if (showMosaicView || !controls) return;
-    navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, folderId ? { folderId, kind: "new" } : { kind: "new" }));
-  }, [controls, explorer.currentProjectId, navigateToRoute, route.projectId, showMosaicView]);
+    const target = folderId ? { folderId, kind: "new" as const } : { kind: "new" as const };
+    navigateToRoute(!route.projectId
+      ? createHomeThreadRoute(ownerProjectId, target)
+      : createThreadRoute(ownerProjectId, target));
+  }, [controls, navigateToRoute, route.projectId, showMosaicView]);
   const handleThreadSettled = useCallback((settledTarget: WorkbenchThreadTarget, ownerProjectId?: string) => {
     const currentRoute = currentRouteRef.current;
     if (currentRoute.view !== "thread"
-      || (ownerProjectId && currentRoute.projectId !== ownerProjectId)
+      || (ownerProjectId && (currentRoute.threadOwnerProjectId || currentRoute.projectId) !== ownerProjectId)
       || !isWorkbenchThreadTargetSelected(settledTarget, currentRoute.threadTarget)) {
       return;
     }
 
-    navigateToRoute(createThreadRoute(currentRoute.projectId, { kind: "new" }));
+    const targetProjectId = ownerProjectId || currentRoute.threadOwnerProjectId || currentRoute.projectId;
+    navigateToRoute(!currentRoute.projectId
+      ? createHomeThreadRoute(targetProjectId, { kind: "new" })
+      : createThreadRoute(currentRoute.projectId, { kind: "new" }));
   }, [navigateToRoute]);
   const usesDesktopSidebarCollapse = !isMobile;
   const effectiveThreadTarget = mobileMosaicFallbackTarget?.kind === "thread" ? mobileMosaicFallbackTarget.target : route.threadTarget;
@@ -1818,9 +1858,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }
   const retainedThread = retainedThreadRef.current;
   const effectiveThreadRoute = effectiveThreadTarget
-    ? route.view === "thread" && route.threadOwnerProjectId && route.threadOwnerProjectId !== route.projectId
-      ? createPinnedThreadRoute(route.projectId, route.threadOwnerProjectId, effectiveThreadTarget)
-      : createThreadRoute(activeProjectId, effectiveThreadTarget)
+    ? route.view === "thread" && !route.projectId && route.threadOwnerProjectId
+      ? createHomeThreadRoute(route.threadOwnerProjectId, effectiveThreadTarget)
+      : route.view === "thread" && route.threadOwnerProjectId && route.threadOwnerProjectId !== route.projectId
+        ? createPinnedThreadRoute(route.projectId, route.threadOwnerProjectId, effectiveThreadTarget)
+        : createThreadRoute(activeProjectId, effectiveThreadTarget)
     : route;
   const getThreadViewInstanceKey = (thread: ThreadPayload) => (
     threadViewInstanceKeysByThreadIdRef.current.get(`${activeProjectId}:${thread.harness}:${thread.id}`) ?? thread.id
@@ -1851,9 +1893,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       ? { harness, kind: "provider" as const, threadId: rootThreadId }
       : { harness, kind: "subagent" as const, parentThreadId: rootThreadId, threadId: selectedThreadId };
     const ownerProjectId = route.view === "thread" ? route.threadOwnerProjectId || route.projectId : activeProjectId;
-    navigateToRoute(ownerProjectId === activeProjectId
-      ? createThreadRoute(activeProjectId, target)
-      : createPinnedThreadRoute(activeProjectId, ownerProjectId, target));
+    navigateToRoute(!activeProjectId
+      ? createHomeThreadRoute(ownerProjectId, target)
+      : ownerProjectId === activeProjectId
+        ? createThreadRoute(activeProjectId, target)
+        : createPinnedThreadRoute(activeProjectId, ownerProjectId, target));
   }, [activeProjectId, effectiveThreadTarget, navigateToRoute, route, threadForThreadView?.harness]);
   const threadSummaryForThreadView = showThreadView ? threadSummariesById.get(effectiveThreadId) ?? null : null;
   const threadShellSource = threadForThreadView ?? threadSummaryForThreadView;
@@ -1891,6 +1935,37 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   );
   const threadProjectId = route.view === "thread" ? route.threadOwnerProjectId || activeProjectId : activeProjectId;
   const threadProject = explorer.projects.find((project) => project.id === threadProjectId) ?? null;
+  const isHomeDraftRoute = route.view === "thread"
+    && !route.projectId
+    && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft");
+  const rotateHomeDraftProject = useCallback(async () => {
+    if (!controls || !isHomeDraftRoute || !threadProjectId || firstSidebarProjectGroup.length < 2) return;
+    const currentIndex = firstSidebarProjectGroup.findIndex(({ id }) => id === threadProjectId);
+    const nextProject = firstSidebarProjectGroup[(currentIndex < 0 ? 0 : currentIndex + 1) % firstSidebarProjectGroup.length];
+    if (!nextProject || nextProject.id === threadProjectId) return;
+    setIsProjectRotationPending(true);
+    setSelectionError("");
+    try {
+      const target = route.threadTarget;
+      if (target?.kind === "draft") {
+        await controls.moveThreadDraft(threadProjectId, nextProject.id, target.draftId);
+        navigateToRoute(createHomeThreadRoute(nextProject.id, target));
+      } else {
+        navigateToRoute(createHomeThreadRoute(nextProject.id, { kind: "new" }));
+      }
+    } catch (error) {
+      setSelectionError((error instanceof Error ? error.message : "Unable to move this draft.").slice(0, 500));
+    } finally {
+      setIsProjectRotationPending(false);
+    }
+  }, [controls, firstSidebarProjectGroup, isHomeDraftRoute, navigateToRoute, route.threadTarget, threadProjectId]);
+  const projectRotator = isHomeDraftRoute && threadProject ? (
+    <WorkbenchProjectControl
+      disabled={isProjectRotationPending || firstSidebarProjectGroup.length < 2}
+      onRotate={() => { void rotateHomeDraftProject(); }}
+      project={threadProject}
+    />
+  ) : null;
   const isForeignThreadProject = Boolean(threadProjectId && threadProjectId !== activeProjectId);
   const threadProjectRoots = isForeignThreadProject ? threadProject?.roots ?? [] : explorer.roots;
   const threadProjectRootPath = isForeignThreadProject ? threadProject?.rootPath ?? "" : explorer.rootPath;
@@ -2285,7 +2360,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [workbenchDragController]);
 
   const beginWorkbenchPointerDrag = useCallback((event: ReactPointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => {
-    if (isMobile || event.button !== 0 || payload.type === "thread-folder") return;
+    if (isMobile || event.button !== 0 || payload.type === "thread-folder" || payload.type === "home-thread-folder") return;
     const label = payload.type === "new-thread"
       ? "New thread"
       : payload.target.kind === "file"
@@ -2762,8 +2837,22 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden py-3 pr-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:pr-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
                 <DropTargetBoundary className="explorer-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto pr-2">
-                <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto] items-center gap-1 pb-5">
+                <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto] items-center gap-1 pb-5">
                   <span className="min-w-0 truncate pl-5 text-xl font-semibold leading-tight text-text">workbench</span>
+                  <a
+                    aria-label="Open home"
+                    className={`${workbenchIconButtonClassName} shrink-0 text-muted`}
+                    href={createHomeHref()}
+                    onClick={(event) => {
+                      if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+                      event.preventDefault();
+                      navigateToRoute(createHomeRoute());
+                    }}
+                    title="Open home"
+                  >
+                    <HomeIcon />
+                    <span className="sr-only">Open home</span>
+                  </a>
                   <a
                     aria-label="Open settings"
                     className={`${workbenchIconButtonClassName} shrink-0 text-muted`}
@@ -2795,20 +2884,22 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   store={threadSidebarStore}
                   threadSummariesById={threadSummariesById}
                 >
-                  <WorkbenchPinnedThreadSidebar
-                    currentTarget={route.view === "thread" ? route.threadTarget : null}
-                    onOpenThread={openThreadFromExplorer}
-                    projectId={explorer.currentProjectId || route.projectId}
-                    projects={explorer.projects}
-                    selectedOwnerProjectId={route.view === "thread" ? route.threadOwnerProjectId || route.projectId : explorer.currentProjectId || route.projectId}
-                  />
+                  {activeProjectId ? (
+                    <WorkbenchPinnedThreadSidebar
+                      currentTarget={route.view === "thread" ? route.threadTarget : null}
+                      onOpenThread={openThreadFromExplorer}
+                      projectId={activeProjectId}
+                      projects={explorer.projects}
+                      selectedOwnerProjectId={route.view === "thread" ? route.threadOwnerProjectId || route.projectId : activeProjectId}
+                    />
+                  ) : null}
                   <ProjectSidebar
                     activeProjectId={activeProjectId}
                     onProjectLinkClick={selectProjectFromLink}
                     projects={explorer.projects}
                     store={threadSidebarStore}
                   />
-                  {currentProject ? <WorkbenchCurrentProjectHeading project={currentProject} /> : null}
+                  {activeProjectId && currentProject ? <WorkbenchCurrentProjectHeading project={currentProject} /> : null}
                   <section className="shrink-0 pb-5">
                     <WorkbenchSidebarSectionDisclosure
                       contentClassName="space-y-2"
@@ -2816,23 +2907,37 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       preferenceKey="threadsOpen"
                       title="Threads"
                     >
-                      <WorkbenchThreadSidebar
-                        attentionLabelsByThreadId={threadAttentionLabelsById}
-                        currentTarget={route.view === "thread" ? route.threadTarget : null}
-                        harness={harness}
-                        isDragActive={Boolean(activeWorkbenchDrag)}
-                        onBeginPointerDrag={beginWorkbenchPointerDrag}
-                        onCreateThread={createThreadFromSidebar}
-                        onOpenThread={openThreadFromExplorer}
-                        projectId={explorer.currentProjectId || route.projectId}
-                        renderThreadTooltipDetails={renderThreadTooltipDetails}
-                        showMosaicView={showMosaicView}
-                      />
+                      {activeProjectId ? (
+                        <WorkbenchThreadSidebar
+                          attentionLabelsByThreadId={threadAttentionLabelsById}
+                          currentTarget={route.view === "thread" ? route.threadTarget : null}
+                          harness={harness}
+                          isDragActive={Boolean(activeWorkbenchDrag)}
+                          onBeginPointerDrag={beginWorkbenchPointerDrag}
+                          onCreateThread={(folderId) => createThreadFromSidebar(activeProjectId, folderId)}
+                          onOpenThread={openThreadFromExplorer}
+                          projectId={activeProjectId}
+                          renderThreadTooltipDetails={renderThreadTooltipDetails}
+                          showMosaicView={showMosaicView}
+                        />
+                      ) : (
+                        <WorkbenchAllProjectsThreadSidebar
+                          activeDragPayload={activeWorkbenchDrag?.payload ?? null}
+                          attentionLabelsByThreadId={threadAttentionLabelsById}
+                          createProjectId={sidebarCreateProjectId}
+                          currentTarget={route.view === "thread" ? route.threadTarget : null}
+                          onCreateThread={createThreadFromSidebar}
+                          onOpenThread={openThreadFromExplorer}
+                          projects={explorer.projects}
+                          renderThreadTooltipDetails={renderThreadTooltipDetails}
+                          selectedOwnerProjectId={route.view === "thread" ? route.threadOwnerProjectId || route.projectId : activeProjectId}
+                        />
+                      )}
                     </WorkbenchSidebarSectionDisclosure>
                   </section>
                 </WorkbenchThreadSidebarActionsProvider>
 
-                  <section className="shrink-0 pb-5">
+                  {activeProjectId ? <section className="shrink-0 pb-5">
                     <WorkbenchSidebarSectionDisclosure
                       actions={(
                         <div className="flex items-center gap-1">
@@ -2911,7 +3016,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger md:pr-4.5">{projectActionError}</p>
                       ) : null}
                     </WorkbenchSidebarSectionDisclosure>
-                  </section>
+                  </section> : null}
                   {browseSessions.length ? (
                     <section className="shrink-0 pb-5">
                       <WorkbenchSidebarSectionDisclosure
@@ -3079,10 +3184,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       key={`${threadProjectId}:${threadViewInstanceKey}`}
                       thread={threadForThreadView}
                       composerSpellCheck={resolvedSettings.composerSpellCheck}
+                      draftLeadingContent={projectRotator}
                       fontSizeRem={resolvedSettings.editorFontSize}
-                      getThreadHref={(target) => isForeignThreadProject
-                        ? createPinnedThreadHref(activeProjectId, threadProjectId, target)
-                        : createThreadHref(activeProjectId, target)}
+                      getThreadHref={(target) => !activeProjectId
+                        ? createHomeThreadHref(threadProjectId, target)
+                        : isForeignThreadProject
+                          ? createPinnedThreadHref(activeProjectId, threadProjectId, target)
+                          : createThreadHref(activeProjectId, target)}
                       mobileFullBleed={isDirectMobileThreadSurface}
                       livePendingUserInputRequestsByThreadId={visibleUserInputRequestsByThreadId}
                       onDraftHarnessChange={handleHarnessChange}
@@ -3205,11 +3313,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         type="button"
                         className="w-fit gap-2"
                         onClick={() => {
-                          if (!controls) {
-                            return;
-                          }
-                          const draftThread = controls.createThreadDraft(harness);
-                          navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, draftThread.id));
+                          if (!controls || !sidebarCreateProjectId) return;
+                          navigateToRoute(!activeProjectId
+                            ? createHomeThreadRoute(sidebarCreateProjectId, { kind: "new" })
+                            : createThreadRoute(activeProjectId, { kind: "new" }));
                         }}
                       >
                         <span className="inline-flex size-4 items-center justify-center text-[1.05em] leading-none">+</span>

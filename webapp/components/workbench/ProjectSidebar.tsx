@@ -9,7 +9,7 @@ import { useMemo, useSyncExternalStore, type MouseEvent } from "react";
 
 import type { WorkbenchProjectOption, WorkbenchThreadSidebarStore } from "../../lib/types";
 import { createProjectHref } from "../../lib/workbench/navigation/workbench-route";
-import { groupSidebarProjects, type ProjectSidebarProject } from "./project-sidebar-groups";
+import { getFirstSidebarProjectGroup, groupSidebarProjects, type ProjectSidebarProject } from "./project-sidebar-groups";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import { getWorkbenchThreadStatusClassName } from "./workbench-thread-status-colors";
@@ -188,10 +188,10 @@ export default function ProjectSidebar({
     },
     WorkbenchThreadStatusCounts.emptyCounts,
   ), [activeProjectId, entriesByProjectId, projects]);
-  const visibleProjects = [
-    ...grouped.alwaysVisibleProjects,
-    ...grouped.timeGroups.slice(0, preferences.projectTimeGroupCount).flatMap(({ projects: entries }) => entries),
-  ];
+  const firstGroup = getFirstSidebarProjectGroup(grouped);
+  const visibleProjects = grouped.alwaysVisibleProjects.length
+    ? [...firstGroup, ...grouped.timeGroups.slice(0, preferences.projectTimeGroupCount).flatMap(({ projects: entries }) => entries)]
+    : [...firstGroup, ...grouped.timeGroups.slice(1, preferences.projectTimeGroupCount).flatMap(({ projects: entries }) => entries)];
   const hasMoreTimeGroups = preferences.projectTimeGroupCount < grouped.timeGroups.length;
   const nowMs = Date.now();
 

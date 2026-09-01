@@ -13,6 +13,11 @@ import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, 
 import { mergeQuestionnaireHistoryEntries } from "../lib/workbench/thread/thread-questionnaire-identity";
 import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
 import {
+  getWorkbenchHomeThreadKey,
+  removeWorkbenchThreadFromProjectFolder,
+  resolveWorkbenchHomeThreadSectionKeys,
+} from "../lib/workbench/thread/home-thread-display-order";
+import {
   getProjectQualifiedThreadDisplayKey,
   parseProjectQualifiedThreadDisplayKey,
   type ThreadDisplayLayoutEntry,
@@ -21,6 +26,7 @@ import {
   createWorkbenchThreadFolder,
   findWorkbenchThreadFolder,
   getWorkbenchThreadDisplayKey,
+  getWorkbenchThreadDisplaySection,
   isWorkbenchThreadDisplayOrderEmpty,
   moveWorkbenchThreadDisplayItem,
   normalizeWorkbenchThreadDisplayOrder,
@@ -59,6 +65,7 @@ import {
   type WorkbenchThreadActivityUpdate,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadSidebarSnapshot,
+  type WorkbenchGlobalThreadStateOpenResult,
   type WorkbenchThreadStateOpenResultV2,
   type WorkbenchThreadStateOpenResult,
   type WorkbenchThreadStateRequest,
@@ -66,6 +73,7 @@ import {
 } from "../lib/workbench/thread/thread-state";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
+import WorkbenchHomeThreadDisplayOrderStore from "./WorkbenchHomeThreadDisplayOrderStore";
 import WorkbenchPinnedThreadLayoutStore from "./WorkbenchPinnedThreadLayoutStore";
 import {
   conformStoredWorkbenchThreadStateRecord,
@@ -78,7 +86,9 @@ import {
 
 interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot" | "opencode"; lifecycle: WorkbenchThreadLifecycle; mcpGeneration?: string | null; orderAt?: number; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null; pinned: boolean; questionnaireHistory?: WorkbenchQuestionnaireHistoryEntryState[]; snoozed: boolean; threadId: string; titleFallback?: string }
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
-type ProjectObservation = { pinnedThreadKeys: Set<string>; projectId: string; version: 1 | 2 | 3 };
+type ProjectObservation =
+  | { pinnedThreadKeys: Set<string>; projectId: string; scope: "project"; version: 1 | 2 | 3 }
+  | { pinnedThreadKeys: Set<string>; scope: "global"; version: 4 | 5 };
 interface StoredProjectStateV1 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
 interface StoredProjectStateV2 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
 interface StoredProjectStateV3 { displayOrder?: WorkbenchThreadDisplayOrder; drafts: StoredThreadDraft[]; records: WorkbenchThreadStateRecord[]; version: 3 }
@@ -276,6 +286,7 @@ export default class WorkbenchThreadStateController {
   private static readonly SETTLED_GIT_RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
   private active = true;
   private readonly connectionProjects = new Map<string, ProjectObservation>();
+  private readonly homeDisplayOrder: WorkbenchHomeThreadDisplayOrderStore;
   private readonly json = new AtomicJsonStore();
   private readonly now: () => number;
   private readonly options: WorkbenchThreadStateControllerOptions;
@@ -292,6 +303,10 @@ export default class WorkbenchThreadStateController {
   constructor(options: WorkbenchThreadStateControllerOptions) {
     this.options = options;
     this.now = options.now ?? Date.now;
+    this.homeDisplayOrder = new WorkbenchHomeThreadDisplayOrderStore(
+      options.storageRoot,
+      (repairedPaths) => this.logHomeDisplayOrderRepairs(repairedPaths),
+    );
     this.pinnedLayout = new WorkbenchPinnedThreadLayoutStore(
       options.storageRoot,
       (repairedPaths) => this.logPinnedLayoutRepairs(repairedPaths),
@@ -324,7 +339,8 @@ export default class WorkbenchThreadStateController {
   private async handleRequestOwned(connectionId: string, input: WorkbenchThreadStateRequest | object) {
     const projectRequest = WorkbenchProjectStateRequestSchema.safeParse(input);
     if (projectRequest.success) {
-      const observedProjectId = this.connectionProjects.get(connectionId)?.projectId;
+      const observation = this.connectionProjects.get(connectionId);
+      const observedProjectId = observation?.scope === "project" ? observation.projectId : "";
       if (observedProjectId !== projectRequest.data.projectId) {
         return { error: { code: "invalidProjectObservation", message: "The project request does not belong to this connection's observed project." } };
       }
@@ -343,6 +359,8 @@ export default class WorkbenchThreadStateController {
     const request = parsed.data;
     switch (request.method) {
       case "workbench/thread-state/open": return { result: await this.open(connectionId, request.projectId, request.version ?? 1) };
+      case "workbench/thread-state/global/open": return { result: await this.openGlobal(connectionId, request.version) };
+      case "workbench/thread-state/global/close": await this.closeGlobal(connectionId); return { result: { accepted: true } };
       case "workbench/thread-state/close": await this.close(connectionId, request.projectId); return { result: { accepted: true } };
       case "workbench/thread-state/refresh": return { result: await this.refresh(request.projectId) };
       case "workbench/thread-state/pin/open": {
@@ -360,7 +378,7 @@ export default class WorkbenchThreadStateController {
       }) };
       case "workbench/thread-state/title/set": {
         if (
-          this.connectionProjects.get(connectionId)?.projectId !== request.projectId
+          !this.isObservedProjectAuthorized(connectionId, request.projectId)
           && !this.isPinnedThreadAuthorized(connectionId, request.projectId, request.identity.harness, request.identity.threadId)
         ) {
           return { error: { code: "invalidProjectObservation", message: "The title request does not belong to this connection's observed project." } };
@@ -372,12 +390,14 @@ export default class WorkbenchThreadStateController {
         }
       }
       case "workbench/thread-state/draft/upsert": return { result: await this.upsertDraft(request.projectId, request.draft, request.folderId) };
+      case "workbench/thread-state/draft/move": return { result: await this.moveDraft(request.sourceProjectId, request.destinationProjectId, request.draftId) };
       case "workbench/thread-state/draft/delete": return { result: await this.deleteDraft(request.projectId, request.draftId, request.clientUpdatedAt) };
       case "workbench/thread-state/draft/pin/set":
       case "workbench/thread-state/draft/snooze/set": return { result: await this.mutateDraft(request) };
       case "workbench/thread-state/display-order/folder/create":
       case "workbench/thread-state/display-order/folder/title/set":
       case "workbench/thread-state/display-order/move": return { result: await this.mutateDisplayOrder(request) };
+      case "workbench/thread-state/home-display-order/move": return { result: await this.mutateHomeDisplayOrder(connectionId, request) };
       case "workbench/thread-state/pinned-display-order/folder/create":
       case "workbench/thread-state/pinned-display-order/folder/title/set":
       case "workbench/thread-state/pinned-display-order/move": return { result: await this.mutatePinnedDisplayOrder(request) };
@@ -391,10 +411,12 @@ export default class WorkbenchThreadStateController {
   async open(connectionId: string, projectId: string, version: 1): Promise<WorkbenchThreadSidebarSnapshot>;
   async open(connectionId: string, projectId: string, version: 1 | 2 | 3): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult>;
   async open(connectionId: string, projectId: string, version: 1 | 2 | 3 = 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult> {
-    const priorProjectId = this.connectionProjects.get(connectionId)?.projectId;
+    const priorObservation = this.connectionProjects.get(connectionId);
+    if (priorObservation?.scope === "global") await this.closeGlobal(connectionId);
+    const priorProjectId = priorObservation?.scope === "project" ? priorObservation.projectId : "";
     if (priorProjectId && priorProjectId !== projectId) await this.close(connectionId, priorProjectId);
     const state = await this.getProject(projectId);
-    const observation: ProjectObservation = { pinnedThreadKeys: new Set(), projectId, version };
+    const observation: ProjectObservation = { pinnedThreadKeys: new Set(), projectId, scope: "project", version };
     this.connectionProjects.set(connectionId, observation);
     state.observers.add(connectionId);
     const currentProjectUpdate = this.options.projectState.getCurrentUpdate(projectId);
@@ -429,13 +451,37 @@ export default class WorkbenchThreadStateController {
     };
   }
 
+  async openGlobal(connectionId: string, version: 4 | 5 = 5): Promise<WorkbenchGlobalThreadStateOpenResult> {
+    const priorObservation = this.connectionProjects.get(connectionId);
+    if (priorObservation?.scope === "project") await this.close(connectionId, priorObservation.projectId);
+    else if (priorObservation) await this.closeGlobal(connectionId);
+    const observation: ProjectObservation = { pinnedThreadKeys: new Set(), scope: "global", version };
+    this.connectionProjects.set(connectionId, observation);
+    const catalog = this.options.getProjectCatalog();
+    const projectSidebars = await Promise.all(catalog.data.map(async ({ id }) => this.snapshot(id, await this.getProject(id))));
+    const result = {
+      catalog,
+      pinnedThreadLayout: await this.pinnedLayout.getSnapshot(),
+      projectSidebars: { projects: projectSidebars },
+    };
+    return version === 5
+      ? { ...result, homeThreadDisplayOrder: await this.homeDisplayOrder.getSnapshot(), version: 5 }
+      : result;
+  }
+
   async close(connectionId: string, expectedProjectId?: string) {
-    const projectId = this.connectionProjects.get(connectionId)?.projectId;
+    const observation = this.connectionProjects.get(connectionId);
+    const projectId = observation?.scope === "project" ? observation.projectId : "";
     if (!projectId || (expectedProjectId && projectId !== expectedProjectId)) return;
     this.connectionProjects.delete(connectionId);
     const state = this.projects.get(projectId);
     if (!state) return;
     state.observers.delete(connectionId);
+  }
+
+  private async closeGlobal(connectionId: string) {
+    if (this.connectionProjects.get(connectionId)?.scope !== "global") return;
+    this.connectionProjects.delete(connectionId);
   }
 
   private synchronizeSettlementTimestamps(state: ProjectState) {
@@ -467,12 +513,15 @@ export default class WorkbenchThreadStateController {
     ));
   }
 
-  async disconnect(connectionId: string) { await this.close(connectionId); }
+  async disconnect(connectionId: string) {
+    if (this.connectionProjects.get(connectionId)?.scope === "global") await this.closeGlobal(connectionId);
+    else await this.close(connectionId);
+  }
 
   async acceptIntent(connectionId: string, input: { draftId?: string; harness: "codex" | "copilot" | "opencode"; projectId: string; threadId: string; title?: string; turnId: string }) {
     const authorizedThreadId = input.draftId ? `draft:${input.draftId}` : input.threadId;
     if (
-      this.connectionProjects.get(connectionId)?.projectId !== input.projectId
+      !this.isObservedProjectAuthorized(connectionId, input.projectId)
       && !this.isPinnedThreadAuthorized(connectionId, input.projectId, input.harness, authorizedThreadId)
     ) {
       throw new Error("The accepted intent does not belong to this connection's observed or pinned thread project.");
@@ -489,6 +538,8 @@ export default class WorkbenchThreadStateController {
       state.displayOrder = replaceWorkbenchThreadFolderMember(state.displayOrder, draftKey, `${input.harness}:${input.threadId}`);
       const pinnedLayoutUpdate = await this.pinnedLayout.replace(input.projectId, draftKey, `${input.harness}:${input.threadId}`);
       if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
+      const homeDisplayOrderUpdate = await this.homeDisplayOrder.replace(input.projectId, draftKey, `${input.harness}:${input.threadId}`);
+      if (homeDisplayOrderUpdate) this.publishHomeDisplayOrder(homeDisplayOrderUpdate);
       state.drafts.delete(input.draftId);
       state.entries.delete(draftKey);
     } else {
@@ -861,6 +912,7 @@ export default class WorkbenchThreadStateController {
     }
     await Promise.allSettled(this.operationQueues.values());
     await Promise.allSettled(this.summaryHydrationPromises);
+    await this.homeDisplayOrder.waitForIdle();
     await this.pinnedLayout.waitForIdle();
     await this.json.waitForIdle();
   }
@@ -1003,6 +1055,13 @@ export default class WorkbenchThreadStateController {
     return this.connectionProjects.get(connectionId)?.pinnedThreadKeys.has(`${projectId}\0${harness}\0${threadId}`) === true;
   }
 
+  private isObservedProjectAuthorized(connectionId: string, projectId: string) {
+    const observation = this.connectionProjects.get(connectionId);
+    return observation?.scope === "global"
+      ? this.options.getProjectCatalog().data.some(({ id }) => id === projectId)
+      : observation?.projectId === projectId;
+  }
+
   private hydrateProjectThreadSummaries(
     connectionId: string,
     observation: ProjectObservation,
@@ -1107,6 +1166,14 @@ export default class WorkbenchThreadStateController {
       .join(",");
     this.options.log?.(`Conformed stored pinned thread layout: repairedPaths=${paths || "none"}`);
   }
+  private logHomeDisplayOrderRepairs(repairedPaths: PropertyKey[][]) {
+    if (!repairedPaths.length) return;
+    const paths = repairedPaths
+      .slice(0, 20)
+      .map((repairPath) => repairPath.length ? repairPath.map(sanitizeLogValue).join(".") : "root")
+      .join(",");
+    this.options.log?.(`Conformed stored home thread display order: repairedPaths=${paths || "none"}`);
+  }
   private snapshot(projectId: string, state: ProjectState): WorkbenchThreadSidebarSnapshot {
     const naturallyOrdered = this.naturallyOrderedEntries(state);
     const resolved = resolveWorkbenchThreadDisplayOrder(naturallyOrdered, state.displayOrder);
@@ -1127,11 +1194,14 @@ export default class WorkbenchThreadStateController {
     if (!this.active) return;
     state.revision += 1;
     this.updatePinnedLayoutEntries(projectId, this.naturallyOrderedEntries(state));
-    if (state.observers.size) this.publishUpdate(state, this.snapshot(projectId, state));
+    const sidebar = this.snapshot(projectId, state);
+    if (state.observers.size) this.publishUpdate(state, sidebar);
     const summary = createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision, state.displayOrder);
     for (const [connectionId, observation] of this.connectionProjects) {
       if (observation.version === 3) {
         this.options.publish(connectionId, { summary, updateKind: "projectThreadSummary" });
+      } else if (observation.scope === "global") {
+        this.options.publish(connectionId, { sidebar, updateKind: "projectThreadSidebar" });
       }
     }
     const projected = changedEntry ? projectWorkbenchThreadStateEntry(changedEntry) : null;
@@ -1304,8 +1374,22 @@ export default class WorkbenchThreadStateController {
   private publishPinnedLayout(snapshot: Extract<WorkbenchThreadStateSnapshot, { updateKind: "pinnedThreadLayout" }>) {
     if (!this.active) return;
     for (const [connectionId, observation] of this.connectionProjects) {
-      if (observation.version === 3) this.options.publish(connectionId, snapshot);
+      if (observation.version === 3 || observation.scope === "global") this.options.publish(connectionId, snapshot);
     }
+  }
+
+  private publishHomeDisplayOrder(snapshot: Extract<WorkbenchThreadStateSnapshot, { updateKind: "homeThreadDisplayOrder" }>) {
+    if (!this.active) return;
+    for (const [connectionId, observation] of this.connectionProjects) {
+      if (observation.scope === "global" && observation.version === 5) this.options.publish(connectionId, snapshot);
+    }
+  }
+
+  private homeLayoutEntries() {
+    return [...this.projects].flatMap(([projectId, state]) => this.naturallyOrderedEntries(state).flatMap((entry): ThreadDisplayLayoutEntry[] => {
+      const section = getWorkbenchThreadDisplaySection(entry);
+      return section ? [{ key: getWorkbenchHomeThreadKey(projectId, entry), section }] : [];
+    }));
   }
 
   private updatePinnedLayoutEntries(projectId: string, entries: readonly WorkbenchThreadSidebarEntry[]) {
@@ -1341,6 +1425,158 @@ export default class WorkbenchThreadStateController {
     const result = await this.pinnedLayout.mutate([...this.pinnedEntries.values()], request);
     if (result.snapshot) this.publishPinnedLayout(result.snapshot);
     return { accepted: result.accepted, revision: result.snapshot?.revision ?? (await this.pinnedLayout.getSnapshot()).revision };
+  }
+
+  private async mutateHomeDisplayOrder(
+    connectionId: string,
+    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/home-display-order/move" }>,
+  ) {
+    const observation = this.connectionProjects.get(connectionId);
+    const currentSnapshot = await this.homeDisplayOrder.getSnapshot();
+    if (observation?.scope !== "global" || observation.version !== 5) {
+      return { accepted: false, revision: currentSnapshot.revision };
+    }
+
+    const sourceIdentity = parseProjectQualifiedThreadDisplayKey(request.sourceKey);
+    if (!sourceIdentity) return { accepted: false, revision: currentSnapshot.revision };
+    const sourceState = await this.getProject(sourceIdentity.projectId);
+    const destinationIdentity = request.destinationFolderKey
+      ? parseProjectQualifiedThreadDisplayKey(request.destinationFolderKey)
+      : null;
+    if (request.destinationFolderKey && !destinationIdentity) return { accepted: false, revision: currentSnapshot.revision };
+    if (destinationIdentity && destinationIdentity.projectId !== sourceIdentity.projectId) {
+      return { accepted: false, revision: currentSnapshot.revision };
+    }
+    const beforeIdentity = request.beforeKey ? parseProjectQualifiedThreadDisplayKey(request.beforeKey) : null;
+    if (request.beforeKey && !beforeIdentity) return { accepted: false, revision: currentSnapshot.revision };
+
+    return await this.enqueue("home-display-order", async () => await this.enqueue(
+      `${sourceIdentity.projectId}:display-order`,
+      async () => {
+        const queuedSnapshot = await this.homeDisplayOrder.getSnapshot();
+        const sourceFolderId = sourceIdentity.threadKey.startsWith("folder:") ? sourceIdentity.threadKey.slice("folder:".length) : null;
+        const sourceFolder = sourceFolderId
+          ? sourceState.displayOrder.folders?.find((folder) => folder.folderId === sourceFolderId) ?? null
+          : null;
+        const sourceEntry = sourceFolder ? null : sourceState.entries.get(sourceIdentity.threadKey) ?? null;
+        if (
+          (sourceFolder && sourceFolder.section !== request.section)
+          || (sourceEntry && getWorkbenchThreadDisplaySection(sourceEntry) !== request.section)
+          || (!sourceFolder && !sourceEntry)
+        ) return { accepted: false, revision: queuedSnapshot.revision };
+
+        const destinationFolderId = destinationIdentity?.threadKey.startsWith("folder:")
+          ? destinationIdentity.threadKey.slice("folder:".length)
+          : null;
+        const destinationFolder = destinationFolderId
+          ? sourceState.displayOrder.folders?.find((folder) => folder.folderId === destinationFolderId) ?? null
+          : null;
+        if (
+          (request.destinationFolderKey && !destinationFolder)
+          || (destinationFolder && destinationFolder.section !== request.section)
+          || (sourceFolder && destinationFolder)
+          || (destinationFolder && beforeIdentity && beforeIdentity.projectId !== sourceIdentity.projectId)
+        ) return { accepted: false, revision: queuedSnapshot.revision };
+
+        const sourceKeys = sourceFolder
+          ? sourceFolder.threadKeys.map((threadKey) => getProjectQualifiedThreadDisplayKey(sourceIdentity.projectId, threadKey))
+          : [request.sourceKey];
+        const entries = this.homeLayoutEntries();
+        let homeBeforeKey = request.beforeKey;
+        if (destinationFolder && !homeBeforeKey) {
+          const orderedKeys = resolveWorkbenchHomeThreadSectionKeys(entries, queuedSnapshot.displayOrder, request.section);
+          const destinationKeys = new Set(destinationFolder.threadKeys.map((threadKey) => (
+            getProjectQualifiedThreadDisplayKey(sourceIdentity.projectId, threadKey)
+          )));
+          const lastDestinationIndex = orderedKeys.reduce(
+            (lastIndex, key, index) => destinationKeys.has(key) ? index : lastIndex,
+            -1,
+          );
+          homeBeforeKey = orderedKeys.slice(lastDestinationIndex + 1).find((key) => !sourceKeys.includes(key)) ?? null;
+        }
+
+        const currentFolder = sourceEntry
+          ? findWorkbenchThreadFolder(sourceState.displayOrder, sourceIdentity.threadKey)
+          : null;
+        const beforeLocalKey = beforeIdentity?.projectId === sourceIdentity.projectId
+          ? beforeIdentity.threadKey
+          : null;
+        const withinSameFolder = Boolean(
+          sourceEntry
+          && currentFolder
+          && destinationFolder
+          && currentFolder.folderId === destinationFolder.folderId,
+        );
+        let nextProjectDisplayOrder = sourceState.displayOrder;
+        if (sourceEntry && destinationFolder) {
+          if (beforeLocalKey && !destinationFolder.threadKeys.includes(beforeLocalKey)) {
+            return { accepted: false, revision: queuedSnapshot.revision };
+          }
+          nextProjectDisplayOrder = moveWorkbenchThreadDisplayItem(
+            this.naturallyOrderedEntries(sourceState),
+            sourceState.displayOrder,
+            request.section,
+            sourceIdentity.threadKey,
+            destinationFolder.folderId,
+            beforeLocalKey,
+          ) ?? sourceState.displayOrder;
+        } else if (sourceEntry && currentFolder) {
+          nextProjectDisplayOrder = reconcileWorkbenchThreadDisplayOrder(
+            this.naturallyOrderedEntries(sourceState),
+            removeWorkbenchThreadFromProjectFolder(sourceState.displayOrder, sourceIdentity.threadKey),
+          );
+        }
+
+        const priorProjectDisplayOrder = sourceState.displayOrder;
+        const projectChanged = !areDeeplyEqual(nextProjectDisplayOrder, priorProjectDisplayOrder);
+        if (projectChanged) {
+          sourceState.displayOrder = nextProjectDisplayOrder;
+          try {
+            await this.persist(sourceIdentity.projectId, sourceState);
+          } catch (error) {
+            sourceState.displayOrder = priorProjectDisplayOrder;
+            throw error;
+          }
+        }
+
+        if (withinSameFolder) {
+          if (projectChanged) this.publish(sourceIdentity.projectId, sourceState);
+          return { accepted: true, revision: sourceState.revision };
+        }
+
+        try {
+          const result = await this.homeDisplayOrder.move(
+            entries,
+            request.section,
+            sourceKeys,
+            homeBeforeKey,
+          );
+          if (!result.accepted) {
+            if (projectChanged) {
+              sourceState.displayOrder = priorProjectDisplayOrder;
+              await this.persist(sourceIdentity.projectId, sourceState);
+            }
+            return { accepted: false, revision: queuedSnapshot.revision };
+          }
+          if (projectChanged) this.publish(sourceIdentity.projectId, sourceState);
+          if (result.snapshot) this.publishHomeDisplayOrder(result.snapshot);
+          return {
+            accepted: true,
+            revision: result.snapshot?.revision ?? queuedSnapshot.revision,
+          };
+        } catch (error) {
+          if (projectChanged) {
+            sourceState.displayOrder = priorProjectDisplayOrder;
+            try {
+              await this.persist(sourceIdentity.projectId, sourceState);
+            } catch {
+              throw new Error(`Home thread move failed and project folder rollback could not be persisted: ${sanitizeError(error)}`);
+            }
+          }
+          throw error;
+        }
+      },
+    ));
   }
 
   private installGitArcSnapshot(state: ProjectState, snapshot: WorkbenchThreadGitArcSnapshot) {
@@ -1406,6 +1642,75 @@ export default class WorkbenchThreadStateController {
     });
   }
 
+  private async moveDraft(sourceProjectId: string, destinationProjectId: string, draftId: string) {
+    const [sourceState, destinationState] = await Promise.all([
+      this.getProject(sourceProjectId),
+      this.getProject(destinationProjectId),
+    ]);
+    return await this.enqueue(`draft:${draftId}`, async () => {
+      const sourceDraft = sourceState.drafts.get(draftId);
+      const sourceEntry = sourceState.entries.get(`draft:${draftId}`);
+      if (!sourceDraft || sourceEntry?.entryKind !== "draft") {
+        return { accepted: false, revision: destinationState.revision };
+      }
+      if (destinationState.drafts.has(draftId) || destinationState.entries.has(`draft:${draftId}`)) {
+        return { accepted: false, revision: destinationState.revision };
+      }
+
+      const sourceDisplayOrder = sourceState.displayOrder;
+      const destinationDisplayOrder = destinationState.displayOrder;
+      const movedDraft = WorkbenchThreadDraftSchema.parse({ ...sourceDraft, projectId: destinationProjectId });
+      const movedEntry = this.draftEntry(movedDraft, sourceEntry.metadata);
+      destinationState.drafts.set(draftId, movedDraft);
+      destinationState.entries.set(`draft:${draftId}`, movedEntry);
+
+      try {
+        await this.persist(destinationProjectId, destinationState);
+      } catch (error) {
+        destinationState.drafts.delete(draftId);
+        destinationState.entries.delete(`draft:${draftId}`);
+        destinationState.displayOrder = destinationDisplayOrder;
+        throw error;
+      }
+
+      sourceState.drafts.delete(draftId);
+      sourceState.entries.delete(`draft:${draftId}`);
+      try {
+        await this.persist(sourceProjectId, sourceState);
+      } catch (error) {
+        sourceState.drafts.set(draftId, sourceDraft);
+        sourceState.entries.set(`draft:${draftId}`, sourceEntry);
+        sourceState.displayOrder = sourceDisplayOrder;
+        destinationState.drafts.delete(draftId);
+        destinationState.entries.delete(`draft:${draftId}`);
+        destinationState.displayOrder = destinationDisplayOrder;
+        const rollback = await Promise.allSettled([
+          this.persist(sourceProjectId, sourceState),
+          this.persist(destinationProjectId, destinationState),
+        ]);
+        if (rollback.some(({ status }) => status === "rejected")) {
+          throw new Error(`Draft move failed and rollback could not be persisted: ${sanitizeError(error)}`);
+        }
+        throw error;
+      }
+
+      if (sourceEntry.metadata.pinned) {
+        const pinnedLayoutUpdate = await this.pinnedLayout.remove(sourceProjectId, `draft:${draftId}`);
+        if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
+      }
+      const homeDisplayOrderUpdate = await this.homeDisplayOrder.replace(
+        sourceProjectId,
+        `draft:${draftId}`,
+        `draft:${draftId}`,
+        destinationProjectId,
+      );
+      if (homeDisplayOrderUpdate) this.publishHomeDisplayOrder(homeDisplayOrderUpdate);
+      this.publish(sourceProjectId, sourceState);
+      this.publish(destinationProjectId, destinationState, movedEntry);
+      return { accepted: true, revision: destinationState.revision };
+    });
+  }
+
   private async deleteDraft(projectId: string, draftId: string, clientUpdatedAt: number) {
     const state = await this.getProject(projectId);
     await this.enqueue(`${projectId}:draft:${draftId}`, async () => {
@@ -1417,6 +1722,8 @@ export default class WorkbenchThreadStateController {
         const pinnedLayoutUpdate = await this.pinnedLayout.remove(projectId, `draft:${draftId}`);
         if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
       }
+      const homeDisplayOrderUpdate = await this.homeDisplayOrder.remove(projectId, `draft:${draftId}`);
+      if (homeDisplayOrderUpdate) this.publishHomeDisplayOrder(homeDisplayOrderUpdate);
       await this.persist(projectId, state); this.publish(projectId, state);
     });
     return { accepted: true, revision: state.revision };
@@ -1465,7 +1772,7 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/pin/open" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" | "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" | "workbench/thread-state/pinned-display-order/folder/create" | "workbench/thread-state/pinned-display-order/folder/title/set" | "workbench/thread-state/pinned-display-order/move" }>) {
+  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/global/open" | "workbench/thread-state/global/close" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/pin/open" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/move" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" | "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" | "workbench/thread-state/home-display-order/move" | "workbench/thread-state/pinned-display-order/folder/create" | "workbench/thread-state/pinned-display-order/folder/title/set" | "workbench/thread-state/pinned-display-order/move" }>) {
     const state = await this.getProject(request.projectId);
     const key = `${request.identity.harness}:${request.identity.threadId}`;
     const mutate = async () => await this.enqueue(`${request.projectId}:thread:${key}`, async () => {

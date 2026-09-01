@@ -161,7 +161,7 @@ import type { OrchestratorReloadResponse, OrchestratorReloadScope } from "./work
 import type { WorkbenchReloadDirtSnapshot as SharedWorkbenchReloadDirtSnapshot, WorkbenchReloadDirtScope as SharedWorkbenchReloadDirtScope, WorkbenchReloadResponse, WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline";
-import type { WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
+import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
 export type {
@@ -1065,7 +1065,10 @@ export interface ExplorerSnapshot {
 }
 
 export interface WorkbenchThreadSidebarStore {
+  getHomeThreadDisplayOrder?: () => WorkbenchHomeThreadDisplayOrderSnapshot;
+  getHomeThreadDisplayOrderSupported?: () => boolean;
   getPinnedThreadLayout?: () => WorkbenchPinnedThreadLayoutSnapshot;
+  getProjectThreadSidebars?: () => WorkbenchProjectThreadSidebars;
   getProjectThreadSummaries?: () => WorkbenchProjectThreadSummaries;
   getSnapshot: () => WorkbenchThreadSidebarSnapshot | null;
   subscribe: (listener: () => void) => () => void;
@@ -1086,6 +1089,7 @@ export interface WorkbenchControls {
   reloadScopes: (scopes: OrchestratorReloadScope[]) => Promise<OrchestratorReloadResponse>;
   refreshRateLimits: () => Promise<void>;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
+  moveThreadDraft: (sourceProjectId: string, destinationProjectId: string, draftId: string) => Promise<void>;
   sendThreadMessage: (
     thread: ThreadPayload,
     input: UserInput[],

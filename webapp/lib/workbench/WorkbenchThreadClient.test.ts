@@ -1768,6 +1768,53 @@ test("project reset suppresses stale reconciliation failure warnings", async () 
   }, { onStatusMessage: (message) => statusMessages.push(message) });
 });
 
+test("thread selection reuses cached rate limits while automatic reads are throttled", async () => withClient(async (client, socket) => {
+  const pendingRequests: SocketRequest[] = [];
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method === "account/rateLimits/read") {
+      pendingRequests.push(request);
+      return true;
+    }
+    return false;
+  };
+  const respondWithRateLimits = (request: SocketRequest, limitName: string) => {
+    const snapshot = {
+      credits: null, individualLimit: null, limitId: "codex", limitName, planType: null,
+      primary: null, rateLimitReachedType: null, secondary: null,
+    };
+    socket.respond(request.id, {
+      rateLimitResetCredits: null,
+      rateLimits: snapshot,
+      rateLimitsByLimitId: { codex: snapshot },
+    });
+  };
+
+  const seedRefresh = client.refreshRateLimits();
+  await waitForCondition(() => pendingRequests.length === 1, "Expected the seed rate-limit read.");
+  respondWithRateLimits(pendingRequests[0]!, "cached");
+  await seedRefresh;
+
+  client.selectThreadPayload(activeThread("codex", "first", "completed"));
+  client.selectThreadPayload(activeThread("codex", "second", "completed"));
+  assert.equal(client.getSnapshot().rateLimits?.limitName, "cached");
+  assert.equal(pendingRequests.length, 1);
+
+  const explicitRefresh = client.refreshRateLimits();
+  await waitForCondition(() => pendingRequests.length === 2, "Expected an explicit rate-limit read.");
+  assert.equal(client.getSnapshot().rateLimits?.limitName, "cached");
+  respondWithRateLimits(pendingRequests[1]!, "explicit");
+  await explicitRefresh;
+  assert.equal(client.getSnapshot().rateLimits?.limitName, "explicit");
+
+  socket.notify("account/rateLimits/updated", {});
+  await waitForCondition(() => pendingRequests.length === 3, "Expected the account update to bypass the refresh throttle.");
+  respondWithRateLimits(pendingRequests[2]!, "notification");
+  await waitForCondition(
+    () => client.getSnapshot().rateLimits?.limitName === "notification",
+    "Expected the account update to replace cached rate limits.",
+  );
+}));
+
 test("project reset fences a late rate-limit success from the previous project", async () => withClient(async (client, socket) => {
   const pendingRequests: SocketRequest[] = [];
   FakeWebSocket.intercept = (_target, request) => {

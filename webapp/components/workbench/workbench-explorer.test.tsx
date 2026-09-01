@@ -7,11 +7,12 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 test("threads render one keyboard-navigable tablist with settled rows and custom drag ownership", async () => {
-  const [draggableSource, listSource, itemSource, sidebarSource, workbenchSource] = await Promise.all([
+  const [draggableSource, homeListSource, listSource, itemSource, sidebarSource, workbenchSource] = await Promise.all([
     readFile(new URL("./drag/Draggable.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchHomeThreadList.tsx", import.meta.url), "utf8"),
     readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8"),
     readFile(new URL("./WorkbenchThreadListItem.tsx", import.meta.url), "utf8"),
-    readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchAllProjectsThreadSidebar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../workbench.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(listSource, /role="tablist"/u);
@@ -31,8 +32,10 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(listSource, /draggable=\{draggable\}/u);
   assert.match(itemSource, /<a[\s\S]*?draggable=\{draggable\}/u);
   assert.match(workbenchSource, /isDragActive=\{Boolean\(activeWorkbenchDrag\)\}/u);
-  assert.match(sidebarSource, /<WorkbenchThreadList[\s\S]*?isDragActive=\{isDragActive\}/u);
-  assert.match(sidebarSource, /<WorkbenchThreadList[\s\S]*?displayOrder=\{actions\.displayOrder\}/u);
+  assert.match(sidebarSource, /<WorkbenchHomeThreadList/u);
+  assert.doesNotMatch(sidebarSource, /<WorkbenchThreadList/u);
+  assert.match(homeListSource, /projectWorkbenchHomeThreadList/u);
+  assert.match(homeListSource, /list\.pinnedItems[\s\S]*?list\.mainEntries[\s\S]*?list\.snoozedItems[\s\S]*?list\.settledItems/u);
   assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?isDragActive=\{isDragActive\}/u);
   assert.match(itemSource, /<WorkbenchTooltip[\s\S]*?enabled=\{showTooltip && !isDragActive\}[\s\S]*?<a/u);
   assert.match(itemSource, /More actions for \$\{entry\.title\}/u);
@@ -63,7 +66,7 @@ test("agent tabs keep a persistent settled toggle and durable thread routing", a
   assert.match(source, /threadSidebarStore\?\.getSnapshot\(\)\?\.entries\.find/u);
   assert.match(source, /candidate\.identity\.harness === mainThreadHarness/u);
   assert.match(threadViewSource, /getThreadHref\?\.\(target\) \?\? createThreadHref\(projectId, target\)/u);
-  assert.match(workbenchSource, /getThreadHref=\{\(target\) => isForeignThreadProject[\s\S]*?createPinnedThreadHref\(activeProjectId, threadProjectId, target\)/u);
+  assert.match(workbenchSource, /getThreadHref=\{\(target\) => !activeProjectId[\s\S]*?createHomeThreadHref\(threadProjectId, target\)[\s\S]*?createPinnedThreadHref\(activeProjectId, threadProjectId, target\)/u);
 });
 
 test("existing-thread composer drafts keep their keyed owner through active subagent selection", async () => {
@@ -97,7 +100,7 @@ test("live sidebar state subscribes below the Workbench root", async () => {
   const actionsSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
   const clientSource = await readFile(new URL("../../lib/WorkbenchClient.ts", import.meta.url), "utf8");
   assert.match(workbenchSource, /onThreadSidebarStoreReady/u);
-  assert.match(workbenchSource, /<WorkbenchThreadSidebar/u);
+  assert.match(workbenchSource, /<WorkbenchAllProjectsThreadSidebar/u);
   assert.doesNotMatch(workbenchSource, /explorer\.threadSidebar/u);
   assert.match(actionsSource, /useSyncExternalStore/u);
   assert.match(actionsSource, /store\?\.subscribe/u);
@@ -156,7 +159,7 @@ test("jit project bootstrap exposes available slices before unrelated hydration"
   assert.ok(beginSelectionIndex < openObservationIndex);
   assert.doesNotMatch(clientSource, /selectProjectStrict\(route\.projectId\)/u);
   assert.doesNotMatch(actionsSource, /isProjectLoading|isThreadsLoading|threadsError/u);
-  assert.match(actionsSource, /snapshot\.freshness === "loading" && !entries\.length/u);
+  assert.match(actionsSource, /!currentSidebar && !projectThreadSidebars\.projects\.length/u);
   assert.match(workbenchSource, /const isProjectIdentityLoading =/u);
   assert.match(workbenchSource, /const isProjectTreeLoading =/u);
   assert.doesNotMatch(workbenchSource, /isSidebarThreadsLoading|explorer\.threadSidebar/u);
@@ -194,7 +197,7 @@ test("active saved drafts hydrate composer input from the subscribed sidebar dra
     readFile(new URL("../../lib/WorkbenchClient.ts", import.meta.url), "utf8"),
   ]);
   assert.match(source, /route\.threadTarget\?\.kind === "draft"[\s\S]*?controls\?\.getSelectedThreadDraft\(\)[\s\S]*?getSidebarDraftComposerInput\(activeRouteDraft\)/u);
-  assert.match(clientSource, /selectedPinnedThreadDraft = isForeignPin \? cloneThreadDraft\(entry\.draft\) : null/u);
+  assert.match(clientSource, /selectedPinnedThreadDraft = isHomeThread \|\| isForeignPin \? cloneThreadDraft\(entry\.draft\) : null/u);
   assert.match(clientSource, /workbench\/thread-state\/draft\/upsert[\s\S]*?projectId: draft\.projectId/u);
   assert.match(clientSource, /workbench\/thread-state\/draft\/delete[\s\S]*?projectId: selectedDraft\.projectId/u);
   assert.doesNotMatch(source, /useMemo\(\(\) => getThreadComposerDraftForTarget\(/u);

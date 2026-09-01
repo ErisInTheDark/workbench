@@ -9,6 +9,7 @@ import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import type { WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
 import type { WorkbenchComposerProfileTargetSelection, WorkbenchReloadDirtSnapshot } from "../lib/types";
 import { getProjectQualifiedThreadDisplayKey } from "../lib/workbench/thread/thread-display-layout";
+import { getWorkbenchHomeFolderKey } from "../lib/workbench/thread/home-thread-display-order";
 import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 
 type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition">
@@ -892,6 +893,202 @@ test("daemon thread state owns profile migration, draft defaults, materializatio
   assert.deepEqual(stored.newThreadProfile, selected);
   assert.deepEqual(stored.records.find((record) => record.identity.threadId === "materialized")?.profile, selected);
   await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("global observation returns full project sidebars and moves durable drafts without selecting a project", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-global-"));
+  const draftId = "22222222-2222-4222-8222-222222222222";
+  const sourceFile = threadStatePath(root, "alpha");
+  const destinationFile = threadStatePath(root, "beta");
+  await fs.mkdir(path.dirname(sourceFile), { recursive: true });
+  await fs.writeFile(sourceFile, JSON.stringify({
+    drafts: [{
+      agent: "profile-agent.md",
+      attachments: [],
+      clientUpdatedAt: 2,
+      composerSettings: { ...EMPTY_CODEX_SETTINGS, agentPath: "profile-agent.md", model: "gpt-profile" },
+      createdAt: 1,
+      draftId,
+      harness: "codex",
+      model: "gpt-profile",
+      profileId: "profile-one",
+      projectId: "alpha",
+      prompt: "Move this durable draft",
+      reasoningEffort: null,
+      serviceTier: null,
+      updatedAt: 2,
+    }],
+    newThreadProfile: null,
+    records: [],
+    version: 4,
+  }), "utf8");
+  await fs.writeFile(destinationFile, JSON.stringify({ drafts: [], newThreadProfile: null, records: [], version: 4 }), "utf8");
+  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [projectOption("alpha", path.join(root, "alpha")), projectOption("beta", path.join(root, "beta"))],
+      rootPath: root,
+    }),
+    projectState: projectState(),
+    publish: (connectionId, snapshot) => { publications.push({ connectionId, snapshot }); },
+    reconcileProject: async () => [],
+    resolveProjectRoot: async (projectId) => path.join(root, projectId),
+    storageRoot: root,
+  });
+
+  const opened = await controller.openGlobal("global");
+  assert.deepEqual(opened.projectSidebars.projects.map(({ projectId }) => projectId), ["alpha", "beta"]);
+  assert.equal(opened.projectSidebars.projects.find(({ projectId }) => projectId === "alpha")?.entries.some((entry) => entry.entryKind === "draft"), true);
+  assert.equal(publications.some(({ snapshot }) => "updateKind" in snapshot && snapshot.updateKind === "project"), false);
+
+  const response = await controller.handleRequest("global", {
+    destinationProjectId: "beta",
+    draftId,
+    method: "workbench/thread-state/draft/move",
+    sourceProjectId: "alpha",
+  });
+  const moved = WorkbenchThreadStateMutationResultSchema.parse("result" in response ? response.result : null);
+  assert.equal(moved.accepted, true);
+  assert.equal((await controller.getSnapshot("alpha")).entries.some((entry) => entry.entryKind === "draft"), false);
+  const destinationDraft = (await controller.getSnapshot("beta")).entries.find((entry) => entry.entryKind === "draft");
+  assert.deepEqual(destinationDraft?.entryKind === "draft" ? {
+    agentPath: destinationDraft.draft.composerSettings.agentPath,
+    model: destinationDraft.draft.composerSettings.model,
+    profileId: destinationDraft.draft.profileId,
+    projectId: destinationDraft.draft.projectId,
+  } : null, {
+    agentPath: "profile-agent.md",
+    model: "gpt-profile",
+    profileId: "profile-one",
+    projectId: "beta",
+  });
+  assert.equal(publications.some(({ connectionId, snapshot }) => (
+    connectionId === "global"
+    && "updateKind" in snapshot
+    && snapshot.updateKind === "projectThreadSidebar"
+    && snapshot.sidebar.projectId === "beta"
+  )), true);
+
+  const storedSource = JSON.parse(await fs.readFile(sourceFile, "utf8")) as { drafts: unknown[] };
+  const storedDestination = JSON.parse(await fs.readFile(destinationFile, "utf8")) as { drafts: Array<{ projectId?: string }> };
+  assert.deepEqual(storedSource.drafts, []);
+  assert.equal(storedDestination.drafts[0]?.projectId, "beta");
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("home order persists folder blocks and rejects foreign-project folder membership", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-home-thread-order-"));
+  const pinned = (threadId: string, orderAt: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
+    activityAt: orderAt,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: true, snoozed: false },
+    orderAt,
+    title: threadId,
+  });
+  const entriesByProject = new Map<string, WorkbenchThreadSidebarEntry[]>([
+    ["alpha", [pinned("a", 20), pinned("b", 10)]],
+    ["beta", [pinned("c", 30)]],
+  ]);
+  const publications: WorkbenchThreadStateSnapshot[] = [];
+  const createController = () => new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [projectOption("alpha", path.join(root, "alpha")), projectOption("beta", path.join(root, "beta"))],
+      rootPath: root,
+    }),
+    projectState: projectState(),
+    publish: (_connectionId, snapshot) => { publications.push(snapshot); },
+    reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", entriesByProject.get(projectId) ?? [], { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async (projectId) => path.join(root, projectId),
+    storageRoot: root,
+  });
+  const controller = createController();
+  const opened = await controller.openGlobal("global", 5);
+  assert.equal("homeThreadDisplayOrder" in opened, true);
+  await waitFor(async () => (await controller.getSnapshot("alpha")).entries.length === 2, "Alpha threads were not discovered.");
+  await waitFor(async () => (await controller.getSnapshot("beta")).entries.length === 1, "Beta threads were not discovered.");
+
+  const folderId = "00000000-0000-4000-8000-000000000202";
+  const created = await controller.handleRequest("global", {
+    folderId,
+    method: "workbench/thread-state/display-order/folder/create",
+    projectId: "alpha",
+    sourceKey: "codex:a",
+    title: "Alpha only",
+  });
+  assert.equal("result" in created && (created.result as { accepted?: boolean }).accepted, true);
+
+  const alphaA = getProjectQualifiedThreadDisplayKey("alpha", "codex:a");
+  const alphaB = getProjectQualifiedThreadDisplayKey("alpha", "codex:b");
+  const betaC = getProjectQualifiedThreadDisplayKey("beta", "codex:c");
+  const alphaFolder = getWorkbenchHomeFolderKey("alpha", folderId);
+  const homeOrderPath = path.join(root, ".workbench", "runtime", "home-thread-display-order.json");
+  await fs.mkdir(homeOrderPath, { recursive: true });
+  await assert.rejects(controller.handleRequest("global", {
+    beforeKey: null,
+    destinationFolderKey: alphaFolder,
+    method: "workbench/thread-state/home-display-order/move",
+    section: "pinned",
+    sourceKey: alphaB,
+  }));
+  assert.deepEqual((await controller.getSnapshot("alpha")).displayOrder.folders?.[0]?.threadKeys, ["codex:a"]);
+  await fs.rm(homeOrderPath, { recursive: true });
+
+  const filled = await controller.handleRequest("global", {
+    beforeKey: null,
+    destinationFolderKey: alphaFolder,
+    method: "workbench/thread-state/home-display-order/move",
+    section: "pinned",
+    sourceKey: alphaB,
+  });
+  assert.equal("result" in filled && (filled.result as { accepted?: boolean }).accepted, true);
+  assert.deepEqual((await controller.getSnapshot("alpha")).displayOrder.folders?.[0]?.threadKeys, ["codex:a", "codex:b"]);
+
+  const foreign = await controller.handleRequest("global", {
+    beforeKey: null,
+    destinationFolderKey: alphaFolder,
+    method: "workbench/thread-state/home-display-order/move",
+    section: "pinned",
+    sourceKey: betaC,
+  });
+  assert.equal("result" in foreign && (foreign.result as { accepted?: boolean }).accepted, false);
+  assert.deepEqual((await controller.getSnapshot("alpha")).displayOrder.folders?.[0]?.threadKeys, ["codex:a", "codex:b"]);
+
+  const movedFolder = await controller.handleRequest("global", {
+    beforeKey: betaC,
+    destinationFolderKey: null,
+    method: "workbench/thread-state/home-display-order/move",
+    section: "pinned",
+    sourceKey: alphaFolder,
+  });
+  assert.equal("result" in movedFolder && (movedFolder.result as { accepted?: boolean }).accepted, true);
+  assert.equal(publications.some((snapshot) => "updateKind" in snapshot && snapshot.updateKind === "homeThreadDisplayOrder"), true);
+
+  const removedFromFolder = await controller.handleRequest("global", {
+    beforeKey: betaC,
+    destinationFolderKey: null,
+    method: "workbench/thread-state/home-display-order/move",
+    section: "pinned",
+    sourceKey: alphaA,
+  });
+  assert.equal("result" in removedFromFolder && (removedFromFolder.result as { accepted?: boolean }).accepted, true);
+  assert.deepEqual((await controller.getSnapshot("alpha")).displayOrder.folders?.[0]?.threadKeys, ["codex:b"]);
+  await controller.dispose();
+
+  const reopened = createController();
+  const reopenedResult = await reopened.openGlobal("reopened", 5);
+  assert.equal("homeThreadDisplayOrder" in reopenedResult, true);
+  if ("homeThreadDisplayOrder" in reopenedResult) {
+    assert.equal(reopenedResult.homeThreadDisplayOrder.revision > 0, true);
+    assert.equal(Boolean(reopenedResult.homeThreadDisplayOrder.displayOrder.pinned?.[alphaA]), true);
+  }
+  await reopened.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });
 

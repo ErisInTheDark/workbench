@@ -168,6 +168,33 @@ test("project updates reject stale and foreign revisions", async () => {
   }
 });
 
+test("entering home retains the catalog and clears every project-owned explorer field", async () => {
+  const fetchHarness = installProjectsFetch([createProject("alpha"), createProject("beta")]);
+  try {
+    const { transport } = createTransport();
+    const client = WorkbenchProjectClient({ transport });
+    await client.selectProjectStrict("alpha");
+    client.accept({ projectId: "alpha", revision: 2, snapshot: createSnapshot("alpha", "owned.ts"), updateKind: "project" });
+
+    client.enterNoProject();
+
+    const home = client.getSnapshot();
+    assert.equal(home.currentProjectId, "");
+    assert.deepEqual(home.projects.map(({ id }) => id), ["alpha", "beta"]);
+    assert.deepEqual(home.tree, []);
+    assert.deepEqual(home.roots, []);
+    assert.deepEqual(home.changes, {});
+    assert.deepEqual(home.expandedDirectories, []);
+    assert.equal(home.isLoading, false);
+    client.accept({ projectId: "alpha", revision: 3, snapshot: createSnapshot("alpha", "late.ts"), updateKind: "project" });
+    assert.equal(client.getSnapshot().currentProjectId, "");
+    assert.deepEqual(client.getSnapshot().tree, []);
+    client.dispose();
+  } finally {
+    fetchHarness.restore();
+  }
+});
+
 test("observation reset accepts a restarted revision without clearing the best-known tree", async () => {
   const fetchHarness = installProjectsFetch([createProject("alpha")]);
   try {

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ProjectSidebarProject/ProjectSidebarTimeGroup/GroupedSidebarProjects: flat project-sidebar visibility and progressive recency contracts. Keywords: project, sidebar, recency, activity.
- * - groupSidebarProjects: promote libraries and unsnoozed unsettled work, then bucket remaining projects by effective thread or commit activity. Keywords: project, sidebar, grouping, time, status.
+ * - groupSidebarProjects/getFirstSidebarProjectGroup: promote libraries and unsnoozed unsettled work, bucket remaining projects by activity, and expose the exact first rendered group. Keywords: project, sidebar, grouping, time, status, rotator.
  */
 
 import type { WorkbenchProjectOption } from "../../lib/types";
@@ -94,4 +94,10 @@ export function groupSidebarProjects(
         projects: group.projects.sort((left, right) => compareSidebarProjects(left, right, catalogOrder)),
       })),
   };
+}
+
+export function getFirstSidebarProjectGroup(grouped: GroupedSidebarProjects) {
+  return grouped.alwaysVisibleProjects.length
+    ? grouped.alwaysVisibleProjects
+    : grouped.timeGroups[0]?.projects ?? [];
 }

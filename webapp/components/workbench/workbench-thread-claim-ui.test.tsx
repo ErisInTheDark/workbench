@@ -1,26 +1,43 @@
 /*
  * Exports:
- * - No production exports; rendered regression checks protect active claim counts, proposed-commit presentation, settlement suppression, and global pinned project context. Keywords: sidebar, thread, pinned, project, claim, proposal, commit, settlement.
+ * - No production exports; rendered regression checks protect active claim counts, proposed-commit presentation, settlement suppression, and home pinned priority ordering. Keywords: sidebar, thread, pinned, project, claim, proposal, commit, settlement.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkbenchProjectOption } from "../../lib/types";
 import {
   WorkbenchThreadSidebarEntrySchema,
+  type WorkbenchProjectThreadSidebars,
   type WorkbenchProjectThreadSummaries,
   type WorkbenchThreadSidebarEntry,
 } from "../../lib/workbench/thread/thread-state";
 import WorkbenchPinnedThreadList from "./WorkbenchPinnedThreadList";
+import WorkbenchHomeThreadList from "./WorkbenchHomeThreadList";
+import ThreadRateLimits from "./thread-view/ThreadRateLimits";
 import WorkbenchSidebarPreferencesProvider from "./WorkbenchSidebarPreferencesProvider";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchContextMenuContext, { type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchDragProvider from "./drag/WorkbenchDragProvider";
+
+test("draft composer controls render project rotation immediately before harness rotation", () => {
+  const markup = renderToStaticMarkup(createElement(ThreadRateLimits, {
+    canToggleHarness: true,
+    harness: "codex",
+    leadingContent: createElement("button", { type: "button" }, "Project alpha"),
+    rateLimits: null,
+  }));
+  const projectIndex = markup.indexOf("Project alpha");
+  const harnessIndex = markup.indexOf("Codex");
+  assert.notEqual(projectIndex, -1);
+  assert.notEqual(harnessIndex, -1);
+  assert.equal(projectIndex < harnessIndex, true);
+});
 
 type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
 
@@ -56,9 +73,7 @@ function createThreadEntry({
   };
 }
 
-function renderThreads(
-  entries: ThreadEntry[],
-) {
+function renderThreads(entries: ThreadEntry[]) {
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
@@ -80,7 +95,10 @@ function renderThreads(
   ));
 }
 
-function renderPinnedThreads(projects: WorkbenchProjectOption[], projectThreadSummaries: WorkbenchProjectThreadSummaries) {
+function renderPinnedThreads(
+  projects: WorkbenchProjectOption[],
+  projectThreadSummaries: WorkbenchProjectThreadSummaries,
+) {
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
@@ -111,10 +129,66 @@ function renderPinnedThreads(projects: WorkbenchProjectOption[], projectThreadSu
   ));
 }
 
+function renderHomeThreads({
+  activeDragPayload = null,
+  displayOrder = {},
+  projectThreadSidebars,
+  projects,
+}: {
+  activeDragPayload?: ComponentProps<typeof WorkbenchHomeThreadList>["activeDragPayload"];
+  displayOrder?: ComponentProps<typeof WorkbenchHomeThreadList>["actions"]["homeDisplayOrder"];
+  projectThreadSidebars: WorkbenchProjectThreadSidebars;
+  projects: WorkbenchProjectOption[];
+}) {
+  const actions: ComponentProps<typeof WorkbenchHomeThreadList>["actions"] = {
+    autoFocusFolderId: null,
+    displayOrder: {},
+    entries: [],
+    error: "",
+    getThreadContextMenu: () => ({ id: "home-thread-menu", items: [], label: "Thread actions" }),
+    homeDisplayOrder: displayOrder,
+    homeDisplayOrderSupported: true,
+    isLoading: false,
+    nowMs: 1_723_456_790_000,
+    onAction: () => undefined,
+    onAutoFocusFolderComplete: () => undefined,
+    onHomeMove: () => undefined,
+    onMove: () => undefined,
+    onPinnedMove: () => undefined,
+    onRenameFolder: async (_folderId, title) => title,
+    onRenamePinnedFolder: async (_folderId, title) => title,
+    pinnedDisplayOrder: {},
+    projectThreadSidebars,
+    projectThreadSummaries: { projects: [] },
+  };
+  return renderToStaticMarkup(createElement(
+    WorkbenchSidebarPreferencesProvider,
+    {
+      children: () => createElement(
+        WorkbenchContextMenuContext.Provider,
+        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+        createElement(WorkbenchDragProvider, null, createElement(WorkbenchHomeThreadList, {
+          actions,
+          activeDragPayload,
+          attentionLabelsByThreadId: {},
+          createProject: projects[0]!,
+          currentTarget: null,
+          onCreateThread: () => undefined,
+          onOpenThread: () => undefined,
+          projects,
+          selectedOwnerProjectId: "",
+        })),
+      ),
+      projectId: "",
+    },
+  ));
+}
+
 function renderThreadItem(
   entry: ThreadEntry,
   contextMenu: WorkbenchContextMenuDefinition | null = null,
   project?: WorkbenchProjectOption,
+  { showPinPriorityIcon = false }: { showPinPriorityIcon?: boolean } = {},
 ) {
   return renderToStaticMarkup(createElement(
     WorkbenchContextMenuContext.Provider,
@@ -126,6 +200,7 @@ function renderThreadItem(
       ...(project ? { project } : {}),
       projectId: "project",
       showActions: true,
+      showPinPriorityIcon,
     }),
   ));
 }
@@ -361,6 +436,105 @@ test("global pinned disclosure starts open, omits thread creation, and identifie
   assert.match(localRowHtml, /Workbench[\s\S]*?web\/workbench[\s\S]*?Local pin/u);
   assert.match(remoteRowHtml, /Other[\s\S]*?web\/other[\s\S]*?Remote pin/u);
   assert.doesNotMatch(`${localRowHtml}${remoteRowHtml}`, /data-role="thread-priority-icon"/u);
+
+});
+
+test("only home thread rows show pin while snooze keeps priority", () => {
+  const pinnedEntry = {
+    ...createThreadEntry({ threadId: "pinned", title: "Pinned" }),
+    metadata: { archived: false as const, pinned: true, snoozed: false },
+  };
+  const projectPinnedHtml = renderThreadItem(pinnedEntry);
+  const homePinnedHtml = renderThreadItem(pinnedEntry, null, undefined, { showPinPriorityIcon: true });
+  const pinnedAndSnoozedHtml = renderThreadItem({
+    ...createThreadEntry({ threadId: "pinned-snoozed", title: "Pinned and snoozed" }),
+    metadata: { archived: false, pinned: true, snoozed: true },
+  }, null, undefined, { showPinPriorityIcon: true });
+  const ordinaryHtml = renderThreadItem(createThreadEntry({ threadId: "ordinary", title: "Ordinary" }));
+
+  assert.doesNotMatch(projectPinnedHtml, /data-role="thread-priority-icon"/u);
+  assert.match(homePinnedHtml, /data-role="thread-priority-icon" data-thread-priority="pinned"/u);
+  assert.match(pinnedAndSnoozedHtml, /data-role="thread-priority-icon" data-thread-priority="snoozed"/u);
+  assert.doesNotMatch(pinnedAndSnoozedHtml, /data-thread-priority="pinned"/u);
+  assert.doesNotMatch(ordinaryHtml, /data-role="thread-priority-icon"/u);
+});
+
+test("home renders one combined priority list with project-owned folders and foreign drag blocking", () => {
+  const projects: WorkbenchProjectOption[] = [{
+    id: "alpha", kind: "git", lastCommitTimeMs: null, name: "Alpha", relativePath: "web/alpha",
+    rootPath: "C:/git/web/alpha", roots: [{ id: "alpha", isPrimary: true, name: "alpha", relativePath: "web/alpha", rootPath: "C:/git/web/alpha" }],
+  }, {
+    id: "beta", kind: "git", lastCommitTimeMs: null, name: "Beta", relativePath: "web/beta",
+    rootPath: "C:/git/web/beta", roots: [{ id: "beta", isPrimary: true, name: "beta", relativePath: "web/beta", rootPath: "C:/git/web/beta" }],
+  }];
+  const alphaPinned = { ...createThreadEntry({ threadId: "alpha-pinned", title: "Alpha pinned" }), metadata: { archived: false as const, pinned: true, snoozed: false } };
+  const alphaMain = createThreadEntry({ threadId: "alpha-main", title: "Alpha main" });
+  const alphaSettled = {
+    ...createThreadEntry({ threadId: "alpha-settled", title: "Alpha settled" }),
+    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: true as const },
+  };
+  const betaPinned = { ...createThreadEntry({ threadId: "beta-pinned", title: "Beta pinned" }), metadata: { archived: false as const, pinned: true, snoozed: false } };
+  const betaSnoozed = { ...createThreadEntry({ threadId: "beta-snoozed", title: "Beta snoozed" }), metadata: { archived: false as const, pinned: false, snoozed: true } };
+  const folderId = "00000000-0000-4000-8000-000000000303";
+  const projectThreadSidebars: WorkbenchProjectThreadSidebars = {
+    projects: [{
+      displayOrder: { folders: [{ folderId, section: "pinned", threadKeys: ["codex:alpha-pinned"], title: "Alpha folder" }] },
+      entries: [alphaPinned, alphaMain, alphaSettled],
+      error: null,
+      freshness: "fresh",
+      projectId: "alpha",
+      revision: 1,
+    }, {
+      displayOrder: {},
+      entries: [betaPinned, betaSnoozed],
+      error: null,
+      freshness: "fresh",
+      projectId: "beta",
+      revision: 1,
+    }],
+  };
+  const html = renderHomeThreads({
+    activeDragPayload: {
+      ownerProjectId: "beta",
+      section: "pinned",
+      sourceKey: "beta/codex%3Abeta-pinned",
+      target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "beta-pinned" } },
+      type: "home-thread-row",
+    },
+    projectThreadSidebars,
+    projects,
+  });
+  const createIndex = html.indexOf("href=\"/@/thread/alpha/@/new\"");
+  const alphaFolderIndex = html.indexOf("Alpha folder");
+  const betaPinnedIndex = html.indexOf("Beta pinned");
+  const mainIndex = html.indexOf("Alpha main");
+  const snoozedIndex = html.indexOf("Beta snoozed");
+  const settledIndex = html.indexOf("Settled threads");
+  assert.equal(createIndex >= 0, true);
+  assert.equal(alphaFolderIndex > createIndex, true);
+  assert.equal(betaPinnedIndex > createIndex, true);
+  assert.equal(mainIndex > alphaFolderIndex && mainIndex > betaPinnedIndex, true);
+  assert.equal(snoozedIndex > mainIndex, true);
+  assert.equal(settledIndex > snoozedIndex, true);
+  assert.doesNotMatch(html, /Pinned threads/u);
+  assert.match(html, /data-role="thread-priority-icon" data-thread-priority="pinned"/u);
+  assert.match(html, /Alpha[\s\S]*?web\/alpha[\s\S]*?Alpha folder/u);
+  assert.match(html, /href="\/@\/thread\/beta\/@\/beta-pinned"/u);
+  assert.match(html, /group\/thread-folder relative pointer-events-none/u);
+
+  const sameProjectHtml = renderHomeThreads({
+    activeDragPayload: {
+      ownerProjectId: "alpha",
+      section: "pinned",
+      sourceKey: "alpha/codex%3Aalpha-pinned",
+      target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "alpha-pinned" } },
+      type: "home-thread-row",
+    },
+    projectThreadSidebars,
+    projects,
+  });
+  assert.match(sameProjectHtml, /group\/thread-folder relative"/u);
+  assert.doesNotMatch(sameProjectHtml, /group\/thread-folder relative pointer-events-none/u);
 });
 
 test("other-project status subtraction removes pins and clamps mixed-version underflow", () => {

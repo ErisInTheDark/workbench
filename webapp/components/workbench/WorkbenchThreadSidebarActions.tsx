@@ -15,6 +15,7 @@ import {
   isWorkbenchThreadSettlementAvailable,
   isWorkbenchThreadStatusProviderOwned,
   type WorkbenchPinnedThreadSummaryEntry,
+  type WorkbenchProjectThreadSidebars,
   type WorkbenchProjectThreadSummaries,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadTarget,
@@ -38,6 +39,8 @@ import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuConte
 const THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 const EMPTY_UNSUBSCRIBE = () => {};
 const EMPTY_PROJECT_THREAD_SUMMARIES: WorkbenchProjectThreadSummaries = { projects: [] };
+const EMPTY_PROJECT_THREAD_SIDEBARS: WorkbenchProjectThreadSidebars = { projects: [] };
+const EMPTY_HOME_THREAD_DISPLAY_ORDER = { displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder" as const };
 const EMPTY_PINNED_THREAD_LAYOUT = { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" as const };
 type ThreadListEntry = WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry;
 
@@ -62,14 +65,18 @@ interface WorkbenchThreadSidebarActionsValue {
   error: string;
   getThreadContextMenu: (entry: ThreadListEntry, ownerProjectId: string) => WorkbenchContextMenuDefinition;
   isLoading: boolean;
+  homeDisplayOrder: WorkbenchThreadDisplayOrder;
+  homeDisplayOrderSupported: boolean;
   nowMs: number;
   onAction: (entry: ThreadListEntry, action: "complete" | "discard" | "restore" | "settle" | "wake", ownerProjectId: string) => void;
   onAutoFocusFolderComplete: () => void;
-  onMove: (sourceKey: string, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null, beforeKey: string | null) => void;
+  onMove: (sourceKey: string, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null, beforeKey: string | null, ownerProjectId?: string) => void;
+  onHomeMove: (sourceKey: string, section: WorkbenchThreadDisplaySection, destinationFolderKey: string | null, beforeKey: string | null) => void;
   onPinnedMove: (sourceKey: string, destinationFolderId: string | null, beforeKey: string | null) => void;
   onRenamePinnedFolder: (folderId: string, title: string) => Promise<string>;
-  onRenameFolder: (folderId: string, title: string) => Promise<string>;
+  onRenameFolder: (folderId: string, title: string, ownerProjectId?: string) => Promise<string>;
   pinnedDisplayOrder: WorkbenchThreadDisplayOrder;
+  projectThreadSidebars: WorkbenchProjectThreadSidebars;
   projectThreadSummaries: WorkbenchProjectThreadSummaries;
 }
 
@@ -108,12 +115,30 @@ function WorkbenchThreadSidebarActionsProvider({
     store?.getProjectThreadSummaries ?? (() => EMPTY_PROJECT_THREAD_SUMMARIES),
     () => EMPTY_PROJECT_THREAD_SUMMARIES,
   );
+  const projectThreadSidebars = useSyncExternalStore(
+    store?.subscribe ?? (() => EMPTY_UNSUBSCRIBE),
+    store?.getProjectThreadSidebars ?? (() => snapshot ? { projects: [snapshot] } : EMPTY_PROJECT_THREAD_SIDEBARS),
+    () => EMPTY_PROJECT_THREAD_SIDEBARS,
+  );
+  const homeThreadDisplayOrder = useSyncExternalStore(
+    store?.subscribe ?? (() => EMPTY_UNSUBSCRIBE),
+    store?.getHomeThreadDisplayOrder ?? (() => EMPTY_HOME_THREAD_DISPLAY_ORDER),
+    () => EMPTY_HOME_THREAD_DISPLAY_ORDER,
+  );
+  const homeDisplayOrderSupported = useSyncExternalStore(
+    store?.subscribe ?? (() => EMPTY_UNSUBSCRIBE),
+    store?.getHomeThreadDisplayOrderSupported ?? (() => false),
+    () => false,
+  );
   const pinnedThreadLayout = useSyncExternalStore(
     store?.subscribe ?? (() => EMPTY_UNSUBSCRIBE),
     store?.getPinnedThreadLayout ?? (() => EMPTY_PINNED_THREAD_LAYOUT),
     () => EMPTY_PINNED_THREAD_LAYOUT,
   );
-  const entries = snapshot?.projectId === projectId ? snapshot.entries : [];
+  const currentSidebar = projectThreadSidebars.projects.find((candidate) => candidate.projectId === projectId)
+    ?? (snapshot?.projectId === projectId ? snapshot : null);
+  const entries = currentSidebar?.entries ?? [];
+  const entryCount = projectThreadSidebars.projects.reduce((total, sidebar) => total + sidebar.entries.length, 0);
   const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
   const [autoFocusFolderId, setAutoFocusFolderId] = useState<string | null>(null);
 
@@ -122,7 +147,7 @@ function WorkbenchThreadSidebarActionsProvider({
     setRelativeTimeNowMs(Date.now());
     const intervalId = window.setInterval(() => setRelativeTimeNowMs(Date.now()), THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(intervalId);
-  }, [entries.length]);
+  }, [entryCount]);
 
   const stopThread = useCallback(async (thread: ThreadSummary) => {
     if (!controls) return;
@@ -191,11 +216,14 @@ function WorkbenchThreadSidebarActionsProvider({
     });
 
     const localDisplayKey = isPinnedDraftSummaryEntry(entry) ? `draft:${entry.draftId}` : getWorkbenchThreadDisplayKey(entry);
-    const displayKey = group === "pinned" ? getProjectQualifiedThreadDisplayKey(ownerProjectId, localDisplayKey) : localDisplayKey;
-    const folder = group === "pinned"
-      ? findWorkbenchThreadFolder(pinnedThreadLayout.displayOrder, displayKey)
-      : ownerProjectId === projectId ? findWorkbenchThreadFolder(snapshot?.displayOrder, displayKey) : null;
-    if (entry.entryKind !== "subagent" && (group === "pinned" || ((group === "snoozed" || group === "settled") && ownerProjectId === projectId)) && !folder) {
+    const useProjectFolder = !projectId || group !== "pinned";
+    const displayKey = useProjectFolder ? localDisplayKey : getProjectQualifiedThreadDisplayKey(ownerProjectId, localDisplayKey);
+    const ownerSidebar = projectThreadSidebars.projects.find((candidate) => candidate.projectId === ownerProjectId)
+      ?? (snapshot?.projectId === ownerProjectId ? snapshot : null);
+    const folder = useProjectFolder
+      ? findWorkbenchThreadFolder(ownerSidebar?.displayOrder, displayKey)
+      : findWorkbenchThreadFolder(pinnedThreadLayout.displayOrder, displayKey);
+    if (entry.entryKind !== "subagent" && (group === "pinned" || group === "snoozed" || group === "settled") && !folder) {
       items.push({
         icon: <FolderInputIcon className="size-4" />,
         id: "add-to-folder",
@@ -204,7 +232,7 @@ function WorkbenchThreadSidebarActionsProvider({
           if (!controls) return;
           const folderId = crypto.randomUUID();
           setAutoFocusFolderId(folderId);
-          const request = group === "pinned"
+          const request = group === "pinned" && !useProjectFolder
             ? { folderId, method: "workbench/thread-state/pinned-display-order/folder/create" as const, sourceKey: displayKey, title: "New folder" }
             : { folderId, method: "workbench/thread-state/display-order/folder/create" as const, projectId: ownerProjectId, sourceKey: displayKey, title: "New folder" };
           void controls.updateThreadStateWithAcceptance(request).then((accepted) => {
@@ -291,19 +319,21 @@ function WorkbenchThreadSidebarActionsProvider({
       });
     }
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}` };
-  }, [controls, mutateEntry, onOpenThread, pinnedThreadLayout.displayOrder, projectId, snapshot?.displayOrder, stopThread, threadSummariesById]);
+  }, [controls, mutateEntry, onOpenThread, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars.projects, snapshot, stopThread, threadSummariesById]);
 
   const value = useMemo<WorkbenchThreadSidebarActionsValue>(() => ({
     autoFocusFolderId,
-    displayOrder: snapshot?.projectId === projectId ? snapshot.displayOrder ?? {} : {},
+    displayOrder: currentSidebar?.displayOrder ?? {},
     entries,
-    error: snapshot?.projectId === projectId ? snapshot.error ?? "" : "",
+    error: currentSidebar?.error ?? "",
     getThreadContextMenu,
-    isLoading: !snapshot || snapshot.projectId !== projectId || (snapshot.freshness === "loading" && !entries.length),
+    homeDisplayOrder: homeThreadDisplayOrder.displayOrder,
+    homeDisplayOrderSupported,
+    isLoading: !currentSidebar && !projectThreadSidebars.projects.length,
     nowMs: relativeTimeNowMs,
     onAction: (entry, action, ownerProjectId) => {
       if (entry.entryKind === "draft") {
-        if (action === "discard" && ownerProjectId === projectId && !isPinnedDraftSummaryEntry(entry)) void controls?.deleteThreadDraft(entry.draft.draftId);
+        if (action === "discard" && !isPinnedDraftSummaryEntry(entry)) void controls?.deleteThreadDraft(entry.draft.draftId);
         return;
       }
       if (action === "complete") void mutateEntry(entry, ownerProjectId, "status/set", "completed");
@@ -312,12 +342,21 @@ function WorkbenchThreadSidebarActionsProvider({
       if (action === "wake") void mutateEntry(entry, ownerProjectId, "snooze/set", false);
     },
     onAutoFocusFolderComplete: () => setAutoFocusFolderId(null),
-    onMove: (sourceKey, section, destinationFolderId, beforeKey) => {
+    onMove: (sourceKey, section, destinationFolderId, beforeKey, ownerProjectId = projectId) => {
       void controls?.updateThreadStateWithAcceptance({
         beforeKey,
         destinationFolderId,
         method: "workbench/thread-state/display-order/move",
-        projectId,
+        projectId: ownerProjectId,
+        section,
+        sourceKey,
+      });
+    },
+    onHomeMove: (sourceKey, section, destinationFolderKey, beforeKey) => {
+      void controls?.updateThreadStateWithAcceptance({
+        beforeKey,
+        destinationFolderKey,
+        method: "workbench/thread-state/home-display-order/move",
         section,
         sourceKey,
       });
@@ -339,19 +378,20 @@ function WorkbenchThreadSidebarActionsProvider({
       if (!accepted) throw new Error("Unable to update the pinned thread folder name.");
       return title.trim();
     },
-    onRenameFolder: async (folderId, title) => {
+    onRenameFolder: async (folderId, title, ownerProjectId = projectId) => {
       const accepted = await controls?.updateThreadStateWithAcceptance({
         folderId,
         method: "workbench/thread-state/display-order/folder/title/set",
-        projectId,
+        projectId: ownerProjectId,
         title,
       });
       if (!accepted) throw new Error("Unable to update the folder name.");
       return title.trim();
     },
     pinnedDisplayOrder: pinnedThreadLayout.displayOrder,
+    projectThreadSidebars,
     projectThreadSummaries,
-  }), [autoFocusFolderId, controls, entries, getThreadContextMenu, mutateEntry, pinnedThreadLayout.displayOrder, projectId, projectThreadSummaries, relativeTimeNowMs, snapshot]);
+  }), [autoFocusFolderId, controls, currentSidebar, entries, getThreadContextMenu, homeDisplayOrderSupported, homeThreadDisplayOrder.displayOrder, mutateEntry, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars, projectThreadSummaries, relativeTimeNowMs]);
 
   return <WorkbenchThreadSidebarActionsContext.Provider value={value}>{children}</WorkbenchThreadSidebarActionsContext.Provider>;
 }

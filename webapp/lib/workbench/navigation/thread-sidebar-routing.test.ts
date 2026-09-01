@@ -1,7 +1,9 @@
-/* No production exports. Tests protect project, blank, draft, provider, and materialized mosaic route identity. */
+/* No production exports. Tests protect home, project, blank, draft, provider, and materialized mosaic route identity. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createHomeHref,
+  createHomeThreadHref,
   createPinnedThreadHref,
   createProjectHref,
   createThreadHref,
@@ -13,11 +15,58 @@ import {
 } from "./workbench-route";
 import { createWorkbenchMosaicSplit, createWorkbenchMosaicTarget, parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route";
 
+test("/@/ is the canonical projectless home route and root remains an alias", () => {
+  assert.equal(createHomeHref(), "/@/");
+  const expected = {
+    error: "",
+    filePath: "",
+    mosaicNode: null,
+    projectId: "",
+    settingsScope: "global",
+    threadId: "",
+    threadOwnerProjectId: "",
+    threadTarget: null,
+    view: "home",
+  } as const;
+  assert.deepEqual(parseWorkbenchRouteFromPath("/@/"), expected);
+  assert.deepEqual(parseWorkbenchRouteFromPath("/"), expected);
+});
+
 test("project hrefs preserve slash and reserved-character identities", () => {
   for (const projectId of ["web/workbench", "team space/project%two"]) {
     const route = parseWorkbenchRouteFromPath(createProjectHref(projectId));
     assert.equal(route.view, "project");
     assert.equal(route.projectId, projectId);
+  }
+});
+
+test("home thread routes preserve the owning project without selecting it", () => {
+  const draftId = "123e4567-e89b-42d3-a456-426614174000";
+  const folderId = "00000000-0000-4000-8000-000000000010";
+  const cases = [
+    [{ kind: "new" as const }, "/@/thread/owner/project/@/new"],
+    [{ draftId, kind: "draft" as const }, `/@/thread/owner/project/@/new/${draftId}`],
+    [{ folderId, kind: "new" as const }, `/@/thread/owner/project/@/folder/${folderId}/thread/new`],
+    [{ kind: "provider" as const, threadId: "provider" }, "/@/thread/owner/project/@/provider"],
+    [{ kind: "subagent" as const, parentThreadId: "parent", threadId: "child" }, "/@/thread/owner/project/@/parent/sub/child"],
+  ] as const;
+
+  for (const [target, expectedHref] of cases) {
+    const href = createHomeThreadHref("owner/project", target);
+    assert.equal(href, expectedHref);
+    const route = parseWorkbenchRouteFromPath(href);
+    assert.equal(route.view, "thread");
+    assert.equal(route.projectId, "");
+    assert.equal(route.threadOwnerProjectId, "owner/project");
+    assert.deepEqual(route.threadTarget, target);
+  }
+});
+
+test("malformed home thread routes never select a project implicitly", () => {
+  for (const href of ["/@/thread", "/@/thread/owner", "/@/thread/owner/@", "/@/thread/owner/@/parent/sub"]) {
+    const route = parseWorkbenchRouteFromPath(href);
+    assert.equal(route.view, "invalid");
+    assert.equal(route.projectId, "");
   }
 });
 

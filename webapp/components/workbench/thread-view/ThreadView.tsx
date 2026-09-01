@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 
 import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
@@ -571,6 +571,7 @@ function useBackgroundProjectFilePathDisambiguationIndex (
 export default memo(function ThreadView ({
   composerSpellCheck,
   contained = false,
+  draftLeadingContent = null,
   mobileFullBleed = false,
   fontSizeRem,
   getThreadHref,
@@ -622,6 +623,7 @@ export default memo(function ThreadView ({
 }: {
   composerSpellCheck: boolean;
   contained?: boolean;
+  draftLeadingContent?: ReactNode;
   mobileFullBleed?: boolean;
   fontSizeRem: number;
   getThreadHref?: (target: WorkbenchThreadTarget) => string;
@@ -1492,7 +1494,17 @@ export default memo(function ThreadView ({
       thread={resolvedActiveThread!}
       threadLifecycle={activeGitArcSelection?.lifecycle ?? null}
     >
-      {isDraftThreadView ? ({ isProfilePickerOpen }) => <ThreadRateLimits canToggleHarness harness={activeThread.harness} onHarnessToggle={handleComposerHarnessToggle} rateLimits={rateLimits} showsHarnessControl={!isProfilePickerOpen} trailingContent={<ThreadContextStatus onCompactThread={onCompactThread} thread={activeThread} />} /> : null}
+      {isDraftThreadView ? ({ isProfilePickerOpen }) => (
+        <ThreadRateLimits
+          canToggleHarness
+          harness={activeThread.harness}
+          leadingContent={draftLeadingContent}
+          onHarnessToggle={handleComposerHarnessToggle}
+          rateLimits={rateLimits}
+          showsHarnessControl={!isProfilePickerOpen}
+          trailingContent={<ThreadContextStatus onCompactThread={onCompactThread} thread={activeThread} />}
+        />
+      ) : null}
     </ThreadComposer>
   ) : null;
 

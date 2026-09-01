@@ -7,7 +7,9 @@
 
 import { useCallback, useEffect, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
 
-import { WORKBENCH_THREAD_ORDER_DROP_TARGET_ID } from "../../lib/workbench/layout/workbench-drag";
+import type { WorkbenchProjectOption } from "../../lib/types";
+import { WORKBENCH_THREAD_ORDER_DROP_TARGET_ID, type WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
+import { parseProjectQualifiedThreadDisplayKey } from "../../lib/workbench/thread/thread-display-layout";
 import {
   getWorkbenchThreadFolderKey,
   type WorkbenchThreadFolder,
@@ -25,6 +27,7 @@ import { CompletedThreadIcon, DraftThreadIcon, FolderClosedIcon, FolderOpenIcon,
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import Draggable from "./drag/Draggable";
 import DropTarget from "./drag/DropTarget";
+import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
 
 const THREAD_FOLDER_HOVER_OPEN_DELAY_MS = 1_000;
@@ -79,11 +82,13 @@ function FolderHoverOpenTarget({ onOpen, onSelectedChange, open, selected }: { o
 }
 
 export default function WorkbenchThreadFolder({
+  activeDragPayload = null,
   autoFocusName = false,
   attentionLabelsByThreadId = {},
   children,
   entries,
   folder,
+  homeFolderKey,
   isDragActive,
   nowMs = Date.now(),
   onAutoFocusComplete,
@@ -91,13 +96,16 @@ export default function WorkbenchThreadFolder({
   onOpenChange,
   onRename,
   open,
+  project,
   tooltip,
 }: {
+  activeDragPayload?: WorkbenchDragPayload | null;
   autoFocusName?: boolean;
   attentionLabelsByThreadId?: Record<string, string | undefined>;
   children: ReactNode;
   entries: FolderEntry[];
   folder: WorkbenchThreadFolder;
+  homeFolderKey?: string;
   isDragActive: boolean;
   nowMs?: number;
   onAutoFocusComplete?: () => void;
@@ -105,6 +113,7 @@ export default function WorkbenchThreadFolder({
   onOpenChange: (open: boolean) => void;
   onRename: (title: string) => Promise<string>;
   open: boolean;
+  project?: WorkbenchProjectOption;
   tooltip: ReactNode;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -179,6 +188,11 @@ export default function WorkbenchThreadFolder({
   }
 
   const folderKey = getWorkbenchThreadFolderKey(folder.folderId);
+  const foreignHomeThreadDrag = Boolean(
+    project
+    && activeDragPayload?.type === "home-thread-row"
+    && activeDragPayload.ownerProjectId !== project.id,
+  );
   const StatusIcon = status.Icon;
   const titleInput = (
     <input
@@ -208,28 +222,32 @@ export default function WorkbenchThreadFolder({
     />
   );
   const errorLabel = error ? <span className="max-w-32 shrink-0 truncate text-[0.68rem] text-danger" role="alert">{error}</span> : null;
+  const fullSummary = (
+    <WorkbenchThreadListFullRowContent
+      action={errorLabel}
+      eyebrow={project ? <WorkbenchProjectLabel project={project} variant="thread" /> : undefined}
+      statusIcon={<StatusIcon className={`size-3.5 ${status.statusClassName}`} />}
+      statusLabel={<span className={`truncate ${status.statusClassName}`}>{status.label}</span>}
+      timestamp={<time dateTime={latestTimestamp.toISOString()} title={latestTimestamp.toLocaleString()}>{formatThreadRelativeTimestamp(latestActivityAt / 1000, nowMs)}</time>}
+      title={(
+        <span className="flex min-w-0 items-center gap-1.5">
+          {open ? <FolderOpenIcon className="size-3.5 shrink-0" /> : <FolderClosedIcon className="size-3.5 shrink-0" />}
+          {titleInput}
+        </span>
+      )}
+    />
+  );
   const summary = (
     <WorkbenchTooltip content={tooltip} enabled={!isDragActive} interactive>
       <div className="min-w-0">
-        {open ? (
+        {project ? fullSummary : open ? (
           <div className="grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-[var(--thread-context-menu-row-padding-right,0.5rem)] pl-2 md:min-h-0">
             <FolderOpenIcon className="mr-1.5 size-3.5 shrink-0" />
             {titleInput}
             {errorLabel}
           </div>
         ) : (
-          <WorkbenchThreadListFullRowContent
-            action={errorLabel}
-            statusIcon={<StatusIcon className={`size-3.5 ${status.statusClassName}`} />}
-            statusLabel={<span className={`truncate ${status.statusClassName}`}>{status.label}</span>}
-            timestamp={<time dateTime={latestTimestamp.toISOString()} title={latestTimestamp.toLocaleString()}>{formatThreadRelativeTimestamp(latestActivityAt / 1000, nowMs)}</time>}
-            title={(
-              <span className="flex min-w-0 items-center gap-1.5">
-                <FolderClosedIcon className="size-3.5 shrink-0" />
-                {titleInput}
-              </span>
-            )}
-          />
+          fullSummary
         )}
       </div>
     </WorkbenchTooltip>
@@ -239,10 +257,12 @@ export default function WorkbenchThreadFolder({
     <Draggable
       dropTargetIds={[WORKBENCH_THREAD_ORDER_DROP_TARGET_ID]}
       label={folder.title}
-      payload={{ section: folder.section, sourceKey: folderKey, type: "thread-folder" }}
+      payload={homeFolderKey && project
+        ? { ownerProjectId: project.id, section: folder.section, sourceKey: homeFolderKey, type: "home-thread-folder" }
+        : { section: folder.section, sourceKey: folderKey, type: "thread-folder" }}
     >
       {({ draggable, onDragStart, onPointerDown }) => (
-        <div className="group/thread-folder relative" draggable={draggable} onDragStart={onDragStart} onPointerDown={onPointerDown}>
+        <div className={`group/thread-folder relative${foreignHomeThreadDrag ? " pointer-events-none" : ""}`} draggable={draggable} onDragStart={onDragStart} onPointerDown={onPointerDown}>
           <div aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 rounded-[0.8rem] bg-accent-soft transition-opacity duration-75 ease-out ${isDropTargetSelected ? "opacity-100" : "opacity-0"}`} />
           <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-20 size-full opacity-0 transition-opacity duration-75 ease-out group-hover/thread-folder:opacity-100 ${status.statusClassName}`}>
             <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="12.8" fill="none" stroke="currentColor" strokeWidth="1" strokeOpacity={status.strokeOpacity} strokeDasharray={status.dashed ? "6 4" : undefined} vectorEffect="non-scaling-stroke" />
@@ -252,8 +272,25 @@ export default function WorkbenchThreadFolder({
               ? "pointer-events-none absolute inset-x-0 top-0 z-30 h-11 md:h-8"
               : "pointer-events-none absolute inset-x-0 top-0 z-30 h-11"}
             dropTargetId={WORKBENCH_THREAD_ORDER_DROP_TARGET_ID}
-            enabled={(payload) => payload.type === "thread-row" && payload.section === folder.section && !folder.threadKeys.includes(payload.sourceKey)}
-            onDrop={(payload) => { if (payload.type === "thread-row") onMoveThread(payload.sourceKey, folder.folderId, null); }}
+            enabled={(payload) => {
+              if (homeFolderKey && project) {
+                const identity = payload.type === "home-thread-row"
+                  ? parseProjectQualifiedThreadDisplayKey(payload.sourceKey)
+                  : null;
+                return payload.type === "home-thread-row"
+                  && payload.ownerProjectId === project.id
+                  && payload.section === folder.section
+                  && identity !== null
+                  && !folder.threadKeys.includes(identity.threadKey);
+              }
+              return payload.type === "thread-row"
+                && payload.section === folder.section
+                && !folder.threadKeys.includes(payload.sourceKey);
+            }}
+            onDrop={(payload) => {
+              if (homeFolderKey && payload.type === "home-thread-row") onMoveThread(payload.sourceKey, homeFolderKey, null);
+              else if (payload.type === "thread-row") onMoveThread(payload.sourceKey, folder.folderId, null);
+            }}
           >
             {({ selected }) => <FolderHoverOpenTarget onOpen={openFromHover} onSelectedChange={setIsDropTargetSelected} open={open} selected={selected} />}
           </DropTarget>

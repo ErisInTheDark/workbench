@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadRateLimits: render harness, account quota windows, auth hints, and optional trailing composer status content. Keywords: thread, rate limits, harness, composer.
+ * - default ThreadRateLimits: render leading composer controls, harness, account quota windows, auth hints, and optional trailing status content. Keywords: thread, rate limits, harness, composer, project.
  */
 "use client";
 
@@ -80,6 +80,7 @@ function RateLimitWindowText ({
 export default function ThreadRateLimits ({
   canToggleHarness = false,
   harness,
+  leadingContent = null,
   onHarnessToggle,
   rateLimits,
   showsHarnessControl = true,
@@ -87,21 +88,23 @@ export default function ThreadRateLimits ({
 }: {
   canToggleHarness?: boolean;
   harness: WorkbenchHarness;
+  leadingContent?: ReactNode;
   onHarnessToggle?: () => void;
   rateLimits: RateLimitSnapshot | null;
   showsHarnessControl?: boolean;
   trailingContent?: ReactNode;
 }) {
-  if (!trailingContent && !canToggleHarness && harness !== "copilot" && harness !== "opencode" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
+  if (!leadingContent && !trailingContent && !canToggleHarness && harness !== "copilot" && harness !== "opencode" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
     return null;
   }
 
   const harnessControl = showsHarnessControl ? <ThreadHarnessControl canToggle={canToggleHarness} harness={harness} onToggle={onHarnessToggle} /> : null;
+  const leadingControl = showsHarnessControl ? leadingContent : null;
 
   if (canToggleHarness && harness !== "copilot" && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.limitName) {
     return (
       <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
-        <div className="flex items-center gap-3">{harnessControl}</div>
+        <div className="flex items-center gap-3">{leadingControl}{harnessControl}</div>
         {trailingContent}
       </div>
     );
@@ -113,6 +116,7 @@ export default function ThreadRateLimits ({
     return (
       <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {leadingControl}
           <div className="flex justify-center">{harnessControl}</div>
           <p className="mb-0 flex flex-wrap gap-x-5 gap-y-1">
             {isAuthRequired ? (
@@ -147,6 +151,7 @@ export default function ThreadRateLimits ({
     return (
       <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {leadingControl}
           <div className="flex justify-center">{harnessControl}</div>
           <p className="mb-0 flex flex-wrap gap-x-5 gap-y-1">
             <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
@@ -162,6 +167,7 @@ export default function ThreadRateLimits ({
   return (
     <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-muted">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {leadingControl}
         <div className="flex justify-center">{harnessControl}</div>
         {(rateLimits?.primary || rateLimits?.secondary) ? (
           <p className="mb-0 flex flex-wrap gap-x-5 gap-y-1">

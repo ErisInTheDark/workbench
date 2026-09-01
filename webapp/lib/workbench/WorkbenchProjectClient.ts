@@ -7,7 +7,7 @@
  * - WorkbenchProjectClientOptions: injected project transport and error boundary. Keywords: workbench, project, client, options.
  * - cloneTreeNodes: deep-clone recursive tree node arrays for safe project snapshots. Keywords: workbench, project, tree, clone.
  * - WorkbenchProjectClient: public surface for the workbench project sub-client. Keywords: workbench, project, client, dispose, select.
- * - default WorkbenchProjectClient: create the project sub-client that owns project discovery, tree refresh, entry creation/deletion, and directory expansion state. Keywords: workbench, project, tree, entries, delete, default export.
+ * - default WorkbenchProjectClient: create the project sub-client that owns project discovery, explicit projectless state, tree refresh, entry creation/deletion, and directory expansion state. Keywords: workbench, project, home, tree, entries, delete, default export.
  */
 
 import type { ChangeSummary, CreateEntryPayload, DeleteFileResponse, ProjectSnapshot, TreeNode, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchProjectsPayload } from "../types";
@@ -71,6 +71,7 @@ interface WorkbenchProjectClient {
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   dispose: () => void;
+  enterNoProject: () => void;
   expandPath: (filePath: string) => boolean;
   getSnapshot: () => WorkbenchProjectSnapshot;
   installCatalog: (payload: WorkbenchProjectsPayload) => boolean;
@@ -304,6 +305,32 @@ function WorkbenchProjectClient({
     };
   }
 
+  function enterNoProject() {
+    persistCurrentExpandedDirectories();
+    const didChange = state.currentProjectId !== ""
+      || state.root !== "Home"
+      || state.rootPath !== ""
+      || state.roots.length > 0
+      || state.tree.length > 0
+      || state.fileIndex !== ProjectTreeFileIndex.empty
+      || Object.keys(state.changes).length > 0
+      || state.expandedDirectories.size > 0
+      || state.hasLoadedProject
+      || state.isLoading;
+    state.currentProjectId = "";
+    state.root = "Home";
+    state.rootPath = "";
+    state.roots = [];
+    state.tree = [];
+    state.fileIndex = ProjectTreeFileIndex.empty;
+    state.changes = {};
+    state.expandedDirectories = new Set();
+    state.hasLoadedProject = false;
+    state.isLoading = false;
+    projectRevision = -1;
+    if (didChange) emit();
+  }
+
   function applyCatalog(payload: WorkbenchProjectsPayload) {
     const didProjectsChange = !areDeeplyEqual(state.projects, payload.data);
     if (didProjectsChange) state.projects = payload.data.map((project) => ({ ...project, roots: project.roots.map((root) => ({ ...root })) }));
@@ -497,6 +524,7 @@ function WorkbenchProjectClient({
     createEntry,
     deleteFile,
     dispose,
+    enterNoProject,
     expandPath,
     getSnapshot,
     installCatalog,

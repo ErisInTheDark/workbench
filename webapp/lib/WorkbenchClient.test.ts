@@ -7,7 +7,8 @@ import test from "node:test";
 
 import type { ExplorerSnapshot, ThreadSummary, WorkbenchSubagentSummary } from "./types.ts";
 import type { WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state.ts";
-import { areExplorerSnapshotsEquivalent, openWorkbenchThreadStateObservation, requestWorkbenchReload } from "./WorkbenchClient.ts";
+import { WorkbenchDaemonRequestError } from "./workbench/daemon/WorkbenchDaemonClient.ts";
+import { areExplorerSnapshotsEquivalent, describeGlobalThreadStateOpenFailure, openWorkbenchGlobalThreadStateObservation, openWorkbenchThreadStateObservation, requestWorkbenchReload } from "./WorkbenchClient.ts";
 
 const thread = (id: string, updatedAt: number): ThreadSummary => ({
   agentNickname: null,
@@ -94,6 +95,62 @@ test("thread-state open keeps an old version-3 response available during a mixed
   });
   assert.deepEqual(result.projectThreads, { projects: [] });
   assert.equal(catalogs.length, 1);
+});
+
+test("global thread-state open installs a catalog and full sidebars without a selected project snapshot", async () => {
+  const catalogs: unknown[] = [];
+  const versions: Array<4 | 5> = [];
+  const result = await openWorkbenchGlobalThreadStateObservation({
+    installCatalog: (catalog) => { catalogs.push(catalog); },
+    request: async (version) => {
+      versions.push(version);
+      return {
+        catalog: { data: [], rootPath: "C:/projects" },
+        homeThreadDisplayOrder: { displayOrder: {}, revision: 2, updateKind: "homeThreadDisplayOrder" },
+        pinnedThreadLayout: { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" },
+        projectSidebars: {
+          projects: [
+            { ...sidebar(), projectId: "alpha" },
+            { ...sidebar(), projectId: "beta" },
+          ],
+        },
+        version: 5,
+      };
+    },
+  });
+  assert.deepEqual(versions, [5]);
+  assert.deepEqual(catalogs, [{ data: [], rootPath: "C:/projects" }]);
+  assert.deepEqual(result.projectSidebars.projects.map(({ projectId }) => projectId), ["alpha", "beta"]);
+  assert.equal(result.homeThreadDisplayOrder?.revision, 2);
+  assert.equal("project" in result, false);
+});
+
+test("global thread-state open falls back to read-only version 4 only for an old protocol rejection", async () => {
+  const versions: Array<4 | 5> = [];
+  const result = await openWorkbenchGlobalThreadStateObservation({
+    installCatalog: () => undefined,
+    request: async (version) => {
+      versions.push(version);
+      if (version === 5) throw new WorkbenchDaemonRequestError(
+        "Invalid literal value, expected 4",
+        "invalidThreadStateMutation" as never,
+      );
+      return {
+        catalog: { data: [], rootPath: "C:/projects" },
+        pinnedThreadLayout: { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" },
+        projectSidebars: { projects: [] },
+      };
+    },
+  });
+  assert.deepEqual(versions, [5, 4]);
+  assert.equal(result.homeThreadDisplayOrder, null);
+});
+
+test("global thread-state failures retain the actual server error and request boundary", () => {
+  assert.equal(
+    describeGlobalThreadStateOpenFailure(new Error("storage read failed")),
+    "Unable to open all-project threads through workbench/thread-state/global/open: storage read failed",
+  );
 });
 
 test("browser reload uses the shared socket method and conforms its admission", async () => {

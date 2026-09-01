@@ -31,4 +31,17 @@ export type WorkbenchDragPayload =
     readonly section: WorkbenchThreadDisplaySection;
     readonly sourceKey: string;
     readonly type: "thread-folder";
+  }
+  | {
+    readonly ownerProjectId: string;
+    readonly section: WorkbenchThreadDisplaySection;
+    readonly sourceKey: string;
+    readonly target: WorkbenchPanelTarget;
+    readonly type: "home-thread-row";
+  }
+  | {
+    readonly ownerProjectId: string;
+    readonly section: WorkbenchThreadDisplaySection;
+    readonly sourceKey: string;
+    readonly type: "home-thread-folder";
   };

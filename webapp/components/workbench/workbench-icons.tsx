@@ -11,7 +11,7 @@
  * - SidebarCollapseIcon/SidebarExpandIcon: render desktop sidebar visibility controls. Keywords: workbench, icon, sidebar.
  * - PanelMinimizeIcon/PanelExpandIcon: render mosaic panel minimize controls. Keywords: workbench, icon, panel.
  * - PanelCloseIcon: render the mosaic panel close control. Keywords: workbench, icon, panel, close.
- * - GearIcon: render the settings navigation icon. Keywords: workbench, icon, settings.
+ * - HomeIcon/GearIcon: render home and settings navigation icons. Keywords: workbench, icon, navigation, settings.
  * - ProjectIcon: render the Projects sidebar section glyph. Keywords: workbench, icon, project, sidebar.
  * - BlocksIcon: render the Lucide-style composer profile control icon. Keywords: workbench, icon, composer, profile, blocks.
  * - BrowserSessionIcon: render the Browse session sidebar icon. Keywords: workbench, icon, browse, session.
@@ -214,6 +214,15 @@ export function BlocksIcon ({ className = "size-4" }: IconProps) {
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M10 22V7a1 1 0 0 0-1-1H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 0 0-1-1H2" />
       <rect x="14" y="2" width="8" height="8" rx="1" />
+    </svg>
+  );
+}
+
+export function HomeIcon ({ className = "size-5" }: IconProps) {
+  return (
+    <svg aria-hidden="true" className={className} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+      <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
+      <path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
     </svg>
   );
 }

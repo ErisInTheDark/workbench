@@ -545,3 +545,90 @@ test("close flushes the newest draft before releasing project observation", asyn
   await client.close();
   assert.deepEqual(events, ["save:persist before close", "close"]);
 });
+
+test("global observation owns full project sidebars and project-qualified draft queues", async () => {
+  const sourceDraft = {
+    ...draft("move this", 2),
+    profileId: "profile-one",
+    projectId: "alpha",
+  };
+  const saved: string[] = [];
+  const moved: string[] = [];
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      closeGlobal: async () => undefined,
+      deleteDraft: async () => undefined,
+      moveDraft: async (sourceProjectId, destinationProjectId, draftId) => {
+        moved.push(`${sourceProjectId}:${destinationProjectId}:${draftId}`);
+      },
+      open: async () => snapshot(1),
+      openGlobal: async () => ({
+        homeThreadDisplayOrder: { displayOrder: {}, revision: 1, updateKind: "homeThreadDisplayOrder" },
+        pinnedThreadLayout,
+        projectSidebars: {
+          projects: [
+            {
+              entries: [{ activityAt: 2, draft: sourceDraft, entryKind: "draft", metadata: { archived: false, pinned: false, snoozed: false }, title: "move this" }],
+              error: null,
+              freshness: "fresh",
+              projectId: "alpha",
+              revision: 1,
+            },
+            { entries: [], error: null, freshness: "fresh", projectId: "beta", revision: 1 },
+          ],
+        },
+      }),
+      upsertDraft: async (projectId, value) => { saved.push(`${projectId}:${value.prompt}`); },
+    },
+  });
+
+  assert.equal(await client.openGlobal(), true);
+  assert.equal(client.getSnapshot(), null);
+  assert.equal(client.getHomeThreadDisplayOrderSupported(), true);
+  assert.equal(client.getHomeThreadDisplayOrder().revision, 1);
+  assert.deepEqual(client.getProjectThreadSidebars().projects.map(({ projectId }) => projectId), ["alpha", "beta"]);
+  client.acceptHomeThreadDisplayOrder({
+    displayOrder: { pinned: { "alpha/codex%3Athread": { above: [], below: [] } } },
+    revision: 2,
+    updateKind: "homeThreadDisplayOrder",
+  });
+  assert.equal(client.getHomeThreadDisplayOrder().revision, 2);
+
+  client.edit({ ...draft("beta edit", 3), projectId: "beta" });
+  await client.flush();
+  assert.deepEqual(saved, ["beta:beta edit"]);
+
+  await client.moveDraft("alpha", "beta", sourceDraft.draftId);
+  assert.deepEqual(moved, [`alpha:beta:${sourceDraft.draftId}`]);
+  const sidebars = client.getProjectThreadSidebars().projects;
+  assert.equal(sidebars.find(({ projectId }) => projectId === "alpha")?.entries.some((entry) => entry.entryKind === "draft"), false);
+  const movedEntry = sidebars.find(({ projectId }) => projectId === "beta")?.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === sourceDraft.draftId);
+  assert.equal(movedEntry?.entryKind === "draft" ? movedEntry.draft.projectId : null, "beta");
+  assert.equal(movedEntry?.entryKind === "draft" ? movedEntry.draft.profileId : null, "profile-one");
+});
+
+test("global observation surfaces transport failure and remains recoverable", async () => {
+  let projectOpenCount = 0;
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => {
+        projectOpenCount += 1;
+        return snapshot(1);
+      },
+      openGlobal: async () => {
+        throw new Error("server core is stale");
+      },
+      upsertDraft: async () => undefined,
+    },
+  });
+
+  await assert.rejects(client.openGlobal(), /server core is stale/u);
+  assert.deepEqual(client.getProjectThreadSidebars(), { projects: [] });
+  assert.equal(await client.open("project"), true);
+  assert.equal(projectOpenCount, 1);
+});
