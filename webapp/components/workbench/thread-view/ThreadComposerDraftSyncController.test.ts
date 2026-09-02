@@ -6,14 +6,19 @@ import test from "node:test";
 
 import ThreadComposerDraftSyncController from "./ThreadComposerDraftSyncController";
 
-test("hydration does not become an edit and echoed drafts cannot replace dirty input", () => {
+test("hydration does not become an edit and durable drafts cannot replace edited input", () => {
   const controller = new ThreadComposerDraftSyncController("thread-a", "thread-a:1");
 
   assert.equal(controller.beginSave(), null);
   assert.equal(controller.acceptHydration("thread-a", "thread-a:2"), true);
   controller.noteEdit();
   assert.equal(controller.acceptHydration("thread-a", "thread-a:3"), false);
-  assert.deepEqual(controller.beginSave(), { generation: 1, threadId: "thread-a" });
+  const save = controller.beginSave();
+  assert.deepEqual(save, { generation: 1, threadId: "thread-a" });
+  assert.ok(save);
+  controller.completeSave(save);
+  assert.equal(controller.beginSave(), null);
+  assert.equal(controller.acceptHydration("thread-a", "thread-a:4"), false);
 });
 
 test("save success clears only its generation and failure leaves input dirty", () => {

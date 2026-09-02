@@ -28,7 +28,7 @@ export default class ThreadComposerDraftSyncController {
     }
     if (draftKey === this.#acknowledgedDraftKey) return false;
     this.#acknowledgedDraftKey = draftKey;
-    return this.#localEditGeneration === this.#savedGeneration;
+    return this.#localEditGeneration === 0;
   }
 
   noteEdit() {
