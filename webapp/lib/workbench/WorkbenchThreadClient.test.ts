@@ -331,6 +331,27 @@ test("normal message admission stays independent until transcript capability is 
   await waitForRequest(socket, "workbench/transcript/subscribe");
 }));
 
+test("transcript comparison capability publishes through the thread client and clears on disconnect", async () => {
+  const publications: Array<{ available: boolean; threadId: string | null }> = [];
+  await withClient(async (client, socket) => {
+    client.selectThreadPayload(activeThread("codex", "thread", "completed"));
+    socket.notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 1 });
+    await waitForRequest(socket, "workbench/transcript/subscribe");
+    assert.deepEqual(publications.at(-1), { available: true, threadId: null });
+
+    socket.close();
+    await waitForCondition(
+      () => publications.at(-1)?.available === false,
+      "expected transcript comparison capability to clear after disconnect",
+    );
+    assert.deepEqual(publications.at(-1), { available: false, threadId: null });
+  }, {
+    onTranscriptComparisonChange: (available, projection) => {
+      publications.push({ available, threadId: projection?.thread.id ?? null });
+    },
+  });
+});
+
 test("accepted thread titles update only the matching canonical source name", async () => withClient(async (client) => {
   const original = activeThread("codex", "original");
   const progressed = { ...original, preview: "newer preview", updatedAt: 2 };

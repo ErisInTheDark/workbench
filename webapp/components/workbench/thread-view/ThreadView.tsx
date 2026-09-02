@@ -59,7 +59,6 @@ import {
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import resolveThreadComposerProfileSlot from "../../../lib/workbench/thread/thread-composer-profile-slot";
 import { ThreadMessageNotSentError } from "../../../lib/workbench/thread/thread-message-submission";
-import { isWorkbenchQuestionnaireResponseInput } from "../../../lib/workbench/thread/thread-recovery-message";
 import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadLifecycle, WorkbenchThreadStateRequest, WorkbenchThreadTarget } from "../../../lib/workbench/thread/thread-state";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import {
@@ -73,12 +72,11 @@ import {
   sortWorkbenchSubagents,
 } from "../../../lib/workbench/thread/thread-subagents";
 import { isPendingInitialOptimisticInputItem } from "../../../lib/workbench/thread/ThreadOptimisticInputStore";
+import type { WorkbenchTranscriptProjection } from "../../../lib/workbench/transcript/workbench-transcript-projection";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import previousTurnLoadReducer from "./previous-turn-load-state";
-import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import projectThreadRenderTurns from "./thread-render-turns";
-import { ThreadTurnDetails, ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 import getThreadGitArcProposalIntents from "./thread-git-arc-proposal-intents";
 import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
 import {
@@ -96,6 +94,8 @@ import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
+import ThreadTranscript from "./ThreadTranscript";
+import ThreadTranscriptComparison from "./ThreadTranscriptComparison";
 import {
   ThreadWebSearchActionRow,
 } from "./ThreadWebSearchItem";
@@ -617,6 +617,8 @@ export default memo(function ThreadView ({
   threadGoalControls,
   threadSidebarStore,
   threadQuestionnaireDraftsByKey,
+  transcriptComparisonOpen = false,
+  transcriptComparisonProjection = null,
   thread,
   threadTarget,
   viewInstanceKey = thread.id,
@@ -677,6 +679,8 @@ export default memo(function ThreadView ({
   threadGoalControls: WorkbenchThreadGoalControls | null;
   threadSidebarStore: WorkbenchThreadSidebarStore | null;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
+  transcriptComparisonOpen?: boolean;
+  transcriptComparisonProjection?: WorkbenchTranscriptProjection | null;
   thread: ThreadPayload;
   threadTarget: WorkbenchThreadTarget | null;
   viewInstanceKey?: string;
@@ -790,7 +794,6 @@ export default memo(function ThreadView ({
   );
   const renderActiveThread = activeThreadRenderProjection?.thread ?? null;
   const activeThreadBrowseResultEntries = activeThreadRenderProjection?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;
-  const activeThreadBrowseResultEntriesByTurnId = useStableBrowseResultEntriesByTurn(activeThreadBrowseResultEntries);
   const activeHarnessUserInputRequest = activeThread
     ? livePendingUserInputRequestsByThreadId[activeThread.id] ?? null
     : null;
@@ -798,6 +801,11 @@ export default memo(function ThreadView ({
   const isDraftThreadView = Boolean(activeThread?.isDraft);
   const currentTurn = activeThread?.turns.at(-1) ?? null;
   const visibleHistoryEntries = useMemo(() => renderActiveThread ? getThreadVisibleHistoryEntries(renderActiveThread) : [], [renderActiveThread]);
+  const visibleLoadedTurnIds = useMemo(() => new Set(
+    visibleHistoryEntries
+      .filter((entry) => entry.loadState === "loaded")
+      .map((entry) => entry.turnId),
+  ), [visibleHistoryEntries]);
   const loadedTurnsById = useMemo(() => new Map(renderActiveThread?.turns.map((turn) => [turn.id, turn]) ?? []), [renderActiveThread?.turns]);
   const firstVisibleLoadedEntry = visibleHistoryEntries.find((entry) => loadedTurnsById.has(entry.turnId)) ?? null;
   const pageBoundaryIndex = renderActiveThread?.nextPageCursor
@@ -1540,6 +1548,11 @@ export default memo(function ThreadView ({
   const terminalGitArcProposalIds = useMemo(() => terminalGitArc
     ? new Set(terminalGitArc.proposals.map(({ proposalId }) => proposalId))
     : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS, [terminalGitArc]);
+  const activeTranscriptComparisonProjection = transcriptComparisonOpen
+    && renderActiveThread
+    && transcriptComparisonProjection?.thread.id === renderActiveThread.id
+    ? transcriptComparisonProjection
+    : null;
 
   return (
     <ProjectFilePathDisplayProvider
@@ -1588,69 +1601,60 @@ export default memo(function ThreadView ({
 
         <div hidden={isDraftThreadView}>
           {activeThread ? (
-            visibleHistoryEntries.length ? (
+            transcriptComparisonOpen && renderActiveThread ? (
               <>
                 {canLoadPreviousTurn ? (
                   <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
                 ) : null}
-                {visibleHistoryEntries.map((entry) => {
-                  const turn = loadedTurnsById.get(entry.turnId);
-                  const isPreviousTurnBoundary = entry === previousTurnEntry;
-                  return [
-                    <div
-                      key={`${entry.turnId}:history-marker`}
-                      aria-hidden="true"
-                      className="h-0 w-full"
-                      data-thread-history-turn-id={entry.turnId}
-                    />,
-                    turn ? (
-                    <ThreadTurnDetails
-                      key={entry.turnId}
-                      browseResultEntries={activeThreadBrowseResultEntriesByTurnId.get(entry.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES}
-                      hiddenDynamicToolCallItemIds={turn.id === currentTurn?.id ? hiddenDynamicToolCallItemIds : EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS}
-                      hideFinalAgentMessage={hideFinalAgentMessage}
-                      hideTerminalReasoning={turn.id === currentTurn?.id && activeGitArcSelection?.lifecycle.kind === "completed"}
-                      hideTopBorder={turn.items.some((item) => item.type === "userMessage" && isWorkbenchQuestionnaireResponseInput(item.content))}
-                      hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
-                      hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
-                      inlineMentionSources={inlineMentionSources}
-                      knownSkills={workbenchSkills}
-                      threadCwdPath={activeThread.cwd}
-                      threadId={activeThread.id}
-                      projectFilePaths={projectFilePaths}
-                      projectId={projectId}
-                      projectRootPath={projectRootPath}
-                      relatedThreadsById={relatedThreadsById}
-                      subagents={subagents}
-                      turn={turn}
-                      workspaceRoots={workspaceFileLinkRoots}
-                      hiddenReasoningItemId={turn.id === currentTurn?.id && liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
-                      hoistedGitArcProposalIds={turn.id === currentTurn?.id ? terminalGitArcProposalIds : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS}
-                      hiddenWebSearchItemIds={turn.id === currentTurn?.id && liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
-                      itemTimeline={entry.itemTimeline}
-                    />
-                  ) : isPreviousTurnBoundary && previousTurnLoadStatus === "loading" ? (
-                    <ThreadTurnLoadingSkeleton
-                      key={entry.turnId}
-                      entry={entry}
-                      isLoading
-                    />
-                  ) : isPreviousTurnBoundary && previousTurnLoadStatus === "failed" ? (
-                    <ThreadTurnLoadFailure
-                      key={entry.turnId}
-                      entry={entry}
-                      onRetry={() => void loadPreviousTurn({ retry: true })}
-                    />
-                    ) : null,
-                  ];
-                })}
+                {activeTranscriptComparisonProjection ? (
+                  <ThreadTranscriptComparison
+                    inlineMentionSources={inlineMentionSources}
+                    jsonBrowseResultEntries={activeThreadBrowseResultEntries}
+                    jsonThread={renderActiveThread}
+                    knownSkills={workbenchSkills}
+                    projectFilePaths={projectFilePaths}
+                    projectId={projectId}
+                    projectRootPath={projectRootPath}
+                    relatedThreadsById={relatedThreadsById}
+                    sqliteProjection={activeTranscriptComparisonProjection}
+                    subagents={subagents}
+                    visibleTurnIds={visibleLoadedTurnIds}
+                    workspaceRoots={workspaceFileLinkRoots}
+                  />
+                ) : (
+                  <p className="m-0 py-4 text-[0.92em] leading-[1.6] text-muted" role="status">
+                    Waiting for the SQLite transcript projection...
+                  </p>
+                )}
               </>
             ) : (
-              !activeThread.isDraft ? (
-                <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4 text-[0.92em] leading-[1.6] text-muted">
-                  No turns were returned for this thread yet.
-                </p>
-              ) : null
+              <ThreadTranscript
+                browseResultEntries={activeThreadBrowseResultEntries}
+                canLoadPreviousTurn={canLoadPreviousTurn}
+                currentTurnId={currentTurn?.id ?? null}
+                hiddenDynamicToolCallItemIds={hiddenDynamicToolCallItemIds}
+                hiddenReasoningItemId={liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
+                hiddenWebSearchItemIds={liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
+                hideFinalAgentMessage={hideFinalAgentMessage}
+                hideTerminalReasoning={activeGitArcSelection?.lifecycle.kind === "completed"}
+                hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
+                hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
+                historySentinelRef={historySentinelRef}
+                inlineMentionSources={inlineMentionSources}
+                knownSkills={workbenchSkills}
+                onRetryPreviousTurn={() => void loadPreviousTurn({ retry: true })}
+                previousTurnEntry={previousTurnEntry}
+                previousTurnLoadStatus={previousTurnLoadStatus}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                relatedThreadsById={relatedThreadsById}
+                subagents={subagents}
+                terminalGitArcProposalIds={terminalGitArcProposalIds}
+                thread={renderActiveThread ?? activeThread}
+                visibleHistoryEntries={visibleHistoryEntries}
+                workspaceRoots={workspaceFileLinkRoots}
+              />
             )
           ) : (
             <div className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4">

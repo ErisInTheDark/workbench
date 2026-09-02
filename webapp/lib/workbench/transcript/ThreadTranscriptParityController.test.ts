@@ -213,6 +213,46 @@ test("repeated comparison emits one bounded report and later absence clears comp
   controller.dispose();
 });
 
+test("reconciled projections publish and every invalidation clears the browser read model", async () => {
+  const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
+  const publications: Array<string | null> = [];
+  const controller = new ThreadTranscriptParityController({
+    available: true,
+    onProjectionChange: (projection) => {
+      publications.push(projection?.thread.id ?? null);
+    },
+    transcripts: {
+      reportParity: async () => undefined,
+      subscribe: async (params, listener) => { listeners.set(params.subscriptionId, listener); },
+      unsubscribe: async (params) => { listeners.delete(params.subscriptionId); },
+    },
+    turnLimit: 4,
+  });
+
+  controller.select({ browseResultEntries: [], thread: thread("one") });
+  await flush();
+  [...listeners.values()][0]?.(emptySnapshot("one"));
+  await flushComparison();
+  assert.equal(publications.at(-1), "one");
+
+  [...listeners.values()][0]?.(null);
+  assert.equal(publications.at(-1), null);
+
+  controller.select({ browseResultEntries: [], thread: thread("two") });
+  assert.equal(publications.at(-1), null);
+  await flush();
+  [...listeners.values()][0]?.(emptySnapshot("two"));
+  await flushComparison();
+  assert.equal(publications.at(-1), "two");
+
+  controller.setAvailable(false);
+  assert.equal(publications.at(-1), null);
+  controller.setAvailable(true);
+  await flush();
+  controller.dispose();
+  assert.equal(publications.at(-1), null);
+});
+
 test("rapid selected-thread updates defer and coalesce comparison work", async () => {
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   const reports: WorkbenchTranscriptParityDiagnostic[] = [];

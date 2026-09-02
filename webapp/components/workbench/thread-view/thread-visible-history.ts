@@ -4,8 +4,15 @@
  */
 
 import type { ThreadPayload, WorkbenchThreadTurnHistoryEntry } from "../../../lib/types";
+import type { WorkbenchTranscriptProjection } from "../../../lib/workbench/transcript/workbench-transcript-projection";
 
-function createLoadedHistoryEntry(turn: ThreadPayload["turns"][number]): WorkbenchThreadTurnHistoryEntry {
+type ThreadVisibleHistorySource =
+  | Pick<ThreadPayload, "turnHistory" | "turns">
+  | Pick<WorkbenchTranscriptProjection, "turnHistory" | "turns">;
+
+function createLoadedHistoryEntry(
+  turn: ThreadPayload["turns"][number] | WorkbenchTranscriptProjection["turns"][number],
+): WorkbenchThreadTurnHistoryEntry {
   return {
     completedAt: turn.completedAt,
     durationMs: turn.durationMs,
@@ -20,7 +27,7 @@ function createLoadedHistoryEntry(turn: ThreadPayload["turns"][number]): Workben
 }
 
 export function getThreadVisibleHistoryEntries(
-  thread: Pick<ThreadPayload, "turnHistory" | "turns">,
+  thread: ThreadVisibleHistorySource,
 ) {
   const loadedTurnIds = new Set(thread.turns.map((turn) => turn.id));
   const history = thread.turnHistory.length

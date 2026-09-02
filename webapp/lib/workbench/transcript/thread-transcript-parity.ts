@@ -1,7 +1,9 @@
 /*
+ * WorkbenchTranscriptComparisonItem/WorkbenchTranscriptComparisonRow: renderer-ready JSON and SQLite item alignment values. Keywords: transcript, comparison, item, identity.
  * WorkbenchTranscriptParityResult: exact semantic equality result or one bounded diagnostic safe for orchestrator logs. Keywords: transcript, parity, diagnostic.
  * compareWorkbenchTranscriptParity: compare the JSON renderer oracle with the relational projection at turn, display, item, timeline, and Browse boundaries. Keywords: transcript, SQLite, equality, browser.
  * createWorkbenchTranscriptProjectionFailureDiagnostic: describe a fail-closed relational projection without exposing row values. Keywords: transcript, projection, failure.
+ * planWorkbenchTranscriptItemComparison: align renderer-ready JSON and SQLite items by canonical identity without hiding inserts or reorders. Keywords: transcript, comparison, alignment.
  */
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
 import type { ThreadPayload, WorkbenchBrowseResultEntry } from "../../types";
@@ -36,6 +38,19 @@ interface SemanticItem {
 
 interface ComparedEntry extends WorkbenchTranscriptParityContextEntry {
   payload: unknown;
+}
+
+export interface WorkbenchTranscriptComparisonItem {
+  identity: string;
+  item: WorkbenchProjectedTranscriptItem;
+  sourceItemId: string;
+  turnId: string;
+  type: string;
+}
+
+export interface WorkbenchTranscriptComparisonRow {
+  json: WorkbenchTranscriptComparisonItem | null;
+  sqlite: WorkbenchTranscriptComparisonItem | null;
 }
 
 export type WorkbenchTranscriptParityResult =
@@ -310,6 +325,85 @@ function projectedDisplay(projection: WorkbenchTranscriptProjection) {
     }),
     semanticByOriginalId,
   };
+}
+
+function jsonComparisonItems(
+  thread: ThreadPayload,
+  visibleTurnIds?: ReadonlySet<string>,
+): WorkbenchTranscriptComparisonItem[] {
+  const turnOrder = new Map(thread.turnHistory.map((entry, index) => [entry.turnId, index]));
+  return [...thread.turns]
+    .filter((turn) => !visibleTurnIds || visibleTurnIds.has(turn.id))
+    .sort((left, right) => (
+      (turnOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (turnOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+    ))
+    .flatMap((turn) => turn.items.map((item) => {
+      const semantic = normalizeJsonItem(item);
+      return {
+        identity: semantic.id,
+        item,
+        sourceItemId: item.id,
+        turnId: turn.id,
+        type: semantic.type,
+      };
+    }));
+}
+
+function sqliteComparisonItems(
+  projection: WorkbenchTranscriptProjection,
+  visibleTurnIds?: ReadonlySet<string>,
+): WorkbenchTranscriptComparisonItem[] {
+  return projection.display.segments
+    .filter((segment) => !visibleTurnIds || visibleTurnIds.has(segment.turnId))
+    .flatMap((segment) => segment.items.map((item) => {
+      const semantic = normalizeProjectedItem(item);
+      return {
+        identity: semantic.id,
+        item,
+        sourceItemId: item.id,
+        turnId: segment.turnId,
+        type: semantic.type,
+      };
+    }));
+}
+
+export function planWorkbenchTranscriptItemComparison({
+  jsonThread,
+  sqliteProjection,
+  visibleTurnIds,
+}: {
+  jsonThread: ThreadPayload;
+  sqliteProjection: WorkbenchTranscriptProjection;
+  visibleTurnIds?: ReadonlySet<string>;
+}): WorkbenchTranscriptComparisonRow[] {
+  const jsonItems = jsonComparisonItems(jsonThread, visibleTurnIds);
+  const sqliteItems = sqliteComparisonItems(sqliteProjection, visibleTurnIds);
+  const sqliteIndexesByIdentity = new Map(sqliteItems.map((item, index) => [item.identity, index]));
+  const rows: WorkbenchTranscriptComparisonRow[] = [];
+  let sqliteIndex = 0;
+
+  for (const json of jsonItems) {
+    const matchingSqliteIndex = sqliteIndexesByIdentity.get(json.identity);
+    if (matchingSqliteIndex === undefined || matchingSqliteIndex < sqliteIndex) {
+      rows.push({ json, sqlite: null });
+      continue;
+    }
+
+    while (sqliteIndex < matchingSqliteIndex) {
+      rows.push({ json: null, sqlite: sqliteItems[sqliteIndex] ?? null });
+      sqliteIndex += 1;
+    }
+
+    rows.push({ json, sqlite: sqliteItems[sqliteIndex] ?? null });
+    sqliteIndex += 1;
+  }
+
+  while (sqliteIndex < sqliteItems.length) {
+    rows.push({ json: null, sqlite: sqliteItems[sqliteIndex] ?? null });
+    sqliteIndex += 1;
+  }
+
+  return rows;
 }
 
 function itemEntries(

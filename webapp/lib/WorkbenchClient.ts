@@ -301,6 +301,9 @@ export async function WorkbenchClient(
       }
       emitExplorerStateChange();
     },
+    onTranscriptComparisonChange: (available, projection) => {
+      workbenchBindings.onTranscriptComparisonChange?.(available, projection);
+    },
     publishAcceptedIntent: (event) => coordinateAcceptedIntent(event),
   });
   const daemon = new WorkbenchDaemonClient({

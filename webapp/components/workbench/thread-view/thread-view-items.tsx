@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - ThreadTranscriptItemDetails: render one provider or relational transcript item with the established item UI. Keywords: workbench, transcript, comparison, item.
  * - ThreadTurnDetails: render one thread turn with grouped commands and typed item sections. Keywords: workbench, thread, turn.
  * - ThreadThreadContent: render all turns for one thread payload without composer chrome. Keywords: workbench, thread, subagent, preview.
  * - ThreadTurnLoadingSkeleton: render a lightweight placeholder for unloaded lazy-history turns. Keywords: workbench, thread, lazy history, skeleton.
@@ -24,9 +25,16 @@ import {
 import type { WorkbenchThreadRecallOutputRecord } from "../../../lib/workbench/thread/thread-recall-output";
 import { getThreadItemsRenderChunkSignature } from "../../../lib/workbench/thread/thread-item-signature";
 import type { WorkspaceFileLinkRoot } from "../../../lib/workbench/markdown/markdown-links";
-import type { WorkbenchProjectedUnknownItem } from "../../../lib/workbench/transcript/workbench-transcript-projection";
+import type {
+  WorkbenchProjectedInteractionItem,
+  WorkbenchProjectedTranscriptItem,
+  WorkbenchProjectedUnknownItem,
+} from "../../../lib/workbench/transcript/workbench-transcript-projection";
 import type { InlineMentionHighlightSources } from "../../../lib/workbench/thread/inline-mention-highlights";
-import { isSyntheticQuestionnaireHistoryItem } from "../../../lib/workbench/thread/thread-questionnaire-history";
+import {
+  isSyntheticQuestionnaireHistoryItem,
+  WORKBENCH_QUESTIONNAIRE_TOOL_NAME,
+} from "../../../lib/workbench/thread/thread-questionnaire-history";
 
 import {
   getAgentScreenshotSteerImages,
@@ -159,6 +167,31 @@ interface HiddenThreadItemIds {
   itemIds?: ReadonlySet<string> | null;
   reasoningItemId?: string | null;
   webSearchItemIds?: ReadonlySet<string> | null;
+}
+
+function isProjectedInteractionItem(
+  item: WorkbenchProjectedTranscriptItem,
+): item is WorkbenchProjectedInteractionItem {
+  return item.type === "questionnaire" || item.type === "approval";
+}
+
+function adaptProjectedInteractionItem(
+  item: WorkbenchProjectedInteractionItem,
+): Extract<ThreadItem, { type: "dynamicToolCall" }> {
+  return {
+    arguments: item.request as unknown as Extract<ThreadItem, { type: "dynamicToolCall" }>["arguments"],
+    contentItems: [{
+      text: JSON.stringify(item.response, null, 2),
+      type: "inputText",
+    }],
+    durationMs: null,
+    id: item.id,
+    namespace: null,
+    status: item.state === "answered" ? "completed" : "failed",
+    success: item.state === "answered",
+    tool: WORKBENCH_QUESTIONNAIRE_TOOL_NAME,
+    type: "dynamicToolCall",
+  };
 }
 
 function isOpenCodeQuestionToolCall(item: ThreadItem) {
@@ -2703,6 +2736,84 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
   && left.turnStatus === right.turnStatus
   && left.workspaceRoots === right.workspaceRoots
 ));
+
+export function ThreadTranscriptItemDetails ({
+  browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  inlineMentionSources,
+  item,
+  itemTimeline,
+  knownSkills = [],
+  projectFilePaths,
+  projectId,
+  projectRootPath,
+  relatedThreadsById = {},
+  subagents = [],
+  threadCwdPath,
+  threadId,
+  turnCompletedAt,
+  turnStartedAt,
+  turnStatus,
+  workspaceRoots,
+}: {
+  browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
+  inlineMentionSources?: InlineMentionHighlightSources | null;
+  item: WorkbenchProjectedTranscriptItem;
+  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
+  knownSkills?: WorkbenchSkillSummary[];
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
+  relatedThreadsById?: RelatedThreadsById;
+  subagents?: readonly WorkbenchSubagentSummary[];
+  threadCwdPath?: string;
+  threadId: string;
+  turnCompletedAt: number | null;
+  turnStartedAt: number | null;
+  turnStatus: Turn["status"];
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}) {
+  if (item.type === "unknown") {
+    return <ThreadFallbackItem item={item} />;
+  }
+
+  const renderItem = isProjectedInteractionItem(item)
+    ? adaptProjectedInteractionItem(item)
+    : item;
+  const blocks = buildRenderableBlocks([renderItem], {}, threadCwdPath);
+  const primaryUserBlock = blocks.find((block) => isUserMessageBlock(block)) ?? null;
+  const finalAgentMessageId = renderItem.type === "agentMessage" && renderItem.phase === "final_answer"
+    ? renderItem.id
+    : null;
+
+  return (
+    <div className="space-y-2">
+      {blocks.map((block, index) => (
+        <ThreadRenderableBlockView
+          key={`${item.id}:${index}`}
+          block={block}
+          browseResultEntries={browseResultEntries}
+          finalAgentMessageId={finalAgentMessageId}
+          inlineMentionSources={inlineMentionSources}
+          itemTimeline={itemTimeline}
+          isMostRecentBlock={index === blocks.length - 1}
+          knownSkills={knownSkills}
+          primaryUserBlock={primaryUserBlock}
+          threadCwdPath={threadCwdPath}
+          threadId={threadId}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          relatedThreadsById={relatedThreadsById}
+          subagents={subagents}
+          turnCompletedAt={turnCompletedAt}
+          turnStartedAt={turnStartedAt}
+          turnStatus={turnStatus}
+          workspaceRoots={workspaceRoots}
+        />
+      ))}
+    </div>
+  );
+}
 
 function ThreadTurnDetailsComponent ({
   defaultOpenCompletedWork = false,

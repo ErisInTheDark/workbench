@@ -35,6 +35,7 @@ interface ThreadTranscriptParityControllerOptions {
   available?: boolean;
   cancelComparison?: (timer: ReturnType<typeof setTimeout>) => void;
   onError?: (error: Error) => void;
+  onProjectionChange?: (projection: WorkbenchTranscriptProjection | null) => void;
   reconcileProjection?: (
     projection: WorkbenchTranscriptProjection,
     selection: ThreadTranscriptParitySelection,
@@ -47,6 +48,7 @@ interface ThreadTranscriptParityControllerOptions {
 export default class ThreadTranscriptParityController {
   readonly #cancelComparison: NonNullable<ThreadTranscriptParityControllerOptions["cancelComparison"]>;
   readonly #onError: NonNullable<ThreadTranscriptParityControllerOptions["onError"]>;
+  readonly #onProjectionChange: NonNullable<ThreadTranscriptParityControllerOptions["onProjectionChange"]>;
   readonly #reconcileProjection: NonNullable<ThreadTranscriptParityControllerOptions["reconcileProjection"]>;
   readonly #scheduleComparison: NonNullable<ThreadTranscriptParityControllerOptions["scheduleComparison"]>;
   readonly #transcripts: ThreadTranscriptParityControllerOptions["transcripts"];
@@ -66,6 +68,7 @@ export default class ThreadTranscriptParityController {
     available = false,
     cancelComparison = (timer) => clearTimeout(timer),
     onError = (error) => console.error("Workbench transcript parity failed.", error),
+    onProjectionChange = () => undefined,
     reconcileProjection = (projection) => projection,
     scheduleComparison = (callback) => setTimeout(callback, 0),
     transcripts,
@@ -73,6 +76,7 @@ export default class ThreadTranscriptParityController {
   }: ThreadTranscriptParityControllerOptions) {
     this.#cancelComparison = cancelComparison;
     this.#onError = onError;
+    this.#onProjectionChange = onProjectionChange;
     this.#available = available;
     this.#reconcileProjection = reconcileProjection;
     this.#scheduleComparison = scheduleComparison;
@@ -86,6 +90,7 @@ export default class ThreadTranscriptParityController {
     this.#cancelScheduledComparison();
     this.#selection = null;
     this.#projection = null;
+    this.#onProjectionChange(null);
     this.#lastDiagnostic = null;
     this.#generation += 1;
     this.#activeSubscriptionId = null;
@@ -96,6 +101,7 @@ export default class ThreadTranscriptParityController {
     this.#available = available;
     this.#cancelScheduledComparison();
     this.#projection = null;
+    this.#onProjectionChange(null);
     this.#lastDiagnostic = null;
     if (!available) {
       this.#generation += 1;
@@ -114,6 +120,7 @@ export default class ThreadTranscriptParityController {
     if (previousThreadId !== nextThreadId || loadedTurnsChanged) {
       this.#cancelScheduledComparison();
       this.#projection = null;
+      this.#onProjectionChange(null);
       this.#lastDiagnostic = null;
       if (!this.#available) {
         this.#generation += 1;
@@ -148,9 +155,11 @@ export default class ThreadTranscriptParityController {
     try {
       projection = this.#reconcileProjection(this.#projection, this.#selection);
     } catch (error) {
+      this.#onProjectionChange(null);
       this.#onError(error instanceof Error ? error : new Error(String(error)));
       return;
     }
+    this.#onProjectionChange(projection);
     const result = compareWorkbenchTranscriptParity({
       jsonBrowseResultEntries: this.#selection.browseResultEntries,
       jsonThread: this.#selection.thread,
@@ -168,6 +177,7 @@ export default class ThreadTranscriptParityController {
     if (snapshot === null) {
       this.#cancelScheduledComparison();
       this.#projection = null;
+      this.#onProjectionChange(null);
       this.#lastDiagnostic = null;
       return;
     }
@@ -175,6 +185,7 @@ export default class ThreadTranscriptParityController {
     const result = projectWorkbenchTranscript(snapshot);
     if ("issues" in result) {
       this.#projection = null;
+      this.#onProjectionChange(null);
       this.#report(createWorkbenchTranscriptProjectionFailureDiagnostic(snapshot.thread.id, result.issues));
       return;
     }

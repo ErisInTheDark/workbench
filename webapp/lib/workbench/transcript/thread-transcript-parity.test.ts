@@ -12,6 +12,7 @@ import { planCanonicalTranscriptDisplay } from "./thread-transcript-display-plan
 import {
   compareWorkbenchTranscriptParity,
   createWorkbenchTranscriptProjectionFailureDiagnostic,
+  planWorkbenchTranscriptItemComparison,
 } from "./thread-transcript-parity";
 import type {
   WorkbenchProjectedTranscriptItem,
@@ -226,6 +227,101 @@ test("parity keeps distinct questionnaire items when provider request keys repea
     jsonThread: thread(jsonItems),
     sqliteProjection: projection(sqliteItems),
   }), { equal: true });
+});
+
+test("visual comparison aligns matching items and leaves source-only gaps", () => {
+  const jsonItems: ThreadItem[] = [
+    { id: "one", text: "one", type: "plan" },
+    { id: "json-only", text: "json", type: "plan" },
+    { id: "three", text: "three", type: "plan" },
+  ];
+  const sqliteItems: WorkbenchProjectedTranscriptItem[] = [
+    { id: "one", text: "one", type: "plan" },
+    { id: "sqlite-only", text: "sqlite", type: "plan" },
+    { id: "three", text: "three", type: "plan" },
+  ];
+
+  assert.deepEqual(
+    planWorkbenchTranscriptItemComparison({
+      jsonThread: thread(jsonItems),
+      sqliteProjection: projection(sqliteItems),
+    }).map((row) => [row.json?.identity ?? null, row.sqlite?.identity ?? null]),
+    [
+      ["one", "one"],
+      ["json-only", null],
+      [null, "sqlite-only"],
+      ["three", "three"],
+    ],
+  );
+});
+
+test("visual comparison renders reordered identities as remove and add rows", () => {
+  const items: ThreadItem[] = [
+    { id: "one", text: "one", type: "plan" },
+    { id: "two", text: "two", type: "plan" },
+    { id: "three", text: "three", type: "plan" },
+  ];
+
+  assert.deepEqual(
+    planWorkbenchTranscriptItemComparison({
+      jsonThread: thread(items),
+      sqliteProjection: projection([items[1]!, items[0]!, items[2]!]),
+    }).map((row) => [row.json?.identity ?? null, row.sqlite?.identity ?? null]),
+    [
+      [null, "two"],
+      ["one", "one"],
+      ["two", null],
+      ["three", "three"],
+    ],
+  );
+});
+
+test("visual comparison uses the durable identity for synthetic questionnaire items", () => {
+  const request = {
+    id: "request",
+    questions: [{ allowOther: false, header: "Pick", id: "choice", isSecret: false, options: [], question: "Which?" }],
+    submitLabel: "Submit",
+    summary: "Choose",
+    title: "Question",
+  };
+  const response = { answers: { choice: { answers: ["one"] } } };
+  const requestKey = "request-key";
+  const jsonItem: ThreadItem = {
+    arguments: request,
+    contentItems: [{ text: JSON.stringify(response, null, 2), type: "inputText" }],
+    durationMs: null,
+    id: createSyntheticQuestionnaireHistoryItemId({
+      itemId: "durable-questionnaire",
+      requestKey,
+      threadId: "thread",
+      turnId: "turn",
+    }),
+    namespace: null,
+    status: "completed",
+    success: true,
+    tool: "workbench_request_user_input",
+    type: "dynamicToolCall",
+  };
+  const sqliteItem: WorkbenchProjectedTranscriptItem = {
+    errorText: null,
+    id: "durable-questionnaire",
+    request,
+    requestKey,
+    resolvedAt: 3_000,
+    response,
+    state: "answered",
+    type: "questionnaire",
+  };
+
+  const rows = planWorkbenchTranscriptItemComparison({
+    jsonThread: thread([jsonItem]),
+    sqliteProjection: projection([sqliteItem]),
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.json?.identity, "durable-questionnaire");
+  assert.equal(rows[0]?.sqlite?.identity, "durable-questionnaire");
+  assert.equal(rows[0]?.json?.sourceItemId, jsonItem.id);
+  assert.equal(rows[0]?.sqlite?.sourceItemId, sqliteItem.id);
 });
 
 test("first semantic mismatch reports only bounded identities and payload fingerprints", () => {

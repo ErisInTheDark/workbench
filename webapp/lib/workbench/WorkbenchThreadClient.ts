@@ -215,6 +215,7 @@ export interface WorkbenchThreadClientOptions {
   clientStateController?: WorkbenchClientStateController;
   onStatusMessage?: (message: string) => void;
   onThreadStarted?: (thread: ThreadPayload) => void;
+  onTranscriptComparisonChange?: (available: boolean, projection: WorkbenchTranscriptProjection | null) => void;
   publishAcceptedIntent?: (event: WorkbenchAcceptedIntent) => Promise<void>;
 }
 
@@ -949,14 +950,20 @@ function WorkbenchThreadClient(
   const stablePreferencesByKey = new Map<string, ThreadStablePreferenceRecord>();
   const statusRecordsByKey = new Map<string, ThreadStatusRecord>();
   const streamingReconciler = new ThreadStreamingReconciler();
+  let transcriptComparisonAvailable = false;
   const transcriptParity = new ThreadTranscriptParityController({
     onError: (error) => console.error("Workbench transcript parity lifecycle failed.", error),
+    onProjectionChange: (projection) => {
+      options.onTranscriptComparisonChange?.(transcriptComparisonAvailable, projection);
+    },
     reconcileProjection: reconcileTranscriptProjectionWithLiveThread,
     transcripts,
     turnLimit: 4,
   });
   lifecycle.addUnsubscribe(transcripts.onAvailabilityChange((available) => {
+    transcriptComparisonAvailable = available;
     transcriptParity.setAvailable(available);
+    options.onTranscriptComparisonChange?.(available, null);
   }));
   async function publishAcceptedIntent({
     draftId,
@@ -5844,6 +5851,7 @@ function WorkbenchThreadClient(
     disposed = true;
     resetProjectThreadState({ emitChange: false });
     listeners.clear();
+    transcriptComparisonAvailable = false;
     transcriptParity.dispose();
     transcripts.dispose();
     threadGoals.dispose();

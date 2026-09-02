@@ -105,6 +105,7 @@ import WorkbenchComposerProfileController from "../lib/workbench/state/Workbench
 import { getThreadDocumentFromSnapshot } from "../lib/workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../lib/workbench/thread/thread-message-submission";
 import { countDraftPromptTokens, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchTranscriptProjection } from "../lib/workbench/transcript/workbench-transcript-projection";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
 import CodexSandboxNetworkSetting from "./workbench/CodexSandboxNetworkSetting";
 import DropTargetBoundary from "./workbench/drag/DropTargetBoundary";
@@ -530,6 +531,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     [groupedSidebarProjects],
   );
   const [currentThread, setCurrentThread] = useState<ThreadPayload | null>(null);
+  const [isTranscriptComparisonAvailable, setIsTranscriptComparisonAvailable] = useState(false);
+  const [isTranscriptComparisonOpen, setIsTranscriptComparisonOpen] = useState(false);
+  const [transcriptComparisonProjection, setTranscriptComparisonProjection] = useState<WorkbenchTranscriptProjection | null>(null);
   const [threadDocuments, setThreadDocuments] = useState<WorkbenchThreadDocumentSnapshot>(EMPTY_THREAD_DOCUMENT_SNAPSHOT);
   const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
   const [harnessUserInputRequestsByThreadId, setHarnessUserInputRequestsByThreadId] = useState<Record<string, WorkbenchPendingUserInputRequest>>({});
@@ -726,6 +730,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           onCurrentThreadChange: (thread) => {
             scheduleWorkbenchStateUpdate(() => {
               setCurrentThread(thread);
+            });
+          },
+          onTranscriptComparisonChange: (available, projection) => {
+            scheduleWorkbenchStateUpdate(() => {
+              setIsTranscriptComparisonAvailable(available);
+              setTranscriptComparisonProjection(projection);
+              if (!available) setIsTranscriptComparisonOpen(false);
             });
           },
           onThreadDocumentsChange: (snapshot) => {
@@ -1912,6 +1923,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const selectedThreadIdForView = effectiveThreadTarget?.kind === "new" && threadForThreadView
     ? threadForThreadView.id
     : effectiveSelectedThreadId;
+  useEffect(() => {
+    setIsTranscriptComparisonOpen(false);
+  }, [isMobile, selectedThreadIdForView, threadForThreadView?.harness]);
   const activeThreadId = showThreadView ? threadViewInstanceKey : "";
   const activeFilePath = showFileView ? effectiveFilePath : "";
   const visibleUserInputRequestsByThreadId = useMemo(() => (
@@ -2119,6 +2133,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const shouldRenderMainLayout = Boolean(mainLayoutForRender);
   const isDirectThreadSurface = showThreadView && !shouldRenderMainLayout;
   const isDirectMobileThreadSurface = isMobile && isDirectThreadSurface;
+  const canCompareSelectedTranscript = isDirectThreadSurface
+    && !isMobile
+    && isTranscriptComparisonAvailable
+    && threadForThreadView?.harness === "codex"
+    && !threadForThreadView.isDraft;
 
   useEffect(() => {
     if (!showMosaicView || !controls) {
@@ -3117,6 +3136,18 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       <span className="sr-only">Back to file explorer</span>
                     </button>
                     <div className="flex items-center gap-1.5">
+                      {canCompareSelectedTranscript ? (
+                        <button
+                          type="button"
+                          aria-label="Compare JSON and SQLite transcripts"
+                          aria-pressed={isTranscriptComparisonOpen}
+                          title={isTranscriptComparisonOpen ? "Show JSON transcript only" : "Compare JSON and SQLite transcripts"}
+                          className={`${workbenchIconButtonClassName} px-2 text-[0.68rem] font-semibold tracking-[0.08em]${isTranscriptComparisonOpen ? " text-accent" : ""}`}
+                          onClick={() => setIsTranscriptComparisonOpen((open) => !open)}
+                        >
+                          JSON / SQL
+                        </button>
+                      ) : null}
                       <button
                         id="zoom-out"
                         ref={zoomOutButtonRef}
@@ -3227,6 +3258,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       threadGoalControls={controls?.threadGoals ?? null}
                       threadSidebarStore={threadSidebarStore}
                       threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
+                      transcriptComparisonOpen={isTranscriptComparisonOpen}
+                      transcriptComparisonProjection={transcriptComparisonProjection}
                       viewInstanceKey={threadViewInstanceKey}
                     />
                   ) : selectionError ? (
