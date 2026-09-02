@@ -96,6 +96,24 @@ test("token commands restrict managed threads without restricting direct users",
       responseKind: "native",
     },
   });
+  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "project"], threadOutside), {
+    kind: "request",
+    request: {
+      body: { cwd: "C:/other", kind: "projectInstructions", model: "gpt-5.6" },
+      method: "POST",
+      path: "/internal/tokens",
+      responseKind: "native",
+    },
+  });
+  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "project", "--model", "gpt-5-test"], userOutside), {
+    kind: "request",
+    request: {
+      body: { cwd: "C:/other", kind: "projectInstructions", model: "gpt-5-test" },
+      method: "POST",
+      path: "/internal/tokens",
+      responseKind: "native",
+    },
+  });
   assert.equal((await parseWorkbenchAgentCliCommand(["tokens", "instructions"], threadOutside)).kind, "error");
   assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "instructions"], threadInside), {
     kind: "request",
@@ -113,8 +131,11 @@ test("token commands restrict managed threads without restricting direct users",
   assert.equal(outsideThreadHelp.kind, "help");
   assert.equal(insideThreadHelp.kind, "help");
   assert.match(userHelp.help, /wb tokens instructions/u);
+  assert.match(userHelp.help, /wb tokens project/u);
   assert.doesNotMatch(outsideThreadHelp.help, /wb tokens instructions/u);
+  assert.match(outsideThreadHelp.help, /wb tokens project/u);
   assert.match(insideThreadHelp.help, /wb tokens instructions/u);
+  assert.match(insideThreadHelp.help, /wb tokens project/u);
 });
 
 before(async () => {

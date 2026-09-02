@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchTokenCountExecutionRequestSchema: validate direct text and caller-aware instruction token requests. Keywords: tokens, instructions, command, cwd, thread.
- * - WORKBENCH_TOKEN_COMMANDS: expose exact local GPT-5 text token counting through CLI and typed MCP definitions. Keywords: tokens, GPT-5, MCP, CLI.
+ * - WorkbenchTokenCountExecutionRequestSchema: validate direct text, Workbench-source, and cwd-owned project instruction token requests. Keywords: tokens, instructions, project, cwd, thread.
+ * - WORKBENCH_TOKEN_COMMANDS: expose exact local GPT-5 text and instruction counting through CLI and typed MCP definitions. Keywords: tokens, GPT-5, project, MCP, CLI.
  */
 import { z } from "zod";
 
@@ -21,6 +21,7 @@ const callerThreadId = z.string().trim().min(1).max(4096).nullable();
 export const WorkbenchTokenCountExecutionRequestSchema = z.discriminatedUnion("kind", [
   z.object({ cwd, kind: z.literal("text"), model, text }).strict(),
   z.object({ callerThreadId, cwd, kind: z.literal("instructions"), model }).strict(),
+  z.object({ cwd, kind: z.literal("projectInstructions"), model }).strict(),
 ]);
 
 const countText = defineWorkbenchAgentCommand({
@@ -59,4 +60,21 @@ const countInstructions = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_TOKEN_COMMANDS = [countText, countInstructions] as const;
+const countProjectInstructions = defineWorkbenchAgentCommand({
+  description: "Count the current cwd's resolved project AGENTS chain locally with the GPT-5 o200k_base tokenizer.",
+  effects: { idempotent: true, openWorld: false, readOnly: true },
+  helpGroups: ["tokens"],
+  mcpCodeModeEligible: true,
+  words: ["tokens", "project"],
+  usage: "wb tokens project [--model <model>]",
+  inputSchema: z.object({ model }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--model"] });
+    return { model: flags.optional("--model") ?? DEFAULT_MODEL };
+  },
+  buildRequest(input, { cwd }) {
+    return postWorkbenchAgentCommand("/internal/tokens", { cwd, kind: "projectInstructions", model: input.model });
+  },
+});
+
+export const WORKBENCH_TOKEN_COMMANDS = [countText, countInstructions, countProjectInstructions] as const;

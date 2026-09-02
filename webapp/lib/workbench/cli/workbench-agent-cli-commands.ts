@@ -90,7 +90,7 @@ export function listWorkbenchAgentCliCommandDescriptors(catalog: readonly Orches
 
 const ROOT_HELP_COMMAND_ORDER = [
   "rg",
-  "tokens", "tokens instructions",
+  "tokens", "tokens instructions", "tokens project",
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop", "subagent message",
   "thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand",
   "git add", "git unstage", "git commit", "git arc plan", "git arc start", "git arc wait", "git arc continue", "git arc add",
@@ -100,9 +100,9 @@ const ROOT_HELP_COMMAND_ORDER = [
 
 const HELP_GROUPS: readonly HelpGroupDefinition[] = [
   {
-    commandOrder: ["tokens", "tokens instructions"],
-    footer: "Pass one exact text value after --. Managed threads can count instructions only from the running Workbench repository root.",
-    key: "tokens", usage: "wb tokens [instructions] [options]", words: ["tokens"],
+    commandOrder: ["tokens", "tokens instructions", "tokens project"],
+    footer: "Pass one exact text value after --. Project counting uses the command cwd. Managed threads can count Workbench source instructions only from the running Workbench repository root.",
+    key: "tokens", usage: "wb tokens [instructions|project] [options]", words: ["tokens"],
   },
   {
     commandOrder: ["rg"],

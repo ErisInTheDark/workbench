@@ -20,10 +20,16 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   create: (context, build) => {
     const gitArc = build.get("gitArc");
     const harnesses = build.get("harnesses");
+    const projectCatalog = build.get("projectCatalog");
     const subagents = build.get("subagents");
     const threadState = build.get("threadState");
     const reloadDirt = build.get("reloadDirt");
-    const tokens = new WorkbenchTokenCountController({ projectRoot: context.legacyMigrationProjectRoot });
+    const tokens = new WorkbenchTokenCountController({
+      projectRoot: context.legacyMigrationProjectRoot,
+      resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, {
+        endpointName: "Project token counting",
+      }),
+    });
     const commandLogger = new WorkbenchAgentCommandLogger();
     const threadRecall = new WorkbenchThreadRecallController({
       readBundle: async (threadId, signal) => {
@@ -79,7 +85,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["gitArc", "harnesses", "reloadDirt", "subagents", "threadGit", "threadState"],
+  requires: ["gitArc", "harnesses", "projectCatalog", "reloadDirt", "subagents", "threadGit", "threadState"],
   safeAll: true,
   scope: "server:commands",
   sources: [

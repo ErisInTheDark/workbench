@@ -2,13 +2,24 @@
  * Exports:
  * - WorkbenchInstructionTokenCorpus: deterministic stripped instruction text plus its contributing source paths. Keywords: instructions, tokens, corpus, measurement.
  * - buildWorkbenchInstructionTokenCorpus: read runtime Markdown leaves and remove source-only control syntax before token counting. Keywords: instructions, tokens, comments, selectors, imports.
+ * - ProjectInstructionTokenCorpus/buildProjectInstructionTokenCorpus: resolve one cwd-owned AGENTS chain and remove source comments before counting. Keywords: project, AGENTS, tokens, imports, comments.
  */
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
+import { stripWorkbenchInstructionHtmlComments } from "../instructions/instruction-context-filter";
+import {
+  buildProjectInstructionContent,
+  type ProjectInstructionContext,
+} from "../instructions/project-instruction-files";
+
 export interface WorkbenchInstructionTokenCorpus {
   readonly content: string;
   readonly files: readonly string[];
+}
+
+export interface ProjectInstructionTokenCorpus {
+  readonly content: string;
 }
 
 async function listMarkdownLeaves(root: string, directory = root): Promise<string[]> {
@@ -45,5 +56,14 @@ export async function buildWorkbenchInstructionTokenCorpus(root: string): Promis
   return {
     content: sources.filter(Boolean).join("\n\n"),
     files: absoluteFiles.map((filePath) => path.relative(absoluteRoot, filePath).replaceAll("\\", "/")),
+  };
+}
+
+export function buildProjectInstructionTokenCorpus(
+  context: ProjectInstructionContext,
+): ProjectInstructionTokenCorpus {
+  const content = buildProjectInstructionContent(context) ?? "";
+  return {
+    content: stripWorkbenchInstructionHtmlComments(content).trim(),
   };
 }

@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { buildWorkbenchInstructionTokenCorpus } from "./instruction-token-corpus";
+import {
+  buildProjectInstructionTokenCorpus,
+  buildWorkbenchInstructionTokenCorpus,
+} from "./instruction-token-corpus";
 
 test("builds one deterministic corpus without authoring or control syntax", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-instruction-tokens-"));
@@ -43,6 +46,33 @@ test("builds one deterministic corpus without authoring or control syntax", asyn
       "Keep z.",
     ].join("\n"));
     assert.doesNotMatch(corpus.content, /available|failure rationale|runtime\.value|workbench\.rendering|nested\/\*|custom-tag|authoring guide|\{\}/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("builds the active cwd-owned AGENTS tree without source comments", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "project-instruction-tokens-"));
+  const cwd = path.join(root, "nested");
+  try {
+    await mkdir(cwd);
+    await Promise.all([
+      writeFile(path.join(root, "AGENTS.md"), "root rule\n<!-- source note -->\n{./leaf}\n```md\n<!-- literal example -->\n```"),
+      writeFile(path.join(root, "leaf.md"), "base leaf"),
+      writeFile(path.join(root, "leaf.override.md"), "active leaf"),
+      writeFile(path.join(cwd, "AGENTS.md"), "nested base"),
+      writeFile(path.join(cwd, "AGENTS.override.md"), "nested active"),
+    ]);
+
+    const corpus = buildProjectInstructionTokenCorpus({
+      cwd,
+      roots: [{ rootPath: root }],
+    });
+
+    assert.ok(corpus.content.indexOf("root rule") < corpus.content.indexOf("active leaf"));
+    assert.ok(corpus.content.indexOf("active leaf") < corpus.content.indexOf("nested active"));
+    assert.match(corpus.content, /<!-- literal example -->/u);
+    assert.doesNotMatch(corpus.content, /source note|base leaf|nested base|\{\.\/leaf\}/u);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

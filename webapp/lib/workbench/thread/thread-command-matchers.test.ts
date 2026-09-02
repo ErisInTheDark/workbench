@@ -136,6 +136,7 @@ test("simple typed wb MCP calls share argument-sensitive CLI presentations", () 
     ["wb thread refresh", "thread_refresh", {}],
     ["wb tokens -- count-me", "tokens", { text: "count-me" }],
     ["wb tokens instructions", "tokens_instructions", {}],
+    ["wb tokens project", "tokens_project", {}],
     ["wb git add -- src/a.ts", "git_add", { paths: ["src/a.ts"] }],
     ["wb thread title get", "thread_title_get", {}],
     ["wb subagent list", "subagent_list", {}],

@@ -26,6 +26,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "rg",
   "tokens",
   "tokens_instructions",
+  "tokens_project",
   "subagent_list",
   "subagent_profiles",
   "subagent_create",
@@ -506,6 +507,8 @@ export function getWorkbenchCommandRoute(
       return simple("workbench-cli.tokens", actionTarget("Counting ", "text tokens"), actionTarget("Counted ", "text tokens"));
     case "tokens_instructions":
       return simple("workbench-cli.tokens", actionTarget("Counting ", "instruction tokens"), actionTarget("Counted ", "instruction tokens"));
+    case "tokens_project":
+      return simple("workbench-cli.tokens", actionTarget("Counting ", "project instruction tokens"), actionTarget("Counted ", "project instruction tokens"));
     case "thread_title_get":
       return simple("workbench-cli.thread-title-get", actionTarget("Checking ", "thread title"), actionTarget("Checked ", "thread title"));
     case "thread_title": {

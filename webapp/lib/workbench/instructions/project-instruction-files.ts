@@ -8,12 +8,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isPathWithinRoot } from "../../project";
-import type { WorkbenchProjectRoot } from "../../types";
 import { createInstructionFileGeneration } from "./instruction-file-generation";
 
 export interface ProjectInstructionContext {
   readonly cwd?: string | null;
-  readonly roots?: readonly WorkbenchProjectRoot[] | null;
+  readonly roots?: readonly { readonly rootPath: string }[] | null;
 }
 
 const AGENTS_FILE_NAME = "AGENTS.md";

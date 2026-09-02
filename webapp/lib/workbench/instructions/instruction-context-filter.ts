@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings. Keywords: instructions, selector, warning.
+ * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure. Keywords: instructions, comments, fences, source.
  * - filterWorkbenchInstructionContent: strip HTML comments and apply harness, shell, and mechanics-availability blocks without rejecting prompt assembly. Keywords: filter, tolerant parser, final payload.
  */
 
@@ -58,7 +59,7 @@ function closesFence(line: string, fence: Fence) {
   return new RegExp(`^(?: {0,3})${marker}{${fence.size},}\\s*$`, "u").test(line);
 }
 
-function stripHtmlCommentsOutsideFences(value: string) {
+export function stripWorkbenchInstructionHtmlComments(value: string) {
   const lines = value.split("\n");
   let fence: Fence | null = null;
   let output = "";
@@ -138,7 +139,7 @@ function warn(context: WorkbenchInstructionFilterContext, line: number, recovery
 
 export function filterWorkbenchInstructionContent(value: string | null | undefined, context: WorkbenchInstructionFilterContext) {
   if (!value) return null;
-  const lines = stripHtmlCommentsOutsideFences(value.replace(/\r\n?/gu, "\n")).split("\n");
+  const lines = stripWorkbenchInstructionHtmlComments(value.replace(/\r\n?/gu, "\n")).split("\n");
   const controls = new Map<number, SelectorControl>();
   const openLines: number[] = [];
   let fence: Fence | null = null;

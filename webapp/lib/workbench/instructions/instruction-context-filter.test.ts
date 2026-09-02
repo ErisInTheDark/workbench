@@ -1,7 +1,11 @@
 /* No production exports. Tests protect the selector owner's final instruction filtering behavior. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { filterWorkbenchInstructionContent, type WorkbenchInstructionFilterWarning } from "./instruction-context-filter";
+import {
+  filterWorkbenchInstructionContent,
+  stripWorkbenchInstructionHtmlComments,
+  type WorkbenchInstructionFilterWarning,
+} from "./instruction-context-filter";
 
 function filter(value: string, harness: "codex" | "copilot" | "opencode" = "codex", shell: "pwsh" | "bash" = "pwsh", available = new Set(["thread-recall"])) {
   const warnings: WorkbenchInstructionFilterWarning[] = [];
@@ -21,12 +25,14 @@ test("fenced selector examples remain literal", () => {
 test("html comments are stripped before selector parsing while preserving line breaks", () => {
   const value = "before<!-- inline -->after\n<!--\n<harness:not-real>\nhidden\n</harness:not-real>\n-->\nkept";
   const result = filter(value);
+  assert.equal(stripWorkbenchInstructionHtmlComments(value), `beforeafter${"\n".repeat(6)}kept`);
   assert.equal(result.output, `beforeafter${"\n".repeat(6)}kept`);
   assert.deepEqual(result.warnings, []);
 });
 
 test("fenced html comment examples remain literal", () => {
   const value = "```md\n<!-- backtick example -->\n```\n~~~md\n<!-- tilde example -->\n~~~";
+  assert.equal(stripWorkbenchInstructionHtmlComments(value), value);
   assert.equal(filter(value).output, value);
 });
 

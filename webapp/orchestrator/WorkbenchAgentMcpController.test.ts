@@ -106,6 +106,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.ok(client.getServerCapabilities()?.experimental?.[WORKBENCH_SHELL_SANDBOX_CAPABILITY]);
     assert.equal(inventory.tools.some(({ name }) => name === "browse_raw"), false);
     assert.equal(inventory.tools.some(({ name }) => name === "tokens"), true);
+    assert.equal(inventory.tools.some(({ name }) => name === "tokens_project"), true);
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_instructions"), false);
     assert.equal((await projectClient.listTools()).tools.some(({ name }) => name === "tokens_instructions"), true);
     const plan = inventory.tools.find(({ name }) => name === "git_arc_plan");
@@ -257,6 +258,19 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(instructionTokens.isError, false);
     assert.deepEqual(executed.at(-1), {
       body: { callerThreadId: "thread-1", cwd: "C:/authoritative", kind: "instructions", model: "gpt-5-test" },
+      method: "POST",
+      path: "/internal/tokens",
+      responseKind: "native",
+    });
+
+    const projectTokens = await client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: { model: "gpt-5-test" },
+      name: "tokens_project",
+    });
+    assert.equal(projectTokens.isError, false);
+    assert.deepEqual(executed.at(-1), {
+      body: { cwd: "C:/authoritative", kind: "projectInstructions", model: "gpt-5-test" },
       method: "POST",
       path: "/internal/tokens",
       responseKind: "native",

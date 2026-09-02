@@ -253,6 +253,9 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (/^wb(?:\.cmd)?\s+tokens\s+instructions(?:\s|$)/iu.test(normalized)) {
         return getWorkbenchCommandRendering("tokens_instructions", {})?.result ?? null;
       }
+      if (/^wb(?:\.cmd)?\s+tokens\s+project(?:\s|$)/iu.test(normalized)) {
+        return getWorkbenchCommandRendering("tokens_project", {})?.result ?? null;
+      }
       if (/^wb(?:\.cmd)?\s+tokens(?:\s|$)/iu.test(normalized)) {
         return getWorkbenchCommandRendering("tokens", {})?.result ?? null;
       }
