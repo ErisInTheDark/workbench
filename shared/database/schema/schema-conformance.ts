@@ -2,6 +2,7 @@
  * DatabaseConformancePath/DatabaseConformanceIssue: bounded schema-derived browser repair and failure evidence. Keywords: database, schema, conformance.
  * DatabaseConformanceResult: successful conformed data or unrecoverable relational incompatibility. Keywords: database, schema, compatibility.
  * conformSelectedRow: conform one unknown selected row from its current table declaration. Keywords: database, schema, row, conformance.
+ * conformSelectedRows: preserve valid selected rows while dropping rows owned by future enum identities. Keywords: database, schema, array, fallback, compatibility.
  */
 import type { SelectRow, TableDefinition } from "./schema-definition.ts";
 
@@ -83,4 +84,61 @@ export function conformSelectedRow<Table extends TableDefinition>(
 
   if (issues.length) return { issues, repairedPaths, success: false };
   return { data: row as SelectRow<Table>, repairedPaths, success: true };
+}
+
+function isIdentityColumn(table: TableDefinition, columnName: string) {
+  const column = table.columns[columnName];
+  return Boolean(column?.runtime.primaryKey) || table.constraints.some((constraint) => (
+    constraint.kind === "primaryKey"
+    && constraint.columns.some((candidate) => candidate.columnName === columnName)
+  ));
+}
+
+function hasFutureEnumIdentity(
+  table: TableDefinition,
+  value: unknown,
+  path: DatabaseConformancePath,
+  issues: readonly DatabaseConformanceIssue[],
+) {
+  if (!isRecord(value)) return false;
+  return issues.some((issue) => {
+    if (issue.code !== "invalidValue" || issue.path.length !== path.length + 1) return false;
+    const columnName = issue.path[path.length];
+    if (typeof columnName !== "string" || !isIdentityColumn(table, columnName)) return false;
+    const enumValues = table.columns[columnName]?.runtime.enumValues;
+    const candidate = value[columnName];
+    return Boolean(enumValues && typeof candidate === "string" && !enumValues.includes(candidate));
+  });
+}
+
+export function conformSelectedRows<Table extends TableDefinition>(
+  table: Table,
+  value: unknown,
+  path: DatabaseConformancePath = [],
+): DatabaseConformanceResult<SelectRow<Table>[]> {
+  if (!Array.isArray(value)) {
+    return { issues: [{ code: "invalidValue", path }], repairedPaths: [], success: false };
+  }
+
+  const data: SelectRow<Table>[] = [];
+  const issues: DatabaseConformanceIssue[] = [];
+  const repairedPaths: DatabaseConformancePath[] = [];
+  value.forEach((candidate, index) => {
+    const rowPath = [...path, index];
+    const result = conformSelectedRow(table, candidate, rowPath);
+    if ("data" in result) {
+      data.push(result.data);
+      repairedPaths.push(...result.repairedPaths);
+      return;
+    }
+    if (hasFutureEnumIdentity(table, candidate, rowPath, result.issues)) {
+      repairedPaths.push(rowPath);
+      return;
+    }
+    repairedPaths.push(...result.repairedPaths);
+    issues.push(...result.issues);
+  });
+  return issues.length
+    ? { issues, repairedPaths, success: false }
+    : { data, repairedPaths, success: true };
 }

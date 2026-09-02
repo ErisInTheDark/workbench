@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchClientStateControllerOptions: HTTP, polling, and visibility seams. Keywords: browser, state, controller, test.
- * - WorkbenchClientStateSnapshot: immutable browser projection and visible failure. Keywords: browser, state, snapshot.
+ * - WorkbenchClientStateSnapshot: immutable browser projection, app-state schema capability, and visible failure. Keywords: browser, state, schema, snapshot.
  * - default WorkbenchClientStateController: own validated app-state bootstrap, memory, writes, and polling. Keywords: browser, state, lifecycle.
  */
 import type {
@@ -26,6 +26,7 @@ export interface WorkbenchClientStateSnapshot {
   error: string;
   records: readonly WorkbenchClientStateRecord[];
   revision: number;
+  schemaVersion: number;
 }
 
 export interface WorkbenchClientStateControllerOptions {
@@ -87,8 +88,15 @@ export default class WorkbenchClientStateController {
   #mutationGeneration = 0;
   #polling = false;
   #revision = 0;
+  #schemaVersion = 0;
   #scheduledPoll: number | null = null;
-  #snapshot: WorkbenchClientStateSnapshot = { daemonRegistrationId: "memory", error: "", records: [], revision: 0 };
+  #snapshot: WorkbenchClientStateSnapshot = {
+    daemonRegistrationId: "memory",
+    error: "",
+    records: [],
+    revision: 0,
+    schemaVersion: 0,
+  };
   #unsubscribeVisibility: (() => void) | null = null;
 
   constructor(options: WorkbenchClientStateControllerOptions = {}) {
@@ -264,6 +272,7 @@ export default class WorkbenchClientStateController {
       throw new Error("Workbench app-state daemon registration changed during this browser session.");
     }
     this.#daemonRegistrationId = response.daemonRegistrationId;
+    this.#schemaVersion = response.schemaVersion ?? 0;
     if (response.kind === "snapshot") this.#records.clear();
     for (const change of projectWorkbenchClientStateRows(response.rows)) {
       if (response.kind === "delta" && change.revision <= this.#revision) continue;
@@ -305,6 +314,7 @@ export default class WorkbenchClientStateController {
       error: this.#error,
       records: [...projectedRecords.values()],
       revision: this.#revision,
+      schemaVersion: this.#schemaVersion,
     };
     for (const listener of this.#listeners) listener();
   }

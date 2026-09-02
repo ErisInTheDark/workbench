@@ -168,6 +168,43 @@ const globalPreferencesV3 = defineTable("global_preferences", {
   ],
 }));
 
+const globalPreferencesV4 = defineTable("global_preferences", {
+  key: enumText(
+    "appPort",
+    "composerSpellCheck",
+    "editorFontFamily",
+    "editorFontSize",
+    "editorSpellCheck",
+    "fileOpenBehavior",
+    "harness",
+    "projectStatusCountsExpanded",
+    "projectsOpen",
+    "projectTimeGroupCount",
+    "reloadNecessaryOpen",
+    "selectedProjectPinPlacement",
+    "showUnopenableFiles",
+    "sidebarCollapsed",
+    "theme",
+    "threadCodeBlockWrap",
+    "threadLiveActivityOpen",
+  ).primaryKey(),
+  boolean_value: booleanInteger(),
+  integer_value: integer(),
+  text_value: text(),
+  ...revisionColumns(),
+}, (table) => ({
+  constraints: [
+    check(sql`
+      (${table.deleted} = ${literal(1)} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.deleted} = ${literal(0)} AND (
+        (${table.key} IN (${literal("composerSpellCheck")}, ${literal("editorSpellCheck")}, ${literal("projectStatusCountsExpanded")}, ${literal("projectsOpen")}, ${literal("reloadNecessaryOpen")}, ${literal("showUnopenableFiles")}, ${literal("sidebarCollapsed")}, ${literal("threadCodeBlockWrap")}, ${literal("threadLiveActivityOpen")}) AND ${table.boolean_value} IS NOT NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+        OR (${table.key} IN (${literal("appPort")}, ${literal("editorFontSize")}, ${literal("projectTimeGroupCount")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NOT NULL AND ${table.text_value} IS NULL)
+        OR (${table.key} IN (${literal("editorFontFamily")}, ${literal("fileOpenBehavior")}, ${literal("harness")}, ${literal("selectedProjectPinPlacement")}, ${literal("theme")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NOT NULL)
+      ))
+    `),
+  ],
+}));
+
 const globalPreferencesHistory = defineTableHistory({
   versions: [
     tableVersion({ migration: createTable(globalPreferencesV1), schemaVersion: 1, table: globalPreferencesV1 }),
@@ -181,8 +218,13 @@ const globalPreferencesHistory = defineTableHistory({
       schemaVersion: 3,
       table: globalPreferencesV3,
     }),
+    tableVersion({
+      migration: rebuildTable({ from: globalPreferencesV3, to: globalPreferencesV4 }),
+      schemaVersion: 4,
+      table: globalPreferencesV4,
+    }),
   ],
-  current: globalPreferencesV3,
+  current: globalPreferencesV4,
 });
 
 const projectPreferencesV1 = defineTable("project_preferences", {

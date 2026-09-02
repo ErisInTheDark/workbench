@@ -3,17 +3,20 @@
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor zoom defaults and bounds. Keywords: settings, editor, zoom.
  * - WorkbenchTheme/WorkbenchEditorFontFamily/WorkbenchFileOpenBehavior/WorkbenchSelectedProjectPinPlacement/WorkbenchSettingKey: setting value contracts. Keywords: settings, theme, editor, pinned, thread.
  * - WorkbenchGlobalSettings, WorkbenchProjectSettings, WorkbenchResolvedSettings: stored and resolved settings shapes. Keywords: settings, global, project override.
- * - WorkbenchProjectSidebarPreferences: project-local sidebar display state. Keywords: settings, project, sidebar, disclosure, folders.
+ * - WorkbenchGlobalSidebarPreferences/WorkbenchProjectSidebarPreferences/WorkbenchSidebarPreferences: global shell, project-local, and combined sidebar state. Keywords: settings, global, project, sidebar, disclosure, folders.
  * - WORKBENCH_SETTING_DEFINITIONS: labels and option metadata for settings UI rendering. Keywords: settings, registry, UI.
- * - createDefaultGlobalWorkbenchSettings/createDefaultWorkbenchProjectSidebarPreferences: create agentic global and sidebar defaults. Keywords: settings, defaults, sidebar, agentic.
+ * - createDefaultGlobalWorkbenchSettings/createDefaultWorkbenchGlobalSidebarPreferences/createDefaultWorkbenchProjectSidebarPreferences: create settings and scoped sidebar defaults. Keywords: settings, defaults, sidebar, global, project.
  * - readGlobalWorkbenchSettings/writeGlobalWorkbenchSetting: project global settings and write one setting intent. Keywords: settings, app state, global.
  * - readProjectWorkbenchSettings/writeProjectWorkbenchSetting: project explicit project override slots and write one override intent. Keywords: settings, app state, project.
+ * - readWorkbenchGlobalSidebarPreferences/writeWorkbenchGlobalSidebarPreference: global shell sidebar state and focused writes. Keywords: settings, app state, global, sidebar, home.
  * - readWorkbenchProjectSidebarPreferences/writeWorkbenchProjectSidebarPreference/setWorkbenchProjectSidebarFolderOpen: project sidebar state and focused writes. Keywords: settings, app state, project, sidebar.
  * - resolveWorkbenchSettings: merge project overrides over global settings. Keywords: settings, inheritance, overrides.
  */
 import type {
-    WorkbenchClientStateRecord,
-    WorkbenchSelectedProjectPinPlacementValue,
+  WorkbenchClientStateRecord,
+  WorkbenchGlobalPreference,
+  WorkbenchSelectedProjectPinPlacementValue,
+  WorkbenchSidebarPreference,
 } from "workbench-shared/state/workbench-client-state";
 
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
@@ -60,22 +63,29 @@ export type WorkbenchProjectSettings = {
   [K in WorkbenchSettingKey]: WorkbenchProjectSettingOverride<K>;
 };
 
-export interface WorkbenchProjectSidebarPreferences {
-  readonly browseSessionsOpen: boolean;
-  readonly explorerOpen: boolean;
-  readonly pinnedFolderIds: readonly string[];
-  readonly pinnedStatusCountsExpanded: boolean;
-  readonly pinnedThreadsOpen: boolean;
-  readonly projectStatusCountsExpanded: boolean;
-  readonly projectsOpen: boolean;
-  readonly projectTimeGroupCount: number;
-  readonly reloadNecessaryOpen: boolean;
-  readonly settledThreadItemLimit: number;
-  readonly settledThreadsOpen: boolean;
-  readonly sidebarCollapsed: boolean;
-  readonly threadFolderIds: readonly string[];
-  readonly threadsOpen: boolean;
+export interface WorkbenchGlobalSidebarPreferences {
+  projectStatusCountsExpanded: boolean;
+  projectsOpen: boolean;
+  projectTimeGroupCount: number;
+  reloadNecessaryOpen: boolean;
+  sidebarCollapsed: boolean;
 }
+
+export interface WorkbenchProjectSidebarPreferences {
+  browseSessionsOpen: boolean;
+  explorerOpen: boolean;
+  pinnedFolderIds: readonly string[];
+  pinnedStatusCountsExpanded: boolean;
+  pinnedThreadsOpen: boolean;
+  settledThreadItemLimit: number;
+  settledThreadsOpen: boolean;
+  threadFolderIds: readonly string[];
+  threadsOpen: boolean;
+}
+
+export type WorkbenchSidebarPreferences =
+  & WorkbenchGlobalSidebarPreferences
+  & WorkbenchProjectSidebarPreferences;
 
 export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = WorkbenchSettingKey> = {
   columns?: "one" | "two";
@@ -321,6 +331,16 @@ export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSetting
   };
 }
 
+export function createDefaultWorkbenchGlobalSidebarPreferences(): WorkbenchGlobalSidebarPreferences {
+  return {
+    projectStatusCountsExpanded: true,
+    projectsOpen: false,
+    projectTimeGroupCount: 1,
+    reloadNecessaryOpen: true,
+    sidebarCollapsed: false,
+  };
+}
+
 export function createDefaultWorkbenchProjectSidebarPreferences(): WorkbenchProjectSidebarPreferences {
   return {
     browseSessionsOpen: true,
@@ -328,16 +348,81 @@ export function createDefaultWorkbenchProjectSidebarPreferences(): WorkbenchProj
     pinnedFolderIds: [],
     pinnedStatusCountsExpanded: true,
     pinnedThreadsOpen: true,
-    projectStatusCountsExpanded: true,
-    projectsOpen: false,
-    projectTimeGroupCount: 1,
-    reloadNecessaryOpen: true,
     settledThreadItemLimit: 50,
     settledThreadsOpen: false,
-    sidebarCollapsed: false,
     threadFolderIds: [],
     threadsOpen: true,
   };
+}
+
+function normalizeProjectTimeGroupCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.min(100, Math.floor(value)))
+    : createDefaultWorkbenchGlobalSidebarPreferences().projectTimeGroupCount;
+}
+
+const WORKBENCH_GLOBAL_SIDEBAR_PROJECT_ID = "";
+const WORKBENCH_GLOBAL_SIDEBAR_SCHEMA_VERSION = 4;
+
+function applyWorkbenchGlobalSidebarPreference(
+  preferences: WorkbenchGlobalSidebarPreferences,
+  preference: WorkbenchGlobalPreference | WorkbenchSidebarPreference,
+) {
+  switch (preference.key) {
+    case "projectStatusCountsExpanded":
+    case "projectsOpen":
+    case "reloadNecessaryOpen":
+    case "sidebarCollapsed":
+      preferences[preference.key] = preference.value;
+      break;
+    case "projectTimeGroupCount":
+      preferences.projectTimeGroupCount = normalizeProjectTimeGroupCount(preference.value);
+      break;
+  }
+}
+
+export function readWorkbenchGlobalSidebarPreferences(
+  daemonRegistrationId: string,
+  records: readonly WorkbenchClientStateRecord[] = [],
+): WorkbenchGlobalSidebarPreferences {
+  const preferences = createDefaultWorkbenchGlobalSidebarPreferences();
+  for (const record of records) {
+    if (record.kind !== "sidebarPreference"
+      || record.daemonRegistrationId !== daemonRegistrationId
+      || record.projectId !== WORKBENCH_GLOBAL_SIDEBAR_PROJECT_ID) continue;
+    applyWorkbenchGlobalSidebarPreference(preferences, record.preference);
+  }
+  for (const record of records) {
+    if (record.kind !== "globalPreference") continue;
+    applyWorkbenchGlobalSidebarPreference(preferences, record.preference);
+  }
+  return preferences;
+}
+
+export async function writeWorkbenchGlobalSidebarPreference<
+  Key extends keyof WorkbenchGlobalSidebarPreferences,
+>(
+  controller: WorkbenchClientStateController,
+  schemaVersion: number,
+  key: Key,
+  value: WorkbenchGlobalSidebarPreferences[Key],
+) {
+  const normalizedValue = key === "projectTimeGroupCount"
+    ? normalizeProjectTimeGroupCount(value)
+    : value;
+  if (schemaVersion < WORKBENCH_GLOBAL_SIDEBAR_SCHEMA_VERSION) {
+    await controller.put({
+      daemonRegistrationId: controller.daemonRegistrationId,
+      kind: "sidebarPreference",
+      preference: { key, value: normalizedValue } as WorkbenchSidebarPreference,
+      projectId: WORKBENCH_GLOBAL_SIDEBAR_PROJECT_ID,
+    });
+    return;
+  }
+  await controller.put({
+    kind: "globalPreference",
+    preference: { key, value: normalizedValue },
+  } as Extract<WorkbenchClientStateRecord, { kind: "globalPreference" }>);
 }
 
 export function readGlobalWorkbenchSettings(records: readonly WorkbenchClientStateRecord[] = []) {
@@ -413,7 +498,19 @@ export function readWorkbenchProjectSidebarPreferences(
     if (record.kind === "sidebarPreference"
       && record.daemonRegistrationId === daemonRegistrationId
       && record.projectId === projectId) {
-      (preferences as Record<string, boolean | number | readonly string[]>)[record.preference.key] = record.preference.value;
+      switch (record.preference.key) {
+        case "browseSessionsOpen":
+        case "explorerOpen":
+        case "pinnedStatusCountsExpanded":
+        case "pinnedThreadsOpen":
+        case "settledThreadsOpen":
+        case "threadsOpen":
+          preferences[record.preference.key] = record.preference.value;
+          break;
+        case "settledThreadItemLimit":
+          preferences.settledThreadItemLimit = record.preference.value;
+          break;
+      }
     }
   }
   preferences.pinnedFolderIds = records.flatMap((record) => (

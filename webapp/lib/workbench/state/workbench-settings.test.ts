@@ -1,19 +1,22 @@
 /*
- * No production exports. Tests protect relational project-setting and sidebar projection, isolation, and writes. Keywords: settings, sidebar, project, app state.
+ * No production exports. Tests protect global shell and project-local sidebar projection, isolation, and writes. Keywords: settings, sidebar, global, project, home, app state.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
   createDefaultProjectWorkbenchSettings,
+  createDefaultWorkbenchGlobalSidebarPreferences,
   createDefaultWorkbenchProjectSidebarPreferences,
   readGlobalWorkbenchSettings,
   readProjectWorkbenchSettings,
+  readWorkbenchGlobalSidebarPreferences,
   readWorkbenchProjectSidebarPreferences,
   resolveWorkbenchSettings,
   setWorkbenchProjectSidebarFolderOpen,
   writeGlobalWorkbenchSetting,
   writeProjectWorkbenchSetting,
+  writeWorkbenchGlobalSidebarPreference,
   writeWorkbenchProjectSidebarPreference,
 } from "./workbench-settings";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
@@ -29,6 +32,8 @@ test("each focused setting intent writes one app-state identity", async () => {
   assert.equal(controller.getSnapshot().records.length, 2);
   await writeWorkbenchProjectSidebarPreference(controller, "alpha", "threadsOpen", false);
   assert.equal(controller.getSnapshot().records.length, 3);
+  await writeWorkbenchGlobalSidebarPreference(controller, 4, "projectsOpen", true);
+  assert.equal(controller.getSnapshot().records.length, 4);
 });
 
 test("selected-project pin placement defaults safely and resolves project overrides", async () => {
@@ -62,7 +67,7 @@ test("sidebar preferences project scalar and collection records without crossing
   await writeWorkbenchProjectSidebarPreference(controller, "alpha", "threadsOpen", false);
   await setWorkbenchProjectSidebarFolderOpen(controller, "alpha", "pinned", "one", true);
   await setWorkbenchProjectSidebarFolderOpen(controller, "alpha", "pinned", "two", true);
-  await writeWorkbenchProjectSidebarPreference(controller, "beta", "projectsOpen", true);
+  await writeWorkbenchProjectSidebarPreference(controller, "beta", "threadsOpen", false);
 
   assert.deepEqual(
     readWorkbenchProjectSidebarPreferences("memory", "alpha", controller.getSnapshot().records),
@@ -74,8 +79,57 @@ test("sidebar preferences project scalar and collection records without crossing
     controller.getSnapshot().records,
   ), {
     ...createDefaultWorkbenchProjectSidebarPreferences(),
-    projectsOpen: true,
+    threadsOpen: false,
   });
+});
+
+test("global sidebar preferences prefer canonical rows and ignore project copies", async () => {
+  const controller = new WorkbenchClientStateController({ mode: "memory" });
+  await controller.put({
+    daemonRegistrationId: controller.daemonRegistrationId,
+    kind: "sidebarPreference",
+    preference: { key: "projectsOpen", value: false },
+    projectId: "alpha",
+  });
+  await controller.put({
+    daemonRegistrationId: controller.daemonRegistrationId,
+    kind: "sidebarPreference",
+    preference: { key: "projectsOpen", value: false },
+    projectId: "",
+  });
+  await writeWorkbenchGlobalSidebarPreference(controller, 4, "projectsOpen", true);
+  await writeWorkbenchGlobalSidebarPreference(controller, 4, "reloadNecessaryOpen", false);
+  await writeWorkbenchGlobalSidebarPreference(controller, 4, "projectTimeGroupCount", 999);
+
+  assert.deepEqual(readWorkbenchGlobalSidebarPreferences(
+    controller.daemonRegistrationId,
+    controller.getSnapshot().records,
+  ), {
+    ...createDefaultWorkbenchGlobalSidebarPreferences(),
+    projectTimeGroupCount: 100,
+    projectsOpen: true,
+    reloadNecessaryOpen: false,
+  });
+  assert.deepEqual(
+    readWorkbenchProjectSidebarPreferences("memory", "alpha", controller.getSnapshot().records),
+    createDefaultWorkbenchProjectSidebarPreferences(),
+  );
+});
+
+test("global sidebar preferences use compatible fallback rows for old app-state schemas", async () => {
+  const controller = new WorkbenchClientStateController({ mode: "memory" });
+  await writeWorkbenchGlobalSidebarPreference(controller, 0, "projectsOpen", true);
+
+  assert.deepEqual(controller.getSnapshot().records, [{
+    daemonRegistrationId: "memory",
+    kind: "sidebarPreference",
+    preference: { key: "projectsOpen", value: true },
+    projectId: "",
+  }]);
+  assert.equal(
+    readWorkbenchGlobalSidebarPreferences("memory", controller.getSnapshot().records).projectsOpen,
+    true,
+  );
 });
 
 test("sidebar and ordinary project settings coexist as separate app-state records", async () => {

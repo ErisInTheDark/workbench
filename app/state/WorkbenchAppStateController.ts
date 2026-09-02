@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAppStateController: own app-state bootstrap, revision reads, and serialized domain mutations. Keywords: app, state, controller, revision.
+ * - default WorkbenchAppStateController: own app-state bootstrap, schema capability, revision reads, and serialized domain mutations. Keywords: app, state, controller, schema, revision.
  */
 import {
   type WorkbenchClientStateIdentity,
@@ -23,7 +23,7 @@ import {
 } from "workbench-shared/database/workbench-database-statements";
 
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
-import { appStateClientTables, appStateTables } from "workbench-shared/state/workbench-app-state-schema";
+import { appStateClientTables, appStateSchema, appStateTables } from "workbench-shared/state/workbench-app-state-schema";
 
 type ScalarPreference = WorkbenchGlobalPreference | WorkbenchProjectPreference | WorkbenchSidebarPreference;
 type GlobalPreferenceForKey<TKey extends WorkbenchGlobalPreference["key"]> = Extract<
@@ -85,6 +85,7 @@ export default class WorkbenchAppStateController {
       daemonRegistrationId: this.daemonRegistrationId,
       kind: canUseDelta ? "delta" : "snapshot",
       rows: this.#readRows(canUseDelta ? sinceRevision : -1),
+      schemaVersion: appStateSchema.currentVersion,
       ...version,
     };
   }

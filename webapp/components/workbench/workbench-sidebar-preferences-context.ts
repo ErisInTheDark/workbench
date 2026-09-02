@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - WorkbenchSidebarPreferencesContext/useWorkbenchSidebarPreferences: provide and consume the active project's sidebar display preferences. Keywords: sidebar, preferences, context, hook.
+ * - WorkbenchSidebarPreferencesContext/useWorkbenchSidebarPreferences: provide and consume combined global and active-project sidebar preferences. Keywords: sidebar, preferences, global, project, context, hook.
  * - WorkbenchSidebarDisclosurePreferenceKey/WorkbenchSidebarPreferencesValue: describe persisted disclosure keys and preference intent methods. Keywords: sidebar, disclosure, settings, types.
  */
 import { createContext, useContext } from "react";
 
-import type { WorkbenchProjectSidebarPreferences } from "../../lib/workbench/state/workbench-settings";
+import type { WorkbenchSidebarPreferences } from "../../lib/workbench/state/workbench-settings";
 
 export type WorkbenchSidebarDisclosurePreferenceKey =
   | "browseSessionsOpen"
@@ -16,7 +16,7 @@ export type WorkbenchSidebarDisclosurePreferenceKey =
   | "threadsOpen";
 
 export interface WorkbenchSidebarPreferencesValue {
-  readonly preferences: WorkbenchProjectSidebarPreferences;
+  readonly preferences: WorkbenchSidebarPreferences;
   setDisclosureOpen(key: WorkbenchSidebarDisclosurePreferenceKey, open: boolean): void;
   setFolderOpen(scope: "pinned" | "threads", folderId: string, open: boolean): void;
   setProjectTimeGroupCount(count: number): void;

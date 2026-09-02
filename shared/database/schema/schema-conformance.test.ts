@@ -1,11 +1,11 @@
 /*
- * No production exports. Tests protect compatibility repair and incompatible-row rejection from the declared database owner. Keywords: database, schema, conformance.
+ * No production exports. Tests protect row and row-array compatibility repair plus incompatible-row rejection. Keywords: database, schema, conformance, array, enum identity.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { conformSelectedRow } from "./schema-conformance.ts";
-import { booleanInteger, defineTable, enumText, integer, jsonText, publishCurrentTable, text } from "./schema-definition.ts";
+import { conformSelectedRow, conformSelectedRows } from "./schema-conformance.ts";
+import { booleanInteger, defineTable, enumText, integer, jsonText, primaryKey, publishCurrentTable, text } from "./schema-definition.ts";
 
 const table = publishCurrentTable(defineTable("conformance_examples", {
   id: text().primaryKey(),
@@ -15,6 +15,14 @@ const table = publishCurrentTable(defineTable("conformance_examples", {
   note: text(),
   payload_json: jsonText().notNull(),
 }));
+
+const preferenceTable = publishCurrentTable(defineTable("conformance_preferences", {
+  owner: text().notNull(),
+  key: enumText("open", "count").notNull(),
+  value: integer().notNull().nonNegative(),
+}, (columns) => ({
+  constraints: [primaryKey([columns.owner, columns.key])],
+})));
 
 test("selected-row conformance repairs compatible schema skew without replacing valid siblings", () => {
   const result = conformSelectedRow(table, {
@@ -64,4 +72,24 @@ test("selected-row conformance rejects incompatible required and constrained val
   });
   assert.equal(missing.success, false);
   if (!missing.success) assert.deepEqual(missing.issues, [{ code: "missingRequired", path: ["id"] }]);
+});
+
+test("selected-row array conformance drops future enum identities but rejects malformed known rows", () => {
+  const compatible = conformSelectedRows(preferenceTable, [
+    { owner: "shell", key: "open", value: 1 },
+    { owner: "shell", key: "future", value: 2 },
+  ], ["rows"]);
+  assert.equal(compatible.success, true);
+  if (compatible.success) {
+    assert.deepEqual(compatible.data, [{ owner: "shell", key: "open", value: 1 }]);
+    assert.deepEqual(compatible.repairedPaths, [["rows", 1]]);
+  }
+
+  const malformed = conformSelectedRows(preferenceTable, [
+    { owner: "shell", key: "open", value: -1 },
+  ], ["rows"]);
+  assert.equal(malformed.success, false);
+  if (!malformed.success) {
+    assert.deepEqual(malformed.issues, [{ code: "invalidValue", path: ["rows", 0, "value"] }]);
+  }
 });

@@ -67,6 +67,12 @@ test("app-state conformance repairs compatible browser/server table skew", () =>
       future_column: "newer server",
       key: "composerSpellCheck",
       revision: 1,
+    }, {
+      boolean_value: 1,
+      integer_value: null,
+      key: "futurePreference",
+      revision: 1,
+      text_value: null,
     }],
   };
   delete rows.projectPreferences;
@@ -90,7 +96,10 @@ test("app-state conformance repairs compatible browser/server table skew", () =>
   assert.ok(result.repairedPaths.some((path) => path.join(".") === "futureRoot"));
   assert.ok(result.repairedPaths.some((path) => path.join(".") === "rows.futureTable"));
   assert.ok(result.repairedPaths.some((path) => path.join(".") === "rows.globalPreferences.0.future_column"));
+  assert.ok(result.repairedPaths.some((path) => path.join(".") === "rows.globalPreferences.1"));
   assert.ok(result.repairedPaths.some((path) => path.join(".") === "rows.projectPreferences"));
+  assert.ok(result.repairedPaths.some((path) => path.join(".") === "schemaVersion"));
+  assert.equal(result.data.schemaVersion, 0);
 });
 
 test("app-state conformance rejects a missing required current-table column", () => {
@@ -124,7 +133,10 @@ test("HTTP state requests carry browser identity and use the browser global rece
     assert.equal(this, globalThis);
     assert.equal(new Headers(init?.headers).get(WORKBENCH_BROWSER_STATE_HEADER), browserStateId);
     methods.push(init?.method ?? "GET");
-    return Promise.resolve(Response.json(response("snapshot", methods.length - 1, emptyRows())));
+    return Promise.resolve(Response.json({
+      ...response("snapshot", methods.length - 1, emptyRows()),
+      schemaVersion: 4,
+    }));
   };
   const controller = new WorkbenchClientStateController({
     browserStateId,
@@ -142,6 +154,7 @@ test("HTTP state requests carry browser identity and use the browser global rece
   });
   await controller.delete({ key: "composerSpellCheck", kind: "globalPreference" });
   assert.equal(controller.getSnapshot().daemonRegistrationId, "registration");
+  assert.equal(controller.getSnapshot().schemaVersion, 4);
   assert.deepEqual(methods, ["GET", "PUT", "DELETE"]);
   controller.dispose();
 });

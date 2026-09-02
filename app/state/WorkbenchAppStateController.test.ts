@@ -1,4 +1,4 @@
-/* No production exports. Real SQLite wards protect revisioned app-state mutation and structured draft hydration. */
+/* No production exports. Real SQLite wards protect revisioned global preferences, app-state mutation, and structured draft hydration. Keywords: app state, SQLite, global sidebar, persistence. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,6 +7,7 @@ import { test, type TestContext } from "node:test";
 
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
+import { appStateSchema } from "workbench-shared/state/workbench-app-state-schema";
 
 import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
@@ -69,6 +70,32 @@ test("numeric app port preferences survive through the global state owner", asyn
   const restarted = fixture.create();
   restarted.start();
   assert.equal(restarted.readGlobalPreference("appPort"), 43_210);
+  restarted.close();
+});
+
+test("global sidebar preferences persist boolean and numeric scalar families", async (context) => {
+  const fixture = await controllerFixture(context);
+  assert.equal(fixture.controller.read().schemaVersion, appStateSchema.currentVersion);
+  await fixture.controller.mutate({
+    action: "put",
+    record: {
+      kind: "globalPreference",
+      preference: { key: "projectsOpen", value: true },
+    },
+  });
+  await fixture.controller.mutate({
+    action: "put",
+    record: {
+      kind: "globalPreference",
+      preference: { key: "projectTimeGroupCount", value: 4 },
+    },
+  });
+  fixture.controller.close();
+
+  const restarted = fixture.create();
+  restarted.start();
+  assert.equal(restarted.readGlobalPreference("projectsOpen"), true);
+  assert.equal(restarted.readGlobalPreference("projectTimeGroupCount"), 4);
   restarted.close();
 });
 

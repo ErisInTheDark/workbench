@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchSidebarPreferencesProvider: own, persist, and provide the active project's sidebar display preferences. Keywords: sidebar, preferences, project, persistence, provider.
+ * - default WorkbenchSidebarPreferencesProvider: compose global shell and active-project sidebar preferences behind focused intents. Keywords: sidebar, preferences, global, project, home, persistence, provider.
  */
 "use client";
 
@@ -12,9 +12,12 @@ import {
 
 import {
   createDefaultWorkbenchProjectSidebarPreferences,
+  readWorkbenchGlobalSidebarPreferences,
   readWorkbenchProjectSidebarPreferences,
   setWorkbenchProjectSidebarFolderOpen,
+  writeWorkbenchGlobalSidebarPreference,
   writeWorkbenchProjectSidebarPreference,
+  type WorkbenchGlobalSidebarPreferences,
   type WorkbenchProjectSidebarPreferences,
 } from "../../lib/workbench/state/workbench-settings";
 import {
@@ -36,23 +39,39 @@ export default function WorkbenchSidebarPreferencesProvider({
   const controller = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
   const preferences = useMemo(() => {
-    return projectId
+    const projectPreferences = projectId
       ? readWorkbenchProjectSidebarPreferences(clientState.daemonRegistrationId, projectId, clientState.records)
       : createDefaultWorkbenchProjectSidebarPreferences();
+    return {
+      ...projectPreferences,
+      ...readWorkbenchGlobalSidebarPreferences(clientState.daemonRegistrationId, clientState.records),
+    };
   }, [clientState.daemonRegistrationId, clientState.records, projectId]);
 
-  const persistPreference = useCallback((
+  const persistGlobalPreference = useCallback((
+    key: keyof WorkbenchGlobalSidebarPreferences,
+    value: boolean | number,
+  ) => {
+    if (preferences[key] === value) return;
+    void writeWorkbenchGlobalSidebarPreference(controller, clientState.schemaVersion, key, value).catch((error) => {
+      console.error("Workbench global sidebar preference persistence failed.", error);
+    });
+  }, [clientState.schemaVersion, controller, preferences]);
+  const persistProjectPreference = useCallback((
     key: Exclude<keyof WorkbenchProjectSidebarPreferences, "pinnedFolderIds" | "threadFolderIds">,
     value: boolean | number,
   ) => {
     if (!projectId || preferences[key] === value) return;
     void writeWorkbenchProjectSidebarPreference(controller, projectId, key, value).catch((error) => {
-      console.error("Workbench sidebar preference persistence failed.", error);
+      console.error("Workbench project sidebar preference persistence failed.", error);
     });
   }, [controller, preferences, projectId]);
   const setDisclosureOpen = useCallback<WorkbenchSidebarPreferencesValue["setDisclosureOpen"]>(
-    (key, open) => persistPreference(key, open),
-    [persistPreference],
+    (key, open) => {
+      if (key === "projectsOpen") persistGlobalPreference(key, open);
+      else persistProjectPreference(key, open);
+    },
+    [persistGlobalPreference, persistProjectPreference],
   );
   const setFolderOpen = useCallback<WorkbenchSidebarPreferencesValue["setFolderOpen"]>((scope, folderId, open) => {
     const key = scope === "pinned" ? "pinnedFolderIds" : "threadFolderIds";
@@ -89,19 +108,25 @@ export default function WorkbenchSidebarPreferencesProvider({
     setFolderOpen,
     setProjectTimeGroupCount: (count) => {
       const boundedCount = Math.max(1, Math.min(100, Math.floor(count)));
-      persistPreference("projectTimeGroupCount", boundedCount);
+      persistGlobalPreference("projectTimeGroupCount", boundedCount);
     },
-    setReloadNecessaryOpen: (open) => persistPreference("reloadNecessaryOpen", open),
+    setReloadNecessaryOpen: (open) => persistGlobalPreference("reloadNecessaryOpen", open),
     setSettledThreadItemLimit: (limit) => {
       const boundedLimit = Math.max(50, Math.min(5_000, Math.floor(limit)));
-      persistPreference("settledThreadItemLimit", boundedLimit);
+      persistProjectPreference("settledThreadItemLimit", boundedLimit);
     },
-    setSidebarCollapsed: (collapsed) => persistPreference("sidebarCollapsed", collapsed),
+    setSidebarCollapsed: (collapsed) => persistGlobalPreference("sidebarCollapsed", collapsed),
     setStatusCountsExpanded: (scope, expanded) => {
-      const key = scope === "pinned" ? "pinnedStatusCountsExpanded" : "projectStatusCountsExpanded";
-      persistPreference(key, expanded);
+      if (scope === "pinned") persistProjectPreference("pinnedStatusCountsExpanded", expanded);
+      else persistGlobalPreference("projectStatusCountsExpanded", expanded);
     },
-  }), [persistPreference, preferences, setDisclosureOpen, setFolderOpen]);
+  }), [
+    persistGlobalPreference,
+    persistProjectPreference,
+    preferences,
+    setDisclosureOpen,
+    setFolderOpen,
+  ]);
 
   return (
     <WorkbenchSidebarPreferencesContext.Provider value={value}>

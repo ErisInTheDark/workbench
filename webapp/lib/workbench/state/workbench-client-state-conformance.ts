@@ -4,12 +4,11 @@
  */
 import { appStateClientTables } from "workbench-shared/state/workbench-app-state-schema";
 import {
-  conformSelectedRow,
+  conformSelectedRows,
   type DatabaseConformanceIssue,
   type DatabaseConformancePath,
   type DatabaseConformanceResult,
 } from "workbench-shared/database/schema/schema-conformance";
-import type { SelectRow, TableDefinition } from "workbench-shared/database/schema/schema-definition";
 import type {
   WorkbenchClientStateResponse,
   WorkbenchClientStateRows,
@@ -21,28 +20,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function invalidValue(path: DatabaseConformancePath): DatabaseConformanceIssue {
   return { code: "invalidValue", path };
-}
-
-function conformRows<Table extends TableDefinition>(
-  table: Table,
-  value: unknown,
-  path: DatabaseConformancePath,
-): DatabaseConformanceResult<SelectRow<Table>[]> {
-  if (!Array.isArray(value)) {
-    return { issues: [invalidValue(path)], repairedPaths: [], success: false };
-  }
-  const data: SelectRow<Table>[] = [];
-  const issues: DatabaseConformanceIssue[] = [];
-  const repairedPaths: DatabaseConformancePath[] = [];
-  value.forEach((row, index) => {
-    const result = conformSelectedRow(table, row, [...path, index]);
-    repairedPaths.push(...result.repairedPaths);
-    if ("data" in result) data.push(result.data);
-    else issues.push(...result.issues);
-  });
-  return issues.length
-    ? { issues, repairedPaths, success: false }
-    : { data, repairedPaths, success: true };
 }
 
 export function conformWorkbenchClientStateResponse(
@@ -60,6 +37,7 @@ export function conformWorkbenchClientStateResponse(
     "oldestAvailableRevision",
     "revision",
     "rows",
+    "schemaVersion",
   ]);
   for (const key of Object.keys(value)) {
     if (!knownRootKeys.has(key)) repairedPaths.push([key]);
@@ -72,6 +50,7 @@ export function conformWorkbenchClientStateResponse(
   }
   const revision = value.revision;
   const oldestAvailableRevision = value.oldestAvailableRevision;
+  const schemaVersion = value.schemaVersion ?? 0;
   if (!Number.isSafeInteger(revision) || (revision as number) < 0) {
     issues.push(invalidValue(["revision"]));
   }
@@ -81,6 +60,11 @@ export function conformWorkbenchClientStateResponse(
     || (Number.isSafeInteger(revision) && (oldestAvailableRevision as number) > (revision as number))
   ) {
     issues.push(invalidValue(["oldestAvailableRevision"]));
+  }
+  if (!Number.isSafeInteger(schemaVersion) || (schemaVersion as number) < 0) {
+    issues.push(invalidValue(["schemaVersion"]));
+  } else if (!Object.hasOwn(value, "schemaVersion")) {
+    repairedPaths.push(["schemaVersion"]);
   }
 
   const rowsValue = isRecord(value.rows) ? value.rows : {};
@@ -96,7 +80,7 @@ export function conformWorkbenchClientStateResponse(
       repairedPaths.push(["rows", name]);
       continue;
     }
-    const result = conformRows(table, rowsValue[name], ["rows", name]);
+    const result = conformSelectedRows(table, rowsValue[name], ["rows", name]);
     repairedPaths.push(...result.repairedPaths);
     if ("data" in result) rows[name as keyof WorkbenchClientStateRows] = result.data as never;
     else issues.push(...result.issues);
@@ -110,6 +94,7 @@ export function conformWorkbenchClientStateResponse(
       oldestAvailableRevision: oldestAvailableRevision as number,
       revision: revision as number,
       rows: rows as WorkbenchClientStateRows,
+      schemaVersion: schemaVersion as number,
     },
     repairedPaths,
     success: true,

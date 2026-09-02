@@ -13,11 +13,12 @@ import { itemTables } from "../schema/item-schema.ts";
 import { operationSourceTables } from "../schema/operation-source-schema.ts";
 import {
   conformSelectedRow,
+  conformSelectedRows,
   type DatabaseConformanceIssue,
   type DatabaseConformancePath,
   type DatabaseConformanceResult,
 } from "workbench-shared/database/schema/schema-conformance";
-import type { SelectRow, TableDefinition } from "workbench-shared/database/schema/schema-definition";
+import type { SelectRow } from "workbench-shared/database/schema/schema-definition";
 
 export const transcriptSnapshotTables = Object.freeze({
   threadItems: itemTables.threadItems,
@@ -128,28 +129,6 @@ function invalidValue(path: DatabaseConformancePath): DatabaseConformanceIssue {
   return { code: "invalidValue", path };
 }
 
-function conformRows<Table extends TableDefinition>(
-  table: Table,
-  value: unknown,
-  path: DatabaseConformancePath,
-) {
-  if (!Array.isArray(value)) {
-    return { issues: [invalidValue(path)], repairedPaths: [], success: false } satisfies DatabaseConformanceResult<SelectRow<Table>[]>;
-  }
-  const data: SelectRow<Table>[] = [];
-  const issues: DatabaseConformanceIssue[] = [];
-  const repairedPaths: DatabaseConformancePath[] = [];
-  value.forEach((row, index) => {
-    const result = conformSelectedRow(table, row, [...path, index]);
-    repairedPaths.push(...result.repairedPaths);
-    if ("data" in result) data.push(result.data);
-    else issues.push(...result.issues);
-  });
-  return issues.length
-    ? { issues, repairedPaths, success: false } as const
-    : { data, repairedPaths, success: true } as const;
-}
-
 export function conformWorkbenchTranscriptSnapshot(
   value: unknown,
 ): DatabaseConformanceResult<WorkbenchTranscriptSnapshot> {
@@ -166,9 +145,9 @@ export function conformWorkbenchTranscriptSnapshot(
   repairedPaths.push(...thread.repairedPaths);
   if ("issues" in thread && thread.issues) issues.push(...thread.issues);
 
-  const turns = conformRows(coreTables.threadTurns, value.turns, ["turns"]);
+  const turns = conformSelectedRows(coreTables.threadTurns, value.turns, ["turns"]);
   repairedPaths.push(...turns.repairedPaths);
-  if (!turns.success) issues.push(...turns.issues);
+  if ("issues" in turns) issues.push(...turns.issues);
 
   const loadedTurnIds = value.loadedTurnIds;
   if (!Array.isArray(loadedTurnIds) || loadedTurnIds.some((id) => typeof id !== "string")) {
@@ -189,9 +168,9 @@ export function conformWorkbenchTranscriptSnapshot(
       repairedPaths.push(["rows", name]);
       continue;
     }
-    const result = conformRows(table, rowsValue[name], ["rows", name]);
+    const result = conformSelectedRows(table, rowsValue[name], ["rows", name]);
     repairedPaths.push(...result.repairedPaths);
-    if (result.success) {
+    if ("data" in result) {
       rows[name as keyof WorkbenchTranscriptSnapshotRows] = result.data as never;
     } else {
       issues.push(...result.issues);

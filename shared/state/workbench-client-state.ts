@@ -4,7 +4,7 @@
  * - WorkbenchGlobalPreference/WorkbenchProjectPreference/WorkbenchSidebarPreference: typed preference records. Keywords: app, settings, state.
  * - WorkbenchFileDraftValue/WorkbenchComposerDraftValue/WorkbenchQuestionnaireDraftValue: recoverable browser draft values. Keywords: app, draft, state.
  * - WorkbenchClientStateRecord/WorkbenchClientStateIdentity/WorkbenchClientStateMutation: app state records, identities, and mutations. Keywords: app, state, contract.
- * - WorkbenchClientStateRows/WorkbenchClientStateResponse: schema-derived rows and revision responses. Keywords: app, state, revision, HTTP.
+ * - WorkbenchClientStateRows/WorkbenchClientStateResponse: schema-derived rows, schema capability, and revision responses. Keywords: app, state, schema, revision, HTTP.
  * - WORKBENCH_BROWSER_STATE_HEADER/isWorkbenchBrowserStateId: browser namespace HTTP boundary. Keywords: browser, state, UUID, HTTP.
  * - workbenchClientStateMutationPath/workbenchClientStateMutationKinds: focused-route registry. Keywords: app, state, HTTP, route.
  */
@@ -18,9 +18,21 @@ export type WorkbenchFileOpenBehaviorValue = "vscode" | "workbench" | "workbench
 export type WorkbenchSelectedProjectPinPlacementValue = "pinned-section" | "threads-section";
 
 export type WorkbenchGlobalPreference =
-  | { key: "composerSpellCheck" | "editorSpellCheck" | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadLiveActivityOpen"; value: boolean }
+  | {
+    key:
+      | "composerSpellCheck"
+      | "editorSpellCheck"
+      | "projectStatusCountsExpanded"
+      | "projectsOpen"
+      | "reloadNecessaryOpen"
+      | "showUnopenableFiles"
+      | "sidebarCollapsed"
+      | "threadCodeBlockWrap"
+      | "threadLiveActivityOpen";
+    value: boolean;
+  }
   | { key: "editorFontFamily"; value: WorkbenchEditorFontFamilyValue }
-  | { key: "appPort" | "editorFontSize"; value: number }
+  | { key: "appPort" | "editorFontSize" | "projectTimeGroupCount"; value: number }
   | { key: "fileOpenBehavior"; value: WorkbenchFileOpenBehaviorValue }
   | { key: "harness"; value: WorkbenchHarnessValue }
   | { key: "selectedProjectPinPlacement"; value: WorkbenchSelectedProjectPinPlacementValue }
@@ -116,6 +128,7 @@ interface WorkbenchClientStateVersion {
   daemonRegistrationId: string;
   oldestAvailableRevision: number;
   revision: number;
+  schemaVersion?: number;
 }
 
 export type WorkbenchClientStateResponse =
