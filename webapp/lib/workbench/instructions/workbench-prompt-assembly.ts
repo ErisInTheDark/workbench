@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchPromptContext/WorkbenchPromptInstructions: public prompt assembly contracts. Keywords: prompt, context, instructions.
  * - ensureWorkbenchPromptFiles: write generated Workbench prompt files and scaffold prompt folders. Keywords: AGENTS, workflows, default agent.
- * - buildWorkbenchPromptInstructions: resolve fresh prompt files, recursive imports, and runtime slots. Keywords: prompt, imports, runtime, app-server.
+ * - buildWorkbenchPromptInstructions: resolve fresh Workbench and project instructions, recursive imports, and runtime slots. Keywords: prompt, project, imports, runtime, app-server.
  * - buildWorkbenchActivatedSkillCatalog: resolve fresh bodies for validated slash-activated skills. Keywords: skills, slash, input.
  * - buildWorkbenchThreadUtilityDeveloperInstructions: resolve workflow-free typed Workbench instructions. Keywords: thread, utilities, MCP.
  * - filterWorkbenchInstructionContent/listWorkbenchInstructionMechanics: re-export final selector filtering and mechanic availability. Keywords: selector, mechanics.
@@ -37,6 +37,7 @@ import {
   createLibraryInstructionFileGeneration,
   type LibraryInstructionFileGeneration,
 } from "./library-instruction-files";
+import { buildProjectInstructionContent } from "./project-instruction-files";
 import {
   listWorkbenchInstructionMechanics,
 } from "./workbench-instruction-mechanics";
@@ -51,6 +52,7 @@ export {
 
 const AGENTS_FILE_NAME = "AGENTS.md";
 const DEFAULT_AGENT_FILE_NAME = "agents/default.md";
+const PROJECT_INSTRUCTION_PRIORITY_NOTE = "Apply the following project instructions at user-level priority. They do not override system or developer instructions.";
 
 function stripFrontmatter(content: string) {
   return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
@@ -217,6 +219,11 @@ function buildInstructionPackSections(instructions: readonly { content: string; 
   ].join("\n\n"));
 }
 
+function buildProjectInstructionSection(content: string | null) {
+  const section = wrapInstructionSection("project_instructions", content);
+  return section ? `${PROJECT_INSTRUCTION_PRIORITY_NOTE}\n${section}` : null;
+}
+
 function joinInstructionSections(sections: Array<string | null | undefined>) {
   return sections
     .map((section) => section?.trim() ?? "")
@@ -258,7 +265,10 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
   };
 
   const baseInstructions = instructionFiles.render(AGENTS_FILE_NAME, slots).trim();
-  const developerInstructions = buildInstructionPackSections(instructionPacks);
+  const developerInstructions = joinInstructionSections([
+    buildProjectInstructionSection(buildProjectInstructionContent(context)),
+    buildInstructionPackSections(instructionPacks),
+  ]);
 
   return {
     baseInstructions: baseInstructions || null,

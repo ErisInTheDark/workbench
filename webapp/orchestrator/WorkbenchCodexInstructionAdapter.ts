@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchCodexInstructionSource: explicit request-inherited or cwd-owned context for internal Codex resume configuration. Keywords: Codex, context, cwd, request.
  * - WorkbenchCodexInstructionPort: narrow Codex request-augmentation boundary consumed by the bridge. Keywords: Codex, instructions, MCP, adapter.
- * - default WorkbenchCodexInstructionAdapter: adapt stable thread instructions, activated skill input, and project-local MCP config into Codex requests. Keywords: Codex, instructions, skills, prompt, MCP.
+ * - default WorkbenchCodexInstructionAdapter: adapt stable thread instructions, disabled native project docs, activated skill input, and project-local MCP config into Codex requests. Keywords: Codex, project, instructions, skills, prompt, MCP.
  */
 import path from "node:path";
 
@@ -53,6 +53,7 @@ function buildWorkbenchOwnedPromptParams(params: Record<string, unknown>, prompt
     config: buildWorkbenchManagedThreadConfig(params, {
       developer_instructions: "",
       instructions: "",
+      project_doc_max_bytes: 0,
     }),
     personality: "none",
   };

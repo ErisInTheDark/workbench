@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect stable Codex thread instructions, per-input activated skills, caller config preservation, and project-local MCP capability stamping.
+ * No production exports. Tests protect stable Codex thread instructions, fresh filtered project rules, per-input activated skills, caller config preservation, and project-local MCP capability stamping.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -38,58 +38,101 @@ function readPromptInstructions(request: JsonRpcRequest) {
   };
 }
 
-test("start, resume, and fork rebuild one stable full prompt and stamp scoped MCP clients", async () => {
-  const root = "C:/git/web/workbench";
+test("start, resume, and fork rebuild one filtered project prefix and disable native project docs", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-project-instructions-"));
   const adapter = new WorkbenchCodexInstructionAdapter("ws://0.0.0.0:4500", root);
   const clientScopes = new Set<string>();
   const prompts: ReturnType<typeof readPromptInstructions>[] = [];
+  const roots = [{ id: "project", isPrimary: true, name: "project", relativePath: "project", rootPath: root }];
 
-  for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
-    const projectLocal = method === "thread/start";
-    const result = await adapter.augment({
-      method,
+  try {
+    await fs.writeFile(
+      path.join(root, "AGENTS.md"),
+      "project root\n<!-- source-only note -->\n{./project-rule}\n",
+      "utf8",
+    );
+    await fs.writeFile(path.join(root, "project-rule.md"), "project rule revision one\n", "utf8");
+
+    for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
+      const result = await adapter.augment({
+        method,
+        params: {
+          config: {
+            bypass_hook_trust: false,
+            existing_setting: "preserved",
+            mcp_servers: { docs: { url: "https://example.com/mcp" } },
+            project_doc_max_bytes: 65_536,
+          },
+          threadId: "thread",
+        },
+        workbenchPromptContext: {
+          cwd: root,
+          instructionScope: "threadUtilities",
+          roots,
+          threadId: "thread",
+        },
+      }, method);
+      prompts.push(readPromptInstructions(result));
+      const config = (result.params as { config: Record<string, unknown> }).config;
+      assert.equal(config.existing_setting, "preserved");
+      assert.equal(config.bypass_hook_trust, true);
+      assert.equal(config.developer_instructions, "");
+      assert.equal(config.instructions, "");
+      assert.equal(config.project_doc_max_bytes, 0);
+      assert.deepEqual((config.mcp_servers as Record<string, unknown>).docs, { url: "https://example.com/mcp" });
+      const workbenchServers = config.mcp_servers as {
+        wb: Record<string, unknown>;
+        wbex: Record<string, unknown>;
+      };
+      for (const server of [workbenchServers.wb, workbenchServers.wbex]) {
+        const mcpUrl = new URL(String(server.url));
+        assert.equal(mcpUrl.origin, "http://127.0.0.1:4500");
+        assert.equal(mcpUrl.pathname, "/orchestrator/mcp");
+        assert.equal(mcpUrl.searchParams.get("project-local"), "true");
+        clientScopes.add(mcpUrl.searchParams.get("client") ?? "");
+      }
+    }
+    assert.deepEqual(prompts[1], prompts[0]);
+    assert.deepEqual(prompts[2], prompts[0]);
+    assert.equal(clientScopes.size, 6);
+
+    const developerInstructions = prompts[0]?.developerInstructions ?? "";
+    assert.equal(developerInstructions.split("<project_instructions>").length - 1, 1);
+    assert.match(
+      developerInstructions,
+      /Apply the following project instructions at user-level priority\. They do not override system or developer instructions\.\n<project_instructions>\nproject root[\s\S]*project rule revision one\n<\/project_instructions>/u,
+    );
+    assert.doesNotMatch(developerInstructions, /source-only note|\{\.\/project-rule\}/u);
+
+    await fs.writeFile(path.join(root, "project-rule.md"), "project rule revision two\n", "utf8");
+    const refreshed = await adapter.augment({
+      method: "thread/resume",
+      params: { threadId: "thread" },
+      workbenchPromptContext: { cwd: root, roots, threadId: "thread" },
+    }, "thread/resume");
+    assert.match(readPromptInstructions(refreshed).developerInstructions ?? "", /project rule revision two/u);
+    assert.doesNotMatch(readPromptInstructions(refreshed).developerInstructions ?? "", /project rule revision one/u);
+
+    const unmarked = await adapter.augment({
+      method: "thread/start",
       params: {
         config: {
           bypass_hook_trust: false,
           existing_setting: "preserved",
-          mcp_servers: { docs: { url: "https://example.com/mcp" } },
+          project_doc_max_bytes: 65_536,
         },
-        threadId: "thread",
       },
-      workbenchPromptContext: {
-        ...(projectLocal ? { cwd: root } : { cwd: "C:/other" }),
-        instructionScope: "threadUtilities",
-        threadId: "thread",
+    }, "thread/start");
+    assert.deepEqual(unmarked.params, {
+      config: {
+        bypass_hook_trust: false,
+        existing_setting: "preserved",
+        project_doc_max_bytes: 65_536,
       },
-    }, method);
-    prompts.push(readPromptInstructions(result));
-    const config = (result.params as { config: Record<string, unknown> }).config;
-    assert.equal(config.existing_setting, "preserved");
-    assert.equal(config.bypass_hook_trust, true);
-    assert.equal(config.developer_instructions, "");
-    assert.equal(config.instructions, "");
-    assert.deepEqual((config.mcp_servers as Record<string, unknown>).docs, { url: "https://example.com/mcp" });
-    const workbenchServers = config.mcp_servers as {
-      wb: Record<string, unknown>;
-      wbex: Record<string, unknown>;
-    };
-    for (const server of [workbenchServers.wb, workbenchServers.wbex]) {
-      const mcpUrl = new URL(String(server.url));
-      assert.equal(mcpUrl.origin, "http://127.0.0.1:4500");
-      assert.equal(mcpUrl.pathname, "/orchestrator/mcp");
-      assert.equal(mcpUrl.searchParams.get("project-local"), projectLocal ? "true" : null);
-      clientScopes.add(mcpUrl.searchParams.get("client") ?? "");
-    }
+    });
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
   }
-  assert.deepEqual(prompts[1], prompts[0]);
-  assert.deepEqual(prompts[2], prompts[0]);
-  assert.equal(clientScopes.size, 6);
-
-  const unmarked = await adapter.augment({
-    method: "thread/start",
-    params: { config: { bypass_hook_trust: false, existing_setting: "preserved" } },
-  }, "thread/start");
-  assert.deepEqual(unmarked.params, { config: { bypass_hook_trust: false, existing_setting: "preserved" } });
 });
 
 test("internal resume inherits the full prompt context from its triggering request", async () => {

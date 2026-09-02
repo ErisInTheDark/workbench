@@ -1,4 +1,4 @@
-/* No production exports. Tests protect per-use mirrored-source freshness, emitted overrides, workflows, mechanics, agents, and builtin skills. */
+/* No production exports. Tests protect per-use library and project instruction freshness, emitted overrides, workflows, mechanics, agents, and builtin skills. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -21,8 +21,16 @@ test("public instruction use refreshes mirrored generated files and preserves ac
     process.chdir(temporaryProjectRoot);
     const promptFiles = require("./WorkbenchPromptFiles") as typeof import("./WorkbenchPromptFiles");
     const context = {
+      cwd: temporaryProjectRoot,
       harness: "codex" as const,
       instructionInjections: { "custom.runtime": "custom workflow runtime" },
+      roots: [{
+        id: "project",
+        isPrimary: true,
+        name: "project",
+        relativePath: "project",
+        rootPath: temporaryProjectRoot,
+      }],
       threadId: "freshness-thread",
       workbenchOrigin: "http://workbench.test",
       workflowIds: ["default"],
@@ -100,6 +108,23 @@ user-owned agent prompt
         "---\nname: browse\n---\nbuiltin skill revision two\n",
         "utf8",
       ),
+      fs.writeFile(
+        path.join(temporaryProjectRoot, "AGENTS.md"),
+        "project root\n{./project-guidance/current}\n",
+        "utf8",
+      ),
+      fs.mkdir(path.join(temporaryProjectRoot, "project-guidance"), { recursive: true }).then(async () => {
+        await fs.writeFile(
+          path.join(temporaryProjectRoot, "project-guidance", "current.md"),
+          "project base revision one\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(temporaryProjectRoot, "project-guidance", "current.override.md"),
+          "project override revision one\n",
+          "utf8",
+        );
+      }),
     ]);
 
     const promptInstructions = await promptFiles.buildWorkbenchPromptInstructions(context);
@@ -116,6 +141,12 @@ user-owned agent prompt
     );
     assert.doesNotMatch(baseInstructions, /builtin skill revision two/u);
     assert.doesNotMatch(promptInstructions.developerInstructions ?? "", /builtin skill revision two|workbench_mechanics/u);
+    assert.match(
+      promptInstructions.developerInstructions ?? "",
+      /Apply the following project instructions at user-level priority\.[\s\S]*<project_instructions>[\s\S]*project root[\s\S]*project override revision one[\s\S]*<\/project_instructions>/u,
+    );
+    assert.doesNotMatch(promptInstructions.developerInstructions ?? "", /project base revision one|\{\.\/project-guidance/u);
+    assert.doesNotMatch(baseInstructions, /project root|project override revision one/u);
     assert.doesNotMatch(baseInstructions, /<workbench_skills>/u);
 
     const selectedLibraryAgent = await promptFiles.buildWorkbenchPromptInstructions({
@@ -179,9 +210,16 @@ user-owned agent prompt
       "deep override revision two\n",
       "utf8",
     );
+    await fs.writeFile(
+      path.join(temporaryProjectRoot, "project-guidance", "current.override.md"),
+      "project override revision two\n",
+      "utf8",
+    );
     const nextTurnInstructions = await promptFiles.buildWorkbenchPromptInstructions(context);
     assert.match(nextTurnInstructions.baseInstructions ?? "", /deep override revision two/u);
     assert.doesNotMatch(nextTurnInstructions.baseInstructions ?? "", /deep override revision one|base deep note/u);
+    assert.match(nextTurnInstructions.developerInstructions ?? "", /project override revision two/u);
+    assert.doesNotMatch(nextTurnInstructions.developerInstructions ?? "", /project override revision one|project base revision one/u);
 
     const workbenchLibrary = require("../../workbench-library") as typeof import("../../workbench-library");
     const skillManifest = await workbenchLibrary.buildWorkbenchSkillManifestInstructions();
