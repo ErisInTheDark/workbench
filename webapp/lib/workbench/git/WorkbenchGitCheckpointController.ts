@@ -477,21 +477,12 @@ export default class WorkbenchGitCheckpointController {
     checkpoint,
     harness,
     lifecycle,
-    proposalUnavailableReason,
     registry,
     repository,
     threadId,
   }: Awaited<ReturnType<WorkbenchGitCheckpointController["requireReleasableArc"]>> & {
-    proposalUnavailableReason: string;
     threadId: string;
   }): Promise<GitArcReleaseResult> {
-    const proposalUpdates = await this.proposals.prepareUnavailableUpdates({
-      cwd: repository.root,
-      harness,
-      proposalIds: lifecycle.proposalIds ?? [],
-      reason: proposalUnavailableReason,
-      threadId,
-    });
     const releasedEntry = active.phase === "plan"
       ? {
         ...active,
@@ -510,7 +501,6 @@ export default class WorkbenchGitCheckpointController {
       version: 1,
     });
     await repository.updateRefs([
-      ...proposalUpdates,
       outcomeUpdate,
       ...(registryMutation.update ? [registryMutation.update] : []),
     ]);
@@ -676,7 +666,6 @@ export default class WorkbenchGitCheckpointController {
     if (!disown) await this.assertClaimPathsClean(releasable.repository, releasable.lifecycle.claimedPaths);
     return await this.finishArcRelease({
       ...releasable,
-      proposalUnavailableReason: "The active Git arc was released without committing this proposal.",
       threadId,
     });
   }
@@ -985,7 +974,7 @@ export default class WorkbenchGitCheckpointController {
         intentName: active.intentName,
         phase: "active",
         proposalIds: active.proposalIds ?? [],
-      }, proposalUnavailableReason: "The active Git arc was unclaimed without committing this proposal.", registry, repository, threadId });
+      }, registry, repository, threadId });
     }
 
     const headMovement = await repository.classifyHeadMovement(checkpoint.parent, scopePaths, checkpoint.checkpointCommit);

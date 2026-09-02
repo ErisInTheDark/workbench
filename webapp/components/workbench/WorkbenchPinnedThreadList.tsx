@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import type { WorkbenchProjectOption } from "../../lib/types";
 import { WORKBENCH_THREAD_ORDER_DROP_TARGET_ID } from "../../lib/workbench/layout/workbench-drag";
@@ -31,6 +31,7 @@ import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButton";
+import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
 
 const THREAD_ORDER_DROP_RANGE = { x: 24, y: 100_000 } as const;
 type GlobalPinnedEntry = { entry: WorkbenchPinnedThreadSummaryEntry; project: WorkbenchProjectOption };
@@ -73,21 +74,8 @@ export default function WorkbenchPinnedThreadList({
   projects: readonly WorkbenchProjectOption[];
   selectedOwnerProjectId: string;
 }) {
-  const [isShiftPressed, setIsShiftPressed] = useState(false);
+  const isShiftPressed = useNonTextInputShiftKey();
   const { preferences, setFolderOpen } = useWorkbenchSidebarPreferences();
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => { if (event.key === "Shift") setIsShiftPressed(true); };
-    const handleKeyUp = (event: KeyboardEvent) => { if (event.key === "Shift") setIsShiftPressed(false); };
-    const handleBlur = () => setIsShiftPressed(false);
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-    window.addEventListener("blur", handleBlur);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-      window.removeEventListener("blur", handleBlur);
-    };
-  }, []);
   const projectsById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const entries = useMemo(() => actions.projectThreadSummaries.projects.flatMap((summary) => {
     const project = projectsById.get(summary.projectId);

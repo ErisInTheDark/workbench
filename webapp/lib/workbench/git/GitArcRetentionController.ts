@@ -4,7 +4,6 @@
  * - GitArcRetentionResult: report the exact namespace cleanup performed for one thread. Keywords: prune, refs, registry, count.
  */
 import GitArcRegistry from "./GitArcRegistry";
-import GitCheckpointStore from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import {
   checkpointNamespace,
@@ -37,16 +36,6 @@ export default class GitArcRetentionController {
     const entry = await registry.find({ harness, threadId });
     if (entry && entry.phase !== "resolved") {
       throw new Error("Git arc history cannot expire while the thread owns an active arc or plan.");
-    }
-    const proposalIds = [...new Set([
-      ...(entry?.proposalIds ?? []),
-      ...(entry?.retainedArc?.proposalIds ?? []),
-    ])];
-    if (proposalIds.length) {
-      const summaries = await new GitCheckpointStore(repository).readProposalSummaries(harness, threadId, proposalIds);
-      if (summaries.some(({ status }) => status === "proposed")) {
-        throw new Error("Git arc history cannot expire while the thread owns a pending proposal.");
-      }
     }
     const prefixes = [
       threadNamespace(checkpointNamespace(harness, threadId)),

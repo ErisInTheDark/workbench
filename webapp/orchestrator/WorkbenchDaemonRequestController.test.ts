@@ -12,6 +12,7 @@ function createController(options: { gitArcResponse?: Response; rejectProjectId?
   const projectNetworkOverrides = new Map<string, boolean>();
   const networkWrites: object[] = [];
   const fileWrites: object[] = [];
+  const gitArcRequests: object[] = [];
   const targetReads: object[] = [];
   const targetWrites: object[] = [];
   const controller = new WorkbenchDaemonRequestController({
@@ -27,7 +28,12 @@ function createController(options: { gitArcResponse?: Response; rejectProjectId?
         return { changes: {}, mtimeMs: 2, path: request.path, projectId: request.projectId, updatedAt: "" };
       },
     },
-    gitArc: { executeRequest: async () => options.gitArcResponse ?? Response.json({ ok: true }) },
+    gitArc: {
+      executeRequest: async (request) => {
+        gitArcRequests.push(request);
+        return options.gitArcResponse ?? Response.json({ ok: true });
+      },
+    },
     nativeFiles: {
       linkRoots: async () => ({ roots: [] }),
       open: async (request) => ({ ok: true, path: request.path, projectId: request.projectId ?? null, target: request.path }),
@@ -79,7 +85,7 @@ function createController(options: { gitArcResponse?: Response; rejectProjectId?
       updateLocalCapabilities: async (update) => update({ browseRawCommandsEnabled: false }),
     },
   });
-  return { controller, fileWrites, networkWrites, targetReads, targetWrites };
+  return { controller, fileWrites, gitArcRequests, networkWrites, targetReads, targetWrites };
 }
 
 test("dispatch validates semantic parameters without corrupting valid empty file content", async () => {
@@ -265,4 +271,21 @@ test("Git arc dispatch returns domain data and preserves structured failure data
     (await rejected.handle({ id: 2, method: "git/arc/compare", params: {} })).error?.data,
     { gitArcFailure },
   );
+
+  const release = createController();
+  assert.deepEqual(
+    (await release.controller.handle({
+      id: 3,
+      method: "git/arc/release",
+      params: { cwd: "C:/git/web/workbench", disown: true, harness: "codex", threadId: "thread" },
+    })).result,
+    { ok: true },
+  );
+  assert.deepEqual(release.gitArcRequests, [{
+    action: "arcRelease",
+    cwd: "C:/git/web/workbench",
+    disown: true,
+    harness: "codex",
+    threadId: "thread",
+  }]);
 });

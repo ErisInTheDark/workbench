@@ -6,9 +6,7 @@
 "use client";
 
 import {
-  useEffect,
   useRef,
-  useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
@@ -35,6 +33,7 @@ import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuConte
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
+import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
 import Draggable from "./drag/Draggable";
 import DropTarget from "./drag/DropTarget";
 import DropTargetBoundary from "./drag/DropTargetBoundary";
@@ -103,26 +102,13 @@ export default function WorkbenchThreadList({
   const { mainEntries } = groupWorkbenchThreadSidebarEntries(entries);
   const snoozedItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "snoozed");
   const settledItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "settled");
-  const [isShiftPressed, setIsShiftPressed] = useState(false);
+  const isShiftPressed = useNonTextInputShiftKey();
   const {
     preferences,
     setDisclosureOpen,
     setFolderOpen,
     setSettledThreadItemLimit,
   } = useWorkbenchSidebarPreferences();
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => { if (event.key === "Shift") setIsShiftPressed(true); };
-    const handleKeyUp = (event: KeyboardEvent) => { if (event.key === "Shift") setIsShiftPressed(false); };
-    const handleBlur = () => setIsShiftPressed(false);
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-    window.addEventListener("blur", handleBlur);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-      window.removeEventListener("blur", handleBlur);
-    };
-  }, []);
   const displayedSettledItems = settledItems.slice(0, preferences.settledThreadItemLimit);
   const remainingSettledThreadCount = settledItems.slice(preferences.settledThreadItemLimit).reduce((total, item) => total + itemThreadCount(item), 0);
   const nextSettledItemCount = Math.min(SETTLED_THREAD_PAGE_SIZE, settledItems.length - displayedSettledItems.length);

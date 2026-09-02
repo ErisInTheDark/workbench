@@ -71,6 +71,7 @@ export const WORKBENCH_GIT_ARC_ACTION_BY_METHOD = {
   "git/arc/diff-artifact/read": "readDiffArtifact",
   "git/arc/proposal/commit": "proposalCommit",
   "git/arc/proposal/read": "proposalState",
+  "git/arc/release": "arcRelease",
   "git/arc/remove": "arcRemove",
   "git/arc/restore": "restore",
 } as const satisfies Record<string, GitCheckpointRequest["action"]>;
@@ -89,6 +90,7 @@ export interface WorkbenchDaemonRequestMap {
   "git/arc/diff-artifact/read": { params: GitArcParams<"readDiffArtifact">; result: string };
   "git/arc/proposal/commit": { params: GitArcParams<"proposalCommit">; result: GitCheckpointProposal };
   "git/arc/proposal/read": { params: GitArcParams<"proposalState">; result: GitCheckpointProposal };
+  "git/arc/release": { params: GitArcParams<"arcRelease">; result: WorkbenchGitArcSuccess };
   "git/arc/remove": { params: GitArcParams<"arcRemove">; result: WorkbenchGitArcSuccess };
   "git/arc/restore": { params: GitArcParams<"restore">; result: WorkbenchGitArcSuccess };
   "local-capabilities/read": { params: object; result: WorkbenchLocalCapabilitySettingsResponse };

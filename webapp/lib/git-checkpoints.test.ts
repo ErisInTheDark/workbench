@@ -134,6 +134,18 @@ checkpointTest("restores only selected checkpoint paths while preserving the ord
     threadId: "thread-one",
   });
   await write(repoRoot, "selected.txt", "active claimed work\n");
+  const restoredOnly = await restoreGitCheckpointPaths({
+    checkpointCommit: checkpoint.checkpointCommit,
+    cwd: repoRoot,
+    filePaths: ["selected.txt"],
+    threadId: "thread-one",
+  });
+  assert.deepEqual(restoredOnly.restoredPaths, ["selected.txt"]);
+  assert.deepEqual(
+    (await controller.findActiveClaim({ cwd: repoRoot, threadId: "thread-one" }))?.claimedPaths,
+    ["selected.txt"],
+  );
+  await write(repoRoot, "selected.txt", "active claimed work\n");
   await assert.rejects(controller.restore({
     checkpointCommit: historical.checkpointCommit,
     confirmRestore: true,
@@ -332,7 +344,7 @@ checkpointTest("plans reject dirty unclaimed paths unless adoption is explicit",
   }), /clean against HEAD|adopt/u);
 });
 
-checkpointTest("releasing a proposed arc makes the proposal unavailable", 2, async (context) => {
+checkpointTest("claim release preserves proposals unless restore discards their work", 2, async (context) => {
   const fixture = await fixtureCache.copy(CHECKPOINT_RELEASE_READY_FIXTURE);
   context.after(fixture.dispose);
   const repoRoot = fixture.root;
@@ -359,14 +371,14 @@ checkpointTest("releasing a proposed arc makes the proposal unavailable", 2, asy
   const released = await removeFromGitArc({ cwd: repoRoot, paths: ["literal[1].txt"], threadId: unclaimThreadId });
   assert.deepEqual(released.scopePaths, []);
   assert.equal(await controller.findActiveClaim({ cwd: repoRoot, threadId: unclaimThreadId }), null);
-  const unavailableAfterUnclaim = await readGitCheckpointProposal({
+  const cleanProposalAfterUnclaim = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
     proposalId: fixture.state.unclaimedProposalId,
     threadId: unclaimThreadId,
   });
-  assert.equal(unavailableAfterUnclaim.status, "unavailable");
-  assert.match(unavailableAfterUnclaim.unavailableReason ?? "", /unclaimed without committing/u);
+  assert.equal(cleanProposalAfterUnclaim.status, "unavailable");
+  assert.match(cleanProposalAfterUnclaim.unavailableReason ?? "", /no longer has working-tree changes/u);
 
   const cleanPlan = await createGitPlan({
     cwd: repoRoot,
@@ -423,14 +435,48 @@ checkpointTest("releasing a proposed arc makes the proposal unavailable", 2, asy
   assert.equal(await git(repoRoot, ["status", "--short", "--", "selected.txt"]), statusBefore);
   assert.equal(await git(repoRoot, ["show", ":selected.txt"]), indexBefore);
   assert.equal(await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8"), worktreeBefore);
-  const unavailable = await readGitCheckpointProposal({
+  const preservedProposal = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
     proposalId: proposal.proposalId,
     threadId: "release-thread",
   });
-  assert.equal(unavailable.status, "unavailable");
-  assert.match(unavailable.unavailableReason ?? "", /released without committing/u);
+  assert.equal(preservedProposal.status, "proposed");
+  assert.equal(preservedProposal.unavailableReason, null);
+
+  const commitThreadId = "proposal-after-unclaim";
+  const commitPlan = await createGitPlan({
+    cwd: repoRoot,
+    intentName: "Commit after unclaim",
+    paths: ["literal1.txt"],
+    threadId: commitThreadId,
+  });
+  await startGitArc({ checkpointCommit: commitPlan.checkpointCommit, cwd: repoRoot, threadId: commitThreadId });
+  await write(repoRoot, "literal1.txt", "proposal preserved after unclaim\n");
+  const commitProposal = await createGitCheckpointProposal({
+    cwd: repoRoot,
+    description: "",
+    threadId: commitThreadId,
+    title: "Commit preserved proposal",
+  });
+  await releaseGitArc({ cwd: repoRoot, disown: true, threadId: commitThreadId });
+  const stillProposed = await readGitCheckpointProposal({
+    cwd: repoRoot,
+    includeNewer: false,
+    proposalId: commitProposal.proposalId,
+    threadId: commitThreadId,
+  });
+  assert.equal(stillProposed.status, "proposed");
+  const committedAfterUnclaim = await commitGitCheckpointProposal({
+    cwd: repoRoot,
+    description: "",
+    includeNewer: false,
+    proposalId: commitProposal.proposalId,
+    threadId: commitThreadId,
+    title: "Commit preserved proposal",
+  });
+  assert.equal(committedAfterUnclaim.status, "committed");
+  assert.equal(await git(repoRoot, ["show", "HEAD:literal1.txt"]), "proposal preserved after unclaim\n");
 });
 
 checkpointTest("arc additions preserve claimed baselines while advancing unclaimed paths to current HEAD", 6, async (context) => {

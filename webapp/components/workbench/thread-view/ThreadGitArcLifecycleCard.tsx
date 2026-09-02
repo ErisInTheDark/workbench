@@ -21,8 +21,9 @@ import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
+import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 
-type ReleaseAction = "restore" | "unclaim";
+type ReleaseAction = "restore" | "restoreAndUnclaim" | "unclaim";
 type ClaimChangeState = "clean" | "dirty" | "error" | "loading";
 type LifecyclePresentation = Omit<WorkbenchGitArcLifecycleState, "phase" | "proposals"> & {
   phase?: "active" | "resolved";
@@ -56,6 +57,7 @@ export default function ThreadGitArcLifecycleCard({
   const daemon = useWorkbenchDaemonClient();
   const phase = claim.phase ?? (claim.claimedPaths.length ? "active" : "resolved");
   const visibleProposals = claim.proposals.filter(({ status }) => status === "proposed" || status === "committed");
+  const isShiftPressed = useNonTextInputShiftKey();
   const [activeAction, setActiveAction] = useState<ReleaseAction | null>(null);
   const [changeState, setChangeState] = useState<ClaimChangeState>("loading");
   const [failure, setFailure] = useState<GitArcFailure | null>(null);
@@ -90,17 +92,19 @@ export default function ThreadGitArcLifecycleCard({
     setActiveAction(action);
     setFailure(null);
     try {
-      if (action === "restore") {
+      if (action === "restore" || action === "restoreAndUnclaim") {
+        const confirmRestore = action === "restoreAndUnclaim";
         await daemon.requestGitArc("git/arc/restore", memberRefs.length ? {
-            confirmRestore: true,
+            confirmRestore,
             cwd,
             harness,
+            ...(confirmRestore ? {} : { paths: claim.claimedPaths }),
             refs: memberRefs,
             roots: [],
             threadId,
           } : {
             checkpointCommit: claim.checkpointCommit,
-            confirmRestore: true,
+            confirmRestore,
             cwd,
             harness,
             paths: claim.claimedPaths,
@@ -109,20 +113,20 @@ export default function ThreadGitArcLifecycleCard({
             threadId,
           });
       } else {
-        await daemon.requestGitArc("git/arc/remove", {
+        await daemon.requestGitArc("git/arc/release", {
           cwd,
+          disown: true,
           harness,
-          paths: claim.claimedPaths,
-          roots: [],
           threadId,
         });
       }
-      await onReleased();
+      if (action === "restore") setChangeState("clean");
+      else await onReleased();
     } catch (releaseError) {
       setFailure(releaseError instanceof GitArcFailureException
         ? releaseError.failure
         : createGitArcOperationRejected(
-          action === "restore" ? "restore" : "arcRemove",
+          action === "unclaim" ? "arcRelease" : "restore",
           releaseError instanceof Error ? releaseError.message : "Unable to release the Git arc claim.",
         ));
     } finally {
@@ -131,6 +135,7 @@ export default function ThreadGitArcLifecycleCard({
   };
 
   if (phase === "resolved" && !visibleProposals.length) return null;
+  const showCombinedAction = activeAction === "restoreAndUnclaim" || (activeAction === null && isShiftPressed);
 
   return (
     <div className="my-2 w-full" data-thread-git-arc-lifecycle="true">
@@ -173,15 +178,39 @@ export default function ThreadGitArcLifecycleCard({
                   <span>{claim.claimedPaths.length} claimed {claim.claimedPaths.length === 1 ? "file" : "files"}</span>
                   <span className="inline-flex min-w-0 items-center justify-end gap-2" data-thread-summary-action="true">
                     {changeState === "dirty" ? (
-                      <PrimaryButton
-                        className="!px-3 !py-1.5 !text-[0.76rem]"
-                        disabled={activeAction !== null}
-                        holdToConfirmMs={2000}
-                        onClick={() => void release("restore")}
-                        tone="danger"
-                      >
-                        {activeAction === "restore" ? "Restoring…" : "Restore & unclaim"}
-                      </PrimaryButton>
+                      showCombinedAction ? (
+                        <PrimaryButton
+                          key="restore-and-unclaim"
+                          className="!px-3 !py-1.5 !text-[0.76rem]"
+                          disabled={activeAction !== null}
+                          holdToConfirmMs={2000}
+                          onClick={() => void release("restoreAndUnclaim")}
+                          tone="danger"
+                        >
+                          {activeAction === "restoreAndUnclaim" ? "Restoring & unclaiming…" : "Restore & unclaim"}
+                        </PrimaryButton>
+                      ) : (
+                        <>
+                          <PrimaryButton
+                            key="restore"
+                            className="!px-3 !py-1.5 !text-[0.76rem]"
+                            disabled={activeAction !== null}
+                            holdToConfirmMs={2000}
+                            onClick={() => void release("restore")}
+                            tone="danger"
+                          >
+                            {activeAction === "restore" ? "Restoring…" : "Restore files"}
+                          </PrimaryButton>
+                          <PrimaryButton
+                            key="unclaim"
+                            className="!px-3 !py-1.5 !text-[0.76rem]"
+                            disabled={activeAction !== null}
+                            onClick={() => void release("unclaim")}
+                          >
+                            {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim files"}
+                          </PrimaryButton>
+                        </>
+                      )
                     ) : changeState === "clean" ? (
                       <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void release("unclaim")}>
                         {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim files"}

@@ -2504,10 +2504,10 @@ test("manual status persists, restores settled threads, and rejects provider-own
   const proposedSettle = await controller.handleRequest("observer", {
     identity: terminal.identity, method: "workbench/thread-state/settle", projectId: "project",
   });
-  assert.equal("result" in proposedSettle ? (proposedSettle.result as { accepted?: boolean }).accepted : true, false);
+  assert.equal("result" in proposedSettle ? (proposedSettle.result as { accepted?: boolean }).accepted : false, true);
   assert.equal(gitArcTransitions, 5);
   entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
-  assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "completed", reason: "userCompleted", settled: true });
   await controller.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });

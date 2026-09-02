@@ -272,7 +272,7 @@ function acceptanceFailure(error: unknown) {
     .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?")
     .slice(0, 500);
   return new Error(
-    `Commit was not published. The proposal remains pending and its files remain claimed. Resolve the reported cause, then retry the same Commit action. No arc repair command is required. Cause: ${cause}`,
+    `Commit was not published. The proposal remains pending and workspace files are unchanged. Resolve the reported cause, then retry the same Commit action. No arc repair command is required. Cause: ${cause}`,
     { cause },
   );
 }
@@ -875,8 +875,8 @@ export default class GitArcProposalController {
     requireArcMetadata(proposalSource.metadata);
     const registry = new GitArcRegistry(repository);
     const active = await registry.find({ harness, threadId });
-    if (!active || active.phase !== "active") {
-      throw new Error("The proposal no longer belongs to this thread's active Git arc.");
+    if (!active || active.phase === "plan") {
+      throw new Error("The proposal no longer belongs to this thread's Git arc.");
     }
     const activeSource = await store.readCheckpoint(harness, threadId, active.checkpointCommit);
     const activeChain = await readArcChain(store, harness, threadId, activeSource, proposalSource.checkpointCommit);

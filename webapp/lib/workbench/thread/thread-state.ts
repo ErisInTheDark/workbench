@@ -209,7 +209,7 @@ export const WorkbenchGitArcLifecycleStateSchema = z.object({
 export type WorkbenchGitArcLifecycleState = z.infer<typeof WorkbenchGitArcLifecycleStateSchema>;
 
 export function gitArcPreventsThreadSettlement(gitArc: WorkbenchGitArcLifecycleState | null | undefined) {
-  return Boolean(gitArc?.claimedPaths.length || gitArc?.proposals.some(({ status }) => status === "proposed"));
+  return Boolean(gitArc?.claimedPaths.length);
 }
 
 export const WorkbenchGitArcPlanStateSchema = z.object({

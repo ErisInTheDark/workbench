@@ -13,7 +13,7 @@ import { CONTROLLER_PARTIAL_READY_FIXTURE } from "./WorkbenchGitTestFixtures";
 
 const fixtureCache = new GitTestFixtureCache();
 
-test("expired thread cleanup refuses pending work and atomically removes only the resolved thread namespace", async (context) => {
+test("expired thread cleanup removes pending proposals only from the resolved thread namespace", async (context) => {
   const fixture = await fixtureCache.copy(CONTROLLER_PARTIAL_READY_FIXTURE);
   context.after(fixture.dispose);
   const repository = await WorkbenchGitRepository.open(fixture.root);
@@ -55,10 +55,6 @@ test("expired thread cleanup refuses pending work and atomically removes only th
     proposalIds: [...active.proposalIds, proposalId],
   }, active.checkpointCommit);
 
-  await assert.rejects(controller.pruneThreadHistory({
-    cwd: fixture.root, harness: "codex", threadId: "partial-thread",
-  }), /pending proposal/u);
-  await controller.rescindProposal({ cwd: fixture.root, harness: "codex", proposalId, threadId: "partial-thread" });
   const ownerRefsBefore = await repository.listRefs("refs/worktree/agents/codex/partial-thread");
   assert.ok(ownerRefsBefore.length > 0);
   const unrelatedRef = "refs/worktree/agents/codex/other-thread/checkpoints/preserved";

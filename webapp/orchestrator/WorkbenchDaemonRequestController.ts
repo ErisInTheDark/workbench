@@ -273,7 +273,9 @@ export default class WorkbenchDaemonRequestController {
       ));
     }
     if (method === "git/arc/diff-artifact/read") return text;
-    if (method === "git/arc/remove" || method === "git/arc/restore") return { ok: true as const };
+    if (method === "git/arc/release" || method === "git/arc/remove" || method === "git/arc/restore") {
+      return { ok: true as const };
+    }
     let value: unknown;
     try {
       value = JSON.parse(text);

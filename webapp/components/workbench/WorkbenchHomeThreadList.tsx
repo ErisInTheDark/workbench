@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import type { WorkbenchProjectOption } from "../../lib/types";
 import { WORKBENCH_THREAD_ORDER_DROP_TARGET_ID, type WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
@@ -28,6 +28,7 @@ import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
+import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
 
 const SETTLED_THREAD_PAGE_SIZE = 50;
 const THREAD_ORDER_DROP_RANGE = { x: 24, y: 100_000 } as const;
@@ -72,27 +73,13 @@ export default function WorkbenchHomeThreadList({
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
   selectedOwnerProjectId: string;
 }) {
-  const [isShiftPressed, setIsShiftPressed] = useState(false);
+  const isShiftPressed = useNonTextInputShiftKey();
   const {
     preferences,
     setDisclosureOpen,
     setFolderOpen,
     setSettledThreadItemLimit,
   } = useWorkbenchSidebarPreferences();
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => { if (event.key === "Shift") setIsShiftPressed(true); };
-    const handleKeyUp = (event: KeyboardEvent) => { if (event.key === "Shift") setIsShiftPressed(false); };
-    const handleBlur = () => setIsShiftPressed(false);
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-    window.addEventListener("blur", handleBlur);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-      window.removeEventListener("blur", handleBlur);
-    };
-  }, []);
-
   const projectsById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const list = useMemo(() => projectWorkbenchHomeThreadList(
     actions.projectThreadSidebars,

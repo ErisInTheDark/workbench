@@ -12,7 +12,7 @@ const EMPTY_CODEX_SETTINGS = {
   serviceTier: null,
 };
 
-test("live claims and proposed commit proposals prevent thread settlement", () => {
+test("live claims prevent thread settlement while proposals do not", () => {
   const resolved = {
     checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "arc",
     phase: "resolved" as const, proposals: [], updatedAt: "2026-08-23T00:00:00.000Z",
@@ -20,7 +20,7 @@ test("live claims and proposed commit proposals prevent thread settlement", () =
   assert.equal(gitArcPreventsThreadSettlement(null), false);
   assert.equal(gitArcPreventsThreadSettlement(resolved), false);
   assert.equal(gitArcPreventsThreadSettlement({ ...resolved, claimedPaths: ["owned.ts"], phase: "active" }), true);
-  assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "pending", status: "proposed" }] }), true);
+  assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "pending", status: "proposed" }] }), false);
   assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "accepted", status: "committed" }] }), false);
 });
 
@@ -92,7 +92,7 @@ test("settlement is available only for unsettled terminal rows without Git block
   assert.equal(isWorkbenchThreadSettlementAvailable({ ...completed, lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false } }), false);
   assert.equal(isWorkbenchThreadSettlementAvailable({ ...completed, lifecycle: { ...completed.lifecycle, settled: true } }), false);
   assert.equal(isWorkbenchThreadSettlementAvailable({ ...completed, gitArc: activeArc }), false);
-  assert.equal(isWorkbenchThreadSettlementAvailable({ ...completed, gitArc: { ...activeArc, claimedPaths: [], phase: "resolved", proposals: [{ proposalId: "proposal", status: "proposed" as const }] } }), false);
+  assert.equal(isWorkbenchThreadSettlementAvailable({ ...completed, gitArc: { ...activeArc, claimedPaths: [], phase: "resolved", proposals: [{ proposalId: "proposal", status: "proposed" as const }] } }), true);
 
   const snoozed = { ...completed, metadata: { ...completed.metadata, snoozed: true } };
   const settled = { ...completed, lifecycle: { ...completed.lifecycle, settled: true } };

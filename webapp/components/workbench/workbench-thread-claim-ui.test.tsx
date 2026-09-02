@@ -302,14 +302,15 @@ test("proposed commits replace the completed state", () => {
   assert.match(html, /aria-label="Commit ready, Proposed commit, 2 claimed files,/u);
 });
 
-test("hanging proposals without claims do not expose settlement", () => {
+test("hanging proposals without claims preserve presentation and expose settlement", () => {
   const html = renderThreadItem(createThreadEntry({
     claimedPaths: [],
     proposalStatus: "proposed",
     threadId: "proposal-only",
     title: "Commit still pending",
   }));
-  assert.doesNotMatch(html, /aria-label="Settle"/u);
+  assert.match(html, /Commit still pending, Proposed commit,/u);
+  assert.match(html, /aria-label="Settle"/u);
 });
 
 test("live lifecycle presentation outranks a hanging proposed commit", () => {

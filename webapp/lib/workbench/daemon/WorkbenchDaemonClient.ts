@@ -84,6 +84,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "git/arc/proposal/commit":
     case "git/arc/proposal/read": return GitCheckpointProposalSchema;
     case "git/arc/diff-artifact/read": return z.string();
+    case "git/arc/release":
     case "git/arc/remove":
     case "git/arc/restore": return z.object({ ok: z.literal(true) }).strict();
   }
