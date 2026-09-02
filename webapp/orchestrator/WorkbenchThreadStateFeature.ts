@@ -287,17 +287,19 @@ export default class WorkbenchThreadStateFeature {
       if (!providerEntry || providerEntry.entryKind === "draft") throw new Error("The managed provider thread could not be normalized.");
       await this.controller.ensureProviderEntry(resolved.projectId, providerEntry);
       if (request.method === "workbench/thread/title") {
+        const providerTitle = resolveWorkbenchThreadTitle({
+          fallback: "",
+          id: resolved.thread.id,
+          name: resolved.thread.name,
+          preview: null,
+        });
         if (params.action === "get") {
           return {
             id,
             result: {
               harness: resolved.harness,
               threadId: resolved.thread.id,
-              title: resolveWorkbenchThreadTitle({
-                id: resolved.thread.id,
-                name: resolved.thread.name,
-                preview: resolved.thread.preview,
-              }),
+              title: providerTitle,
             },
           };
         }
@@ -307,16 +309,10 @@ export default class WorkbenchThreadStateFeature {
         if (params.currentTitle !== undefined && typeof params.currentTitle !== "string") {
           throw new Error("currentTitle must be exact non-empty text when supplied.");
         }
-        const currentTitle = resolveWorkbenchThreadTitle({
-          fallback: "",
-          id: resolved.thread.id,
-          name: resolved.thread.name,
-          preview: resolved.thread.preview,
-        });
         const expectedCurrentTitle = typeof params.currentTitle === "string" ? params.currentTitle : null;
-        if (expectedCurrentTitle !== (currentTitle || null)) {
-          throw new Error(currentTitle
-            ? `Thread title mismatch. Current title: ${JSON.stringify(currentTitle)}. Retry with currentTitle set to this exact text.`
+        if (expectedCurrentTitle !== (providerTitle || null)) {
+          throw new Error(providerTitle
+            ? `Thread title mismatch. Current title: ${JSON.stringify(providerTitle)}. Retry with currentTitle set to this exact text.`
             : "Thread title mismatch. No current title is set. Retry without currentTitle.");
         }
         await this.setProviderThreadTitle(resolved.harness, resolved.thread.id, title, resolved.cwd);

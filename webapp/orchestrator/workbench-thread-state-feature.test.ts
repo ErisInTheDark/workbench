@@ -592,14 +592,24 @@ test("managed title commands use the validated provider title as the mutation pr
   assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, 1);
 
   providerName = "New thread";
-  providerPreview = null;
-  const initiallyNamed = await feature.handleManagedThreadRequest({
+  providerPreview = "Initial request";
+  const initiallyUntitled = await feature.handleManagedThreadRequest({
     id: 5,
+    method: "workbench/thread/title",
+    params: { action: "get", callerThreadId: "thread-one", cwd: "C:/workspace" },
+  });
+  assert.deepEqual(initiallyUntitled, {
+    id: 5,
+    result: { harness: "codex", threadId: "thread-one", title: "" },
+  });
+
+  const initiallyNamed = await feature.handleManagedThreadRequest({
+    id: 6,
     method: "workbench/thread/title",
     params: { action: "set", callerThreadId: "thread-one", cwd: "C:/workspace", title: "First useful title" },
   });
   assert.deepEqual(initiallyNamed, {
-    id: 5,
+    id: 6,
     result: { harness: "codex", threadId: "thread-one", title: "First useful title" },
   });
   assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, 2);
