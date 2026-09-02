@@ -869,6 +869,46 @@ test("project reset rejects stale reads while newer canonical notifications merg
   assert.deepEqual(client.getSnapshot().currentThread?.turns[0]?.items.map((item) => item.id), ["new-item"]);
 }));
 
+test("late latest pages cannot erase completed live items", async () => withClient(async (client, socket) => {
+  const liveItem = {
+    clientId: null,
+    content: [{ text: "live", text_elements: [], type: "text" as const }],
+    id: "live-item",
+    type: "userMessage" as const,
+  };
+  const source = activeThread("codex", "thread", "completed");
+  source.turns[0]!.items = [liveItem];
+  client.selectThreadPayload(source);
+  let pageRequest: SocketRequest | null = null;
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method !== "workbench/thread/page/read") return false;
+    pageRequest = request;
+    return true;
+  };
+
+  const read = client.readThread("thread", "codex");
+  await waitForRequest(socket, "workbench/thread/page/read");
+  const stalePage = wireThread("thread", "turn", "completed");
+  stalePage.turns[0]!.items = [{
+    clientId: null,
+    content: [{ text: "stored", text_elements: [], type: "text" }],
+    id: "stored-item",
+    type: "userMessage",
+  }];
+  socket.respond(pageRequest!.id, {
+    browseResultEntries: [],
+    nextCursor: null,
+    questionnaireEntries: [],
+    steerEntries: [],
+    thread: stalePage,
+  });
+
+  assert.deepEqual(
+    (await read)?.turns[0]?.items.map((item) => item.id),
+    ["stored-item", "live-item"],
+  );
+}));
+
 test("foreign pinned thread context owns provider cwd, subagents, and late-read fencing without replacing the viewed project", async () => withClient(async (client, socket) => {
   const ownerProject = {
     id: "owner",

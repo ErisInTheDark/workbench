@@ -83,22 +83,28 @@ function response(result: unknown): JsonRpcResponse {
 function fakeStore(previousCursors: Record<string, string | null | undefined> = {}) {
   const catalogs: Array<{ boundary?: { cursor: string | null; turnId: string }; turns: Turn[] }> = [];
   const pages: Array<{ cursor: string | null; turn: Turn }> = [];
+  const recordings: Array<{
+    catalog?: { boundary?: { cursor: string | null; turnId: string }; turns: Turn[] };
+    page?: { previousCursor: string | null; turn: Turn };
+    thread: Thread;
+  }> = [];
   return {
     catalogs,
     pages,
+    recordings,
     store: {
       async readProviderPreviousCursor(_threadId: string, beforeTurnId: string) {
         return previousCursors[beforeTurnId];
       },
-      async recordProviderTurnCatalog(
-        _thread: Thread,
-        turns: Turn[],
-        boundary?: { cursor: string | null; turnId: string },
-      ) {
-        catalogs.push({ ...(boundary ? { boundary } : {}), turns });
-      },
-      async recordProviderTurnPage(_thread: Thread, pageTurn: Turn, cursor: string | null) {
-        pages.push({ cursor, turn: pageTurn });
+      recordProviderWindow(recording: typeof recordings[number]) {
+        recordings.push(recording);
+        if (recording.catalog) catalogs.push(recording.catalog);
+        if (recording.page) {
+          pages.push({
+            cursor: recording.page.previousCursor,
+            turn: recording.page.turn,
+          });
+        }
       },
     },
   };
@@ -121,17 +127,29 @@ test("unseen threads import every identity and materialize only the latest turn"
   });
   const owner = fakeStore();
 
-  assert.equal(await loader.ensureWindow(owner.store, thread(), thread(), { mode: "latest" }), true);
+  const loaded = await loader.ensureWindow(owner.store, thread(), thread(), { mode: "latest" });
+  assert.deepEqual(loaded && loaded.thread.turns.map(({ id }) => id), ["oldest", "middle", "latest"]);
   assert.deepEqual(requests.map((request) => request.params), [
     { itemsView: "notLoaded", limit: 1, sortDirection: "desc", threadId: "thread" },
     { itemsView: "full", limit: 1, sortDirection: "desc", threadId: "thread" },
     { cursor: "after-latest", itemsView: "notLoaded", sortDirection: "desc", threadId: "thread" },
   ]);
-  assert.deepEqual(owner.catalogs[0]?.turns.map((candidate) => candidate.id), ["oldest", "middle", "latest"]);
-  assert.deepEqual(owner.catalogs[0]?.boundary, { cursor: "after-latest", turnId: "latest" });
-  assert.deepEqual(owner.pages.map(({ cursor, turn: candidate }) => ({ cursor, turnId: candidate.id })), [
-    { cursor: "after-latest", turnId: "latest" },
+  assert.deepEqual(loaded && loaded.recording.catalog?.turns.map((candidate) => candidate.id), [
+    "oldest",
+    "middle",
+    "latest",
   ]);
+  assert.deepEqual(loaded && loaded.recording.catalog?.boundary, {
+    cursor: "after-latest",
+    turnId: "latest",
+  });
+  assert.deepEqual(loaded && {
+    cursor: loaded.recording.page?.previousCursor,
+    turnId: loaded.recording.page?.turn.id,
+  }, {
+    cursor: "after-latest",
+    turnId: "latest",
+  });
 });
 
 test("previous windows use the stored boundary and accept only the exact predecessor", async () => {
@@ -147,10 +165,11 @@ test("previous windows use the stored boundary and accept only the exact predece
     history("latest", "loaded"),
   ]);
 
-  assert.equal(await loader.ensureWindow(owner.store, thread(), hydrated, {
+  const loaded = await loader.ensureWindow(owner.store, thread(), hydrated, {
     beforeTurnId: "latest",
     mode: "previous",
-  }), true);
+  });
+  assert.deepEqual(loaded && loaded.thread.turns.map(({ id }) => id), ["older"]);
   assert.deepEqual(requests[0]?.params, {
     cursor: "after-latest",
     itemsView: "full",
@@ -158,9 +177,13 @@ test("previous windows use the stored boundary and accept only the exact predece
     sortDirection: "desc",
     threadId: "thread",
   });
-  assert.deepEqual(owner.pages.map(({ cursor, turn: candidate }) => ({ cursor, turnId: candidate.id })), [
-    { cursor: null, turnId: "older" },
-  ]);
+  assert.deepEqual(loaded && {
+    cursor: loaded.recording.page?.previousCursor,
+    turnId: loaded.recording.page?.turn.id,
+  }, {
+    cursor: null,
+    turnId: "older",
+  });
 });
 
 test("already materialized latest windows use one metadata probe without fetching provider content", async () => {
@@ -202,30 +225,31 @@ test("inactive provider metadata repairs the same durable turn from one full pro
     status: "inProgress",
   }]);
 
-  assert.equal(await loader.ensureWindow(
+  const loaded = await loader.ensureWindow(
     owner.store,
     thread(),
     hydrated,
     { mode: "latest" },
     { recoveryOnly: true },
-  ), true);
+  );
+  assert.deepEqual(loaded && loaded.thread.turns.map(({ id }) => id), ["latest"]);
   assert.deepEqual(requests.map((request) => request.params), [{
     itemsView: "full",
     limit: 1,
     sortDirection: "desc",
     threadId: "thread",
   }]);
-  assert.deepEqual(owner.pages.map(({ cursor, turn: candidate }) => ({
-    cursor,
-    itemIds: candidate.items.map(({ id }) => id),
-    status: candidate.status,
-    turnId: candidate.id,
-  })), [{
+  assert.deepEqual(loaded && {
+    cursor: loaded.recording.page?.previousCursor,
+    itemIds: loaded.recording.page?.turn.items.map(({ id }) => id),
+    status: loaded.recording.page?.turn.status,
+    turnId: loaded.recording.page?.turn.id,
+  }, {
     cursor: "after-latest",
     itemIds: ["user", "assistant"],
     status: "completed",
     turnId: "latest",
-  }]);
+  });
 });
 
 test("inactive recovery fails closed when provider latest identity differs", async () => {
@@ -273,20 +297,28 @@ test("stale latest windows import only the missing suffix and materialize the pr
     history("stored-latest", "loaded"),
   ]);
 
-  assert.equal(await loader.ensureWindow(owner.store, thread(), hydrated, { mode: "latest" }), true);
+  const loaded = await loader.ensureWindow(owner.store, thread(), hydrated, { mode: "latest" });
+  assert.deepEqual(loaded && loaded.thread.turns.map(({ id }) => id), ["missing-middle", "latest"]);
   assert.deepEqual(requests.map((request) => request.params), [
     { itemsView: "notLoaded", limit: 1, sortDirection: "desc", threadId: "thread" },
     { itemsView: "full", limit: 1, sortDirection: "desc", threadId: "thread" },
     { cursor: "after-latest", itemsView: "notLoaded", sortDirection: "desc", threadId: "thread" },
   ]);
-  assert.deepEqual(owner.catalogs[0]?.turns.map((candidate) => candidate.id), [
+  assert.deepEqual(loaded && loaded.recording.catalog?.turns.map((candidate) => candidate.id), [
     "missing-middle",
     "latest",
   ]);
-  assert.deepEqual(owner.catalogs[0]?.boundary, { cursor: "after-latest", turnId: "latest" });
-  assert.deepEqual(owner.pages.map(({ cursor, turn: candidate }) => ({ cursor, turnId: candidate.id })), [
-    { cursor: "after-latest", turnId: "latest" },
-  ]);
+  assert.deepEqual(loaded && loaded.recording.catalog?.boundary, {
+    cursor: "after-latest",
+    turnId: "latest",
+  });
+  assert.deepEqual(loaded && {
+    cursor: loaded.recording.page?.previousCursor,
+    turnId: loaded.recording.page?.turn.id,
+  }, {
+    cursor: "after-latest",
+    turnId: "latest",
+  });
 });
 
 test("wrong provider predecessors fail without materializing a turn", async () => {

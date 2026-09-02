@@ -1745,7 +1745,9 @@ function WorkbenchThreadClient(
     const currentSource = threadSources.get(fence.threadKey);
     const stablePreferenceAdvanced = fence.stablePreferenceRevision !== getStablePreferenceRevision(fence.threadKey);
     const statusAdvanced = fence.statusRevision !== getStatusRevision(fence.threadKey);
-    let payload = mergeLiveStreamingThreadSnapshot(result.payload);
+    let payload = mergeLiveStreamingThreadSnapshot(result.payload, {
+      preserveUnmatchedLiveItems: true,
+    });
     if (stablePreferenceAdvanced && currentSource) {
       payload = {
         ...payload,
@@ -2516,7 +2518,10 @@ function WorkbenchThreadClient(
   function mergeLiveStreamingTurn(
     incomingTurn: Turn,
     liveTurn: Turn | undefined,
-    options: { settleStreamingKeys?: boolean } = {},
+    options: {
+      preserveUnmatchedLiveItems?: boolean;
+      settleStreamingKeys?: boolean;
+    } = {},
   ) {
     if (!liveTurn) {
       return incomingTurn;
@@ -2527,12 +2532,14 @@ function WorkbenchThreadClient(
       && incomingTurn.status !== "inProgress"
       && liveTurn.status !== "inProgress"
       && !streamingReconciler.hasClientCreatedItemForTurn(incomingTurn.id)
+      && !options.preserveUnmatchedLiveItems
     ) {
       return incomingTurn;
     }
 
     const liveItemsById = new Map(liveTurn.items.map((item) => [item.id, item]));
-    const preserveAllUnmatchedLiveItems = shouldPreserveUnmatchedLiveTurnItems(incomingTurn, liveTurn);
+    const preserveAllUnmatchedLiveItems = options.preserveUnmatchedLiveItems
+      || shouldPreserveUnmatchedLiveTurnItems(incomingTurn, liveTurn);
     const preserveToolItemsFromThinnerTurn = incomingTurn.itemsView === "full"
       && incomingTurn.items.length < liveTurn.items.length;
     const nextItems = incomingTurn.items.map((item) => {
@@ -2573,7 +2580,10 @@ function WorkbenchThreadClient(
     };
   }
 
-  function mergeLiveStreamingThreadSnapshot(incomingThread: ThreadPayload) {
+  function mergeLiveStreamingThreadSnapshot(
+    incomingThread: ThreadPayload,
+    options: { preserveUnmatchedLiveItems?: boolean } = {},
+  ) {
     const liveThread = threadSources.get(getThreadSourceKey(incomingThread));
     if (!liveThread || liveThread.id !== incomingThread.id || liveThread.harness !== incomingThread.harness) {
       return ensureThreadHistory(incomingThread);
@@ -2581,7 +2591,11 @@ function WorkbenchThreadClient(
 
     const liveTurnsById = new Map(liveThread.turns.map((turn) => [turn.id, turn]));
     const turnHistory = mergeThreadTurnHistory(incomingThread.turnHistory, liveThread.turnHistory);
-    const incomingTurns = incomingThread.turns.map((turn) => mergeLiveStreamingTurn(turn, liveTurnsById.get(turn.id)));
+    const incomingTurns = incomingThread.turns.map((turn) => mergeLiveStreamingTurn(
+      turn,
+      liveTurnsById.get(turn.id),
+      options,
+    ));
     return {
       ...incomingThread,
       agentNickname: incomingThread.agentNickname ?? liveThread.agentNickname,

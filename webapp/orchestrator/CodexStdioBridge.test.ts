@@ -477,6 +477,7 @@ test("background thread pages repair inactive provider turns directly into both 
       },
     });
     await contextResolutionStarted.promise;
+    const response = await responsePromise;
     await bridge.handleUpstreamMessage({
       id: "later-provider-fact",
       method: "item/tool/call",
@@ -490,12 +491,11 @@ test("background thread pages repair inactive provider turns directly into both 
       },
     });
     releaseContextResolution.resolve();
-    const response = await responsePromise;
     await laterProviderFactRecorded.promise;
 
     const recovered = (response?.result as WorkbenchThreadPageResponse).thread.turns[0]!;
     assert.equal(recovered.status, "interrupted");
-    assert.deepEqual(recovered.items.map(({ id }) => id), ["user", "assistant", "later-call"]);
+    assert.deepEqual(recovered.items.map(({ id }) => id), ["user", "assistant"]);
     assert.deepEqual(upstreamRequests.map(({ method }) => method), [
       "thread/read",
       "thread/turns/list",
@@ -507,6 +507,84 @@ test("background thread pages repair inactive provider turns directly into both 
     assert.equal(sqliteBatches.flat().some(({ kind }) => kind === "canonicalWindow"), false);
   } finally {
     await bridge.waitForIdle();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("provider catalog identities and the materialized page record as one dual-recorder fact", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-provider-window-"));
+  const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
+  const pageItem: ThreadItem = {
+    id: "assistant",
+    memoryCitation: null,
+    phase: "commentary",
+    text: "latest",
+    type: "agentMessage",
+  };
+  const latest = bridgeThread([pageItem]).turns[0]!;
+  const older = {
+    ...latest,
+    completedAt: 1,
+    durationMs: 1,
+    id: "older",
+    items: [],
+    itemsView: "notLoaded" as const,
+    status: "completed" as const,
+  };
+  const metadata = { ...bridgeThread(), turns: [] } as Thread;
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    recordSqliteTranscript: async (observations) => {
+      sqliteBatches.push([...observations]);
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const owner = bridge as unknown as {
+    createThreadWindowStore(store: CodexTranscriptStore): {
+      recordProviderWindow(recording: {
+        catalog: {
+          boundary: { cursor: string | null; turnId: string };
+          turns: Thread["turns"];
+        };
+        page: { previousCursor: string | null; turn: Thread["turns"][number] };
+        thread: Thread;
+      }): void;
+    };
+    ensureTranscriptStore(): CodexTranscriptStore;
+  };
+  try {
+    owner.createThreadWindowStore(owner.ensureTranscriptStore()).recordProviderWindow({
+      catalog: {
+        boundary: { cursor: "before-latest", turnId: latest.id },
+        turns: [older, latest],
+      },
+      page: { previousCursor: "before-latest", turn: latest },
+      thread: metadata,
+    });
+    await bridge.waitForIdle();
+
+    assert.deepEqual(sqliteBatches.map((batch) => batch.map(({ kind }) => kind)), [[
+      "thread",
+      "turn",
+      "turn",
+      "item",
+    ]]);
+    const stored = await owner.ensureTranscriptStore().readStoredThreadWindow("thread", ["turn"]) as (
+      Thread & { workbenchTurnHistory: Array<{ turnId: string }> }
+    );
+    assert.deepEqual(stored.workbenchTurnHistory.map(({ turnId }) => turnId), ["older", "turn"]);
+    assert.deepEqual(stored.turns[0]?.items.map(({ id }) => id), ["assistant"]);
+  } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }
@@ -733,7 +811,6 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
     assert.deepEqual(upstreamMessages[0]?.params, { includeTurns: true, threadId: "thread" });
     assert.deepEqual(contexts, [
       { recoveryBoundary: true, source: "provider" },
-      { source: "provider" },
     ]);
   } finally {
     releaseSqlite.resolve();

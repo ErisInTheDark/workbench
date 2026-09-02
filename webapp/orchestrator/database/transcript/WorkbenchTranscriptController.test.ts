@@ -189,6 +189,135 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
   }
 });
 
+test("durable item facts refresh subscriptions only at complete projection boundaries", async () => {
+  let reads = 0;
+  let published = deferred<void>();
+  const controller = new WorkbenchTranscriptController({
+    failure: null,
+    async readTranscript() {
+      reads += 1;
+      return null;
+    },
+    async settleTranscript(observations) {
+      const threadIds = new Set(observations.flatMap((observation) => (
+        observation.kind === "questionnaire" || observation.kind === "steer"
+          ? [observation.entry.threadId]
+          : observation.kind === "browse"
+            ? [observation.entry.threadId]
+            : observation.kind === "canonicalWindow" || observation.kind === "captureGap"
+              ? [observation.threadId]
+              : observation.threadId
+                ? [observation.threadId]
+                : []
+      )));
+      return { changedThreadIds: [...threadIds] };
+    },
+    async start() {
+      return { schemaVersion: 1, tableNames: [] };
+    },
+  }, new WorkbenchTranscriptCaptureGapController({
+    markerPath: join(tmpdir(), "unused-transcript-boundary-gap.json"),
+  }));
+  const awaitNextPublication = async (
+    observation: WorkbenchTranscriptObservation,
+    source: "compatibility" | "provider" | "workbench" = "provider",
+  ) => {
+    published = deferred<void>();
+    await controller.record([observation], { source });
+    await published.promise;
+  };
+  try {
+    await controller.subscribe({
+      id: "latest",
+      request: { threadId: "thread", turnLimit: 1 },
+      publish() {
+        published.resolve();
+      },
+    });
+    assert.equal(reads, 1);
+
+    await controller.record([{
+      item: {
+        id: "message",
+        memoryCitation: null,
+        phase: "commentary",
+        text: "hello",
+        type: "agentMessage",
+      },
+      kind: "item",
+      lifecycle: "completed",
+      observedAt: 2,
+      threadId: "thread",
+      turnId: "turn",
+    }], { source: "provider" });
+    await controller.record([{
+      createdAt: 1,
+      durationMs: null,
+      endedAt: null,
+      harnessId: "codex",
+      kind: "turn",
+      nativeLocation: "C:/project",
+      nativeThreadId: "thread",
+      nativeTurnId: "turn",
+      startedAt: 1,
+      state: "inProgress",
+      threadId: "thread",
+      turnId: "turn",
+    }], { source: "provider" });
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(reads, 1);
+
+    await awaitNextPublication({
+      createdAt: 1,
+      durationMs: 1,
+      endedAt: 2,
+      harnessId: "codex",
+      kind: "turn",
+      nativeLocation: "C:/project",
+      nativeThreadId: "thread",
+      nativeTurnId: "turn",
+      startedAt: 1,
+      state: "completed",
+      threadId: "thread",
+      turnId: "turn",
+    });
+    assert.equal(reads, 2);
+
+    await awaitNextPublication({
+      activityAt: 3,
+      createdAt: 1,
+      kind: "thread",
+      projectId: "project",
+      projectRoot: "C:/project",
+      threadId: "thread",
+      title: "Thread",
+      updatedAt: 3,
+    });
+    assert.equal(reads, 3);
+
+    await awaitNextPublication({
+      entry: {
+        action: "browse",
+        actionIndex: 0,
+        assetUrl: null,
+        commandItemId: null,
+        durationMs: 1,
+        entryKey: "browse",
+        recordedAt: 4,
+        session: "session",
+        state: "completed",
+        threadId: "thread",
+        turnId: "turn",
+      },
+      kind: "browse",
+    }, "workbench");
+    assert.equal(reads, 4);
+  } finally {
+    controller.dispose();
+  }
+});
+
 test("capture gaps block only per-thread compatibility and cutover while direct recording continues", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-transcript-controller-gap-"));
   const databasePath = join(directory, "workbench.sqlite3");

@@ -1,7 +1,9 @@
 /*
  * Exports:
- * - CodexThreadWindowStore: durable provider-window port used by bounded loading and recovery. Keywords: codex, thread, window, store.
- * - default CodexThreadWindowLoader: import Codex turn identities and materialize one requested provider turn window. Keywords: codex, thread, pagination, window.
+ * - CodexThreadWindowLoad: fetched provider projection plus its ordered recording input. Keywords: codex, thread, window, load.
+ * - CodexThreadWindowRecord: one fetched provider catalog and materialized page admitted for ordered recording. Keywords: codex, thread, window, record.
+ * - CodexThreadWindowStore: provider-window recording port used by bounded loading and recovery. Keywords: codex, thread, window, store.
+ * - default CodexThreadWindowLoader: fetch one requested provider turn window and admit it for recording. Keywords: codex, thread, pagination, window.
  */
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
 import type { ThreadTurnsListParams } from "../lib/codex/generated/app-server/v2/ThreadTurnsListParams";
@@ -9,12 +11,27 @@ import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
 import type { WorkbenchThreadHydrationRequest } from "../lib/codex/thread-hydration";
 import type { WorkbenchThreadTurnHistoryEntry } from "../lib/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import type CodexTranscriptStore from "./CodexTranscriptStore";
+export interface CodexThreadWindowRecord {
+  catalog?: {
+    boundary?: { cursor: string | null; turnId: string };
+    turns: Turn[];
+  };
+  page?: {
+    previousCursor: string | null;
+    turn: Turn;
+  };
+  thread: Thread;
+}
 
-export type CodexThreadWindowStore = Pick<
-  CodexTranscriptStore,
-  "readProviderPreviousCursor" | "recordProviderTurnCatalog" | "recordProviderTurnPage"
->;
+export interface CodexThreadWindowLoad {
+  recording: CodexThreadWindowRecord;
+  thread: Thread;
+}
+
+export interface CodexThreadWindowStore {
+  readProviderPreviousCursor: (threadId: string, beforeTurnId: string) => Promise<string | null | undefined>;
+  recordProviderWindow: (record: CodexThreadWindowRecord) => void;
+}
 
 type ThreadWithHistory = Thread & {
   workbenchTurnHistory?: WorkbenchThreadTurnHistoryEntry[];
@@ -78,6 +95,20 @@ function isProviderThreadInactive(thread: Thread) {
   return record(thread.status)?.type === "idle";
 }
 
+function providerWindowThread(recording: CodexThreadWindowRecord) {
+  return {
+    ...recording.thread,
+    turns: recording.catalog?.turns ?? (recording.page ? [recording.page.turn] : []),
+  };
+}
+
+function createProviderWindowLoad(recording: CodexThreadWindowRecord): CodexThreadWindowLoad {
+  return {
+    recording,
+    thread: providerWindowThread(recording),
+  };
+}
+
 export default class CodexThreadWindowLoader {
   constructor(
     private readonly request: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
@@ -122,8 +153,10 @@ export default class CodexThreadWindowLoader {
     if (!turn || turn.id !== expectedId) {
       throw new Error(`Codex previous turn did not match expected turn ${expectedId}.`);
     }
-    await store.recordProviderTurnPage(metadataThread, turn, page.nextCursor);
-    return true;
+    return createProviderWindowLoad({
+      page: { previousCursor: page.nextCursor, turn },
+      thread: metadataThread,
+    });
   }
 
   private async ensureLatestWindow(
@@ -143,8 +176,10 @@ export default class CodexThreadWindowLoader {
       });
     } catch (error) {
       if (!history.length && error instanceof Error && error.message.includes("unavailable before first user message")) {
-        await store.recordProviderTurnCatalog(thread, []);
-        return true;
+        return createProviderWindowLoad({
+          catalog: { turns: [] },
+          thread,
+        });
       }
       throw error;
     }
@@ -154,8 +189,10 @@ export default class CodexThreadWindowLoader {
       if (storedLatestTurnId !== null) {
         throw new Error(`Codex returned no latest turn for stored turn ${storedLatestTurnId}.`);
       }
-      await store.recordProviderTurnCatalog(thread, []);
-      return true;
+      return createProviderWindowLoad({
+        catalog: { turns: [] },
+        thread,
+      });
     }
     const hydratedLatestTurn = findTurn(hydratedThread, storedLatestTurnId);
     if (
@@ -177,8 +214,10 @@ export default class CodexThreadWindowLoader {
       throw new Error(`Codex did not materialize latest turn ${metadataLatestTurn.id}.`);
     }
     if (latestTurn.id === storedLatestTurnId) {
-      await store.recordProviderTurnPage(thread, latestTurn, firstPage.nextCursor);
-      return true;
+      return createProviderWindowLoad({
+        page: { previousCursor: firstPage.nextCursor, turn: latestTurn },
+        thread,
+      });
     }
 
     const descendingTurns = [latestTurn];
@@ -210,13 +249,15 @@ export default class CodexThreadWindowLoader {
       throw new Error(`Codex turn catalog did not contain stored latest turn ${storedLatestTurnId}.`);
     }
 
-    await store.recordProviderTurnCatalog(
+    const turns = descendingTurns.slice().reverse();
+    return createProviderWindowLoad({
+      catalog: {
+        boundary: { cursor: firstPage.nextCursor, turnId: latestTurn.id },
+        turns,
+      },
+      page: { previousCursor: firstPage.nextCursor, turn: latestTurn },
       thread,
-      descendingTurns.slice().reverse(),
-      { cursor: firstPage.nextCursor, turnId: latestTurn.id },
-    );
-    await store.recordProviderTurnPage(thread, latestTurn, firstPage.nextCursor);
-    return true;
+    });
   }
 
   private async recoverLatestWindow(
@@ -248,8 +289,10 @@ export default class CodexThreadWindowLoader {
       throw new Error(`Codex thread ${thread.id} is inactive but latest turn ${providerLatestTurn.id} is still in progress.`);
     }
 
-    await store.recordProviderTurnPage(thread, providerLatestTurn, page.nextCursor);
-    return true;
+    return createProviderWindowLoad({
+      page: { previousCursor: page.nextCursor, turn: providerLatestTurn },
+      thread,
+    });
   }
 
   private async requestTurns(params: ThreadTurnsListParams) {

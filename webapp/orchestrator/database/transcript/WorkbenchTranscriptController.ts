@@ -54,6 +54,28 @@ function reportSubscriptionFailure(error: unknown) {
   );
 }
 
+function requestsSubscriptionRefresh(observations: readonly WorkbenchTranscriptObservation[]) {
+  return observations.some((observation) => {
+    switch (observation.kind) {
+      case "canonicalWindow":
+      case "thread":
+      case "questionnaire":
+      case "browse":
+        return true;
+      case "turn":
+        return observation.state === "completed"
+          || observation.state === "interrupted"
+          || observation.state === "failed";
+      case "steer":
+        return observation.entry.resolvedAt !== null;
+      case "captureGap":
+      case "item":
+      case "nativeEvidence":
+        return false;
+    }
+  });
+}
+
 export default class WorkbenchTranscriptController {
   readonly #captureGaps: WorkbenchTranscriptCaptureGapController;
   readonly #database: Pick<
@@ -130,12 +152,13 @@ export default class WorkbenchTranscriptController {
       ))
         ? marker.turnId
         : null;
+      const recoveryObservations = [
+        ...observations,
+        this.#captureGaps.createRecoveryObservation(marker, recoveredMarkerTurn),
+      ];
       let settlement: WorkbenchTranscriptSettlement;
       try {
-        settlement = await this.#recorder.record([
-          ...observations,
-          this.#captureGaps.createRecoveryObservation(marker, recoveredMarkerTurn),
-        ]);
+        settlement = await this.#recorder.record(recoveryObservations);
       } catch (error) {
         throw await this.#captureGaps.captureFailure({
           error,
@@ -152,7 +175,9 @@ export default class WorkbenchTranscriptController {
           ...identity,
         });
       }
-      this.#subscriptions.settle(settlement.changedThreadIds);
+      if (requestsSubscriptionRefresh(recoveryObservations)) {
+        this.#subscriptions.settle(settlement.changedThreadIds);
+      }
       return settlement;
     }
     let settlement: WorkbenchTranscriptSettlement;
@@ -166,7 +191,9 @@ export default class WorkbenchTranscriptController {
         ...identity,
       });
     }
-    this.#subscriptions.settle(settlement.changedThreadIds);
+    if (requestsSubscriptionRefresh(observations)) {
+      this.#subscriptions.settle(settlement.changedThreadIds);
+    }
     return settlement;
   }
 

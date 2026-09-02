@@ -426,7 +426,7 @@ function createUpstreamRequest(message: JsonRpcRequest, upstreamRequestId: numbe
 }
 
 function shouldCapturePollingTranscript(method: string | null, requestSource: WorkbenchRequestSource) {
-  if (requestSource !== "autoRefresh") {
+  if (requestSource !== "autoRefresh" && requestSource !== "internal") {
     return true;
   }
 
@@ -2502,17 +2502,30 @@ export default class CodexStdioBridge {
       if (!metadataThread?.id || !hydratedThread?.id) {
         throw new Error("Bounded thread/context/read did not receive a readable thread.");
       }
-      if (await this.threadWindowLoader.ensureWindow(
-        this.createThreadWindowStore(transcriptStore),
+      const threadWindowStore = this.createThreadWindowStore(transcriptStore);
+      const providerWindow = await this.threadWindowLoader.ensureWindow(
+        threadWindowStore,
         metadataThread,
         hydratedThread,
         hydration,
         { recoveryOnly: isSubagentBackgroundRead },
-      )) {
-        readResponse = await transcriptStore.hydrateThreadResponse(readRequest, upstreamReadResponse, {
-          hydration,
-          touchThread: false,
-        });
+      );
+      if (providerWindow) {
+        const providerWindowResponse: JsonRpcResponse = {
+          ...upstreamReadResponse,
+          result: {
+            ...(asRecord(upstreamReadResponse.result) ?? {}),
+            thread: providerWindow.thread,
+          },
+        };
+        try {
+          readResponse = await transcriptStore.hydrateThreadResponse(readRequest, providerWindowResponse, {
+            hydration,
+            touchThread: false,
+          });
+        } finally {
+          threadWindowStore.recordProviderWindow(providerWindow.recording);
+        }
       }
     }
     if (readResponse.error) {
@@ -2844,17 +2857,36 @@ export default class CodexStdioBridge {
       readProviderPreviousCursor: (threadId, beforeTurnId) => (
         transcriptStore.readProviderPreviousCursor(threadId, beforeTurnId)
       ),
-      recordProviderTurnCatalog: (thread, turns, boundary) => (
-        transcriptStore.recordProviderTurnCatalog(thread, turns, boundary)
-      ),
-      recordProviderTurnPage: async (thread, turn, previousCursor) => {
-        await this.captureTranscript(`provider-turn-page:${thread.id}:${turn.id}`, async () => {
-          const observations = await this.createSqliteProviderTurnPageObservations(thread, turn);
+      recordProviderWindow: (recording) => {
+        const labelTurnId = recording.page?.turn.id
+          ?? recording.catalog?.turns.at(-1)?.id
+          ?? "empty";
+        void this.captureTranscript(`provider-turn-window:${recording.thread.id}:${labelTurnId}`, async () => {
+          const providerThread = {
+            ...recording.thread,
+            turns: recording.catalog?.turns ?? (recording.page ? [recording.page.turn] : []),
+          };
+          const observations = await this.createSqliteProviderWindowObservations(providerThread);
           await this.transcriptRecording.recordProviderFact({
             observations,
-            recordLegacy: () => transcriptStore.recordProviderTurnPage(thread, turn, previousCursor),
+            recordLegacy: async () => {
+              if (recording.catalog) {
+                await transcriptStore.recordProviderTurnCatalog(
+                  recording.thread,
+                  recording.catalog.turns,
+                  recording.catalog.boundary,
+                );
+              }
+              if (recording.page) {
+                await transcriptStore.recordProviderTurnPage(
+                  recording.thread,
+                  recording.page.turn,
+                  recording.page.previousCursor,
+                );
+              }
+            },
           });
-        }, { propagateFailure: true });
+        });
       },
     };
   }
@@ -3042,23 +3074,12 @@ export default class CodexStdioBridge {
     return { id: requestId, result: { kind: "steered", turnId } };
   }
 
-  private async createSqliteProviderTurnPageObservations(
+  private async createSqliteProviderWindowObservations(
     thread: Thread,
-    turn: Turn,
   ): Promise<WorkbenchTranscriptAtomicObservation[]> {
     if (!this.sqliteTranscriptEnabled) return [];
     const context = await this.resolveTranscriptThreadContext(thread);
-    return [
-      createCodexTranscriptProviderThreadObservation(thread.id, context),
-      createCodexTranscriptProviderTurnObservation({ context, threadId: thread.id, turn }),
-      ...turn.items.map((item) => createCodexTranscriptProviderItemObservation({
-        item,
-        lifecycle: turn.status === "inProgress" ? "streaming" : "completed",
-        observedAt: Math.round((turn.completedAt ?? turn.startedAt ?? thread.updatedAt) * 1_000),
-        threadId: thread.id,
-        turnId: turn.id,
-      })),
-    ];
+    return createCodexTranscriptProviderThreadObservations(thread, context);
   }
 
   private async createSqliteProviderResponseObservations(
