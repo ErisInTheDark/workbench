@@ -1125,6 +1125,11 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     stderr: "",
     stdout: "Thread title: Current task\n",
   });
+  assert.deepEqual(adapt("thread-title-get", { title: "" }), {
+    exitCode: 0,
+    stderr: "",
+    stdout: "No thread title is set.\n",
+  });
   assert.equal(adapt("thread-refresh", { accepted: true }).stdout, "Thread refresh scheduled.\n");
   const planRef = "a".repeat(40);
   const successorRef = "b".repeat(40);

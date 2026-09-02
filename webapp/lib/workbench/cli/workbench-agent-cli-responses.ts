@@ -174,8 +174,10 @@ export function adaptWorkbenchAgentCliResponse({
       }) : [];
       return succeeded(scopes.join("\n"));
     }
-    case "thread-title-get":
-      return succeeded(`Thread title: ${readString(payload, "title") || "untitled"}`);
+    case "thread-title-get": {
+      const title = readString(payload, "title");
+      return succeeded(title ? `Thread title: ${title}` : "No thread title is set.");
+    }
     case "thread-title":
       return succeeded(`Thread title set: ${readString(payload, "title") || "untitled"}`);
     case "thread-status":
