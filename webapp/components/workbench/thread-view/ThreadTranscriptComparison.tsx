@@ -39,11 +39,11 @@ function TranscriptComparisonCell({
   entry,
   inlineMentionSources,
   knownSkills,
+  missingIdentity,
   projectFilePaths,
   projectId,
   projectRootPath,
   relatedThreadsById,
-  source,
   subagents,
   threadCwdPath,
   threadId,
@@ -54,54 +54,48 @@ function TranscriptComparisonCell({
   entry: WorkbenchTranscriptComparisonItem | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills: WorkbenchSkillSummary[];
+  missingIdentity: string;
   projectFilePaths: readonly string[];
   projectId: string;
   projectRootPath: string;
   relatedThreadsById: Record<string, ThreadPayload | undefined>;
-  source: "JSON" | "SQLite";
   subagents: readonly WorkbenchSubagentSummary[];
   threadCwdPath: string;
   threadId: string;
   turn: ThreadPayload["turns"][number] | WorkbenchTranscriptProjection["turns"][number] | null;
   workspaceRoots: readonly WorkspaceFileLinkRoot[];
 }) {
+  if (!entry) {
+    return (
+      <div className="flex min-h-16 min-w-0 items-center justify-center px-4 py-6 text-center text-[0.78em] text-muted">
+        Missing {missingIdentity}
+      </div>
+    );
+  }
+
+  if (!turn) return null;
+
   return (
-    <section className="min-w-0 rounded-[1rem] bg-[color-mix(in_srgb,var(--text)_3%,transparent)] px-4 py-3">
-      <p className="m-0 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[0.68em] font-medium tracking-[0.08em] text-muted uppercase">
-        <span className="text-text">{source}</span>
-        {entry ? (
-          <>
-            <span>{entry.type}</span>
-            <code className="break-all font-mono normal-case tracking-normal">{entry.identity}</code>
-            <span className="break-all normal-case tracking-normal">turn {entry.turnId}</span>
-          </>
-        ) : (
-          <span className="normal-case tracking-normal">No matching item</span>
-        )}
-      </p>
-      {entry && turn ? (
-        <div className="mt-2">
-          <ThreadTranscriptItemDetails
-            browseResultEntries={browseResultEntries}
-            inlineMentionSources={inlineMentionSources}
-            item={entry.item}
-            itemTimeline={"itemTimeline" in turn ? turn.itemTimeline : undefined}
-            knownSkills={knownSkills}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            relatedThreadsById={relatedThreadsById}
-            subagents={subagents}
-            threadCwdPath={threadCwdPath}
-            threadId={threadId}
-            turnCompletedAt={turn.completedAt}
-            turnStartedAt={turn.startedAt}
-            turnStatus={turn.status}
-            workspaceRoots={workspaceRoots}
-          />
-        </div>
-      ) : null}
-    </section>
+    <div className="min-w-0">
+      <ThreadTranscriptItemDetails
+        browseResultEntries={browseResultEntries}
+        inlineMentionSources={inlineMentionSources}
+        item={entry.item}
+        itemTimeline={"itemTimeline" in turn ? turn.itemTimeline : undefined}
+        knownSkills={knownSkills}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        relatedThreadsById={relatedThreadsById}
+        subagents={subagents}
+        threadCwdPath={threadCwdPath}
+        threadId={threadId}
+        turnCompletedAt={turn.completedAt}
+        turnStartedAt={turn.startedAt}
+        turnStatus={turn.status}
+        workspaceRoots={workspaceRoots}
+      />
+    </div>
   );
 }
 
@@ -206,11 +200,11 @@ export default function ThreadTranscriptComparison({
                 entry={row.json}
                 inlineMentionSources={inlineMentionSources}
                 knownSkills={knownSkills}
+                missingIdentity={identity}
                 projectFilePaths={projectFilePaths}
                 projectId={projectId}
                 projectRootPath={projectRootPath}
                 relatedThreadsById={relatedThreadsById}
-                source="JSON"
                 subagents={subagents}
                 threadCwdPath={jsonThread.cwd}
                 threadId={jsonThread.id}
@@ -224,11 +218,11 @@ export default function ThreadTranscriptComparison({
                 entry={row.sqlite}
                 inlineMentionSources={inlineMentionSources}
                 knownSkills={knownSkills}
+                missingIdentity={identity}
                 projectFilePaths={projectFilePaths}
                 projectId={projectId}
                 projectRootPath={projectRootPath}
                 relatedThreadsById={relatedThreadsById}
-                source="SQLite"
                 subagents={subagents}
                 threadCwdPath={sqliteProjection.thread.projectRoot}
                 threadId={sqliteProjection.thread.id}

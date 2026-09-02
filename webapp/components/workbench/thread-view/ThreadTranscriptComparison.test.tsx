@@ -150,7 +150,8 @@ test("comparison renders both sources and explicit gaps without losing later ali
   assert.match(html, /SQLite transcript/u);
   assert.match(html, /JSON only/u);
   assert.match(html, /SQLite only/u);
-  assert.match(html, /No matching item/u);
+  assert.match(html, /Missing json-only/u);
+  assert.match(html, /Missing sqlite-only/u);
   assert.match(html, /tail JSON/u);
   assert.match(html, /tail SQLite/u);
 });
@@ -255,6 +256,5 @@ test("comparison includes SQLite-only turns outside the JSON visible turn set", 
   );
 
   assert.match(html, /SQLite extra turn/u);
-  assert.match(html, /sqlite-turn/u);
-  assert.match(html, /No matching item/u);
+  assert.match(html, /Missing sqlite-extra/u);
 });
