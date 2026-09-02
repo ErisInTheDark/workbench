@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - WorkbenchThreadStateFeatureContext: stable ports required by the reloadable sidebar, lifecycle, Git retention, and shared project-observation owner. Keywords: dependency injection, thread state, retention, project.
+ * - WorkbenchThreadStateFeatureContext: stable database, sidebar, lifecycle, Git retention, and shared project-observation ports. Keywords: dependency injection, thread state, retention, project, sqlite.
  * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result. Keywords: lifecycle, observation, persistence.
  * - normalizeProviderSidebarEntry/normalizeSubagentProviderLifecycle/mapProviderLifecycleNotification/mapProviderActivityNotification: normalize provider rows, subagent defaults, lifecycle, and activity notifications. Keywords: timestamp, lifecycle, harness.
- * - default WorkbenchThreadStateFeature: own reconciliation, project observation, provider-backed title and status commands, notification observation, and the current controller. Keywords: sidebar, project, lifecycle, title, reloadable feature.
+ * - default WorkbenchThreadStateFeature: own reconciliation, project observation, SQLite store injection, provider-backed title and status commands, notification observation, and the current controller. Keywords: sidebar, project, lifecycle, title, sqlite, reloadable feature.
  */
 import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
 import { getCurrentTurn } from "../lib/codex/thread-state";
@@ -16,6 +16,7 @@ import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse 
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchThreadGitArcSnapshot, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
+import WorkbenchThreadStateStore, { type WorkbenchThreadStateStoreDatabase } from "./WorkbenchThreadStateStore";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { WorkbenchGitArcLifecycleState as GitArcLifecycleState, WorkbenchGitArcPlanState as GitArcPlanState } from "./WorkbenchGitArcFeature";
 
@@ -46,6 +47,7 @@ function legacyGitArc(claim: GitArcActiveClaim): RepoGitArcLifecycleState {
 }
 
 export interface WorkbenchThreadStateFeatureContext {
+  database: WorkbenchThreadStateStoreDatabase;
   gitArcs: {
     findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcActiveClaim | null>;
     findLifecycleState?(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcLifecycleState | RepoGitArcLifecycleState | null>;
@@ -246,6 +248,7 @@ export default class WorkbenchThreadStateFeature {
         return await read.call(context.transitions, project.rootPath, operation);
       },
       storageRoot: context.storageRoot,
+      threadStateStore: new WorkbenchThreadStateStore(context.database),
     });
   }
 

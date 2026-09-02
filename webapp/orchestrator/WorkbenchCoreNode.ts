@@ -194,6 +194,7 @@ function createWorkbenchCoreFeature(
     },
   });
   threadState = new WorkbenchThreadStateFeature({
+    database,
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
     gitArcs: gitArc,
     harnesses,
@@ -336,6 +337,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/orchestrator/WorkbenchSubagentStore.ts",
     "webapp/orchestrator/WorkbenchThreadStateFeature.ts",
     "webapp/orchestrator/WorkbenchThreadStateController.ts",
+    "webapp/orchestrator/WorkbenchThreadStateStore.ts",
     "webapp/orchestrator/BrowseSessionCleanupSupervisor.ts",
     "webapp/orchestrator/CodexHealthMonitor.ts",
     "webapp/lib/project.ts",

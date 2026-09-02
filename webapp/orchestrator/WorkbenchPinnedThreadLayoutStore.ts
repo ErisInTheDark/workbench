@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchPinnedThreadLayoutStore: own Workbench-wide pinned folders, sparse ordering, compatibility import, and durable atomic persistence. Keywords: pinned, global, layout, folder, storage.
+ * - default WorkbenchPinnedThreadLayoutStore: own Workbench-wide pinned folders, sparse ordering, compatibility import, authoritative JSON persistence, and SQLite shadow parity. Keywords: pinned, global, layout, folder, storage, sqlite.
  */
 
 import path from "node:path";
@@ -31,6 +31,10 @@ import type {
   WorkbenchThreadStateRequest,
 } from "../lib/workbench/thread/thread-state";
 import AtomicJsonStore from "./AtomicJsonStore";
+import WorkbenchThreadStateStore, {
+  describeWorkbenchThreadStateParityIssue,
+  describeWorkbenchThreadStateStoreFailure,
+} from "./WorkbenchThreadStateStore";
 
 const StoredPinnedThreadLayoutSchema = z.object({
   displayOrder: ThreadDisplayLayoutSchema,
@@ -39,6 +43,12 @@ const StoredPinnedThreadLayoutSchema = z.object({
   version: z.literal(1),
 }).strict();
 type StoredPinnedThreadLayout = z.infer<typeof StoredPinnedThreadLayoutSchema>;
+interface WorkbenchPinnedThreadLayoutStoreOptions {
+  json?: AtomicJsonStore;
+  reportRepairs?: (repairedPaths: PropertyKey[][]) => void;
+  reportSqliteIssue?: (message: string) => void;
+  sqlite?: WorkbenchThreadStateStore;
+}
 
 const EMPTY_STORED_LAYOUT: StoredPinnedThreadLayout = {
   displayOrder: {},
@@ -88,16 +98,20 @@ function qualifyProjectPinnedOrder(projectId: string, entries: readonly Workbenc
 
 export default class WorkbenchPinnedThreadLayoutStore {
   private readonly filePath: string;
+  private readonly json: AtomicJsonStore;
   private loadPromise: Promise<StoredPinnedThreadLayout> | null = null;
   private operationQueue: Promise<void> = Promise.resolve();
+  private readonly reportRepairs: (repairedPaths: PropertyKey[][]) => void;
+  private readonly reportSqliteIssue: (message: string) => void;
+  private readonly sqlite: WorkbenchThreadStateStore | null;
   private state: StoredPinnedThreadLayout | null = null;
 
-  constructor(
-    storageRoot: string,
-    private readonly reportRepairs: (repairedPaths: PropertyKey[][]) => void = () => undefined,
-    private readonly json = new AtomicJsonStore(),
-  ) {
+  constructor(storageRoot: string, options: WorkbenchPinnedThreadLayoutStoreOptions = {}) {
     this.filePath = path.join(storageRoot, ".workbench", "runtime", "pinned-thread-layout.json");
+    this.json = options.json ?? new AtomicJsonStore();
+    this.reportRepairs = options.reportRepairs ?? (() => undefined);
+    this.reportSqliteIssue = options.reportSqliteIssue ?? (() => undefined);
+    this.sqlite = options.sqlite ?? null;
   }
 
   async getSnapshot(): Promise<WorkbenchPinnedThreadLayoutSnapshot> {
@@ -177,14 +191,48 @@ export default class WorkbenchPinnedThreadLayoutStore {
       this.reportRepairs(conformed.repairedPaths);
       this.state = conformed.data;
       return this.state;
+    }).then(async (state) => {
+      await this.baselineSqlite(state);
+      return state;
     });
     return await this.loadPromise;
   }
 
   private async commit(next: StoredPinnedThreadLayout) {
     await this.json.write(this.filePath, next);
+    await this.verifySqlite(next);
     this.state = next;
     return { displayOrder: next.displayOrder, revision: next.revision, updateKind: "pinnedThreadLayout" as const };
+  }
+
+  private conformSqlite(candidate: unknown) {
+    return conformToZodSchema(StoredPinnedThreadLayoutSchema, candidate, EMPTY_STORED_LAYOUT).data;
+  }
+
+  private async baselineSqlite(state: StoredPinnedThreadLayout) {
+    if (!this.sqlite) return;
+    try {
+      const issue = describeWorkbenchThreadStateParityIssue(
+        "pinned thread layout",
+        await this.sqlite.baselineGlobal("pinnedLayout", state, (candidate) => this.conformSqlite(candidate)),
+      );
+      if (issue) this.reportSqliteIssue(issue);
+    } catch (error) {
+      this.reportSqliteIssue(describeWorkbenchThreadStateStoreFailure("pinned thread layout baseline", error));
+    }
+  }
+
+  private async verifySqlite(state: StoredPinnedThreadLayout) {
+    if (!this.sqlite) return;
+    try {
+      const issue = describeWorkbenchThreadStateParityIssue(
+        "pinned thread layout",
+        await this.sqlite.writeAndVerifyGlobal("pinnedLayout", state, (candidate) => this.conformSqlite(candidate)),
+      );
+      if (issue) this.reportSqliteIssue(issue);
+    } catch (error) {
+      this.reportSqliteIssue(describeWorkbenchThreadStateStoreFailure("pinned thread layout write", error));
+    }
   }
 
   private enqueue<T>(operation: () => Promise<T>) {

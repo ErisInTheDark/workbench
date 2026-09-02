@@ -7,6 +7,7 @@ import * as evidenceSchemaModule from "./evidence-schema.ts";
 import * as interactionSchemaModule from "./interaction-schema.ts";
 import * as itemSchemaModule from "./item-schema.ts";
 import * as operationSourceSchemaModule from "./operation-source-schema.ts";
+import * as threadStateSchemaModule from "./thread-state-schema.ts";
 
 test("subsystem modules do not export versioned table descriptors", () => {
   const subsystemModules = [
@@ -15,6 +16,7 @@ test("subsystem modules do not export versioned table descriptors", () => {
     operationSourceSchemaModule,
     interactionSchemaModule,
     evidenceSchemaModule,
+    threadStateSchemaModule,
   ];
   for (const subsystemModule of subsystemModules) {
     assert.deepEqual(Object.keys(subsystemModule).filter((name) => /V\d+$/.test(name)), []);

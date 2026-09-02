@@ -14,6 +14,8 @@
  * InteractionSchemaRows: current interaction selected-row registry. Keywords: database, schema, types.
  * evidenceTables: current evidence table map. Keywords: database, schema, evidence.
  * EvidenceSchemaRows: current evidence selected-row registry. Keywords: database, schema, types.
+ * threadStateTables: current thread-state table map. Keywords: database, schema, thread state.
+ * ThreadStateSchemaRows: current thread-state selected-row registry. Keywords: database, schema, thread state, types.
  * workbenchDatabaseTables: every current table keyed by its SQLite name. Keywords: database, schema, statements.
  */
 import type Database from "better-sqlite3";
@@ -24,6 +26,7 @@ import { evidenceSchemaHistory } from "../../lib/workbench/database/schema/evide
 import { interactionSchemaHistory } from "../../lib/workbench/database/schema/interaction-schema.ts";
 import { itemSchemaHistory } from "../../lib/workbench/database/schema/item-schema.ts";
 import { operationSourceSchemaHistory } from "../../lib/workbench/database/schema/operation-source-schema.ts";
+import { threadStateSchemaHistory } from "../../lib/workbench/database/schema/thread-state-schema.ts";
 import type { CurrentTableDefinition } from "workbench-shared/database/schema/schema-definition";
 import { applyWorkbenchDatabaseSchema, defineWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
 import { codexSandboxNetworkTables } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
@@ -32,6 +35,7 @@ import { evidenceTables } from "../../lib/workbench/database/schema/evidence-sch
 import { interactionTables } from "../../lib/workbench/database/schema/interaction-schema.ts";
 import { itemTables } from "../../lib/workbench/database/schema/item-schema.ts";
 import { operationSourceTables } from "../../lib/workbench/database/schema/operation-source-schema.ts";
+import { threadStateTables } from "../../lib/workbench/database/schema/thread-state-schema.ts";
 
 export { codexSandboxNetworkTables } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
 export type { CodexSandboxNetworkSchemaRows } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
@@ -45,6 +49,8 @@ export { itemTables } from "../../lib/workbench/database/schema/item-schema.ts";
 export type { ItemSchemaRows } from "../../lib/workbench/database/schema/item-schema.ts";
 export { operationSourceTables } from "../../lib/workbench/database/schema/operation-source-schema.ts";
 export type { OperationSourceSchemaRows } from "../../lib/workbench/database/schema/operation-source-schema.ts";
+export { threadStateTables } from "../../lib/workbench/database/schema/thread-state-schema.ts";
+export type { ThreadStateSchemaRows } from "../../lib/workbench/database/schema/thread-state-schema.ts";
 
 const workbenchDatabaseSchema = defineWorkbenchDatabaseSchema({
   subsystems: [
@@ -54,6 +60,7 @@ const workbenchDatabaseSchema = defineWorkbenchDatabaseSchema({
     operationSourceSchemaHistory,
     interactionSchemaHistory,
     evidenceSchemaHistory,
+    threadStateSchemaHistory,
   ],
 });
 
@@ -64,6 +71,7 @@ const currentTables = {
   ...operationSourceTables,
   ...interactionTables,
   ...evidenceTables,
+  ...threadStateTables,
 };
 
 export const workbenchDatabaseTables = Object.freeze(Object.fromEntries(

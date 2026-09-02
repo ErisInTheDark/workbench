@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect provider normalization, relationship projection, progressive reconciliation, Git projection and retention routing, managed resume, and controller-owned title mutation. Keywords: provider, sidebar, subagent, title, resume, reconciliation, git, retention, test.
+ * - No production exports; tests protect provider normalization, SQLite store routing, relationship projection, progressive reconciliation, Git projection and retention routing, managed resume, and controller-owned title mutation. Keywords: provider, sidebar, sqlite, subagent, title, resume, reconciliation, git, retention, test.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -10,6 +10,7 @@ import test from "node:test";
 
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "../lib/types";
 import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchDatabaseMutation, WorkbenchDatabaseQuery, WorkbenchDatabaseRow, WorkbenchDatabaseValue } from "workbench-shared/database/workbench-database-statements";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import WorkbenchThreadStateFeature, { mapProviderActivityNotification, mapProviderLifecycleNotification, normalizeProviderSidebarEntry, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
@@ -36,6 +37,38 @@ function createHarnesses(
     listHarnesses: () => ["codex", "copilot", "opencode"] satisfies WorkbenchHarness[],
     request,
     resumeThread,
+  };
+}
+
+function createThreadStateDatabase() {
+  const rowsByTable = new Map<string, Array<Record<string, WorkbenchDatabaseValue>>>();
+  const operations: string[] = [];
+  return {
+    executeTransaction: async (statements: readonly WorkbenchDatabaseMutation[]) => {
+      for (const statement of statements) {
+        operations.push(`${statement.kind}:${statement.tableName}`);
+        if (statement.kind !== "upsert") throw new Error(`Unexpected test database mutation: ${statement.kind}`);
+        const rows = rowsByTable.get(statement.tableName) ?? [];
+        const incoming = Object.fromEntries(statement.values);
+        const existing = rows.find((row) => statement.conflictColumns.every((column) => row[column] === incoming[column]));
+        if (existing) {
+          for (const column of statement.updateColumns) existing[column] = incoming[column]!;
+        } else {
+          rows.push(incoming);
+          rowsByTable.set(statement.tableName, rows);
+        }
+      }
+      return { changes: statements.length };
+    },
+    query: async <Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>) => {
+      operations.push(`${statement.kind}:${statement.tableName}`);
+      const rows = rowsByTable.get(statement.tableName) ?? [];
+      return rows.filter((row) => (
+        statement.where.every(([column, value]) => row[column] === value)
+        && statement.whereIn.every(([column, values]) => values.includes(row[column] as Exclude<WorkbenchDatabaseValue, null>))
+      )).map((row) => ({ ...row }) as Row);
+    },
+    operations,
   };
 }
 
@@ -97,7 +130,9 @@ test("provider lifecycle notification mapping is exact and bounded", () => {
 
 test("provider notification observation returns the persisted lifecycle result", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-observation-result-"));
+  const database = createThreadStateDatabase();
   const feature = new WorkbenchThreadStateFeature({
+    database,
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     harnesses: createHarnesses(async (_harness, request) => ({ id: request.id ?? null, result: { data: [], nextCursor: null } })),
@@ -130,6 +165,7 @@ test("provider notification observation returns the persisted lifecycle result",
     lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
     threadId: "thread",
   });
+  assert.equal(database.operations.includes("upsert:workbench_thread_state_projects"), true);
 
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
@@ -152,6 +188,7 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-mcp-admission-"));
   const requests: JsonRpcRequest[] = [];
   const feature = new WorkbenchThreadStateFeature({
+    database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     harnesses: createHarnesses(async (_harness, request) => {
@@ -217,6 +254,7 @@ test("a relationship committed during provider pagination remains a subagent aft
     updatedAt: 2,
   };
   const feature = new WorkbenchThreadStateFeature({
+    database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     harnesses: createHarnesses(async (harness, request) => {
@@ -312,6 +350,7 @@ test("provider reconciliation starts concurrently and publishes each successful 
     listPlanStates: async () => [planState],
   };
   const feature = new WorkbenchThreadStateFeature({
+    database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs,
     listSubagents: async () => ({
@@ -445,6 +484,7 @@ test("deep provider pages serialize across projects while both newest pages star
   let activeDeepPages = 0;
   let maximumActiveDeepPages = 0;
   const feature = new WorkbenchThreadStateFeature({
+    database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
@@ -492,6 +532,7 @@ test("managed title commands use the validated provider title as the mutation pr
   let providerName: string | null = "Current task";
   let providerPreview: string | null = "Initial request";
   const feature = new WorkbenchThreadStateFeature({
+    database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
@@ -621,6 +662,7 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-git-failure-"));
   const logs: string[] = [];
   const feature = new WorkbenchThreadStateFeature({
+    database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs: {
       findActiveClaim: async () => null,
@@ -671,6 +713,7 @@ test("expired settled threads reach repository retention through the feature bou
   }), "utf8");
   const pruned: Array<{ cwd: string; identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }> }> = [];
   const feature = new WorkbenchThreadStateFeature({
+    database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: {
       findActiveClaim: async () => null,
@@ -728,6 +771,7 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
     intentName: "old plan", scopePaths: ["owned.ts"], threadId: "thread-one", updatedAt: "2026-08-23T00:00:00.000Z",
   };
   const feature = new WorkbenchThreadStateFeature({
+    database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: {
       findActiveClaim: async () => resolved ? null : activeClaim,
@@ -818,6 +862,7 @@ test("managed resume validates the provider thread before requesting lifecycle-o
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-managed-resume-"));
   const resumes: Array<{ harness: string; threadId: string }> = [];
   const feature = new WorkbenchThreadStateFeature({
+    database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
@@ -873,6 +918,7 @@ test("observed title mutations update the provider and published sidebar togethe
   const titleRequests: Array<{ harness: string; params: unknown }> = [];
   let rejectTitle = false;
   const feature = new WorkbenchThreadStateFeature({
+    database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),

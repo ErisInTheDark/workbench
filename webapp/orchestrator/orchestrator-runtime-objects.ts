@@ -4,7 +4,7 @@
  * - OrchestratorProviderNotification: provider event routed into the core node. Keywords: provider, notification, thread state.
  * - OrchestratorCodexAppServerRuntime: persistent Codex app-server registration. Keywords: codex, runtime, lifecycle.
  * - OrchestratorBrowseExecution: warm Browse execution registration. Keywords: browse, runtime, lifecycle.
- * - OrchestratorDatabaseRegistration: mandatory SQLite lifecycle registration. Keywords: database, readiness, lifecycle.
+ * - OrchestratorDatabaseRegistration: mandatory SQLite lifecycle and typed statement registration. Keywords: database, readiness, lifecycle, statement.
  * - WorkbenchCodexSandboxNetworkController: server-owned Codex sandbox network settings. Keywords: Codex, sandbox, network, settings.
  * - OrchestratorTranscriptRegistration: SQLite transcript recording and recovery registration. Keywords: transcript, recovery, subscription.
  * - OrchestratorTranscriptShadowLog: bounded transcript diagnostic log registration. Keywords: transcript, diagnostics, log.
@@ -16,9 +16,15 @@ import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPr
 import * as workbenchLibrary from "../lib/workbench-library";
 import type { WorkbenchTranscriptSnapshot } from "../lib/workbench/database/transcript/workbench-transcript-contract";
 import type {
+  WorkbenchDatabaseMutation,
+  WorkbenchDatabaseQuery,
+  WorkbenchDatabaseRow,
+} from "workbench-shared/database/workbench-database-statements";
+import type {
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptRecordingContext,
 } from "./database/transcript/workbench-transcript-types";
+import type { WorkbenchDatabaseMutationResult } from "./database/workbench-database-protocol";
 import type BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
@@ -87,7 +93,9 @@ export interface OrchestratorBrowseExecution {
 export interface OrchestratorDatabaseRegistration {
   assertReady(): void;
   close(): Promise<void>;
+  executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult>;
   readonly failure: Error | null;
+  query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Promise<Row[]>;
   start(): Promise<object>;
   readonly state: "starting" | "ready" | "failed" | "closed";
 }

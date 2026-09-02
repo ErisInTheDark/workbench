@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadGitArcSnapshot/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state and title ports, Git projection, claim context, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification, title, git.
- * - default WorkbenchThreadStateController: own UI-independent thread records, settlement retention timing, fallback storage reads, durable display order, provider observation, and local/cross-project sidebar projection. Keywords: drafts, pinned, project, lifecycle, retention, headless.
+ * - default WorkbenchThreadStateController: own UI-independent thread records, settlement retention timing, authoritative JSON state, SQLite shadow parity, durable display order, provider observation, and local/cross-project sidebar projection. Keywords: drafts, pinned, project, lifecycle, retention, headless, sqlite.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -75,6 +75,10 @@ import AtomicJsonStore from "./AtomicJsonStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import WorkbenchHomeThreadDisplayOrderStore from "./WorkbenchHomeThreadDisplayOrderStore";
 import WorkbenchPinnedThreadLayoutStore from "./WorkbenchPinnedThreadLayoutStore";
+import WorkbenchThreadStateStore, {
+  describeWorkbenchThreadStateParityIssue,
+  describeWorkbenchThreadStateStoreFailure,
+} from "./WorkbenchThreadStateStore";
 import {
   conformStoredWorkbenchThreadStateRecord,
   parseWorkbenchThreadStateEntry,
@@ -156,6 +160,7 @@ export interface WorkbenchThreadStateControllerOptions {
   runGitArcReadTransition: <TValue>(projectId: string, operation: () => Promise<TValue>) => Promise<TValue>;
   storageRoot: string;
   subscribeReloadDirt?: (listener: () => void) => () => void;
+  threadStateStore?: WorkbenchThreadStateStore;
 }
 
 export interface WorkbenchThreadReconciliationFailure {
@@ -305,11 +310,19 @@ export default class WorkbenchThreadStateController {
     this.now = options.now ?? Date.now;
     this.homeDisplayOrder = new WorkbenchHomeThreadDisplayOrderStore(
       options.storageRoot,
-      (repairedPaths) => this.logHomeDisplayOrderRepairs(repairedPaths),
+      {
+        reportRepairs: (repairedPaths) => this.logHomeDisplayOrderRepairs(repairedPaths),
+        reportSqliteIssue: (message) => this.options.log?.(message),
+        sqlite: options.threadStateStore,
+      },
     );
     this.pinnedLayout = new WorkbenchPinnedThreadLayoutStore(
       options.storageRoot,
-      (repairedPaths) => this.logPinnedLayoutRepairs(repairedPaths),
+      {
+        reportRepairs: (repairedPaths) => this.logPinnedLayoutRepairs(repairedPaths),
+        reportSqliteIssue: (message) => this.options.log?.(message),
+        sqlite: options.threadStateStore,
+      },
     );
     this.stopReloadDirtSubscription = options.subscribeReloadDirt?.(() => this.publishReloadDirt()) ?? null;
   }
@@ -965,16 +978,22 @@ export default class WorkbenchThreadStateController {
     return this.enqueue(`${projectId}:storage:read`, async (): Promise<StoredProjectState> => {
       const canonicalPath = this.filePath(projectId);
       const canonicalExists = await this.fileExists(canonicalPath);
+      let decoded: StoredProjectState;
       if (canonicalExists) {
         const stored = await this.json.read<StoredProjectState | StoredProjectStateV3 | StoredProjectStateV2 | StoredProjectStateV1>(canonicalPath, { drafts: [], newThreadProfile: null, records: [], version: 4 });
-        return this.decodeStoredProjectState(stored, projectId);
+        decoded = this.decodeStoredProjectState(stored, projectId);
+      } else {
+        const projectRoot = await this.options.resolveProjectRoot(projectId);
+        const legacyPath = this.legacyFilePath(projectRoot, projectId);
+        if (!await this.fileExists(legacyPath)) {
+          decoded = { drafts: [], newThreadProfile: null, records: [], version: 4 };
+        } else {
+          const legacy = await this.json.read<StoredProjectStateV1>(legacyPath, { drafts: [], threads: [], version: 1 });
+          decoded = this.decodeStoredProjectState(legacy, projectId);
+        }
       }
-
-      const projectRoot = await this.options.resolveProjectRoot(projectId);
-      const legacyPath = this.legacyFilePath(projectRoot, projectId);
-      if (!await this.fileExists(legacyPath)) return { drafts: [], newThreadProfile: null, records: [], version: 4 };
-      const legacy = await this.json.read<StoredProjectStateV1>(legacyPath, { drafts: [], threads: [], version: 1 });
-      return this.decodeStoredProjectState(legacy, projectId);
+      await this.baselineProjectSqlite(projectId, decoded);
+      return decoded;
     });
   }
 
@@ -1932,14 +1951,60 @@ export default class WorkbenchThreadStateController {
         };
       });
       const records = [...state.entries.values()].filter((entry): entry is WorkbenchThreadStateRecord => entry.entryKind !== "draft");
-      await this.json.write(this.filePath(projectId), {
+      const document = {
         ...(!isWorkbenchThreadDisplayOrderEmpty(state.displayOrder) ? { displayOrder: state.displayOrder } : {}),
         drafts,
         newThreadProfile: state.newThreadProfile,
         records,
         version: 4,
-      } satisfies StoredProjectState);
+      } satisfies StoredProjectState;
+      await this.json.write(this.filePath(projectId), document);
+      await this.verifyProjectSqlite(projectId, document);
     });
+  }
+
+  private conformSqliteProject(candidate: unknown, projectId: string) {
+    return this.decodeStoredProjectState(candidate as Partial<StoredProjectState>, projectId);
+  }
+
+  private async baselineProjectSqlite(projectId: string, document: StoredProjectState) {
+    if (!this.options.threadStateStore) return;
+    try {
+      const issue = describeWorkbenchThreadStateParityIssue(
+        `project thread state project=${sanitizeLogValue(projectId)}`,
+        await this.options.threadStateStore.baselineProject(
+          projectId,
+          document,
+          (candidate) => this.conformSqliteProject(candidate, projectId),
+        ),
+      );
+      if (issue) this.options.log?.(issue);
+    } catch (error) {
+      this.options.log?.(describeWorkbenchThreadStateStoreFailure(
+        `project thread state baseline project=${sanitizeLogValue(projectId)}`,
+        error,
+      ));
+    }
+  }
+
+  private async verifyProjectSqlite(projectId: string, document: StoredProjectState) {
+    if (!this.options.threadStateStore) return;
+    try {
+      const issue = describeWorkbenchThreadStateParityIssue(
+        `project thread state project=${sanitizeLogValue(projectId)}`,
+        await this.options.threadStateStore.writeAndVerifyProject(
+          projectId,
+          document,
+          (candidate) => this.conformSqliteProject(candidate, projectId),
+        ),
+      );
+      if (issue) this.options.log?.(issue);
+    } catch (error) {
+      this.options.log?.(describeWorkbenchThreadStateStoreFailure(
+        `project thread state write project=${sanitizeLogValue(projectId)}`,
+        error,
+      ));
+    }
   }
 }
 

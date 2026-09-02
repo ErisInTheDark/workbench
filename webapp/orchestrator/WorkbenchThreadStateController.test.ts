@@ -1,4 +1,4 @@
-/* No production exports. Tests protect headless ownership, legacy reload projection, folder persistence, MCP generation, observation replay, reconciliation, mutations, and stale publication fences. */
+/* No production exports. Tests protect headless ownership, legacy reload projection, SQLite shadow parity, folder persistence, MCP generation, observation replay, reconciliation, mutations, and stale publication fences. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -11,6 +11,8 @@ import type { WorkbenchComposerProfileTargetSelection, WorkbenchReloadDirtSnapsh
 import { getProjectQualifiedThreadDisplayKey } from "../lib/workbench/thread/thread-display-layout";
 import { getWorkbenchHomeFolderKey } from "../lib/workbench/thread/home-thread-display-order";
 import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
+import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 
 type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition">
   & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition">>;
@@ -74,7 +76,7 @@ function threadStatePath(root: string, projectId: string) {
   return path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`);
 }
 
-function pinnedRecord(threadId: string, title: string) {
+function pinnedRecord(threadId: string, title: string): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> & { providerObserved: true } {
   return {
     activityAt: 1,
     entryKind: "thread" as const,
@@ -212,6 +214,128 @@ test("global pinned folders import project layout, accept mixed-project members,
   assert.deepEqual(afterSnooze.displayOrder.folders?.[0]?.threadKeys, [keyA]);
   await controller.dispose();
   await fs.rm(root, { force: true, recursive: true });
+});
+
+test("project, pinned, and home thread state mirror to SQLite and report only semantic drift", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-sqlite-shadow-"));
+  await fs.mkdir(path.join(root, ".workbench"), { recursive: true });
+  const database = new WorkbenchDatabaseController({ databasePath: path.join(root, ".workbench", "workbench.sqlite3") });
+  const store = new WorkbenchThreadStateStore(database, () => 10);
+  const logs: string[] = [];
+  const providerEntries: WorkbenchThreadSidebarEntry[] = [
+    pinnedRecord("alpha", "Private alpha title"),
+    pinnedRecord("beta", "Private beta title"),
+  ];
+  const createController = () => new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({ data: [projectOption("project", root)], rootPath: root }),
+    log: (message) => logs.push(message),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", providerEntries, { complete: true });
+      return [];
+    },
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+    threadStateStore: store,
+  });
+  let controller = createController();
+  try {
+    await controller.openGlobal("global", 6);
+    await waitFor(async () => (await controller.getSnapshot("project")).entries.length === 2, "Provider entries did not reconcile.");
+    const alphaKey = getProjectQualifiedThreadDisplayKey("project", "codex:alpha");
+    const betaKey = getProjectQualifiedThreadDisplayKey("project", "codex:beta");
+    const pinnedFolderId = "00000000-0000-4000-8000-000000000301";
+    const pinnedResult = await controller.handleRequest("global", {
+      folderId: pinnedFolderId,
+      method: "workbench/thread-state/pinned-display-order/folder/create",
+      sourceKey: alphaKey,
+      title: "Pinned group",
+    });
+    assert.equal("result" in pinnedResult && (pinnedResult.result as { accepted?: boolean }).accepted, true);
+    const homeResult = await controller.handleRequest("global", {
+      beforeKey: alphaKey,
+      destinationFolderKey: null,
+      method: "workbench/thread-state/home-display-order/move",
+      section: "pinned",
+      sourceKey: betaKey,
+    });
+    assert.equal("result" in homeResult && (homeResult.result as { accepted?: boolean }).accepted, true);
+
+    await waitFor(async () => {
+      const document = await store.readProject("project") as { records?: unknown[] } | null;
+      return document?.records?.length === 2;
+    }, "Project thread state did not reach the SQLite shadow.");
+    const projectDocument = await store.readProject("project") as { records?: unknown[] } | null;
+    const pinnedDocument = await store.readGlobal("pinnedLayout") as { revision?: number } | null;
+    const homeDocument = await store.readGlobal("homeDisplayOrder") as { revision?: number } | null;
+    assert.equal(projectDocument?.records?.length, 2);
+    assert.equal((pinnedDocument?.revision ?? 0) > 0, true);
+    assert.equal((homeDocument?.revision ?? 0) > 0, true);
+    assert.equal(logs.some((message) => message.startsWith("SQLite ")), false);
+
+    await controller.dispose();
+    logs.length = 0;
+    controller = createController();
+    await controller.openGlobal("reopened", 6);
+    await controller.getSnapshot("project");
+    assert.equal(logs.some((message) => message.startsWith("SQLite ")), false);
+
+    await controller.dispose();
+    await store.writeProject("project", { drafts: [], newThreadProfile: null, records: [], version: 4 });
+    logs.length = 0;
+    controller = createController();
+    await controller.getSnapshot("project");
+    const parityLog = logs.find((message) => message.includes("project thread state") && message.includes("mismatched")) ?? "";
+    assert.match(parityLog, /paths=root\./u);
+    assert.equal(parityLog.includes("Private alpha title"), false);
+    const repaired = await store.readProject("project") as { records?: unknown[] } | null;
+    assert.equal(repaired?.records?.length, 2);
+  } finally {
+    await controller.dispose();
+    await database.close();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("SQLite shadow failure does not reverse an accepted JSON-backed thread mutation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-sqlite-failure-"));
+  const logs: string[] = [];
+  const failure = new Error("sqlite shadow unavailable");
+  const store = new WorkbenchThreadStateStore({
+    executeTransaction: async () => { throw failure; },
+    query: async () => { throw failure; },
+  });
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    log: (message) => logs.push(message),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    resolveProjectRoot: async () => root,
+    storageRoot: root,
+    threadStateStore: store,
+  });
+  try {
+    await controller.open("observer", "project");
+    const draftId = "00000000-0000-4000-8000-000000000302";
+    const response = await controller.handleRequest("observer", {
+      draft: {
+        agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 1,
+        draftId, harness: "codex", model: null, profileId: null, projectId: "project", prompt: "Kept draft",
+        reasoningEffort: null, serviceTier: null, updatedAt: 1,
+      },
+      method: "workbench/thread-state/draft/upsert",
+      projectId: "project",
+    });
+    assert.equal("result" in response && (response.result as { accepted?: boolean }).accepted, true);
+    const stored = JSON.parse(await fs.readFile(threadStatePath(root, "project"), "utf8")) as { drafts?: Array<{ prompt?: string }> };
+    assert.equal(stored.drafts?.[0]?.prompt, "Kept draft");
+    assert.equal(logs.some((message) => message.includes("SQLite project thread state write") && message.includes("sqlite shadow unavailable")), true);
+  } finally {
+    await controller.dispose();
+    await fs.rm(root, { force: true, recursive: true });
+  }
 });
 
 test("repairable global pinned layout drift cannot block thread-state open", async () => {

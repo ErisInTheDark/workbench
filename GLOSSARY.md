@@ -6,6 +6,7 @@
 | Project Skill | A skill package stored inside the selected project and surfaced to supported harnesses for that project |
 | Project Agent | An agent prompt stored inside `.agents/agents` in the selected project and surfaced in the composer agent selector for that project |
 | Skill Load | The act of reading a skill's instruction file so the agent can apply that skill's workflow to the current task |
+| thread state | Durable sidebar state owned by `WorkbenchThreadStateController`. It includes project thread and draft records, project display order, new-thread profile selection, home display order, and pinned layout |
 | profile | The exact composer settings snapshot held by a thread or draft. If tied to a stored profile, it also keeps that profile id |
 | stored profile | A named reusable profile. A tied thread copies its latest settings whenever it starts a new turn |
 | profile ribbon | The composer controls immediately to the left of the send button, regardless of their visual treatment |
