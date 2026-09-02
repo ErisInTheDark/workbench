@@ -1,11 +1,9 @@
 /*
  * Exports:
  * - WorkbenchThreadState: owned thread, rate-limit, and model cache state for the workbench. Keywords: workbench, thread, state, codex.
- * - WorkbenchThreadSnapshot: readonly projection of the current thread client state. Keywords: workbench, thread, snapshot, rate limits.
- * - WorkbenchThreadListener: subscriber signature for thread client state changes. Keywords: workbench, thread, subscribe.
  * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator. Keywords: workbench, thread, sidebar, intent.
  * - WorkbenchThreadClientOptions: creation options for the thread client manager hooks. Keywords: workbench, thread, status, callbacks.
- * - default WorkbenchThreadClient: create the thread sub-client that owns Codex, Copilot, or OpenCode thread state and notifications. Keywords: workbench, thread, codex, copilot, opencode, default export.
+ * - default WorkbenchThreadClient: own provider thread state, durable global-home questionnaires, and notifications. Keywords: workbench, thread, codex, copilot, opencode, questionnaire, global home, default export.
  */
 
 import { CodexAppServerClient } from "../codex/app-server-client";
@@ -67,6 +65,7 @@ import type {
     WorkbenchSubmitUserInputRequestOptions,
     WorkbenchThreadDocumentSnapshot,
     WorkbenchThreadGoalControls,
+    WorkbenchThreadRuntimeSnapshot,
     WorkbenchThreadTurnHistoryEntry,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
@@ -188,19 +187,7 @@ export interface WorkbenchThreadState {
   threadsError: string;
 }
 
-export interface WorkbenchThreadSnapshot {
-  currentThread: ThreadPayload | null;
-  currentThreadId: string;
-  isLoading: boolean;
-  pendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
-  rateLimits: RateLimitSnapshot | null;
-  subagents: WorkbenchSubagentSummary[];
-  threadDocuments: WorkbenchThreadDocumentSnapshot;
-  threads: ThreadSummary[];
-  threadsError: string;
-}
-
-export type WorkbenchThreadListener = (snapshot: WorkbenchThreadSnapshot) => void;
+type WorkbenchThreadListener = (snapshot: WorkbenchThreadRuntimeSnapshot) => void;
 
 export interface WorkbenchAcceptedIntent {
   draftId?: string;
@@ -224,11 +211,14 @@ interface WorkbenchThreadClient {
   clearThreadSelection: () => void;
   createThread: (harness: WorkbenchHarness, threadId?: string, options?: { entries?: readonly WorkbenchThreadSidebarEntry[]; project?: WorkbenchProjectOption; select?: boolean }) => ThreadPayload;
   dispose: () => void;
-  getSnapshot: () => WorkbenchThreadSnapshot;
+  getSnapshot: () => WorkbenchThreadRuntimeSnapshot;
   hasThread: (threadId: string) => boolean;
   isCurrentThreadUpToDate: (threadId: string) => boolean;
   isDraftThreadId: (threadId: string) => boolean;
-  installSidebarSnapshot: (snapshot: WorkbenchThreadSidebarSnapshot | null) => void;
+  installThreadStateSources: (sources: {
+    activeProjectSnapshot: WorkbenchThreadSidebarSnapshot | null;
+    durableQuestionnaireEntries: readonly WorkbenchThreadSidebarEntry[];
+  }) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   openThread: (threadId: string, options?: { entries?: readonly WorkbenchThreadSidebarEntry[]; harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" }) => Promise<ThreadPayloadFetchOutcome>;
   onReconnect: (listener: () => void) => () => void;
@@ -1022,7 +1012,8 @@ function WorkbenchThreadClient(
   const pendingUserInputRequestGenerationsByHarness = new Map<WorkbenchHarness, number>();
   const questionnaireListSyncPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
   const questionnaireListSyncedHarnesses = new Set<WorkbenchHarness>();
-  let installedSidebarSnapshot: WorkbenchThreadSidebarSnapshot | null = null;
+  let installedDurableQuestionnaireEntries: readonly WorkbenchThreadSidebarEntry[] = [];
+  const resolvedDurableQuestionnaireKeysByThreadId = new Map<string, string>();
   const browseResultReadGenerationByKey = new Map<string, number>();
   const questionnaireHistoryReadGenerationByKey = new Map<string, number>();
   const steerHistoryReadGenerationByKey = new Map<string, number>();
@@ -1117,7 +1108,7 @@ function WorkbenchThreadClient(
       : null;
   }
 
-  function getSnapshot(): WorkbenchThreadSnapshot {
+  function getSnapshot(): WorkbenchThreadRuntimeSnapshot {
     return {
       currentThread: state.currentThread,
       currentThreadId: state.currentThreadId,
@@ -1194,7 +1185,8 @@ function WorkbenchThreadClient(
     state.pendingUserInputRequestsByThreadId.clear();
     questionnaireListSyncPromisesByHarness.clear();
     questionnaireListSyncedHarnesses.clear();
-    installedSidebarSnapshot = null;
+    installedDurableQuestionnaireEntries = [];
+    resolvedDurableQuestionnaireKeysByThreadId.clear();
     threadRenderPipeline.clear();
     streamingReconciler.clearClientCreatedItemKeys();
     if (emitChange) {
@@ -1544,19 +1536,29 @@ function WorkbenchThreadClient(
     };
   }
 
-  function installSidebarSnapshot(snapshot: WorkbenchThreadSidebarSnapshot | null) {
-    installedSidebarSnapshot = snapshot;
-    if (!snapshot) {
-      state.subagents = [];
-      state.threads = [];
-      state.threadsError = "";
-      state.hasLoadedThreads = false;
-      state.isLoading = false;
-      emit();
-      return;
+  function installThreadStateSources({
+    activeProjectSnapshot,
+    durableQuestionnaireEntries,
+  }: {
+    activeProjectSnapshot: WorkbenchThreadSidebarSnapshot | null;
+    durableQuestionnaireEntries: readonly WorkbenchThreadSidebarEntry[];
+  }) {
+    installedDurableQuestionnaireEntries = durableQuestionnaireEntries;
+
+    const durableQuestionnairesByThreadId = new Map(
+      durableQuestionnaireEntries.flatMap((entry) => (
+        entry.entryKind !== "draft" && entry.pendingQuestionnaire
+          ? [[entry.identity.threadId, entry.pendingQuestionnaire] as const]
+          : []
+      )),
+    );
+    for (const [threadId, requestKey] of resolvedDurableQuestionnaireKeysByThreadId) {
+      if (durableQuestionnairesByThreadId.get(threadId)?.requestKey !== requestKey) {
+        resolvedDurableQuestionnaireKeysByThreadId.delete(threadId);
+      }
     }
 
-    for (const entry of snapshot.entries) {
+    for (const entry of durableQuestionnaireEntries) {
       if (entry.entryKind === "draft") continue;
       const durableHistory = entry.questionnaireHistory ?? [];
       if (durableHistory.length) {
@@ -1581,17 +1583,26 @@ function WorkbenchThreadClient(
       }
     }
     for (const harness of ["codex", "copilot", "opencode"] as const) {
-      if (questionnaireListSyncedHarnesses.has(harness)) {
-        replacePendingUserInputRequests(harness, Array.from(state.pendingUserInputRequestsByThreadId.values()).filter((request) => (
-          request.harness === harness && request.responseMode === "native"
-        )));
-      } else {
+      replacePendingUserInputRequests(harness, Array.from(state.pendingUserInputRequestsByThreadId.values()).filter((request) => (
+        request.harness === harness && request.responseMode === "native"
+      )));
+      if (!questionnaireListSyncedHarnesses.has(harness)) {
         void refreshPendingUserInputRequests(harness);
       }
     }
 
+    if (!activeProjectSnapshot) {
+      state.subagents = [];
+      state.threads = [];
+      state.threadsError = "";
+      state.hasLoadedThreads = false;
+      state.isLoading = false;
+      emit();
+      return;
+    }
+
     const priorThreadsByKey = new Map(state.threads.map((thread) => [`${thread.harness}:${thread.id}`, thread]));
-    state.threads = snapshot.entries.flatMap((entry): ThreadSummary[] => {
+    state.threads = activeProjectSnapshot.entries.flatMap((entry): ThreadSummary[] => {
       if (entry.entryKind !== "thread") return [];
       const prior = priorThreadsByKey.get(`${entry.identity.harness}:${entry.identity.threadId}`);
       const activitySeconds = Math.trunc(entry.activityAt / 1000);
@@ -1611,10 +1622,10 @@ function WorkbenchThreadClient(
         updatedAt: activitySeconds,
       }];
     });
-    state.subagents = projectWorkbenchSubagents(snapshot.entries);
-    state.threadsError = snapshot.error ?? "";
-    state.hasLoadedThreads = snapshot.freshness !== "loading";
-    state.isLoading = snapshot.freshness === "loading";
+    state.subagents = projectWorkbenchSubagents(activeProjectSnapshot.entries);
+    state.threadsError = activeProjectSnapshot.error ?? "";
+    state.hasLoadedThreads = activeProjectSnapshot.freshness !== "loading";
+    state.isLoading = activeProjectSnapshot.freshness === "loading";
     emit();
   }
 
@@ -2873,8 +2884,9 @@ function WorkbenchThreadClient(
     for (const request of requests) {
       nextRequests.set(request.threadId, { ...request, responseMode: "native" });
     }
-    for (const entry of installedSidebarSnapshot?.entries ?? []) {
+    for (const entry of installedDurableQuestionnaireEntries) {
       if (entry.entryKind === "draft" || entry.identity.harness !== harness || !entry.pendingQuestionnaire) continue;
+      if (resolvedDurableQuestionnaireKeysByThreadId.get(entry.identity.threadId) === entry.pendingQuestionnaire.requestKey) continue;
       if (!nextRequests.has(entry.identity.threadId)) {
         nextRequests.set(entry.identity.threadId, {
           harness,
@@ -5347,6 +5359,7 @@ function WorkbenchThreadClient(
       if (!isProjectOperationIdentityCurrent(projectIdentity)) {
         return thread;
       }
+      resolvedDurableQuestionnaireKeysByThreadId.set(thread.id, pendingRequest.requestKey);
       const clearedPendingRequest = clearPendingUserInputRequest(thread.id, pendingRequest.requestKey);
       const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(thread.id);
       if (clearedPendingRequest || clearedWaitingFlag) {
@@ -5506,6 +5519,7 @@ function WorkbenchThreadClient(
         throw new Error("The questionnaire response was admitted, but its durable history could not be resolved.");
       }
       if (disposed || submissionProjectGeneration !== projectContextGeneration) return;
+      resolvedDurableQuestionnaireKeysByThreadId.set(threadId, pendingRequest.requestKey);
       recordLocalQuestionnaireHistoryEntry(pendingRequest, response, {
         insertAfterItemId: historyEntry.insertAfterItemId,
         insertAfterItemIndex: historyEntry.insertAfterItemIndex,
@@ -5548,6 +5562,7 @@ function WorkbenchThreadClient(
     if (submitResult.warning) {
       emitStatusMessage(submitResult.warning);
     }
+    resolvedDurableQuestionnaireKeysByThreadId.set(threadId, pendingRequest.requestKey);
     const clearedPendingRequest = clearPendingUserInputRequest(threadId, pendingRequest.requestKey);
     const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(threadId);
     if (clearedPendingRequest || clearedWaitingFlag) {
@@ -5865,7 +5880,7 @@ function WorkbenchThreadClient(
     dispose,
     getSnapshot,
     hasThread,
-    installSidebarSnapshot,
+    installThreadStateSources,
     isCurrentThreadUpToDate,
     isDraftThreadId,
     listModels,

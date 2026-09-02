@@ -2,7 +2,8 @@
  * Exports:
  * - areExplorerSnapshotsEquivalent: compare root-visible explorer semantics while excluding sidebar-only activity ordering. Keywords: explorer, equality, render boundary.
  * - openWorkbenchThreadStateObservation/openWorkbenchGlobalThreadStateObservation/describeGlobalThreadStateOpenFailure: negotiate sidebar bootstrap versions and expose bounded global-open transport failures. Keywords: thread state, protocol, compatibility, conformance, home.
- * - WorkbenchClient: wire the workbench DOM, bridge continuity recovery, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket, resume.
+ * - MountedWorkbenchClient: provider-facing controls, thread runtime, sidebar store, and disposal boundary. Keywords: React, domain hook, mount.
+ * - WorkbenchClient: wire the workbench DOM, bridge continuity recovery, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket, resume, global home, durable questionnaire.
  */
 
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
@@ -10,7 +11,6 @@ import { getCurrentTurn } from "./codex/thread-state";
 import type {
     ExplorerSnapshot,
     DeleteFileResponse,
-    WorkbenchPendingUserInputRequest,
     WorkbenchProjectOption,
     ThreadPayload,
     WorkbenchBindings,
@@ -20,7 +20,9 @@ import type {
     WorkbenchReadThreadOptions,
     WorkbenchSendThreadMessageOptions,
     WorkbenchSubagentSummary,
-    WorkbenchThreadDocumentSnapshot,
+    WorkbenchThreadRuntimeSnapshot,
+    WorkbenchThreadRuntimeStore,
+    WorkbenchThreadSidebarStore,
     WorkbenchProjectsPayload,
     ThreadSummary,
 } from "./types";
@@ -46,6 +48,7 @@ import WorkbenchFilePanelClient from "./workbench/WorkbenchFilePanelClient";
 import type { WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench/WorkbenchThreadClient";
+import WorkbenchThreadRuntimeStoreController from "./workbench/WorkbenchThreadRuntimeStore";
 import WorkbenchConnectionRecoveryController, { type WorkbenchConnectionContinuity } from "./workbench/WorkbenchConnectionRecoveryController";
 import WorkbenchOrchestratorRuntimeClient from "./workbench/WorkbenchOrchestratorRuntimeClient";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./workbench/daemon/WorkbenchDaemonClient";
@@ -65,6 +68,13 @@ type MountedWorkbenchControls = WorkbenchControls & {
     options?: Partial<Omit<WorkbenchFilePanelClientOptions, "clearThreadSelection" | "draftStore" | "emitExplorerStateChange" | "expandProjectPath" | "fileTransport" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>,
   ) => ReturnType<typeof WorkbenchFilePanelClient>;
 };
+
+export interface MountedWorkbenchClient {
+  controls: WorkbenchControls;
+  dispose: () => void;
+  threadRuntime: WorkbenchThreadRuntimeStore;
+  threadSidebar: WorkbenchThreadSidebarStore;
+}
 
 function readInitialEditorFontSize(controller?: WorkbenchClientStateController) {
   const record = controller?.records("globalPreference").find((candidate) => (
@@ -278,7 +288,7 @@ export async function WorkbenchClient(
     clientStateController?: WorkbenchClientStateController;
     dom?: WorkbenchDomSurfaces | null;
   } = {},
-): Promise<() => void> {
+): Promise<MountedWorkbenchClient> {
   const { ...workbenchBindings } = bindings;
 
   const coordinatorLifecycle = new LifecycleScope();
@@ -332,7 +342,7 @@ export async function WorkbenchClient(
         error: snapshot.reloadDirt.error ?? null,
         pendingScopes: snapshot.reloadDirt.pendingScopes,
       } : null);
-      threadClient.installSidebarSnapshot(snapshot);
+      installCurrentThreadStateSources(snapshot);
       emitExplorerStateChange();
     },
     transport: {
@@ -371,7 +381,17 @@ export async function WorkbenchClient(
       },
     },
   });
-  workbenchBindings.onThreadSidebarStoreReady?.(threadSidebarClient);
+  function installCurrentThreadStateSources(
+    activeProjectSnapshot = threadSidebarClient.getSnapshot(),
+  ) {
+    const durableQuestionnaireEntries = activeProjectSnapshot
+      ? activeProjectSnapshot.entries
+      : threadSidebarClient.getProjectThreadSidebars().projects.flatMap((projectSnapshot) => projectSnapshot.entries);
+    threadClient.installThreadStateSources({
+      activeProjectSnapshot,
+      durableQuestionnaireEntries,
+    });
+  }
   coordinateAcceptedIntent = async (event) => {
     await threadSidebarClient.acceptIntent({
       ...(event.draftId ? { draftId: event.draftId } : {}),
@@ -420,6 +440,14 @@ export async function WorkbenchClient(
     currentThread: initialThreadSnapshot.currentThread,
     currentThreadId: initialThreadSnapshot.currentThreadId,
   });
+  const createThreadRuntimeSnapshot = (
+    snapshot = threadClient.getSnapshot(),
+  ): WorkbenchThreadRuntimeSnapshot => ({
+    ...snapshot,
+    currentThread: sessionState.currentThread,
+    currentThreadId: sessionState.currentThreadId,
+  });
+  const threadRuntime = WorkbenchThreadRuntimeStoreController(createThreadRuntimeSnapshot(initialThreadSnapshot));
   const draftStore = FileDraftStore(
     () => projectClient.getSnapshot().currentProjectId,
     emitExplorerStateChange,
@@ -438,6 +466,9 @@ export async function WorkbenchClient(
       rootPath: snapshot.rootPath,
       roots: snapshot.roots,
     });
+    if (previousProjectId !== snapshot.currentProjectId) {
+      installCurrentThreadStateSources();
+    }
     if (previousProjectId && previousProjectId !== snapshot.currentProjectId) {
       activeFilePath = "";
       void draftStore.hydratePersistedDrafts();
@@ -460,20 +491,7 @@ export async function WorkbenchClient(
       }
     }
 
-    if (lastSnapshot.rateLimits !== snapshot.rateLimits) {
-      emitRateLimitsChange();
-    }
-
-    if (!arePendingUserInputRequestsEquivalent(
-      lastSnapshot.pendingUserInputRequestsByThreadId,
-      snapshot.pendingUserInputRequestsByThreadId,
-    )) {
-      emitPendingUserInputRequestsChange();
-    }
-
-    if (lastSnapshot.threadDocuments !== snapshot.threadDocuments) {
-      emitThreadDocumentsChange(snapshot.threadDocuments);
-    }
+    threadRuntime.accept(createThreadRuntimeSnapshot(snapshot));
 
     if (
       lastSnapshot.currentThreadId !== snapshot.currentThreadId
@@ -544,7 +562,7 @@ export async function WorkbenchClient(
     }
 
     if (lastSnapshot.currentThread !== snapshot.currentThread) {
-      emitCurrentThreadChange();
+      threadRuntime.accept(createThreadRuntimeSnapshot());
     }
   }));
   async function openFile(
@@ -617,22 +635,6 @@ export async function WorkbenchClient(
     });
   }
 
-  function emitCurrentThreadChange() {
-    workbenchBindings.onCurrentThreadChange?.(sessionState.currentThread);
-  }
-
-  function emitThreadDocumentsChange(snapshot: WorkbenchThreadDocumentSnapshot = threadClient.getSnapshot().threadDocuments) {
-    workbenchBindings.onThreadDocumentsChange?.(snapshot);
-  }
-
-  function emitRateLimitsChange() {
-    workbenchBindings.onRateLimitsChange?.(threadClient.getSnapshot().rateLimits);
-  }
-
-  function emitPendingUserInputRequestsChange() {
-    workbenchBindings.onPendingUserInputRequestsChange?.(threadClient.getSnapshot().pendingUserInputRequestsByThreadId);
-  }
-
   function applyCurrentThreadSelection(thread: ThreadPayload | null) {
     if (
       areThreadPayloadsEquivalent(sessionState.currentThread, thread)
@@ -641,7 +643,11 @@ export async function WorkbenchClient(
       return false;
     }
 
-    return sessionState.setCurrentThreadSelection(thread);
+    const changed = sessionState.setCurrentThreadSelection(thread);
+    if (changed) {
+      threadRuntime.accept(createThreadRuntimeSnapshot());
+    }
+    return changed;
   }
 
   function areCurrentTurnsEquivalent(left: ThreadPayload | null, right: ThreadPayload | null) {
@@ -657,26 +663,6 @@ export async function WorkbenchClient(
     }
 
     return areDeeplyEqual(leftTurn, rightTurn);
-  }
-
-  function arePendingUserInputRequestsEquivalent(
-    left: Record<string, WorkbenchPendingUserInputRequest>,
-    right: Record<string, WorkbenchPendingUserInputRequest>,
-  ) {
-    if (left === right) {
-      return true;
-    }
-
-    const leftEntries = Object.entries(left);
-    const rightEntries = Object.entries(right);
-    if (leftEntries.length !== rightEntries.length) {
-      return false;
-    }
-
-    return leftEntries.every(([threadId, request]) => {
-      const matchingRequest = right[threadId];
-      return Boolean(matchingRequest) && areDeeplyEqual(request, matchingRequest);
-    });
   }
 
   function areTurnListsEquivalent(leftTurns: ThreadPayload["turns"], rightTurns: ThreadPayload["turns"]) {
@@ -1264,22 +1250,22 @@ export async function WorkbenchClient(
     );
   });
   emitExplorerStateChange();
-  emitCurrentThreadChange();
-  emitThreadDocumentsChange();
-  emitPendingUserInputRequestsChange();
-  emitRateLimitsChange();
   await applyRoute(activeRoute);
-  workbenchBindings.onControlsReady?.(controls);
   if (sessionState.currentThreadId || activeRoute.view === "thread") {
     void refreshRateLimits();
   }
   connectionRecovery.start();
-  return () => {
-    threadSidebarClient.bestEffortFlush();
-    void threadSidebarClient.close();
-    orchestratorRuntime.dispose();
-    projectClient.dispose();
-    threadClient.dispose();
-    coordinatorLifecycle.dispose();
+  return {
+    controls,
+    dispose: () => {
+      threadSidebarClient.bestEffortFlush();
+      void threadSidebarClient.close();
+      orchestratorRuntime.dispose();
+      projectClient.dispose();
+      threadClient.dispose();
+      coordinatorLifecycle.dispose();
+    },
+    threadRuntime,
+    threadSidebar: threadSidebarClient,
   };
 }

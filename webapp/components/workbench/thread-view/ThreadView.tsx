@@ -1,13 +1,12 @@
 /*
  * Exports:
- * - default ThreadView: render the main thread, subthread tabs, live activity, and polled turn history. Keywords: thread view, subthread, polling, workbench.
+ * - default ThreadView: render the main thread, subthread tabs, live activity, and polled turn history through identity-bound thread controllers. Keywords: thread view, domain hook, subthread, polling, workbench.
  * - Local helpers: merge thread history, derive render state, delegate thread interactions, and locate stable lazy-history turn markers. Keywords: thread, history, rendering, interaction.
  */
 "use client";
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 
-import type { RateLimitSnapshot } from "../../../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../../../lib/codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn, mergeTurnsPreservingLiveItems } from "../../../lib/codex/thread-state";
 import type {
@@ -16,21 +15,14 @@ import type {
   WorkbenchComposerInputDraft,
   WorkbenchComposerSettings,
   WorkbenchHarness,
-  WorkbenchListModelsOptions,
-  WorkbenchModelOption,
   WorkbenchPendingUserInputRequest,
   WorkbenchProjectRoot,
   WorkbenchQuestionnaireDraft,
-  WorkbenchReadThreadOptions,
   WorkbenchSendThreadMessageOptions,
   WorkbenchSkillSummary,
   WorkbenchSubagentSummary,
-  WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadDocumentSnapshot,
-  WorkbenchThreadGoalControls,
-  WorkbenchThreadSidebarStore,
   WorkbenchThreadTurnHistoryEntry,
-  WorkbenchUserInputResponse,
 } from "../../../lib/types";
 import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 import { areDeeplyEqual } from "../../../lib/workbench/deep-equality";
@@ -59,7 +51,7 @@ import {
 import { getThreadDocumentFromSnapshot } from "../../../lib/workbench/thread/thread-document-keys";
 import resolveThreadComposerProfileSlot from "../../../lib/workbench/thread/thread-composer-profile-slot";
 import { ThreadMessageNotSentError } from "../../../lib/workbench/thread/thread-message-submission";
-import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadLifecycle, WorkbenchThreadStateRequest, WorkbenchThreadTarget } from "../../../lib/workbench/thread/thread-state";
+import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadLifecycle, WorkbenchThreadTarget } from "../../../lib/workbench/thread/thread-state";
 import { isWorkbenchPendingSteerUserMessage } from "../../../lib/workbench/thread/thread-steer-history";
 import {
   filterSubagentsByParentThreadId,
@@ -74,6 +66,7 @@ import {
 import { isPendingInitialOptimisticInputItem } from "../../../lib/workbench/thread/ThreadOptimisticInputStore";
 import type { WorkbenchTranscriptProjection } from "../../../lib/workbench/transcript/workbench-transcript-projection";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
+import { useWorkbenchThread } from "../WorkbenchClientProvider";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import projectThreadRenderTurns from "./thread-render-turns";
@@ -578,26 +571,15 @@ export default memo(function ThreadView ({
   hideFinalAgentMessage = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = true,
-  livePendingUserInputRequestsByThreadId,
   onDraftHarnessChange,
   onThreadCodeBlockWrapChange,
-  onListModels,
   onOpenThread,
-  onReadThread,
-  onCompactThread,
   onSendMessage,
-  onStopThread,
-  onSubmitUserInputRequest,
   onThreadComposerDraftChange,
   onThreadComposerDraftClear,
   onThreadQuestionnaireDraftChange,
   onThreadQuestionnaireDraftClear,
-  onThreadAgentChange,
-  onThreadReasoningEffortChange,
-  onThreadServiceTierChange,
   onThreadSettingsChange,
-  onThreadModelChange,
-  onUpdateThreadState,
   onSelectedThreadChange,
   projectId,
   projectFileCandidates,
@@ -607,15 +589,11 @@ export default memo(function ThreadView ({
   projectRootPath,
   projectRoots,
   knownSubagents,
-  rateLimits,
   scrollViewportRef,
   selectedThreadId,
   threadCodeBlockWrap,
   threadComposerDraft,
   threadComposerDraftsByThreadId,
-  threadDocuments,
-  threadGoalControls,
-  threadSidebarStore,
   threadQuestionnaireDraftsByKey,
   transcriptComparisonOpen = false,
   transcriptComparisonProjection = null,
@@ -632,34 +610,19 @@ export default memo(function ThreadView ({
   hideFinalAgentMessage?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
-  livePendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
-  onListModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
-  onReadThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
-  onCompactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   onSendMessage: (
     thread: ThreadPayload,
     input: UserInput[],
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
-  onStopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
-  onSubmitUserInputRequest: (
-    threadId: string,
-    response: WorkbenchUserInputResponse,
-    options?: WorkbenchSubmitUserInputRequestOptions,
-  ) => Promise<void>;
   onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft, reason?: "autosave" | "submission") => void;
   onThreadComposerDraftClear: (threadId: string) => void;
   onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
   onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
-  onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
-  onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
-  onThreadServiceTierChange: (threadId: string, serviceTier: string | null) => void;
   onThreadSettingsChange: (threadId: string, settings: WorkbenchComposerSettings) => void;
-  onThreadModelChange: (threadId: string, model: string) => void;
-  onUpdateThreadState: (request: WorkbenchThreadStateRequest) => Promise<void>;
   onSelectedThreadChange?: (threadId: string) => void;
   projectId: string;
   projectFileCandidates: readonly ProjectTreeFileCandidate[];
@@ -669,15 +632,11 @@ export default memo(function ThreadView ({
   projectRootPath: string;
   projectRoots?: readonly WorkbenchProjectRoot[];
   knownSubagents: readonly WorkbenchSubagentSummary[];
-  rateLimits: RateLimitSnapshot | null;
   scrollViewportRef: RefObject<HTMLDivElement | null>;
   selectedThreadId?: string;
   threadCodeBlockWrap: boolean;
   threadComposerDraft: WorkbenchComposerInputDraft | null;
   threadComposerDraftsByThreadId: Record<string, WorkbenchComposerInputDraft | undefined>;
-  threadDocuments: WorkbenchThreadDocumentSnapshot;
-  threadGoalControls: WorkbenchThreadGoalControls | null;
-  threadSidebarStore: WorkbenchThreadSidebarStore | null;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
   transcriptComparisonOpen?: boolean;
   transcriptComparisonProjection?: WorkbenchTranscriptProjection | null;
@@ -690,6 +649,13 @@ export default memo(function ThreadView ({
   const clientState = useWorkbenchClientStateSnapshot();
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const [activeThreadId, setActiveThreadId] = useState(selectedThreadId ?? thread.id);
+  const activeThreadController = useWorkbenchThread(activeThreadId);
+  const rootThreadController = useWorkbenchThread(thread.id);
+  const threads = activeThreadController.threads;
+  const threadDocuments = threads.documents;
+  const threadGoalControls = threads.goals;
+  const threadSidebarStore = threads.sidebar;
+  const rateLimits = threads.rateLimits;
   const [areSettledSubagentsVisible, setAreSettledSubagentsVisible] = useState(false);
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
   const [loadingThreadIds, setLoadingThreadIds] = useState<Record<string, true>>({});
@@ -795,7 +761,7 @@ export default memo(function ThreadView ({
   const renderActiveThread = activeThreadRenderProjection?.thread ?? null;
   const activeThreadBrowseResultEntries = activeThreadRenderProjection?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;
   const activeHarnessUserInputRequest = activeThread
-    ? livePendingUserInputRequestsByThreadId[activeThread.id] ?? null
+    ? threads.pendingQuestionnaire(activeThread.id)
     : null;
   const activePendingUserInputRequest = activeHarnessUserInputRequest;
   const isDraftThreadView = Boolean(activeThread?.isDraft);
@@ -903,7 +869,7 @@ export default memo(function ThreadView ({
 
     try {
       const subagentCwd = getSubagentSummary(subagents, threadId)?.cwd.trim();
-      const payload = await onReadThread(threadId, harness, {
+      const payload = await threads.read(threadId, harness, {
         ...(subagentCwd ? { cwd: subagentCwd } : {}),
         cursor: null,
         ...(options.background ? { readScope: "subagentBackground" as const } : {}),
@@ -947,7 +913,7 @@ export default memo(function ThreadView ({
         return next;
       });
     }
-  }, [onReadThread, projectId, subagents, thread.harness, thread.id]);
+  }, [projectId, subagents, thread.harness, thread.id, threads.read]);
 
   const handleToggleSettledSubagents = useCallback(() => {
     setAreSettledSubagentsVisible((current) => !current);
@@ -988,7 +954,7 @@ export default memo(function ThreadView ({
 
     try {
       const subagentCwd = getSubagentSummary(subagents, targetThreadId)?.cwd.trim();
-      const payload = await onReadThread(targetThreadId, targetHarness, {
+      const payload = await threads.read(targetThreadId, targetHarness, {
         ...(subagentCwd ? { cwd: subagentCwd } : {}),
         cursor: activeThread.nextPageCursor,
       });
@@ -1024,7 +990,7 @@ export default memo(function ThreadView ({
       dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
       console.error("Previous thread turn load failed.", error);
     }
-  }, [activeThread, firstVisibleLoadedEntry, onReadThread, previousTurnLoadKey, previousTurnLoadStatus, scrollViewportRef, subagents, thread.id]);
+  }, [activeThread, firstVisibleLoadedEntry, previousTurnLoadKey, previousTurnLoadStatus, scrollViewportRef, subagents, thread.id, threads.read]);
 
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;
@@ -1175,23 +1141,23 @@ export default memo(function ThreadView ({
   const handleSubagentPinToggle = useCallback((threadId: string) => {
     const subagent = getSubagentSummary(subagents, threadId);
     if (!subagent) return;
-    void onUpdateThreadState({
+    void threads.updateState({
       identity: { harness: subagent.harness, threadId },
       method: "workbench/thread-state/pin/set",
       pinned: !subagent.pinned,
       projectId,
     });
-  }, [onUpdateThreadState, projectId, subagents]);
+  }, [projectId, subagents, threads.updateState]);
 
   const handleSubagentSettlementToggle = useCallback((threadId: string, settled: boolean) => {
     const subagent = getSubagentSummary(subagents, threadId);
     if (!subagent) return;
-    void onUpdateThreadState({
+    void threads.updateState({
       identity: { harness: subagent.harness, threadId },
       method: settled ? "workbench/thread-state/settle" : "workbench/thread-state/restore",
       projectId,
     });
-  }, [onUpdateThreadState, projectId, subagents]);
+  }, [projectId, subagents, threads.updateState]);
 
   const handleSendMessage = useCallback(async (
     _threadId: string,
@@ -1228,18 +1194,22 @@ export default memo(function ThreadView ({
       return;
     }
 
-    const payload = await onStopThread(activeThread);
+    const payload = await activeThreadController.stop(activeThread);
     if (payload && activeThread.id !== thread.id) {
       setSubthreadsById((current) => ({
         ...current,
         [activeThread.id]: payload,
       }));
     }
-  }, [activeThread, onStopThread, thread.id]);
+  }, [activeThread, activeThreadController, thread.id]);
+
+  const handleCompactThread = useCallback(async (source: ThreadPayload) => (
+    await activeThreadController.compact(source)
+  ), [activeThreadController]);
 
   const handleThreadModelChange = useCallback((threadId: string, model: string) => {
     if (threadId === thread.id) {
-      onThreadModelChange(threadId, model);
+      rootThreadController.changeModel(model);
       return;
     }
 
@@ -1259,11 +1229,11 @@ export default memo(function ThreadView ({
         },
       };
     });
-  }, [onThreadModelChange, thread.id]);
+  }, [rootThreadController, thread.id]);
 
   const handleThreadAgentChange = useCallback((threadId: string, agentPath: string | null) => {
     if (threadId === thread.id) {
-      onThreadAgentChange(threadId, agentPath);
+      rootThreadController.changeAgent(agentPath);
       return;
     }
 
@@ -1281,11 +1251,11 @@ export default memo(function ThreadView ({
         },
       };
     });
-  }, [onThreadAgentChange, thread.id]);
+  }, [rootThreadController, thread.id]);
 
   const handleThreadReasoningEffortChange = useCallback((threadId: string, effort: string | null) => {
     if (threadId === thread.id) {
-      onThreadReasoningEffortChange(threadId, effort);
+      rootThreadController.changeReasoningEffort(effort);
       return;
     }
 
@@ -1303,11 +1273,11 @@ export default memo(function ThreadView ({
         },
       };
     });
-  }, [onThreadReasoningEffortChange, thread.id]);
+  }, [rootThreadController, thread.id]);
 
   const handleThreadServiceTierChange = useCallback((threadId: string, serviceTier: string | null) => {
     if (threadId === thread.id) {
-      onThreadServiceTierChange(threadId, serviceTier);
+      rootThreadController.changeServiceTier(serviceTier);
       return;
     }
 
@@ -1325,7 +1295,7 @@ export default memo(function ThreadView ({
         },
       };
     });
-  }, [onThreadServiceTierChange, thread.id]);
+  }, [rootThreadController, thread.id]);
 
   const handleThreadSettingsChange = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
     if (threadId === thread.id) {
@@ -1457,7 +1427,7 @@ export default memo(function ThreadView ({
       rateLimits={rateLimits}
       trailingContent={(
         <ThreadContextStatus
-          onCompactThread={onCompactThread}
+          onCompactThread={handleCompactThread}
           thread={activeThread}
         />
       )}
@@ -1468,7 +1438,7 @@ export default memo(function ThreadView ({
       canToggleHarness={activeThread.isDraft}
       key={activeThread.id}
       composerSpellCheck={composerSpellCheck}
-      onListModels={onListModels}
+      onListModels={threads.listModels}
       onHarnessToggle={handleComposerHarnessToggle}
       highlightSources={inlineMentionSources}
       onSendMessage={handleSendMessage}
@@ -1479,7 +1449,9 @@ export default memo(function ThreadView ({
       onThreadComposerDraftClear={onThreadComposerDraftClear}
       onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}
       onThreadQuestionnaireDraftClear={onThreadQuestionnaireDraftClear}
-      onSubmitUserInputRequest={onSubmitUserInputRequest}
+      onSubmitUserInputRequest={async (_threadId, response, options) => {
+        await activeThreadController.submitQuestionnaire(response, options);
+      }}
       onThreadAgentChange={handleThreadAgentChange}
       onThreadReasoningEffortChange={handleThreadReasoningEffortChange}
       onThreadServiceTierChange={handleThreadServiceTierChange}
@@ -1510,7 +1482,7 @@ export default memo(function ThreadView ({
           onHarnessToggle={handleComposerHarnessToggle}
           rateLimits={rateLimits}
           showsHarnessControl={!isProfilePickerOpen}
-          trailingContent={<ThreadContextStatus onCompactThread={onCompactThread} thread={activeThread} />}
+          trailingContent={<ThreadContextStatus onCompactThread={handleCompactThread} thread={activeThread} />}
         />
       ) : null}
     </ThreadComposer>
@@ -1730,7 +1702,7 @@ export default memo(function ThreadView ({
             claim={terminalGitArc}
             cwd={activeThread.cwd}
             harness={activeThread.harness}
-            onReleased={async () => await onUpdateThreadState({ method: "workbench/thread-state/refresh", projectId })}
+            onReleased={async () => await threads.updateState({ method: "workbench/thread-state/refresh", projectId })}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}

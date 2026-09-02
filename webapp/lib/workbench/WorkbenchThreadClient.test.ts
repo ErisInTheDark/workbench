@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover thread reads, lifecycle fencing, canonical placement, and message admission settlement. Keywords: workbench, thread, lifecycle, read, message, integration, test.
+ * - No production exports; Node tests cover thread reads, lifecycle fencing, canonical placement, message admission, and durable global-home questionnaires. Keywords: workbench, thread, lifecycle, read, message, questionnaire, global home, test.
  */
 
 import assert from "node:assert/strict";
@@ -12,7 +12,7 @@ import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchQuestionnaireH
 import { workbenchTranscriptNotifications } from "./database/transcript/workbench-transcript-contract.ts";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./WorkbenchThreadClient.ts";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission.ts";
-import type { WorkbenchThreadSidebarEntry } from "./thread/thread-state.ts";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot } from "./thread/thread-state.ts";
 
 type Listener = (event: { data?: string }) => void;
 type SocketRequest = {
@@ -207,6 +207,16 @@ async function waitForCondition(predicate: () => boolean, message: string) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error(message);
+}
+
+function installProjectThreadState(
+  client: ReturnType<typeof WorkbenchThreadClient>,
+  snapshot: WorkbenchThreadSidebarSnapshot,
+) {
+  client.installThreadStateSources({
+    activeProjectSnapshot: snapshot,
+    durableQuestionnaireEntries: snapshot.entries,
+  });
 }
 
 async function withClient(
@@ -2270,7 +2280,7 @@ test("sidebar history preserves questionnaires with reused request keys", async 
     startedAt: 1,
     status: "completed",
   }));
-  client.installSidebarSnapshot({
+  installProjectThreadState(client, {
     entries: [{
       activityAt: 2,
       entryKind: "thread",
@@ -2449,6 +2459,58 @@ test("interrupted proper questionnaires detach while approvals are discarded", a
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
 }));
 
+test("global home thread state restores durable questionnaires without an active project snapshot", async () => withClient(async (client, socket) => {
+  const source = activeThread("codex", "thread", "interrupted");
+  client.selectThreadPayload(source);
+  const durableRequest = {
+    id: "durable",
+    questions: [{ allowOther: false, header: "Route", id: "route", isSecret: false, options: [{ description: "Continue", label: "Approve" }], question: "Continue?" }],
+    submitLabel: "Send",
+    summary: "Choose",
+    title: "Questionnaire",
+  };
+  const durableEntry: WorkbenchThreadSidebarEntry = {
+    activityAt: 2,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "thread" },
+    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    pendingQuestionnaire: { itemId: "item", request: durableRequest, requestKey: "durable", turnId: "turn" },
+    title: "Thread",
+  };
+
+  client.installThreadStateSources({
+    activeProjectSnapshot: null,
+    durableQuestionnaireEntries: [durableEntry],
+  });
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "newTurn");
+  client.setProjectContext({ projectId: "", root: "", rootPath: "" });
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
+  client.installThreadStateSources({
+    activeProjectSnapshot: null,
+    durableQuestionnaireEntries: [durableEntry],
+  });
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "newTurn");
+
+  socket.notify("questionnaire/requested", {
+    itemId: "native-item",
+    request: { ...durableRequest, id: "native" },
+    requestKey: "native",
+    threadId: "thread",
+    turnId: "turn",
+  });
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey, "native");
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "native");
+
+  client.installThreadStateSources({
+    activeProjectSnapshot: null,
+    durableQuestionnaireEntries: [],
+  });
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey, "native");
+  socket.notify("questionnaire/resolved", { requestKey: "native", threadId: "thread", turnId: "turn" });
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
+}));
+
 test("stop dismisses detached questionnaires without interrupting an inactive provider turn", async () => withClient(async (client, socket) => {
   const source = activeThread("codex", "thread", "interrupted");
   client.selectThreadPayload(source);
@@ -2459,7 +2521,7 @@ test("stop dismisses detached questionnaires without interrupting an inactive pr
     summary: "Choose",
     title: "Questionnaire",
   };
-  client.installSidebarSnapshot({
+  installProjectThreadState(client, {
     entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
     error: null, freshness: "fresh", projectId: "project", revision: 1,
   });
@@ -2508,16 +2570,17 @@ test("durable detached questionnaire responses resolve after admission even when
     summary: "Choose",
     title: "Questionnaire",
   };
-  client.installSidebarSnapshot({
-    entries: [{
-      activityAt: 2,
-      entryKind: "thread",
-      identity: { harness: "codex", threadId: "thread" },
-      lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" },
-      metadata: { archived: false, pinned: false, snoozed: false },
-      pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" },
-      title: "Thread",
-    }],
+  const durableEntry: WorkbenchThreadSidebarEntry = {
+    activityAt: 2,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "thread" },
+    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" },
+    title: "Thread",
+  };
+  installProjectThreadState(client, {
+    entries: [durableEntry],
     error: null,
     freshness: "fresh",
     projectId: "project",
@@ -2565,6 +2628,20 @@ test("durable detached questionnaire responses resolve after admission even when
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
   const originalTurn = client.getSnapshot().currentThread?.turns.find((turn) => turn.id === "turn");
   assert.equal(originalTurn?.items.some((item) => item.id.startsWith("workbench:questionnaire-history:")), true);
+  client.installThreadStateSources({
+    activeProjectSnapshot: null,
+    durableQuestionnaireEntries: [durableEntry],
+  });
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
+
+  client.installThreadStateSources({
+    activeProjectSnapshot: null,
+    durableQuestionnaireEntries: [{
+      ...durableEntry,
+      pendingQuestionnaire: { ...durableEntry.pendingQuestionnaire!, requestKey: "next-question" },
+    }],
+  });
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey, "next-question");
 }));
 
 test("failed detached questionnaire admission leaves the durable request retryable", async () => withClient(async (client, socket) => {
@@ -2577,7 +2654,7 @@ test("failed detached questionnaire admission leaves the durable request retryab
     summary: "Choose",
     title: "Questionnaire",
   };
-  client.installSidebarSnapshot({
+  installProjectThreadState(client, {
     entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
     error: null, freshness: "fresh", projectId: "project", revision: 1,
   });
@@ -2603,7 +2680,7 @@ test("rejected durable questionnaire resolution does not clear the detached requ
     summary: "Choose",
     title: "Questionnaire",
   };
-  client.installSidebarSnapshot({
+  installProjectThreadState(client, {
     entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
     error: null, freshness: "fresh", projectId: "project", revision: 1,
   });

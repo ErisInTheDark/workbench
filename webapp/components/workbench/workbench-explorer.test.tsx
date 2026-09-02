@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; static regression checks cover thread accessibility, grouped context actions, accepted settlement routing, lifecycle ownership, and agent tabs. Keywords: explorer, context menu, tablist, keyboard, settlement.
+ * - No production exports; static regression checks cover thread accessibility, grouped context actions, accepted settlement routing, lifecycle ownership, and agent tabs without pinning client-store wiring. Keywords: explorer, context menu, tablist, keyboard, settlement.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -95,19 +95,6 @@ test("thread views reuse the sidebar's in-app thread navigation owner", async ()
   assert.match(source, /<WorkbenchThreadPanel[\s\S]*?onOpenThread=\{openThreadFromExplorer\}/u);
 });
 
-test("live sidebar state subscribes below the Workbench root", async () => {
-  const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
-  const actionsSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
-  const clientSource = await readFile(new URL("../../lib/WorkbenchClient.ts", import.meta.url), "utf8");
-  assert.match(workbenchSource, /onThreadSidebarStoreReady/u);
-  assert.match(workbenchSource, /<WorkbenchAllProjectsThreadSidebar/u);
-  assert.doesNotMatch(workbenchSource, /explorer\.threadSidebar/u);
-  assert.match(actionsSource, /useSyncExternalStore/u);
-  assert.match(actionsSource, /store\?\.subscribe/u);
-  assert.match(clientSource, /onThreadSidebarStoreReady\?\.\(threadSidebarClient\)/u);
-  assert.doesNotMatch(clientSource, /threadSidebar: threadSidebarSnapshot/u);
-});
-
 test("thread context actions group priority checkboxes and canonical status radios", async () => {
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
   const openIndex = sidebarSource.indexOf('id: "open"');
@@ -146,14 +133,11 @@ test("jit project bootstrap exposes available slices before unrelated hydration"
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
   const actionsSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
   const clientSource = await readFile(new URL("../../lib/WorkbenchClient.ts", import.meta.url), "utf8");
-  const storeReadyIndex = clientSource.indexOf("workbenchBindings.onThreadSidebarStoreReady?.(threadSidebarClient)");
   const initialRouteHydrationIndex = clientSource.indexOf("await applyRoute(activeRoute);");
   const beginSelectionIndex = clientSource.indexOf("projectClient.beginProjectSelection(route.projectId)");
   const openObservationIndex = clientSource.indexOf("threadSidebarClient.open(route.projectId)");
 
-  assert.notEqual(storeReadyIndex, -1);
   assert.notEqual(initialRouteHydrationIndex, -1);
-  assert.ok(storeReadyIndex < initialRouteHydrationIndex);
   assert.notEqual(beginSelectionIndex, -1);
   assert.notEqual(openObservationIndex, -1);
   assert.ok(beginSelectionIndex < openObservationIndex);
@@ -163,8 +147,6 @@ test("jit project bootstrap exposes available slices before unrelated hydration"
   assert.match(workbenchSource, /const isProjectIdentityLoading =/u);
   assert.match(workbenchSource, /const isProjectTreeLoading =/u);
   assert.doesNotMatch(workbenchSource, /isSidebarThreadsLoading|explorer\.threadSidebar/u);
-  assert.match(clientSource, /emitRateLimitsChange\(\);\s*await applyRoute\(activeRoute\);/u);
-  assert.doesNotMatch(clientSource, /emitRateLimitsChange\(\);\s*await draftStore\.hydratePersistedDrafts\(\);/u);
 });
 
 test("blank thread routes render their private draft and preserve one view instance through promotion", async () => {

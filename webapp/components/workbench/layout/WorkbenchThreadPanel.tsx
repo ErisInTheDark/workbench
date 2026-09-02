@@ -1,15 +1,16 @@
 /*
  * Exports:
- * - default WorkbenchThreadPanel: hydrate and render one thread target inside a split panel. Keywords: workbench, thread panel, split layout.
+ * - default WorkbenchThreadPanel: hydrate through an identity-bound controller and render one thread target inside a split panel. Keywords: workbench, thread controller, thread panel, split layout.
  */
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ComponentProps, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type PointerEvent } from "react";
 
 import type { ThreadPayload, ThreadSummary } from "../../../lib/types";
 import ThreadLoadingSkeleton from "../thread-view/ThreadLoadingSkeleton";
 import ThreadScrollViewport from "../thread-view/ThreadScrollViewport";
 import ThreadView from "../thread-view/ThreadView";
+import { useWorkbenchThread } from "../WorkbenchClientProvider";
 import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-formatters";
 import { workbenchIconButtonClassName } from "../workbench-class-names";
@@ -49,16 +50,14 @@ export default function WorkbenchThreadPanel ({
   onClose,
   onCreateDraftThread,
   onHeaderPointerDragStart,
-  onReadThread,
   onMinimizeToggle,
   onPanelZoomDeltaChange,
-  onSendMessage,
-  onStopThread,
   panelZoomDelta = 0,
   thread,
   threadId,
   ...threadViewProps
 }: WorkbenchThreadPanelProps) {
+  const threadController = useWorkbenchThread(threadId);
   const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
   const scrollViewportRef = useRef<HTMLDivElement>(null);
 
@@ -71,18 +70,21 @@ export default function WorkbenchThreadPanel ({
   }, [onCreateDraftThread, thread?.id, threadId]);
 
   useEffect(() => {
-    if (threadId === "new" || thread?.id === threadId) {
+    if (thread?.id === threadId) {
+      return;
+    }
+    if (threadId === "new") {
       return;
     }
 
     async function loadThread() {
-      await onReadThread(threadId, undefined, {
+      await threadController.read(undefined, {
         cursor: null,
       });
     }
 
     void loadThread();
-  }, [onReadThread, thread?.id, threadId]);
+  }, [thread?.id, threadController.read, threadId]);
 
   const fallbackSummary = fallbackThreadSummary?.id === threadId ? fallbackThreadSummary : null;
   const threadDisplaySource = thread ?? fallbackSummary;
@@ -106,18 +108,6 @@ export default function WorkbenchThreadPanel ({
       window.clearInterval(intervalId);
     };
   }, [threadActivityTimestampMs, threadDisplaySource?.id]);
-
-  const handleReadThread = useCallback<ThreadViewProps["onReadThread"]>(async (nextThreadId, harness, options) => {
-    return await onReadThread(nextThreadId, harness, options);
-  }, [onReadThread]);
-
-  const handleSendMessage = useCallback<ThreadViewProps["onSendMessage"]>(async (activeThread, input, options) => {
-    return await onSendMessage(activeThread, input, options);
-  }, [onSendMessage]);
-
-  const handleStopThread = useCallback<ThreadViewProps["onStopThread"]>(async (activeThread) => {
-    return await onStopThread(activeThread);
-  }, [onStopThread]);
 
   if (!thread) {
     return (
@@ -230,9 +220,6 @@ export default function WorkbenchThreadPanel ({
             {...threadViewProps}
             contained
             fontSizeRem={effectiveFontSizeRem}
-            onReadThread={handleReadThread}
-            onSendMessage={handleSendMessage}
-            onStopThread={handleStopThread}
             scrollViewportRef={scrollViewportRef}
             thread={thread}
           />

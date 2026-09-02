@@ -130,6 +130,7 @@
  * - ProjectSnapshot: project snapshot contract.
  * - ExplorerSnapshot: explorer snapshot contract.
  * - WorkbenchThreadSidebarStore: read-only live sidebar store contract.
+ * - WorkbenchThreadRuntimeSnapshot/WorkbenchThreadRuntimeStore: provider-facing thread state and subscription boundary. Keywords: thread runtime, domain hook, React.
  * - WorkbenchRouteLoadResult: route-load result.
  * - WorkbenchControls: top-level Workbench command surface.
  * - WorkbenchThreadGoalSnapshot: thread goal state.
@@ -1109,6 +1110,23 @@ export interface WorkbenchThreadSidebarStore {
   subscribe: (listener: () => void) => () => void;
 }
 
+export interface WorkbenchThreadRuntimeSnapshot {
+  currentThread: ThreadPayload | null;
+  currentThreadId: string;
+  isLoading: boolean;
+  pendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
+  rateLimits: RateLimitSnapshot | null;
+  subagents: WorkbenchSubagentSummary[];
+  threadDocuments: WorkbenchThreadDocumentSnapshot;
+  threads: ThreadSummary[];
+  threadsError: string;
+}
+
+export interface WorkbenchThreadRuntimeStore {
+  getSnapshot: () => WorkbenchThreadRuntimeSnapshot;
+  subscribe: (listener: () => void) => () => void;
+}
+
 export interface WorkbenchRouteLoadResult {
   error?: string;
   ok: boolean;
@@ -1175,13 +1193,7 @@ export interface WorkbenchThreadGoalControls {
 export interface WorkbenchBindings {
   initialRoute?: WorkbenchRoute;
   onExplorerStateChange?: (snapshot: ExplorerSnapshot) => void;
-  onCurrentThreadChange?: (thread: ThreadPayload | null) => void;
   onTranscriptComparisonChange?: (available: boolean, projection: WorkbenchTranscriptProjection | null) => void;
-  onThreadDocumentsChange?: (snapshot: WorkbenchThreadDocumentSnapshot) => void;
-  onPendingUserInputRequestsChange?: (requestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>) => void;
-  onRateLimitsChange?: (rateLimits: RateLimitSnapshot | null) => void;
-  onThreadSidebarStoreReady?: (store: WorkbenchThreadSidebarStore) => void;
-  onControlsReady?: (controls: WorkbenchControls) => void;
 }
 
 export interface FilePayload {
