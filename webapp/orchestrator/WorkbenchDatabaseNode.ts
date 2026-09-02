@@ -22,7 +22,9 @@ import { logError } from "./process-helpers";
 
 type DatabaseControllerConstructor = new (
   options: { databasePath: string },
-) => OrchestratorDatabaseRegistration & WorkbenchCodexSandboxNetworkDatabase;
+) => OrchestratorDatabaseRegistration & WorkbenchCodexSandboxNetworkDatabase & {
+  resetTranscript(): Promise<void>;
+};
 
 type CodexSandboxNetworkControllerConstructor = new (
   database: WorkbenchCodexSandboxNetworkDatabase,
@@ -39,7 +41,7 @@ type CaptureGapControllerConstructor = new (
   options: { markerPath: string },
 ) => CaptureGapController;
 
-const SQLITE_RESET_REQUEST = "workbench-sqlite-shadow-reset-v1\n";
+const TRANSCRIPT_RESET_REQUEST = "workbench-transcript-shadow-reset-v2\n";
 
 async function readSqliteResetRequest(requestPath: string) {
   try {
@@ -116,16 +118,12 @@ export default new ReloadableNode<
         await mkdir(dirname(databasePath), { recursive: true });
         const resetRequest = await readSqliteResetRequest(resetRequestPath);
         if (resetRequest !== null) {
-          if (resetRequest !== SQLITE_RESET_REQUEST) {
-            throw new Error(`Unexpected SQLite reset request: ${resetRequestPath}`);
+          if (resetRequest !== TRANSCRIPT_RESET_REQUEST) {
+            throw new Error(`Unexpected transcript reset request: ${resetRequestPath}`);
           }
-          for (const target of [
-            databasePath,
-            `${databasePath}-wal`,
-            `${databasePath}-shm`,
-            captureGapMarkerPath,
-            shadowLogPath,
-          ]) {
+          await database.start();
+          await database.resetTranscript();
+          for (const target of [captureGapMarkerPath, shadowLogPath]) {
             await rm(target, { force: true });
           }
         }

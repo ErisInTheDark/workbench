@@ -34,6 +34,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "getInventory" }
   | { type: "executeTransaction"; statements: readonly WorkbenchDatabaseMutation[] }
   | { type: "query"; statement: WorkbenchDatabaseQuery }
+  | { type: "resetTranscript" }
   | { type: "settleTranscript"; observations: readonly WorkbenchTranscriptObservation[] }
   | { type: "readTranscript"; request: WorkbenchTranscriptReadRequest }
   | { type: "readTranscriptMaterializedTurnIds"; threadId: string; turnIds: readonly string[] }
@@ -46,6 +47,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "inventory"; inventory: WorkbenchDatabaseInventory }
   | { id: number; type: "mutationResult"; result: WorkbenchDatabaseMutationResult }
   | { id: number; type: "queryResult"; rows: WorkbenchDatabaseRow[] }
+  | { id: number; type: "transcriptReset" }
   | { id: number; type: "transcriptSettlement"; settlement: WorkbenchTranscriptSettlement }
   | { id: number; type: "transcriptSnapshot"; snapshot: WorkbenchTranscriptSnapshot | null }
   | { id: number; type: "transcriptMaterializedTurnIds"; turnIds: string[] }

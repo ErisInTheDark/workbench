@@ -1,5 +1,5 @@
 /*
- * WorkbenchTranscriptRepository: owns atomic transcript settlements, turn-owned item positions, and hydration-bounded reads on one SQLite connection. Keywords: transcript, repository, transaction.
+ * WorkbenchTranscriptRepository: owns atomic transcript settlements and resets, turn-owned item positions, and hydration-bounded reads on one SQLite connection. Keywords: transcript, repository, reset, transaction.
  */
 import type Database from "better-sqlite3";
 
@@ -85,6 +85,15 @@ export default class WorkbenchTranscriptRepository {
 
   constructor(database: Database.Database) {
     this.#database = database;
+  }
+
+  reset() {
+    this.#database.transaction(() => {
+      this.#database.prepare("DELETE FROM transcript_native_records").run();
+      this.#database.prepare("DELETE FROM workbench_threads").run();
+      this.#database.prepare("DELETE FROM transcript_assets").run();
+      this.#database.prepare("DELETE FROM workbench_harnesses").run();
+    })();
   }
 
   settle(observations: readonly WorkbenchTranscriptObservation[]): WorkbenchTranscriptSettlement {

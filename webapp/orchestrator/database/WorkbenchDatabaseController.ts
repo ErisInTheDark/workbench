@@ -116,6 +116,14 @@ export default class WorkbenchDatabaseController {
     return response.rows as Row[];
   }
 
+  async resetTranscript() {
+    await this.start();
+    const response = await this.#request({ type: "resetTranscript" });
+    if (response.type !== "transcriptReset") {
+      throw new WorkbenchDatabaseFailure(`Unexpected transcript reset response: ${response.type}`);
+    }
+  }
+
   async settleTranscript(observations: readonly WorkbenchTranscriptObservation[]) {
     await this.start();
     if (observations.length === 0) return { changedThreadIds: [] };
