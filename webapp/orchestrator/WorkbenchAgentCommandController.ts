@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute shared structured commands while preserving reload, search, token, streaming, and direct-port lifecycle. Keywords: workbench, agent, command, shell, orchestrator, reload, tokens, transport.
+ * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute shared structured commands while preserving reload, search, toc, token, streaming, and direct-port lifecycle. Keywords: workbench, agent, command, shell, orchestrator, reload, search, toc, tokens, transport.
  */
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
@@ -19,6 +19,7 @@ import type { WorkbenchHarness, WorkbenchReloadDirtSnapshot } from "../lib/types
 import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
+import WorkbenchMarkdownTocController from "./WorkbenchMarkdownTocController";
 import WorkbenchRipgrepController from "./WorkbenchRipgrepController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
@@ -139,6 +140,7 @@ function isLoopbackAddress(address: string | undefined) {
 export default class WorkbenchAgentCommandController {
   private readonly activeRequests = new Set<WorkbenchAgentCommandActiveRequest>();
   private acceptingRequests = true;
+  private readonly markdownToc = new WorkbenchMarkdownTocController();
   private readonly ripgrep: Pick<WorkbenchRipgrepController, "execute">;
 
   constructor(
@@ -352,6 +354,9 @@ export default class WorkbenchAgentCommandController {
     }
     if (request.path.startsWith("/api/thread-context/") && this.direct.executeThreadRecallRequest) {
       return await this.direct.executeThreadRecallRequest(request, signal);
+    }
+    if (request.path === "/api/toc" && request.body) {
+      return await this.markdownToc.execute(request.body, signal);
     }
     if (request.path === "/api/rg" && request.body) {
       return await this.ripgrep.execute(request.body, signal);

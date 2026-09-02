@@ -3,7 +3,7 @@
  * - WorkbenchSubagentCommand/WorkbenchSubagentCommandTarget/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered id/name targets, and messages from wb commands. Keywords: workbench, cli, subagent, parse, create, target, message.
  * - WorkbenchThreadTitleCommand/parseWorkbenchThreadTitleCommand/isWorkbenchThreadTitleSetMatcherClaim: parse title set/get actions and identify standalone title-set displays. Keywords: workbench, cli, thread, title, parse, matcher.
  * - WorkbenchThreadStatusCommand/parseWorkbenchThreadStatusCommand/isWorkbenchThreadStatusMatcherClaim: parse completed/blocked task status actions and identify standalone successful displays. Keywords: workbench, cli, thread, status, task, matcher.
- * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb title, status, token, subagent, and reload commands. Keywords: workbench, cli, title, tokens, subagent, reload.
+ * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, title, status, token, subagent, and reload commands. Keywords: workbench, cli, toc, title, tokens, subagent, reload.
  */
 import type { CommandAction } from "../../../codex/generated/app-server/v2/CommandAction";
 
@@ -245,6 +245,19 @@ function renderSubagentCliFallback(command: WorkbenchSubagentCommand) {
 }
 
 export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
+  CommandMatcher({
+    id: "workbench-cli.toc",
+    match: ({ stage, summaryParts }) => {
+      if (summaryParts.length) return null;
+      const normalized = stage.text.trim();
+      const commandMatch = /^wb(?:\.cmd)?\s+toc(?:\s+|$)/iu.exec(normalized);
+      if (!commandMatch) return null;
+      const file = readValue(normalized, commandMatch[0].length).value;
+      return file && file !== "--help"
+        ? getWorkbenchCommandRendering("toc", { file })?.result ?? null
+        : null;
+    },
+  }),
   CommandMatcher({
     id: "workbench-cli.tokens",
     match: ({ stage, summaryParts }) => {

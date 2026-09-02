@@ -138,6 +138,27 @@ test("token commands restrict managed threads without restricting direct users",
   assert.match(insideThreadHelp.help, /wb tokens project/u);
 });
 
+test("parses Markdown toc requests and exposes focused help", async () => {
+  const parsed = await parseWorkbenchAgentCliCommand(["toc", "AGENTS.md"], { cwd: "C:/workspace" });
+  assert.deepEqual(parsed, {
+    kind: "request",
+    request: {
+      body: { cwd: "C:/workspace", file: "AGENTS.md" },
+      method: "POST",
+      path: "/api/toc",
+      responseKind: "native",
+    },
+  });
+  assert.equal((await parseWorkbenchAgentCliCommand(["toc", "notes.txt"], { cwd: "C:/workspace" })).kind, "error");
+
+  const rootHelp = await parseWorkbenchAgentCliCommand(["--help"]);
+  const tocHelp = await parseWorkbenchAgentCliCommand(["toc", "--help"]);
+  assert.equal(rootHelp.kind, "help");
+  assert.equal(tocHelp.kind, "help");
+  assert.match(rootHelp.help, /wb toc <file>/u);
+  assert.match(tocHelp.help, /wb toc <file>/u);
+});
+
 before(async () => {
   server = http.createServer((request, response) => {
     if (request.url === "/orchestrator/agent-command") {

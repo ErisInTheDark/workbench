@@ -1,10 +1,13 @@
 /*
  * Exports:
- * - No production exports; Node tests cover direct Browse/subagent/thread dispatch, snapshot-owned reload dirt, response adaptation, and caller cancellation. Keywords: workbench, agent, command, browse, subagent, thread, dirt, cancellation, transport, test.
+ * - No production exports; Node tests cover direct Browse/subagent/thread/toc dispatch, snapshot-owned reload dirt, response adaptation, and caller cancellation. Keywords: workbench, agent, command, browse, subagent, thread, toc, dirt, cancellation, transport, test.
  */
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
@@ -362,6 +365,40 @@ test("dispatches ripgrep directly with one argument-vector request", async () =>
     assert.equal(received?.signal.aborted, false);
   } finally {
     await server.close();
+  }
+});
+
+test("dispatches Markdown toc directly with exact heading ranges", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-toc-command-"));
+  await writeFile(path.join(root, "guide.md"), [
+    "## Parent",
+    "body",
+    "### Child",
+    "child body",
+    "## Next",
+  ].join("\n").concat("\n"));
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:4500",
+    createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+    async () => { throw new Error("unexpected internal fetch"); },
+  );
+  const server = await startController(controller);
+  try {
+    const response = await fetch(`${server.origin}/orchestrator/agent-command`, {
+      body: agentCommandBody(["toc", "guide.md"], root),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), [
+      "1-4 ## Parent",
+      "3-4 ### Child",
+      "5-5 ## Next",
+      "",
+    ].join("\n"));
+  } finally {
+    await server.close();
+    await rm(root, { force: true, recursive: true });
   }
 });
 

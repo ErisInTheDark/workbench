@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WorkbenchCommandPresentationName/WORKBENCH_COMMAND_PRESENTATION_NAMES: canonical wb tool inventory shared by CLI and MCP adapters. Keywords: workbench, command, inventory.
- * - WorkbenchCommandRoute/WorkbenchSpecializedOperation/WorkbenchCommandPresentationContext: route one wb operation with optional path context to a dedicated or simple renderer. Keywords: workbench, command, route, renderer.
- * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay/getWorkbenchCommandRouteSummaryDisplay: resolve structured arguments and routes into shared rendering metadata. Keywords: workbench, CLI, MCP, rendering.
+ * - WorkbenchCommandPresentationName/WORKBENCH_COMMAND_PRESENTATION_NAMES: canonical wb tool inventory shared by CLI and MCP adapters. Keywords: workbench, command, inventory, toc.
+ * - WorkbenchCommandRoute/WorkbenchSpecializedOperation/WorkbenchCommandPresentationContext: route one wb operation with optional path context to a dedicated or simple renderer. Keywords: workbench, command, route, renderer, toc.
+ * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay/getWorkbenchCommandRouteSummaryDisplay: resolve structured arguments and routes into shared rendering metadata. Keywords: workbench, CLI, MCP, rendering, toc.
  */
 import type { JsonValue } from "../../../codex/generated/app-server/serde_json/JsonValue";
 
@@ -23,6 +23,7 @@ import type {
 } from "./types";
 
 export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
+  "toc",
   "rg",
   "tokens",
   "tokens_instructions",
@@ -490,6 +491,14 @@ export function getWorkbenchCommandRoute(
   switch (name) {
     case "git_arc_wait":
       return specialized("git-arc.wait", { kind: "gitArcWait", ref: readString(args.ref) });
+    case "toc": {
+      const file = readString(args.file) || "Markdown file";
+      return simple(
+        "workbench-cli.toc",
+        actionTarget("Listing headings in ", file),
+        actionTarget("Listed headings in ", file),
+      );
+    }
     case "rg":
       return {
         kind: "simple",

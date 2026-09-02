@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover shell command summary matching and argument semantics. Keywords: thread, command, matcher, powershell, ripgrep, test.
+ * - No production exports; Node tests cover shell command summary matching and argument semantics. Keywords: thread, command, matcher, powershell, ripgrep, toc, test.
  */
 
 import assert from "node:assert/strict";
@@ -83,6 +83,7 @@ function pathOperands(parts: readonly ThreadCommandDisplayPart[]) {
 
 function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
   switch (name) {
+    case "toc": return { file: "AGENTS.md" };
     case "rg": return { args: ["-n", "needle", "webapp"] };
     case "tokens": return { text: "count me" };
     case "thread_title": return { title: "Render typed wb tools" };
@@ -133,6 +134,7 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
 
 test("simple typed wb MCP calls share argument-sensitive CLI presentations", () => {
   const cases = [
+    ['wb toc "docs/guide file.md"', "toc", { file: "docs/guide file.md" }],
     ["wb thread refresh", "thread_refresh", {}],
     ["wb tokens -- count-me", "tokens", { text: "count-me" }],
     ["wb tokens instructions", "tokens_instructions", {}],
