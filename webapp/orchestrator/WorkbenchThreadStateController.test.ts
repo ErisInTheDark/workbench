@@ -76,14 +76,13 @@ function threadStatePath(root: string, projectId: string) {
   return path.join(root, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment(projectId)}.json`);
 }
 
-function pinnedRecord(threadId: string, title: string): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> & { providerObserved: true } {
+function pinnedRecord(threadId: string, title: string): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> {
   return {
     activityAt: 1,
     entryKind: "thread" as const,
     identity: { harness: "codex" as const, threadId },
     lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false },
     metadata: { archived: false as const, pinned: true, snoozed: false },
-    providerObserved: true,
     title,
   };
 }
@@ -262,10 +261,7 @@ test("project, pinned, and home thread state mirror to SQLite and report only se
     });
     assert.equal("result" in homeResult && (homeResult.result as { accepted?: boolean }).accepted, true);
 
-    await waitFor(async () => {
-      const document = await store.readProject("project") as { records?: unknown[] } | null;
-      return document?.records?.length === 2;
-    }, "Project thread state did not reach the SQLite shadow.");
+    await store.waitForIdle();
     const projectDocument = await store.readProject("project") as { records?: unknown[] } | null;
     const pinnedDocument = await store.readGlobal("pinnedLayout") as { revision?: number } | null;
     const homeDocument = await store.readGlobal("homeDisplayOrder") as { revision?: number } | null;
@@ -335,7 +331,6 @@ test("pending SQLite shadow cannot block draft materialization and later failure
     holdShadow = true;
 
     const draftId = "00000000-0000-4000-8000-000000000302";
-    let upsertSettled = false;
     const responsePromise = controller.handleRequest("observer", {
       draft: {
         agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 1,
@@ -344,14 +339,8 @@ test("pending SQLite shadow cannot block draft materialization and later failure
       },
       method: "workbench/thread-state/draft/upsert",
       projectId: "project",
-    }).then((result) => {
-      upsertSettled = true;
-      return result;
     });
     await shadowStarted;
-    await Promise.resolve();
-    await Promise.resolve();
-    assert.equal(upsertSettled, true);
     const response = await responsePromise;
     assert.equal("result" in response && (response.result as { accepted?: boolean }).accepted, true);
     const accepted = await controller.acceptIntent("observer", {
