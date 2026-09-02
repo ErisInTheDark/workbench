@@ -216,7 +216,7 @@ test("error completions log the full multiline message in a red follow-up entry 
   assert.equal(lines.length, 2);
   assert.match(lines[0] ?? "", /codex:thread\/read .*error.*process:.*json:.*send:.*in:.*out:/u);
   assert.equal(lines[0]?.includes("first line"), false);
-  assert.equal(lines[1], `\u001b[31m WS codex:thread/read first line\nsecond line ${longTail}\u001b[0m`);
+  assert.equal(lines[1], ` WS codex:thread/read \u001b[31mfirst line\nsecond line ${longTail}\u001b[0m`);
   assert.equal(lines.join("\n").includes("never-log-response-data"), false);
   controller.dispose();
 });

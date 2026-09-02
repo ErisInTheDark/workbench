@@ -657,7 +657,7 @@ export default class WorkbenchWebSocketRequestController {
     const totalMs = this.now() - request.startedAt;
     const detail = dimWebSocketDetail(`(process: ${formatDuration(processMs)}, json: ${formatDuration(jsonMs)}, send: ${formatDuration(sendMs)}, in: ${formatBytes(request.inBytes)}, out: ${formatBytes(outBytes)})`);
     this.writeLine(` WS ${request.method} ${completionToken(outcome)} in ${formatDuration(totalMs)} ${detail}`);
-    if (errorMessage) this.writeLine(`${ANSI_RED} WS ${request.method} ${errorMessage}${ANSI_RESET}`);
+    if (errorMessage) this.writeLine(` WS ${request.method} ${ANSI_RED}${errorMessage}${ANSI_RESET}`);
   }
 
   private assertActive() {
