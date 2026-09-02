@@ -1,11 +1,16 @@
 /*
- * No production exports. Tests protect the thin process boundary and app source ownership.
+ * No production exports. Tests protect the thin process boundary, app source ownership, and live database replacement.
  */
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import WorkbenchAppLogger from "../WorkbenchAppLogger.ts";
 import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
@@ -13,6 +18,7 @@ import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateReposito
 import WorkbenchAppRuntime from "./WorkbenchAppRuntime.ts";
 
 const appDirectoryPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const execFileAsync = promisify(execFile);
 const nonServerSourcePaths = new Set([
   "app/browser-entry.tsx",
   "app/desktop.ts",
@@ -20,6 +26,24 @@ const nonServerSourcePaths = new Set([
   "app/WorkbenchBrowserLogForwarder.ts",
   "app/WorkbenchDesktopLauncher.ts",
 ]);
+
+class TestResponse extends EventEmitter {
+  body = "";
+  statusCode = 0;
+  writableFinished = false;
+
+  end(body?: string | Buffer) {
+    if (body !== undefined) this.body += body.toString();
+    this.writableFinished = true;
+    this.emit("finish");
+    return this;
+  }
+
+  writeHead(statusCode: number) {
+    this.statusCode = statusCode;
+    return this;
+  }
+}
 
 function runtime() {
   const compiler = {
@@ -97,8 +121,111 @@ test("assigns every app server source to a reloadable node or the explicit proce
   assert.deepEqual(owners("shared/http/StaticHttpRequestController.ts"), ["client:http"]);
   assert.deepEqual(owners("shared/http/workbench-app-port.ts"), ["client:http"]);
   assert.deepEqual(owners("shared/http/HttpServer.ts"), ["client:process"]);
+  assert.deepEqual(owners("shared/state/workbench-app-state-schema.ts"), ["client:database"]);
   assert.deepEqual(owners("shared/package.json"), ["client:process"]);
   assert.deepEqual(owners("tray/src/main.rs"), ["client:process"]);
   assert.deepEqual(owners("tray/bin/windows-x64/workbench-tray.exe"), ["client:process"]);
   assert.deepEqual(owners("tray/target/release/workbench-tray.exe"), []);
+});
+
+test("reloads the database with a fresh repository constructor and no process restart", async (context) => {
+  const rootPath = await mkdtemp(path.join(os.tmpdir(), "workbench-app-runtime-reload-"));
+  context.after(async () => await rm(rootPath, { force: true, recursive: true }));
+  const outputDirectoryPath = path.join(rootPath, "output");
+  const databasePath = path.join(rootPath, "app-state.sqlite3");
+  await Promise.all(["app", "shared", "static", "tray"].map(async (directory) => {
+    await mkdir(path.join(rootPath, directory), { recursive: true });
+  }));
+  await mkdir(outputDirectoryPath, { recursive: true });
+  await writeFile(path.join(rootPath, "README.md"), "reload fixture\n", "utf8");
+  await execFileAsync("git", ["init", "-q"], { cwd: rootPath });
+  await execFileAsync("git", ["config", "user.email", "workbench-tests@example.invalid"], { cwd: rootPath });
+  await execFileAsync("git", ["config", "user.name", "Workbench Tests"], { cwd: rootPath });
+  await execFileAsync("git", ["add", "README.md"], { cwd: rootPath });
+  await execFileAsync("git", ["commit", "-q", "-m", "fixture"], { cwd: rootPath });
+
+  const constructors: Array<typeof WorkbenchAppStateRepository> = [];
+  const databaseEvents: string[] = [];
+  let reloadLine = "";
+  let resolveReload!: () => void;
+  let rejectReload!: (error: Error) => void;
+  const reloaded = new Promise<void>((resolve, reject) => {
+    resolveReload = resolve;
+    rejectReload = reject;
+  });
+  const target = new WorkbenchAppRuntime({
+    appPort: {
+      read: () => ({
+        appOrigin: "http://127.0.0.1:43210",
+        currentPort: 43_210,
+        editable: true,
+        source: "random",
+      }),
+      update: async () => ({
+        appOrigin: "http://127.0.0.1:43210",
+        currentPort: 43_210,
+        editable: true,
+        source: "setting",
+      }),
+    },
+    createCompiler: () => ({
+      close: async () => {},
+      outputDirectoryPath,
+      startWatching: async () => outputDirectoryPath,
+    } as WorkbenchFrontendCompiler),
+    createDatabase: (Repository) => {
+      constructors.push(Repository);
+      const generation = constructors.length;
+      const repository = new Repository({ databasePath });
+      const close = repository.close.bind(repository);
+      const start = repository.start.bind(repository);
+      repository.close = () => {
+        databaseEvents.push(`close:${generation}`);
+        close();
+      };
+      repository.start = () => {
+        databaseEvents.push(`start:${generation}`);
+        return start();
+      };
+      return repository;
+    },
+    logger: new WorkbenchAppLogger({
+      color: false,
+      writeError: (line) => {
+        if (line.includes("reload execution failed:")) rejectReload(new Error(line.trim()));
+      },
+      writeOutput: (line) => {
+        if (!line.includes("reloaded app nodes:")) return;
+        reloadLine = line;
+        resolveReload();
+      },
+    }),
+    outputDirectoryPath,
+    repositoryRootPath: rootPath,
+  });
+
+  let started = false;
+  try {
+    await target.start();
+    started = true;
+    await target.writeAppPort(43_211);
+    const request = Readable.from([JSON.stringify({ scopes: ["client:database"] })]) as import("node:http").IncomingMessage;
+    request.method = "POST";
+    request.url = "/api/workbench-app-runtime";
+    const response = new TestResponse();
+    await target.handleRequest(request, response as unknown as import("node:http").ServerResponse);
+    assert.equal(response.statusCode, 202);
+    await reloaded;
+
+    assert.equal(constructors.length, 2);
+    assert.notEqual(constructors[0], constructors[1]);
+    assert.deepEqual(databaseEvents, ["start:1", "close:1", "start:2"]);
+    assert.equal(target.readAppPort(), 43_211);
+    assert.match(reloadLine, /client:database/u);
+    assert.match(reloadLine, /client:state/u);
+    assert.match(reloadLine, /client:http/u);
+    assert.doesNotMatch(reloadLine, /client:process/u);
+  } finally {
+    if (started) await target.close();
+  }
 });

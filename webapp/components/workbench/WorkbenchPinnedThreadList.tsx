@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchPinnedThreadList: render the Workbench-wide pinned disclosure, mixed-project folders, rows, actions, and drag order. Keywords: pinned, global, folders, sidebar.
+ * - default WorkbenchPinnedThreadList: render filtered Workbench-wide pins, mixed-project folders, rows, actions, and drag order. Keywords: pinned, global, placement, folders, sidebar.
  * - Local helpers: derive pinned targets and collision-safe layout keys. Keywords: draft, provider, project, identity.
  */
 "use client";
@@ -10,6 +10,7 @@ import { useMemo } from "react";
 import type { WorkbenchProjectOption } from "../../lib/types";
 import { WORKBENCH_THREAD_ORDER_DROP_TARGET_ID } from "../../lib/workbench/layout/workbench-drag";
 import { createPinnedThreadHref, createThreadHref, isWorkbenchThreadTargetSelected } from "../../lib/workbench/navigation/workbench-route";
+import type { WorkbenchSelectedProjectPinPlacement } from "../../lib/workbench/state/workbench-settings";
 import {
   getProjectQualifiedThreadDisplayKey,
   getThreadDisplayFolderKey,
@@ -65,6 +66,7 @@ export default function WorkbenchPinnedThreadList({
   onOpenThread,
   projectId,
   projects,
+  selectedProjectPinPlacement,
   selectedOwnerProjectId,
 }: {
   actions: PinnedThreadListActions;
@@ -72,15 +74,17 @@ export default function WorkbenchPinnedThreadList({
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projectId: string;
   projects: readonly WorkbenchProjectOption[];
+  selectedProjectPinPlacement: WorkbenchSelectedProjectPinPlacement;
   selectedOwnerProjectId: string;
 }) {
   const isShiftPressed = useNonTextInputShiftKey();
   const { preferences, setFolderOpen } = useWorkbenchSidebarPreferences();
   const projectsById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const entries = useMemo(() => actions.projectThreadSummaries.projects.flatMap((summary) => {
+    if (selectedProjectPinPlacement === "threads-section" && summary.projectId === projectId) return [];
     const project = projectsById.get(summary.projectId);
     return project ? summary.pinnedThreads.map((entry) => ({ entry, project })) : [];
-  }), [actions.projectThreadSummaries.projects, projectsById]);
+  }), [actions.projectThreadSummaries.projects, projectId, projectsById, selectedProjectPinPlacement]);
   const layoutEntries = useMemo(() => entries.map(({ entry, project }) => ({
     key: getProjectQualifiedThreadDisplayKey(project.id, displayKeyForEntry(entry)),
     section: "pinned" as const,

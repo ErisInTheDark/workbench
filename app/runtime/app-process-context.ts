@@ -12,7 +12,7 @@ import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateReposito
 export interface AppProcessContext {
   appPort: WorkbenchAppPortControl;
   createCompiler(): WorkbenchFrontendCompiler;
-  createDatabase(): WorkbenchAppStateRepository;
+  createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;
   executeReloadScopes(scopes: WorkbenchReloadScope[]): Promise<WorkbenchReloadScope[]>;
   getReloadDependantClosure(scopes: readonly WorkbenchReloadScope[]): WorkbenchReloadScope[];
   getReloadScopeCatalog(): readonly WorkbenchReloadScopeDescriptor[];

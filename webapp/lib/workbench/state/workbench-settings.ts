@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor zoom defaults and bounds. Keywords: settings, editor, zoom.
- * - WorkbenchTheme, WorkbenchEditorFontFamily, WorkbenchFileOpenBehavior, WorkbenchSettingKey: setting value contracts for Workbench preferences. Keywords: settings, theme, editor, composer, file open, thread code.
+ * - WorkbenchTheme/WorkbenchEditorFontFamily/WorkbenchFileOpenBehavior/WorkbenchSelectedProjectPinPlacement/WorkbenchSettingKey: setting value contracts. Keywords: settings, theme, editor, pinned, thread.
  * - WorkbenchGlobalSettings, WorkbenchProjectSettings, WorkbenchResolvedSettings: stored and resolved settings shapes. Keywords: settings, global, project override.
  * - WorkbenchProjectSidebarPreferences: project-local sidebar display state. Keywords: settings, project, sidebar, disclosure, folders.
  * - WORKBENCH_SETTING_DEFINITIONS: labels and option metadata for settings UI rendering. Keywords: settings, registry, UI.
@@ -11,7 +11,10 @@
  * - readWorkbenchProjectSidebarPreferences/writeWorkbenchProjectSidebarPreference/setWorkbenchProjectSidebarFolderOpen: project sidebar state and focused writes. Keywords: settings, app state, project, sidebar.
  * - resolveWorkbenchSettings: merge project overrides over global settings. Keywords: settings, inheritance, overrides.
  */
-import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
+import type {
+    WorkbenchClientStateRecord,
+    WorkbenchSelectedProjectPinPlacementValue,
+} from "workbench-shared/state/workbench-client-state";
 
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
 
@@ -22,6 +25,7 @@ export const MAX_EDITOR_FONT_SIZE = 1.72;
 export type WorkbenchTheme = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamily = "sans" | "serif" | "mono";
 export type WorkbenchFileOpenBehavior = "workbench" | "workbench-or-vscode" | "vscode";
+export type WorkbenchSelectedProjectPinPlacement = WorkbenchSelectedProjectPinPlacementValue;
 export type WorkbenchSettingKey =
   | "theme"
   | "editorFontFamily"
@@ -29,6 +33,7 @@ export type WorkbenchSettingKey =
   | "composerSpellCheck"
   | "editorFontSize"
   | "fileOpenBehavior"
+  | "selectedProjectPinPlacement"
   | "showUnopenableFiles"
   | "threadCodeBlockWrap";
 
@@ -38,6 +43,7 @@ export interface WorkbenchGlobalSettings {
   editorFontSize: number;
   editorSpellCheck: boolean;
   fileOpenBehavior: WorkbenchFileOpenBehavior;
+  selectedProjectPinPlacement: WorkbenchSelectedProjectPinPlacement;
   showUnopenableFiles: boolean;
   theme: WorkbenchTheme;
   threadCodeBlockWrap: boolean;
@@ -72,6 +78,7 @@ export interface WorkbenchProjectSidebarPreferences {
 }
 
 export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = WorkbenchSettingKey> = {
+  columns?: "one" | "two";
   description: string;
   key: K;
   label: string;
@@ -142,6 +149,25 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
     ],
     type: "select",
   },
+  selectedProjectPinPlacement: {
+    columns: "two",
+    description: "Choose where pinned threads from the selected project appear.",
+    key: "selectedProjectPinPlacement",
+    label: "Selected-project pin placement",
+    options: [
+      {
+        description: "Keep them in the global pinned threads list.",
+        label: "Pinned threads",
+        value: "pinned-section",
+      },
+      {
+        description: "A pinned section at the top of the project's threads.",
+        label: "Threads",
+        value: "threads-section",
+      },
+    ],
+    type: "select",
+  },
   showUnopenableFiles: {
     description: "Controls whether the project sidebar shows files Workbench cannot open directly.",
     key: "showUnopenableFiles",
@@ -161,6 +187,7 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
     type: "boolean",
   },
   theme: {
+    columns: "two",
     description: "Controls Workbench colors and font personality.",
     key: "theme",
     label: "Theme",
@@ -210,6 +237,10 @@ function normalizeFileOpenBehavior(value: unknown): WorkbenchFileOpenBehavior {
   return value === "workbench-or-vscode" || value === "vscode" ? value : "workbench";
 }
 
+function normalizeSelectedProjectPinPlacement(value: unknown): WorkbenchSelectedProjectPinPlacement {
+  return value === "threads-section" ? value : "pinned-section";
+}
+
 function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettings {
   const candidate = isRecord(value) ? value : {};
   return {
@@ -218,6 +249,7 @@ function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettin
     editorFontSize: clampEditorFontSize(candidate.editorFontSize),
     editorSpellCheck: typeof candidate.editorSpellCheck === "boolean" ? candidate.editorSpellCheck : false,
     fileOpenBehavior: normalizeFileOpenBehavior(candidate.fileOpenBehavior),
+    selectedProjectPinPlacement: normalizeSelectedProjectPinPlacement(candidate.selectedProjectPinPlacement),
     showUnopenableFiles: typeof candidate.showUnopenableFiles === "boolean" ? candidate.showUnopenableFiles : false,
     theme: normalizeTheme(candidate.theme),
     threadCodeBlockWrap: typeof candidate.threadCodeBlockWrap === "boolean" ? candidate.threadCodeBlockWrap : false,
@@ -242,6 +274,11 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
         enabled,
         value: normalizeFileOpenBehavior(candidate.value ?? defaultValue),
       } as WorkbenchProjectSettingOverride<K>;
+    case "selectedProjectPinPlacement":
+      return {
+        enabled,
+        value: normalizeSelectedProjectPinPlacement(candidate.value ?? defaultValue),
+      } as WorkbenchProjectSettingOverride<K>;
     case "editorFontSize":
       return { enabled, value: clampEditorFontSize(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "editorSpellCheck":
@@ -262,6 +299,7 @@ export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings 
     editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
     editorSpellCheck: false,
     fileOpenBehavior: "workbench-or-vscode",
+    selectedProjectPinPlacement: "pinned-section",
     showUnopenableFiles: false,
     theme: "default",
     threadCodeBlockWrap: false,
@@ -276,6 +314,7 @@ export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSetting
     editorFontSize: { enabled: false, value: globalDefaults.editorFontSize },
     editorSpellCheck: { enabled: false, value: globalDefaults.editorSpellCheck },
     fileOpenBehavior: { enabled: false, value: globalDefaults.fileOpenBehavior },
+    selectedProjectPinPlacement: { enabled: false, value: globalDefaults.selectedProjectPinPlacement },
     showUnopenableFiles: { enabled: false, value: globalDefaults.showUnopenableFiles },
     theme: { enabled: false, value: globalDefaults.theme },
     threadCodeBlockWrap: { enabled: false, value: globalDefaults.threadCodeBlockWrap },
@@ -343,6 +382,7 @@ export function readProjectWorkbenchSettings(
     editorFontSize: normalizeProjectOverride("editorFontSize", candidate.editorFontSize),
     editorSpellCheck: normalizeProjectOverride("editorSpellCheck", candidate.editorSpellCheck),
     fileOpenBehavior: normalizeProjectOverride("fileOpenBehavior", candidate.fileOpenBehavior),
+    selectedProjectPinPlacement: normalizeProjectOverride("selectedProjectPinPlacement", candidate.selectedProjectPinPlacement),
     showUnopenableFiles: normalizeProjectOverride("showUnopenableFiles", candidate.showUnopenableFiles),
     theme: normalizeProjectOverride("theme", candidate.theme),
     threadCodeBlockWrap: normalizeProjectOverride("threadCodeBlockWrap", candidate.threadCodeBlockWrap),
@@ -445,6 +485,9 @@ export function resolveWorkbenchSettings(
     editorFontSize: projectSettings.editorFontSize.enabled ? projectSettings.editorFontSize.value : globalSettings.editorFontSize,
     editorSpellCheck: projectSettings.editorSpellCheck.enabled ? projectSettings.editorSpellCheck.value : globalSettings.editorSpellCheck,
     fileOpenBehavior: projectSettings.fileOpenBehavior.enabled ? projectSettings.fileOpenBehavior.value : globalSettings.fileOpenBehavior,
+    selectedProjectPinPlacement: projectSettings.selectedProjectPinPlacement.enabled
+      ? projectSettings.selectedProjectPinPlacement.value
+      : globalSettings.selectedProjectPinPlacement,
     showUnopenableFiles: projectSettings.showUnopenableFiles.enabled ? projectSettings.showUnopenableFiles.value : globalSettings.showUnopenableFiles,
     theme: projectSettings.theme.enabled ? projectSettings.theme.value : globalSettings.theme,
     threadCodeBlockWrap: projectSettings.threadCodeBlockWrap.enabled ? projectSettings.threadCodeBlockWrap.value : globalSettings.threadCodeBlockWrap,

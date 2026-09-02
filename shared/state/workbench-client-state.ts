@@ -1,10 +1,12 @@
 /*
  * Exports:
- * - WorkbenchClientStateRecord/WorkbenchClientStateIdentity: typed app-owned state records and deletion identities. Keywords: app, state, contract.
- * - WorkbenchClientStateRows/WorkbenchClientStateResponse: schema-derived selected rows in a complete snapshot or revision delta. Keywords: app, state, revision, HTTP.
- * - WorkbenchClientStateMutation: focused state mutation payload admitted by app state routes. Keywords: app, state, mutation.
- * - workbenchClientStateMutationPath/workbenchClientStateMutationKinds: shared focused-route registry for browser and app. Keywords: app, state, HTTP, route.
+ * - WorkbenchHarnessValue/WorkbenchThemeValue/WorkbenchEditorFontFamilyValue/WorkbenchFileOpenBehaviorValue/WorkbenchSelectedProjectPinPlacementValue: preference value contracts. Keywords: app, settings, value.
+ * - WorkbenchGlobalPreference/WorkbenchProjectPreference/WorkbenchSidebarPreference: typed preference records. Keywords: app, settings, state.
+ * - WorkbenchFileDraftValue/WorkbenchComposerDraftValue/WorkbenchQuestionnaireDraftValue: recoverable browser draft values. Keywords: app, draft, state.
+ * - WorkbenchClientStateRecord/WorkbenchClientStateIdentity/WorkbenchClientStateMutation: app state records, identities, and mutations. Keywords: app, state, contract.
+ * - WorkbenchClientStateRows/WorkbenchClientStateResponse: schema-derived rows and revision responses. Keywords: app, state, revision, HTTP.
  * - WORKBENCH_BROWSER_STATE_HEADER/isWorkbenchBrowserStateId: browser namespace HTTP boundary. Keywords: browser, state, UUID, HTTP.
+ * - workbenchClientStateMutationPath/workbenchClientStateMutationKinds: focused-route registry. Keywords: app, state, HTTP, route.
  */
 import { appStateClientTables } from "./workbench-app-state-schema.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
@@ -13,6 +15,7 @@ export type WorkbenchHarnessValue = "codex" | "copilot" | "opencode";
 export type WorkbenchThemeValue = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamilyValue = "mono" | "sans" | "serif";
 export type WorkbenchFileOpenBehaviorValue = "vscode" | "workbench" | "workbench-or-vscode";
+export type WorkbenchSelectedProjectPinPlacementValue = "pinned-section" | "threads-section";
 
 export type WorkbenchGlobalPreference =
   | { key: "composerSpellCheck" | "editorSpellCheck" | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadLiveActivityOpen"; value: boolean }
@@ -20,6 +23,7 @@ export type WorkbenchGlobalPreference =
   | { key: "appPort" | "editorFontSize"; value: number }
   | { key: "fileOpenBehavior"; value: WorkbenchFileOpenBehaviorValue }
   | { key: "harness"; value: WorkbenchHarnessValue }
+  | { key: "selectedProjectPinPlacement"; value: WorkbenchSelectedProjectPinPlacementValue }
   | { key: "theme"; value: WorkbenchThemeValue };
 
 export type WorkbenchProjectPreference =
@@ -27,6 +31,7 @@ export type WorkbenchProjectPreference =
   | { enabled: boolean; key: "editorFontFamily"; value: WorkbenchEditorFontFamilyValue }
   | { enabled: boolean; key: "editorFontSize"; value: number }
   | { enabled: boolean; key: "fileOpenBehavior"; value: WorkbenchFileOpenBehaviorValue }
+  | { enabled: boolean; key: "selectedProjectPinPlacement"; value: WorkbenchSelectedProjectPinPlacementValue }
   | { enabled: boolean; key: "theme"; value: WorkbenchThemeValue };
 
 export type WorkbenchSidebarPreference =

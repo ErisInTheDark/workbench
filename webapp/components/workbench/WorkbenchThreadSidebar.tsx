@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadSidebar: render the current project's ordinary thread list from shared sidebar actions. Keywords: sidebar, project, threads, activity, React.
+ * - default WorkbenchThreadSidebar: render the current project's configured main thread list from shared sidebar actions. Keywords: sidebar, project, pinned, threads, activity, React.
  */
 "use client";
 
@@ -9,6 +9,7 @@ import { memo, type PointerEvent, type ReactNode } from "react";
 import type { WorkbenchHarness } from "../../lib/types";
 import type { WorkbenchDragPayload } from "../../lib/workbench/layout/workbench-drag";
 import { createThreadHref } from "../../lib/workbench/navigation/workbench-route";
+import type { WorkbenchSelectedProjectPinPlacement } from "../../lib/workbench/state/workbench-settings";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
 import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import WorkbenchThreadList from "./WorkbenchThreadList";
@@ -24,6 +25,7 @@ interface WorkbenchThreadSidebarProps {
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projectId: string;
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
+  selectedProjectPinPlacement: WorkbenchSelectedProjectPinPlacement;
   showMosaicView: boolean;
 }
 
@@ -37,6 +39,7 @@ export default memo(function WorkbenchThreadSidebar({
   onOpenThread,
   projectId,
   renderThreadTooltipDetails,
+  selectedProjectPinPlacement,
   showMosaicView,
 }: WorkbenchThreadSidebarProps) {
   const actions = WorkbenchThreadSidebarActionsProvider.useActions();
@@ -67,6 +70,7 @@ export default memo(function WorkbenchThreadSidebar({
           onRenameFolder={actions.onRenameFolder}
           projectId={projectId}
           renderThreadTooltipDetails={renderThreadTooltipDetails}
+          showPinnedThreadsInMain={selectedProjectPinPlacement === "threads-section"}
         />
       </nav>
       {actions.error ? <p className="m-0 pr-2 text-[0.84rem] leading-6 text-muted">{actions.error}</p> : null}

@@ -29,7 +29,7 @@ const requiredRegistrations = [
 export interface WorkbenchAppRuntimeOptions {
   appPort: WorkbenchAppPortControl;
   createCompiler(): WorkbenchFrontendCompiler;
-  createDatabase(): WorkbenchAppStateRepository;
+  createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;
   logger: WorkbenchAppLogger;
   outputDirectoryPath: string;
   repositoryRootPath: string;

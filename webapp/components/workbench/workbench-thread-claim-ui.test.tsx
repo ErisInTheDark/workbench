@@ -73,7 +73,7 @@ function createThreadEntry({
   };
 }
 
-function renderThreads(entries: ThreadEntry[]) {
+function renderThreads(entries: ThreadEntry[], showPinnedThreadsInMain = false) {
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
@@ -88,6 +88,7 @@ function renderThreads(entries: ThreadEntry[]) {
             onCreateThread: () => undefined,
             onOpenThread: () => undefined,
             projectId: "project",
+            showPinnedThreadsInMain,
           })),
       ),
       projectId: "project",
@@ -98,6 +99,7 @@ function renderThreads(entries: ThreadEntry[]) {
 function renderPinnedThreads(
   projects: WorkbenchProjectOption[],
   projectThreadSummaries: WorkbenchProjectThreadSummaries,
+  selectedProjectPinPlacement: ComponentProps<typeof WorkbenchPinnedThreadList>["selectedProjectPinPlacement"] = "pinned-section",
 ) {
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
@@ -121,6 +123,7 @@ function renderPinnedThreads(
           onOpenThread: () => undefined,
           projectId: "project",
           projects,
+          selectedProjectPinPlacement,
           selectedOwnerProjectId: "project",
         })),
       ),
@@ -438,6 +441,12 @@ test("global pinned disclosure starts open, omits thread creation, and identifie
   assert.match(remoteRowHtml, /Other[\s\S]*?web\/other[\s\S]*?Remote pin/u);
   assert.doesNotMatch(`${localRowHtml}${remoteRowHtml}`, /data-role="thread-priority-icon"/u);
 
+  const relocatedPinnedHtml = renderPinnedThreads(projects, projectThreadSummaries, "threads-section");
+  assert.doesNotMatch(relocatedPinnedHtml, /Local pin/u);
+  assert.match(relocatedPinnedHtml, /Remote pin/u);
+  const relocatedMainHtml = renderThreads([localPinned], true);
+  assert.match(relocatedMainHtml, /Local pin/u);
+  assert.match(relocatedMainHtml, /data-role="thread-priority-icon" data-thread-priority="pinned"/u);
 });
 
 test("only home thread rows show pin while snooze keeps priority", () => {

@@ -33,6 +33,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
     "app/state/WorkbenchAppStateController.ts",
     "app/state/WorkbenchBrowserStateRegistry.ts",
     "shared/state/**",
+    "!shared/state/workbench-app-state-schema.ts",
     "shared/database/**",
   ].join("\n"),
 });

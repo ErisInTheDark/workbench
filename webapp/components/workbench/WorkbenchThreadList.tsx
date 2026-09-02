@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadList: render project-owned ordinary, snoozed, and settled threads with folder, action, and drag mechanics. Keywords: workbench, project, threads, folders, sidebar, context menu.
+ * - default WorkbenchThreadList: render project-owned main, snoozed, and settled threads with optional pinned priority rows. Keywords: workbench, project, pinned, threads, folders, sidebar.
  * - Local helpers: derive thread targets and stable mixed-item keys and counts. Keywords: thread, draft, folder, identity, pagination.
  */
 "use client";
@@ -76,6 +76,7 @@ export default function WorkbenchThreadList({
   onRenameFolder,
   projectId,
   renderThreadTooltipDetails,
+  showPinnedThreadsInMain = false,
 }: {
   allowMainPanelDrop?: boolean;
   attentionLabelsByThreadId?: Record<string, string | undefined>;
@@ -97,9 +98,13 @@ export default function WorkbenchThreadList({
   onRenameFolder?: (folderId: string, title: string) => Promise<string>;
   projectId: string;
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
+  showPinnedThreadsInMain?: boolean;
 }) {
   const rowRefs = useRef(new Map<string, HTMLAnchorElement>());
-  const { mainEntries } = groupWorkbenchThreadSidebarEntries(entries);
+  const groupedEntries = groupWorkbenchThreadSidebarEntries(entries);
+  const mainEntries = showPinnedThreadsInMain
+    ? [...groupedEntries.pinnedEntries, ...groupedEntries.mainEntries]
+    : groupedEntries.mainEntries;
   const snoozedItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "snoozed");
   const settledItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "settled");
   const isShiftPressed = useNonTextInputShiftKey();
@@ -164,6 +169,7 @@ export default function WorkbenchThreadList({
         projectId,
         selected,
         showActions: true,
+        showPinPriorityIcon: showPinnedThreadsInMain,
         tooltipDetails: renderThreadTooltipDetails?.(entry),
       };
       return asTab ? (

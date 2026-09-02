@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - default WorkbenchPinnedThreadSidebar: render the global pinned-thread disclosure above project navigation while preserving viewed-project routes. Keywords: pinned, sidebar, projects, route.
+ * - default WorkbenchPinnedThreadSidebar: render the filtered global pinned disclosure above project navigation. Keywords: pinned, sidebar, projects, placement, route.
  */
 "use client";
 
 import type { WorkbenchProjectOption } from "../../lib/types";
+import type { WorkbenchSelectedProjectPinPlacement } from "../../lib/workbench/state/workbench-settings";
 import type { WorkbenchThreadTarget } from "../../lib/workbench/thread/thread-state";
 import WorkbenchPinnedThreadList from "./WorkbenchPinnedThreadList";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
@@ -14,12 +15,14 @@ export default function WorkbenchPinnedThreadSidebar({
   onOpenThread,
   projectId,
   projects,
+  selectedProjectPinPlacement,
   selectedOwnerProjectId,
 }: {
   currentTarget: WorkbenchThreadTarget | null;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projectId: string;
   projects: readonly WorkbenchProjectOption[];
+  selectedProjectPinPlacement: WorkbenchSelectedProjectPinPlacement;
   selectedOwnerProjectId: string;
 }) {
   const actions = WorkbenchThreadSidebarActionsProvider.useActions();
@@ -31,6 +34,7 @@ export default function WorkbenchPinnedThreadSidebar({
         onOpenThread={onOpenThread}
         projectId={projectId}
         projects={projects}
+        selectedProjectPinPlacement={selectedProjectPinPlacement}
         selectedOwnerProjectId={selectedOwnerProjectId}
       />
     </nav>

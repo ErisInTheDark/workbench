@@ -4,6 +4,7 @@
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 
+import WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import AppStateNode from "./AppStateNode.ts";
@@ -12,7 +13,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   access: "operator",
   children: [AppStateNode],
   create: (context) => {
-    const database = context.createDatabase();
+    const database = context.createDatabase(WorkbenchAppStateRepository);
     let detached = false;
     const close = () => {
       database.close();

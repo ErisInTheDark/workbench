@@ -193,6 +193,7 @@ const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "editorSpellCheck",
   "composerSpellCheck",
   "fileOpenBehavior",
+  "selectedProjectPinPlacement",
   "showUnopenableFiles",
   "threadCodeBlockWrap",
   "editorFontSize",
@@ -2376,7 +2377,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return (
         <WorkbenchOptionCards<WorkbenchGlobalSettings[WorkbenchSettingKey]>
           ariaLabel={definition.label}
-          columns={key === "theme" ? "two" : "one"}
+          columns={definition.columns ?? "one"}
           disabled={disabled}
           mode="radio"
           options={definition.options}
@@ -2659,6 +2660,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       onOpenThread={openThreadFromExplorer}
                       projectId={activeProjectId}
                       projects={explorer.projects}
+                      selectedProjectPinPlacement={resolvedSettings.selectedProjectPinPlacement}
                       selectedOwnerProjectId={route.view === "thread" ? route.threadOwnerProjectId || route.projectId : activeProjectId}
                     />
                   ) : null}
@@ -2687,6 +2689,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           onOpenThread={openThreadFromExplorer}
                           projectId={activeProjectId}
                           renderThreadTooltipDetails={renderThreadTooltipDetails}
+                          selectedProjectPinPlacement={resolvedSettings.selectedProjectPinPlacement}
                           showMosaicView={showMosaicView}
                         />
                       ) : (

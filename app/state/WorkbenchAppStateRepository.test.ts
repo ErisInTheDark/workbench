@@ -63,6 +63,56 @@ test("checked scalar families reject value columns that do not match their key",
   database.close();
 });
 
+test("selected-project pin placement persists as text at global and project scopes", async (context) => {
+  const databasePath = await temporaryDatabase(context);
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  const daemonRegistrationId = repository.start();
+  assert.throws(() => repository.executeTransaction([
+    insertRow(appStateTables.globalPreferences, {
+      boolean_value: 1,
+      deleted: 0,
+      integer_value: null,
+      key: "selectedProjectPinPlacement",
+      revision: 1,
+      text_value: null,
+    }),
+  ]), /CHECK constraint failed/u);
+
+  repository.commit((revision) => [
+    insertRow(appStateTables.globalPreferences, {
+      boolean_value: null,
+      deleted: 0,
+      integer_value: null,
+      key: "selectedProjectPinPlacement",
+      revision,
+      text_value: "threads-section",
+    }),
+    insertRow(appStateTables.projectPreferences, {
+      boolean_value: null,
+      daemon_registration_id: daemonRegistrationId,
+      deleted: 0,
+      enabled: 1,
+      integer_value: null,
+      key: "selectedProjectPinPlacement",
+      project_id: "project",
+      revision,
+      text_value: "pinned-section",
+    }),
+  ]);
+
+  assert.equal(repository.query(selectRows(appStateTables.globalPreferences, {
+    where: { key: "selectedProjectPinPlacement" },
+  }))[0]?.text_value, "threads-section");
+  assert.equal(repository.query(selectRows(appStateTables.projectPreferences, {
+    where: {
+      daemon_registration_id: daemonRegistrationId,
+      key: "selectedProjectPinPlacement",
+      project_id: "project",
+    },
+  }))[0]?.text_value, "pinned-section");
+  repository.close();
+});
+
 test("backup creates a complete independent app-state database", async (context) => {
   const sourcePath = await temporaryDatabase(context);
   const backupPath = path.join(path.dirname(sourcePath), "backup.sqlite3");

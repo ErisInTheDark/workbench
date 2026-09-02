@@ -6,7 +6,6 @@ import WorkbenchAppLogger from "./WorkbenchAppLogger.ts";
 import WorkbenchAppProcessProtocol from "./WorkbenchAppProcessProtocol.ts";
 import WorkbenchFrontendCompiler from "./WorkbenchFrontendCompiler.ts";
 import WorkbenchFrontendServer from "./WorkbenchFrontendServer.ts";
-import WorkbenchAppStateRepository from "./state/WorkbenchAppStateRepository.ts";
 import WorkbenchAppRuntime from "./runtime/WorkbenchAppRuntime.ts";
 import { readWorkbenchAppCommandLine } from "./app-command-line.ts";
 import path from "node:path";
@@ -29,7 +28,7 @@ async function main() {
     createRuntime: (appPort) => new WorkbenchAppRuntime({
       appPort,
       createCompiler,
-      createDatabase: () => new WorkbenchAppStateRepository(),
+      createDatabase: (Repository) => new Repository(),
       logger,
       outputDirectoryPath,
       repositoryRootPath,
