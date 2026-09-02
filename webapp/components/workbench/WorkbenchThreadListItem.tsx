@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, direct navigation, tooltip detail, and explicit context-menu access. Keywords: thread, project, sidebar, navigation, tooltip, context menu, claim.
+ * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, direct navigation, tooltip detail, and explicit context-menu access. Keywords: thread, project, sidebar, navigation, tooltip, context menu, claim, priority, pin, snooze, compact.
  * - Local helpers: derive full or compact pinned-draft row targets and render bounded thread tooltip details. Keywords: thread, draft, target, tooltip, status.
  */
 "use client";
@@ -218,7 +218,7 @@ export default function WorkbenchThreadListItem({
   const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
   const compact = compactOverride ?? group === "settled";
-  const hideCompactMetadata = showActions && Boolean(action);
+  const actionReplacesPriority = showActions && Boolean(action);
   const actionButton = showActions && action ? (
     <button type="button" aria-label={actionLabel} title={actionLabel} className={`pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-muted focus-visible:flex focus-visible:text-text${isDragActive ? "" : " hover:text-text group-hover/thread-row:flex group-has-[:focus-visible]/thread-row:flex"} ${compact ? "col-start-3 self-center" : "col-start-2 self-start"} ${action === "discard" ? "p-1" : "gap-1 px-1.5 py-1 text-[0.72rem] font-medium"}`} onClick={(event) => { event.stopPropagation(); onAction?.(canShiftSettle && (event.shiftKey || event.detail > 1) ? "settle" : action); }} onPointerDown={(event) => event.stopPropagation()}>
       <ActionIcon className="size-4" />
@@ -283,18 +283,33 @@ export default function WorkbenchThreadListItem({
         >
           <Icon className={`mr-1.5 size-3.5 ${statusClassName}`} />
           <span className={`${workbenchThreadListLabelClassName} truncate${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
-          <time className={`col-start-3 row-start-1 text-[0.72rem] text-muted${hideCompactMetadata && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`} dateTime={dateTime} title={exactTime}>{relativeTime}</time>
+          <span className={`col-start-3 row-start-1 inline-flex items-center gap-1.5 text-[0.72rem] text-muted${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
+            {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon className="size-3.5" /></span> : null}
+            <time dateTime={dateTime} title={exactTime}>{relativeTime}</time>
+          </span>
           {actionButton}
         </div>
       ) : (
         <WorkbenchThreadListFullRowContent
-          action={actionButton}
+          action={(
+            <>
+              {PriorityIcon ? (
+                <span
+                  data-role="thread-priority-icon"
+                  data-thread-priority={priority}
+                  className={`col-start-2 row-start-1 inline-flex size-4 shrink-0 items-center justify-center self-center${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:hidden group-has-[:focus-visible]/thread-row:hidden" : ""}`}
+                >
+                  <PriorityIcon className="size-3.5" />
+                </span>
+              ) : null}
+              {actionButton}
+            </>
+          )}
           contextMenu={Boolean(contextMenu)}
           eyebrow={project ? <WorkbenchProjectLabel project={project} variant="thread" /> : undefined}
           metadata={(
-            <span className="grid grid-cols-[auto_auto] items-center gap-1.5">
+            <span className="grid items-center">
               {claimedFileCount ? <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true"><FlagIcon className="size-3.5" /><span>{claimedFileCount}</span></span> : null}
-              {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 items-center justify-center"><PriorityIcon className="size-3.5" /></span> : null}
             </span>
           )}
           statusIcon={<Icon className={`size-3.5 ${statusClassName}`} />}

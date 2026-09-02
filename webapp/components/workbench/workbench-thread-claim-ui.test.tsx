@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; rendered regression checks protect active claim counts, proposed-commit presentation, settlement suppression, and home pinned priority ordering. Keywords: sidebar, thread, pinned, project, claim, proposal, commit, settlement.
+ * - No production exports; rendered regression checks protect active claim counts, proposed-commit presentation, settlement suppression, home pinned priority ordering, and settled pin visibility. Keywords: sidebar, thread, pinned, project, claim, proposal, commit, settlement.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -467,6 +467,17 @@ test("only home thread rows show pin while snooze keeps priority", () => {
   assert.match(pinnedAndSnoozedHtml, /data-role="thread-priority-icon" data-thread-priority="snoozed"/u);
   assert.doesNotMatch(pinnedAndSnoozedHtml, /data-thread-priority="pinned"/u);
   assert.doesNotMatch(ordinaryHtml, /data-role="thread-priority-icon"/u);
+});
+
+test("settled home thread rows retain pin priority", () => {
+  const html = renderThreadItem({
+    ...createThreadEntry({ threadId: "settled-pinned", title: "Settled pinned" }),
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+    metadata: { archived: false, pinned: true, snoozed: false },
+  }, null, undefined, { showPinPriorityIcon: true });
+
+  assert.match(html, /aria-label="Restore"/u);
+  assert.match(html, /data-role="thread-priority-icon" data-thread-priority="pinned"/u);
 });
 
 test("home renders one combined priority list with project-owned folders and foreign drag blocking", () => {
