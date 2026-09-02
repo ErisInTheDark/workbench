@@ -22,7 +22,7 @@ You may propose new invariants or changes to existing invariants, but you must m
 <!-- Prevent echoed persistence from replaying stale UI state. -->
 - The browser client-state controller owns optimistic projection and per-identity mutation order. Consumers derive persisted state from its snapshot. They do not mirror and write back hydrated state.
 <!-- Prevent suspended mobile tabs from trusting an unreplayable WebSocket stream. -->
-- Treat browser visibility suspension as loss of live stream continuity. On resume, replace the browser WebSocket and rebuild pushed observations plus visible route state from authoritative owners.
+- Treat browser visibility resumption as possible state staleness, not transport loss. Refresh authoritative observations and visible state over the live socket without invalidating pending work. Replace the socket and fully reset connection state only after observed transport loss.
 <!-- Prevent app-port changes from racing persistence, stranding clients, or splitting runtime identity. -->
 - Move the app port by binding the replacement before retiring the old listener. Preserve app runtime and state identity. Update browser and desktop origins together.
 <!-- Prevent full app reload from racing the native singleton or opening duplicate static-port tabs. -->

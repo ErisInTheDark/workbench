@@ -231,7 +231,7 @@ interface WorkbenchThreadClient {
   openThread: (threadId: string, options?: { entries?: readonly WorkbenchThreadSidebarEntry[]; harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" }) => Promise<ThreadPayloadFetchOutcome>;
   onReconnect: (listener: () => void) => () => void;
   onWorkbenchNotification: (listener: (notification: { method: "workbench/thread-state/reset" | "workbench/thread-state/updated"; params: unknown }) => void) => () => void;
-  reconnect: () => Promise<void>;
+  refreshCurrentThread: () => Promise<ThreadPayload | null>;
   requestWorkbench: <TResponse>(method: string, params: unknown) => Promise<TResponse>;
   resetConnectionState: () => void;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
@@ -902,10 +902,6 @@ function WorkbenchThreadClient(
 
   function onReconnect(listener: () => void) {
     return codexClient.onReconnect(listener);
-  }
-
-  async function reconnect() {
-    await codexClient.reconnect();
   }
 
   let transcriptConformanceReportFailureLogged = false;
@@ -3582,6 +3578,24 @@ function WorkbenchThreadClient(
       });
   }
 
+  async function refreshCurrentThread() {
+    const currentThread = state.currentThread;
+    if (!currentThread || isDraftThreadId(currentThread.id)) {
+      return currentThread;
+    }
+    const outcome = await fetchThreadPayload(currentThread.id, currentThread.harness, {}, (payload) => {
+      if (threadDocuments.getSelectedThreadKey() === getThreadSourceKey(payload)) {
+        setCurrentThread(payload);
+        return state.currentThread;
+      }
+      return upsertThreadDocument(payload, { emitChange: true });
+    });
+    if (outcome.kind === "failure") {
+      throw new Error(outcome.failure.message);
+    }
+    return outcome.kind === "success" ? outcome.payload : state.currentThread;
+  }
+
   async function fetchThreadPayloadFromCandidates(
     threadId: string,
     harness?: WorkbenchHarness,
@@ -5839,7 +5853,7 @@ function WorkbenchThreadClient(
     openThread,
     onReconnect,
     onWorkbenchNotification,
-    reconnect,
+    refreshCurrentThread,
     requestWorkbench,
     readThread,
     resetConnectionState,

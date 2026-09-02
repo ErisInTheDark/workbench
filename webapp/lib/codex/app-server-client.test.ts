@@ -201,7 +201,7 @@ test("shared transcript notifications and connection closure reach their Workben
   }
 });
 
-test("reconnect replaces and fences the old socket before announcing fresh continuity", async () => {
+test("a closed socket is fenced before fresh continuity is announced", async () => {
   const originalWebSocket = globalThis.WebSocket;
   const sockets: FakeWebSocket[] = [];
   globalThis.WebSocket = class extends FakeWebSocket {
@@ -222,8 +222,9 @@ test("reconnect replaces and fences the old socket before announcing fresh conti
 
     const oldSocket = sockets[0]!;
     const oldRequest = client.sendRequest({ id: 42, method: "old/request" });
-    const oldRequestRejected = assert.rejects(oldRequest, /connection replaced/u);
-    await client.reconnect();
+    const oldRequestRejected = assert.rejects(oldRequest, /connection closed/u);
+    oldSocket.close();
+    await client.connect("ws://test");
     await oldRequestRejected;
 
     assert.equal(sockets.length, 2);

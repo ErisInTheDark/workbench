@@ -184,27 +184,6 @@ export class CodexAppServerClient {
     }, delay);
   }
 
-  async reconnect() {
-    if (this.disposed) throw new Error("Codex app-server client is disposed.");
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-
-    const socket = this.socket;
-    if (socket) {
-      this.retireSocket(socket, new Error("Codex app-server connection replaced."));
-      socket.close(1000, "Browser resumed.");
-    }
-    this.connectPromise = null;
-    this.socketPromise = null;
-
-    try {
-      await this.connect(this.url);
-    } catch (error) {
-      this.scheduleReconnect();
-      throw error;
-    }
-  }
-
   close(code?: number, reason?: string) {
     this.disposed = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);

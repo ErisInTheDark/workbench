@@ -909,6 +909,35 @@ test("late latest pages cannot erase completed live items", async () => withClie
   );
 }));
 
+test("refreshing the selected thread preserves pending steer ownership", async () => withClient(async (client, socket) => {
+  const source = activeThread();
+  client.selectThreadPayload(source);
+  let steerRequest: SocketRequest | null = null;
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method !== "turn/steer") return false;
+    steerRequest = request;
+    return true;
+  };
+
+  const send = client.sendThreadMessage(source, [{ text: "queued", text_elements: [], type: "text" }]);
+  await waitForRequest(socket, "turn/steer");
+
+  assert.equal((await client.refreshCurrentThread())?.id, "thread");
+  socket.respond(steerRequest!.id, { turnId: "different-turn" });
+  assert.equal((await send)?.id, "thread");
+}));
+
+test("refreshing the selected thread surfaces read failures", async () => withClient(async (client) => {
+  client.selectThreadPayload(activeThread());
+  FakeWebSocket.intercept = (target, request) => {
+    if (request.method !== "workbench/thread/page/read") return false;
+    queueMicrotask(() => target.fail(request.id, "refresh failed"));
+    return true;
+  };
+
+  await assert.rejects(client.refreshCurrentThread(), /refresh failed/u);
+}));
+
 test("foreign pinned thread context owns provider cwd, subagents, and late-read fencing without replacing the viewed project", async () => withClient(async (client, socket) => {
   const ownerProject = {
     id: "owner",

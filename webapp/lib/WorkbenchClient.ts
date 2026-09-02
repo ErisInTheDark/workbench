@@ -3,7 +3,7 @@
  * - areExplorerSnapshotsEquivalent: compare root-visible explorer semantics while excluding sidebar-only activity ordering. Keywords: explorer, equality, render boundary.
  * - openWorkbenchThreadStateObservation/openWorkbenchGlobalThreadStateObservation/describeGlobalThreadStateOpenFailure: negotiate sidebar bootstrap versions and expose bounded global-open transport failures. Keywords: thread state, protocol, compatibility, conformance, home.
  * - requestWorkbenchReload: send and conform one typed socket reload admission. Keywords: reload, WebSocket, Zod, boundary.
- * - WorkbenchClient: wire the workbench DOM, one reconnecting bridge transport, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket, resume.
+ * - WorkbenchClient: wire the workbench DOM, bridge continuity recovery, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket, resume.
  */
 
 import type { UserInput } from "./codex/generated/app-server/v2/UserInput";
@@ -51,6 +51,7 @@ import WorkbenchFilePanelClient from "./workbench/WorkbenchFilePanelClient";
 import type { WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench/WorkbenchThreadClient";
+import WorkbenchConnectionRecoveryController, { type WorkbenchConnectionContinuity } from "./workbench/WorkbenchConnectionRecoveryController";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./workbench/daemon/WorkbenchDaemonClient";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema, type WorkbenchProjectStateUpdate } from "./workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
@@ -58,7 +59,6 @@ import conformWorkbenchThreadStateOpenResult from "./workbench/thread/browser-th
 import { WorkbenchGlobalThreadStateOpenResultSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateOpenResultSchema, WorkbenchThreadStateSnapshotSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
 import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
 import reportClientSchemaError from "./workbench/report-client-schema-error";
-import WorkbenchBrowserResumeController from "./workbench/WorkbenchBrowserResumeController";
 
 type MountedWorkbenchControls = WorkbenchControls & {
   createFilePanelClient: (
@@ -468,42 +468,44 @@ export async function WorkbenchClient(
     }
   }));
   const reportConnectionRecoveryFailure = (summary: string, error: unknown) => {
-    const detail = error instanceof Error ? error.message.slice(0, 500) : "Unknown reconnect recovery failure.";
+    const detail = error instanceof Error ? error.message.slice(0, 500) : "Unknown connection recovery failure.";
     console.error(summary, detail);
     reportStatusMessage(`${summary} ${detail}`);
   };
-  let connectionRecoveryPending = false;
-  let connectionRecoveryTask: Promise<void> | null = null;
-  const requestConnectionRecovery = () => {
-    connectionRecoveryPending = true;
-    if (connectionRecoveryTask) return;
-    connectionRecoveryTask = (async () => {
-      while (connectionRecoveryPending && !coordinatorLifecycle.isDisposed) {
-        connectionRecoveryPending = false;
-        try {
-          projectClient.resetObservation();
-          threadClient.resetConnectionState();
-          await threadSidebarClient.reopen();
-          if (coordinatorLifecycle.isDisposed) return;
-          await applyRoute(activeRoute);
-          if (activeRoute.view === "thread") await refreshRateLimits();
-          const fileRefreshes = await Promise.allSettled(
-            [...mountedFilePanelClients].map(async (client) => await client.refreshCurrentFileFromDiskIfSafe()),
-          );
-          const failedFileRefresh = fileRefreshes.find((result) => result.status === "rejected");
-          if (failedFileRefresh?.status === "rejected") {
-            reportConnectionRecoveryFailure("Unable to refresh a file after reconnecting.", failedFileRefresh.reason);
-          }
-        } catch (error) {
-          reportConnectionRecoveryFailure("Unable to rebuild Workbench state after reconnecting.", error);
-        }
-      }
-    })().finally(() => {
-      connectionRecoveryTask = null;
-      if (connectionRecoveryPending && !coordinatorLifecycle.isDisposed) requestConnectionRecovery();
-    });
+  const recoverConnection = async (continuity: WorkbenchConnectionContinuity) => {
+    projectClient.resetObservation();
+    if (continuity === "lost") {
+      threadClient.resetConnectionState();
+    }
+    await threadSidebarClient.reopen();
+    if (coordinatorLifecycle.isDisposed) return;
+    if (continuity === "lost") {
+      await applyRoute(activeRoute);
+    } else {
+      await threadClient.refreshCurrentThread();
+    }
+    if (activeRoute.view === "thread") await refreshRateLimits();
+    const fileRefreshes = await Promise.allSettled(
+      [...mountedFilePanelClients].map(async (client) => await client.refreshCurrentFileFromDiskIfSafe()),
+    );
+    const failedFileRefresh = fileRefreshes.find((result) => result.status === "rejected");
+    if (failedFileRefresh?.status === "rejected") {
+      reportConnectionRecoveryFailure("Unable to refresh a file during connection recovery.", failedFileRefresh.reason);
+    }
   };
-  coordinatorLifecycle.addUnsubscribe(threadClient.onReconnect(requestConnectionRecovery));
+  const connectionRecovery = new WorkbenchConnectionRecoveryController({
+    onError: (continuity, error) => {
+      reportConnectionRecoveryFailure(
+        continuity === "lost"
+          ? "Unable to rebuild Workbench state after reconnecting."
+          : "Unable to refresh Workbench state after resuming.",
+        error,
+      );
+    },
+    recover: recoverConnection,
+  });
+  coordinatorLifecycle.addUnsubscribe(threadClient.onReconnect(() => connectionRecovery.recoverAfterConnectionLoss()));
+  coordinatorLifecycle.addUnsubscribe(() => connectionRecovery.dispose());
 
   document.execCommand?.("defaultParagraphSeparator", false, "p");
 
@@ -1246,14 +1248,7 @@ export async function WorkbenchClient(
   if (sessionState.currentThreadId || activeRoute.view === "thread") {
     void refreshRateLimits();
   }
-  const browserResume = new WorkbenchBrowserResumeController({
-    onError: (error) => {
-      reportConnectionRecoveryFailure("Unable to reconnect after resuming Workbench.", error);
-    },
-    reconnect: async () => await threadClient.reconnect(),
-  });
-  browserResume.start();
-  coordinatorLifecycle.addUnsubscribe(() => browserResume.dispose());
+  connectionRecovery.start();
   return () => {
     threadSidebarClient.bestEffortFlush();
     void threadSidebarClient.close();
