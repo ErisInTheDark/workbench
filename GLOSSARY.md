@@ -14,5 +14,8 @@
 | steer admittance | The point when Workbench or the underlying harness accepts a steer for an active turn. Admittance associates the steer with that turn, but does not mean that the running agent has received it in model context |
 | steer delivery | The later point when an admitted steer is supplied to the running agent at an input boundary. Delivery makes the steer available to the agent's reasoning and can occur after a pending tool call completes |
 | transcripts | persisted transcript files under `.workbench/transcripts/`. For Codex threads, `thread.json`, `turns/*.json`, `turns/*.ndjson`, orphan-event files, and `assets/`, with `CodexTranscriptStore` as their owner |
-| logs | The persisted Workbench orchestrator runtime logs under `.workbench/logs/` |
+| logs | The persisted Workbench runtime logs under `.workbench/logs/`. Includes both orchestrator/daemon logs, and app server logs. |
 | layered sort | A sort where each layer orders only ties from earlier layers. A user override replaces later layers within its slot. |
+| daemon/orchestrator | The workbench harness, applied on top of existing harnesses. |
+| codex app-server | Codex's harness. |
+| app | Sometimes "app server". NOT "codex app-server", which is codex's harness. May be referring to the backend or frontend of a workbench *app*. The backend has thin responsibilities related to serving the SPA, providing the tray features, and storing settings. The frontend is thinner, solely responsible for rendering and interaction. |
