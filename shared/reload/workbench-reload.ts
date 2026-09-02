@@ -16,6 +16,7 @@ export interface WorkbenchReloadScopeDescriptor {
 }
 
 export interface WorkbenchReloadDirtScope {
+  dependantScopes?: WorkbenchReloadScope[];
   description: string;
   destructive: boolean;
   scope: WorkbenchReloadScope;

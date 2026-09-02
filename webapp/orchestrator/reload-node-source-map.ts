@@ -188,6 +188,7 @@ export function observeReloadNodeGraphSources<TContext, TObjects extends object,
   }
   sourceRegistry().pending = {
     dependantClosure(scopes) {
+      if (scopes.includes("server:process")) return descriptors.map(({ scope }) => scope);
       const selected = new Set(scopes);
       const visit = (scope: OrchestratorReloadScope) => {
         for (const child of children.get(scope) ?? []) if (!selected.has(child)) {

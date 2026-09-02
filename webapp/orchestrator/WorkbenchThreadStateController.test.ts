@@ -1,4 +1,4 @@
-/* No production exports. Tests protect headless ownership, pushed reload dirt, folder persistence, MCP generation, observation replay, reconciliation, mutations, and stale publication fences. */
+/* No production exports. Tests protect headless ownership, legacy reload projection, folder persistence, MCP generation, observation replay, reconciliation, mutations, and stale publication fences. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -658,17 +658,20 @@ test("project-local and old central thread state stay read-only until a real mut
   await Promise.all([storageRoot, legacyRoot, centralWinsRoot].map((root) => fs.rm(root, { force: true, recursive: true })));
 });
 
-test("reload dirt publishes through every observed project's existing sidebar channel", async () => {
+test("reload dirt remains only on legacy project and global observations", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dirt-"));
   let dirt: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
   let dirtListener = () => undefined;
   let unsubscribed = false;
-  const published: WorkbenchThreadSidebarSnapshot[] = [];
+  const published: Array<{ connectionId: string; update: WorkbenchThreadStateSnapshot }> = [];
   const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog,
+    getProjectCatalog: () => ({
+      data: [projectOption("project", root)],
+      rootPath: root,
+    }),
     getReloadDirt: () => dirt!,
     projectState: projectState(),
-    publish: (_connectionId, update) => { if (!("updateKind" in update)) published.push(update); },
+    publish: (connectionId, update) => { published.push({ connectionId, update }); },
     reconcileProject: async () => [],
     resolveProjectRoot: async () => root,
     storageRoot: root,
@@ -678,15 +681,41 @@ test("reload dirt publishes through every observed project's existing sidebar ch
     },
   });
   try {
-    const opened = await controller.open("connection", "project");
-    assert.deepEqual(opened.sidebar.reloadDirt, dirt);
+    const legacy = await controller.open("legacy-project", "project", 3);
+    const current = await controller.open("current-project", "project", 4);
+    const legacyGlobal = await controller.openGlobal("legacy-global", 5);
+    const currentGlobal = await controller.openGlobal("current-global", 6);
+    assert.deepEqual(legacy.sidebar.reloadDirt, dirt);
+    assert.equal(current.sidebar.reloadDirt, undefined);
+    assert.deepEqual(legacyGlobal.projectSidebars.projects[0]?.reloadDirt, dirt);
+    assert.equal(currentGlobal.projectSidebars.projects[0]?.reloadDirt, undefined);
+    published.length = 0;
     dirt = {
-      dirtyScopes: [{ description: "Core", destructive: false, scope: "server:core" }],
+      dirtyScopes: [{
+        dependantScopes: ["server:websocket"],
+        description: "Core",
+        destructive: false,
+        scope: "server:core",
+      }],
       error: null,
       pendingScopes: [],
     };
     dirtListener();
-    await waitFor(() => published.some((sidebar) => sidebar.reloadDirt?.dirtyScopes[0]?.scope === "server:core"), "Reload dirt did not publish.");
+    await waitFor(() => published.some(({ connectionId, update }) => (
+      connectionId === "legacy-project"
+      && !("updateKind" in update)
+      && update.reloadDirt?.dirtyScopes[0]?.scope === "server:core"
+    )), "Legacy reload dirt did not publish.");
+    assert.equal(published.some(({ connectionId }) => connectionId === "current-project" || connectionId === "current-global"), false);
+    const legacyUpdate = published.find(({ connectionId, update }) => (
+      connectionId === "legacy-project" && !("updateKind" in update)
+    ))?.update;
+    assert.equal(
+      legacyUpdate && !("updateKind" in legacyUpdate)
+        ? legacyUpdate.reloadDirt?.dirtyScopes[0]?.dependantScopes
+        : null,
+      undefined,
+    );
   } finally {
     await controller.dispose();
     assert.equal(unsubscribed, true);

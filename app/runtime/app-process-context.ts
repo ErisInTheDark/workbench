@@ -14,6 +14,7 @@ export interface AppProcessContext {
   createCompiler(): WorkbenchFrontendCompiler;
   createDatabase(): WorkbenchAppStateRepository;
   executeReloadScopes(scopes: WorkbenchReloadScope[]): Promise<WorkbenchReloadScope[]>;
+  getReloadDependantClosure(scopes: readonly WorkbenchReloadScope[]): WorkbenchReloadScope[];
   getReloadScopeCatalog(): readonly WorkbenchReloadScopeDescriptor[];
   getReloadScopesForPaths(paths: readonly string[]): WorkbenchReloadScope[];
   logger: WorkbenchAppLogger;

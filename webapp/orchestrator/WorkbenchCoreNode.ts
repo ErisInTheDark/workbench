@@ -212,7 +212,6 @@ function createWorkbenchCoreFeature(
     storageRoot: context.legacyMigrationProjectRoot,
     transitions: worktreeGitTransitions,
   });
-  threadState.controller.subscribe(context.notifyThreadLifecycle);
   const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
   const legacyMigrationSource = new WorkbenchLegacyMigrationSourceController({
     allowedProjectIds,

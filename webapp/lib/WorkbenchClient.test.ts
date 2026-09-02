@@ -8,7 +8,7 @@ import test from "node:test";
 import type { ExplorerSnapshot, ThreadSummary, WorkbenchSubagentSummary } from "./types.ts";
 import type { WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state.ts";
 import { WorkbenchDaemonRequestError } from "./workbench/daemon/WorkbenchDaemonClient.ts";
-import { areExplorerSnapshotsEquivalent, describeGlobalThreadStateOpenFailure, openWorkbenchGlobalThreadStateObservation, openWorkbenchThreadStateObservation, requestWorkbenchReload } from "./WorkbenchClient.ts";
+import { areExplorerSnapshotsEquivalent, describeGlobalThreadStateOpenFailure, openWorkbenchGlobalThreadStateObservation, openWorkbenchThreadStateObservation } from "./WorkbenchClient.ts";
 
 const thread = (id: string, updatedAt: number): ThreadSummary => ({
   agentNickname: null,
@@ -74,8 +74,8 @@ const sidebar = (): WorkbenchThreadSidebarSnapshot => ({
   entries: [], error: null, freshness: "fresh", projectId: "project", revision: 1,
 });
 
-test("thread-state open keeps an old version-3 response available during a mixed reload", async () => {
-  const requests: Array<{ projectId: string; version?: 2 | 3 }> = [];
+test("thread-state open negotiates current version 4", async () => {
+  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 }> = [];
   const catalogs: unknown[] = [];
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
@@ -86,7 +86,7 @@ test("thread-state open keeps an old version-3 response available during a mixed
       return { catalog: { data: [], rootPath: "C:/projects" }, project: null, sidebar: sidebar() };
     },
   });
-  assert.deepEqual(requests, [{ projectId: "project", version: 3 }]);
+  assert.deepEqual(requests, [{ projectId: "project", version: 4 }]);
   assert.equal(result.sidebar.projectId, "project");
   assert.deepEqual(result.pinnedThreadLayout, {
     displayOrder: {},
@@ -99,7 +99,7 @@ test("thread-state open keeps an old version-3 response available during a mixed
 
 test("global thread-state open installs a catalog and full sidebars without a selected project snapshot", async () => {
   const catalogs: unknown[] = [];
-  const versions: Array<4 | 5> = [];
+  const versions: Array<4 | 5 | 6> = [];
   const result = await openWorkbenchGlobalThreadStateObservation({
     installCatalog: (catalog) => { catalogs.push(catalog); },
     request: async (version) => {
@@ -114,11 +114,11 @@ test("global thread-state open installs a catalog and full sidebars without a se
             { ...sidebar(), projectId: "beta" },
           ],
         },
-        version: 5,
+        version: 6,
       };
     },
   });
-  assert.deepEqual(versions, [5]);
+  assert.deepEqual(versions, [6]);
   assert.deepEqual(catalogs, [{ data: [], rootPath: "C:/projects" }]);
   assert.deepEqual(result.projectSidebars.projects.map(({ projectId }) => projectId), ["alpha", "beta"]);
   assert.equal(result.homeThreadDisplayOrder?.revision, 2);
@@ -126,12 +126,12 @@ test("global thread-state open installs a catalog and full sidebars without a se
 });
 
 test("global thread-state open falls back to read-only version 4 only for an old protocol rejection", async () => {
-  const versions: Array<4 | 5> = [];
+  const versions: Array<4 | 5 | 6> = [];
   const result = await openWorkbenchGlobalThreadStateObservation({
     installCatalog: () => undefined,
     request: async (version) => {
       versions.push(version);
-      if (version === 5) throw new WorkbenchDaemonRequestError(
+      if (version !== 4) throw new WorkbenchDaemonRequestError(
         "Invalid literal value, expected 4",
         "invalidThreadStateMutation" as never,
       );
@@ -142,8 +142,31 @@ test("global thread-state open falls back to read-only version 4 only for an old
       };
     },
   });
-  assert.deepEqual(versions, [5, 4]);
+  assert.deepEqual(versions, [6, 5, 4]);
   assert.equal(result.homeThreadDisplayOrder, null);
+});
+
+test("global thread-state open preserves version 5 home ordering during a mixed reload", async () => {
+  const versions: Array<4 | 5 | 6> = [];
+  const result = await openWorkbenchGlobalThreadStateObservation({
+    installCatalog: () => undefined,
+    request: async (version) => {
+      versions.push(version);
+      if (version === 6) throw new WorkbenchDaemonRequestError(
+        "Invalid literal value, expected 5",
+        "invalidThreadStateMutation" as never,
+      );
+      return {
+        catalog: { data: [], rootPath: "C:/projects" },
+        homeThreadDisplayOrder: { displayOrder: {}, revision: 7, updateKind: "homeThreadDisplayOrder" },
+        pinnedThreadLayout: { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" },
+        projectSidebars: { projects: [] },
+        version: 5,
+      };
+    },
+  });
+  assert.deepEqual(versions, [6, 5]);
+  assert.equal(result.homeThreadDisplayOrder?.revision, 7);
 });
 
 test("global thread-state failures retain the actual server error and request boundary", () => {
@@ -153,32 +176,15 @@ test("global thread-state failures retain the actual server error and request bo
   );
 });
 
-test("browser reload uses the shared socket method and conforms its admission", async () => {
-  const requests: Array<{ method: string; params: unknown }> = [];
-  const result = await requestWorkbenchReload(["server:database"], async (method, params) => {
-    requests.push({ method, params });
-    return {
-      appliedScopes: [], completedAt: null, error: null, ok: true,
-      queuedScopes: ["server:database"], requestedScopes: ["server:database"],
-      startedAt: 1, state: "running",
-    };
-  });
-  assert.deepEqual(requests, [{
-    method: "workbench/orchestrator/reload",
-    params: { scopes: ["server:database"] },
-  }]);
-  assert.equal(result.state, "running");
-});
-
 test("thread-state open negotiates back to version 2 while the server is still old", async () => {
-  const requests: Array<{ projectId: string; version?: 2 | 3 }> = [];
+  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 }> = [];
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
     projectId: "project",
     request: async (params) => {
       requests.push(params);
-      if (params.version === 3) throw new Error("Invalid input: expected 2");
+      if (params.version === 4 || params.version === 3) throw new Error("Invalid input: expected 2");
       return {
         catalog: { data: [], rootPath: "C:/projects" },
         project: null,
@@ -188,6 +194,7 @@ test("thread-state open negotiates back to version 2 while the server is still o
     },
   });
   assert.deepEqual(requests, [
+    { projectId: "project", version: 4 },
     { projectId: "project", version: 3 },
     { projectId: "project", version: 2 },
   ]);
@@ -195,8 +202,37 @@ test("thread-state open negotiates back to version 2 while the server is still o
   assert.deepEqual(result.projectThreads, { projects: [] });
 });
 
+test("thread-state open falls back from version 4 on the typed old-server rejection", async () => {
+  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 }> = [];
+  const result = await openWorkbenchThreadStateObservation({
+    acceptProject: () => undefined,
+    installCatalog: () => undefined,
+    projectId: "project",
+    request: async (params) => {
+      requests.push(params);
+      if (params.version === 4) {
+        throw new WorkbenchDaemonRequestError(
+          "Invalid input",
+          "invalidThreadStateMutation" as never,
+        );
+      }
+      return {
+        catalog: { data: [], rootPath: "C:/projects" },
+        project: null,
+        projectThreads: { projects: [] },
+        sidebar: sidebar(),
+      };
+    },
+  });
+  assert.deepEqual(requests, [
+    { projectId: "project", version: 4 },
+    { projectId: "project", version: 3 },
+  ]);
+  assert.equal(result.sidebar.projectId, "project");
+});
+
 test("thread-state open retries legacy only for an unsupported version field", async () => {
-  const requests: Array<{ projectId: string; version?: 2 | 3 }> = [];
+  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 }> = [];
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
@@ -208,6 +244,7 @@ test("thread-state open retries legacy only for an unsupported version field", a
     },
   });
   assert.deepEqual(requests, [
+    { projectId: "project", version: 4 },
     { projectId: "project", version: 3 },
     { projectId: "project", version: 2 },
     { projectId: "project" },
@@ -216,7 +253,7 @@ test("thread-state open retries legacy only for an unsupported version field", a
 });
 
 test("thread-state open accepts a composite bootstrap from the versionless compatibility retry", async () => {
-  const requests: Array<{ projectId: string; version?: 2 | 3 }> = [];
+  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 }> = [];
   const catalogs: unknown[] = [];
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
@@ -234,6 +271,7 @@ test("thread-state open accepts a composite bootstrap from the versionless compa
     },
   });
   assert.deepEqual(requests, [
+    { projectId: "project", version: 4 },
     { projectId: "project", version: 3 },
     { projectId: "project", version: 2 },
     { projectId: "project" },
@@ -267,6 +305,47 @@ test("thread-state open conforms malformed composite nodes without discarding va
   assert.deepEqual(catalogs, [{ data: [], rootPath: "C:/projects" }]);
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0]!, /Repaired Workbench thread-state open response/u);
+});
+
+test("thread-state conformance strips retired arc reload scopes without dropping the entry", async (context) => {
+  const diagnostics: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...values) => { diagnostics.push(values.map(String).join(" ")); };
+  context.after(() => { console.error = originalConsoleError; });
+  const result = await openWorkbenchThreadStateObservation({
+    acceptProject: () => undefined,
+    installCatalog: () => undefined,
+    projectId: "project",
+    request: async () => ({
+      catalog: { data: [], rootPath: "C:/projects" },
+      project: null,
+      sidebar: {
+        ...sidebar(),
+        entries: [{
+          activityAt: 1,
+          entryKind: "thread",
+          gitArc: {
+            checkpointCommit: "a".repeat(40),
+            claimedPaths: ["webapp"],
+            intentDescription: "",
+            intentName: "work",
+            phase: "active",
+            proposals: [],
+            reloadScopes: ["server:core"],
+            updatedAt: "2026-09-02T00:00:00.000Z",
+          },
+          identity: { harness: "codex", threadId: "thread" },
+          lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+          metadata: { archived: false, pinned: false, snoozed: false },
+          title: "Thread",
+        }],
+      },
+    }),
+  });
+  assert.equal(result.sidebar.entries.length, 1);
+  const entry = result.sidebar.entries[0];
+  assert.equal(entry?.entryKind === "thread" && entry.gitArc ? "reloadScopes" in entry.gitArc : true, false);
+  assert.equal(diagnostics.length, 1);
 });
 
 test("thread-state open repairs a missing project summary during a mixed reload", async () => {

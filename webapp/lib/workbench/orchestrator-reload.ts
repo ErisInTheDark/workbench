@@ -1,6 +1,8 @@
 /*
  * Exports:
  * - WORKBENCH_RELOAD_METHOD/OrchestratorReloadRequestSchema/OrchestratorReloadResponseSchema: one typed browser reload protocol. Keywords: WebSocket, Zod, contract.
+ * - WORKBENCH_RELOAD_DIRT_READ_METHOD/WORKBENCH_RELOAD_DIRT_UPDATED_METHOD: global reload dirt observation methods. Keywords: WebSocket, dirt, notification.
+ * - WorkbenchOrchestratorReloadDirtEnvelopeSchema/WorkbenchOrchestratorReloadDirtEnvelope: ordered global reload dirt snapshot. Keywords: revision, snapshot, reconnect.
  * - OrchestratorReloadScope/OrchestratorReloadState/OrchestratorReloadRequest/OrchestratorReloadResponse: inferred reload protocol types. Keywords: reload, types.
  * - ORCHESTRATOR_RELOAD_SCOPE_PATTERN: canonical namespace:path scope syntax. Keywords: reload, scope, validation.
  * - OrchestratorReloadScopeDescriptor: active node catalog projection shared by CLI and reload admission. Keywords: catalog, access, destructive.
@@ -17,8 +19,24 @@ const RELOAD_SCOPE_GROUP_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\/[a-z][a
 const MAX_RELOAD_SCOPES = 64;
 const MAX_RELOAD_SCOPE_LENGTH = 64;
 const OrchestratorReloadScopeSchema = z.string().max(MAX_RELOAD_SCOPE_LENGTH).regex(ORCHESTRATOR_RELOAD_SCOPE_PATTERN);
+const WorkbenchReloadDirtSnapshotSchema = z.object({
+  dirtyScopes: z.array(z.object({
+    dependantScopes: z.array(OrchestratorReloadScopeSchema).max(MAX_RELOAD_SCOPES).default([]),
+    description: z.string(),
+    destructive: z.boolean(),
+    scope: OrchestratorReloadScopeSchema,
+  }).strict()).max(MAX_RELOAD_SCOPES),
+  error: z.string().nullable(),
+  pendingScopes: z.array(OrchestratorReloadScopeSchema).max(MAX_RELOAD_SCOPES),
+}).strict();
 
 export const WORKBENCH_RELOAD_METHOD = "workbench/orchestrator/reload";
+export const WORKBENCH_RELOAD_DIRT_READ_METHOD = "workbench/orchestrator/reload-dirt/read";
+export const WORKBENCH_RELOAD_DIRT_UPDATED_METHOD = "workbench/orchestrator/reload-dirt/updated";
+export const WorkbenchOrchestratorReloadDirtEnvelopeSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  snapshot: WorkbenchReloadDirtSnapshotSchema,
+}).strict();
 export const OrchestratorReloadRequestSchema = z.object({
   all: z.boolean().optional(),
   scopes: z.array(OrchestratorReloadScopeSchema).max(MAX_RELOAD_SCOPES).optional(),
@@ -38,6 +56,7 @@ export type OrchestratorReloadScope = z.infer<typeof OrchestratorReloadScopeSche
 export type OrchestratorReloadState = z.infer<typeof OrchestratorReloadResponseSchema>["state"];
 export type OrchestratorReloadRequest = z.infer<typeof OrchestratorReloadRequestSchema>;
 export type OrchestratorReloadResponse = z.infer<typeof OrchestratorReloadResponseSchema>;
+export type WorkbenchOrchestratorReloadDirtEnvelope = z.infer<typeof WorkbenchOrchestratorReloadDirtEnvelopeSchema>;
 
 export interface OrchestratorReloadScopeDescriptor {
   access: "agent" | "cli" | "operator";

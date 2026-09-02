@@ -2,6 +2,7 @@
  * Exports:
  * - NORMAL_RELOAD_HOLD_MS/DESTRUCTIVE_RELOAD_HOLD_MS: user-confirmation durations for ordinary and destructive scopes. Keywords: reload, confirmation, duration.
  * - getReloadScopeHoldMs/getReloadAllHoldMs: derive user-confirmation duration from destructive scope metadata. Keywords: reload, confirmation, destructive.
+ * - getAffectedReloadScopes: derive buttons affected by one reload selection from owner metadata. Keywords: reload, hover, dependants.
  * - mergeReloadDirt/partitionReloadScopes: combine snapshots and route scopes while full app restart subsumes client-node reloads. Keywords: reload, client, server.
  */
 import type { WorkbenchReloadDirtScope, WorkbenchReloadDirtSnapshot } from "../../lib/types";
@@ -15,6 +16,15 @@ export function getReloadScopeHoldMs(scope: WorkbenchReloadDirtScope) {
 
 export function getReloadAllHoldMs(scopes: readonly WorkbenchReloadDirtScope[]) {
   return Math.max(NORMAL_RELOAD_HOLD_MS, ...scopes.map(getReloadScopeHoldMs));
+}
+
+export function getAffectedReloadScopes(
+  hoveredScope: string | "all" | null,
+  scopes: readonly WorkbenchReloadDirtScope[],
+) {
+  if (!hoveredScope) return new Set<string>();
+  if (hoveredScope === "all") return new Set(scopes.map(({ scope }) => scope));
+  return new Set(scopes.find(({ scope }) => scope === hoveredScope)?.dependantScopes ?? []);
 }
 
 export function mergeReloadDirt(

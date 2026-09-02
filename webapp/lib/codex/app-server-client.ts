@@ -3,6 +3,7 @@
  * - CodexAppServerClient: persistent typed WebSocket client with fenced reconnects for the local stdio bridge and app-server notifications. Keywords: codex, websocket, reconnect, stdio, notifications.
  */
 import type { WorkbenchHarness } from "../types";
+import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/orchestrator-reload";
 import { workbenchTranscriptNotifications } from "../workbench/database/transcript/workbench-transcript-contract";
 import {
   WORKBENCH_EVENT_STREAM_ACK_METHOD,
@@ -36,6 +37,7 @@ type WorkbenchNotification = {
   method:
     | "workbench/thread-state/reset"
     | "workbench/thread-state/updated"
+    | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
     | typeof workbenchTranscriptNotifications.capabilities.method
     | typeof workbenchTranscriptNotifications.updated.method;
   params: unknown;
@@ -285,6 +287,7 @@ export class CodexAppServerClient {
     const workbenchMessage = parsed as unknown as { method?: string };
     if (workbenchMessage.method === "workbench/thread-state/updated"
       || workbenchMessage.method === "workbench/thread-state/reset"
+      || workbenchMessage.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
       || workbenchMessage.method === workbenchTranscriptNotifications.capabilities.method
       || workbenchMessage.method === workbenchTranscriptNotifications.updated.method) {
       for (const listener of this.workbenchNotificationListeners) listener(parsed as unknown as WorkbenchNotification);

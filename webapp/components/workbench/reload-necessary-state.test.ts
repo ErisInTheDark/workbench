@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import {
   DESTRUCTIVE_RELOAD_HOLD_MS,
+  getAffectedReloadScopes,
   getReloadAllHoldMs,
   getReloadScopeHoldMs,
   mergeReloadDirt,
@@ -46,4 +47,17 @@ test("full app restart subsumes client reloads without swallowing daemon scopes"
     client: ["client:process"],
     server: ["server:core"],
   });
+});
+
+test("derives sibling highlights from owner metadata and reload all affects every visible scope", () => {
+  const scopes = [
+    { ...regular, dependantScopes: ["server:websocket", "server:mcp"] },
+    { description: "WebSocket", destructive: false, scope: "server:websocket" },
+    { description: "MCP", destructive: false, scope: "server:mcp" },
+    { description: "Browse", destructive: false, scope: "server:browse" },
+  ];
+  assert.deepEqual([...getAffectedReloadScopes("server:core", scopes)], ["server:websocket", "server:mcp"]);
+  assert.deepEqual([...getAffectedReloadScopes("server:browse", scopes)], []);
+  assert.deepEqual([...getAffectedReloadScopes("all", scopes)], scopes.map(({ scope }) => scope));
+  assert.deepEqual([...getAffectedReloadScopes(null, scopes)], []);
 });

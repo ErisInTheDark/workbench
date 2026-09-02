@@ -3040,8 +3040,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   ) : null}
                   <ReloadNecessary
                     appRuntime={appRuntime}
-                    reloadScopes={controls?.reloadScopes ?? null}
-                    store={threadSidebarStore}
+                    orchestratorRuntime={controls?.orchestratorRuntime ?? null}
                   />
                 </DropTargetBoundary>
               </div>

@@ -23,6 +23,7 @@ export type WorkbenchAppReloadDirtControllerState = ReloadDirtControllerState;
 
 export interface WorkbenchAppReloadDirtControllerOptions {
   getCatalog(): readonly WorkbenchReloadScopeDescriptor[];
+  getDependantClosure(scopes: readonly WorkbenchReloadScope[]): WorkbenchReloadScope[];
   getScopesForPaths(paths: readonly string[]): WorkbenchReloadScope[];
   onChange?(): void;
   repositoryRootPath: string;
@@ -64,7 +65,7 @@ function createSourceState(options: WorkbenchAppReloadDirtControllerOptions): Re
     }
   }
   return {
-    dependantClosure: (scopes) => [...new Set(scopes)],
+    dependantClosure: options.getDependantClosure,
     descriptors: catalog.map((descriptor): ReloadDirtSourceDescriptor => ({
       ...descriptor,
       paths: [...pathsByScope.get(descriptor.scope) ?? []].sort(),

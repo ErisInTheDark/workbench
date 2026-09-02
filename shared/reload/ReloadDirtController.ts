@@ -81,9 +81,13 @@ function sameSnapshot(left: WorkbenchReloadDirtSnapshot, right: WorkbenchReloadD
     && left.dirtyScopes.length === right.dirtyScopes.length
     && left.dirtyScopes.every((scope, index) => {
       const candidate = right.dirtyScopes[index];
+      const dependantScopes = scope.dependantScopes ?? [];
+      const candidateDependantScopes = candidate?.dependantScopes ?? [];
       return candidate?.scope === scope.scope
         && candidate.description === scope.description
-        && candidate.destructive === scope.destructive;
+        && candidate.destructive === scope.destructive
+        && dependantScopes.length === candidateDependantScopes.length
+        && dependantScopes.every((dependantScope, dependantIndex) => dependantScope === candidateDependantScopes[dependantIndex]);
     });
 }
 
@@ -288,7 +292,8 @@ export default class ReloadDirtController {
     const state = this.requireState();
     try {
       if (signal?.aborted) throw signal.reason;
-      for (const descriptor of this.options.getSourceState().descriptors) {
+      const sourceState = this.options.getSourceState();
+      for (const descriptor of sourceState.descriptors) {
         state.descriptors.set(
           descriptor.scope,
           mergeDescriptorSources(state.descriptors.get(descriptor.scope), descriptor),
@@ -347,6 +352,7 @@ export default class ReloadDirtController {
       for (const descriptor of descriptors) {
         if (dirtyScopeNames.has(descriptor.scope)) {
           dirtyScopes.push({
+            dependantScopes: sourceState.dependantClosure([descriptor.scope]).filter((scope) => scope !== descriptor.scope),
             description: descriptor.description,
             destructive: descriptor.destructive === true,
             scope: descriptor.scope,

@@ -22,7 +22,6 @@ import { z } from "zod";
 import type { WorkbenchComposerProfileTargetSelection, WorkbenchComposerSettings } from "../../types";
 import { areDeeplyEqual } from "../deep-equality";
 import { gitArcPathsOverlap } from "../git/git-arc-paths";
-import { ORCHESTRATOR_RELOAD_SCOPE_PATTERN } from "../orchestrator-reload";
 import { WorkbenchProjectsPayloadSchema, WorkbenchProjectStateUpdateSchema } from "../project/project-state";
 import { ThreadDisplayLayoutSchema } from "./thread-display-layout";
 import {
@@ -175,8 +174,6 @@ const WorkbenchGitArcProposalStateSchema = z.object({
   status: z.enum(["committed", "proposed"]),
 }).strict();
 
-const WorkbenchReloadScopeProjectionSchema = z.array(z.string().regex(ORCHESTRATOR_RELOAD_SCOPE_PATTERN));
-
 const WorkbenchGitArcMemberStateSchema = z.object({
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
   claimedPaths: z.array(z.string().min(1)),
@@ -185,7 +182,6 @@ const WorkbenchGitArcMemberStateSchema = z.object({
   intentName: z.string().min(1),
   phase: z.enum(["active", "resolved"]),
   proposals: z.array(WorkbenchGitArcProposalStateSchema),
-  reloadScopes: WorkbenchReloadScopeProjectionSchema.optional(),
   repoRoot: z.string().min(1),
   rootId: z.string().min(1),
   rootIds: z.array(z.string().min(1)).min(1),
@@ -201,7 +197,6 @@ export const WorkbenchGitArcLifecycleStateSchema = z.object({
   members: z.array(WorkbenchGitArcMemberStateSchema).min(1).optional(),
   phase: z.enum(["active", "resolved"]),
   proposals: z.array(WorkbenchGitArcProposalStateSchema),
-  reloadScopes: WorkbenchReloadScopeProjectionSchema.optional(),
   updatedAt: z.string().min(1),
 }).strict().superRefine((value, context) => {
   if (value.phase === "active" && !value.claimedPaths.length) {
@@ -226,7 +221,6 @@ export const WorkbenchGitArcPlanStateSchema = z.object({
     harness: z.string().min(1),
     intentDescription: z.string(),
     intentName: z.string().min(1),
-    reloadScopes: WorkbenchReloadScopeProjectionSchema.optional(),
     repoRoot: z.string().min(1),
     rootId: z.string().min(1),
     rootIds: z.array(z.string().min(1)).min(1),
@@ -234,7 +228,6 @@ export const WorkbenchGitArcPlanStateSchema = z.object({
     threadId: z.string().min(1),
     updatedAt: z.string().min(1),
   }).strict()).min(1).optional(),
-  reloadScopes: WorkbenchReloadScopeProjectionSchema.optional(),
   scopePaths: z.array(z.string().min(1)),
   updatedAt: z.string().min(1),
 }).strict();
@@ -332,6 +325,7 @@ export type WorkbenchTopLevelThreadSidebarEntry = z.infer<typeof TopLevelEntrySc
 
 export const WorkbenchReloadDirtSnapshotSchema = z.object({
   dirtyScopes: z.array(z.object({
+    dependantScopes: z.array(z.string()).optional(),
     description: z.string(),
     destructive: z.boolean(),
     scope: z.string(),
@@ -461,7 +455,12 @@ export const WorkbenchGlobalThreadStateOpenResultV5Schema = WorkbenchGlobalThrea
   homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
   version: z.literal(5),
 }).strict();
+export const WorkbenchGlobalThreadStateOpenResultV6Schema = WorkbenchGlobalThreadStateOpenResultV4Schema.extend({
+  homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
+  version: z.literal(6),
+}).strict();
 export const WorkbenchGlobalThreadStateOpenResultSchema = z.union([
+  WorkbenchGlobalThreadStateOpenResultV6Schema,
   WorkbenchGlobalThreadStateOpenResultV5Schema,
   WorkbenchGlobalThreadStateOpenResultV4Schema,
 ]);
@@ -525,8 +524,8 @@ export type WorkbenchThreadTitleMutationResult = z.infer<typeof WorkbenchThreadT
 
 const ProjectRequestBase = z.object({ projectId: z.string().trim().min(1) }).strict();
 export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", [
-  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.union([z.literal(2), z.literal(3)]).optional() }),
-  z.object({ method: z.literal("workbench/thread-state/global/open"), version: z.union([z.literal(4), z.literal(5)]) }).strict(),
+  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.union([z.literal(2), z.literal(3), z.literal(4)]).optional() }),
+  z.object({ method: z.literal("workbench/thread-state/global/open"), version: z.union([z.literal(4), z.literal(5), z.literal(6)]) }).strict(),
   z.object({ method: z.literal("workbench/thread-state/global/close") }).strict(),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/close") }),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/refresh") }),

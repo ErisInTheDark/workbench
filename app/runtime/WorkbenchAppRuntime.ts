@@ -7,7 +7,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import ReloadableNodeHost from "workbench-shared/reload/ReloadableNodeHost";
 import { createReloadableNodeModuleLoader } from "workbench-shared/reload/reloadable-node-loader";
-import { WORKBENCH_RELOAD_SCOPE_PATTERN, type WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
+import {
+  WORKBENCH_RELOAD_SCOPE_PATTERN,
+  type WorkbenchReloadDirtSnapshot,
+  type WorkbenchReloadScope,
+} from "workbench-shared/reload/workbench-reload";
 
 import type WorkbenchAppLogger from "../WorkbenchAppLogger.ts";
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
@@ -38,6 +42,17 @@ function sendJson(response: ServerResponse, status: number, value: object) {
     "Content-Type": "application/json; charset=utf-8",
   });
   response.end(JSON.stringify(value));
+}
+
+function projectReloadDirt(
+  snapshot: WorkbenchReloadDirtSnapshot,
+  includeDependants: boolean,
+): WorkbenchReloadDirtSnapshot {
+  if (includeDependants) return snapshot;
+  return {
+    ...snapshot,
+    dirtyScopes: snapshot.dirtyScopes.map(({ dependantScopes: _dependantScopes, ...scope }) => scope),
+  };
 }
 
 async function readReloadScopes(request: IncomingMessage) {
@@ -87,6 +102,9 @@ export default class WorkbenchAppRuntime {
           throw error;
         }
       },
+      getReloadDependantClosure: (scopes) => scopes.includes("client:process")
+        ? host.getReloadScopeCatalog().map(({ scope }) => scope)
+        : host.getDependantClosure(scopes),
       getReloadScopeCatalog: () => host.getReloadScopeCatalog(),
       getReloadScopesForPaths: (paths) => host.getReloadScopesForPaths(paths),
       logger: options.logger,
@@ -174,7 +192,12 @@ export default class WorkbenchAppRuntime {
   async handleRequest(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url ?? "/", "http://workbench.local");
     if (url.pathname === RUNTIME_PATH && request.method === "GET") {
-      sendJson(response, 200, { reloadDirt: this.host.get("reloadDirt").getSnapshot() });
+      sendJson(response, 200, {
+        reloadDirt: projectReloadDirt(
+          this.host.get("reloadDirt").getSnapshot(),
+          url.searchParams.get("version") === "2",
+        ),
+      });
       return;
     }
     if (url.pathname === RUNTIME_PATH && request.method === "POST") {

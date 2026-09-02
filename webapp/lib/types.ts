@@ -7,6 +7,7 @@
  * - OrchestratorReloadResponse: orchestrator reload response contract.
  * - WorkbenchReloadDirtScope/WorkbenchReloadDirtSnapshot: shared app and daemon reload dirt.
  * - WorkbenchAppRuntimeStore: browser-facing app reload observation and command port.
+ * - WorkbenchOrchestratorRuntimeStore: browser-facing orchestrator reload observation and command port.
  * - WorkbenchLocalCapabilitySettings: local capability settings contract.
  * - WorkbenchLocalCapabilitySettingsResponse: local capability read response.
  * - WorkbenchLocalCapabilitySettingsUpdateRequest: local capability update request.
@@ -177,6 +178,12 @@ export type WorkbenchReloadDirtSnapshot = SharedWorkbenchReloadDirtSnapshot;
 export interface WorkbenchAppRuntimeStore {
   getSnapshot(): WorkbenchReloadDirtSnapshot;
   reloadScopes(scopes: readonly WorkbenchReloadScope[]): Promise<WorkbenchReloadResponse>;
+  subscribe(listener: () => void): () => void;
+}
+
+export interface WorkbenchOrchestratorRuntimeStore {
+  getSnapshot(): WorkbenchReloadDirtSnapshot;
+  reloadScopes(scopes: readonly OrchestratorReloadScope[]): Promise<OrchestratorReloadResponse>;
   subscribe(listener: () => void): () => void;
 }
 
@@ -1086,7 +1093,7 @@ export interface WorkbenchControls {
   createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: string }) => ThreadPayload;
   getSelectedThreadDraft: () => WorkbenchThreadDraft | null;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
-  reloadScopes: (scopes: OrchestratorReloadScope[]) => Promise<OrchestratorReloadResponse>;
+  orchestratorRuntime: WorkbenchOrchestratorRuntimeStore;
   refreshRateLimits: () => Promise<void>;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   moveThreadDraft: (sourceProjectId: string, destinationProjectId: string, draftId: string) => Promise<void>;

@@ -39,3 +39,25 @@ test("posts selected client scopes and accepts the shared reload response", asyn
   assert.equal((await client.reloadScopes(["client:http"])).state, "running");
   assert.deepEqual(JSON.parse(body), { scopes: ["client:http"] });
 });
+
+test("requests dependant metadata and defaults it for an older app response", async () => {
+  let requested = "";
+  const client = new WorkbenchAppRuntimeClient({
+    fetcher: ((input) => {
+      requested = String(input);
+      return Promise.resolve(Response.json({
+        reloadDirt: {
+          dirtyScopes: [{ description: "HTTP", destructive: false, scope: "client:http" }],
+          error: null,
+          pendingScopes: [],
+        },
+      }));
+    }) as typeof fetch,
+    schedule: () => 1,
+    visibility: { hidden: () => false, subscribe: () => () => {} },
+  });
+  const snapshot = await client.bootstrap();
+  assert.equal(requested, "/api/workbench-app-runtime?version=2");
+  assert.deepEqual(snapshot.dirtyScopes[0]?.dependantScopes, []);
+  client.dispose();
+});

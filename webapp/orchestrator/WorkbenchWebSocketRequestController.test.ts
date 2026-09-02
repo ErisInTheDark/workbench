@@ -57,7 +57,7 @@ function createController(options: {
   lines?: string[];
   onDisconnect?: (connectionId: string) => void;
   onHarnessMessage?: (message: JsonRpcRequest, client: BridgeClient) => Promise<void> | void;
-  reload?: Pick<WorkbenchOrchestratorReloadController, "admitUserReload">;
+  reload?: WorkbenchWebSocketRequestControllerOptions["reload"];
   transcript?: WorkbenchWebSocketRequestControllerOptions["transcript"];
   transcriptShadowLog?: WorkbenchWebSocketRequestControllerOptions["transcriptShadowLog"];
 }) {
@@ -77,6 +77,8 @@ function createController(options: {
     now: () => options.clock.nowMs,
     reload: options.reload ?? {
       admitUserReload: () => { throw new Error("Unexpected reload request."); },
+      getReloadDirtSnapshot: () => ({ dirtyScopes: [], error: null, pendingScopes: [] }),
+      subscribeReloadDirt: () => () => undefined,
     },
     setTimeout: options.clock.setTimeout,
     threadState: {
@@ -145,6 +147,8 @@ test("browser reload admission responds before starting the reserved batch", asy
           start: async () => { events.push("start"); },
         };
       },
+      getReloadDirtSnapshot: () => ({ dirtyScopes: [], error: null, pendingScopes: [] }),
+      subscribeReloadDirt: () => () => undefined,
     },
   });
 
@@ -424,6 +428,84 @@ test("transcript diagnostics log only decoded bounded evidence and acknowledge i
   assert.equal(lines.filter((line) => line.startsWith("[workbench-transcript-parity]")).length, 0);
   assert.ok(sent.some((message) => typeof message === "object" && message !== null && "error" in message));
   controller.dispose();
+});
+
+test("orders reload dirt observation across bootstrap, handoff, and disconnect", async () => {
+  const clock = new FakeClock();
+  const sent: Array<Record<string, unknown>> = [];
+  let snapshot = {
+    dirtyScopes: [{ dependantScopes: ["server:websocket"], description: "Core", destructive: false, scope: "server:core" }],
+    error: null,
+    pendingScopes: [] as string[],
+  };
+  const listeners = new Set<() => void>();
+  let subscriptions = 0;
+  let unsubscriptions = 0;
+  const reload: WorkbenchWebSocketRequestControllerOptions["reload"] = {
+    admitUserReload: () => { throw new Error("Unexpected reload request."); },
+    getReloadDirtSnapshot: () => snapshot,
+    subscribeReloadDirt: (listener) => {
+      subscriptions += 1;
+      listeners.add(listener);
+      return () => {
+        unsubscriptions += 1;
+        listeners.delete(listener);
+      };
+    },
+  };
+  const client = createClient((data, callback) => {
+    sent.push(JSON.parse(data) as Record<string, unknown>);
+    callback?.();
+  });
+  const first = createController({ clock, reload });
+  await first.controller.start();
+  await first.controller.handleMessage(client, "reload-observer", frame(
+    "workbench/orchestrator/reload-dirt/read",
+    11,
+    { params: {} },
+  ), false);
+  assert.deepEqual(sent.find((message) => message.id === 11), {
+    id: 11,
+    result: { revision: 0, snapshot },
+  });
+
+  snapshot = { ...snapshot, pendingScopes: ["server:core"] };
+  for (const listener of listeners) listener();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(sent.find((message) => message.method === "workbench/orchestrator/reload-dirt/updated"), {
+    method: "workbench/orchestrator/reload-dirt/updated",
+    params: { revision: 1, snapshot },
+  });
+
+  const state = first.controller.detachForReload();
+  assert.equal(unsubscriptions, 1);
+  const replacement = createController({ clock, initialState: state, reload });
+  await replacement.controller.start();
+  assert.equal(subscriptions, 2);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    sent.filter((message) => (
+      message.method === "workbench/orchestrator/reload-dirt/updated"
+      && (message.params as { revision?: number }).revision === 2
+    )).length,
+    1,
+  );
+  snapshot = { ...snapshot, pendingScopes: [] };
+  for (const listener of listeners) listener();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    sent.filter((message) => (
+      message.method === "workbench/orchestrator/reload-dirt/updated"
+      && (message.params as { revision?: number }).revision === 3
+    )).length,
+    1,
+  );
+
+  await replacement.controller.disconnect(client, "reload-observer");
+  for (const listener of listeners) listener();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(sent.filter((message) => message.method === "workbench/orchestrator/reload-dirt/updated").length, 3);
+  replacement.controller.dispose();
 });
 
 test("controller reload drops transcript subscriptions and advertises a fresh capability generation", async () => {

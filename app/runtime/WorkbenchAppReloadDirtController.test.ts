@@ -58,6 +58,11 @@ async function fixture(context: test.TestContext) {
       }
       return [...scopes];
     },
+    getDependantClosure: (scopes) => scopes.includes("client:process")
+      ? ["client:http", "client:compiler", "client:process"]
+      : scopes.includes("client:http")
+        ? ["client:http", "client:compiler"]
+        : [...scopes],
     repositoryRootPath,
     watchSource: ((_root, _options, listener) => {
       observe = listener as typeof observe;
@@ -93,6 +98,7 @@ test("real app, shared, static, and tray edits dirty only actual owners and adva
   await fsp.writeFile(httpPath, "export const http = 2;\n", "utf8");
   target.observe("app/runtime/http.ts");
   assert.deepEqual((await target.controller.refresh()).dirtyScopes.map(({ scope }) => scope), ["client:http"]);
+  assert.deepEqual(target.controller.getSnapshot().dirtyScopes[0]?.dependantScopes, ["client:compiler"]);
   await target.controller.completeReload(["client:http"]);
   assert.deepEqual(target.controller.getSnapshot().dirtyScopes, []);
 
@@ -109,9 +115,13 @@ test("real app, shared, static, and tray edits dirty only actual owners and adva
     (await target.controller.refresh()).dirtyScopes.map(({ scope }) => scope),
     ["client:http", "client:compiler", "client:process"],
   );
+  assert.deepEqual(
+    target.controller.getSnapshot().dirtyScopes.find(({ scope }) => scope === "client:process")?.dependantScopes,
+    ["client:http", "client:compiler"],
+  );
   await target.controller.completeReload(["client:http"]);
-  assert.deepEqual(target.controller.getSnapshot().dirtyScopes.map(({ scope }) => scope), ["client:compiler", "client:process"]);
-  await target.controller.completeReload(["client:compiler", "client:process"]);
+  assert.deepEqual(target.controller.getSnapshot().dirtyScopes.map(({ scope }) => scope), ["client:process"]);
+  await target.controller.completeReload(["client:process"]);
   assert.deepEqual(target.controller.getSnapshot().dirtyScopes, []);
 
   await fsp.writeFile(path.join(target.repositoryRootPath, "tray", "target", "ignored.exe"), "changed\n", "utf8");

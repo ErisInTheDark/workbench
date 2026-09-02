@@ -95,6 +95,39 @@ test("a transferred batch stays pending without starting stale reconciliation", 
   await controller.dispose();
 });
 
+test("dirty scopes carry dependant metadata from the source graph owner", async () => {
+  const repository = new ControlledRepository();
+  const blocked = repository.blockNextScopedTree();
+  const dependant: ReloadDirtSourceDescriptor = {
+    ...descriptor,
+    description: "Dependant",
+    paths: [],
+    scope: "client:dependant",
+  };
+  const controller = new ReloadDirtController({
+    getSourceState: () => ({
+      dependantClosure: (scopes) => scopes.includes("client:core")
+        ? ["client:core", "client:dependant"]
+        : [...scopes],
+      descriptors: [descriptor, dependant],
+    }),
+    repoRoot: "C:/repo",
+    repository,
+    snapshotRef: "refs/worktree/workbench/test-reload-snapshot",
+    watchSource: (() => ({ close: () => {}, on: () => {} })) as never,
+  }, transferredState());
+  const refresh = controller.refresh();
+  await blocked.started;
+  blocked.release("stale-tree");
+  assert.deepEqual((await refresh).dirtyScopes, [{
+    dependantScopes: ["client:dependant"],
+    description: "Core",
+    destructive: false,
+    scope: "client:core",
+  }]);
+  await controller.dispose();
+});
+
 test("a user reload aborts stale reconciliation and rejects its late result", async () => {
   const repository = new ControlledRepository();
   const blocked = repository.blockNextScopedTree();

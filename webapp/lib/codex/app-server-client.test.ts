@@ -8,6 +8,7 @@ import { test } from "node:test";
 
 import { CodexAppServerClient } from "./app-server-client.ts";
 import { workbenchTranscriptNotifications } from "../workbench/database/transcript/workbench-transcript-contract.ts";
+import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/orchestrator-reload.ts";
 import { WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD } from "../workbench/websocket-stream.ts";
 
 type Listener = (event: { data?: string }) => void;
@@ -184,6 +185,10 @@ test("shared transcript notifications and connection closure reach their Workben
       method: workbenchTranscriptNotifications.updated.method,
       params: { matchingMethodIsNotProof: true },
     });
+    socket.notify({
+      method: WORKBENCH_RELOAD_DIRT_UPDATED_METHOD,
+      params: { revision: 1, snapshot: { dirtyScopes: [], error: null, pendingScopes: [] } },
+    });
     assert.deepEqual(notifications, [
       {
         method: workbenchTranscriptNotifications.capabilities.method,
@@ -192,6 +197,10 @@ test("shared transcript notifications and connection closure reach their Workben
       {
         method: workbenchTranscriptNotifications.updated.method,
         params: { matchingMethodIsNotProof: true },
+      },
+      {
+        method: WORKBENCH_RELOAD_DIRT_UPDATED_METHOD,
+        params: { revision: 1, snapshot: { dirtyScopes: [], error: null, pendingScopes: [] } },
       },
     ]);
     client.close();

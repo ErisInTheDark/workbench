@@ -1,7 +1,7 @@
 /* No production exports. Tests protect strict lifecycle, grouping, cross-project pin summaries, folder mutation, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
+import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state";
 
 const EMPTY_CODEX_SETTINGS = {
   agentPath: null,
@@ -24,18 +24,18 @@ test("live claims and proposed commit proposals prevent thread settlement", () =
   assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "accepted", status: "committed" }] }), false);
 });
 
-test("global observation and draft moves use distinct strict version 4 requests", () => {
+test("current project and global observation versions stay distinct from draft moves", () => {
   assert.deepEqual(WorkbenchThreadStateRequestSchema.parse({
     method: "workbench/thread-state/global/open",
-    version: 4,
+    version: 6,
   }), {
     method: "workbench/thread-state/global/open",
-    version: 4,
+    version: 6,
   });
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     method: "workbench/thread-state/global/open",
     projectId: "must-not-select",
-    version: 4,
+    version: 6,
   }).success, false);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     destinationProjectId: "beta",
@@ -49,6 +49,29 @@ test("global observation and draft moves use distinct strict version 4 requests"
     method: "workbench/thread-state/draft/move",
     sourceProjectId: "alpha",
   }).success, false);
+});
+
+test("current Git arc schemas reject retired reload scopes", () => {
+  const lifecycle = {
+    checkpointCommit: "a".repeat(40),
+    claimedPaths: ["webapp"],
+    intentDescription: "",
+    intentName: "work",
+    phase: "active",
+    proposals: [],
+    reloadScopes: ["server:core"],
+    updatedAt: "2026-09-02T00:00:00.000Z",
+  };
+  const plan = {
+    checkpointCommit: "a".repeat(40),
+    intentDescription: "",
+    intentName: "work",
+    reloadScopes: ["server:core"],
+    scopePaths: ["webapp"],
+    updatedAt: "2026-09-02T00:00:00.000Z",
+  };
+  assert.equal(WorkbenchGitArcLifecycleStateSchema.safeParse(lifecycle).success, false);
+  assert.equal(WorkbenchGitArcPlanStateSchema.safeParse(plan).success, false);
 });
 
 test("settlement is available only for unsettled terminal rows without Git blockers", () => {

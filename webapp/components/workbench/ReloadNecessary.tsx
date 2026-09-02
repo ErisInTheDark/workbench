@@ -6,11 +6,12 @@
 
 import { useState, useSyncExternalStore } from "react";
 
-import type { OrchestratorReloadResponse, OrchestratorReloadScope, WorkbenchAppRuntimeStore, WorkbenchReloadDirtScope, WorkbenchThreadSidebarStore } from "../../lib/types";
+import type { WorkbenchAppRuntimeStore, WorkbenchOrchestratorRuntimeStore, WorkbenchReloadDirtScope } from "../../lib/types";
 import ChevronIcon from "./ChevronIcon";
 import PrimaryButton from "./PrimaryButton";
 import {
   getReloadAllHoldMs,
+  getAffectedReloadScopes,
   getReloadScopeHoldMs,
   mergeReloadDirt,
   partitionReloadScopes,
@@ -21,24 +22,27 @@ const EMPTY_SUBSCRIBE = () => () => undefined;
 
 export default function ReloadNecessary ({
   appRuntime,
-  reloadScopes,
-  store,
+  orchestratorRuntime,
 }: {
   appRuntime: WorkbenchAppRuntimeStore | null;
-  reloadScopes: ((scopes: OrchestratorReloadScope[]) => Promise<OrchestratorReloadResponse>) | null;
-  store: WorkbenchThreadSidebarStore | null;
+  orchestratorRuntime: WorkbenchOrchestratorRuntimeStore | null;
 }) {
+  const [hoveredScope, setHoveredScope] = useState<string | "all" | null>(null);
   const [requestError, setRequestError] = useState("");
   const [requesting, setRequesting] = useState<string[]>([]);
   const { preferences, setReloadNecessaryOpen } = useWorkbenchSidebarPreferences();
   const collapsed = !preferences.reloadNecessaryOpen;
-  const snapshot = useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, store?.getSnapshot ?? (() => null), () => null);
+  const orchestratorDirt = useSyncExternalStore(
+    orchestratorRuntime?.subscribe ?? EMPTY_SUBSCRIBE,
+    orchestratorRuntime?.getSnapshot ?? (() => null),
+    () => null,
+  );
   const appDirt = useSyncExternalStore(
     appRuntime?.subscribe ?? EMPTY_SUBSCRIBE,
     appRuntime?.getSnapshot ?? (() => null),
     () => null,
   );
-  const dirt = mergeReloadDirt(appDirt, snapshot?.reloadDirt);
+  const dirt = mergeReloadDirt(appDirt, orchestratorDirt);
 
   if (!dirt || (!dirt.dirtyScopes.length && !dirt.error)) return null;
 
@@ -55,7 +59,7 @@ export default function ReloadNecessary ({
           ? appRuntime?.reloadScopes(owners.client) ?? Promise.reject(new Error("Workbench app reload controls are not ready."))
           : undefined,
         owners.server.length
-          ? reloadScopes?.(owners.server) ?? Promise.reject(new Error("Workbench daemon reload controls are not ready."))
+          ? orchestratorRuntime?.reloadScopes(owners.server) ?? Promise.reject(new Error("Workbench daemon reload controls are not ready."))
           : undefined,
       ]);
     } catch (error) {
@@ -65,6 +69,7 @@ export default function ReloadNecessary ({
     }
   };
   const allBusy = Boolean(dirt.pendingScopes.length || requesting.length);
+  const affectedScopes = getAffectedReloadScopes(hoveredScope, reloadableScopes);
 
   return (
     <section
@@ -94,6 +99,8 @@ export default function ReloadNecessary ({
             disabled={allBusy}
             holdToConfirmMs={getReloadAllHoldMs(reloadableScopes)}
             onClick={() => void reload(reloadableScopes)}
+            onPointerEnter={() => setHoveredScope("all")}
+            onPointerLeave={() => setHoveredScope(null)}
             pendingHalo={allBusy}
             tone={reloadableScopes.some(({ destructive }) => destructive) ? "danger" : "default"}
           >
@@ -109,10 +116,16 @@ export default function ReloadNecessary ({
                 <div className="flex items-center justify-between gap-2" key={scope.scope}>
                   <p className="m-0 min-w-0 truncate text-[0.8rem] font-medium text-text">{scope.scope}</p>
                   <PrimaryButton
-                    className="!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px]"
+                    className={`!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px] ${
+                      affectedScopes.has(scope.scope)
+                        ? "[&>span:first-of-type]:!ring-2 [&>span:first-of-type]:!ring-accent"
+                        : ""
+                    }`}
                     disabled={busy}
                     holdToConfirmMs={getReloadScopeHoldMs(scope)}
                     onClick={() => void reload([scope])}
+                    onPointerEnter={() => setHoveredScope(scope.scope)}
+                    onPointerLeave={() => setHoveredScope(null)}
                     pendingHalo={busy}
                     tone={scope.destructive ? "danger" : "default"}
                   >

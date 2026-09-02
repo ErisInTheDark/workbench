@@ -6,7 +6,7 @@
 import type { OrchestratorReloadScope, WorkbenchHarness, WorkbenchSubagentRelationship } from "../lib/types";
 import type { WorkbenchBrowseProjectIdResolver, WorkbenchBrowseProjectResolver } from "../lib/workbench/browse/WorkbenchBrowseRuntime";
 import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
 import type { BrowseSessionCleanupSupervisorOptions } from "./BrowseSessionCleanupSupervisor";
 import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
@@ -59,8 +59,6 @@ export interface OrchestratorProcessContext {
   legacyMigrationProjectRoot: string;
   localOrchestratorOrigin: string;
   logTurnRecovery(message: string): void;
-  notifyReloadEligibilityChanged(): void;
-  notifyThreadLifecycle(projectId: string, entry: WorkbenchThreadSidebarEntry): void;
   onCodexBridgeReady(bridge: CodexStdioBridge): Promise<void>;
   onCodexBridgeUnavailable(restartingAppServer: boolean): void;
   onCodexFatalExit(reason: string, bridge: CodexStdioBridge | null): void;
@@ -69,7 +67,6 @@ export interface OrchestratorProcessContext {
   publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   reportTurnRecoveryFailure(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
   refreshWorkbenchPromptFiles(): Promise<void>;
-  requestOrchestratorReload(body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
   runTurnRecoveryTask(owner: WorkbenchTurnRecoveryController, label: string, task: () => Promise<void>): Promise<void>;
   threadTransitions: WorkbenchThreadTransitionCoordinator;
 }

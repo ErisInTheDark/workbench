@@ -2,7 +2,6 @@
  * Exports:
  * - areExplorerSnapshotsEquivalent: compare root-visible explorer semantics while excluding sidebar-only activity ordering. Keywords: explorer, equality, render boundary.
  * - openWorkbenchThreadStateObservation/openWorkbenchGlobalThreadStateObservation/describeGlobalThreadStateOpenFailure: negotiate sidebar bootstrap versions and expose bounded global-open transport failures. Keywords: thread state, protocol, compatibility, conformance, home.
- * - requestWorkbenchReload: send and conform one typed socket reload admission. Keywords: reload, WebSocket, Zod, boundary.
  * - WorkbenchClient: wire the workbench DOM, bridge continuity recovery, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket, resume.
  */
 
@@ -11,7 +10,6 @@ import { getCurrentTurn } from "./codex/thread-state";
 import type {
     ExplorerSnapshot,
     DeleteFileResponse,
-    OrchestratorReloadScope,
     WorkbenchPendingUserInputRequest,
     WorkbenchProjectOption,
     ThreadPayload,
@@ -27,10 +25,7 @@ import type {
     ThreadSummary,
 } from "./types";
 import { areDeeplyEqual } from "./workbench/deep-equality";
-import {
-    OrchestratorReloadResponseSchema,
-    WORKBENCH_RELOAD_METHOD,
-} from "./workbench/orchestrator-reload";
+import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "./workbench/orchestrator-reload";
 import {
     createHomeRoute,
     getWorkbenchThreadTargetRootId,
@@ -52,10 +47,14 @@ import type { WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFileP
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench/WorkbenchThreadClient";
 import WorkbenchConnectionRecoveryController, { type WorkbenchConnectionContinuity } from "./workbench/WorkbenchConnectionRecoveryController";
+import WorkbenchOrchestratorRuntimeClient from "./workbench/WorkbenchOrchestratorRuntimeClient";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./workbench/daemon/WorkbenchDaemonClient";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema, type WorkbenchProjectStateUpdate } from "./workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
-import conformWorkbenchThreadStateOpenResult from "./workbench/thread/browser-thread-state-conformance";
+import conformWorkbenchThreadStateOpenResult, {
+    conformWorkbenchGlobalThreadStateOpenResult,
+    conformWorkbenchThreadStateSnapshot,
+} from "./workbench/thread/browser-thread-state-conformance";
 import { WorkbenchGlobalThreadStateOpenResultSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateOpenResultSchema, WorkbenchThreadStateSnapshotSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot } from "./workbench/thread/thread-state";
 import { getTurnRenderSignature } from "./workbench/thread/thread-item-signature";
 import reportClientSchemaError from "./workbench/report-client-schema-error";
@@ -168,6 +167,10 @@ export function areExplorerSnapshotsEquivalent(left: ExplorerSnapshot | null, ri
 }
 
 function isUnsupportedThreadStateOpenVersion(error: unknown) {
+  if (
+    error instanceof WorkbenchDaemonRequestError
+    && (error.code as unknown) === "invalidThreadStateMutation"
+  ) return true;
   const message = error instanceof Error ? error.message : String(error);
   return (/unrecognized key/iu.test(message) && /version/iu.test(message))
     || (/invalid input/iu.test(message) && /expected 2/iu.test(message));
@@ -186,7 +189,7 @@ export async function openWorkbenchThreadStateObservation({
   acceptProject: (update: WorkbenchProjectStateUpdate) => void;
   installCatalog: (catalog: WorkbenchProjectsPayload) => void;
   projectId: string;
-  request: (params: { projectId: string; version?: 2 | 3 }) => Promise<unknown>;
+  request: (params: { projectId: string; version?: 2 | 3 | 4 }) => Promise<unknown>;
 }) {
   const acceptComposite = (response: unknown) => {
     const parsed = WorkbenchThreadStateOpenResultSchema.safeParse(response);
@@ -200,15 +203,20 @@ export async function openWorkbenchThreadStateObservation({
   };
   let response: unknown;
   try {
-    response = await request({ projectId, version: 3 });
+    response = await request({ projectId, version: 4 });
   } catch (error) {
     if (!isUnsupportedThreadStateOpenVersion(error)) throw error;
     let fallbackResponse: unknown;
     try {
-      fallbackResponse = await request({ projectId, version: 2 });
+      fallbackResponse = await request({ projectId, version: 3 });
     } catch (fallbackError) {
       if (!isUnsupportedThreadStateOpenVersion(fallbackError)) throw fallbackError;
-      fallbackResponse = await request({ projectId });
+      try {
+        fallbackResponse = await request({ projectId, version: 2 });
+      } catch (legacyError) {
+        if (!isUnsupportedThreadStateOpenVersion(legacyError)) throw legacyError;
+        fallbackResponse = await request({ projectId });
+      }
     }
     if (isCompositeThreadStateOpenResponse(fallbackResponse)) {
       const composite = acceptComposite(fallbackResponse).data;
@@ -231,45 +239,38 @@ export async function openWorkbenchGlobalThreadStateObservation({
   request,
 }: {
   installCatalog: (catalog: WorkbenchProjectsPayload) => void;
-  request: (version: 4 | 5) => Promise<unknown>;
+  request: (version: 4 | 5 | 6) => Promise<unknown>;
 }) {
   let response: unknown;
   try {
-    response = await request(5);
+    response = await request(6);
   } catch (error) {
     const code = error instanceof WorkbenchDaemonRequestError ? error.code as unknown : null;
     if (code !== "invalidThreadStateMutation") throw error;
-    response = await request(4);
+    try {
+      response = await request(5);
+    } catch (fallbackError) {
+      const fallbackCode = fallbackError instanceof WorkbenchDaemonRequestError ? fallbackError.code as unknown : null;
+      if (fallbackCode !== "invalidThreadStateMutation") throw fallbackError;
+      response = await request(4);
+    }
   }
   const parsed = WorkbenchGlobalThreadStateOpenResultSchema.safeParse(response);
   if (!parsed.success) {
-    reportClientSchemaError("Rejected Workbench global thread-state open response", parsed.error);
-    throw new Error("The global thread-state open response was invalid.");
+    reportClientSchemaError("Repaired Workbench global thread-state open response", parsed.error);
   }
-  installCatalog(parsed.data.catalog);
+  const conformed = conformWorkbenchGlobalThreadStateOpenResult(response).data;
+  installCatalog(conformed.catalog);
   return {
-    homeThreadDisplayOrder: "homeThreadDisplayOrder" in parsed.data ? parsed.data.homeThreadDisplayOrder : null,
-    pinnedThreadLayout: parsed.data.pinnedThreadLayout,
-    projectSidebars: parsed.data.projectSidebars,
+    homeThreadDisplayOrder: "homeThreadDisplayOrder" in conformed ? conformed.homeThreadDisplayOrder : null,
+    pinnedThreadLayout: conformed.pinnedThreadLayout,
+    projectSidebars: conformed.projectSidebars,
   };
 }
 
 export function describeGlobalThreadStateOpenFailure(error: unknown) {
   const message = error instanceof Error ? error.message : "Unknown global thread-state failure.";
   return `Unable to open all-project threads through workbench/thread-state/global/open: ${message}`.slice(0, 500);
-}
-
-export async function requestWorkbenchReload(
-  scopes: OrchestratorReloadScope[],
-  request: (method: string, params: unknown) => Promise<unknown>,
-) {
-  const response = await request(WORKBENCH_RELOAD_METHOD, { scopes });
-  const parsed = OrchestratorReloadResponseSchema.safeParse(response);
-  if (!parsed.success) {
-    reportClientSchemaError("Rejected Workbench reload admission response", parsed.error);
-    throw new Error("The Workbench reload admission response was invalid.");
-  }
-  return parsed.data;
 }
 
 export async function WorkbenchClient(
@@ -305,6 +306,9 @@ export async function WorkbenchClient(
   const daemon = new WorkbenchDaemonClient({
     request: async (method, params) => await threadClient.requestWorkbench(method, params),
   });
+  const orchestratorRuntime = new WorkbenchOrchestratorRuntimeClient({
+    request: async (method, params) => await threadClient.requestWorkbench(method, params),
+  });
   const projectClient = WorkbenchProjectClient({
     clientStateController: workbenchBindings.clientStateController,
     onError: (message) => reportStatusMessage(message),
@@ -320,6 +324,11 @@ export async function WorkbenchClient(
   const threadSidebarClient = new ThreadSidebarClient({
     onChange: (snapshot) => {
       threadSidebarSnapshot = snapshot;
+      orchestratorRuntime.acceptLegacy(snapshot?.reloadDirt ? {
+        dirtyScopes: snapshot.reloadDirt.dirtyScopes,
+        error: snapshot.reloadDirt.error ?? null,
+        pendingScopes: snapshot.reloadDirt.pendingScopes,
+      } : null);
       threadClient.installSidebarSnapshot(snapshot);
       emitExplorerStateChange();
     },
@@ -377,21 +386,26 @@ export async function WorkbenchClient(
     });
   };
   coordinatorLifecycle.addUnsubscribe(threadClient.onWorkbenchNotification((notification) => {
+    if (notification.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD) {
+      orchestratorRuntime.acceptUpdate(notification.params);
+      return;
+    }
     if (notification.method === "workbench/thread-state/updated") {
       const parsed = WorkbenchThreadStateSnapshotSchema.safeParse(notification.params);
       if (!parsed.success) {
-        reportClientSchemaError("Rejected workbench thread-state update", parsed.error);
-        return;
+        reportClientSchemaError("Repaired workbench thread-state update", parsed.error);
       }
-      if ("updateKind" in parsed.data) {
-        if (parsed.data.updateKind === "project") projectClient.accept(parsed.data);
-        else if (parsed.data.updateKind === "homeThreadDisplayOrder") threadSidebarClient.acceptHomeThreadDisplayOrder(parsed.data);
-        else if (parsed.data.updateKind === "projectThreadSidebar") threadSidebarClient.acceptProjectThreadSidebar(parsed.data);
-        else if (parsed.data.updateKind === "projectThreadSummary") threadSidebarClient.acceptProjectThreadSummary(parsed.data);
-        else if (parsed.data.updateKind === "pinnedThreadLayout") threadSidebarClient.acceptPinnedThreadLayout(parsed.data);
-        else threadSidebarClient.acceptActivity(parsed.data);
+      const conformed = conformWorkbenchThreadStateSnapshot(notification.params).data;
+      if (!conformed) return;
+      if ("updateKind" in conformed) {
+        if (conformed.updateKind === "project") projectClient.accept(conformed);
+        else if (conformed.updateKind === "homeThreadDisplayOrder") threadSidebarClient.acceptHomeThreadDisplayOrder(conformed);
+        else if (conformed.updateKind === "projectThreadSidebar") threadSidebarClient.acceptProjectThreadSidebar(conformed);
+        else if (conformed.updateKind === "projectThreadSummary") threadSidebarClient.acceptProjectThreadSummary(conformed);
+        else if (conformed.updateKind === "pinnedThreadLayout") threadSidebarClient.acceptPinnedThreadLayout(conformed);
+        else threadSidebarClient.acceptActivity(conformed);
       } else {
-        threadSidebarClient.accept(parsed.data);
+        threadSidebarClient.accept(conformed);
       }
       return;
     }
@@ -475,8 +489,10 @@ export async function WorkbenchClient(
   const recoverConnection = async (continuity: WorkbenchConnectionContinuity) => {
     projectClient.resetObservation();
     if (continuity === "lost") {
+      orchestratorRuntime.resetConnection();
       threadClient.resetConnectionState();
     }
+    await orchestratorRuntime.open();
     await threadSidebarClient.reopen();
     if (coordinatorLifecycle.isDisposed) return;
     if (continuity === "lost") {
@@ -1183,7 +1199,7 @@ export async function WorkbenchClient(
       }
     },
     readThread,
-    reloadScopes: async (scopes) => await requestWorkbenchReload(scopes, threadClient.requestWorkbench),
+    orchestratorRuntime,
     refreshRateLimits,
     sendThreadMessage,
     setThreadTitle: async (request) => {
@@ -1238,6 +1254,12 @@ export async function WorkbenchClient(
     updateThreadStateWithAcceptance,
   };
 
+  await orchestratorRuntime.open().catch((error: unknown) => {
+    console.error(
+      "Unable to observe Workbench orchestrator reload dirt.",
+      error instanceof Error ? error.message.slice(0, 500) : "Unknown reload observation failure.",
+    );
+  });
   emitExplorerStateChange();
   emitCurrentThreadChange();
   emitThreadDocumentsChange();
@@ -1252,6 +1274,7 @@ export async function WorkbenchClient(
   return () => {
     threadSidebarClient.bestEffortFlush();
     void threadSidebarClient.close();
+    orchestratorRuntime.dispose();
     projectClient.dispose();
     threadClient.dispose();
     coordinatorLifecycle.dispose();

@@ -1,12 +1,14 @@
 /*
  * Exports:
- * - WorkbenchWebSocketPendingRequestState/WorkbenchWebSocketRequestControllerState: handoff state for browser requests and aggregate event-stream health. Keywords: websocket, request, stream, handoff, timer.
+ * - WorkbenchWebSocketPendingRequestState/WorkbenchWebSocketReloadDirtObserverState/WorkbenchWebSocketRequestControllerState: handoff state for browser requests, reload dirt observers, and aggregate event-stream health. Keywords: websocket, request, reload, stream, handoff, timer.
  * - WorkbenchWebSocketRequestControllerOptions: injected routing, clock, scheduler, and log ports. Keywords: websocket, dependency injection, diagnostics.
  * - default WorkbenchWebSocketRequestController: route browser WebSocket messages and compose request timing with aggregate event-stream health. Keywords: websocket, json-rpc, latency, stream, lifecycle.
  */
 import type { WorkbenchHarness } from "../lib/types";
 import {
   OrchestratorReloadRequestSchema,
+  WORKBENCH_RELOAD_DIRT_READ_METHOD,
+  WORKBENCH_RELOAD_DIRT_UPDATED_METHOD,
   WORKBENCH_RELOAD_METHOD,
 } from "../lib/workbench/orchestrator-reload";
 import {
@@ -61,7 +63,14 @@ export interface WorkbenchWebSocketPendingRequestState {
 
 export interface WorkbenchWebSocketRequestControllerState {
   pending: WorkbenchWebSocketPendingRequestState[];
+  reloadDirtObservers?: WorkbenchWebSocketReloadDirtObserverState[];
+  reloadDirtRevision?: number;
   stream?: WorkbenchWebSocketStreamControllerState;
+}
+
+export interface WorkbenchWebSocketReloadDirtObserverState {
+  client: BridgeClient;
+  connectionId: string;
 }
 
 interface WorkbenchWebSocketTranscriptSubscriptionState {
@@ -83,7 +92,10 @@ export interface WorkbenchWebSocketRequestControllerOptions {
   harnesses: Pick<WorkbenchHarnessController, "handleBrowserMessage" | "resolveHarness">;
   initialState?: WorkbenchWebSocketRequestControllerState;
   now?: () => number;
-  reload: Pick<WorkbenchOrchestratorReloadController, "admitUserReload">;
+  reload: Pick<
+    WorkbenchOrchestratorReloadController,
+    "admitUserReload" | "getReloadDirtSnapshot" | "subscribeReloadDirt"
+  >;
   setTimeout?: (callback: () => void, delayMs: number) => Timer;
   threadState: Pick<WorkbenchThreadStateController, "acceptIntent" | "disconnect" | "handleRequest">;
   transcript: Pick<OrchestratorTranscriptRegistration, "read" | "subscribe" | "unsubscribe">;
@@ -147,6 +159,9 @@ export default class WorkbenchWebSocketRequestController {
   private readonly now: NonNullable<WorkbenchWebSocketRequestControllerOptions["now"]>;
   private readonly pending = new Map<BridgeClient, Map<RequestId, PendingRequest>>();
   private readonly reload: WorkbenchWebSocketRequestControllerOptions["reload"];
+  private readonly reloadDirtObservers = new Map<string, WorkbenchWebSocketReloadDirtObserverState>();
+  private reloadDirtRevision: number;
+  private unsubscribeReloadDirt: (() => void) | null = null;
   private readonly schedule: NonNullable<WorkbenchWebSocketRequestControllerOptions["setTimeout"]>;
   private readonly cancel: NonNullable<WorkbenchWebSocketRequestControllerOptions["clearTimeout"]>;
   private readonly stream: WorkbenchWebSocketStreamController;
@@ -178,6 +193,10 @@ export default class WorkbenchWebSocketRequestController {
     this.harnesses = harnesses;
     this.now = now;
     this.reload = reload;
+    this.reloadDirtRevision = initialState?.reloadDirtRevision ?? 0;
+    for (const observer of initialState?.reloadDirtObservers ?? []) {
+      this.reloadDirtObservers.set(observer.connectionId, observer);
+    }
     this.schedule = schedule;
     this.stream = new WorkbenchWebSocketStreamController({
       clearTimeout: cancel,
@@ -193,7 +212,10 @@ export default class WorkbenchWebSocketRequestController {
     for (const state of initialState?.pending ?? []) this.restorePending(state);
   }
 
-  async start() {}
+  async start() {
+    this.unsubscribeReloadDirt = this.reload.subscribeReloadDirt(() => this.publishReloadDirt());
+    if (this.reloadDirtObservers.size) this.publishReloadDirt();
+  }
 
   async handleMessage(client: BridgeClient, connectionId: string, data: Buffer, hardReloadPending: boolean) {
     this.assertActive();
@@ -221,6 +243,7 @@ export default class WorkbenchWebSocketRequestController {
     const daemonRequest = this.daemonRequests.accepts(method);
     const workbenchRequest = daemonRequest || method.startsWith("workbench/thread-state/")
       || method === WORKBENCH_RELOAD_METHOD
+      || method === WORKBENCH_RELOAD_DIRT_READ_METHOD
       || transcriptRequest !== null;
     let harness: WorkbenchHarness | "unknown" | "workbench" = workbenchRequest ? "workbench" : "unknown";
     if (!workbenchRequest) {
@@ -273,6 +296,22 @@ export default class WorkbenchWebSocketRequestController {
         }
         void admission.start().catch((error: unknown) => {
           this.writeLine(`[orchestrator-reload] ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+        });
+        return;
+      }
+      if (method === WORKBENCH_RELOAD_DIRT_READ_METHOD) {
+        const params = asRecord(message.params);
+        if (params === null || Object.keys(params).length !== 0) {
+          await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: "Invalid Workbench reload dirt request." } });
+          return;
+        }
+        this.reloadDirtObservers.set(connectionId, { client, connectionId });
+        await this.sendJsonToClient(client, {
+          id: requestId,
+          result: {
+            revision: this.reloadDirtRevision,
+            snapshot: this.reload.getReloadDirtSnapshot(),
+          },
         });
         return;
       }
@@ -382,6 +421,7 @@ export default class WorkbenchWebSocketRequestController {
     const requests = [...(this.pending.get(client)?.values() ?? [])];
     for (const request of requests) this.complete(request, "closed", this.now() - request.startedAt, 0, 0, 0);
     this.stream.disconnect(client);
+    this.reloadDirtObservers.delete(connectionId);
     this.unsubscribeTranscriptConnection(connectionId);
     await this.threadState.disconnect(connectionId);
   }
@@ -404,7 +444,14 @@ export default class WorkbenchWebSocketRequestController {
       this.transcript.unsubscribe(this.transcriptSubscriptionKey(connectionId, subscriptionId));
     }
     this.transcriptSubscriptions.clear();
-    return { pending, stream: this.stream.detachForReload() };
+    this.unsubscribeReloadDirt?.();
+    this.unsubscribeReloadDirt = null;
+    return {
+      pending,
+      reloadDirtObservers: [...this.reloadDirtObservers.values()],
+      reloadDirtRevision: this.reloadDirtRevision,
+      stream: this.stream.detachForReload(),
+    };
   }
 
   dispose() {
@@ -418,6 +465,9 @@ export default class WorkbenchWebSocketRequestController {
       this.transcript.unsubscribe(this.transcriptSubscriptionKey(connectionId, subscriptionId));
     }
     this.transcriptSubscriptions.clear();
+    this.unsubscribeReloadDirt?.();
+    this.unsubscribeReloadDirt = null;
+    this.reloadDirtObservers.clear();
     this.stream.dispose();
   }
 
@@ -529,6 +579,22 @@ export default class WorkbenchWebSocketRequestController {
 
   private transcriptSubscriptionKey(connectionId: string, subscriptionId: string) {
     return `${connectionId}\0${subscriptionId}`;
+  }
+
+  private publishReloadDirt() {
+    this.reloadDirtRevision += 1;
+    const envelope = {
+      revision: this.reloadDirtRevision,
+      snapshot: this.reload.getReloadDirtSnapshot(),
+    };
+    for (const observer of this.reloadDirtObservers.values()) {
+      void this.sendJsonToClient(observer.client, {
+        method: WORKBENCH_RELOAD_DIRT_UPDATED_METHOD,
+        params: envelope,
+      }).catch((error: unknown) => {
+        this.writeLine(`[orchestrator-reload-dirt] ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+      });
+    }
   }
 
   private beginRequest(client: BridgeClient, id: RequestId, inBytes: number, label: string, method: string) {

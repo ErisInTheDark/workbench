@@ -29,6 +29,7 @@ const catalog: OrchestratorReloadScopeDescriptor[] = [
 function dirtStub(options: {
   dirty?: Array<{ destructive: boolean; scope: OrchestratorReloadScope }>;
   events?: string[];
+  listeners?: Set<() => void>;
 }) {
   const events = options.events ?? [];
   return {
@@ -36,8 +37,12 @@ function dirtStub(options: {
     completeReload: async (scopes: readonly OrchestratorReloadScope[]) => { events.push(`complete:${scopes.join(",")}`); },
     failReload: (error: unknown) => events.push(`fail:${error instanceof Error ? error.message : String(error)}`),
     getCatalog: () => catalog,
-    getSnapshot: () => ({ dirtyScopes: options.dirty ?? [] }),
+    getSnapshot: () => ({ dirtyScopes: options.dirty ?? [], error: null, pendingScopes: [] }),
     resumeAfterFailedReload: () => events.push("resume"),
+    subscribe: (listener: () => void) => {
+      options.listeners?.add(listener);
+      return () => options.listeners?.delete(listener);
+    },
   } as unknown as WorkbenchReloadDirtController;
 }
 
@@ -71,7 +76,25 @@ test("successful and failed user reloads advance dirt through one lifecycle owne
   assert.deepEqual(events, ["begin:server:core", "execute:server:core", "complete:server:core"]);
   await assert.rejects(controller.executeUnmanaged(["server:mcp"]), /reload failed/u);
   assert.deepEqual(events.slice(-3), ["begin:server:mcp", "execute:server:mcp", "fail:reload failed"]);
-  await assert.rejects(controller.request(), /user's decision/u);
+});
+
+test("exposes the dirt owner's snapshot and subscription without duplicating state", () => {
+  const listeners = new Set<() => void>();
+  const dirt = dirtStub({
+    dirty: [{ destructive: false, scope: "server:core" }],
+    listeners,
+  });
+  const controller = new WorkbenchOrchestratorReloadController({
+    dirt,
+    executeBatch: async () => undefined,
+  });
+  let notifications = 0;
+  const unsubscribe = controller.subscribeReloadDirt(() => { notifications += 1; });
+  assert.deepEqual(controller.getReloadDirtSnapshot(), dirt.getSnapshot());
+  for (const listener of listeners) listener();
+  assert.equal(notifications, 1);
+  unsubscribe();
+  assert.equal(listeners.size, 0);
 });
 
 test("browser admission reserves a batch and starts only after its response is sent", async () => {

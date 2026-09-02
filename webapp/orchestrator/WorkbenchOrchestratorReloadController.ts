@@ -4,8 +4,9 @@
  * - WorkbenchUserReloadAdmission: browser admission response plus post-send execution controls. Keywords: WebSocket, admission, scheduling.
  * - WorkbenchHardReloadNotification/WorkbenchHardReloadOptions: impending-restart notification and force-exit ports. Keywords: hard reload, notification, deadline.
  * - WorkbenchOrchestratorReloadControllerOptions: dirt selection and low-level execution ports. Keywords: reload, dirt, ports.
- * - default WorkbenchOrchestratorReloadController: own user-requested reload execution, handoff completion, and hard reload. Keywords: reload, user, lifecycle.
+ * - default WorkbenchOrchestratorReloadController: own user-requested reload execution, dirt observation, handoff completion, and hard reload. Keywords: reload, user, lifecycle.
  */
+import type { WorkbenchReloadDirtSnapshot } from "workbench-shared/reload/workbench-reload";
 import type { OrchestratorReloadRequest, OrchestratorReloadResponse, OrchestratorReloadScope } from "../lib/types";
 import {
   expandOrchestratorReloadScopes,
@@ -14,13 +15,6 @@ import {
   type OrchestratorReloadScopeDescriptor,
 } from "../lib/workbench/orchestrator-reload";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
-
-export interface WorkbenchReloadScopeClaim {
-  harness: "codex" | "copilot" | "opencode";
-  lifecycleKind: "completed" | "needsAttention" | "stopped" | "unknown" | "working";
-  reloadScopes: OrchestratorReloadScope[];
-  threadId: string;
-}
 
 interface ReloadBatch { scopes: OrchestratorReloadScope[] }
 
@@ -59,13 +53,16 @@ export interface WorkbenchOrchestratorReloadControllerOptions {
   getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
   hardReload?: WorkbenchHardReloadOptions;
   initialState?: WorkbenchOrchestratorReloadControllerState;
-  listClaims?: (cwd: string) => Promise<WorkbenchReloadScopeClaim[]>;
-  listScopes?: () => readonly OrchestratorReloadScope[];
   now?: () => number;
   schedule?: (callback: () => void) => void;
 }
 
 const DEFAULT_HARD_RELOAD_TIMEOUT_MS = 5_000;
+const EMPTY_RELOAD_DIRT: WorkbenchReloadDirtSnapshot = {
+  dirtyScopes: [],
+  error: null,
+  pendingScopes: [],
+};
 
 function createDeadline(timeoutMs: number): HardReloadDeadline {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -118,13 +115,12 @@ export default class WorkbenchOrchestratorReloadController {
     return validateOrchestratorReloadScopeCombination(scopes);
   }
 
-  notifyEligibilityChanged() {}
+  getReloadDirtSnapshot() {
+    return this.options.dirt?.getSnapshot() ?? EMPTY_RELOAD_DIRT;
+  }
 
-  async request(
-    _input?: { cwd: string; harness: "codex" | "copilot" | "opencode"; scopes: OrchestratorReloadScope[]; threadId: string },
-    _signal?: AbortSignal,
-  ): Promise<OrchestratorReloadResponse> {
-    throw new Error("Agent-managed reload admission is no longer available. Reloading is the user's decision.");
+  subscribeReloadDirt(listener: () => void) {
+    return this.options.dirt?.subscribe(listener) ?? (() => undefined);
   }
 
   admitUserReload(input: OrchestratorReloadRequest): WorkbenchUserReloadAdmission {

@@ -87,8 +87,8 @@ import {
 interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot" | "opencode"; lifecycle: WorkbenchThreadLifecycle; mcpGeneration?: string | null; orderAt?: number; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null; pinned: boolean; questionnaireHistory?: WorkbenchQuestionnaireHistoryEntryState[]; snoozed: boolean; threadId: string; titleFallback?: string }
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
 type ProjectObservation =
-  | { pinnedThreadKeys: Set<string>; projectId: string; scope: "project"; version: 1 | 2 | 3 }
-  | { pinnedThreadKeys: Set<string>; scope: "global"; version: 4 | 5 };
+  | { pinnedThreadKeys: Set<string>; projectId: string; scope: "project"; version: 1 | 2 | 3 | 4 }
+  | { pinnedThreadKeys: Set<string>; scope: "global"; version: 4 | 5 | 6 };
 interface StoredProjectStateV1 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
 interface StoredProjectStateV2 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
 interface StoredProjectStateV3 { displayOrder?: WorkbenchThreadDisplayOrder; drafts: StoredThreadDraft[]; records: WorkbenchThreadStateRecord[]; version: 3 }
@@ -362,7 +362,15 @@ export default class WorkbenchThreadStateController {
       case "workbench/thread-state/global/open": return { result: await this.openGlobal(connectionId, request.version) };
       case "workbench/thread-state/global/close": await this.closeGlobal(connectionId); return { result: { accepted: true } };
       case "workbench/thread-state/close": await this.close(connectionId, request.projectId); return { result: { accepted: true } };
-      case "workbench/thread-state/refresh": return { result: await this.refresh(request.projectId) };
+      case "workbench/thread-state/refresh": {
+        const sidebar = await this.refresh(request.projectId);
+        const observation = this.connectionProjects.get(connectionId);
+        return {
+          result: observation
+            ? this.snapshotForObservation(sidebar, observation)
+            : sidebar,
+        };
+      }
       case "workbench/thread-state/pin/open": {
         const context = await this.getPinnedThreadContext(request);
         if (context) this.authorizePinnedThreadContext(connectionId, context);
@@ -406,11 +414,12 @@ export default class WorkbenchThreadStateController {
   }
 
   async open(connectionId: string, projectId: string): Promise<WorkbenchThreadStateOpenResultV2>;
+  async open(connectionId: string, projectId: string, version: 4): Promise<WorkbenchThreadStateOpenResult>;
   async open(connectionId: string, projectId: string, version: 3): Promise<WorkbenchThreadStateOpenResult>;
   async open(connectionId: string, projectId: string, version: 2): Promise<WorkbenchThreadStateOpenResultV2>;
   async open(connectionId: string, projectId: string, version: 1): Promise<WorkbenchThreadSidebarSnapshot>;
-  async open(connectionId: string, projectId: string, version: 1 | 2 | 3): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult>;
-  async open(connectionId: string, projectId: string, version: 1 | 2 | 3 = 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult> {
+  async open(connectionId: string, projectId: string, version: 1 | 2 | 3 | 4): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult>;
+  async open(connectionId: string, projectId: string, version: 1 | 2 | 3 | 4 = 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult> {
     const priorObservation = this.connectionProjects.get(connectionId);
     if (priorObservation?.scope === "global") await this.closeGlobal(connectionId);
     const priorProjectId = priorObservation?.scope === "project" ? priorObservation.projectId : "";
@@ -424,7 +433,7 @@ export default class WorkbenchThreadStateController {
       this.options.publish(connectionId, currentProjectUpdate);
       this.options.log?.(`project replayed connection=${sanitizeLogValue(connectionId)} project=${sanitizeLogValue(projectId)} revision=${currentProjectUpdate.revision}`);
     }
-    const sidebar = this.snapshot(projectId, state);
+    const sidebar = this.snapshotForObservation(this.snapshot(projectId, state), observation);
     if (version === 1) return sidebar;
     const catalog = this.options.getProjectCatalog();
     const composite = {
@@ -451,21 +460,23 @@ export default class WorkbenchThreadStateController {
     };
   }
 
-  async openGlobal(connectionId: string, version: 4 | 5 = 5): Promise<WorkbenchGlobalThreadStateOpenResult> {
+  async openGlobal(connectionId: string, version: 4 | 5 | 6 = 5): Promise<WorkbenchGlobalThreadStateOpenResult> {
     const priorObservation = this.connectionProjects.get(connectionId);
     if (priorObservation?.scope === "project") await this.close(connectionId, priorObservation.projectId);
     else if (priorObservation) await this.closeGlobal(connectionId);
     const observation: ProjectObservation = { pinnedThreadKeys: new Set(), scope: "global", version };
     this.connectionProjects.set(connectionId, observation);
     const catalog = this.options.getProjectCatalog();
-    const projectSidebars = await Promise.all(catalog.data.map(async ({ id }) => this.snapshot(id, await this.getProject(id))));
+    const projectSidebars = await Promise.all(catalog.data.map(async ({ id }) => (
+      this.snapshotForObservation(this.snapshot(id, await this.getProject(id)), observation)
+    )));
     const result = {
       catalog,
       pinnedThreadLayout: await this.pinnedLayout.getSnapshot(),
       projectSidebars: { projects: projectSidebars },
     };
-    return version === 5
-      ? { ...result, homeThreadDisplayOrder: await this.homeDisplayOrder.getSnapshot(), version: 5 }
+    return version === 5 || version === 6
+      ? { ...result, homeThreadDisplayOrder: await this.homeDisplayOrder.getSnapshot(), version }
       : result;
   }
 
@@ -1182,13 +1193,47 @@ export default class WorkbenchThreadStateController {
       error: state.error,
       freshness: state.freshness,
       projectId,
-      ...(this.options.getReloadDirt ? { reloadDirt: this.options.getReloadDirt() } : {}),
       revision: state.revision,
+    };
+  }
+  private snapshotForObservation(
+    sidebar: WorkbenchThreadSidebarSnapshot,
+    observation: ProjectObservation,
+  ): WorkbenchThreadSidebarSnapshot {
+    const legacy = observation.scope === "project" ? observation.version <= 3 : observation.version <= 5;
+    if (!legacy || !this.options.getReloadDirt) return sidebar;
+    const reloadDirt = this.options.getReloadDirt();
+    return {
+      ...sidebar,
+      reloadDirt: {
+        ...reloadDirt,
+        dirtyScopes: reloadDirt.dirtyScopes.map(({ dependantScopes: _dependantScopes, ...scope }) => scope),
+      },
     };
   }
   private publishReloadDirt() {
     if (!this.active) return;
-    for (const [projectId, state] of this.projects) this.publish(projectId, state);
+    const legacyGlobalObservers = [...this.connectionProjects.entries()].filter(([, observation]) => (
+      observation.scope === "global" && observation.version <= 5
+    ));
+    for (const [projectId, state] of this.projects) {
+      const legacyProjectObservers = [...state.observers].flatMap((connectionId) => {
+        const observation = this.connectionProjects.get(connectionId);
+        return observation?.scope === "project" && observation.version <= 3 ? [[connectionId, observation] as const] : [];
+      });
+      if (!legacyProjectObservers.length && !legacyGlobalObservers.length) continue;
+      state.revision += 1;
+      const sidebar = this.snapshot(projectId, state);
+      for (const [connectionId, observation] of legacyProjectObservers) {
+        this.options.publish(connectionId, this.snapshotForObservation(sidebar, observation));
+      }
+      for (const [connectionId, observation] of legacyGlobalObservers) {
+        this.options.publish(connectionId, {
+          sidebar: this.snapshotForObservation(sidebar, observation),
+          updateKind: "projectThreadSidebar",
+        });
+      }
+    }
   }
   private publish(projectId: string, state: ProjectState, changedEntry?: WorkbenchThreadStateEntry) {
     if (!this.active) return;
@@ -1198,10 +1243,13 @@ export default class WorkbenchThreadStateController {
     if (state.observers.size) this.publishUpdate(state, sidebar);
     const summary = createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision, state.displayOrder);
     for (const [connectionId, observation] of this.connectionProjects) {
-      if (observation.version === 3) {
+      if (observation.scope === "project" && (observation.version === 3 || observation.version === 4)) {
         this.options.publish(connectionId, { summary, updateKind: "projectThreadSummary" });
       } else if (observation.scope === "global") {
-        this.options.publish(connectionId, { sidebar, updateKind: "projectThreadSidebar" });
+        this.options.publish(connectionId, {
+          sidebar: this.snapshotForObservation(sidebar, observation),
+          updateKind: "projectThreadSidebar",
+        });
       }
     }
     const projected = changedEntry ? projectWorkbenchThreadStateEntry(changedEntry) : null;
@@ -1210,7 +1258,15 @@ export default class WorkbenchThreadStateController {
 
   private publishUpdate(state: ProjectState, update: WorkbenchThreadStateSnapshot) {
     if (!this.active) return;
-    for (const connectionId of state.observers) this.options.publish(connectionId, update);
+    for (const connectionId of state.observers) {
+      const observation = this.connectionProjects.get(connectionId);
+      this.options.publish(
+        connectionId,
+        observation && "entries" in update
+          ? this.snapshotForObservation(update, observation)
+          : update,
+      );
+    }
   }
 
   private reconcile(projectId: string, state: ProjectState) {
@@ -1374,14 +1430,17 @@ export default class WorkbenchThreadStateController {
   private publishPinnedLayout(snapshot: Extract<WorkbenchThreadStateSnapshot, { updateKind: "pinnedThreadLayout" }>) {
     if (!this.active) return;
     for (const [connectionId, observation] of this.connectionProjects) {
-      if (observation.version === 3 || observation.scope === "global") this.options.publish(connectionId, snapshot);
+      if (
+        (observation.scope === "project" && (observation.version === 3 || observation.version === 4))
+        || observation.scope === "global"
+      ) this.options.publish(connectionId, snapshot);
     }
   }
 
   private publishHomeDisplayOrder(snapshot: Extract<WorkbenchThreadStateSnapshot, { updateKind: "homeThreadDisplayOrder" }>) {
     if (!this.active) return;
     for (const [connectionId, observation] of this.connectionProjects) {
-      if (observation.scope === "global" && observation.version === 5) this.options.publish(connectionId, snapshot);
+      if (observation.scope === "global" && (observation.version === 5 || observation.version === 6)) this.options.publish(connectionId, snapshot);
     }
   }
 
@@ -1433,7 +1492,7 @@ export default class WorkbenchThreadStateController {
   ) {
     const observation = this.connectionProjects.get(connectionId);
     const currentSnapshot = await this.homeDisplayOrder.getSnapshot();
-    if (observation?.scope !== "global" || observation.version !== 5) {
+    if (observation?.scope !== "global" || (observation.version !== 5 && observation.version !== 6)) {
       return { accepted: false, revision: currentSnapshot.revision };
     }
 

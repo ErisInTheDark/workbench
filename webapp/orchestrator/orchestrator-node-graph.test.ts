@@ -148,4 +148,8 @@ test("server branch and topology closures never acquire harness roots", () => {
   assert.equal(catalog.get("harness:codex")!.destructive, true);
   assert.equal(catalog.get("harness:opencode")!.destructive, true);
   assert.equal(catalog.get("server:process")!.destructive, true);
+  assert.deepEqual(
+    dependantClosure(["server:process"]),
+    descriptors.map(({ scope }) => scope),
+  );
 });

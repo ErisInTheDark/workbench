@@ -329,10 +329,6 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
     legacyMigrationProjectRoot: PROJECT_ROOT,
     localOrchestratorOrigin: LOCAL_ORCHESTRATOR_ORIGIN,
     logTurnRecovery: (message) => log("turn-recovery", message),
-    notifyThreadLifecycle: () => {
-      featureHost.get("reloadController").notifyEligibilityChanged();
-    },
-    notifyReloadEligibilityChanged: () => featureHost.get("reloadController").notifyEligibilityChanged(),
     onCodexFatalExit: (reason, bridge) => {
       if (shuttingDown) return;
       bridge?.beginStopping();
@@ -370,31 +366,6 @@ function createOrchestratorFeatureContext(): OrchestratorProcessContext {
       );
     },
     refreshWorkbenchPromptFiles: ensureWorkbenchPromptFiles,
-    requestOrchestratorReload: async (body, signal) => {
-      const record = asRecord(body);
-      const harness = record?.callerHarness;
-      const threadId = record?.callerThreadId;
-      const cwd = record?.cwd;
-      if (typeof threadId !== "string" || !threadId.trim()) {
-        throw new Error("A managed thread identity is required.");
-      }
-      if (typeof cwd !== "string" || !cwd.trim()) {
-        throw new Error("A valid working directory is required.");
-      }
-      if (harness !== "codex" && harness !== "copilot" && harness !== "opencode") {
-        throw new Error("A supported managed harness is required.");
-      }
-      const reloadController = featureHost.get("reloadController");
-      const scopes = reloadController.resolveSelections({ all: record?.all === true, scopes: record?.scopes }, "agent");
-      const invalidCombination = reloadController.validateCombination(scopes);
-      if (invalidCombination) throw new Error(invalidCombination);
-      return Response.json(await featureHost.get("reloadController").request({
-        cwd: cwd.trim(),
-        harness,
-        scopes,
-        threadId: threadId.trim(),
-      }, signal));
-    },
     runTurnRecoveryTask: async (owner, label, task) => await featureHost.run(
       "turnRecovery",
       async (currentOwner) => {
