@@ -6,7 +6,6 @@ import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
-import AppCompilerNode from "./AppCompilerNode.ts";
 import AppDatabaseNode from "./AppDatabaseNode.ts";
 import AppTopologyNode from "./AppTopologyNode.ts";
 import WorkbenchAppReloadController, { type WorkbenchAppReloadControllerState } from "./WorkbenchAppReloadController.ts";
@@ -19,7 +18,7 @@ interface AppRuntimeNodeState {
 
 export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   access: "operator",
-  children: [AppDatabaseNode, AppCompilerNode, AppTopologyNode],
+  children: [AppDatabaseNode, AppTopologyNode],
   create: (context, build) => {
     const state = build.handoffState as AppRuntimeNodeState | undefined;
     const dirt = new WorkbenchAppReloadDirtController({

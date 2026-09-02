@@ -16,6 +16,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
       appPort: context.appPort,
       logger: context.logger,
       outputDirectoryPath: context.outputDirectoryPath,
+      readAppliedReactDevelopmentMode: context.readAppliedReactDevelopmentMode,
       state: build.get("state"),
     });
     return {
@@ -34,8 +35,10 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
     "app/runtime/AppHttpNode.ts",
     "app/runtime/WorkbenchAppHttpRouter.ts",
     "app/runtime/WorkbenchAppPortRoutes.ts",
+    "app/runtime/WorkbenchAppSettingsRoutes.ts",
     "app/state/workbench-app-state-routes.ts",
     "shared/http/workbench-app-port.ts",
+    "shared/http/workbench-app-settings.ts",
     "shared/http/StaticHttpRequestController.ts",
   ].join("\n"),
 });

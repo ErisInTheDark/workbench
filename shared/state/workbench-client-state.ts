@@ -24,6 +24,7 @@ export type WorkbenchGlobalPreference =
       | "editorSpellCheck"
       | "projectStatusCountsExpanded"
       | "projectsOpen"
+      | "reactDevelopmentMode"
       | "reloadNecessaryOpen"
       | "showUnopenableFiles"
       | "sidebarCollapsed"

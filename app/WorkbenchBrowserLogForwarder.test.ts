@@ -10,6 +10,7 @@ test("preserves console warnings and forwards cycle-safe client entries", () => 
   const visible: unknown[][] = [];
   const requests: string[] = [];
   const scheduled: Array<() => void> = [];
+  let scheduleReceiver: unknown;
   const listeners = new Map<string, EventListener>();
   const fakeConsole = {
     error: (...values: unknown[]) => visible.push(["error", ...values]),
@@ -21,7 +22,10 @@ test("preserves console warnings and forwards cycle-safe client entries", () => 
       requests.push(String(init?.body));
       return Promise.resolve(new Response("{}", { status: 202 }));
     }) as typeof fetch,
-    schedule: (callback) => scheduled.push(callback),
+    schedule: function (this: unknown, callback) {
+      scheduleReceiver = this;
+      scheduled.push(callback);
+    },
     target: {
       addEventListener: ((name: string, listener: EventListener) => listeners.set(name, listener)) as Window["addEventListener"],
       removeEventListener: ((name: string) => listeners.delete(name)) as Window["removeEventListener"],
@@ -31,6 +35,7 @@ test("preserves console warnings and forwards cycle-safe client entries", () => 
   const cyclic: { self?: object } = {};
   cyclic.self = cyclic;
   fakeConsole.warn("careful", cyclic);
+  assert.equal(scheduleReceiver, undefined);
   assert.deepEqual(visible[0]?.slice(0, 2), ["warn", "careful"]);
   scheduled.shift()?.();
   assert.match(requests[0] ?? "", /"level":"warn"/u);

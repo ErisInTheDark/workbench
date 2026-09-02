@@ -11,6 +11,7 @@ import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import WorkbenchAppStateRoutes from "../state/workbench-app-state-routes.ts";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
+import WorkbenchAppSettingsRoutes from "./WorkbenchAppSettingsRoutes.ts";
 
 const CLIENT_LOG_PATH = "/api/workbench-client-log";
 const MAX_CLIENT_LOG_BODY_BYTES = 128_000;
@@ -61,6 +62,7 @@ function parseClientLogs(value: unknown) {
 
 export default class WorkbenchAppHttpRouter {
   private readonly portRoutes: WorkbenchAppPortRoutes;
+  private readonly settingsRoutes: WorkbenchAppSettingsRoutes | null;
   private readonly stateRoutes: WorkbenchAppStateRoutes;
   private readonly staticRequests: StaticHttpRequestController;
 
@@ -68,12 +70,31 @@ export default class WorkbenchAppHttpRouter {
     appPort: WorkbenchAppPortControl;
     logger: WorkbenchAppLogger;
     outputDirectoryPath: string;
+    readAppliedReactDevelopmentMode?: () => boolean;
     state: WorkbenchBrowserStateRegistry;
   }) {
     this.portRoutes = new WorkbenchAppPortRoutes({
       appPort: options.appPort,
       onDiagnostic: (message) => options.logger.error("http", message),
     });
+    this.settingsRoutes = options.readAppliedReactDevelopmentMode
+      ? new WorkbenchAppSettingsRoutes({
+          onDiagnostic: (message) => options.logger.error("http", message),
+          readAppliedReactDevelopmentMode: options.readAppliedReactDevelopmentMode,
+          readRequestedReactDevelopmentMode: () => (
+            options.state.readGlobalPreference("reactDevelopmentMode")
+          ),
+          writeRequestedReactDevelopmentMode: async (value) => {
+            await options.state.mutate({
+              action: "put",
+              record: {
+                kind: "globalPreference",
+                preference: { key: "reactDevelopmentMode", value },
+              },
+            });
+          },
+        })
+      : null;
     this.stateRoutes = new WorkbenchAppStateRoutes(options.state);
     this.staticRequests = new StaticHttpRequestController({
       rootDirectoryPath: options.outputDirectoryPath,
@@ -96,6 +117,7 @@ export default class WorkbenchAppHttpRouter {
       return;
     }
     if (await this.portRoutes.handle(request, response, url)) return;
+    if (this.settingsRoutes && await this.settingsRoutes.handle(request, response, url)) return;
     if (await this.stateRoutes.handle(request, response, url)) return;
     if (url.pathname.startsWith("/api/")) {
       sendJson(response, 404, { error: "Workbench app route not found." });

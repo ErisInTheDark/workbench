@@ -7,11 +7,12 @@ import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 import WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
+import AppCompilerNode from "./AppCompilerNode.ts";
 import AppHttpNode from "./AppHttpNode.ts";
 
 export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   access: "operator",
-  children: [AppHttpNode],
+  children: [AppCompilerNode, AppHttpNode],
   create: (context, build) => {
     const state = new WorkbenchBrowserStateRegistry(build.get("database"), {
       onDiagnostic: (message) => context.logger.error("app", message),

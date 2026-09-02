@@ -10,8 +10,11 @@ import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   access: "operator",
   children: [],
-  create: (context) => {
-    const compiler = context.createCompiler();
+  create: (context, build) => {
+    const state = build.get("state");
+    const compiler = context.createCompiler(
+      () => state.readGlobalPreference("reactDevelopmentMode") === true,
+    );
     let detached = false;
     const close = async () => {
       await compiler.close();
@@ -30,7 +33,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   description: "Reload esbuild and Tailwind compiler configuration and watch lifecycles.",
   lifecycle: "handoff",
   provides: ["compiler"],
-  requires: [],
+  requires: ["state"],
   safeAll: false,
   scope: "client:compiler",
   sources: [

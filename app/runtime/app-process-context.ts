@@ -11,7 +11,7 @@ import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateReposito
 
 export interface AppProcessContext {
   appPort: WorkbenchAppPortControl;
-  createCompiler(): WorkbenchFrontendCompiler;
+  createCompiler(readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
   createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;
   executeReloadScopes(scopes: WorkbenchReloadScope[]): Promise<WorkbenchReloadScope[]>;
   getReloadDependantClosure(scopes: readonly WorkbenchReloadScope[]): WorkbenchReloadScope[];
@@ -19,5 +19,6 @@ export interface AppProcessContext {
   getReloadScopesForPaths(paths: readonly string[]): WorkbenchReloadScope[];
   logger: WorkbenchAppLogger;
   outputDirectoryPath: string;
+  readAppliedReactDevelopmentMode(): boolean;
   repositoryRootPath: string;
 }

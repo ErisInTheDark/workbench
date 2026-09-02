@@ -28,7 +28,7 @@ const requiredRegistrations = [
 
 export interface WorkbenchAppRuntimeOptions {
   appPort: WorkbenchAppPortControl;
-  createCompiler(): WorkbenchFrontendCompiler;
+  createCompiler(readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
   createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;
   logger: WorkbenchAppLogger;
   outputDirectoryPath: string;
@@ -80,13 +80,17 @@ async function readReloadScopes(request: IncomingMessage) {
 }
 
 export default class WorkbenchAppRuntime {
+  private appliedReactDevelopmentMode: boolean | null = null;
   private readonly host: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
 
   constructor(private readonly options: WorkbenchAppRuntimeOptions) {
     let host!: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
     const context: AppProcessContext = {
       appPort: options.appPort,
-      createCompiler: options.createCompiler,
+      createCompiler: (readReactDevelopmentMode) => options.createCompiler(() => {
+        this.appliedReactDevelopmentMode ??= readReactDevelopmentMode();
+        return this.appliedReactDevelopmentMode;
+      }),
       createDatabase: options.createDatabase,
       executeReloadScopes: async (scopes) => {
         const previous = host.get("reloadController");
@@ -109,6 +113,12 @@ export default class WorkbenchAppRuntime {
       getReloadScopesForPaths: (paths) => host.getReloadScopesForPaths(paths),
       logger: options.logger,
       outputDirectoryPath: options.outputDirectoryPath,
+      readAppliedReactDevelopmentMode: () => {
+        if (this.appliedReactDevelopmentMode === null) {
+          throw new Error("Workbench frontend mode is unavailable before compiler startup.");
+        }
+        return this.appliedReactDevelopmentMode;
+      },
       repositoryRootPath: options.repositoryRootPath,
     };
     const loader = createReloadableNodeModuleLoader<AppProcessContext, AppRuntimeObjects, never>(
@@ -192,9 +202,28 @@ export default class WorkbenchAppRuntime {
   async handleRequest(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url ?? "/", "http://workbench.local");
     if (url.pathname === RUNTIME_PATH && request.method === "GET") {
+      const reloadDirt = this.host.get("reloadDirt").getSnapshot();
+      const requestedReactDevelopmentMode = this.host.get("state")
+        .readGlobalPreference("reactDevelopmentMode") === true;
+      const appliedReactDevelopmentMode = this.appliedReactDevelopmentMode;
+      const projectedDirt = requestedReactDevelopmentMode !== appliedReactDevelopmentMode
+        && !reloadDirt.dirtyScopes.some(({ scope }) => scope === "client:process")
+        ? {
+            ...reloadDirt,
+            dirtyScopes: [
+              ...reloadDirt.dirtyScopes,
+              {
+                dependantScopes: this.host.getReloadScopeCatalog().map(({ scope }) => scope),
+                description: "Restart the Workbench app to apply app-wide settings.",
+                destructive: true,
+                scope: "client:process",
+              },
+            ],
+          }
+        : reloadDirt;
       sendJson(response, 200, {
         reloadDirt: projectReloadDirt(
-          this.host.get("reloadDirt").getSnapshot(),
+          projectedDirt,
           url.searchParams.get("version") === "2",
         ),
       });

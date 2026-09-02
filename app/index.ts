@@ -17,12 +17,13 @@ async function main() {
   const commandLine = readWorkbenchAppCommandLine();
   const repositoryRootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const desktopProtocolEnabled = process.env.WORKBENCH_DESKTOP_PROTOCOL === "1";
-  const createCompiler = () => new WorkbenchFrontendCompiler({
+  const createCompiler = (readReactDevelopmentMode: () => boolean) => new WorkbenchFrontendCompiler({
     logger,
     onDiagnostic: (message) => logger.error("tailwind", message),
+    readReactDevelopmentMode,
     repositoryRootPath,
   });
-  const outputDirectoryPath = createCompiler().outputDirectoryPath;
+  const outputDirectoryPath = createCompiler(() => false).outputDirectoryPath;
   let protocol: WorkbenchAppProcessProtocol | null = null;
   const app = new WorkbenchApp({
     createRuntime: (appPort) => new WorkbenchAppRuntime({

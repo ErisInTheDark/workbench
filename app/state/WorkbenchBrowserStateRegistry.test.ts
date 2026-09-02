@@ -107,9 +107,14 @@ test("portable settings refresh the seed, drafts do not, and new browsers wait f
     action: "put",
     record: { kind: "globalPreference", preference: { key: "appPort", value: 43_210 } },
   });
+  await registry.mutateBrowser(BROWSER_A, {
+    action: "put",
+    record: { kind: "globalPreference", preference: { key: "reactDevelopmentMode", value: true } },
+  });
   const browserD = records(await registry.readBrowser(BROWSER_D));
   assert.equal(browserD.some((record) => record.kind === "composerDraft"), false);
   assert.equal(globalPreference(browserD, "appPort"), undefined);
+  assert.equal(globalPreference(browserD, "reactDevelopmentMode"), undefined);
 });
 
 test("missing IDs use shared state and invalid IDs never create browser storage", async (context) => {

@@ -20,6 +20,7 @@ export interface WorkbenchFrontendCompilerOptions {
   logger?: WorkbenchAppLogger;
   onDiagnostic?: (message: string) => void;
   outputDirectoryPath?: string;
+  readReactDevelopmentMode?: () => boolean;
   repositoryRootPath?: string;
 }
 
@@ -52,6 +53,7 @@ export default class WorkbenchFrontendCompiler {
   private readonly environment: NodeJS.ProcessEnv;
   private readonly logger: WorkbenchAppLogger;
   private readonly onDiagnostic: (message: string) => void;
+  private readonly readReactDevelopmentMode: () => boolean;
   private readonly repositoryRootPath: string;
   private readonly staticDirectoryPath: string;
   private esbuildContext: esbuild.BuildContext | null = null;
@@ -66,6 +68,7 @@ export default class WorkbenchFrontendCompiler {
     this.outputDirectoryPath = path.resolve(
       options.outputDirectoryPath ?? path.join(workbenchLibraryRoot, "runtime", "app"),
     );
+    this.readReactDevelopmentMode = options.readReactDevelopmentMode ?? (() => false);
     this.logger = options.logger ?? new WorkbenchAppLogger();
     this.onDiagnostic = options.onDiagnostic ?? ((message) => console.error(message));
   }
@@ -126,6 +129,8 @@ export default class WorkbenchFrontendCompiler {
       assetNames: "assets/[name]-[hash]",
       bundle: true,
       define: {
+        // Keep this separate from the process.env object so esbuild folds React's runtime branch.
+        "process.env.NODE_ENV": JSON.stringify(this.readReactDevelopmentMode() ? "development" : "production"),
         "process.env": JSON.stringify({
           WORKBENCH_CODEX_APP_SERVER_PORT: this.environment.WORKBENCH_CODEX_APP_SERVER_PORT ?? "4500",
           WORKBENCH_CODEX_APP_SERVER_URL: this.environment.WORKBENCH_CODEX_APP_SERVER_URL,

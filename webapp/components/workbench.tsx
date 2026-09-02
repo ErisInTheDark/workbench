@@ -171,6 +171,7 @@ import WorkbenchDaemonClientContext from "./workbench/WorkbenchDaemonClientConte
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
 import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
+import WorkbenchReactDevelopmentModeSetting from "./workbench/WorkbenchReactDevelopmentModeSetting";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
@@ -3060,6 +3061,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             <>
                               {SETTINGS_ORDER.map((key) => renderGlobalSettingRow(key))}
                               <WorkbenchAppPortSetting />
+                              <WorkbenchReactDevelopmentModeSetting />
                               {renderLocalCapabilitySettings()}
                             </>
                           )

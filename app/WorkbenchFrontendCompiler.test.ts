@@ -76,6 +76,16 @@ test("watches the real browser app into static output without Next runtime impor
   const javascript = await readFile(path.join(outputDirectoryPath, "assets", "app.js"), "utf8");
   assert.doesNotMatch(javascript, /from\s+["']next\/navigation["']/u);
   assert.doesNotMatch(javascript, /webpack-hmr/u);
+  const sourceMap = JSON.parse(
+    await readFile(path.join(outputDirectoryPath, "assets", "app.js.map"), "utf8"),
+  ) as { sources?: unknown };
+  assert.ok(Array.isArray(sourceMap.sources));
+  assert.equal(sourceMap.sources.some((source) => (
+    typeof source === "string" && /react(?:-dom)?(?:-client)?\.development\.js$/u.test(source)
+  )), false);
+  assert.equal(sourceMap.sources.some((source) => (
+    typeof source === "string" && /react-dom-client\.production\.js$/u.test(source)
+  )), true);
   await compiler.close();
   assert.deepEqual(diagnostics, []);
 });

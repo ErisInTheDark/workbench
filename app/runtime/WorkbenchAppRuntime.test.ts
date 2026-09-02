@@ -120,6 +120,7 @@ test("assigns every app server source to a reloadable node or the explicit proce
   assert.deepEqual(owners("package.json"), ["client:process"]);
   assert.deepEqual(owners("shared/http/StaticHttpRequestController.ts"), ["client:http"]);
   assert.deepEqual(owners("shared/http/workbench-app-port.ts"), ["client:http"]);
+  assert.deepEqual(owners("shared/http/workbench-app-settings.ts"), ["client:http"]);
   assert.deepEqual(owners("shared/http/HttpServer.ts"), ["client:process"]);
   assert.deepEqual(owners("shared/state/workbench-app-state-schema.ts"), ["client:database"]);
   assert.deepEqual(owners("shared/package.json"), ["client:process"]);
@@ -145,6 +146,7 @@ test("reloads the database with a fresh repository constructor and no process re
   await execFileAsync("git", ["commit", "-q", "-m", "fixture"], { cwd: rootPath });
 
   const constructors: Array<typeof WorkbenchAppStateRepository> = [];
+  const compilerModes: boolean[] = [];
   const databaseEvents: string[] = [];
   let reloadLine = "";
   let resolveReload!: () => void;
@@ -168,11 +170,16 @@ test("reloads the database with a fresh repository constructor and no process re
         source: "setting",
       }),
     },
-    createCompiler: () => ({
-      close: async () => {},
-      outputDirectoryPath,
-      startWatching: async () => outputDirectoryPath,
-    } as WorkbenchFrontendCompiler),
+    createCompiler: (readReactDevelopmentMode) => {
+      return {
+        close: async () => {},
+        outputDirectoryPath,
+        startWatching: async () => {
+          compilerModes.push(readReactDevelopmentMode());
+          return outputDirectoryPath;
+        },
+      } as WorkbenchFrontendCompiler;
+    },
     createDatabase: (Repository) => {
       constructors.push(Repository);
       const generation = constructors.length;
@@ -209,6 +216,32 @@ test("reloads the database with a fresh repository constructor and no process re
     await target.start();
     started = true;
     await target.writeAppPort(43_211);
+
+    const settingsRequest = Readable.from([
+      JSON.stringify({ reactDevelopmentMode: true }),
+    ]) as import("node:http").IncomingMessage;
+    settingsRequest.method = "PUT";
+    settingsRequest.url = "/api/workbench-app-settings";
+    const settingsResponse = new TestResponse();
+    await target.handleRequest(
+      settingsRequest,
+      settingsResponse as unknown as import("node:http").ServerResponse,
+    );
+    assert.equal(settingsResponse.statusCode, 200);
+
+    const dirtyRequest = Readable.from([]) as import("node:http").IncomingMessage;
+    dirtyRequest.method = "GET";
+    dirtyRequest.url = "/api/workbench-app-runtime?version=2";
+    const dirtyResponse = new TestResponse();
+    await target.handleRequest(
+      dirtyRequest,
+      dirtyResponse as unknown as import("node:http").ServerResponse,
+    );
+    assert.deepEqual(
+      JSON.parse(dirtyResponse.body).reloadDirt.dirtyScopes.map(({ scope }: { scope: string }) => scope),
+      ["client:process"],
+    );
+
     const request = Readable.from([JSON.stringify({ scopes: ["client:database"] })]) as import("node:http").IncomingMessage;
     request.method = "POST";
     request.url = "/api/workbench-app-runtime";
@@ -218,13 +251,37 @@ test("reloads the database with a fresh repository constructor and no process re
     await reloaded;
 
     assert.equal(constructors.length, 2);
+    assert.deepEqual(compilerModes, [false, false]);
     assert.notEqual(constructors[0], constructors[1]);
     assert.deepEqual(databaseEvents, ["start:1", "close:1", "start:2"]);
     assert.equal(target.readAppPort(), 43_211);
     assert.match(reloadLine, /client:database/u);
     assert.match(reloadLine, /client:state/u);
+    assert.match(reloadLine, /client:compiler/u);
     assert.match(reloadLine, /client:http/u);
     assert.doesNotMatch(reloadLine, /client:process/u);
+
+    const restoreRequest = Readable.from([
+      JSON.stringify({ reactDevelopmentMode: false }),
+    ]) as import("node:http").IncomingMessage;
+    restoreRequest.method = "PUT";
+    restoreRequest.url = "/api/workbench-app-settings";
+    const restoreResponse = new TestResponse();
+    await target.handleRequest(
+      restoreRequest,
+      restoreResponse as unknown as import("node:http").ServerResponse,
+    );
+    assert.equal(restoreResponse.statusCode, 200);
+
+    const cleanRequest = Readable.from([]) as import("node:http").IncomingMessage;
+    cleanRequest.method = "GET";
+    cleanRequest.url = "/api/workbench-app-runtime?version=2";
+    const cleanResponse = new TestResponse();
+    await target.handleRequest(
+      cleanRequest,
+      cleanResponse as unknown as import("node:http").ServerResponse,
+    );
+    assert.deepEqual(JSON.parse(cleanResponse.body).reloadDirt.dirtyScopes, []);
   } finally {
     if (started) await target.close();
   }

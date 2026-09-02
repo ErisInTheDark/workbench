@@ -31,7 +31,7 @@ function isPortableSeedMutation(mutation: WorkbenchClientStateMutation) {
     : mutation.action === "delete" && mutation.identity.kind === "globalPreference"
       ? mutation.identity.key
       : null;
-  return key !== "appPort";
+  return key !== "appPort" && key !== "reactDevelopmentMode";
 }
 
 async function removeFailedClone(filePath: string, cause: unknown) {

@@ -73,7 +73,10 @@ export default class WorkbenchBrowserLogForwarder {
     this.fetcher = options.fetcher ?? globalThis.fetch;
     this.originalError = this.console.error;
     this.originalWarn = this.console.warn;
-    this.schedule = options.schedule ?? queueMicrotask;
+    const schedule = options.schedule;
+    this.schedule = schedule
+      ? (callback) => schedule(callback)
+      : (callback) => globalThis.queueMicrotask(callback);
     this.target = options.target ?? window;
     this.wrappedError = (...values) => {
       this.originalError.apply(this.console, values);
