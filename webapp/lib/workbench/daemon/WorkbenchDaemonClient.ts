@@ -45,6 +45,15 @@ const fileWriteSchema = z.union([
 
 function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
   switch (method) {
+    case "codex-sandbox-network/read":
+    case "codex-sandbox-network/update": return z.object({
+      codexSandboxNetwork: z.object({
+        effectiveEnabled: z.boolean(),
+        globalEnabled: z.boolean(),
+        projectId: z.string(),
+        projectOverride: z.boolean().nullable(),
+      }).strict(),
+    }).strict();
     case "project/catalog/read": return WorkbenchProjectsPayloadSchema;
     case "project/file/read": return z.object({
       content: z.string(), headContent: z.string().nullable(), mtimeMs: z.number(), path: z.string(), projectId: z.string(), updatedAt: z.string(),

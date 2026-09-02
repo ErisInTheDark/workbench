@@ -25,6 +25,8 @@ import type {
   WorkbenchComposerProfileSlot,
   WorkbenchComposerProfileTargetSelection,
   WorkbenchComposerProfileStorePayload,
+  WorkbenchCodexSandboxNetworkSettingsResponse,
+  WorkbenchCodexSandboxNetworkSettingsUpdateRequest,
   WorkbenchLocalCapabilitySettingsResponse,
   WorkbenchLocalCapabilitySettingsUpdateRequest,
   WorkbenchProjectsPayload,
@@ -81,6 +83,8 @@ export interface WorkbenchDaemonRequestMap {
   "browse/sessions/forget": { params: BrowseSessionParams; result: WorkbenchBrowseSessionControlResponse };
   "browse/sessions/read": { params: WorkbenchBrowseSessionListRequest; result: WorkbenchBrowseSessionListResponse };
   "browse/sessions/stop": { params: BrowseSessionParams; result: WorkbenchBrowseSessionControlResponse };
+  "codex-sandbox-network/read": { params: { projectId: string }; result: WorkbenchCodexSandboxNetworkSettingsResponse };
+  "codex-sandbox-network/update": { params: WorkbenchCodexSandboxNetworkSettingsUpdateRequest; result: WorkbenchCodexSandboxNetworkSettingsResponse };
   "git/arc/compare": { params: GitArcParams<"compare">; result: GitCheckpointCompareResult };
   "git/arc/diff-artifact/read": { params: GitArcParams<"readDiffArtifact">; result: string };
   "git/arc/proposal/commit": { params: GitArcParams<"proposalCommit">; result: GitCheckpointProposal };

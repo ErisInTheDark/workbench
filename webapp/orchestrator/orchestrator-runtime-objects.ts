@@ -5,6 +5,7 @@
  * - OrchestratorCodexAppServerRuntime: persistent Codex app-server registration. Keywords: codex, runtime, lifecycle.
  * - OrchestratorBrowseExecution: warm Browse execution registration. Keywords: browse, runtime, lifecycle.
  * - OrchestratorDatabaseRegistration: mandatory SQLite lifecycle registration. Keywords: database, readiness, lifecycle.
+ * - WorkbenchCodexSandboxNetworkController: server-owned Codex sandbox network settings. Keywords: Codex, sandbox, network, settings.
  * - OrchestratorTranscriptRegistration: SQLite transcript recording and recovery registration. Keywords: transcript, recovery, subscription.
  * - OrchestratorTranscriptShadowLog: bounded transcript diagnostic log registration. Keywords: transcript, diagnostics, log.
  * - OrchestratorRuntimeObjects: centralized live object registry contract populated by reloadable nodes. Keywords: registry, ownership, graph.
@@ -23,6 +24,7 @@ import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type CodexHealthMonitor from "./CodexHealthMonitor";
+import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandboxNetworkController";
 import type OpenCodeAppServer from "./OpenCodeAppServer";
 import type { OpenCodeBridge } from "./opencode-bridge";
 import * as copilotThreadState from "./copilot-thread-state";
@@ -124,6 +126,7 @@ export interface OrchestratorRuntimeObjects {
   codexBridge: CodexStdioBridge;
   codexHealth: CodexHealthMonitor;
   codexMcpGeneration: WorkbenchCodexMcpGenerationController;
+  codexSandboxNetwork: WorkbenchCodexSandboxNetworkController;
   codexInstructions: WorkbenchCodexInstructionAdapter;
   database: OrchestratorDatabaseRegistration;
   daemonRequests: WorkbenchDaemonRequestController;

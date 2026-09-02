@@ -7,7 +7,10 @@ import { test } from "node:test";
 
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController.ts";
 
-function createController(options: { gitArcResponse?: Response } = {}) {
+function createController(options: { gitArcResponse?: Response; rejectProjectId?: string } = {}) {
+  let globalNetworkEnabled = false;
+  const projectNetworkOverrides = new Map<string, boolean>();
+  const networkWrites: object[] = [];
   const fileWrites: object[] = [];
   const targetReads: object[] = [];
   const targetWrites: object[] = [];
@@ -30,6 +33,26 @@ function createController(options: { gitArcResponse?: Response } = {}) {
       open: async (request) => ({ ok: true, path: request.path, projectId: request.projectId ?? null, target: request.path }),
       reveal: async (request) => ({ ok: true, path: request.path, projectId: request.projectId }),
     },
+    codexSandboxNetwork: {
+      read: async (projectId) => {
+        const projectOverride = projectNetworkOverrides.get(projectId) ?? null;
+        return {
+          effectiveEnabled: projectOverride ?? globalNetworkEnabled,
+          globalEnabled: globalNetworkEnabled,
+          projectId,
+          projectOverride,
+        };
+      },
+      setGlobal: async (enabled) => {
+        networkWrites.push({ enabled, scope: "global" });
+        globalNetworkEnabled = enabled;
+      },
+      setProjectOverride: async (projectId, enabled) => {
+        networkWrites.push({ enabled, projectId, scope: "project" });
+        if (enabled === null) projectNetworkOverrides.delete(projectId);
+        else projectNetworkOverrides.set(projectId, enabled);
+      },
+    },
     profiles: {
       mutate: async () => ({ profiles: [] }),
       read: async () => ({ profiles: [] }),
@@ -44,13 +67,19 @@ function createController(options: { gitArcResponse?: Response } = {}) {
         return true;
       },
     },
-    projects: { readCatalog: async () => ({ data: [], rootPath: "" }) },
+    projects: {
+      readCatalog: async () => ({ data: [], rootPath: "" }),
+      resolveProjectById: async (projectId) => {
+        if (projectId === options.rejectProjectId) throw new Error("Unknown project.");
+        return { id: projectId, kind: "git", root: "", rootPath: "", roots: [] };
+      },
+    },
     settings: {
       readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
       updateLocalCapabilities: async (update) => update({ browseRawCommandsEnabled: false }),
     },
   });
-  return { controller, fileWrites, targetReads, targetWrites };
+  return { controller, fileWrites, networkWrites, targetReads, targetWrites };
 }
 
 test("dispatch validates semantic parameters without corrupting valid empty file content", async () => {
@@ -104,6 +133,50 @@ test("Browse registration swaps atomically and stale disposal cannot remove its 
     (await controller.handle({ id: 3, method: "browse/sessions/read", params: {} })).error?.message ?? "",
     /reloading/u,
   );
+});
+
+test("Codex sandbox network requests validate project ownership and preserve explicit override intent", async () => {
+  const { controller, networkWrites } = createController({ rejectProjectId: "missing" });
+  const rejected = await controller.handle({
+    id: 1,
+    method: "codex-sandbox-network/update",
+    params: { enabled: true, projectId: "missing", scope: "project" },
+  });
+  assert.match(rejected.error?.message ?? "", /Unknown project/u);
+  assert.deepEqual(networkWrites, []);
+
+  const global = await controller.handle({
+    id: 2,
+    method: "codex-sandbox-network/update",
+    params: { enabled: true, projectId: "project", scope: "global" },
+  });
+  assert.deepEqual(global.result, {
+    codexSandboxNetwork: {
+      effectiveEnabled: true,
+      globalEnabled: true,
+      projectId: "project",
+      projectOverride: null,
+    },
+  });
+
+  const disabled = await controller.handle({
+    id: 3,
+    method: "codex-sandbox-network/update",
+    params: { enabled: false, projectId: "project", scope: "project" },
+  });
+  assert.equal((disabled.result as { codexSandboxNetwork: { effectiveEnabled: boolean } }).codexSandboxNetwork.effectiveEnabled, false);
+
+  const inherited = await controller.handle({
+    id: 4,
+    method: "codex-sandbox-network/update",
+    params: { enabled: null, projectId: "project", scope: "project" },
+  });
+  assert.equal((inherited.result as { codexSandboxNetwork: { effectiveEnabled: boolean } }).codexSandboxNetwork.effectiveEnabled, true);
+  assert.deepEqual(networkWrites, [
+    { enabled: true, scope: "global" },
+    { enabled: false, projectId: "project", scope: "project" },
+    { enabled: null, projectId: "project", scope: "project" },
+  ]);
 });
 
 test("profile target dispatch preserves exact slot and settings contracts", async () => {

@@ -118,6 +118,7 @@ function createWorkbenchCoreFeature(
   reloadDirt: WorkbenchReloadDirtController,
   turnRecovery: WorkbenchTurnRecoveryController,
   database: OrchestratorDatabaseRegistration,
+  codexSandboxNetwork: OrchestratorRuntimeObjects["codexSandboxNetwork"],
   transcript: Pick<OrchestratorTranscriptRegistration, "read">,
   transcriptShadowLog: OrchestratorTranscriptShadowLog,
 ) {
@@ -158,6 +159,7 @@ function createWorkbenchCoreFeature(
   });
   const daemonRequests = new WorkbenchDaemonRequestController({
     agents: new WorkbenchAgentSkillCatalogController((projectId) => projectCatalog.resolveProjectById(projectId)),
+    codexSandboxNetwork,
     files: new WorkbenchProjectFileController(projectCatalog, projectSnapshot),
     gitArc,
     nativeFiles: new WorkbenchNativeFileController(projectCatalog),
@@ -310,13 +312,14 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     get("reloadDirt"),
     get("turnRecovery"),
     get("database"),
+    get("codexSandboxNetwork"),
     get("transcript"),
     get("transcriptShadowLog"),
   ),
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: ["database", "reloadDirt", "transcriptShadowLog", "turnRecovery", "transcript"],
+  requires: ["codexSandboxNetwork", "database", "reloadDirt", "transcriptShadowLog", "turnRecovery", "transcript"],
   safeAll: true,
   scope: "server:core",
   sources: [

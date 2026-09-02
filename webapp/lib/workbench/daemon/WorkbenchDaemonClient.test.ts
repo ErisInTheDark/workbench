@@ -36,6 +36,38 @@ test("transport failures never fall back to app HTTP", async () => {
   }
 });
 
+test("Codex sandbox network responses require the complete server-owned settings snapshot", async () => {
+  const snapshot = {
+    codexSandboxNetwork: {
+      effectiveEnabled: false,
+      globalEnabled: true,
+      projectId: "project",
+      projectOverride: false,
+    },
+  };
+  const valid = new WorkbenchDaemonClient({
+    request: async <TResponse>() => snapshot as TResponse,
+  });
+  assert.deepEqual(
+    await valid.request("codex-sandbox-network/read", { projectId: "project" }),
+    snapshot,
+  );
+
+  const malformed = new WorkbenchDaemonClient({
+    request: async <TResponse>() => ({
+      codexSandboxNetwork: {
+        effectiveEnabled: true,
+        globalEnabled: false,
+        projectId: "project",
+      },
+    }) as TResponse,
+  });
+  await assert.rejects(
+    malformed.request("codex-sandbox-network/read", { projectId: "project" }),
+    /response was invalid/u,
+  );
+});
+
 test("Git arc requests return exact domain results and preserve structured failures", async () => {
   const comparison = {
     changes: [],

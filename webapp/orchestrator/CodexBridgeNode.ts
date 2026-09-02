@@ -9,6 +9,7 @@ import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
+import { applyServerCodexSandboxPolicy } from "./codex-sandbox-policy";
 
 function record(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -71,8 +72,10 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   create: (context, build) => {
     const parent = build.get("codexAppServer");
     const codexMcpGeneration = build.get("codexMcpGeneration");
+    const codexSandboxNetwork = build.get("codexSandboxNetwork");
     const codexInstructions = build.get("codexInstructions");
     const harnesses = build.get("harnesses");
+    const projectCatalog = build.get("projectCatalog");
     const transcript = build.get("transcript");
     const threadState = build.get("threadState");
     const turnRecovery = build.get("turnRecovery");
@@ -84,6 +87,10 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       const threadId = typeof record(request.params)?.threadId === "string" ? String(record(request.params)!.threadId).trim() : "";
       if (!threadId) throw new Error("Codex turn/start requires a thread id before MCP freshness can be checked.");
       const state = await threadState.getCodexMcpState(threadId, requestProvider);
+      const [project, networkAccess] = await Promise.all([
+        projectCatalog.resolveProjectById(state.projectId),
+        codexSandboxNetwork.resolve(state.projectId),
+      ]);
       const generation = await codexMcpGeneration.prepare(state.generation, async () => {
         const response = await requestProvider({
           id: `workbench:mcp-refresh:${codexMcpGeneration.generation}`,
@@ -93,6 +100,11 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         if (response.error) throw new Error(response.error.message);
       });
       await threadState.setManagedCodexMcpGeneration(state.projectId, threadId, generation);
+      applyServerCodexSandboxPolicy(
+        request,
+        project.roots.map((root) => root.rootPath),
+        networkAccess,
+      );
     };
     bridge = new CodexStdioBridge({
       ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
@@ -164,11 +176,12 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge"],
-  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "harnesses", "threadState", "transcript", "transcriptShadowLog", "turnRecovery"],
+  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "harnesses", "projectCatalog", "threadState", "transcript", "transcriptShadowLog", "turnRecovery"],
   safeAll: true,
   scope: "server:codex",
   sources: [
     "webapp/orchestrator/CodexBridgeNode.ts",
+    "webapp/orchestrator/codex-sandbox-policy.ts",
     "webapp/orchestrator/CodexStdioBridge.ts",
     "webapp/orchestrator/CodexThreadWindowLoader.ts",
     "webapp/lib/workbench/thread/workbench-thread-page.ts",

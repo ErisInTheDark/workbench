@@ -119,6 +119,7 @@ import ReloadNecessary from "./workbench/ReloadNecessary";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
 import WorkbenchAppPortSetting from "./workbench/WorkbenchAppPortSetting";
+import CodexSandboxNetworkSetting from "./workbench/CodexSandboxNetworkSetting";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
@@ -3289,10 +3290,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             <>
                               {SETTINGS_ORDER.map((key) => renderGlobalSettingRow(key))}
                               <WorkbenchAppPortSetting />
+                              <CodexSandboxNetworkSetting key={`global:${activeProjectId}`} projectId={activeProjectId} scope="global" />
                               {renderLocalCapabilitySettings()}
                             </>
                           )
-                          : SETTINGS_ORDER.map((key) => renderProjectSettingRow(key))}
+                          : (
+                            <>
+                              {SETTINGS_ORDER.map((key) => renderProjectSettingRow(key))}
+                              <CodexSandboxNetworkSetting key={`project:${activeProjectId}`} projectId={activeProjectId} scope="project" />
+                            </>
+                          )}
                       </div>
                     </section>
                   </div>

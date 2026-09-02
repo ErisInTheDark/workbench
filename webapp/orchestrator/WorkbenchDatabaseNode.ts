@@ -1,5 +1,5 @@
 /*
- * default WorkbenchDatabaseNode: own mandatory SQLite readiness, transcript domain registration, reload replacement, and closure. Keywords: database, transcript, graph, lifecycle.
+ * default WorkbenchDatabaseNode: own mandatory SQLite readiness, transcript and Codex sandbox network registrations, reload replacement, and closure. Keywords: database, transcript, Codex, network, graph, lifecycle.
  */
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -11,6 +11,8 @@ import type {
   OrchestratorRuntimeObjects,
   OrchestratorTranscriptRegistration,
 } from "./orchestrator-runtime-objects";
+import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandboxNetworkController";
+import type { WorkbenchCodexSandboxNetworkDatabase } from "./WorkbenchCodexSandboxNetworkController";
 import ReloadableNode from "./ReloadableNode";
 import CodexBridgeNode from "./CodexBridgeNode";
 import WorkbenchCoreNode from "./WorkbenchCoreNode";
@@ -20,7 +22,11 @@ import { logError } from "./process-helpers";
 
 type DatabaseControllerConstructor = new (
   options: { databasePath: string },
-) => OrchestratorDatabaseRegistration;
+) => OrchestratorDatabaseRegistration & WorkbenchCodexSandboxNetworkDatabase;
+
+type CodexSandboxNetworkControllerConstructor = new (
+  database: WorkbenchCodexSandboxNetworkDatabase,
+) => WorkbenchCodexSandboxNetworkController;
 
 type CaptureGapController = import("./database/transcript/WorkbenchTranscriptCaptureGapController").default;
 
@@ -54,7 +60,12 @@ function loadDatabaseControllers() {
   const CaptureGapController = (
     require("./database/transcript/WorkbenchTranscriptCaptureGapController") as { default: CaptureGapControllerConstructor }
   ).default;
-  return { CaptureGapController, DatabaseController, TranscriptController };
+  const CodexSandboxNetworkController = (
+    require("./WorkbenchCodexSandboxNetworkController") as {
+      default: CodexSandboxNetworkControllerConstructor;
+    }
+  ).default;
+  return { CaptureGapController, CodexSandboxNetworkController, DatabaseController, TranscriptController };
 }
 
 export default new ReloadableNode<
@@ -63,10 +74,18 @@ export default new ReloadableNode<
   OrchestratorProviderNotification
 >({
   access: "agent",
-  boundarySources: "webapp/orchestrator/database/**",
+  boundarySources: [
+    "webapp/lib/workbench/database/schema/**",
+    "webapp/orchestrator/database/**",
+  ].join("\n"),
   children: [WorkbenchCoreNode, CodexBridgeNode, WorkbenchWebSocketNode],
   create: (context) => {
-    const { CaptureGapController, DatabaseController, TranscriptController } = loadDatabaseControllers();
+    const {
+      CaptureGapController,
+      CodexSandboxNetworkController,
+      DatabaseController,
+      TranscriptController,
+    } = loadDatabaseControllers();
     const databasePath = join(context.legacyMigrationProjectRoot, ".workbench", "workbench.sqlite3");
     const captureGapMarkerPath = join(
       context.legacyMigrationProjectRoot,
@@ -76,6 +95,7 @@ export default new ReloadableNode<
     const resetRequestPath = join(context.legacyMigrationProjectRoot, ".workbench", "reset-workbench-sqlite");
     const shadowLogPath = join(context.legacyMigrationProjectRoot, ".workbench", "logs", "workbench-transcript-shadow.jsonl");
     const database = new DatabaseController({ databasePath });
+    const codexSandboxNetwork = new CodexSandboxNetworkController(database);
     const captureGaps = new CaptureGapController({ markerPath: captureGapMarkerPath });
     const transcript = new TranscriptController(database, captureGaps);
     const transcriptShadowLog = new WorkbenchTranscriptShadowLog(shadowLogPath, (error) => {
@@ -91,7 +111,7 @@ export default new ReloadableNode<
       return shutdownPromise;
     };
     return {
-      registrations: { database, transcript, transcriptShadowLog },
+      registrations: { codexSandboxNetwork, database, transcript, transcriptShadowLog },
       start: async () => {
         await mkdir(dirname(databasePath), { recursive: true });
         const resetRequest = await readSqliteResetRequest(resetRequestPath);
@@ -119,9 +139,12 @@ export default new ReloadableNode<
   },
   description: "Reload the mandatory SQLite worker and every direct database dependant.",
   lifecycle: "handoff",
-  provides: ["database", "transcript", "transcriptShadowLog"],
+  provides: ["codexSandboxNetwork", "database", "transcript", "transcriptShadowLog"],
   requires: [],
   safeAll: true,
   scope: "server:database",
-  sources: "webapp/orchestrator/WorkbenchDatabaseNode.ts",
+  sources: [
+    "webapp/orchestrator/WorkbenchDatabaseNode.ts",
+    "webapp/orchestrator/WorkbenchCodexSandboxNetworkController.ts",
+  ].join("\n"),
 });

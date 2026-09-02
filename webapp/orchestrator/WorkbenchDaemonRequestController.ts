@@ -5,6 +5,7 @@
  */
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCatalogController";
+import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandboxNetworkController";
 import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import type WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import type WorkbenchNativeFileController from "./WorkbenchNativeFileController";
@@ -40,6 +41,7 @@ export interface WorkbenchBrowseSessionPort {
 const METHODS = new Set([
   "agents/list", "agents/read",
   "browse/sessions/forget", "browse/sessions/read", "browse/sessions/stop",
+  "codex-sandbox-network/read", "codex-sandbox-network/update",
   ...Object.keys(WORKBENCH_GIT_ARC_ACTION_BY_METHOD),
   "local-capabilities/read", "local-capabilities/update",
   "native/file/link-roots", "native/file/open", "native/file/reveal",
@@ -117,12 +119,13 @@ export default class WorkbenchDaemonRequestController {
 
   constructor(private readonly owners: {
     agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readSkills">;
+    codexSandboxNetwork: Pick<WorkbenchCodexSandboxNetworkController, "read" | "setGlobal" | "setProjectOverride">;
     files: Pick<WorkbenchProjectFileController, "read" | "write">;
     gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;
     nativeFiles: Pick<WorkbenchNativeFileController, "linkRoots" | "open" | "reveal">;
     profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
     profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
-    projects: Pick<WorkbenchProjectCatalogController, "readCatalog">;
+    projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "resolveProjectById">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
   }) {}
 
@@ -138,6 +141,33 @@ export default class WorkbenchDaemonRequestController {
       }
       let result: object;
       switch (request.method) {
+        case "codex-sandbox-network/read": {
+          const projectId = requiredString(params, "projectId");
+          await this.owners.projects.resolveProjectById(projectId);
+          result = { codexSandboxNetwork: await this.owners.codexSandboxNetwork.read(projectId) };
+          break;
+        }
+        case "codex-sandbox-network/update": {
+          const projectId = requiredString(params, "projectId");
+          await this.owners.projects.resolveProjectById(projectId);
+          if (params.scope === "global") {
+            if (typeof params.enabled !== "boolean") {
+              throw new InvalidParamsError("A global Codex sandbox network update requires a boolean enabled value.");
+            }
+            const enabled = params.enabled as boolean;
+            await this.owners.codexSandboxNetwork.setGlobal(enabled);
+          } else if (params.scope === "project") {
+            if (typeof params.enabled !== "boolean" && params.enabled !== null) {
+              throw new InvalidParamsError("A project Codex sandbox network update requires a boolean or null enabled value.");
+            }
+            const enabled = params.enabled === null ? null : params.enabled as boolean;
+            await this.owners.codexSandboxNetwork.setProjectOverride(projectId, enabled);
+          } else {
+            throw new InvalidParamsError("scope must be global or project.");
+          }
+          result = { codexSandboxNetwork: await this.owners.codexSandboxNetwork.read(projectId) };
+          break;
+        }
         case "project/catalog/read": result = await this.owners.projects.readCatalog(); break;
         case "project/file/read": result = await this.owners.files.read({
           path: requiredString(params, "path"),
