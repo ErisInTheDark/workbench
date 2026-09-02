@@ -9,182 +9,179 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState, use
 import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
 import type {
-  ExplorerSnapshot, FilePayload, OpenFileInEditorRequest, RevealProjectEntryRequest, ThreadPayload, ThreadSummary, TreeNode,
-  WorkbenchBrowseSessionControlResponse,
-  WorkbenchBrowseSessionListResponse,
-  WorkbenchBrowseSessionSummary,
-  WorkbenchAppRuntimeStore,
-  WorkbenchComposerInputDraft,
-  WorkbenchComposerSettings,
-  WorkbenchControls,
-  WorkbenchFileOpenTarget,
-  WorkbenchHarness,
-  WorkbenchListModelsOptions,
-  WorkbenchLocalCapabilitySettings,
-  WorkbenchLocalCapabilitySettingsResponse,
-  WorkbenchPendingUserInputRequest,
-  WorkbenchProjectOption,
-  WorkbenchQuestionnaireDraft,
-  WorkbenchReadThreadOptions,
-  WorkbenchSendThreadMessageOptions,
-  WorkbenchSubmitUserInputRequestOptions,
-  WorkbenchThreadDocumentSnapshot,
-  WorkbenchThreadSidebarStore,
-  WorkbenchUserInputResponse
+    ExplorerSnapshot,
+    OpenFileInEditorRequest, RevealProjectEntryRequest, ThreadPayload, ThreadSummary, TreeNode,
+    WorkbenchAppRuntimeStore,
+    WorkbenchBrowseSessionSummary,
+    WorkbenchComposerInputDraft,
+    WorkbenchComposerSettings,
+    WorkbenchControls,
+    WorkbenchFileOpenTarget,
+    WorkbenchHarness,
+    WorkbenchListModelsOptions,
+    WorkbenchLocalCapabilitySettings,
+    WorkbenchPendingUserInputRequest,
+    WorkbenchProjectOption,
+    WorkbenchQuestionnaireDraft,
+    WorkbenchReadThreadOptions,
+    WorkbenchSendThreadMessageOptions,
+    WorkbenchSubmitUserInputRequestOptions,
+    WorkbenchThreadDocumentSnapshot,
+    WorkbenchThreadSidebarStore,
+    WorkbenchUserInputResponse
 } from "../lib/types";
 import { installBrowserRandomUuidPolyfill } from "../lib/workbench/browser-random-uuid-polyfill";
 import { areDeeplyEqual } from "../lib/workbench/deep-equality";
 import { writeTextToClipboard } from "../lib/workbench/dom/clipboard";
-import WorkbenchDragController from "../lib/workbench/layout/WorkbenchDragController";
 import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../lib/workbench/layout/workbench-drag";
 import WorkbenchMainLayout, {
-  type WorkbenchDropPlacement,
-  type WorkbenchMainLayout as WorkbenchMainLayoutState,
-  type WorkbenchPanelTarget,
+    type WorkbenchDropPlacement,
+    type WorkbenchMainLayout as WorkbenchMainLayoutState,
+    type WorkbenchPanelTarget,
 } from "../lib/workbench/layout/workbench-layout";
 import {
-  applyWorkbenchMosaicDrop,
-  applyWorkbenchMosaicResize,
-  closeWorkbenchMosaicTarget,
-  createWorkbenchMainLayoutFromMosaic,
-  moveWorkbenchMosaicTarget,
-  replaceWorkbenchMosaicTarget,
-  updateWorkbenchMosaicPanelOptions,
+    applyWorkbenchMosaicDrop,
+    applyWorkbenchMosaicResize,
+    closeWorkbenchMosaicTarget,
+    createWorkbenchMainLayoutFromMosaic,
+    moveWorkbenchMosaicTarget,
+    replaceWorkbenchMosaicTarget,
+    updateWorkbenchMosaicPanelOptions,
 } from "../lib/workbench/layout/workbench-mosaic-layout";
+import WorkbenchDragController from "../lib/workbench/layout/WorkbenchDragController";
 import type { WorkspaceFileLinkRoot } from "../lib/workbench/markdown/markdown-links";
 import { useWorkbenchRoute } from "../lib/workbench/navigation/use-workbench-route";
 import {
-  createWorkbenchMosaicSplit,
-  createWorkbenchMosaicTarget,
-  type WorkbenchMosaicNode,
-  type WorkbenchMosaicPanelTarget,
+    createWorkbenchMosaicSplit,
+    createWorkbenchMosaicTarget,
+    type WorkbenchMosaicNode,
+    type WorkbenchMosaicPanelTarget,
 } from "../lib/workbench/navigation/workbench-mosaic-route";
 import {
-  createFileRoute,
-  createHomeHref,
-  createHomeRoute,
-  createHomeThreadHref,
-  createHomeThreadRoute,
-  createMosaicRoute,
-  createPinnedThreadHref,
-  createPinnedThreadRoute,
-  createProjectRoute,
-  createSettingsHref,
-  createSettingsRoute,
-  createThreadHref,
-  createThreadRoute,
-  getWorkbenchMosaicThreadRootIds,
-  getWorkbenchThreadTargetRootId,
-  getWorkbenchThreadTargetSelectedId,
-  isWorkbenchRouteOwnerOfThread,
-  isWorkbenchThreadTargetSelected,
-  type WorkbenchRoute,
-  type WorkbenchSettingsScope
+    createFileRoute,
+    createHomeHref,
+    createHomeRoute,
+    createHomeThreadHref,
+    createHomeThreadRoute,
+    createMosaicRoute,
+    createPinnedThreadHref,
+    createPinnedThreadRoute,
+    createProjectRoute,
+    createSettingsHref,
+    createSettingsRoute,
+    createThreadHref,
+    createThreadRoute,
+    getWorkbenchMosaicThreadRootIds,
+    getWorkbenchThreadTargetRootId,
+    getWorkbenchThreadTargetSelectedId,
+    isWorkbenchRouteOwnerOfThread,
+    isWorkbenchThreadTargetSelected,
+    type WorkbenchRoute,
+    type WorkbenchSettingsScope
 } from "../lib/workbench/navigation/workbench-route";
 import ProjectTreeFileIndex from "../lib/workbench/project/ProjectTreeFileIndex";
 import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
 import { createComposerProfilePersistence, createComposerProfileTargetPersistence } from "../lib/workbench/state/composer-profile-api";
 import {
-  getPreferredMobilePane,
-  MOBILE_MEDIA_QUERY,
-  type MobilePane,
+    getPreferredMobilePane,
+    MOBILE_MEDIA_QUERY,
+    type MobilePane,
 } from "../lib/workbench/state/mobile-pane-url-state";
 import {
-  createDefaultProjectWorkbenchSettings,
-  MAX_EDITOR_FONT_SIZE,
-  MIN_EDITOR_FONT_SIZE,
-  readGlobalWorkbenchSettings,
-  readProjectWorkbenchSettings,
-  resolveWorkbenchSettings,
-  WORKBENCH_SETTING_DEFINITIONS,
-  writeGlobalWorkbenchSetting,
-  writeProjectWorkbenchSetting,
-  type WorkbenchEditorFontFamily,
-  type WorkbenchGlobalSettings,
-  type WorkbenchSettingKey,
+    createDefaultProjectWorkbenchSettings,
+    MAX_EDITOR_FONT_SIZE,
+    MIN_EDITOR_FONT_SIZE,
+    readGlobalWorkbenchSettings,
+    readProjectWorkbenchSettings,
+    resolveWorkbenchSettings,
+    WORKBENCH_SETTING_DEFINITIONS,
+    writeGlobalWorkbenchSetting,
+    writeProjectWorkbenchSetting,
+    type WorkbenchEditorFontFamily,
+    type WorkbenchGlobalSettings,
+    type WorkbenchSettingKey,
 } from "../lib/workbench/state/workbench-settings";
 import WorkbenchComposerProfileController from "../lib/workbench/state/WorkbenchComposerProfileController";
 import { getThreadDocumentFromSnapshot } from "../lib/workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../lib/workbench/thread/thread-message-submission";
 import { countDraftPromptTokens, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "../lib/workbench/thread/thread-state";
 import type { WorkbenchDomSurfaces } from "../lib/workbench/workbench-dom";
+import CodexSandboxNetworkSetting from "./workbench/CodexSandboxNetworkSetting";
+import DropTargetBoundary from "./workbench/drag/DropTargetBoundary";
+import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchMainLayoutView from "./workbench/layout/WorkbenchMainLayoutView";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
-import DropTarget from "./workbench/drag/DropTarget";
-import DropTargetBoundary from "./workbench/drag/DropTargetBoundary";
-import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
 import PrimaryButton from "./workbench/PrimaryButton";
-import ReloadNecessary from "./workbench/ReloadNecessary";
+import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
-import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
-import WorkbenchAppPortSetting from "./workbench/WorkbenchAppPortSetting";
-import CodexSandboxNetworkSetting from "./workbench/CodexSandboxNetworkSetting";
-import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
+import ReloadNecessary from "./workbench/ReloadNecessary";
+import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
-import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
+import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import {
-  workbenchFloatingToolbarClassName,
-  workbenchFloatingToolbarGroupClassName,
-  workbenchIconButtonClassName,
-  workbenchNewEntryButtonClassName,
-  workbenchRevisionHoverToolbarClassName
+    workbenchFloatingToolbarClassName,
+    workbenchFloatingToolbarGroupClassName,
+    workbenchIconButtonClassName,
+    workbenchNewEntryButtonClassName,
+    workbenchRevisionHoverToolbarClassName
 } from "./workbench/workbench-class-names";
+import {
+    useWorkbenchClientStateController,
+    useWorkbenchClientStateSnapshot,
+} from "./workbench/workbench-client-state-context";
 import { dialogButtonClassName } from "./workbench/workbench-dialog-styles";
 import {
-  WorkbenchDialog,
+    WorkbenchDialog,
 } from "./workbench/workbench-dialogs";
 import {
-  BrowseSessionsList,
-  ExplorerTree,
-  FileVisibilityIcon,
-  NewEntryIcon,
-  SidebarLoadingSkeleton,
+    BrowseSessionsList,
+    ExplorerTree,
+    FileVisibilityIcon,
+    NewEntryIcon,
+    SidebarLoadingSkeleton,
 } from "./workbench/workbench-explorer";
 import {
-  ArchiveIcon,
-  BackArrowIcon,
-  BinIcon,
-  BrowserSessionIcon,
-  CopyIcon,
-  DraftThreadIcon,
-  FileMoveIcon,
-  FolderOpenIcon,
-  GearIcon,
-  HomeIcon,
-  ReloadIcon,
-  SaveIcon,
-  SidebarCollapseIcon,
-  SidebarExpandIcon,
-  SparkleIcon,
-  StopIcon,
-  ZoomInIcon,
-  ZoomOutIcon
+    ArchiveIcon,
+    BackArrowIcon,
+    BinIcon,
+    BrowserSessionIcon,
+    CopyIcon,
+    DraftThreadIcon,
+    FileMoveIcon,
+    FolderOpenIcon,
+    GearIcon,
+    HomeIcon,
+    ReloadIcon,
+    SaveIcon,
+    SidebarCollapseIcon,
+    SidebarExpandIcon,
+    SparkleIcon,
+    StopIcon,
+    ZoomInIcon,
+    ZoomOutIcon
 } from "./workbench/workbench-icons";
+import WorkbenchAllProjectsThreadSidebar from "./workbench/WorkbenchAllProjectsThreadSidebar";
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
+import WorkbenchAppPortSetting from "./workbench/WorkbenchAppPortSetting";
 import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
-import WorkbenchDaemonClientContext from "./workbench/WorkbenchDaemonClientContext";
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
+import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
+import WorkbenchDaemonClientContext from "./workbench/WorkbenchDaemonClientContext";
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
+import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
+import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
-import {
-  useWorkbenchClientStateController,
-  useWorkbenchClientStateSnapshot,
-} from "./workbench/workbench-client-state-context";
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchStepSlider from "./workbench/WorkbenchStepSlider";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
-import WorkbenchAllProjectsThreadSidebar from "./workbench/WorkbenchAllProjectsThreadSidebar";
-import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
-import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
 import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
 import WorkbenchThreadSidebarActionsProvider from "./workbench/WorkbenchThreadSidebarActions";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
-import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./workbench/project-sidebar-groups";
 
 installBrowserRandomUuidPolyfill();
 
@@ -2655,16 +2652,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     <section className="space-y-3 rounded-[0.85rem] py-1">
       <div className="min-w-0">
         <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">Local command capabilities</h3>
-        <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-muted">
-          Dangerous local server capabilities. These settings are stored server-side so API routes can enforce them.
-        </p>
       </div>
+      <CodexSandboxNetworkSetting key={`global:${activeProjectId}`} projectId={activeProjectId} scope="global" />
       <WorkbenchOptionCard
-        description="Allow Workbench agents to send raw browse CLI args through /api/browse. Typed Browse API actions stay available. Default off."
+        description="Allow raw Browse CLI usage outside the sandbox."
         disabled={isLocalCapabilitySettingsLoading}
         isChecked={localCapabilitySettings.browseRawCommandsEnabled}
         isSingleChoice={false}
-        label="Enable raw browse commands"
+        label="Raw Browse commands"
         onClick={() => {
           updateBrowseRawCommandsEnabled(!localCapabilitySettings.browseRawCommandsEnabled);
         }}
@@ -3290,7 +3285,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             <>
                               {SETTINGS_ORDER.map((key) => renderGlobalSettingRow(key))}
                               <WorkbenchAppPortSetting />
-                              <CodexSandboxNetworkSetting key={`global:${activeProjectId}`} projectId={activeProjectId} scope="global" />
                               {renderLocalCapabilitySettings()}
                             </>
                           )

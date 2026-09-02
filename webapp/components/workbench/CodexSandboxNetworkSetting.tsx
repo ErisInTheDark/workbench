@@ -18,7 +18,7 @@ const DEFAULT_SETTINGS: WorkbenchCodexSandboxNetworkSettings = {
   projectOverride: null,
 };
 
-export default function CodexSandboxNetworkSetting({
+export default function CodexSandboxNetworkSetting ({
   projectId,
   scope,
 }: {
@@ -79,12 +79,12 @@ export default function CodexSandboxNetworkSetting({
   const enabled = scope === "global" ? settings.globalEnabled : settings.effectiveEnabled;
   const hasProjectOverride = scope === "project" && settings.projectOverride !== null;
   return (
-    <section className="relative space-y-3 rounded-[0.85rem] py-1">
+    <div className="relative rounded-[0.85rem] py-1">
       <WorkbenchOptionCard
         className={hasProjectOverride ? "pr-12" : undefined}
         description={scope === "global"
-          ? "Allow outbound requests from Codex workspace sandboxes. Projects inherit this value unless overridden. Default off."
-          : "Allow outbound requests from this project's Codex workspace sandboxes. Inherits the global value until overridden."}
+          ? "Allow agents outbound network access."
+          : "Allow agents outbound network access in this project."}
         disabled={isLoading}
         isChecked={enabled}
         isSingleChoice={false}
@@ -107,12 +107,9 @@ export default function CodexSandboxNetworkSetting({
           <ReloadIcon />
         </button>
       ) : null}
-      <p className="m-0 text-[0.78rem] leading-5 text-muted">
-        Enabling this permits processes in the sandbox to send files they can read over the network.
-      </p>
       {error ? (
         <p className="m-0 text-[0.78rem] leading-5 text-danger">{error}</p>
       ) : null}
-    </section>
+    </div>
   );
 }
