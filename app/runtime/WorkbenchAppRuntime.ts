@@ -202,6 +202,7 @@ export default class WorkbenchAppRuntime {
   async handleRequest(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url ?? "/", "http://workbench.local");
     if (url.pathname === RUNTIME_PATH && request.method === "GET") {
+      const responseVersion = url.searchParams.get("version");
       const reloadDirt = this.host.get("reloadDirt").getSnapshot();
       const requestedReactDevelopmentMode = this.host.get("state")
         .readGlobalPreference("reactDevelopmentMode") === true;
@@ -222,9 +223,12 @@ export default class WorkbenchAppRuntime {
           }
         : reloadDirt;
       sendJson(response, 200, {
+        ...(responseVersion === "3"
+          ? { frontendGeneration: this.host.get("compiler").getFrontendGeneration() }
+          : {}),
         reloadDirt: projectReloadDirt(
           projectedDirt,
-          url.searchParams.get("version") === "2",
+          responseVersion === "2" || responseVersion === "3",
         ),
       });
       return;

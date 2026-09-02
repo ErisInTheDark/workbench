@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect non-fatal bootstrap failure and app-owned reload requests.
+ * No production exports. Tests protect non-fatal bootstrap failure, frontend freshness, and app-owned reload requests.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -53,11 +53,59 @@ test("requests dependant metadata and defaults it for an older app response", as
         },
       }));
     }) as typeof fetch,
+    loadedFrontendGeneration: {
+      javascript: "javascript-loaded",
+      stylesheet: "stylesheet-loaded",
+    },
     schedule: () => 1,
     visibility: { hidden: () => false, subscribe: () => () => {} },
   });
   const snapshot = await client.bootstrap();
-  assert.equal(requested, "/api/workbench-app-runtime?version=2");
+  assert.equal(requested, "/api/workbench-app-runtime?version=3");
   assert.deepEqual(snapshot.dirtyScopes[0]?.dependantScopes, []);
+  assert.equal(snapshot.tabOutOfDate, false);
   client.dispose();
+});
+
+test("derives tab freshness from both loaded frontend generations", async () => {
+  const loadedFrontendGeneration = {
+    javascript: "javascript-loaded",
+    stylesheet: "stylesheet-loaded",
+  };
+  const cases = [
+    {
+      current: loadedFrontendGeneration,
+      expected: false,
+      name: "matching output",
+    },
+    {
+      current: { ...loadedFrontendGeneration, javascript: "javascript-new" },
+      expected: true,
+      name: "new JavaScript",
+    },
+    {
+      current: { ...loadedFrontendGeneration, stylesheet: "stylesheet-new" },
+      expected: true,
+      name: "new stylesheet",
+    },
+  ];
+
+  for (const fixture of cases) {
+    const client = new WorkbenchAppRuntimeClient({
+      fetcher: (() => Promise.resolve(Response.json({
+        frontendGeneration: fixture.current,
+        reloadDirt: {
+          dirtyScopes: [],
+          error: null,
+          pendingScopes: [],
+        },
+      }))) as typeof fetch,
+      loadedFrontendGeneration,
+      schedule: () => 1,
+      visibility: { hidden: () => false, subscribe: () => () => {} },
+    });
+    const snapshot = await client.bootstrap();
+    assert.equal(snapshot.tabOutOfDate, fixture.expected, fixture.name);
+    client.dispose();
+  }
 });

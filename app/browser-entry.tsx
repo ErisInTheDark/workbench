@@ -2,6 +2,9 @@
  * No exports. Browser entry installs diagnostics before loading and rendering the standalone Workbench browser shell.
  */
 import WorkbenchBrowserLogForwarder from "./WorkbenchBrowserLogForwarder.ts";
+import frontendJavaScriptGeneration, {
+  WORKBENCH_STYLESHEET_GENERATION_PROPERTY,
+} from "./frontend-generation.ts";
 
 const logForwarder = new WorkbenchBrowserLogForwarder();
 logForwarder.install();
@@ -31,7 +34,17 @@ async function start() {
   installBrowserNavigationEvents();
   const rootElement = document.getElementById("root");
   if (!rootElement) throw new Error("Workbench app root is unavailable.");
-  const runtime = new WorkbenchAppRuntimeClient();
+  const stylesheetGeneration = getComputedStyle(document.documentElement)
+    .getPropertyValue(WORKBENCH_STYLESHEET_GENERATION_PROPERTY)
+    .trim();
+  const runtime = new WorkbenchAppRuntimeClient({
+    loadedFrontendGeneration: frontendJavaScriptGeneration === "unbundled" || !stylesheetGeneration
+      ? null
+      : {
+          javascript: frontendJavaScriptGeneration,
+          stylesheet: stylesheetGeneration,
+        },
+  });
   let controller: InstanceType<typeof WorkbenchClientStateController> | null = null;
   try {
     const portSnapshot = await readWorkbenchAppPort();

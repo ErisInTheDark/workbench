@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ReloadNecessary: render pushed reload dirt as a collapsible, user-confirmed sidebar action surface. Keywords: reload, dirt, sidebar, hold.
+ * - default ReloadNecessary: render separate tab-refresh and runtime-reload footer actions. Keywords: reload, dirt, stale tab, sidebar, hold.
  */
 "use client";
 
@@ -43,11 +43,13 @@ export default function ReloadNecessary ({
     () => null,
   );
   const dirt = mergeReloadDirt(appDirt, orchestratorDirt);
+  const tabOutOfDate = appDirt?.tabOutOfDate ?? false;
+  const hasReloadDirt = Boolean(dirt && (dirt.dirtyScopes.length || dirt.error));
 
-  if (!dirt || (!dirt.dirtyScopes.length && !dirt.error)) return null;
+  if (!tabOutOfDate && !hasReloadDirt) return null;
 
-  const pending = new Set(dirt.pendingScopes);
-  const reloadableScopes = dirt.dirtyScopes;
+  const pending = new Set(dirt?.pendingScopes ?? []);
+  const reloadableScopes = dirt?.dirtyScopes ?? [];
   const reload = async (scopes: readonly WorkbenchReloadDirtScope[]) => {
     const selected = scopes.map(({ scope }) => scope);
     setRequestError("");
@@ -68,15 +70,31 @@ export default function ReloadNecessary ({
       setRequesting([]);
     }
   };
-  const allBusy = Boolean(dirt.pendingScopes.length || requesting.length);
+  const allBusy = Boolean(dirt?.pendingScopes.length || requesting.length);
   const affectedScopes = getAffectedReloadScopes(hoveredScope, reloadableScopes);
 
   return (
-    <section
-      className="sticky bottom-0 z-20 mt-auto ml-3"
-      data-reload-necessary="true"
-    >
-      <div className="rounded-[1.15rem] border border-[color-mix(in_srgb,var(--text)_20%,transparent)] bg-[color:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] p-2.5 backdrop-blur-md">
+    <section className="sticky bottom-0 z-20 mt-auto ml-3 space-y-2">
+      {tabOutOfDate ? (
+        <div
+          className="flex items-center justify-between gap-2 rounded-[1.15rem] bg-[color:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] p-2.5 pl-3.5 backdrop-blur-md"
+          data-tab-out-of-date="true"
+        >
+          <p className="m-0 min-w-0 text-[0.8rem] font-semibold text-text">
+            This tab is out of date
+          </p>
+          <PrimaryButton
+            className="!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px]"
+            onClick={() => window.location.reload()}
+          >
+            Refresh
+          </PrimaryButton>
+        </div>
+      ) : null}
+      {hasReloadDirt ? <div
+        className="rounded-[1.15rem] border border-[color-mix(in_srgb,var(--text)_20%,transparent)] bg-[color:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] p-2.5 backdrop-blur-md"
+        data-reload-necessary="true"
+      >
         <div
           className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 ${collapsed ? "" : "border-b border-[color-mix(in_srgb,var(--text)_12%,transparent)] pb-2"
             }`}
@@ -109,7 +127,7 @@ export default function ReloadNecessary ({
         </div>
         {!collapsed ? (
           <div className="mt-2 space-y-1.5">
-            {dirt.dirtyScopes.map((scope) => {
+            {reloadableScopes.map((scope) => {
               const busy = pending.has(scope.scope) || requesting.includes(scope.scope);
               const restartRequired = scope.scope === "client:process";
               return (
@@ -134,12 +152,12 @@ export default function ReloadNecessary ({
                 </div>
               );
             })}
-            {requestError || dirt.error ? (
-              <p className="m-0 text-[0.74rem] leading-4 text-danger">{requestError || dirt.error}</p>
+            {requestError || dirt?.error ? (
+              <p className="m-0 text-[0.74rem] leading-4 text-danger">{requestError || dirt?.error}</p>
             ) : null}
           </div>
         ) : null}
-      </div>
+      </div> : null}
     </section>
   );
 }

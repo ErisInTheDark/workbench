@@ -1,12 +1,16 @@
 /*
  * Exports:
  * - WorkbenchAppRuntimeClientOptions: HTTP, polling, and visibility seams. Keywords: app, reload, browser, test.
- * - default WorkbenchAppRuntimeClient: own app reload-dirt observation and reload requests. Keywords: app, reload, lifecycle.
+ * - default WorkbenchAppRuntimeClient: own app reload dirt, tab freshness, and reload requests. Keywords: app, reload, frontend generation, lifecycle.
  */
 import { z } from "zod";
 
-import type { WorkbenchReloadDirtSnapshot, WorkbenchReloadResponse, WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
+import type { WorkbenchReloadResponse, WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
 
+import type {
+  WorkbenchAppRuntimeSnapshot,
+  WorkbenchFrontendGeneration,
+} from "../../types";
 import { OrchestratorReloadResponseSchema } from "../orchestrator-reload";
 import reportClientSchemaError from "../report-client-schema-error";
 
@@ -20,12 +24,25 @@ const ReloadDirtSchema = z.object({
   error: z.string().max(500).nullable(),
   pendingScopes: z.array(z.string().regex(/^client:[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u)),
 }).strict();
-const RuntimeResponseSchema = z.object({ reloadDirt: ReloadDirtSchema }).strict();
-const EMPTY: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
+const FrontendGenerationSchema = z.object({
+  javascript: z.string().min(1).max(200),
+  stylesheet: z.string().min(1).max(200),
+}).strict();
+const RuntimeResponseSchema = z.object({
+  frontendGeneration: FrontendGenerationSchema.nullable().optional().default(null),
+  reloadDirt: ReloadDirtSchema,
+}).strict();
+const EMPTY: WorkbenchAppRuntimeSnapshot = {
+  dirtyScopes: [],
+  error: null,
+  pendingScopes: [],
+  tabOutOfDate: false,
+};
 
 export interface WorkbenchAppRuntimeClientOptions {
   cancelSchedule?: (id: number) => void;
   fetcher?: typeof fetch;
+  loadedFrontendGeneration?: WorkbenchFrontendGeneration | null;
   pollDelayMs?: number;
   schedule?: (callback: () => void, delayMs: number) => number;
   visibility?: {
@@ -50,17 +67,19 @@ export default class WorkbenchAppRuntimeClient {
   #disposed = false;
   readonly #fetcher: typeof fetch;
   readonly #listeners = new Set<() => void>();
+  readonly #loadedFrontendGeneration: WorkbenchFrontendGeneration | null;
   #polling = false;
   readonly #pollDelayMs: number;
   readonly #schedule: (callback: () => void, delayMs: number) => number;
   #scheduled: number | null = null;
-  #snapshot: WorkbenchReloadDirtSnapshot = EMPTY;
+  #snapshot: WorkbenchAppRuntimeSnapshot = EMPTY;
   #unsubscribe: (() => void) | null = null;
   readonly #visibility: NonNullable<WorkbenchAppRuntimeClientOptions["visibility"]>;
 
   constructor(options: WorkbenchAppRuntimeClientOptions = {}) {
     const fetcher = options.fetcher ?? globalThis.fetch;
     this.#fetcher = (input, init) => fetcher.call(globalThis, input, init);
+    this.#loadedFrontendGeneration = options.loadedFrontendGeneration ?? null;
     this.#pollDelayMs = options.pollDelayMs ?? 2_000;
     this.#schedule = options.schedule ?? ((callback, delay) => globalThis.setTimeout(callback, delay) as unknown as number);
     this.#cancelSchedule = options.cancelSchedule ?? ((id) => globalThis.clearTimeout(id));
@@ -132,7 +151,7 @@ export default class WorkbenchAppRuntimeClient {
 
   async #refresh() {
     try {
-      const response = await this.#fetcher("/api/workbench-app-runtime?version=2");
+      const response = await this.#fetcher("/api/workbench-app-runtime?version=3");
       if (!response.ok) throw new Error((await response.text()).slice(0, 1_000) || `App runtime request failed with ${response.status}.`);
       const parsed = RuntimeResponseSchema.safeParse(await response.json());
       if (!parsed.success) {
@@ -143,6 +162,7 @@ export default class WorkbenchAppRuntimeClient {
         dirtyScopes: parsed.data.reloadDirt.dirtyScopes,
         error: parsed.data.reloadDirt.error ?? null,
         pendingScopes: parsed.data.reloadDirt.pendingScopes,
+        tabOutOfDate: this.#isTabOutOfDate(parsed.data.frontendGeneration),
       });
     } catch (error) {
       this.#publish({
@@ -166,7 +186,19 @@ export default class WorkbenchAppRuntimeClient {
     this.#scheduled = null;
   }
 
-  #publish(snapshot: WorkbenchReloadDirtSnapshot) {
+  #isTabOutOfDate(current: WorkbenchFrontendGeneration | null) {
+    const loaded = this.#loadedFrontendGeneration;
+    return Boolean(
+      loaded
+      && current
+      && (
+        loaded.javascript !== current.javascript
+        || loaded.stylesheet !== current.stylesheet
+      ),
+    );
+  }
+
+  #publish(snapshot: WorkbenchAppRuntimeSnapshot) {
     this.#snapshot = snapshot;
     for (const listener of this.#listeners) listener();
   }

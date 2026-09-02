@@ -6,7 +6,8 @@
  * - OrchestratorReloadRequest: orchestrator reload request contract.
  * - OrchestratorReloadResponse: orchestrator reload response contract.
  * - WorkbenchReloadDirtScope/WorkbenchReloadDirtSnapshot: shared app and daemon reload dirt.
- * - WorkbenchAppRuntimeStore: browser-facing app reload observation and command port.
+ * - WorkbenchFrontendGeneration: JavaScript and stylesheet identities for one browser build snapshot.
+ * - WorkbenchAppRuntimeSnapshot/WorkbenchAppRuntimeStore: browser-facing app reload and tab-freshness observation port.
  * - WorkbenchOrchestratorRuntimeStore: browser-facing orchestrator reload observation and command port.
  * - WorkbenchLocalCapabilitySettings: local capability settings contract.
  * - WorkbenchLocalCapabilitySettingsResponse: local capability read response.
@@ -169,6 +170,7 @@ import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFi
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline";
 import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state";
 import type { WorkbenchTranscriptProjection } from "./workbench/transcript/workbench-transcript-projection";
+import type { WorkbenchFrontendGeneration } from "../../app/frontend-generation";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
 export type {
@@ -181,11 +183,17 @@ export type {
 export type WorkbenchReloadDirtScope = SharedWorkbenchReloadDirtScope;
 export type WorkbenchReloadDirtSnapshot = SharedWorkbenchReloadDirtSnapshot;
 
+export interface WorkbenchAppRuntimeSnapshot extends WorkbenchReloadDirtSnapshot {
+  tabOutOfDate: boolean;
+}
+
 export interface WorkbenchAppRuntimeStore {
-  getSnapshot(): WorkbenchReloadDirtSnapshot;
+  getSnapshot(): WorkbenchAppRuntimeSnapshot;
   reloadScopes(scopes: readonly WorkbenchReloadScope[]): Promise<WorkbenchReloadResponse>;
   subscribe(listener: () => void): () => void;
 }
+
+export type { WorkbenchFrontendGeneration };
 
 export interface WorkbenchOrchestratorRuntimeStore {
   getSnapshot(): WorkbenchReloadDirtSnapshot;

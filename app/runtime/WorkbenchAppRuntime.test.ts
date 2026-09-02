@@ -22,6 +22,7 @@ const execFileAsync = promisify(execFile);
 const nonServerSourcePaths = new Set([
   "app/browser-entry.tsx",
   "app/desktop.ts",
+  "app/frontend-generation.ts",
   "app/WorkbenchBrowserApp.tsx",
   "app/WorkbenchBrowserLogForwarder.ts",
   "app/WorkbenchDesktopLauncher.ts",
@@ -48,6 +49,7 @@ class TestResponse extends EventEmitter {
 function runtime() {
   const compiler = {
     close: async () => {},
+    getFrontendGeneration: () => ({ javascript: "javascript-one", stylesheet: "stylesheet-one" }),
     outputDirectoryPath: "C:/workbench-output",
     startWatching: async () => "C:/workbench-output",
   } as WorkbenchFrontendCompiler;
@@ -173,6 +175,7 @@ test("reloads the database with a fresh repository constructor and no process re
     createCompiler: (readReactDevelopmentMode) => {
       return {
         close: async () => {},
+        getFrontendGeneration: () => ({ javascript: "javascript-one", stylesheet: "stylesheet-one" }),
         outputDirectoryPath,
         startWatching: async () => {
           compilerModes.push(readReactDevelopmentMode());
@@ -282,6 +285,19 @@ test("reloads the database with a fresh repository constructor and no process re
       cleanResponse as unknown as import("node:http").ServerResponse,
     );
     assert.deepEqual(JSON.parse(cleanResponse.body).reloadDirt.dirtyScopes, []);
+
+    const generationRequest = Readable.from([]) as import("node:http").IncomingMessage;
+    generationRequest.method = "GET";
+    generationRequest.url = "/api/workbench-app-runtime?version=3";
+    const generationResponse = new TestResponse();
+    await target.handleRequest(
+      generationRequest,
+      generationResponse as unknown as import("node:http").ServerResponse,
+    );
+    assert.deepEqual(JSON.parse(generationResponse.body).frontendGeneration, {
+      javascript: "javascript-one",
+      stylesheet: "stylesheet-one",
+    });
   } finally {
     if (started) await target.close();
   }

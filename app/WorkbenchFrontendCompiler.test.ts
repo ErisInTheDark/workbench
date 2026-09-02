@@ -74,6 +74,14 @@ test("watches the real browser app into static output without Next runtime impor
   });
 
   const javascript = await readFile(path.join(outputDirectoryPath, "assets", "app.js"), "utf8");
+  const stylesheet = await readFile(path.join(outputDirectoryPath, "assets", "app.css"), "utf8");
+  const frontendGeneration = compiler.getFrontendGeneration();
+  assert.ok(frontendGeneration);
+  assert.match(javascript, new RegExp(frontendGeneration.javascript, "u"));
+  assert.match(
+    stylesheet,
+    new RegExp(`--workbench-frontend-stylesheet-generation:${frontendGeneration.stylesheet}`, "u"),
+  );
   assert.doesNotMatch(javascript, /from\s+["']next\/navigation["']/u);
   assert.doesNotMatch(javascript, /webpack-hmr/u);
   const sourceMap = JSON.parse(
