@@ -97,6 +97,7 @@ export default class WorkbenchAppHttpRouter {
       : null;
     this.stateRoutes = new WorkbenchAppStateRoutes(options.state);
     this.staticRequests = new StaticHttpRequestController({
+      cacheSeconds: 0,
       rootDirectoryPath: options.outputDirectoryPath,
       spaFallbackPath: "index.html",
     });

@@ -67,6 +67,7 @@ function acceptsHtml(request: IncomingMessage) {
 }
 
 function cacheControlFor(filePath: string, cacheSeconds: number) {
+  if (cacheSeconds === 0) return "no-store";
   return path.extname(filePath).toLowerCase() === ".html"
     ? "no-cache"
     : `public, max-age=${cacheSeconds}`;
