@@ -109,6 +109,19 @@ function canonicalWindow(
   };
 }
 
+function providerTurnScope(
+  observations: WorkbenchTranscriptAtomicObservation[],
+  completeTurnIds: string[],
+  threadId = "thread",
+): WorkbenchTranscriptObservation {
+  return {
+    completeTurnIds,
+    kind: "providerTurnScope",
+    observations,
+    threadId,
+  };
+}
+
 test("transcript reset clears transcript roots and preserves unrelated database domains", () => {
   const { database, repository } = createRepository();
   try {
@@ -714,6 +727,323 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
       { deliveryState: "failed", error: "delivery failed" },
       { deliveryState: "interrupted", error: null },
     ]);
+  } finally {
+    database.close();
+  }
+});
+
+test("complete provider scopes prune provisional aliases while preserving Workbench-owned facts and placement", () => {
+  const { database, repository } = createRepository();
+  const failedSteer: WorkbenchSteerHistoryEntry = {
+    attemptedAt: 8,
+    canonicalItemId: null,
+    clientUserMessageId: "failed-client",
+    entryKey: "failed-entry",
+    error: "delivery failed",
+    input: [{ text: "failed steer", text_elements: [], type: "text" }],
+    requestId: "steer-request",
+    resolvedAt: 9,
+    status: "failed",
+    threadId: "thread",
+    turnId: "turn",
+  };
+  const questionnaire = {
+    kind: "questionnaire",
+    entry: {
+      insertAfterItemId: "command",
+      insertAfterItemIndex: 4,
+      itemId: "questionnaire",
+      request: {
+        id: "questionnaire-request",
+        questions: [{
+          allowOther: false,
+          header: "Choice",
+          id: "choice",
+          isSecret: false,
+          options: [],
+          question: "Pick one",
+        }],
+        submitLabel: "Submit",
+        summary: "Choose",
+        title: "Questionnaire",
+      },
+      requestKey: "questionnaire-request",
+      resolvedAt: 7,
+      response: { answers: { choice: { answers: ["one"] } } },
+      threadId: "thread",
+      turnId: "turn",
+    },
+    observedAt: 7,
+  } satisfies WorkbenchTranscriptAtomicObservation;
+  const command = {
+    kind: "item",
+    threadId: "thread",
+    turnId: "turn",
+    lifecycle: "completed",
+    observedAt: 6,
+    item: {
+      aggregatedOutput: "done",
+      command: "echo done",
+      commandActions: [],
+      cwd: "C:/project",
+      durationMs: 1,
+      exitCode: 0,
+      id: "command",
+      pluginId: null,
+      processId: null,
+      scriptPath: null,
+      source: "agent",
+      status: "completed",
+      type: "commandExecution",
+    },
+  } satisfies WorkbenchTranscriptAtomicObservation;
+  const browse = {
+    kind: "browse",
+    asset: {
+      byteLength: 12,
+      digest: "b".repeat(64),
+      mimeType: "image/png",
+      storageKey: `/api/transcript-assets/codex/dGhyZWFk/${"b".repeat(64)}.png`,
+    },
+    entry: {
+      action: "snapshot",
+      actionIndex: 0,
+      assetUrl: `/api/transcript-assets/codex/dGhyZWFk/${"b".repeat(64)}.png`,
+      commandItemId: "command",
+      durationMs: 1,
+      entryKey: "browse",
+      recordedAt: 10,
+      session: "session",
+      state: "completed",
+      threadId: "thread",
+      turnId: "turn",
+    },
+  } satisfies WorkbenchTranscriptAtomicObservation;
+  const user = {
+    kind: "item",
+    threadId: "thread",
+    turnId: "turn",
+    lifecycle: "completed",
+    observedAt: 3,
+    timeline: {
+      completedAt: 3,
+      firstSeenAt: 2,
+      itemId: "user",
+      lastSeenAt: 3,
+      startedAt: 2,
+    },
+    item: {
+      clientId: "initial-client",
+      content: [{ text: "start", text_elements: [], type: "text" }],
+      id: "user",
+      type: "userMessage",
+    },
+  } satisfies WorkbenchTranscriptAtomicObservation;
+  const reasoningA = {
+    kind: "item",
+    threadId: "thread",
+    turnId: "turn",
+    lifecycle: "completed",
+    observedAt: 4,
+    item: { content: [], id: "rs-a", summary: ["alpha"], type: "reasoning" },
+  } satisfies WorkbenchTranscriptAtomicObservation;
+  const reasoningB = {
+    kind: "item",
+    threadId: "thread",
+    turnId: "turn",
+    lifecycle: "completed",
+    observedAt: 5,
+    item: { content: ["beta"], id: "rs-b", summary: [], type: "reasoning" },
+  } satisfies WorkbenchTranscriptAtomicObservation;
+  const answer = {
+    kind: "item",
+    threadId: "thread",
+    turnId: "turn",
+    lifecycle: "completed",
+    observedAt: 12,
+    item: {
+      id: "answer",
+      memoryCitation: null,
+      phase: "final_answer",
+      text: "done",
+      type: "agentMessage",
+    },
+  } satisfies WorkbenchTranscriptAtomicObservation;
+  try {
+    repository.settle([canonicalWindow([
+      threadObservation(),
+      turnObservation("turn", 0),
+      user,
+      {
+        ...user,
+        observedAt: 4,
+        timeline: {
+          completedAt: 4,
+          firstSeenAt: 4,
+          itemId: "item-1",
+          lastSeenAt: 4,
+          startedAt: 4,
+        },
+        item: { ...user.item, id: "item-1" },
+      },
+      reasoningA,
+      reasoningB,
+      {
+        ...reasoningA,
+        observedAt: 6,
+        item: {
+          content: ["beta"],
+          id: "item-2",
+          summary: ["alpha"],
+          type: "reasoning",
+        },
+      },
+      command,
+      questionnaire,
+      { kind: "steer", entry: failedSteer, observedAt: 9 },
+      {
+        kind: "item",
+        threadId: "thread",
+        turnId: "turn",
+        lifecycle: "interrupted",
+        observedAt: 10,
+        item: {
+          changes: [],
+          id: "workbench-file-failure",
+          status: "failed",
+          type: "fileChange",
+          workbenchFailureKind: "unclaimed",
+        },
+      },
+      {
+        kind: "item",
+        threadId: "thread",
+        turnId: "turn",
+        lifecycle: "completed",
+        observedAt: 11,
+        item: {
+          id: "stale",
+          memoryCitation: null,
+          phase: "commentary",
+          text: "stale",
+          type: "agentMessage",
+        },
+      },
+      answer,
+      browse,
+    ], ["turn"])]);
+
+    const replacement = providerTurnScope([
+      turnObservation("turn", 0),
+      {
+        ...user,
+        observedAt: 20,
+        timeline: undefined,
+        item: { ...user.item, id: "item-1" },
+      },
+      {
+        ...reasoningA,
+        observedAt: 20,
+        item: {
+          content: ["beta"],
+          id: "item-2",
+          summary: ["alpha"],
+          type: "reasoning",
+        },
+      },
+      { ...command, observedAt: 20 },
+      {
+        ...answer,
+        observedAt: 20,
+        item: { ...answer.item, id: "item-4" },
+      },
+    ], ["turn"]);
+    repository.settle([replacement]);
+    repository.settle([replacement]);
+
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
+    assert.ok(snapshot);
+    assert.deepEqual(
+      snapshot.rows.threadItems.map(({ source_id, item_position }) => [source_id, item_position]),
+      [
+        ["user", 0],
+        ["rs-a", 1],
+        ["rs-b", 2],
+        ["command", 3],
+        ["questionnaire", 4],
+        [createSyntheticSteerHistoryItemId(failedSteer), 5],
+        ["workbench-file-failure", 6],
+        ["answer", 7],
+      ],
+    );
+    assert.equal(snapshot.rows.threadBrowseEntries.length, 1);
+    assert.equal(snapshot.rows.transcriptAssets.length, 1);
+    assert.equal(snapshot.rows.threadItemInteractions.length, 1);
+    assert.equal(snapshot.rows.threadItemFileChanges[0]?.workbench_failure_kind, "unclaimed");
+    const sourceIdsByItemId = new Map(snapshot.rows.threadItems.map(({ id, source_id }) => [id, source_id]));
+    assert.deepEqual(snapshot.rows.threadItemTimelines.map((timeline) => ({
+      completedAt: timeline.completed_at,
+      firstSeenAt: timeline.first_seen_at,
+      lastSeenAt: timeline.last_seen_at,
+      sourceId: sourceIdsByItemId.get(timeline.item_id),
+      startedAt: timeline.started_at,
+    })).sort((left, right) => String(left.sourceId).localeCompare(String(right.sourceId))), [
+      {
+        completedAt: 20,
+        firstSeenAt: 20,
+        lastSeenAt: 20,
+        sourceId: "answer",
+        startedAt: null,
+      },
+      {
+        completedAt: 3,
+        firstSeenAt: 2,
+        lastSeenAt: 3,
+        sourceId: "user",
+        startedAt: 2,
+      },
+    ]);
+    assert.deepEqual(snapshot.rows.threadItemTimelineAliases.map(({ alias, item_id }) => ({
+      alias,
+      sourceId: sourceIdsByItemId.get(item_id),
+    })).sort((left, right) => left.alias.localeCompare(right.alias)), [
+      { alias: "item-1", sourceId: "user" },
+      { alias: "item-4", sourceId: "answer" },
+    ]);
+  } finally {
+    database.close();
+  }
+});
+
+test("complete provider scopes keep metadata-only turns unmaterialized", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([providerTurnScope([
+      threadObservation(),
+      turnObservation("metadata", 0),
+      turnObservation("loaded", 1),
+      {
+        kind: "item",
+        threadId: "thread",
+        turnId: "loaded",
+        lifecycle: "completed",
+        observedAt: 5,
+        item: {
+          id: "answer",
+          memoryCitation: null,
+          phase: "final_answer",
+          text: "done",
+          type: "agentMessage",
+        },
+      },
+    ], ["loaded"])]);
+
+    assert.equal(repository.read({ threadId: "thread", turnIds: ["metadata"], turnLimit: 1 }), null);
+    assert.deepEqual(
+      repository.read({ threadId: "thread", turnIds: ["loaded"], turnLimit: 1 })?.rows.threadItems
+        .map(({ source_id }) => source_id),
+      ["answer"],
+    );
   } finally {
     database.close();
   }

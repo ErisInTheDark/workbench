@@ -1,8 +1,22 @@
 /*
- * WorkbenchTranscriptRepository: owns atomic transcript settlements and resets, turn-owned item positions, and hydration-bounded reads on one SQLite connection. Keywords: transcript, repository, reset, transaction.
+ * Exports:
+ * - default WorkbenchTranscriptRepository: own atomic settlement, provider replacement, reset, and bounded reads. Keywords: transcript, repository, provider, replacement, transaction.
+ * Local helpers: classify timestamps, provider projection items, and one transaction-local canonical item index. Keywords: transcript, item, timeline, projection, index.
  */
 import type Database from "better-sqlite3";
 
+import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem.ts";
+import {
+  mergeThreadItem,
+  reconcileCompleteThreadItems,
+} from "../../../lib/codex/thread-item-normalization.ts";
+import { SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX } from "../../../lib/workbench/thread/thread-steer-history.ts";
+import type { WorkbenchFileChangeItem } from "../../../lib/workbench/thread/workbench-file-change.ts";
+import type { WorkbenchThreadItemTimelineEntry } from "../../../lib/workbench/thread/thread-item-timeline.ts";
+import {
+  projectWorkbenchTranscriptItems,
+  type WorkbenchProjectedTranscriptItem,
+} from "../../../lib/workbench/database/transcript/workbench-transcript-item-projection.ts";
 import type {
   ColumnDefinition,
   CurrentTableDefinition,
@@ -80,6 +94,10 @@ function latestTimestamp(left: number | null, right: number | null) {
   return Math.max(left, right);
 }
 
+function isProviderProjectionItem(item: WorkbenchProjectedTranscriptItem): item is ThreadItem | WorkbenchFileChangeItem {
+  return item.type !== "approval" && item.type !== "questionnaire" && item.type !== "unknown";
+}
+
 export default class WorkbenchTranscriptRepository {
   readonly #database: Database.Database;
 
@@ -102,6 +120,8 @@ export default class WorkbenchTranscriptRepository {
       for (const observation of observations) {
         const threadId = observation.kind === "canonicalWindow"
           ? this.#settleCanonicalWindow(observation)
+          : observation.kind === "providerTurnScope"
+            ? this.#settleProviderTurnScope(observation)
           : this.#settleObservation(observation);
         if (threadId) changedThreadIds.add(threadId);
       }
@@ -233,6 +253,280 @@ export default class WorkbenchTranscriptRepository {
     index.operationRevisionsByItemId.delete(item.id);
     index.timelinesByItemId.delete(item.id);
     index.timelineAliasesByItemId.delete(item.id);
+  }
+
+  #providerReplacementProtectedItemIds(existingItems: readonly TranscriptItemRow[]) {
+    const itemIds = existingItems.map(({ id }) => id);
+    const sourceIdByItemId = new Map(existingItems.map(({ id, source_id }) => [id, source_id]));
+    const protectedItemIds = new Set(existingItems
+      .filter(({ source_id, type }) => (
+        type === "questionnaire"
+        || type === "approval"
+        || source_id.startsWith(SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX)
+      ))
+      .map(({ id }) => id));
+    for (const row of this.#rowsByItemIds(itemTables.threadItemUserMessages, itemIds)) {
+      const sourceId = sourceIdByItemId.get(row.item_id);
+      if (row.client_id && sourceId && !/^item-\d+$/u.test(sourceId)) {
+        protectedItemIds.add(row.item_id);
+      }
+    }
+    for (const row of this.#rowsByItemIds(itemTables.threadItemFileChanges, itemIds)) {
+      if (row.workbench_failure_kind) protectedItemIds.add(row.item_id);
+    }
+    for (const row of this.#rowsByItemIds(itemTables.threadItemUnknown, itemIds)) {
+      if (row.native_type === "workbenchSteer") protectedItemIds.add(row.item_id);
+    }
+    for (const row of this.#rowsByItemIds(evidenceTables.threadBrowseEntries, itemIds)) {
+      protectedItemIds.add(row.item_id);
+    }
+    return protectedItemIds;
+  }
+
+  #providerReplacementTimeline(
+    index: CanonicalSettlementIndex,
+    itemId: string,
+    observation: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }>,
+    aliases: readonly string[],
+  ): WorkbenchThreadItemTimelineEntry | undefined {
+    const existingItem = index.itemsBySourceId.get(itemId);
+    const existingTimeline = existingItem ? index.timelinesByItemId.get(existingItem.id) : undefined;
+    const existingAliases = existingItem ? index.timelineAliasesByItemId.get(existingItem.id) ?? [] : [];
+    const mergedAliases = Array.from(new Set([
+      ...existingAliases,
+      ...(observation.timeline?.aliases ?? []),
+      ...aliases,
+    ])).filter((alias) => alias !== itemId);
+    if (!existingTimeline && !observation.timeline && mergedAliases.length === 0) {
+      return undefined;
+    }
+    return {
+      ...(mergedAliases.length ? { aliases: mergedAliases } : {}),
+      completedAt: latestTimestamp(
+        existingTimeline?.completed_at ?? null,
+        observation.timeline?.completedAt ?? (
+          existingTimeline
+            ? null
+            : observation.lifecycle === "completed"
+              ? observation.observedAt
+              : null
+        ),
+      ),
+      firstSeenAt: earliestTimestamp(
+        existingTimeline?.first_seen_at ?? null,
+        observation.timeline?.firstSeenAt ?? (existingTimeline ? null : observation.observedAt),
+      ) ?? observation.observedAt,
+      itemId,
+      lastSeenAt: latestTimestamp(
+        existingTimeline?.last_seen_at ?? null,
+        observation.timeline?.lastSeenAt ?? (existingTimeline ? null : observation.observedAt),
+      ) ?? observation.observedAt,
+      startedAt: earliestTimestamp(
+        existingTimeline?.started_at ?? null,
+        observation.timeline?.startedAt ?? null,
+      ),
+    };
+  }
+
+  #settleProviderTurnScope(
+    scope: Extract<WorkbenchTranscriptObservation, { kind: "providerTurnScope" }>,
+  ) {
+    if (new Set(scope.completeTurnIds).size !== scope.completeTurnIds.length) {
+      throw new Error("Complete provider scope contains duplicate turn ids");
+    }
+    for (const observation of scope.observations) {
+      if (observation.kind !== "thread" && observation.kind !== "turn" && observation.kind !== "item") {
+        throw new Error(`Complete provider scope contains unsupported ${observation.kind} observation`);
+      }
+      if (observation.threadId !== scope.threadId) {
+        throw new Error(`Complete provider scope crossed thread ownership: ${observation.threadId}`);
+      }
+    }
+    const turnObservations = scope.observations.filter((
+      observation,
+    ): observation is Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }> => observation.kind === "turn");
+    const turnsById = new Map(turnObservations.map((observation) => [observation.turnId, observation]));
+    for (const turnId of scope.completeTurnIds) {
+      if (!turnsById.has(turnId)) {
+        throw new Error(`Complete provider scope references unknown turn ${turnId}`);
+      }
+    }
+    const completeTurnIds = new Set(scope.completeTurnIds);
+    for (const observation of scope.observations) {
+      if (observation.kind === "item" && !completeTurnIds.has(observation.turnId)) {
+        throw new Error(`Complete provider item ${observation.item.id} references incomplete turn ${observation.turnId}`);
+      }
+    }
+
+    for (const observation of scope.observations) {
+      if (observation.kind !== "item") this.#settleObservation(observation, true);
+    }
+    const index = this.#createCanonicalSettlementIndex(scope.threadId);
+    for (const turnId of scope.completeTurnIds) {
+      const itemObservations = scope.observations.filter((
+        observation,
+      ): observation is Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => (
+        observation.kind === "item" && observation.turnId === turnId
+      ));
+      const incomingSourceIds = itemObservations.map(({ item }) => item.id);
+      if (new Set(incomingSourceIds).size !== incomingSourceIds.length) {
+        throw new Error(`Complete provider turn ${turnId} contains duplicate item ids`);
+      }
+      const existingItems = [...(index.itemsByTurnId.get(turnId)?.values() ?? [])]
+        .sort((left, right) => left.item_position - right.item_position);
+      const protectedItemIds = this.#providerReplacementProtectedItemIds(existingItems);
+      const rows = this.#readRows(scope.threadId, existingItems.map(({ id }) => id));
+      rows.threadItems = existingItems;
+      const projection = projectWorkbenchTranscriptItems(rows);
+      if ("issues" in projection) {
+        const issues = projection.issues.map(({ code, itemId, table }) => (
+          `${code}:${table}${itemId ? `:${itemId}` : ""}`
+        )).join(", ");
+        throw new Error(`Complete provider turn ${turnId} could not project current items: ${issues}`);
+      }
+      const projectedBySourceId = new Map(projection.data.map(({ item, root }) => [root.source_id, item]));
+      const currentProviderItems = projection.data.flatMap(({ item, root }) => (
+        isProviderProjectionItem(item)
+        && !root.source_id.startsWith(SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX)
+          ? [item]
+          : []
+      ));
+      const incomingObservationById = new Map(itemObservations.map((observation) => [
+        observation.item.id,
+        observation,
+      ]));
+      const reconciledItems = reconcileCompleteThreadItems(
+        currentProviderItems,
+        itemObservations.map(({ item }) => item),
+        { mergeDuplicateItems: mergeThreadItem },
+      ).map((entry) => {
+        const existingRoot = index.itemsBySourceId.get(entry.item.id);
+        if (!existingRoot || !protectedItemIds.has(existingRoot.id)) return entry;
+        const existingItem = projectedBySourceId.get(existingRoot.source_id);
+        if (
+          existingItem?.type === "userMessage"
+          && entry.item.type === "userMessage"
+          && existingItem.clientId
+        ) {
+          return {
+            ...entry,
+            item: { ...entry.item, clientId: existingItem.clientId },
+          };
+        }
+        if (
+          existingItem?.type === "fileChange"
+          && entry.item.type === "fileChange"
+          && "workbenchFailureKind" in existingItem
+          && existingItem.workbenchFailureKind
+        ) {
+          return {
+            ...entry,
+            item: {
+              ...entry.item,
+              workbenchFailureKind: existingItem.workbenchFailureKind,
+            },
+          };
+        }
+        return entry;
+      });
+      const desiredSourceIds = reconciledItems.map(({ item }) => item.id);
+      if (new Set(desiredSourceIds).size !== desiredSourceIds.length) {
+        throw new Error(`Complete provider turn ${turnId} reconciled duplicate item ids`);
+      }
+      const desiredSourceIdSet = new Set(desiredSourceIds);
+      const survivingSourceIdByEvidenceId = new Map<string, string>();
+      for (const entry of reconciledItems) {
+        survivingSourceIdByEvidenceId.set(entry.item.id, entry.item.id);
+        survivingSourceIdByEvidenceId.set(entry.incomingItemId, entry.item.id);
+        for (const alias of entry.aliases) {
+          survivingSourceIdByEvidenceId.set(alias, entry.item.id);
+        }
+      }
+      const protectedAfterSourceId = new Map<string | null, TranscriptItemRow[]>();
+      let precedingProviderSourceId: string | null = null;
+      for (const existingItem of existingItems) {
+        const survivingSourceId = survivingSourceIdByEvidenceId.get(existingItem.source_id);
+        if (survivingSourceId) {
+          precedingProviderSourceId = survivingSourceId;
+          continue;
+        }
+        if (!protectedItemIds.has(existingItem.id) || desiredSourceIdSet.has(existingItem.source_id)) continue;
+        const protectedItems = protectedAfterSourceId.get(precedingProviderSourceId) ?? [];
+        protectedItems.push(existingItem);
+        protectedAfterSourceId.set(precedingProviderSourceId, protectedItems);
+      }
+
+      for (const existingItem of existingItems) {
+        if (!desiredSourceIdSet.has(existingItem.source_id) && !protectedItemIds.has(existingItem.id)) {
+          this.#deleteCanonicalItem(index, existingItem);
+        }
+      }
+      const finalEntries: Array<
+        | {
+          entry: (typeof reconciledItems)[number];
+          kind: "provider";
+          observation: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }>;
+        }
+        | { item: TranscriptItemRow; kind: "protected" }
+      > = [];
+      for (const item of protectedAfterSourceId.get(null) ?? []) {
+        finalEntries.push({ item, kind: "protected" });
+      }
+      for (const entry of reconciledItems) {
+        const observation = incomingObservationById.get(entry.incomingItemId);
+        if (!observation) {
+          throw new Error(`Complete provider turn ${turnId} lost incoming item ${entry.incomingItemId}`);
+        }
+        finalEntries.push({ entry, kind: "provider", observation });
+        for (const item of protectedAfterSourceId.get(entry.item.id) ?? []) {
+          finalEntries.push({ item, kind: "protected" });
+        }
+      }
+      const retainedExistingItems = existingItems.filter((item) => (
+        desiredSourceIdSet.has(item.source_id) || protectedItemIds.has(item.id)
+      ));
+      const temporaryPositionBase = Math.max(
+        finalEntries.length,
+        ...retainedExistingItems.map(({ item_position }) => item_position + 1),
+      );
+      for (const [offset, existingItem] of retainedExistingItems.entries()) {
+        this.#run(updateRows(itemTables.threadItems, {
+          item_position: temporaryPositionBase + offset,
+        }, { id: existingItem.id }));
+        this.#replaceCanonicalItem(index, existingItem, {
+          item_position: temporaryPositionBase + offset,
+        });
+      }
+      for (const [itemPosition, entry] of finalEntries.entries()) {
+        if (entry.kind === "provider") {
+          const timeline = this.#providerReplacementTimeline(
+            index,
+            entry.entry.item.id,
+            entry.observation,
+            entry.entry.aliases,
+          );
+          this.#settleObservation(
+            {
+              ...entry.observation,
+              item: entry.entry.item,
+              itemPosition,
+              ...(timeline ? { timeline } : {}),
+            },
+            true,
+            index,
+          );
+          continue;
+        }
+        this.#run(updateRows(itemTables.threadItems, {
+          item_position: itemPosition,
+        }, { id: entry.item.id }));
+        this.#replaceCanonicalItem(index, index.itemsBySourceId.get(entry.item.source_id) ?? entry.item, {
+          item_position: itemPosition,
+        });
+      }
+      this.#materializeTurn(scope.threadId, turnId, index);
+    }
+    return scope.threadId;
   }
 
   #settleCanonicalWindow(

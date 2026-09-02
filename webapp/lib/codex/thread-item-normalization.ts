@@ -1,13 +1,145 @@
 /*
  * Exports:
  * - normalizeThreadItems: dedupe thread items, including cumulative reasoning snapshot segments and context-compaction lifecycle aliases. Keywords: thread, reasoning, compaction, dedupe, transcript.
+ * - mergeThreadItem: merge same-id thread items without losing richer stored history. Keywords: thread, item, merge, history.
+ * - reconcileCompleteThreadItems: reconcile one complete provider snapshot with directly recorded canonical items. Keywords: thread, provider, snapshot, identity, replacement.
+ * - ReconciledCompleteThreadItem: one complete-scope result and its incoming identity evidence. Keywords: thread, provider, alias, identity.
  * - areUserInputsEquivalentForUserMessageDedupe: compare user inputs for duplicate user-message pruning. Keywords: thread, user message, image, equality.
  */
 import type { ThreadItem } from "./generated/app-server/v2/ThreadItem";
 import type { UserInput } from "./generated/app-server/v2/UserInput";
+import { compactCommandOutput } from "./thread-command-output.ts";
 
 interface NormalizeThreadItemsOptions {
   mergeDuplicateItems?: (existingItem: ThreadItem, incomingItem: ThreadItem) => ThreadItem;
+}
+
+export interface ReconciledCompleteThreadItem {
+  aliases: string[];
+  incomingItemId: string;
+  item: ThreadItem;
+}
+
+function isNonEmptyArray<TValue>(value: TValue[] | null | undefined): value is TValue[] {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function preferValue<TValue>(incoming: TValue, stored: TValue, isRicher: (value: TValue) => boolean) {
+  return isRicher(incoming) ? incoming : stored;
+}
+
+function mergeStatus(incoming: string, stored: string) {
+  const rank = (status: string) => {
+    switch (status) {
+      case "failed":
+        return 4;
+      case "declined":
+        return 3;
+      case "completed":
+        return 2;
+      case "inProgress":
+        return 1;
+      default:
+        return 0;
+    }
+  };
+  return rank(stored) > rank(incoming) ? stored : incoming;
+}
+
+function mergeText(incoming: string, stored: string) {
+  return stored.length > incoming.length ? stored : incoming;
+}
+
+function mergeTextArray(incoming: string[], stored: string[]) {
+  const length = Math.max(incoming.length, stored.length);
+  return Array.from({ length }, (_, index) => mergeText(incoming[index] ?? "", stored[index] ?? ""));
+}
+
+export function mergeThreadItem(incoming: ThreadItem, stored: ThreadItem): ThreadItem {
+  if (incoming.id !== stored.id || incoming.type !== stored.type) {
+    return incoming;
+  }
+
+  switch (incoming.type) {
+    case "agentMessage": {
+      const storedItem = stored as Extract<ThreadItem, { type: "agentMessage" }>;
+      return {
+        ...incoming,
+        memoryCitation: incoming.memoryCitation ?? storedItem.memoryCitation,
+        text: mergeText(incoming.text, storedItem.text),
+      };
+    }
+    case "reasoning": {
+      const storedItem = stored as Extract<ThreadItem, { type: "reasoning" }>;
+      return {
+        ...incoming,
+        content: mergeTextArray(incoming.content, storedItem.content),
+        summary: mergeTextArray(incoming.summary, storedItem.summary),
+      };
+    }
+    case "plan": {
+      const storedItem = stored as Extract<ThreadItem, { type: "plan" }>;
+      return {
+        ...incoming,
+        text: mergeText(incoming.text, storedItem.text),
+      };
+    }
+    case "commandExecution": {
+      const storedItem = stored as Extract<ThreadItem, { type: "commandExecution" }>;
+      const aggregatedOutput = compactCommandOutput(preferValue(incoming.aggregatedOutput, storedItem.aggregatedOutput, (value) => Boolean(value?.length)));
+      return {
+        ...incoming,
+        aggregatedOutput,
+        commandActions: preferValue(incoming.commandActions, storedItem.commandActions, isNonEmptyArray),
+        durationMs: incoming.durationMs ?? storedItem.durationMs,
+        exitCode: incoming.exitCode ?? storedItem.exitCode,
+        status: mergeStatus(incoming.status, storedItem.status) as typeof incoming.status,
+      };
+    }
+    case "fileChange": {
+      const storedItem = stored as Extract<ThreadItem, { type: "fileChange" }>;
+      return {
+        ...incoming,
+        changes: preferValue(incoming.changes, storedItem.changes, isNonEmptyArray),
+        status: mergeStatus(incoming.status, storedItem.status) as typeof incoming.status,
+      };
+    }
+    case "mcpToolCall": {
+      const storedItem = stored as Extract<ThreadItem, { type: "mcpToolCall" }>;
+      return {
+        ...incoming,
+        durationMs: incoming.durationMs ?? storedItem.durationMs,
+        error: incoming.error ?? storedItem.error,
+        result: incoming.result ?? storedItem.result,
+        status: mergeStatus(incoming.status, storedItem.status) as typeof incoming.status,
+      };
+    }
+    case "dynamicToolCall": {
+      const storedItem = stored as Extract<ThreadItem, { type: "dynamicToolCall" }>;
+      return {
+        ...incoming,
+        contentItems: incoming.contentItems ?? storedItem.contentItems,
+        durationMs: incoming.durationMs ?? storedItem.durationMs,
+        status: mergeStatus(incoming.status, storedItem.status) as typeof incoming.status,
+        success: incoming.success ?? storedItem.success,
+      };
+    }
+    case "collabAgentToolCall": {
+      const storedItem = stored as Extract<ThreadItem, { type: "collabAgentToolCall" }>;
+      return {
+        ...incoming,
+        agentsStates: Object.keys(incoming.agentsStates).length ? incoming.agentsStates : storedItem.agentsStates,
+        model: incoming.model ?? storedItem.model,
+        prompt: incoming.prompt ?? storedItem.prompt,
+        reasoningEffort: incoming.reasoningEffort ?? storedItem.reasoningEffort,
+        receiverThreadIds: incoming.receiverThreadIds.length ? incoming.receiverThreadIds : storedItem.receiverThreadIds,
+        senderThreadId: incoming.senderThreadId || storedItem.senderThreadId,
+        status: mergeStatus(incoming.status, storedItem.status) as typeof incoming.status,
+      };
+    }
+    default:
+      return incoming;
+  }
 }
 
 function stableStringify(value: unknown): string {
@@ -139,6 +271,155 @@ function getTurnItemDedupeKey(item: ThreadItem) {
 
 function isGenericSnapshotItemId(itemId: string) {
   return /^item-\d+$/u.test(itemId);
+}
+
+function nonEmptyReasoningSegments(item: Extract<ThreadItem, { type: "reasoning" }>) {
+  return [...item.summary, ...item.content]
+    .map(normalizeTextSegment)
+    .filter(Boolean);
+}
+
+function reasoningItemsOverlap(
+  left: Extract<ThreadItem, { type: "reasoning" }>,
+  right: Extract<ThreadItem, { type: "reasoning" }>,
+) {
+  const rightSegments = new Set(nonEmptyReasoningSegments(right));
+  return nonEmptyReasoningSegments(left).some((segment) => rightSegments.has(segment));
+}
+
+function hasReasoningContent(item: Extract<ThreadItem, { type: "reasoning" }>) {
+  return nonEmptyReasoningSegments(item).length > 0;
+}
+
+function preferCanonicalEquivalentItem(currentItem: ThreadItem, incomingItem: ThreadItem) {
+  if (isGenericSnapshotItemId(currentItem.id) && !isGenericSnapshotItemId(incomingItem.id)) {
+    return incomingItem;
+  }
+  return currentItem;
+}
+
+function mergeSameIdItem(
+  currentItem: ThreadItem,
+  incomingItem: ThreadItem,
+  options: NormalizeThreadItemsOptions,
+) {
+  return options.mergeDuplicateItems?.(incomingItem, currentItem) ?? incomingItem;
+}
+
+function findEquivalentCurrentItem(
+  currentItems: readonly ThreadItem[],
+  incomingItem: ThreadItem,
+  usedCurrentItemIds: ReadonlySet<string>,
+) {
+  return currentItems.find((currentItem) => {
+    if (usedCurrentItemIds.has(currentItem.id) || currentItem.type !== incomingItem.type) {
+      return false;
+    }
+    if (currentItem.id === incomingItem.id) {
+      return true;
+    }
+    if (currentItem.type === "userMessage" && incomingItem.type === "userMessage") {
+      return areUserMessagesEquivalentForDedupe(currentItem, incomingItem);
+    }
+    if (
+      (currentItem.type === "agentMessage" || currentItem.type === "plan")
+      && (incomingItem.type === "agentMessage" || incomingItem.type === "plan")
+    ) {
+      const currentKey = getTurnItemDedupeKey(currentItem);
+      return currentKey !== null && currentKey === getTurnItemDedupeKey(incomingItem);
+    }
+    return false;
+  });
+}
+
+export function reconcileCompleteThreadItems(
+  currentItems: readonly ThreadItem[],
+  incomingItems: readonly ThreadItem[],
+  options: NormalizeThreadItemsOptions = {},
+): ReconciledCompleteThreadItem[] {
+  const current = normalizeThreadItems([...currentItems], options);
+  const incoming = normalizeThreadItems([...incomingItems], options);
+  const currentById = new Map(current.map((item) => [item.id, item]));
+  const usedCurrentItemIds = new Set<string>();
+  const results: ReconciledCompleteThreadItem[] = [];
+  const currentCompactions = current.filter((
+    item,
+  ): item is Extract<ThreadItem, { type: "contextCompaction" }> => item.type === "contextCompaction");
+  let incomingCompactionIndex = 0;
+
+  const emit = (item: ThreadItem, incomingItemId: string, aliases: string[] = []) => {
+    results.push({
+      aliases: aliases.filter((alias) => alias !== item.id),
+      incomingItemId,
+      item,
+    });
+  };
+
+  for (const incomingItem of incoming) {
+    const exactCurrentItem = currentById.get(incomingItem.id);
+    if (exactCurrentItem && !usedCurrentItemIds.has(exactCurrentItem.id)) {
+      usedCurrentItemIds.add(exactCurrentItem.id);
+      emit(mergeSameIdItem(exactCurrentItem, incomingItem, options), incomingItem.id);
+      if (incomingItem.type === "contextCompaction") incomingCompactionIndex += 1;
+      continue;
+    }
+
+    if (incomingItem.type === "reasoning" && isGenericSnapshotItemId(incomingItem.id)) {
+      const representedCurrentItems = current.filter((
+        currentItem,
+      ): currentItem is Extract<ThreadItem, { type: "reasoning" }> => (
+        currentItem.type === "reasoning"
+        && !isGenericSnapshotItemId(currentItem.id)
+        && reasoningItemsOverlap(currentItem, incomingItem)
+      ));
+      for (const currentItem of representedCurrentItems) {
+        if (usedCurrentItemIds.has(currentItem.id)) continue;
+        usedCurrentItemIds.add(currentItem.id);
+        emit(
+          currentItem,
+          incomingItem.id,
+          representedCurrentItems.length === 1 ? [incomingItem.id] : [],
+        );
+      }
+      const reasoningOwners = new Map<string, Extract<ThreadItem, { type: "reasoning" }>>();
+      for (const segment of nonEmptyReasoningSegments(incomingItem)) {
+        reasoningOwners.set(segment, incomingItem);
+      }
+      for (const currentItem of representedCurrentItems) {
+        for (const segment of nonEmptyReasoningSegments(currentItem)) {
+          reasoningOwners.set(segment, currentItem);
+        }
+      }
+      const residualItem = removeDuplicateReasoningSegments(incomingItem, reasoningOwners);
+      if (hasReasoningContent(residualItem)) {
+        emit(residualItem, incomingItem.id);
+      }
+      continue;
+    }
+
+    if (incomingItem.type === "contextCompaction") {
+      const currentItem = currentCompactions[incomingCompactionIndex];
+      incomingCompactionIndex += 1;
+      if (currentItem && !usedCurrentItemIds.has(currentItem.id)) {
+        usedCurrentItemIds.add(currentItem.id);
+        const item = preferCanonicalEquivalentItem(currentItem, incomingItem);
+        emit(item, incomingItem.id, item.id === currentItem.id ? [incomingItem.id] : []);
+        continue;
+      }
+    }
+
+    const equivalentCurrentItem = findEquivalentCurrentItem(current, incomingItem, usedCurrentItemIds);
+    if (equivalentCurrentItem) {
+      usedCurrentItemIds.add(equivalentCurrentItem.id);
+      const item = preferCanonicalEquivalentItem(equivalentCurrentItem, incomingItem);
+      emit(item, incomingItem.id, item.id === equivalentCurrentItem.id ? [incomingItem.id] : []);
+      continue;
+    }
+
+    emit(incomingItem, incomingItem.id);
+  }
+
+  return results;
 }
 
 function mergeContextCompactionDedupeItem(

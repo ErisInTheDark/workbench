@@ -1,13 +1,16 @@
 /*
  * Exports:
- * - No production exports; Node tests cover identity-aware user-message normalization and timeline placement. Keywords: thread, user message, normalize, test.
+ * - No production exports; Node tests cover identity-aware normalization and complete provider-scope reconciliation. Keywords: thread, user message, reasoning, provider, normalize, test.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ThreadItem } from "./generated/app-server/v2/ThreadItem.ts";
-import { normalizeThreadItems } from "./thread-item-normalization.ts";
+import {
+  normalizeThreadItems,
+  reconcileCompleteThreadItems,
+} from "./thread-item-normalization.ts";
 
 function user(id: string, clientId: string | null, text = "same"): Extract<ThreadItem, { type: "userMessage" }> {
   return { clientId, content: [{ text, text_elements: [], type: "text" }], id, type: "userMessage" };
@@ -56,4 +59,69 @@ test("optimistic and generic aliases converge only with their concrete delivery"
     normalizeThreadItems([user("item-1", "client-a"), user("canonical", "client-b")]).map((item) => item.id),
     ["item-1", "canonical"],
   );
+});
+
+test("complete provider reconciliation retains canonical narrative identities and prunes stale current items", () => {
+  const current: ThreadItem[] = [
+    user("msg-user", "client", "hello"),
+    { id: "msg-agent", memoryCitation: null, phase: "commentary", text: "working", type: "agentMessage" },
+    { id: "plan-canonical", text: "one plan", type: "plan" },
+    { id: "stale", memoryCitation: null, phase: null, text: "stale", type: "agentMessage" },
+  ];
+  const incoming: ThreadItem[] = [
+    user("item-1", "client", "hello"),
+    { id: "item-2", memoryCitation: null, phase: "commentary", text: "working", type: "agentMessage" },
+    { id: "item-3", text: "one plan", type: "plan" },
+    { id: "new", memoryCitation: null, phase: "final_answer", text: "done", type: "agentMessage" },
+  ];
+
+  const reconciled = reconcileCompleteThreadItems(current, incoming);
+  assert.deepEqual(
+    reconciled.map(({ aliases, incomingItemId, item }) => ({
+      aliases,
+      incomingItemId,
+      itemId: item.id,
+    })),
+    [
+      { aliases: ["item-1"], incomingItemId: "item-1", itemId: "msg-user" },
+      { aliases: ["item-2"], incomingItemId: "item-2", itemId: "msg-agent" },
+      { aliases: ["item-3"], incomingItemId: "item-3", itemId: "plan-canonical" },
+      { aliases: [], incomingItemId: "new", itemId: "new" },
+    ],
+  );
+});
+
+test("complete provider reconciliation preserves granular canonical reasoning and emits only snapshot residue", () => {
+  const current: ThreadItem[] = [
+    { content: [], id: "rs-a", summary: ["alpha"], type: "reasoning" },
+    { content: ["beta"], id: "rs-b", summary: [], type: "reasoning" },
+    { content: [], id: "rs-stale", summary: ["stale"], type: "reasoning" },
+  ];
+  const incoming: ThreadItem[] = [{
+    content: ["beta", "gamma"],
+    id: "item-4",
+    summary: ["alpha"],
+    type: "reasoning",
+  }];
+
+  const reconciled = reconcileCompleteThreadItems(current, incoming);
+  assert.deepEqual(reconciled.map(({ aliases, incomingItemId, item }) => ({
+    aliases,
+    content: item.type === "reasoning" ? item.content : [],
+    incomingItemId,
+    itemId: item.id,
+    summary: item.type === "reasoning" ? item.summary : [],
+  })), [
+    { aliases: [], content: [], incomingItemId: "item-4", itemId: "rs-a", summary: ["alpha"] },
+    { aliases: [], content: ["beta"], incomingItemId: "item-4", itemId: "rs-b", summary: [] },
+    { aliases: [], content: ["", "gamma"], incomingItemId: "item-4", itemId: "item-4", summary: [""] },
+  ]);
+});
+
+test("complete provider reconciliation preserves conflicting user identities", () => {
+  const reconciled = reconcileCompleteThreadItems(
+    [user("canonical", "client-a")],
+    [user("item-1", "client-b")],
+  );
+  assert.deepEqual(reconciled.map(({ item }) => item.id), ["item-1"]);
 });

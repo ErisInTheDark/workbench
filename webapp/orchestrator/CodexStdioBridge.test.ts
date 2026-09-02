@@ -501,9 +501,17 @@ test("background thread pages repair inactive provider turns directly into both 
       "thread/turns/list",
     ]);
     assert.deepEqual(sqliteBatches.map((batch) => batch.map(({ kind }) => kind)), [
-      ["thread", "turn", "item", "item"],
+      ["providerTurnScope"],
       ["item"],
     ]);
+    const recoveredScope = sqliteBatches[0]?.[0];
+    assert.equal(recoveredScope?.kind, "providerTurnScope");
+    assert.deepEqual(
+      recoveredScope?.kind === "providerTurnScope"
+        ? recoveredScope.observations.map(({ kind }) => kind)
+        : [],
+      ["thread", "turn", "item", "item"],
+    );
     assert.equal(sqliteBatches.flat().some(({ kind }) => kind === "canonicalWindow"), false);
   } finally {
     await bridge.waitForIdle();
@@ -573,17 +581,87 @@ test("provider catalog identities and the materialized page record as one dual-r
     });
     await bridge.waitForIdle();
 
-    assert.deepEqual(sqliteBatches.map((batch) => batch.map(({ kind }) => kind)), [[
-      "thread",
-      "turn",
-      "turn",
-      "item",
-    ]]);
+    assert.deepEqual(sqliteBatches.map((batch) => batch.map(({ kind }) => kind)), [["providerTurnScope"]]);
+    const providerScope = sqliteBatches[0]?.[0];
+    assert.equal(providerScope?.kind, "providerTurnScope");
+    assert.deepEqual(
+      providerScope?.kind === "providerTurnScope"
+        ? providerScope.observations.map(({ kind }) => kind)
+        : [],
+      ["thread", "turn", "turn", "item"],
+    );
+    assert.deepEqual(
+      providerScope?.kind === "providerTurnScope" ? providerScope.completeTurnIds : [],
+      ["turn"],
+    );
     const stored = await owner.ensureTranscriptStore().readStoredThreadWindow("thread", ["turn"]) as (
       Thread & { workbenchTurnHistory: Array<{ turnId: string }> }
     );
     assert.deepEqual(stored.workbenchTurnHistory.map(({ turnId }) => turnId), ["older", "turn"]);
     assert.deepEqual(stored.turns[0]?.items.map(({ id }) => id), ["assistant"]);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("non-empty terminal provider turns record as complete replacement scopes", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-provider-turn-scope-"));
+  const batches: WorkbenchTranscriptObservation[][] = [];
+  const item: ThreadItem = {
+    id: "answer",
+    memoryCitation: null,
+    phase: "final_answer",
+    text: "done",
+    type: "agentMessage",
+  };
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    recordSqliteTranscript: async (observations) => {
+      batches.push([...observations]);
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    await bridge.handleUpstreamMessage({
+      method: "thread/started",
+      params: { thread: bridgeThread([]) },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "turn/completed",
+      params: {
+        threadId: "thread",
+        turn: {
+          ...bridgeThread([item]).turns[0]!,
+          completedAt: 3,
+          durationMs: 2_000,
+          status: "completed",
+        },
+      },
+    });
+    await bridge.waitForIdle();
+
+    const scope = batches.at(-1)?.[0];
+    assert.equal(scope?.kind, "providerTurnScope");
+    assert.deepEqual(
+      scope?.kind === "providerTurnScope" ? scope.completeTurnIds : [],
+      ["turn"],
+    );
+    assert.deepEqual(
+      scope?.kind === "providerTurnScope"
+        ? scope.observations.map((observation) => observation.kind)
+        : [],
+      ["turn", "item"],
+    );
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
@@ -665,7 +743,7 @@ test("live provider observations and active baselines stay ordered across a brid
     assert.ok(batches.length > batchesBeforeBaseline);
     assert.deepEqual(
       batches.at(-1)?.map((observation) => (observation as { kind?: string }).kind),
-      ["thread", "turn"],
+      ["providerTurnScope"],
     );
     await bridge.handleUpstreamMessage({
       method: "turn/completed",

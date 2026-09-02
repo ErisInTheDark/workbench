@@ -66,8 +66,10 @@ import {
 import {
   createCodexTranscriptProviderDynamicToolObservation,
   createCodexTranscriptProviderItemObservation,
+  createCodexTranscriptProviderThreadScopeObservation,
   createCodexTranscriptProviderThreadObservation,
   createCodexTranscriptProviderThreadObservations,
+  createCodexTranscriptProviderTurnScopeObservation,
   createCodexTranscriptProviderTurnObservation,
   type CodexTranscriptProviderContext,
 } from "./codex-transcript-provider-observations.ts";
@@ -3076,17 +3078,17 @@ export default class CodexStdioBridge {
 
   private async createSqliteProviderWindowObservations(
     thread: Thread,
-  ): Promise<WorkbenchTranscriptAtomicObservation[]> {
+  ): Promise<WorkbenchTranscriptObservation[]> {
     if (!this.sqliteTranscriptEnabled) return [];
     const context = await this.resolveTranscriptThreadContext(thread);
-    return createCodexTranscriptProviderThreadObservations(thread, context);
+    return [createCodexTranscriptProviderThreadScopeObservation(thread, context)];
   }
 
   private async createSqliteProviderResponseObservations(
     request: JsonRpcRequest,
     response: JsonRpcResponse,
     historicalHydration: boolean,
-  ): Promise<WorkbenchTranscriptAtomicObservation[]> {
+  ): Promise<WorkbenchTranscriptObservation[]> {
     if (
       !this.sqliteTranscriptEnabled
       || response.error
@@ -3098,14 +3100,17 @@ export default class CodexStdioBridge {
     const thread = asRecord(response.result)?.thread as Thread | undefined;
     if (!thread?.id || !Array.isArray(thread.turns)) return [];
     const context = await this.resolveTranscriptThreadContext(thread);
-    return request.method === "thread/resume"
-      ? [createCodexTranscriptProviderThreadObservation(thread.id, context)]
+    if (request.method === "thread/resume") {
+      return [createCodexTranscriptProviderThreadObservation(thread.id, context)];
+    }
+    return request.method === "thread/read" || request.method === "thread/fork"
+      ? [createCodexTranscriptProviderThreadScopeObservation(thread, context)]
       : createCodexTranscriptProviderThreadObservations(thread, context);
   }
 
   private async createSqliteProviderNotificationObservations(
     notification: JsonRpcNotification,
-  ): Promise<WorkbenchTranscriptAtomicObservation[]> {
+  ): Promise<WorkbenchTranscriptObservation[]> {
     if (!this.sqliteTranscriptEnabled) return [];
     if (notification.method === "thread/started") {
       const thread = asRecord(notification.params)?.thread as Thread | undefined;
@@ -3143,12 +3148,17 @@ export default class CodexStdioBridge {
     if (!context) {
       throw new Error(`Codex transcript thread ${threadId} has no provider context for live turn ${turn.id}`);
     }
+    if (notification.method === "turn/completed" && turn.items.length > 0) {
+      return [createCodexTranscriptProviderTurnScopeObservation({ context, threadId, turn })];
+    }
     return [
       createCodexTranscriptProviderTurnObservation({ context, threadId, turn }),
       ...turn.items.map((item) => createCodexTranscriptProviderItemObservation({
         item,
-        lifecycle: turn.status === "inProgress" ? "streaming" : "completed",
-        observedAt: Math.round((turn.completedAt ?? turn.startedAt ?? Date.now() / 1_000) * 1_000),
+        lifecycle: notification.method === "turn/completed" ? "completed" : "streaming",
+        observedAt: Math.round(
+          (turn.completedAt ?? turn.startedAt ?? Date.now() / 1_000) * 1_000,
+        ),
         threadId,
         turnId: turn.id,
       })),

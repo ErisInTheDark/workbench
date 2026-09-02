@@ -1,5 +1,5 @@
 /*
- * No production exports. Real SQLite fixtures protect relational-to-browser projection, hydration, renderer facts, opaque values, and malformed augmentation refusal. Keywords: transcript, projection, sqlite, parity.
+ * No production exports. Real SQLite fixtures protect relational item reconstruction, browser projection, hydration, renderer facts, opaque values, and malformed augmentation refusal. Keywords: transcript, projection, sqlite, parity.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -14,6 +14,7 @@ import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
 } from "../../../orchestrator/database/transcript/workbench-transcript-types";
+import { projectWorkbenchTranscriptItems } from "../database/transcript/workbench-transcript-item-projection";
 import { projectWorkbenchTranscript } from "./workbench-transcript-projection";
 
 function createRepository() {
@@ -214,6 +215,25 @@ test("real SQLite rows project the renderer facts used by current command, file,
 
     const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
     assert.ok(snapshot);
+    const itemProjection = projectWorkbenchTranscriptItems(snapshot.rows);
+    assert.equal(itemProjection.success, true);
+    if (!itemProjection.success) return;
+    assert.deepEqual(
+      itemProjection.data.map(({ item: projectedItem, root }) => [
+        projectedItem.id,
+        root.source_id,
+        root.item_position,
+      ]),
+      [
+        ["user", "user", 0],
+        ["reasoning", "reasoning", 1],
+        ["command", "command", 2],
+        ["mcp", "mcp", 3],
+        ["file", "file", 4],
+        ["workbench-questionnaire:thread:turn-1:request-key", "workbench-questionnaire:thread:turn-1:request-key", 5],
+        ["opaque", "opaque", 6],
+      ],
+    );
     const result = projectWorkbenchTranscript(snapshot);
     assert.equal(result.success, true);
     if (!result.success) return;
@@ -369,10 +389,12 @@ test("projection fails closed when a canonical root loses its required augmentat
     `).run();
     const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
     assert.ok(snapshot);
-    assert.deepEqual(projectWorkbenchTranscript(snapshot), {
+    const issue = {
       issues: [{ code: "missingRow", itemId: "plan", table: "threadItemPlans" }],
       success: false,
-    });
+    } as const;
+    assert.deepEqual(projectWorkbenchTranscriptItems(snapshot.rows), issue);
+    assert.deepEqual(projectWorkbenchTranscript(snapshot), issue);
   } finally {
     database.close();
   }

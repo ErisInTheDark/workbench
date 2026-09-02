@@ -8,8 +8,10 @@ import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
 import {
   createCodexTranscriptProviderDynamicToolObservation,
   createCodexTranscriptProviderItemObservation,
+  createCodexTranscriptProviderThreadScopeObservation,
   createCodexTranscriptProviderThreadObservation,
   createCodexTranscriptProviderThreadObservations,
+  createCodexTranscriptProviderTurnScopeObservation,
 } from "./codex-transcript-provider-observations.ts";
 
 const context = {
@@ -126,6 +128,40 @@ test("complete provider snapshots keep carried items with their first turn", () 
       .map(({ item, turnId }) => [turnId, item.id]),
     [["turn", "answer"], ["later", "later-answer"]],
   );
+});
+
+test("complete provider scopes normalize positional snapshot aliases before admission", () => {
+  const thread = providerThread();
+  const userContent = [{ text: "hello", text_elements: [], type: "text" as const }];
+  const reasoningSummary = ["thinking"];
+  thread.turns[0]!.items = [
+    { clientId: null, content: userContent, id: "user-canonical", type: "userMessage" },
+    { clientId: null, content: userContent, id: "item-1", type: "userMessage" },
+    { content: [], id: "rs-canonical", summary: reasoningSummary, type: "reasoning" },
+    { content: [], id: "item-2", summary: reasoningSummary, type: "reasoning" },
+    thread.turns[0]!.items[0]!,
+  ];
+
+  const scope = createCodexTranscriptProviderThreadScopeObservation(thread, context);
+  assert.deepEqual(scope.completeTurnIds, ["turn"]);
+  assert.deepEqual(
+    scope.observations
+      .filter((observation) => observation.kind === "item")
+      .map(({ item }) => item.id),
+    ["user-canonical", "rs-canonical", "answer"],
+  );
+});
+
+test("one completed provider turn becomes one normalized replacement scope", () => {
+  const turn = providerThread().turns[0]!;
+  const scope = createCodexTranscriptProviderTurnScopeObservation({
+    context,
+    threadId: "thread",
+    turn,
+  });
+  assert.equal(scope.kind, "providerTurnScope");
+  assert.deepEqual(scope.completeTurnIds, ["turn"]);
+  assert.deepEqual(scope.observations.map(({ kind }) => kind), ["turn", "item"]);
 });
 
 test("one provider item lifecycle becomes one atomic observation", () => {

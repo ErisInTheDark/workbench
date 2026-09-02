@@ -1,5 +1,7 @@
 /*
- * WorkbenchTranscriptController: owns transcript readiness, recording, reads, active subscriptions, and disposal above the database worker. Keywords: transcript, controller, lifecycle.
+ * Exports:
+ * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, and disposal. Keywords: transcript, controller, lifecycle, recovery.
+ * Local helpers: derive settlement identity, refresh boundaries, and recovered turn coverage. Keywords: transcript, observation, subscription, recovery.
  */
 import { logError } from "../../process-helpers.ts";
 import type WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
@@ -19,9 +21,13 @@ function observationIdentity(observations: readonly WorkbenchTranscriptObservati
   const threadIds = new Set<string>();
   const turnIds = new Set<string>();
   for (const observation of observations) {
-    if (observation.kind === "canonicalWindow") {
+    if (observation.kind === "canonicalWindow" || observation.kind === "providerTurnScope") {
       threadIds.add(observation.threadId);
-      for (const turnId of observation.materializedTurnIds) turnIds.add(turnId);
+      for (const turnId of observation.kind === "canonicalWindow"
+        ? observation.materializedTurnIds
+        : observation.completeTurnIds) {
+        turnIds.add(turnId);
+      }
       continue;
     }
     if (observation.kind === "questionnaire" || observation.kind === "steer") {
@@ -58,6 +64,7 @@ function requestsSubscriptionRefresh(observations: readonly WorkbenchTranscriptO
   return observations.some((observation) => {
     switch (observation.kind) {
       case "canonicalWindow":
+      case "providerTurnScope":
       case "thread":
       case "questionnaire":
       case "browse":
@@ -74,6 +81,20 @@ function requestsSubscriptionRefresh(observations: readonly WorkbenchTranscriptO
         return false;
     }
   });
+}
+
+function observationContainsTurn(
+  observation: WorkbenchTranscriptObservation,
+  turnId: string,
+) {
+  if (observation.kind === "turn") return observation.turnId === turnId;
+  if (observation.kind === "canonicalWindow") {
+    return observation.materializedTurnIds.includes(turnId);
+  }
+  if (observation.kind === "providerTurnScope") {
+    return observation.completeTurnIds.includes(turnId);
+  }
+  return false;
 }
 
 export default class WorkbenchTranscriptController {
@@ -148,7 +169,7 @@ export default class WorkbenchTranscriptController {
       }
       const marker = this.#captureGaps.requireRecovery(identity.threadId);
       const recoveredMarkerTurn = marker.turnId && observations.some((observation) => (
-        observation.kind === "turn" && observation.turnId === marker.turnId
+        observationContainsTurn(observation, marker.turnId!)
       ))
         ? marker.turnId
         : null;

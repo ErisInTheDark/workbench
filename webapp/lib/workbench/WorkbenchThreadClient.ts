@@ -1016,6 +1016,7 @@ function WorkbenchThreadClient(
   const resolvedDurableQuestionnaireKeysByThreadId = new Map<string, string>();
   const browseResultReadGenerationByKey = new Map<string, number>();
   const questionnaireHistoryReadGenerationByKey = new Map<string, number>();
+  const questionnaireHistoryWarningKeys = new Set<string>();
   const steerHistoryReadGenerationByKey = new Map<string, number>();
   const steerHistoryWarningKeys = new Set<string>();
   const messageAdmissionController = ThreadMessageAdmissionController({
@@ -1177,6 +1178,7 @@ function WorkbenchThreadClient(
     statusRecordsByKey.clear();
     browseResultReadGenerationByKey.clear();
     questionnaireHistoryReadGenerationByKey.clear();
+    questionnaireHistoryWarningKeys.clear();
     steerHistoryReadGenerationByKey.clear();
     steerHistoryWarningKeys.clear();
     state.questionnaireHistoryByThreadId.clear();
@@ -3274,6 +3276,7 @@ function WorkbenchThreadClient(
       if (projectGeneration !== projectContextGeneration || questionnaireHistoryReadGenerationByKey.get(key) !== generation) {
         return state.questionnaireHistoryByThreadId.get(threadId) ?? [];
       }
+      questionnaireHistoryWarningKeys.delete(key);
       const changed = setQuestionnaireHistoryEntries(threadId, entries);
       if (!changed && entries.length) {
         bumpOverlayRevision(threadId, "questionnaireForceProjectionEpoch");
@@ -3283,13 +3286,15 @@ function WorkbenchThreadClient(
       }
       return entries;
     } catch {
+      const retainedEntries = state.questionnaireHistoryByThreadId.get(threadId) ?? [];
       if (projectGeneration !== projectContextGeneration || questionnaireHistoryReadGenerationByKey.get(key) !== generation) {
-        return state.questionnaireHistoryByThreadId.get(threadId) ?? [];
+        return retainedEntries;
       }
-      if (setQuestionnaireHistoryEntries(threadId, []) && (options.refreshProjection ?? true)) {
-        refreshFinalVisibleQuestionnaireHistory(threadId);
+      if (!questionnaireHistoryWarningKeys.has(key)) {
+        questionnaireHistoryWarningKeys.add(key);
+        emitStatusMessage("Unable to refresh questionnaire history; showing the last known answers.");
       }
-      return [];
+      return retainedEntries;
     }
   }
 

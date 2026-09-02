@@ -1,11 +1,13 @@
 /*
- * WorkbenchTranscriptItemLifecycle: durable lifecycle values shared by item transforms. Keywords: transcript, item, lifecycle.
- * WorkbenchTranscriptAtomicObservation: one source-owned semantic transcript fact. Keywords: transcript, observation, atomic.
- * WorkbenchTranscriptCaptureGapObservation: one closed failed-capture interval. Keywords: transcript, capture gap, recovery.
- * WorkbenchTranscriptObservation: harness-neutral durable transcript input accepted in queue order. Keywords: transcript, observation, recorder.
- * WorkbenchTranscriptRecordingContext: fact ownership and provider-recovery boundary for one settlement. Keywords: transcript, recording, recovery.
- * WorkbenchTranscriptSettlement: semantic commit result used to refresh subscriptions. Keywords: transcript, settlement, subscription.
- * WorkbenchTranscriptReadRequest/WorkbenchTranscriptSnapshot/WorkbenchTranscriptSnapshotRows: shared hydration-bounded relational read contract re-exports. Keywords: transcript, snapshot, hydration.
+ * Exports:
+ * - WorkbenchTranscriptItemLifecycle: durable lifecycle values shared by item transforms. Keywords: transcript, item, lifecycle.
+ * - WorkbenchTranscriptAtomicObservation: one source-owned semantic transcript fact. Keywords: transcript, observation, atomic.
+ * - WorkbenchTranscriptCaptureGapObservation: one closed failed-capture interval. Keywords: transcript, capture gap, recovery.
+ * - WorkbenchTranscriptProviderTurnScopeObservation: one complete provider-owned turn replacement boundary. Keywords: transcript, provider, replacement.
+ * - WorkbenchTranscriptObservation: harness-neutral durable transcript input accepted in queue order. Keywords: transcript, observation, recorder.
+ * - WorkbenchTranscriptRecordingContext: fact ownership and provider-recovery boundary for one settlement. Keywords: transcript, recording, recovery.
+ * - WorkbenchTranscriptSettlement: semantic commit result used to refresh subscriptions. Keywords: transcript, settlement, subscription.
+ * - WorkbenchTranscriptReadRequest/WorkbenchTranscriptSnapshot/WorkbenchTranscriptSnapshotRows: shared hydration-bounded relational read contract re-exports. Keywords: transcript, snapshot, hydration.
  */
 import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem.ts";
 import type {
@@ -113,9 +115,17 @@ export interface WorkbenchTranscriptCaptureGapObservation {
   turnId: string | null;
 }
 
+export interface WorkbenchTranscriptProviderTurnScopeObservation {
+  completeTurnIds: readonly string[];
+  kind: "providerTurnScope";
+  observations: readonly WorkbenchTranscriptAtomicObservation[];
+  threadId: string;
+}
+
 export type WorkbenchTranscriptObservation =
   | WorkbenchTranscriptAtomicObservation
   | WorkbenchTranscriptCaptureGapObservation
+  | WorkbenchTranscriptProviderTurnScopeObservation
   | {
     kind: "canonicalWindow";
     contentVersion: number;

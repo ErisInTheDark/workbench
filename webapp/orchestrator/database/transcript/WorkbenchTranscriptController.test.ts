@@ -10,7 +10,10 @@ import { test } from "node:test";
 import WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 import WorkbenchTranscriptCaptureGapController from "./WorkbenchTranscriptCaptureGapController.ts";
 import WorkbenchTranscriptController from "./WorkbenchTranscriptController.ts";
-import type { WorkbenchTranscriptObservation } from "./workbench-transcript-types.ts";
+import type {
+  WorkbenchTranscriptAtomicObservation,
+  WorkbenchTranscriptObservation,
+} from "./workbench-transcript-types.ts";
 
 function deferred<Value>() {
   let resolve!: (value: Value) => void;
@@ -20,7 +23,7 @@ function deferred<Value>() {
   return { promise, resolve };
 }
 
-function observationsFor(threadId: string): WorkbenchTranscriptObservation[] {
+function observationsFor(threadId: string): WorkbenchTranscriptAtomicObservation[] {
   return [{
     activityAt: 1,
     createdAt: 1,
@@ -204,7 +207,9 @@ test("durable item facts refresh subscriptions only at complete projection bound
           ? [observation.entry.threadId]
           : observation.kind === "browse"
             ? [observation.entry.threadId]
-            : observation.kind === "canonicalWindow" || observation.kind === "captureGap"
+            : observation.kind === "canonicalWindow"
+              || observation.kind === "providerTurnScope"
+              || observation.kind === "captureGap"
               ? [observation.threadId]
               : observation.threadId
                 ? [observation.threadId]
@@ -285,6 +290,27 @@ test("durable item facts refresh subscriptions only at complete projection bound
     assert.equal(reads, 2);
 
     await awaitNextPublication({
+      completeTurnIds: ["turn"],
+      kind: "providerTurnScope",
+      observations: [{
+        createdAt: 1,
+        durationMs: 1,
+        endedAt: 2,
+        harnessId: "codex",
+        kind: "turn",
+        nativeLocation: "C:/project",
+        nativeThreadId: "thread",
+        nativeTurnId: "turn",
+        startedAt: 1,
+        state: "completed",
+        threadId: "thread",
+        turnId: "turn",
+      }],
+      threadId: "thread",
+    });
+    assert.equal(reads, 3);
+
+    await awaitNextPublication({
       activityAt: 3,
       createdAt: 1,
       kind: "thread",
@@ -294,7 +320,7 @@ test("durable item facts refresh subscriptions only at complete projection bound
       title: "Thread",
       updatedAt: 3,
     });
-    assert.equal(reads, 3);
+    assert.equal(reads, 4);
 
     await awaitNextPublication({
       entry: {
@@ -312,7 +338,7 @@ test("durable item facts refresh subscriptions only at complete projection bound
       },
       kind: "browse",
     }, "workbench");
-    assert.equal(reads, 4);
+    assert.equal(reads, 5);
   } finally {
     controller.dispose();
   }
@@ -380,7 +406,12 @@ test("capture gaps block only per-thread compatibility and cutover while direct 
     recovered.assertReady();
     assert.deepEqual(recovered.pendingRecoveryThreadIds, ["provider-thread"]);
     await recovered.record(
-      observationsFor("provider-thread"),
+      [{
+        completeTurnIds: ["turn-provider-thread"],
+        kind: "providerTurnScope",
+        observations: observationsFor("provider-thread"),
+        threadId: "provider-thread",
+      }],
       { recoveryBoundary: true, source: "provider" },
     );
     assert.deepEqual(recovered.pendingRecoveryThreadIds, []);

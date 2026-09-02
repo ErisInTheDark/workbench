@@ -2262,6 +2262,70 @@ test("questionnaire and Browse history reads are latest-wins within one project"
   assert.deepEqual(current?.browseResultEntries, []);
 }));
 
+test("questionnaire history keeps last-known answers through refresh failures and clears on later empty success", async () => {
+  const statusMessages: string[] = [];
+  await withClient(async (client, socket) => {
+    const source = activeThread();
+    source.turns[0]!.items = [{
+      id: "anchor-turn",
+      memoryCitation: null,
+      phase: "commentary",
+      text: "choose",
+      type: "agentMessage",
+    }];
+    client.selectThreadPayload(source);
+    const requests: SocketRequest[] = [];
+    FakeWebSocket.intercept = (_target, request) => {
+      if (request.method !== "questionnaire/history/list") return false;
+      requests.push(request);
+      return true;
+    };
+    const trigger = (requestKey: string) => socket.notify("questionnaire/resolved", {
+      requestKey,
+      threadId: "thread",
+      turnId: "turn",
+    });
+
+    trigger("settled");
+    await waitForRequest(socket, "questionnaire/history/list");
+    socket.respond(requests[0]!.id, { data: [questionnaireEntry("turn", "settled")] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const hasQuestionnaire = () => client.getSnapshot().currentThread?.turns[0]?.items.some(
+      (item) => item.id.startsWith("workbench:questionnaire-history:"),
+    );
+    assert.equal(hasQuestionnaire(), true);
+
+    trigger("failure-one");
+    await waitForRequest(socket, "questionnaire/history/list", 1);
+    socket.fail(requests[1]!.id, "temporarily unavailable");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(hasQuestionnaire(), true);
+    assert.deepEqual(statusMessages, ["Unable to refresh questionnaire history; showing the last known answers."]);
+
+    trigger("failure-two");
+    await waitForRequest(socket, "questionnaire/history/list", 2);
+    socket.fail(requests[2]!.id, "still unavailable");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(hasQuestionnaire(), true);
+    assert.equal(statusMessages.length, 1);
+
+    trigger("stale-failure");
+    trigger("newer-success");
+    await waitForRequest(socket, "questionnaire/history/list", 4);
+    socket.respond(requests[4]!.id, { data: [questionnaireEntry("turn", "settled")] });
+    socket.fail(requests[3]!.id, "stale failure");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(hasQuestionnaire(), true);
+    assert.equal(statusMessages.length, 1);
+
+    trigger("empty-success");
+    await waitForRequest(socket, "questionnaire/history/list", 5);
+    socket.respond(requests[5]!.id, { data: [] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(hasQuestionnaire(), false);
+  }, { onStatusMessage: (message) => statusMessages.push(message) });
+});
+
 test("sidebar history preserves questionnaires with reused request keys", async () => withClient(async (client) => {
   const source = activeThread();
   source.turns = ["older", "newer"].map((turnId) => ({

@@ -1,10 +1,13 @@
 /*
- * CodexTranscriptProviderContext: Workbench identity and timestamps attached to provider transcript facts. Keywords: codex, transcript, provider, context.
- * createCodexTranscriptProviderThreadObservation: project one provider thread into its atomic Workbench metadata fact. Keywords: codex, transcript, provider, thread.
- * createCodexTranscriptProviderTurnObservation: project one provider turn into its atomic Workbench lifecycle fact. Keywords: codex, transcript, provider, turn.
- * createCodexTranscriptProviderItemObservation: project one provider item lifecycle without reading storage. Keywords: codex, transcript, provider, item.
- * createCodexTranscriptProviderDynamicToolObservation: project one provider dynamic-tool request without reading storage. Keywords: codex, transcript, provider, tool.
- * createCodexTranscriptProviderThreadObservations: project one complete provider thread response into ordered atomic facts. Keywords: codex, transcript, provider, snapshot.
+ * Exports:
+ * - CodexTranscriptProviderContext: Workbench identity and timestamps attached to provider transcript facts. Keywords: codex, transcript, provider, context.
+ * - createCodexTranscriptProviderThreadObservation: project one provider thread into its atomic Workbench metadata fact. Keywords: codex, transcript, provider, thread.
+ * - createCodexTranscriptProviderTurnObservation: project one provider turn into its atomic Workbench lifecycle fact. Keywords: codex, transcript, provider, turn.
+ * - createCodexTranscriptProviderItemObservation: project one provider item lifecycle without reading storage. Keywords: codex, transcript, provider, item.
+ * - createCodexTranscriptProviderDynamicToolObservation: project one provider dynamic-tool request without reading storage. Keywords: codex, transcript, provider, tool.
+ * - createCodexTranscriptProviderTurnScopeObservation: project one complete provider turn into a replacement boundary. Keywords: codex, transcript, provider, replacement.
+ * - createCodexTranscriptProviderThreadObservations: project one complete provider thread response into ordered atomic facts. Keywords: codex, transcript, provider, snapshot.
+ * - createCodexTranscriptProviderThreadScopeObservation: project complete turns from one provider thread response into a replacement boundary. Keywords: codex, transcript, provider, replacement.
  */
 import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/JsonValue.ts";
 import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
@@ -13,9 +16,12 @@ import type { Turn } from "../lib/codex/generated/app-server/v2/Turn.ts";
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptItemLifecycle,
+  WorkbenchTranscriptProviderTurnScopeObservation,
 } from "./database/transcript/workbench-transcript-types.ts";
+import { normalizeThreadItems } from "../lib/codex/thread-item-normalization.ts";
 import type { JsonRpcRequest } from "./bridge-types.ts";
 import { createFirstTurnItemOwners } from "./codex-transcript-item-ownership.ts";
+import { mergeThreadItem } from "./codex-transcript-item-merge.ts";
 import { asRecord, asString } from "./codex-transcript-normalizers.ts";
 import { createDynamicToolCallItem } from "./codex-transcript-timeline.ts";
 
@@ -31,6 +37,13 @@ export interface CodexTranscriptProviderContext {
 
 function secondsToMilliseconds(value: number | null) {
   return value === null ? null : Math.round(value * 1_000);
+}
+
+function normalizeProviderTurn(turn: Turn): Turn {
+  return {
+    ...turn,
+    items: normalizeThreadItems(turn.items, { mergeDuplicateItems: mergeThreadItem }),
+  };
 }
 
 export function createCodexTranscriptProviderThreadObservation(
@@ -147,14 +160,15 @@ export function createCodexTranscriptProviderThreadObservations(
   thread: Thread,
   context: CodexTranscriptProviderContext,
 ): WorkbenchTranscriptAtomicObservation[] {
-  const itemOwners = createFirstTurnItemOwners(thread.turns.map((turn) => ({
+  const turns = thread.turns.map(normalizeProviderTurn);
+  const itemOwners = createFirstTurnItemOwners(turns.map((turn) => ({
     itemIds: turn.items.map(({ id }) => id),
     turnId: turn.id,
   })));
   const observations: WorkbenchTranscriptAtomicObservation[] = [
     createCodexTranscriptProviderThreadObservation(thread.id, context),
   ];
-  for (const [turnIndex, turn] of thread.turns.entries()) {
+  for (const [turnIndex, turn] of turns.entries()) {
     observations.push(createCodexTranscriptProviderTurnObservation({
       context,
       threadId: thread.id,
@@ -173,4 +187,61 @@ export function createCodexTranscriptProviderThreadObservations(
     }
   }
   return observations;
+}
+
+export function createCodexTranscriptProviderTurnScopeObservation({
+  context,
+  threadId,
+  turn,
+  turnIndex,
+}: {
+  context: CodexTranscriptProviderContext;
+  threadId: string;
+  turn: Turn;
+  turnIndex?: number;
+}): WorkbenchTranscriptProviderTurnScopeObservation {
+  const normalizedTurn = normalizeProviderTurn(turn);
+  return {
+    completeTurnIds: [normalizedTurn.id],
+    kind: "providerTurnScope",
+    observations: [
+      createCodexTranscriptProviderTurnObservation({
+        context,
+        threadId,
+        turn: normalizedTurn,
+        turnIndex,
+      }),
+      ...normalizedTurn.items.map((item) => createCodexTranscriptProviderItemObservation({
+        item,
+        lifecycle: normalizedTurn.status === "inProgress" ? "streaming" : "completed",
+        observedAt: Math.round(
+          (normalizedTurn.completedAt ?? normalizedTurn.startedAt ?? context.updatedAt / 1_000) * 1_000,
+        ),
+        threadId,
+        turnId: normalizedTurn.id,
+      })),
+    ],
+    threadId,
+  };
+}
+
+export function createCodexTranscriptProviderThreadScopeObservation(
+  thread: Thread,
+  context: CodexTranscriptProviderContext,
+): WorkbenchTranscriptProviderTurnScopeObservation {
+  const completeTurnIds = thread.turns
+    .filter(({ itemsView }) => itemsView === "full")
+    .map(({ id }) => id);
+  const completeTurnIdSet = new Set(completeTurnIds);
+  return {
+    completeTurnIds,
+    kind: "providerTurnScope",
+    observations: createCodexTranscriptProviderThreadObservations({
+      ...thread,
+      turns: thread.turns.map((turn) => (
+        completeTurnIdSet.has(turn.id) ? turn : { ...turn, items: [] }
+      )),
+    }, context),
+    threadId: thread.id,
+  };
 }
