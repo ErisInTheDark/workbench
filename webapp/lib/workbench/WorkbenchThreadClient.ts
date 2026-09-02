@@ -5234,6 +5234,14 @@ function WorkbenchThreadClient(
         }
         throw error;
       }
+      void publishAcceptedIntent({
+        ...(materializingDraftId ? { draftId: materializingDraftId } : {}),
+        harness,
+        projectId: operationProjectContext.projectId,
+        threadId: resolvedThreadId,
+        title: firstMessagePreview || "New thread",
+        turnId: turnStartResponse.turn.id,
+      });
       if (
         !isSendProjectCurrent()
         || !isThreadOperationIdentityCurrent(turnStartFence)
@@ -5252,14 +5260,6 @@ function WorkbenchThreadClient(
         optimisticInputs.transition(pendingInitialOptimisticHandle, "sent");
         bumpOverlayRevisionForKey(getThreadStateKey(harness, resolvedThreadId), "optimisticRevision");
       }
-      void publishAcceptedIntent({
-        ...(materializingDraftId ? { draftId: materializingDraftId } : {}),
-        harness,
-        projectId: operationProjectContext.projectId,
-        threadId: resolvedThreadId,
-        title: firstMessagePreview || "New thread",
-        turnId: optimisticTurnId,
-      });
       if (!pendingInitialOptimisticHandle && harness !== "opencode" && !recoveryClientUserMessageId) {
         enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "initial", "sent", liveThread);
       }

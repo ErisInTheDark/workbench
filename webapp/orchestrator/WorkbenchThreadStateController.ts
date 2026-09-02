@@ -75,10 +75,7 @@ import AtomicJsonStore from "./AtomicJsonStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import WorkbenchHomeThreadDisplayOrderStore from "./WorkbenchHomeThreadDisplayOrderStore";
 import WorkbenchPinnedThreadLayoutStore from "./WorkbenchPinnedThreadLayoutStore";
-import WorkbenchThreadStateStore, {
-  describeWorkbenchThreadStateParityIssue,
-  describeWorkbenchThreadStateStoreFailure,
-} from "./WorkbenchThreadStateStore";
+import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 import {
   conformStoredWorkbenchThreadStateRecord,
   parseWorkbenchThreadStateEntry,
@@ -939,6 +936,7 @@ export default class WorkbenchThreadStateController {
     await this.homeDisplayOrder.waitForIdle();
     await this.pinnedLayout.waitForIdle();
     await this.json.waitForIdle();
+    await this.options.threadStateStore?.waitForIdle();
   }
 
   private async getProject(projectId: string) {
@@ -992,7 +990,7 @@ export default class WorkbenchThreadStateController {
           decoded = this.decodeStoredProjectState(legacy, projectId);
         }
       }
-      await this.baselineProjectSqlite(projectId, decoded);
+      this.baselineProjectSqlite(projectId, decoded);
       return decoded;
     });
   }
@@ -1959,7 +1957,7 @@ export default class WorkbenchThreadStateController {
         version: 4,
       } satisfies StoredProjectState;
       await this.json.write(this.filePath(projectId), document);
-      await this.verifyProjectSqlite(projectId, document);
+      this.verifyProjectSqlite(projectId, document);
     });
   }
 
@@ -1967,44 +1965,24 @@ export default class WorkbenchThreadStateController {
     return this.decodeStoredProjectState(candidate as Partial<StoredProjectState>, projectId);
   }
 
-  private async baselineProjectSqlite(projectId: string, document: StoredProjectState) {
+  private baselineProjectSqlite(projectId: string, document: StoredProjectState) {
     if (!this.options.threadStateStore) return;
-    try {
-      const issue = describeWorkbenchThreadStateParityIssue(
-        `project thread state project=${sanitizeLogValue(projectId)}`,
-        await this.options.threadStateStore.baselineProject(
-          projectId,
-          document,
-          (candidate) => this.conformSqliteProject(candidate, projectId),
-        ),
-      );
-      if (issue) this.options.log?.(issue);
-    } catch (error) {
-      this.options.log?.(describeWorkbenchThreadStateStoreFailure(
-        `project thread state baseline project=${sanitizeLogValue(projectId)}`,
-        error,
-      ));
-    }
+    this.options.threadStateStore.baselineProject(
+      projectId,
+      document,
+      (candidate) => this.conformSqliteProject(candidate, projectId),
+      (message) => this.options.log?.(message),
+    );
   }
 
-  private async verifyProjectSqlite(projectId: string, document: StoredProjectState) {
+  private verifyProjectSqlite(projectId: string, document: StoredProjectState) {
     if (!this.options.threadStateStore) return;
-    try {
-      const issue = describeWorkbenchThreadStateParityIssue(
-        `project thread state project=${sanitizeLogValue(projectId)}`,
-        await this.options.threadStateStore.writeAndVerifyProject(
-          projectId,
-          document,
-          (candidate) => this.conformSqliteProject(candidate, projectId),
-        ),
-      );
-      if (issue) this.options.log?.(issue);
-    } catch (error) {
-      this.options.log?.(describeWorkbenchThreadStateStoreFailure(
-        `project thread state write project=${sanitizeLogValue(projectId)}`,
-        error,
-      ));
-    }
+    this.options.threadStateStore.writeAndVerifyProject(
+      projectId,
+      document,
+      (candidate) => this.conformSqliteProject(candidate, projectId),
+      (message) => this.options.log?.(message),
+    );
   }
 }
 

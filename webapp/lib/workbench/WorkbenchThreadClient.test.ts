@@ -1957,7 +1957,7 @@ test("project changes during draft materialization prevent stale general dispatc
   assert.equal(socket.requests.some((request) => request.method === "turn/steer" && request.params?.threadId === "materialized"), false);
 }));
 
-test("project changes after draft turn dispatch prevent acceptance and materialization", async () => {
+test("project changes after draft turn dispatch preserve durable acceptance without stale materialization", async () => {
   const acceptedIntents: WorkbenchAcceptedIntent[] = [];
   await withClient(async (client, socket) => {
     const draft = { ...activeThread("codex", "draft:00000000-0000-4000-8000-000000000002", "completed"), isDraft: true, source: "draft" };
@@ -1984,7 +1984,14 @@ test("project changes after draft turn dispatch prevent acceptance and materiali
     socket.respond(startRequest!.id, { turn: wireThread("materialized-after-dispatch", "new-turn").turns[0] });
 
     assert.equal(await send, null);
-    assert.deepEqual(acceptedIntents, []);
+    assert.deepEqual(acceptedIntents, [{
+      draftId: "00000000-0000-4000-8000-000000000002",
+      harness: "codex",
+      projectId: "project",
+      threadId: "materialized-after-dispatch",
+      title: "draft",
+      turnId: "new-turn",
+    }]);
     assert.deepEqual(materialized, []);
   }, {
     publishAcceptedIntent: async (event) => { acceptedIntents.push(event); },

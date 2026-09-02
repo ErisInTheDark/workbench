@@ -3,7 +3,7 @@
  * - WorkbenchThreadStateGlobalDocumentId/WorkbenchThreadStateStoreDatabase: typed SQLite document identities and database port. Keywords: thread state, sqlite, storage, boundary.
  * - WorkbenchThreadStateParityResult: bounded semantic comparison result without document values. Keywords: thread state, parity, diagnostics.
  * - describeWorkbenchThreadStateParityIssue/describeWorkbenchThreadStateStoreFailure: format bounded SQLite shadow diagnostics without document values. Keywords: thread state, sqlite, diagnostics, sanitization.
- * - default WorkbenchThreadStateStore: persist, compare, and read project and Workbench-wide thread-state documents through the shared database worker. Keywords: thread state, sqlite, store, aggregate, parity.
+ * - default WorkbenchThreadStateStore: persist, compare, queue, and drain project and Workbench-wide SQLite shadow documents through the shared database worker. Keywords: thread state, sqlite, store, aggregate, parity, queue, lifecycle.
  */
 import { selectRows, upsertRow, type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
 
@@ -41,9 +41,14 @@ export function describeWorkbenchThreadStateStoreFailure(label: string, error: u
 }
 
 type ConformDocument = (candidate: unknown) => object;
+type ReportIssue = (message: string) => void;
 
 function sanitizeIdentity(identity: string) {
   return identity.replace(/[^a-zA-Z0-9_./:-]/gu, "?").slice(0, 160);
+}
+
+function globalDocumentLabel(id: WorkbenchThreadStateGlobalDocumentId) {
+  return id === "homeDisplayOrder" ? "home thread display order" : "pinned thread layout";
 }
 
 function encodeDocument(document: object, identity: string) {
@@ -90,6 +95,8 @@ function compareDocument(candidate: unknown, current: object, conform: ConformDo
 }
 
 export default class WorkbenchThreadStateStore {
+  private operationQueue: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly database: WorkbenchThreadStateStoreDatabase,
     private readonly now: () => number = Date.now,
@@ -115,21 +122,37 @@ export default class WorkbenchThreadStateStore {
     ]);
   }
 
-  async baselineProject(projectId: string, document: object, conform: ConformDocument): Promise<WorkbenchThreadStateParityResult> {
-    const stored = await this.readProject(projectId);
-    if (stored === null) {
-      await this.writeProject(projectId, document);
-      return { kind: "seeded", paths: [] };
-    }
-    const parity = compareDocument(stored, document, conform);
-    if (parity.kind !== "matched") await this.writeProject(projectId, document);
-    return parity;
+  baselineProject(projectId: string, document: object, conform: ConformDocument, reportIssue: ReportIssue) {
+    const identity = sanitizeIdentity(projectId);
+    this.schedule(
+      `project thread state project=${identity}`,
+      `project thread state baseline project=${identity}`,
+      async () => {
+        const stored = await this.readProject(projectId);
+        if (stored === null) {
+          await this.writeProject(projectId, document);
+          return { kind: "seeded", paths: [] };
+        }
+        const parity = compareDocument(stored, document, conform);
+        if (parity.kind !== "matched") await this.writeProject(projectId, document);
+        return parity;
+      },
+      reportIssue,
+    );
   }
 
-  async writeAndVerifyProject(projectId: string, document: object, conform: ConformDocument): Promise<WorkbenchThreadStateParityResult> {
-    await this.writeProject(projectId, document);
-    const stored = await this.readProject(projectId);
-    return stored === null ? { kind: "invalid", paths: ["root"] } : compareDocument(stored, document, conform);
+  writeAndVerifyProject(projectId: string, document: object, conform: ConformDocument, reportIssue: ReportIssue) {
+    const identity = sanitizeIdentity(projectId);
+    this.schedule(
+      `project thread state project=${identity}`,
+      `project thread state write project=${identity}`,
+      async () => {
+        await this.writeProject(projectId, document);
+        const stored = await this.readProject(projectId);
+        return stored === null ? { kind: "invalid", paths: ["root"] } : compareDocument(stored, document, conform);
+      },
+      reportIssue,
+    );
   }
 
   async readGlobal(id: WorkbenchThreadStateGlobalDocumentId): Promise<unknown | null> {
@@ -152,20 +175,60 @@ export default class WorkbenchThreadStateStore {
     ]);
   }
 
-  async baselineGlobal(id: WorkbenchThreadStateGlobalDocumentId, document: object, conform: ConformDocument): Promise<WorkbenchThreadStateParityResult> {
-    const stored = await this.readGlobal(id);
-    if (stored === null) {
-      await this.writeGlobal(id, document);
-      return { kind: "seeded", paths: [] };
-    }
-    const parity = compareDocument(stored, document, conform);
-    if (parity.kind !== "matched") await this.writeGlobal(id, document);
-    return parity;
+  baselineGlobal(id: WorkbenchThreadStateGlobalDocumentId, document: object, conform: ConformDocument, reportIssue: ReportIssue) {
+    const label = globalDocumentLabel(id);
+    this.schedule(
+      label,
+      `${label} baseline`,
+      async () => {
+        const stored = await this.readGlobal(id);
+        if (stored === null) {
+          await this.writeGlobal(id, document);
+          return { kind: "seeded", paths: [] };
+        }
+        const parity = compareDocument(stored, document, conform);
+        if (parity.kind !== "matched") await this.writeGlobal(id, document);
+        return parity;
+      },
+      reportIssue,
+    );
   }
 
-  async writeAndVerifyGlobal(id: WorkbenchThreadStateGlobalDocumentId, document: object, conform: ConformDocument): Promise<WorkbenchThreadStateParityResult> {
-    await this.writeGlobal(id, document);
-    const stored = await this.readGlobal(id);
-    return stored === null ? { kind: "invalid", paths: ["root"] } : compareDocument(stored, document, conform);
+  writeAndVerifyGlobal(id: WorkbenchThreadStateGlobalDocumentId, document: object, conform: ConformDocument, reportIssue: ReportIssue) {
+    const label = globalDocumentLabel(id);
+    this.schedule(
+      label,
+      `${label} write`,
+      async () => {
+        await this.writeGlobal(id, document);
+        const stored = await this.readGlobal(id);
+        return stored === null ? { kind: "invalid", paths: ["root"] } : compareDocument(stored, document, conform);
+      },
+      reportIssue,
+    );
+  }
+
+  async waitForIdle() {
+    await this.operationQueue;
+  }
+
+  private schedule(
+    parityLabel: string,
+    failureLabel: string,
+    operation: () => Promise<WorkbenchThreadStateParityResult>,
+    reportIssue: ReportIssue,
+  ) {
+    const result = this.operationQueue.then(operation, operation).then(
+      (parity) => {
+        const issue = describeWorkbenchThreadStateParityIssue(parityLabel, parity);
+        if (issue) reportIssue(issue);
+      },
+      (error: unknown) => {
+        reportIssue(describeWorkbenchThreadStateStoreFailure(failureLabel, error));
+      },
+    );
+    this.operationQueue = result.catch((error: unknown) => {
+      console.error(describeWorkbenchThreadStateStoreFailure(`${failureLabel} reporting`, error));
+    });
   }
 }

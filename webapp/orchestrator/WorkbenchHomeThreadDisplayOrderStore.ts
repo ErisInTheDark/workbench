@@ -19,10 +19,7 @@ import type { WorkbenchThreadDisplaySection } from "../lib/workbench/thread/thre
 import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
 import type { WorkbenchHomeThreadDisplayOrderSnapshot } from "../lib/workbench/thread/thread-state";
 import AtomicJsonStore from "./AtomicJsonStore";
-import WorkbenchThreadStateStore, {
-  describeWorkbenchThreadStateParityIssue,
-  describeWorkbenchThreadStateStoreFailure,
-} from "./WorkbenchThreadStateStore";
+import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 
 const StoredHomeThreadDisplayOrderSchema = z.object({
   displayOrder: WorkbenchHomeThreadDisplayOrderSchema,
@@ -119,8 +116,8 @@ export default class WorkbenchHomeThreadDisplayOrderStore {
       this.reportRepairs(conformed.repairedPaths);
       this.state = conformed.data;
       return this.state;
-    }).then(async (state) => {
-      await this.baselineSqlite(state);
+    }).then((state) => {
+      this.baselineSqlite(state);
       return state;
     });
     return await this.loadPromise;
@@ -136,7 +133,7 @@ export default class WorkbenchHomeThreadDisplayOrderStore {
 
   private async commit(next: StoredHomeThreadDisplayOrder) {
     await this.json.write(this.filePath, next);
-    await this.verifySqlite(next);
+    this.verifySqlite(next);
     this.state = next;
     return this.snapshot(next);
   }
@@ -145,30 +142,24 @@ export default class WorkbenchHomeThreadDisplayOrderStore {
     return conformToZodSchema(StoredHomeThreadDisplayOrderSchema, candidate, EMPTY_STORED_ORDER).data;
   }
 
-  private async baselineSqlite(state: StoredHomeThreadDisplayOrder) {
+  private baselineSqlite(state: StoredHomeThreadDisplayOrder) {
     if (!this.sqlite) return;
-    try {
-      const issue = describeWorkbenchThreadStateParityIssue(
-        "home thread display order",
-        await this.sqlite.baselineGlobal("homeDisplayOrder", state, (candidate) => this.conformSqlite(candidate)),
-      );
-      if (issue) this.reportSqliteIssue(issue);
-    } catch (error) {
-      this.reportSqliteIssue(describeWorkbenchThreadStateStoreFailure("home thread display order baseline", error));
-    }
+    this.sqlite.baselineGlobal(
+      "homeDisplayOrder",
+      state,
+      (candidate) => this.conformSqlite(candidate),
+      this.reportSqliteIssue,
+    );
   }
 
-  private async verifySqlite(state: StoredHomeThreadDisplayOrder) {
+  private verifySqlite(state: StoredHomeThreadDisplayOrder) {
     if (!this.sqlite) return;
-    try {
-      const issue = describeWorkbenchThreadStateParityIssue(
-        "home thread display order",
-        await this.sqlite.writeAndVerifyGlobal("homeDisplayOrder", state, (candidate) => this.conformSqlite(candidate)),
-      );
-      if (issue) this.reportSqliteIssue(issue);
-    } catch (error) {
-      this.reportSqliteIssue(describeWorkbenchThreadStateStoreFailure("home thread display order write", error));
-    }
+    this.sqlite.writeAndVerifyGlobal(
+      "homeDisplayOrder",
+      state,
+      (candidate) => this.conformSqlite(candidate),
+      this.reportSqliteIssue,
+    );
   }
 
   private snapshot(state: StoredHomeThreadDisplayOrder): WorkbenchHomeThreadDisplayOrderSnapshot {

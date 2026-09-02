@@ -279,6 +279,7 @@ test("project, pinned, and home thread state mirror to SQLite and report only se
     controller = createController();
     await controller.openGlobal("reopened", 6);
     await controller.getSnapshot("project");
+    await store.waitForIdle();
     assert.equal(logs.some((message) => message.startsWith("SQLite ")), false);
 
     await controller.dispose();
@@ -286,6 +287,7 @@ test("project, pinned, and home thread state mirror to SQLite and report only se
     logs.length = 0;
     controller = createController();
     await controller.getSnapshot("project");
+    await store.waitForIdle();
     const parityLog = logs.find((message) => message.includes("project thread state") && message.includes("mismatched")) ?? "";
     assert.match(parityLog, /paths=root\./u);
     assert.equal(parityLog.includes("Private alpha title"), false);
@@ -298,16 +300,26 @@ test("project, pinned, and home thread state mirror to SQLite and report only se
   }
 });
 
-test("SQLite shadow failure does not reverse an accepted JSON-backed thread mutation", async () => {
+test("pending SQLite shadow cannot block draft materialization and later failures remain bounded", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-sqlite-failure-"));
   const logs: string[] = [];
   const failure = new Error("sqlite shadow unavailable");
+  let releaseShadow: (() => void) | null = null;
+  let markShadowStarted: (() => void) | null = null;
+  let holdShadow = false;
+  const shadowRelease = new Promise<void>((resolve) => { releaseShadow = resolve; });
+  const shadowStarted = new Promise<void>((resolve) => { markShadowStarted = resolve; });
   const store = new WorkbenchThreadStateStore({
-    executeTransaction: async () => { throw failure; },
-    query: async () => { throw failure; },
+    executeTransaction: async () => {
+      if (!holdShadow) return { changes: 1 };
+      markShadowStarted?.();
+      await shadowRelease;
+      throw failure;
+    },
+    query: async () => [],
   });
   const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog,
+    getProjectCatalog: () => ({ data: [projectOption("project", root)], rootPath: root }),
     log: (message) => logs.push(message),
     projectState: projectState(),
     publish: () => undefined,
@@ -317,9 +329,14 @@ test("SQLite shadow failure does not reverse an accepted JSON-backed thread muta
     threadStateStore: store,
   });
   try {
-    await controller.open("observer", "project");
+    await controller.openGlobal("observer", 6);
+    await store.waitForIdle();
+    await controller.open("observer", "project", 4);
+    holdShadow = true;
+
     const draftId = "00000000-0000-4000-8000-000000000302";
-    const response = await controller.handleRequest("observer", {
+    let upsertSettled = false;
+    const responsePromise = controller.handleRequest("observer", {
       draft: {
         agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 1,
         draftId, harness: "codex", model: null, profileId: null, projectId: "project", prompt: "Kept draft",
@@ -327,12 +344,41 @@ test("SQLite shadow failure does not reverse an accepted JSON-backed thread muta
       },
       method: "workbench/thread-state/draft/upsert",
       projectId: "project",
+    }).then((result) => {
+      upsertSettled = true;
+      return result;
     });
+    await shadowStarted;
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(upsertSettled, true);
+    const response = await responsePromise;
     assert.equal("result" in response && (response.result as { accepted?: boolean }).accepted, true);
-    const stored = JSON.parse(await fs.readFile(threadStatePath(root, "project"), "utf8")) as { drafts?: Array<{ prompt?: string }> };
-    assert.equal(stored.drafts?.[0]?.prompt, "Kept draft");
+    const accepted = await controller.acceptIntent("observer", {
+      draftId,
+      harness: "codex",
+      projectId: "project",
+      threadId: "materialized",
+      title: "Materialized",
+      turnId: "turn",
+    });
+    assert.equal(accepted.accepted, true);
+    const snapshot = await controller.getSnapshot("project");
+    assert.equal(snapshot.entries.some((entry) => entry.entryKind === "draft"), false);
+    assert.equal(snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "materialized"), true);
+    const stored = JSON.parse(await fs.readFile(threadStatePath(root, "project"), "utf8")) as {
+      drafts?: unknown[];
+      records?: Array<{ identity?: { threadId?: string } }>;
+    };
+    assert.deepEqual(stored.drafts, []);
+    assert.equal(stored.records?.some((record) => record.identity?.threadId === "materialized"), true);
+    assert.equal(logs.some((message) => message.includes("sqlite shadow unavailable")), false);
+
+    releaseShadow?.();
+    await store.waitForIdle();
     assert.equal(logs.some((message) => message.includes("SQLite project thread state write") && message.includes("sqlite shadow unavailable")), true);
   } finally {
+    releaseShadow?.();
     await controller.dispose();
     await fs.rm(root, { force: true, recursive: true });
   }
