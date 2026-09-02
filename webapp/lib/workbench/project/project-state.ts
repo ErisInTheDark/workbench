@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchProjectsPayloadSchema: strict project catalog wire contract. Keywords: project, catalog, schema.
+ * - WorkbenchProjectsPayloadSchema: strict project catalog wire contract with optional icon descriptors. Keywords: project, catalog, icon, schema.
  * - WorkbenchProjectSnapshotSchema: strict project tree and change-summary wire contract. Keywords: project, tree, snapshot, schema.
  * - WorkbenchProjectStateUpdateSchema/WorkbenchProjectStateUpdate: successful pushed project snapshot update. Keywords: project, websocket, revision.
  * - WorkbenchProjectStateRequestSchema/WorkbenchProjectStateRequest: refresh, create, and delete requests carried by the existing project observation. Keywords: project, mutation, websocket.
@@ -19,8 +19,14 @@ const WorkbenchProjectRootSchema = z.object({
   rootPath: z.string(),
 }).strict();
 
+const WorkbenchProjectIconSchema = z.object({
+  path: z.string().min(1),
+  rootId: z.string().min(1),
+}).strict();
+
 const WorkbenchProjectOptionSchema = z.object({
   id: z.string().min(1),
+  icon: WorkbenchProjectIconSchema.optional(),
   kind: z.enum(["git", "workspace", "workbench-library"]),
   lastCommitTimeMs: z.number().nullable().nonoptional(),
   name: z.string(),

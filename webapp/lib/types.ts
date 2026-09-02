@@ -76,6 +76,7 @@
  * - WorkbenchAgentDefinition: resolved agent definition.
  * - WorkbenchSkillSummary: selectable skill summary.
  * - WorkbenchSkillDefinition: resolved skill definition.
+ * - WorkbenchProjectIcon: selected project icon asset descriptor.
  * - WorkbenchProjectOption: selectable project option.
  * - WorkbenchProjectRoot: project-root contract.
  * - WorkbenchProjectsPayload: project-list payload.
@@ -692,8 +693,14 @@ export interface WorkbenchSkillDefinition extends WorkbenchSkillSummary {
   content: string;
 }
 
+export interface WorkbenchProjectIcon {
+  path: string;
+  rootId: string;
+}
+
 export interface WorkbenchProjectOption {
   id: string;
+  icon?: WorkbenchProjectIcon;
   kind: "git" | "workspace" | "workbench-library";
   lastCommitTimeMs: number | null;
   name: string;

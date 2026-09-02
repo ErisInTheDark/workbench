@@ -1,9 +1,12 @@
 /*
  * Exports:
- * - No production exports; Node tests cover structured project catalog caching, coalescing, watcher invalidation, soft TTL refresh, CWD resolution, retry, and disposal. Keywords: project, catalog, cache, watcher, cwd, lifecycle, test.
+ * - No production exports; Node tests cover project icon assets, catalog caching, coalescing, watcher invalidation, soft TTL refresh, CWD resolution, retry, and disposal. Keywords: project, icon, asset, catalog, cache, watcher, cwd, lifecycle, test.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import type http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 
 import type { ResolvedProject } from "../lib/project";
@@ -40,8 +43,7 @@ function deferred<TValue>() {
   return { promise, reject, resolve };
 }
 
-function createProject(id: string): WorkbenchProjectOption {
-  const rootPath = `C:/projects/${id}`;
+function createProject(id: string, rootPath = `C:/projects/${id}`): WorkbenchProjectOption {
   return {
     id,
     kind: "git",
@@ -51,6 +53,35 @@ function createProject(id: string): WorkbenchProjectOption {
     rootPath,
     roots: [{ id, isPrimary: true, name: id, relativePath: id, rootPath }],
   };
+}
+
+function createIconResponse() {
+  let body = new Uint8Array();
+  let headers: Record<string, string | number> = {};
+  let statusCode = 200;
+  const response = {
+    end(value: string | Uint8Array = "") {
+      body = typeof value === "string" ? Buffer.from(value) : new Uint8Array(value);
+    },
+    writeHead(nextStatusCode: number, nextHeaders: Record<string, string | number>) {
+      statusCode = nextStatusCode;
+      headers = nextHeaders;
+    },
+  } as unknown as http.ServerResponse;
+  return {
+    response,
+    get body() { return body; },
+    get headers() { return headers; },
+    get statusCode() { return statusCode; },
+  };
+}
+
+function iconRequest(projectId: string) {
+  return {
+    headers: {},
+    method: "GET",
+    url: `/orchestrator/project-icons/${encodeURIComponent(projectId)}`,
+  } as http.IncomingMessage;
 }
 
 function resolveFromCatalog(
@@ -133,6 +164,69 @@ function createHarness() {
     watchers,
   };
 }
+
+test("serves catalog-selected PNG and ICO assets with bounded content types", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-icon-asset-"));
+  const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const icoBytes = Buffer.from([0x00, 0x00, 0x01, 0x00]);
+  await fs.writeFile(path.join(root, "favicon.png"), pngBytes);
+  await fs.writeFile(path.join(root, "favicon.ico"), icoBytes);
+  const pngProject = {
+    ...createProject("team/png", root),
+    icon: { path: "favicon.png", rootId: "team/png" },
+  };
+  const icoProject = {
+    ...createProject("team/ico", root),
+    icon: { path: "favicon.ico", rootId: "team/ico" },
+  };
+  const controller = new WorkbenchProjectCatalogController({
+    createWatcher: () => new FakeWatcher(root, () => undefined, false),
+    discoverProjects: async () => [pngProject, icoProject],
+    projectsRootPath: root,
+  });
+  context.after(async () => {
+    controller.dispose();
+    await fs.rm(root, { force: true, recursive: true });
+  });
+
+  const png = createIconResponse();
+  await controller.handleIconHttpRequest(iconRequest(pngProject.id), png.response);
+  assert.equal(png.statusCode, 200);
+  assert.equal(png.headers["Content-Type"], "image/png");
+  assert.equal(png.headers["X-Content-Type-Options"], "nosniff");
+  assert.deepEqual([...png.body], [...pngBytes]);
+
+  const ico = createIconResponse();
+  await controller.handleIconHttpRequest(iconRequest(icoProject.id), ico.response);
+  assert.equal(ico.statusCode, 200);
+  assert.equal(ico.headers["Content-Type"], "image/x-icon");
+  assert.deepEqual([...ico.body], [...icoBytes]);
+});
+
+test("rejects catalog icon descriptors that escape their project root", async (context) => {
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-icon-escape-"));
+  const projectRoot = path.join(temporaryRoot, "project");
+  await fs.mkdir(projectRoot);
+  await fs.writeFile(path.join(temporaryRoot, "outside.png"), "outside", "utf8");
+  const project = {
+    ...createProject("escape", projectRoot),
+    icon: { path: "../outside.png", rootId: "escape" },
+  };
+  const controller = new WorkbenchProjectCatalogController({
+    createWatcher: () => new FakeWatcher(temporaryRoot, () => undefined, false),
+    discoverProjects: async () => [project],
+    projectsRootPath: temporaryRoot,
+  });
+  context.after(async () => {
+    controller.dispose();
+    await fs.rm(temporaryRoot, { force: true, recursive: true });
+  });
+
+  const output = createIconResponse();
+  await controller.handleIconHttpRequest(iconRequest(project.id), output.response);
+  assert.equal(output.statusCode, 404);
+  assert.deepEqual(JSON.parse(Buffer.from(output.body).toString("utf8")), { error: "Project icon not found." });
+});
 
 test("reuses one structured catalog for repeated CWD resolution", async () => {
   const harness = createHarness();

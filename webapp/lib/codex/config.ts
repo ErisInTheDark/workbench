@@ -9,6 +9,7 @@
  * - getCodexAppServerReadyUrl: resolve the bridge readiness endpoint. Keywords: codex, readyz.
  * - getCodexAppServerHealthUrl: resolve the bridge health endpoint. Keywords: codex, healthz.
  * - getCodexTranscriptAssetUrl: map canonical transcript storage keys to the daemon HTTP asset route. Keywords: transcript, asset, daemon.
+ * - getWorkbenchProjectIconUrl: map one project identity to the daemon HTTP icon route. Keywords: project, icon, asset, daemon.
  */
 export const DEFAULT_CODEX_APP_SERVER_BRIDGE_PORT = "4500";
 export const DEFAULT_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${DEFAULT_CODEX_APP_SERVER_BRIDGE_PORT}`;
@@ -103,4 +104,8 @@ export function getCodexTranscriptAssetUrl(value: string) {
   return assetUrl.startsWith("/api/transcript-assets/")
     ? `${getCodexAppServerHttpOrigin()}/orchestrator/transcript-assets/${assetUrl.slice("/api/transcript-assets/".length)}`
     : value;
+}
+
+export function getWorkbenchProjectIconUrl(projectId: string, assetKey: string) {
+  return `${getCodexAppServerHttpOrigin()}/orchestrator/project-icons/${encodeURIComponent(projectId)}?asset=${encodeURIComponent(assetKey)}`;
 }

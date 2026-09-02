@@ -13,13 +13,17 @@ interface ProjectSnapshotHttpController {
   handleTreeHttpRequest(request: http.IncomingMessage, response: http.ServerResponse): Promise<void>;
 }
 
+interface ProjectCatalogHttpController extends HttpController {
+  handleIconHttpRequest(request: http.IncomingMessage, response: http.ServerResponse): Promise<void>;
+}
+
 export interface WorkbenchOrchestratorHttpRouterOptions {
   agentCommand: HttpController;
   bridgeRequest: HttpController;
   gitArc: HttpController;
   legacyMigrationSource: HttpController;
   mcp: HttpController;
-  projectCatalog: HttpController;
+  projectCatalog: ProjectCatalogHttpController;
   projectSnapshot: ProjectSnapshotHttpController;
   threadGit: HttpController;
   transcriptAssets?: HttpController;
@@ -98,6 +102,14 @@ export default class WorkbenchOrchestratorHttpRouter {
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
     const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
+    if (request.method === "GET" && requestPath.startsWith("/orchestrator/project-icons/")) {
+      try {
+        await this.options.projectCatalog.handleIconHttpRequest(request, response);
+      } catch (error) {
+        sendJson(response, 500, { error: error instanceof Error ? error.message : "Project icon request failed." });
+      }
+      return;
+    }
     if (this.options.transcriptAssets && request.method === "GET" && requestPath.startsWith("/orchestrator/transcript-assets/")) {
       try {
         await this.options.transcriptAssets.handleHttpRequest(request, response);

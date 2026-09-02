@@ -7,6 +7,7 @@
  */
 import type { ThreadPayload, ThreadSummary, WorkbenchSubagentSummary } from "../../types";
 import { areDeeplyEqual } from "../deep-equality";
+import { getIdentityAccentColor } from "../identity-accent-color";
 import type { WorkbenchSubagentCommandTarget } from "./command-matchers/workbench-cli";
 
 export interface ThreadAgentLabelParts {
@@ -28,15 +29,6 @@ const SUBAGENT_BACKGROUND_BATCH_SIZE = 4;
 
 function normalizeLabel(value: string | null | undefined) {
   return value?.trim() || null;
-}
-
-function hashThreadId(value: string) {
-  let hash = 2_166_136_261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16_777_619);
-  }
-  return hash >>> 0;
 }
 
 export function sortWorkbenchSubagents(subagents: readonly WorkbenchSubagentSummary[]) {
@@ -200,9 +192,11 @@ export function getThreadAgentAccentColor(
   subagent: Pick<WorkbenchSubagentSummary, "directSubagentIndex" | "parentThreadId">,
   chromaPercent = 90,
 ) {
-  const startingHue = hashThreadId(subagent.parentThreadId) % 360;
-  const hue = (startingHue + SUBAGENT_HUE_ROTATION_DEGREES * subagent.directSubagentIndex) % 360;
-  return `oklch(var(--oklch-text-lightness) ${chromaPercent}% ${hue}deg)`;
+  return getIdentityAccentColor(
+    subagent.parentThreadId,
+    chromaPercent,
+    SUBAGENT_HUE_ROTATION_DEGREES * subagent.directSubagentIndex,
+  );
 }
 
 export function getThreadAgentTabLabel(

@@ -2,6 +2,7 @@
  * Exports:
  * - getGitChanges: summarize tracked and untracked project file changes for the explorer. Keywords: git, changes, explorer.
  * - getHeadFileContent: read a tracked file from HEAD when available. Keywords: git, HEAD, file.
+ * - listGitVisibleFiles: list tracked and non-ignored untracked paths, optionally narrowed by Git pathspecs. Keywords: git, visible, tracked, untracked, pathspec.
  * - isGitTrackedFile: report whether Git tracks a project-relative path in its index. Keywords: git, tracked, file, delete.
  */
 import { execFile } from "node:child_process";
@@ -13,6 +14,7 @@ import type { ChangeSummary } from "./types";
 
 const execFileAsync = promisify(execFile);
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
+const notGitRepositoryMessage = "fatal: not a git repository";
 
 function normalizeDiffPath(rawPath: string) {
   let normalized = rawPath.trim();
@@ -139,6 +141,33 @@ export async function getHeadFileContent(rootDir: string, filePath: string): Pro
   } catch {
     return null;
   }
+}
+
+export async function listGitVisibleFiles(rootDir: string, pathspecs: readonly string[] = []) {
+  let stdout: string;
+  try {
+    ({ stdout } = await runGit(rootDir, [
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      ...pathspecs,
+    ]));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(notGitRepositoryMessage)) {
+      return [];
+    }
+    throw error;
+  }
+
+  return Array.from(new Set(
+    stdout
+      .split("\0")
+      .map((filePath) => filePath.replace(/\\/gu, "/"))
+      .filter(Boolean),
+  ));
 }
 
 export async function isGitTrackedFile(rootDir: string, filePath: string) {

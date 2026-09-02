@@ -1,12 +1,14 @@
 /*
  * Exports:
  * - WorkbenchProjectCatalogControllerOptions: injected project discovery, resolution, watcher, clock, logging, and TTL controls. Keywords: project, catalog, cache, watcher, test.
- * - default WorkbenchProjectCatalogController: own the structured project catalog, JIT snapshot replay, serialized HTTP payload, coalesced refresh, CWD resolution, and invalidation lifecycle. Keywords: project, catalog, cwd, cache, orchestrator.
+ * - default WorkbenchProjectCatalogController: own the structured project catalog, project icon assets, JIT snapshot replay, serialized HTTP payload, coalesced refresh, CWD resolution, and invalidation lifecycle. Keywords: project, catalog, icon, asset, cwd, cache, orchestrator.
  */
 import fs from "node:fs";
+import fileSystem from "node:fs/promises";
 import type http from "node:http";
+import path from "node:path";
 
-import { discoverProjects, normalizeRelativePath, projectsRoot, resolveProjectRootFromProjects } from "../lib/project";
+import { discoverProjects, isPathWithinRoot, normalizeRelativePath, projectsRoot, resolveProjectRootFromProjects } from "../lib/project";
 import type { WorkbenchProjectOption, WorkbenchProjectsPayload } from "../lib/types";
 import {
   resolveAgentEndpointProjectFromProjects,
@@ -15,6 +17,7 @@ import {
 import { logError as defaultLogError } from "./process-helpers";
 
 const DEFAULT_CACHE_TTL_MS = 15_000;
+const MAX_PROJECT_ICON_BYTES = 4 * 1024 * 1024;
 const IGNORED_DISCOVERY_SEGMENTS = new Set([".next", "build", "coverage", "dist", "node_modules"]);
 
 type CatalogCacheState = "coalesced" | "hit" | "miss" | "stale";
@@ -107,6 +110,27 @@ function sendError(response: http.ServerResponse, error: unknown) {
   }));
 }
 
+function sendIconError(response: http.ServerResponse, statusCode: number, error: string) {
+  sendSerializedJson(response, statusCode, JSON.stringify({ error }));
+}
+
+function projectIconContentType(filePath: string) {
+  return filePath.toLocaleLowerCase().endsWith(".ico") ? "image/x-icon" : "image/png";
+}
+
+class ProjectIconRequestError extends Error {
+  constructor(readonly statusCode: number, message: string) {
+    super(message);
+  }
+}
+
+function isMissingFileError(error: unknown) {
+  return Boolean(error && typeof error === "object" && "code" in error && (
+    error.code === "ENOENT"
+    || error.code === "ENOTDIR"
+  ));
+}
+
 export default class WorkbenchProjectCatalogController {
   private readonly cacheTtlMs: number;
   private catalog: ProjectCatalogSnapshot | null = null;
@@ -163,6 +187,66 @@ export default class WorkbenchProjectCatalogController {
       sendSerializedJson(response, 200, result.catalog.serialized, result.cacheState);
     } catch (error) {
       sendError(response, error);
+    }
+  }
+
+  async handleIconHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
+    try {
+      const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
+      const match = /^\/orchestrator\/project-icons\/([^/]+)$/u.exec(requestPath);
+      if (!match) throw new ProjectIconRequestError(400, "Invalid project icon request.");
+      let projectId = "";
+      try {
+        projectId = decodeURIComponent(match[1]);
+      } catch {
+        throw new ProjectIconRequestError(400, "Invalid project icon request.");
+      }
+      const { catalog } = await this.readFreshCatalog();
+      const project = catalog.data.find((candidate) => candidate.id === projectId);
+      const icon = project?.icon;
+      const root = icon ? project.roots.find((candidate) => candidate.id === icon.rootId) : null;
+      if (!project || !icon || !root) throw new ProjectIconRequestError(404, "Project icon not found.");
+
+      const canonicalRoot = await fileSystem.realpath(root.rootPath);
+      const requestedPath = path.resolve(root.rootPath, icon.path);
+      const canonicalIcon = await fileSystem.realpath(requestedPath);
+      if (!isPathWithinRoot(canonicalIcon, canonicalRoot)) {
+        throw new ProjectIconRequestError(404, "Project icon not found.");
+      }
+      const stats = await fileSystem.stat(canonicalIcon);
+      if (!stats.isFile()) throw new ProjectIconRequestError(404, "Project icon not found.");
+      if (stats.size > MAX_PROJECT_ICON_BYTES) {
+        throw new ProjectIconRequestError(413, "Project icon is too large.");
+      }
+      const etag = `"${stats.size.toString(16)}-${Math.trunc(stats.mtimeMs).toString(16)}"`;
+      if (request.headers["if-none-match"] === etag) {
+        response.writeHead(304, { ETag: etag });
+        response.end();
+        return;
+      }
+      const bytes = await fileSystem.readFile(canonicalIcon);
+      if (bytes.byteLength > MAX_PROJECT_ICON_BYTES) {
+        throw new ProjectIconRequestError(413, "Project icon is too large.");
+      }
+      response.writeHead(200, {
+        "Cache-Control": "no-cache",
+        "Content-Length": bytes.byteLength,
+        "Content-Type": projectIconContentType(icon.path),
+        ETag: etag,
+        "X-Content-Type-Options": "nosniff",
+      });
+      response.end(bytes);
+    } catch (error) {
+      if (error instanceof ProjectIconRequestError) {
+        sendIconError(response, error.statusCode, error.message);
+        return;
+      }
+      if (isMissingFileError(error)) {
+        sendIconError(response, 404, "Project icon not found.");
+        return;
+      }
+      this.logError(`project icon request failed: ${sanitizeRefreshError(error)}`);
+      sendIconError(response, 500, "Unable to read the project icon.");
     }
   }
 
