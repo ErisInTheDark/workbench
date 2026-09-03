@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ReloadDirtSnapshotRepositoryPort: narrow Git tree and ref operations required by reload dirt reconciliation. Keywords: reload, Git, snapshot, port.
- * - default ReloadDirtSnapshotRepository: materialize ignored-safe worktree snapshots without touching the real index. Keywords: reload, Git, worktree, stdin, pathspec, command length.
+ * - default ReloadDirtSnapshotRepository: compare reload sources and materialize durable baselines without touching the real index. Keywords: reload, Git, worktree, baseline, command length.
  */
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -34,11 +34,10 @@ function matchesSelectedPath(candidate: string, selectedPaths: ReadonlySet<strin
 
 export interface ReloadDirtSnapshotRepositoryPort {
   createCommitFromTree(tree: string, parent: string, message: string): Promise<string>;
-  listChangedPaths(from: string, to: string, paths: string[], signal?: AbortSignal): Promise<string[]>;
+  listWorktreeChangedPaths(baseTreeish: string, paths: string[], signal?: AbortSignal): Promise<string[]>;
   listWorktreePaths(signal?: AbortSignal): Promise<string[]>;
   readRef(ref: string): Promise<string | null>;
   updateRef(ref: string, newValue: string, oldValue?: string): Promise<void>;
-  writeScopedWorktreeTree(paths: string[], baseTreeish?: string, signal?: AbortSignal): Promise<string>;
   writeWorktreeTree(): Promise<string>;
 }
 
@@ -55,11 +54,14 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
     ], message)).trim();
   }
 
-  async listChangedPaths(from: string, to: string, paths: string[], signal?: AbortSignal) {
+  async listWorktreeChangedPaths(baseTreeish: string, paths: string[], signal?: AbortSignal) {
     const selectedPaths = new Set(paths);
-    return parseNullPaths(await this.run([
-      "diff", "--name-only", "-z", "--no-renames", from, to,
-    ], process.env, signal))
+    const env = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
+    const [tracked, untracked] = await Promise.all([
+      this.run(["diff", "--name-only", "-z", "--no-renames", baseTreeish, "--"], env, signal),
+      this.run(["ls-files", "-z", "--others", "--exclude-standard", "--"], env, signal),
+    ]);
+    return [...new Set([...parseNullPaths(tracked), ...parseNullPaths(untracked)])]
       .filter((candidate) => matchesSelectedPath(candidate, selectedPaths))
       .sort((left, right) => left.localeCompare(right));
   }
@@ -83,25 +85,6 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
     await this.run(["update-ref", ref, newValue, ...(oldValue !== undefined ? [oldValue] : [])]);
   }
 
-  async writeScopedWorktreeTree(paths: string[], baseTreeish = "HEAD", signal?: AbortSignal) {
-    return await this.withTemporaryIndex(async (indexPath) => {
-      const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await this.run(["read-tree", baseTreeish], env, signal);
-      const selectedPaths = new Set(paths);
-      const matchedPaths = [...new Set(parseNullPaths(await this.run([
-        "ls-files", "-z", "--cached", "--others", "--exclude-standard",
-      ], env, signal)))]
-        .filter((candidate) => matchesSelectedPath(candidate, selectedPaths))
-        .sort((left, right) => left.localeCompare(right));
-      if (matchedPaths.length) {
-        await this.runWithInput([
-          "--literal-pathspecs", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
-        ], `${matchedPaths.join("\0")}\0`, env, signal);
-      }
-      return (await this.run(["write-tree"], env, signal)).trim();
-    });
-  }
-
   async writeWorktreeTree() {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
@@ -114,10 +97,6 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
       ], env);
       return (await this.run(["write-tree"], env)).trim();
     });
-  }
-
-  private literalPathspec(relativePath: string) {
-    return `:(top,literal)${relativePath}`;
   }
 
   private async run(args: string[], env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal) {

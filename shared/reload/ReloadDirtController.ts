@@ -326,11 +326,9 @@ export default class ReloadDirtController {
       const changedByBaseline = new Map<string, Set<string>>();
       for (const [baseline, paths] of pathsByBaseline) {
         const sourcePaths = [...paths];
-        const currentTree = await this.repository.writeScopedWorktreeTree(sourcePaths, baseline, signal);
-        if (signal?.aborted) throw signal.reason;
         changedByBaseline.set(
           baseline,
-          new Set(await this.repository.listChangedPaths(baseline, currentTree, sourcePaths, signal)),
+          new Set(await this.repository.listWorktreeChangedPaths(baseline, sourcePaths, signal)),
         );
         if (signal?.aborted) throw signal.reason;
       }

@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect large literal path sets and exact scoped temporary-index snapshots.
+ * No production exports. Regression wards protect large literal path sets and read-only worktree change detection.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -13,7 +13,21 @@ import ReloadDirtSnapshotRepository from "./ReloadDirtSnapshotRepository.ts";
 
 const run = promisify(execFile);
 
-test("large scoped snapshots preserve exact path ownership without process argument overflow", async (context) => {
+async function listObjectPaths(rootPath: string) {
+  const paths: string[] = [];
+  const visit = async (directoryPath: string, relativePath: string) => {
+    for (const entry of await fs.readdir(directoryPath, { withFileTypes: true })) {
+      const entryPath = path.join(directoryPath, entry.name);
+      const entryRelativePath = path.posix.join(relativePath, entry.name);
+      if (entry.isDirectory()) await visit(entryPath, entryRelativePath);
+      else paths.push(entryRelativePath);
+    }
+  };
+  await visit(path.join(rootPath, ".git", "objects"), "");
+  return paths.sort();
+}
+
+test("large scoped reads preserve exact path ownership without writing Git objects", async (context) => {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-reload-snapshot-"));
   const git = async (...args: string[]) => await run("git", args, { cwd: repoRoot });
   context.after(async () => {
@@ -47,11 +61,12 @@ test("large scoped snapshots preserve exact path ownership without process argum
 
   const repository = new ReloadDirtSnapshotRepository(repoRoot);
   const selectedPaths = [...missingSourcePaths, editedPath, deletedPath, literalPath, "nested"];
-  const tree = await repository.writeScopedWorktreeTree(selectedPaths, baseline);
+  const objectsBefore = await listObjectPaths(repoRoot);
 
   assert.deepEqual(
-    await repository.listChangedPaths(baseline, tree, selectedPaths),
+    await repository.listWorktreeChangedPaths(baseline, selectedPaths),
     [deletedPath, editedPath, literalPath, "nested/owned.ts"].sort((left, right) => left.localeCompare(right)),
   );
-  assert.deepEqual(await repository.listChangedPaths(baseline, tree, ["outside.ts"]), []);
+  assert.deepEqual(await repository.listWorktreeChangedPaths(baseline, ["outside.ts"]), ["outside.ts"]);
+  assert.deepEqual(await listObjectPaths(repoRoot), objectsBefore);
 });

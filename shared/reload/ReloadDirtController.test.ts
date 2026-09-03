@@ -41,32 +41,30 @@ function sourceState(descriptors: readonly ReloadDirtSourceDescriptor[] = [descr
 class ControlledRepository implements ReloadDirtSnapshotRepositoryPort {
   blockedSignal: AbortSignal | undefined;
   refUpdates = 0;
-  scopedTreeWrites = 0;
-  private blockedTree: { start(): void; tree: Promise<string> } | null = null;
+  worktreeReads = 0;
+  private blockedRead: { changes: Promise<string[]>; start(): void } | null = null;
 
-  blockNextScopedTree() {
+  blockNextWorktreeRead() {
     const started = deferred<void>();
-    const tree = deferred<string>();
-    this.blockedTree = { start: () => started.resolve(), tree: tree.promise };
-    return { release: tree.resolve, started: started.promise };
+    const changes = deferred<string[]>();
+    this.blockedRead = { changes: changes.promise, start: () => started.resolve() };
+    return { release: changes.resolve, started: started.promise };
   }
 
   async createCommitFromTree() { return "snapshot-commit"; }
-  async listChangedPaths(_from: string, to: string) { return to === "stale-tree" ? ["app/core.ts"] : []; }
+  async listWorktreeChangedPaths(_base: string, _paths: string[], signal?: AbortSignal) {
+    this.worktreeReads += 1;
+    const blocked = this.blockedRead;
+    if (!blocked) return [];
+    this.blockedRead = null;
+    this.blockedSignal = signal;
+    blocked.start();
+    return await blocked.changes;
+  }
   async listWorktreePaths() { return []; }
   async readRef() { return "base-snapshot"; }
   async updateRef() { this.refUpdates += 1; }
   async writeWorktreeTree() { return "snapshot-tree"; }
-
-  async writeScopedWorktreeTree(_paths: string[], _base = "HEAD", signal?: AbortSignal) {
-    this.scopedTreeWrites += 1;
-    const blocked = this.blockedTree;
-    if (!blocked) return "fresh-tree";
-    this.blockedTree = null;
-    this.blockedSignal = signal;
-    blocked.start();
-    return await blocked.tree;
-  }
 }
 
 function transferredState(pendingScopes: string[] = []): ReloadDirtControllerState {
@@ -91,13 +89,13 @@ test("a transferred batch stays pending without starting stale reconciliation", 
   }, transferredState(["client:core"]));
   await controller.start();
   assert.deepEqual(controller.getSnapshot().pendingScopes, ["client:core"]);
-  assert.equal(repository.scopedTreeWrites, 0);
+  assert.equal(repository.worktreeReads, 0);
   await controller.dispose();
 });
 
 test("dirty scopes carry dependant metadata from the source graph owner", async () => {
   const repository = new ControlledRepository();
-  const blocked = repository.blockNextScopedTree();
+  const blocked = repository.blockNextWorktreeRead();
   const dependant: ReloadDirtSourceDescriptor = {
     ...descriptor,
     description: "Dependant",
@@ -118,7 +116,7 @@ test("dirty scopes carry dependant metadata from the source graph owner", async 
   }, transferredState());
   const refresh = controller.refresh();
   await blocked.started;
-  blocked.release("stale-tree");
+  blocked.release(["app/core.ts"]);
   assert.deepEqual((await refresh).dirtyScopes, [{
     dependantScopes: ["client:dependant"],
     description: "Core",
@@ -130,7 +128,7 @@ test("dirty scopes carry dependant metadata from the source graph owner", async 
 
 test("a user reload aborts stale reconciliation and rejects its late result", async () => {
   const repository = new ControlledRepository();
-  const blocked = repository.blockNextScopedTree();
+  const blocked = repository.blockNextWorktreeRead();
   const state = transferredState();
   const controller = new ReloadDirtController({
     getSourceState: sourceState,
@@ -146,7 +144,7 @@ test("a user reload aborts stale reconciliation and rejects its late result", as
   controller.beginReload(["client:core"]);
   assert.equal(staleSignal.aborted, true);
   await controller.completeReload(["client:core"]);
-  blocked.release("stale-tree");
+  blocked.release(["app/core.ts"]);
   await assert.rejects(staleRefresh, (error) => error === staleSignal.reason);
   assert.deepEqual(controller.getSnapshot(), { dirtyScopes: [], error: null, pendingScopes: [] });
   await controller.dispose();
@@ -171,17 +169,17 @@ test("watcher events during reconciliation collapse into one trailing refresh", 
       return watcher;
     }) as typeof fsWatch,
   }, transferredState());
-  let first: ReturnType<ControlledRepository["blockNextScopedTree"]> | null = null;
-  let trailing: ReturnType<ControlledRepository["blockNextScopedTree"]> | null = null;
+  let first: ReturnType<ControlledRepository["blockNextWorktreeRead"]> | null = null;
+  let trailing: ReturnType<ControlledRepository["blockNextWorktreeRead"]> | null = null;
   context.after(async () => {
-    first?.release("fresh-tree");
-    trailing?.release("fresh-tree");
+    first?.release([]);
+    trailing?.release([]);
     await controller.dispose();
   });
   await controller.start();
-  assert.equal(repository.scopedTreeWrites, 1);
+  assert.equal(repository.worktreeReads, 1);
 
-  first = repository.blockNextScopedTree();
+  first = repository.blockNextWorktreeRead();
   watcherEvents.observe?.("change", "app/core.ts");
   await first.started;
   for (let event = 0; event < 5; event += 1) {
@@ -189,13 +187,13 @@ test("watcher events during reconciliation collapse into one trailing refresh", 
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 
-  trailing = repository.blockNextScopedTree();
-  first.release("fresh-tree");
+  trailing = repository.blockNextWorktreeRead();
+  first.release([]);
   await trailing.started;
-  assert.equal(repository.scopedTreeWrites, 3);
-  trailing.release("fresh-tree");
+  assert.equal(repository.worktreeReads, 3);
+  trailing.release([]);
   await controller.dispose();
-  assert.equal(repository.scopedTreeWrites, 3);
+  assert.equal(repository.worktreeReads, 3);
 });
 
 async function gitFixture() {

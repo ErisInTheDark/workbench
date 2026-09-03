@@ -1,11 +1,9 @@
 /*
  * Exports:
- * - WorkbenchProjectSnapshotControllerOptions: injected project resolution, tree operations, watcher factory, clock, polling, logging, and cache bound for deterministic lifecycle tests. Keywords: project, snapshot, poll, watcher, test.
+ * - WorkbenchProjectSnapshotControllerOptions: injected project resolution, tree operations, clock, polling, logging, and cache bound for deterministic lifecycle tests. Keywords: project, snapshot, poll, test.
  * - default WorkbenchProjectSnapshotController: own one reloadable snapshot loop per observed project, mutations, change-only publication, HTTP compatibility, and disposal. Keywords: project, tree, websocket, cache, lifecycle.
  */
-import fs from "node:fs";
 import type http from "node:http";
-import path from "node:path";
 
 import {
   assertProjectFileCanBeDeleted,
@@ -13,7 +11,6 @@ import {
   deleteProjectFile,
   formatWorkspaceQualifiedPath,
   getProjectSnapshotFromResolvedProject,
-  normalizeRelativePath,
   resolveProjectFilePath,
   type ResolvedProject,
 } from "../lib/project";
@@ -25,19 +22,8 @@ import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "
 const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_PROJECT_SNAPSHOTS = 4;
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
-const IGNORED_TREE_SEGMENTS = new Set([".codex", ".next", ".vscode", ".workbench", "node_modules"]);
 
 type SnapshotCacheState = "coalesced" | "hit" | "miss";
-
-interface ProjectWatcher {
-  close: () => void;
-  on: (event: "error", listener: () => void) => ProjectWatcher;
-}
-
-interface ProjectWatcherBinding {
-  rootPath: string;
-  watcher: ProjectWatcher;
-}
 
 interface ProjectSnapshotState {
   expiresAt: number;
@@ -50,10 +36,8 @@ interface ProjectSnapshotState {
   refreshRequested: boolean;
   refreshTimer: ReturnType<typeof setTimeout> | null;
   revision: number;
-  rootPaths: string[];
   serialized: string | null;
   snapshot: ProjectSnapshot | null;
-  watchers: ProjectWatcherBinding[];
 }
 
 interface SnapshotResponse {
@@ -73,44 +57,12 @@ type ProjectOperations = {
 
 export interface WorkbenchProjectSnapshotControllerOptions {
   cacheTtlMs?: number;
-  createWatcher?: (rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) => ProjectWatcher;
   logError?: (message: string) => void;
   maxProjectSnapshots?: number;
   now?: () => number;
   operations?: ProjectOperations;
   pollIntervalMs?: number;
   resolveProjectById: (projectId?: string | null) => Promise<ResolvedProject>;
-}
-
-function defaultCreateWatcher(rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) {
-  return fs.watch(rootPath, { recursive }, listener);
-}
-
-function normalizeWatchPath(filename: string | Buffer | null) {
-  return normalizeRelativePath(Buffer.isBuffer(filename) ? filename.toString("utf8") : filename ?? "").replace(/^\/+|\/+$/gu, "");
-}
-
-function hasIgnoredSegment(relativePath: string, ignoredSegments: ReadonlySet<string>) {
-  return relativePath.split("/").some((segment) => ignoredSegments.has(segment));
-}
-
-function isRelevantGitPath(relativePath: string) {
-  const segments = relativePath.split("/");
-  const gitIndex = segments.indexOf(".git");
-  if (gitIndex < 0) return false;
-  const gitPath = segments.slice(gitIndex + 1).join("/");
-  return !gitPath || gitPath === "HEAD" || gitPath === "index" || gitPath === "packed-refs" || gitPath.startsWith("refs/");
-}
-
-function shouldRefreshTree(filename: string | Buffer | null) {
-  const relativePath = normalizeWatchPath(filename);
-  if (!relativePath) return true;
-  if (relativePath.split("/").includes(".git")) return isRelevantGitPath(relativePath);
-  return !hasIgnoredSegment(relativePath, IGNORED_TREE_SEGMENTS);
-}
-
-function haveSameRootPaths(left: readonly string[], right: readonly string[]) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function readRequestBody(request: http.IncomingMessage) {
@@ -138,7 +90,6 @@ function sendError(response: http.ServerResponse, error: unknown, fallback: stri
 
 export default class WorkbenchProjectSnapshotController {
   private readonly cacheTtlMs: number;
-  private readonly createWatcher: NonNullable<WorkbenchProjectSnapshotControllerOptions["createWatcher"]>;
   private disposed = false;
   private readonly logError: (message: string) => void;
   private readonly maxProjectSnapshots: number;
@@ -150,7 +101,6 @@ export default class WorkbenchProjectSnapshotController {
 
   constructor({
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
-    createWatcher = defaultCreateWatcher,
     logError = (message) => console.error(message),
     maxProjectSnapshots = DEFAULT_MAX_PROJECT_SNAPSHOTS,
     now = Date.now,
@@ -159,7 +109,6 @@ export default class WorkbenchProjectSnapshotController {
     resolveProjectById,
   }: WorkbenchProjectSnapshotControllerOptions) {
     this.cacheTtlMs = cacheTtlMs;
-    this.createWatcher = createWatcher;
     this.logError = logError;
     this.maxProjectSnapshots = Math.max(1, Math.trunc(maxProjectSnapshots));
     this.now = now;
@@ -185,7 +134,6 @@ export default class WorkbenchProjectSnapshotController {
     state.observed = true;
     state.publish = publish;
     if (state.snapshot) publish(this.toUpdate(state.snapshot, state.revision));
-    this.ensureWatchers(key, state);
     this.scheduleRefresh(key, projectId, 0);
     return () => {
       if (state.observationToken !== observationToken) return;
@@ -313,10 +261,8 @@ export default class WorkbenchProjectSnapshotController {
       refreshRequested: false,
       refreshTimer: null,
       revision: 0,
-      rootPaths: [],
       serialized: null,
       snapshot: null,
-      watchers: [],
     };
     this.projects.set(key, state);
     return state;
@@ -391,8 +337,6 @@ export default class WorkbenchProjectSnapshotController {
     state.lastAccessAt = this.now();
     state.serialized = JSON.stringify(snapshot);
     state.snapshot = snapshot;
-    state.rootPaths = snapshot.roots.map((root) => path.resolve(root.rootPath));
-    this.ensureWatchers(key, state);
     if (changed) {
       state.revision += 1;
       state.publish?.(this.toUpdate(snapshot, state.revision));
@@ -404,32 +348,6 @@ export default class WorkbenchProjectSnapshotController {
     return { projectId: snapshot.projectId, revision, snapshot, updateKind: "project" };
   }
 
-  private ensureWatchers(key: string, state: ProjectSnapshotState) {
-    if (!state.observed || !state.snapshot) {
-      this.closeWatchers(state.watchers);
-      state.watchers = [];
-      return;
-    }
-    const watchedRoots = state.watchers.map(({ rootPath }) => path.resolve(rootPath));
-    if (state.watchers.length && haveSameRootPaths(watchedRoots, state.rootPaths)) return;
-    this.closeWatchers(state.watchers);
-    state.watchers = state.rootPaths.flatMap((rootPath) => {
-      try {
-        const watcher = this.createWatcher(rootPath, (_eventType, filename) => {
-          if (shouldRefreshTree(filename)) this.scheduleRefresh(key, state.snapshot?.projectId ?? key, 0);
-        }, true);
-        watcher.on("error", () => this.scheduleRefresh(key, state.snapshot?.projectId ?? key, 0));
-        return [{ rootPath, watcher }];
-      } catch (error) {
-        if (!state.failureReported) {
-          state.failureReported = true;
-          this.logError(`Project watcher failed for ${key}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        return [];
-      }
-    });
-  }
-
   private stopObservation(state: ProjectSnapshotState) {
     state.observationToken = null;
     state.observed = false;
@@ -437,8 +355,6 @@ export default class WorkbenchProjectSnapshotController {
     state.refreshRequested = false;
     if (state.refreshTimer) clearTimeout(state.refreshTimer);
     state.refreshTimer = null;
-    this.closeWatchers(state.watchers);
-    state.watchers = [];
   }
 
   private stopState(state: ProjectSnapshotState) {
@@ -455,10 +371,6 @@ export default class WorkbenchProjectSnapshotController {
       this.stopState(oldest[1]);
       this.projects.delete(oldest[0]);
     }
-  }
-
-  private closeWatchers(watchers: readonly ProjectWatcherBinding[]) {
-    for (const { watcher } of watchers) watcher.close();
   }
 
   private assertActive() {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests protect project observation, best-known replay, serialized polling, change-only publication, mutation refresh, HTTP compatibility, and disposal. Keywords: project, snapshot, observe, replay, poll, watcher, lifecycle, test.
+ * - No production exports; Node tests protect project observation, best-known replay, serialized polling, change-only publication, mutation refresh, HTTP compatibility, and disposal. Keywords: project, snapshot, observe, replay, poll, lifecycle, test.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -13,34 +13,6 @@ import { deleteProjectFile } from "../lib/project";
 import type { ProjectSnapshot } from "workbench-shared/types";
 import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
-
-class FakeWatcher {
-  closed = false;
-  private errorListener = () => undefined;
-
-  constructor(
-    readonly rootPath: string,
-    private readonly changeListener: (eventType: string, filename: string | Buffer | null) => void,
-    readonly recursive: boolean,
-  ) {}
-
-  close() {
-    this.closed = true;
-  }
-
-  emitChange(filename: string) {
-    this.changeListener("change", filename);
-  }
-
-  emitError() {
-    this.errorListener();
-  }
-
-  on(_event: "error", listener: () => void) {
-    this.errorListener = listener;
-    return this;
-  }
-}
 
 function deferred<TValue>() {
   let resolve = (_value: TValue) => undefined;
@@ -95,7 +67,17 @@ async function waitFor(predicate: () => boolean, message: string) {
   assert.fail(message);
 }
 
-function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: number } = {}) {
+async function flushPromises() {
+  for (let index = 0; index < 10; index += 1) await Promise.resolve();
+}
+
+function createHarness({
+  maxProjectSnapshots = 4,
+  pollIntervalMs = 60_000,
+}: {
+  maxProjectSnapshots?: number;
+  pollIntervalMs?: number;
+} = {}) {
   const deletedPaths: string[] = [];
   const errors: string[] = [];
   let tracked = true;
@@ -103,14 +85,8 @@ function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: numb
   let snapshotReads = 0;
   let snapshotReader = async (projectId: string | null | undefined) => createSnapshot(projectId || "default");
   const resolvedProjectIds: Array<string | null | undefined> = [];
-  const watchers: FakeWatcher[] = [];
   const controller = new WorkbenchProjectSnapshotController({
     cacheTtlMs: 100,
-    createWatcher(rootPath, listener, recursive) {
-      const watcher = new FakeWatcher(rootPath, listener, recursive);
-      watchers.push(watcher);
-      return watcher;
-    },
     logError: (message) => { errors.push(message); },
     maxProjectSnapshots,
     now: () => now,
@@ -131,7 +107,7 @@ function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: numb
         rootRelativePath: requestPath,
       }),
     },
-    pollIntervalMs: 60_000,
+    pollIntervalMs,
     resolveProjectById: async (projectId) => {
       resolvedProjectIds.push(projectId);
       return {
@@ -156,11 +132,10 @@ function createHarness({ maxProjectSnapshots = 4 }: { maxProjectSnapshots?: numb
     setNow(value: number) { now = value; },
     setTracked(value: boolean) { tracked = value; },
     setSnapshotReader(reader: typeof snapshotReader) { snapshotReader = reader; },
-    watchers,
   };
 }
 
-test("dormant HTTP reads cache without starting project watchers", async () => {
+test("dormant HTTP reads reuse the snapshot cache without starting observation", async () => {
   const harness = createHarness();
   const first = await harness.readTree("alpha");
   const second = await harness.readTree("alpha");
@@ -169,7 +144,6 @@ test("dormant HTTP reads cache without starting project watchers", async () => {
   assert.equal(harness.snapshotReads, 1);
   assert.deepEqual(harness.resolvedProjectIds, ["alpha"]);
   assert.deepEqual(JSON.parse(second.body), createSnapshot("alpha"));
-  assert.equal(harness.watchers.length, 0);
 });
 
 test("coalesces concurrent dormant snapshot misses", async () => {
@@ -191,8 +165,6 @@ test("an observed project publishes only changed snapshots", async () => {
   const updates: WorkbenchProjectStateUpdate[] = [];
   const stop = harness.controller.observe("alpha", (update) => updates.push(update));
   await waitFor(() => updates.length === 1, "Initial observed snapshot was not published.");
-  assert.equal(harness.watchers.length, 1);
-  assert.equal(harness.watchers[0]?.recursive, true);
   await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: "alpha" });
   await waitFor(() => harness.snapshotReads === 2, "Explicit refresh did not run.");
   assert.equal(updates.length, 1);
@@ -222,7 +194,7 @@ test("project observations publish only to their own project", async () => {
   const stopBeta = harness.controller.observe("beta", (update) => betaUpdates.push(update));
   await waitFor(() => alphaUpdates.length === 1 && betaUpdates.length === 1, "Initial project snapshots were not published.");
   harness.setSnapshotReader(async (projectId) => createSnapshot(projectId || "default", projectId === "alpha" ? "changed.ts" : "README.md"));
-  harness.watchers.find((watcher) => watcher.rootPath.endsWith("alpha") && !watcher.closed)?.emitChange("src/changed.ts");
+  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: "alpha" });
   await waitFor(() => alphaUpdates.length === 2, "Changed alpha snapshot was not published.");
   assert.equal(betaUpdates.length, 1);
   assert.equal(alphaUpdates[1]?.projectId, "alpha");
@@ -231,7 +203,7 @@ test("project observations publish only to their own project", async () => {
   harness.controller.dispose();
 });
 
-test("a watcher event during a build requests exactly one serialized follow-up", async () => {
+test("an explicit refresh during a build requests exactly one serialized follow-up", async () => {
   const harness = createHarness();
   const updates: WorkbenchProjectStateUpdate[] = [];
   const stop = harness.controller.observe("alpha", (update) => updates.push(update));
@@ -242,11 +214,9 @@ test("a watcher event during a build requests exactly one serialized follow-up",
     refreshCall += 1;
     return refreshCall === 1 ? await gate.promise : createSnapshot("alpha", "follow-up.ts");
   });
-  const watcher = harness.watchers.find((candidate) => candidate.rootPath.endsWith("alpha") && !candidate.closed);
-  assert.ok(watcher);
-  watcher.emitChange("src/first.ts");
-  await waitFor(() => harness.snapshotReads === 2, "Watcher refresh did not start.");
-  watcher.emitChange("src/second.ts");
+  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: "alpha" });
+  await waitFor(() => harness.snapshotReads === 2, "Explicit refresh did not start.");
+  await harness.controller.handleRequest("alpha", { method: "workbench/thread-state/project/refresh", projectId: "alpha" });
   gate.resolve(createSnapshot("alpha", "during-build.ts"));
   await waitFor(() => harness.snapshotReads === 3 && updates.length === 3, "Serialized follow-up did not finish.");
   await new Promise((resolve) => setTimeout(resolve, 5));
@@ -274,18 +244,24 @@ test("refresh failures keep the last snapshot, log once per streak, and retry", 
   harness.controller.dispose();
 });
 
-test("last observer disposal closes watchers and stops refresh work", async () => {
-  const harness = createHarness();
+test("automatic observation refreshes at ten seconds and stops after disposal", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const harness = createHarness({ pollIntervalMs: 10_000 });
   const updates: WorkbenchProjectStateUpdate[] = [];
   const stop = harness.controller.observe("alpha", (update) => updates.push(update));
-  await waitFor(() => updates.length === 1, "Initial snapshot was not published.");
-  const watcher = harness.watchers[0];
-  const readsBeforeStop = harness.snapshotReads;
+  context.mock.timers.tick(0);
+  await flushPromises();
+  assert.equal(harness.snapshotReads, 1);
+  context.mock.timers.tick(9_999);
+  await flushPromises();
+  assert.equal(harness.snapshotReads, 1);
+  context.mock.timers.tick(1);
+  await flushPromises();
+  assert.equal(harness.snapshotReads, 2);
   stop();
-  assert.equal(watcher?.closed, true);
-  watcher?.emitChange("src/after-stop.ts");
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.equal(harness.snapshotReads, readsBeforeStop);
+  context.mock.timers.tick(10_000);
+  await flushPromises();
+  assert.equal(harness.snapshotReads, 2);
   harness.controller.dispose();
 });
 
@@ -363,17 +339,15 @@ test("the dormant HTTP compatibility adapter delegates to the same mutation owne
   assert.equal(response.statusCode, 200);
   assert.equal(JSON.parse(response.body).path, "created.md");
   assert.equal(harness.snapshotReads, 1);
-  assert.equal(harness.watchers.length, 0);
   harness.controller.dispose();
 });
 
-test("unobserved snapshots use bounded LRU storage without watcher ownership", async () => {
+test("unobserved snapshots use bounded LRU storage without observation ownership", async () => {
   const harness = createHarness({ maxProjectSnapshots: 1 });
   await harness.readTree("alpha");
   await harness.readTree("beta");
   await harness.readTree("alpha");
   assert.equal(harness.snapshotReads, 3);
-  assert.equal(harness.watchers.length, 0);
   harness.controller.dispose();
 });
 
