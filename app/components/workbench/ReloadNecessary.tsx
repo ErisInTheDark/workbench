@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ReloadNecessary: render separate tab-refresh and runtime-reload footer actions. Keywords: reload, dirt, stale tab, sidebar, hold.
+ * - default ReloadNecessary: render runtime reload controls with a separate stale-tab footer action. Keywords: reload, dirt, stale tab, sidebar, footer, hold.
  */
 "use client";
 
@@ -45,6 +45,7 @@ export default function ReloadNecessary ({
   const dirt = mergeReloadDirt(appDirt, orchestratorDirt);
   const tabOutOfDate = appDirt?.tabOutOfDate ?? false;
   const hasReloadDirt = Boolean(dirt && (dirt.dirtyScopes.length || dirt.error));
+  const showReloadBody = hasReloadDirt && !collapsed;
 
   if (!tabOutOfDate && !hasReloadDirt) return null;
 
@@ -74,41 +75,27 @@ export default function ReloadNecessary ({
   const affectedScopes = getAffectedReloadScopes(hoveredScope, reloadableScopes);
 
   return (
-    <section className="sticky bottom-0 z-20 mt-auto ml-3 space-y-2">
-      {tabOutOfDate ? (
-        <div
-          className="flex items-center justify-between gap-2 rounded-[1.15rem] bg-[color:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] p-2.5 pl-3.5 backdrop-blur-md"
-          data-tab-out-of-date="true"
-        >
-          <p className="m-0 min-w-0 text-[0.8rem] font-semibold text-text">
-            This tab is out of date
-          </p>
-          <PrimaryButton
-            className="!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px]"
-            onClick={() => window.location.reload()}
-          >
-            Refresh
-          </PrimaryButton>
-        </div>
-      ) : null}
-      {hasReloadDirt ? <div
+    <section className="sticky bottom-0 z-20 mt-auto ml-3">
+      <div
         className="rounded-[1.15rem] border border-[color-mix(in_srgb,var(--text)_20%,transparent)] bg-[color:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] p-2.5 backdrop-blur-md"
         data-reload-necessary="true"
       >
         <div
-          className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 ${collapsed ? "" : "border-b border-[color-mix(in_srgb,var(--text)_12%,transparent)] pb-2"
+          className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 ${showReloadBody || tabOutOfDate ? "border-b border-[color-mix(in_srgb,var(--text)_12%,transparent)] pb-2" : ""
             }`}
         >
-          <button
-            aria-expanded={!collapsed}
-            aria-label={collapsed ? "Expand reload controls" : "Collapse reload controls"}
-            className="inline-flex size-8 items-center justify-center rounded-full text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-            onClick={() => setReloadNecessaryOpen(collapsed)}
-            title={collapsed ? "Expand reload controls" : "Collapse reload controls"}
-            type="button"
-          >
-            <ChevronIcon className={`size-4 transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} />
-          </button>
+          {hasReloadDirt ? (
+            <button
+              aria-expanded={!collapsed}
+              aria-label={collapsed ? "Expand reload controls" : "Collapse reload controls"}
+              className="inline-flex size-8 items-center justify-center rounded-full text-muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+              onClick={() => setReloadNecessaryOpen(collapsed)}
+              title={collapsed ? "Expand reload controls" : "Collapse reload controls"}
+              type="button"
+            >
+              <ChevronIcon className={`size-4 transition-transform ${collapsed ? "-rotate-90" : "rotate-90"}`} />
+            </button>
+          ) : <span aria-hidden="true" className="size-8" />}
           <p className="m-0 min-w-0 truncate font-semibold text-text">
             Reload necessary
           </p>
@@ -125,7 +112,7 @@ export default function ReloadNecessary ({
             Reload all
           </PrimaryButton> : null}
         </div>
-        {!collapsed ? (
+        {showReloadBody ? (
           <div className="mt-2 space-y-1.5">
             {reloadableScopes.map((scope) => {
               const busy = pending.has(scope.scope) || requesting.includes(scope.scope);
@@ -157,7 +144,23 @@ export default function ReloadNecessary ({
             ) : null}
           </div>
         ) : null}
-      </div> : null}
+        {tabOutOfDate ? (
+          <div
+            className={`flex items-center justify-between gap-2 ${showReloadBody ? "mt-2 border-t border-[color-mix(in_srgb,var(--text)_12%,transparent)] pt-2" : "mt-2"}`}
+            data-tab-out-of-date="true"
+          >
+            <p className="m-0 min-w-0 pl-1 text-[0.8rem] font-semibold text-text">
+              This tab is out of date
+            </p>
+            <PrimaryButton
+              className="!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px]"
+              onClick={() => window.location.reload()}
+            >
+              Refresh
+            </PrimaryButton>
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }
