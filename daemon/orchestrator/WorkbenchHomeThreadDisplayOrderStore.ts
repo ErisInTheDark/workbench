@@ -1,9 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchHomeThreadDisplayOrderStore: own revisioned home priority order, authoritative JSON persistence, and SQLite shadow parity. Keywords: home, thread, order, storage, sqlite.
+ * - default WorkbenchHomeThreadDisplayOrderStore: own revisioned home priority order and authoritative SQLite persistence. Keywords: home, thread, order, storage, sqlite.
  */
 
-import path from "node:path";
 import { z } from "zod";
 
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -18,8 +17,7 @@ import { getProjectQualifiedThreadDisplayKey, type ThreadDisplayLayoutEntry } fr
 import type { WorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { WorkbenchHomeThreadDisplayOrderSnapshot } from "workbench-shared/workbench/thread/thread-state";
-import AtomicJsonStore from "./AtomicJsonStore";
-import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
+import type { WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 
 const StoredHomeThreadDisplayOrderSchema = z.object({
   displayOrder: WorkbenchHomeThreadDisplayOrderSchema,
@@ -28,10 +26,7 @@ const StoredHomeThreadDisplayOrderSchema = z.object({
 }).strict();
 type StoredHomeThreadDisplayOrder = z.infer<typeof StoredHomeThreadDisplayOrderSchema>;
 interface WorkbenchHomeThreadDisplayOrderStoreOptions {
-  json?: AtomicJsonStore;
   reportRepairs?: (repairedPaths: PropertyKey[][]) => void;
-  reportSqliteIssue?: (message: string) => void;
-  sqlite?: WorkbenchThreadStateStore;
 }
 
 const EMPTY_STORED_ORDER: StoredHomeThreadDisplayOrder = {
@@ -41,21 +36,16 @@ const EMPTY_STORED_ORDER: StoredHomeThreadDisplayOrder = {
 };
 
 export default class WorkbenchHomeThreadDisplayOrderStore {
-  private readonly filePath: string;
-  private readonly json: AtomicJsonStore;
   private loadPromise: Promise<StoredHomeThreadDisplayOrder> | null = null;
   private operationQueue: Promise<void> = Promise.resolve();
   private readonly reportRepairs: (repairedPaths: PropertyKey[][]) => void;
-  private readonly reportSqliteIssue: (message: string) => void;
-  private readonly sqlite: WorkbenchThreadStateStore | null;
   private state: StoredHomeThreadDisplayOrder | null = null;
 
-  constructor(storageRoot: string, options: WorkbenchHomeThreadDisplayOrderStoreOptions = {}) {
-    this.filePath = path.join(storageRoot, ".workbench", "runtime", "home-thread-display-order.json");
-    this.json = options.json ?? new AtomicJsonStore();
+  constructor(
+    private readonly persistence: WorkbenchThreadStatePersistence,
+    options: WorkbenchHomeThreadDisplayOrderStoreOptions = {},
+  ) {
     this.reportRepairs = options.reportRepairs ?? (() => undefined);
-    this.reportSqliteIssue = options.reportSqliteIssue ?? (() => undefined);
-    this.sqlite = options.sqlite ?? null;
   }
 
   async getSnapshot(): Promise<WorkbenchHomeThreadDisplayOrderSnapshot> {
@@ -106,19 +96,19 @@ export default class WorkbenchHomeThreadDisplayOrderStore {
 
   async waitForIdle() {
     await this.operationQueue;
-    await this.json.waitForIdle();
   }
 
   private async load() {
     if (this.state) return this.state;
-    this.loadPromise ??= this.json.read<unknown>(this.filePath, EMPTY_STORED_ORDER).then((candidate) => {
+    this.loadPromise ??= this.persistence.readGlobal("homeDisplayOrder").then(async (stored) => {
+      const candidate = stored ?? EMPTY_STORED_ORDER;
       const conformed = conformToZodSchema(StoredHomeThreadDisplayOrderSchema, candidate, EMPTY_STORED_ORDER);
       this.reportRepairs(conformed.repairedPaths);
+      if (stored === null || conformed.repairedPaths.length) {
+        await this.persistence.writeGlobal("homeDisplayOrder", conformed.data);
+      }
       this.state = conformed.data;
       return this.state;
-    }).then((state) => {
-      this.baselineSqlite(state);
-      return state;
     });
     return await this.loadPromise;
   }
@@ -132,34 +122,9 @@ export default class WorkbenchHomeThreadDisplayOrderStore {
   }
 
   private async commit(next: StoredHomeThreadDisplayOrder) {
-    await this.json.write(this.filePath, next);
-    this.verifySqlite(next);
+    await this.persistence.writeGlobal("homeDisplayOrder", next);
     this.state = next;
     return this.snapshot(next);
-  }
-
-  private conformSqlite(candidate: unknown) {
-    return conformToZodSchema(StoredHomeThreadDisplayOrderSchema, candidate, EMPTY_STORED_ORDER).data;
-  }
-
-  private baselineSqlite(state: StoredHomeThreadDisplayOrder) {
-    if (!this.sqlite) return;
-    this.sqlite.baselineGlobal(
-      "homeDisplayOrder",
-      state,
-      (candidate) => this.conformSqlite(candidate),
-      this.reportSqliteIssue,
-    );
-  }
-
-  private verifySqlite(state: StoredHomeThreadDisplayOrder) {
-    if (!this.sqlite) return;
-    this.sqlite.writeAndVerifyGlobal(
-      "homeDisplayOrder",
-      state,
-      (candidate) => this.conformSqlite(candidate),
-      this.reportSqliteIssue,
-    );
   }
 
   private snapshot(state: StoredHomeThreadDisplayOrder): WorkbenchHomeThreadDisplayOrderSnapshot {

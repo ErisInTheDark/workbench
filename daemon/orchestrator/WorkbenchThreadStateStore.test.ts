@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect shared-worker thread-state document round trips, replacement, isolation, reopen durability, transcript-reset survival, JSON constraints, and shadow queue lifecycle. Keywords: thread state, sqlite, shadow, queue, lifecycle, test.
+ * No production exports. Tests protect authoritative shared-worker thread-state document round trips, replacement, isolation, reopen durability, transcript-reset survival, and JSON constraints. Keywords: thread state, sqlite, authority, durability, test.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -9,7 +9,7 @@ import { test } from "node:test";
 
 import WorkbenchDatabaseController, { WorkbenchDatabaseRequestFailure } from "./database/WorkbenchDatabaseController";
 import { threadStateTables } from "./database/workbench-database-schema";
-import WorkbenchThreadStateStore, { type WorkbenchThreadStateStoreDatabase } from "./WorkbenchThreadStateStore";
+import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 import { insertRow } from "workbench-shared/database/workbench-database-statements";
 
 test("thread-state documents round trip, replace, stay isolated, survive reopen, and outlive transcript reset", async () => {
@@ -33,17 +33,6 @@ test("thread-state documents round trip, replace, stay isolated, survive reopen,
     await store.writeGlobal("homeDisplayOrder", home);
     await store.writeGlobal("pinnedLayout", pinned);
 
-    const issues: string[] = [];
-    store.baselineProject("first", replacedProject, (candidate) => candidate as object, (issue) => issues.push(issue));
-    await store.waitForIdle();
-    assert.deepEqual(issues, []);
-    store.baselineProject("first", firstProject, (candidate) => candidate as object, (issue) => issues.push(issue));
-    await store.waitForIdle();
-    assert.equal(issues.length, 1);
-    assert.match(issues[0] ?? "", /mismatched: paths=root\./u);
-    store.writeAndVerifyProject("first", replacedProject, (candidate) => candidate as object, (issue) => issues.push(issue));
-    await store.waitForIdle();
-    assert.equal(issues.length, 1);
     assert.deepEqual(await store.readProject("first"), replacedProject);
     assert.deepEqual(await store.readProject("second"), secondProject);
     assert.deepEqual(await store.readGlobal("homeDisplayOrder"), home);
@@ -65,46 +54,6 @@ test("thread-state documents round trip, replace, stay isolated, survive reopen,
     await database.close();
     await rm(directory, { force: true, recursive: true });
   }
-});
-
-test("shadow scheduling is non-blocking, ordered, failure-tolerant, and lifecycle-drained", async () => {
-  const calls: string[] = [];
-  const issues: string[] = [];
-  let queryCount = 0;
-  let releaseFirstQuery: (() => void) | null = null;
-  const firstQuery = new Promise<void>((resolve) => { releaseFirstQuery = resolve; });
-  const database: WorkbenchThreadStateStoreDatabase = {
-    executeTransaction: async () => {
-      calls.push("write");
-      return { changes: 1 };
-    },
-    query: async () => {
-      queryCount += 1;
-      calls.push(`query:${queryCount}`);
-      if (queryCount === 1) await firstQuery;
-      if (queryCount === 2) throw new Error("simulated shadow failure");
-      return [];
-    },
-  };
-  const store = new WorkbenchThreadStateStore(database);
-  const report = (issue: string) => issues.push(issue);
-
-  store.baselineProject("project", { version: 4 }, (candidate) => candidate as object, report);
-  store.baselineGlobal("homeDisplayOrder", { version: 1 }, (candidate) => candidate as object, report);
-  store.baselineGlobal("pinnedLayout", { version: 1 }, (candidate) => candidate as object, report);
-
-  let drained = false;
-  const draining = store.waitForIdle().then(() => { drained = true; });
-  await Promise.resolve();
-  assert.equal(drained, false);
-  assert.deepEqual(calls, ["query:1"]);
-
-  releaseFirstQuery?.();
-  await draining;
-  assert.equal(drained, true);
-  assert.deepEqual(calls, ["query:1", "write", "query:2", "query:3", "write"]);
-  assert.equal(issues.length, 1);
-  assert.match(issues[0] ?? "", /SQLite home thread display order baseline failed: simulated shadow failure/u);
 });
 
 test("thread-state tables reject malformed JSON and unknown global document ids", async () => {

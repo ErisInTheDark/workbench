@@ -12,8 +12,8 @@ import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-
 import type { WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchDatabaseMutation, WorkbenchDatabaseQuery, WorkbenchDatabaseRow, WorkbenchDatabaseValue } from "workbench-shared/database/workbench-database-statements";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import WorkbenchThreadStateFeature, { mapProviderActivityNotification, mapProviderLifecycleNotification, normalizeProviderSidebarEntry, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
+import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, message: string) {
   const deadline = Date.now() + 1_000;
@@ -145,7 +145,6 @@ test("provider notification observation returns the persisted lifecycle result",
     publish: () => undefined,
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
-    storageRoot,
     transitions: { run: async (_key, operation) => await operation() },
   });
   await feature.controller.ensureProviderEntry("project", {
@@ -216,7 +215,6 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
     publish: () => undefined,
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
-    storageRoot,
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -277,7 +275,6 @@ test("a relationship committed during provider pagination remains a subagent aft
     publish: () => undefined,
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
-    storageRoot,
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -395,7 +392,6 @@ test("provider reconciliation starts concurrently and publishes each successful 
     }),
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
-    storageRoot,
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -510,7 +506,6 @@ test("deep provider pages serialize across projects while both newest pages star
     }),
     resolveProjectById: async (projectId) => ({ id: projectId, rootPath: projectRoots.get(projectId) ?? storageRoot }),
     resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
-    storageRoot,
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -563,7 +558,6 @@ test("managed title commands use the validated provider title as the mutation pr
     }),
     resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
-    storageRoot,
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -680,7 +674,6 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
     harnesses: createHarnesses(async () => { throw new Error("Provider reconciliation must not start after the initial Git snapshot fails."); }),
     resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
-    storageRoot,
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -694,10 +687,9 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
 
 test("expired settled threads reach repository retention through the feature boundary", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-retention-feature-"));
-  const statePath = path.join(storageRoot, ".workbench", "runtime", "thread-state", `${encodeTranscriptPathSegment("project")}.json`);
   const identity = { harness: "codex" as const, threadId: "expired-thread" };
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  await fs.writeFile(statePath, JSON.stringify({
+  const database = createThreadStateDatabase();
+  await new WorkbenchThreadStateStore(database).writeProject("project", {
     drafts: [],
     records: [{
       activityAt: 1,
@@ -710,10 +702,10 @@ test("expired settled threads reach repository retention through the feature bou
       title: "Expired thread",
     }],
     version: 3,
-  }), "utf8");
+  });
   const pruned: Array<{ cwd: string; identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }> }> = [];
   const feature = new WorkbenchThreadStateFeature({
-    database: createThreadStateDatabase(),
+    database,
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: {
       findActiveClaim: async () => null,
@@ -731,7 +723,6 @@ test("expired settled threads reach repository retention through the feature bou
     publish: () => undefined,
     resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: "C:/workspace" } }),
-    storageRoot,
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -803,7 +794,6 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
     }),
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async () => { throw new Error("Not used by this test."); },
-    storageRoot,
     transitions: {
       run: async (_key, operation) => {
         transitionCount += 1;
@@ -893,7 +883,6 @@ test("managed resume validates the provider thread before requesting lifecycle-o
     }, async (harness, threadId) => { resumes.push({ harness, threadId }); }),
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
-    storageRoot,
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -947,7 +936,6 @@ test("observed title mutations update the provider and published sidebar togethe
     }),
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
-    storageRoot,
     transitions: { run: async (_key, operation) => await operation() },
   });
 

@@ -70,7 +70,6 @@ export interface WorkbenchThreadStateFeatureContext {
   publish(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
   resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
-  storageRoot: string;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
     & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read">>;
 }
@@ -241,13 +240,11 @@ export default class WorkbenchThreadStateFeature {
         const state = await context.gitArcs.findPlanState(project.rootPath, harness, threadId);
         return projectGitArcPlan(state ?? undefined);
       },
-      resolveProjectRoot: async (projectId) => (await context.resolveProjectById(projectId)).rootPath,
       runGitArcReadTransition: async (projectId, operation) => {
         const project = await context.resolveProjectById(projectId);
         const read = context.transitions.read ?? context.transitions.run;
         return await read.call(context.transitions, project.rootPath, operation);
       },
-      storageRoot: context.storageRoot,
       threadStateStore: new WorkbenchThreadStateStore(context.database),
     });
   }

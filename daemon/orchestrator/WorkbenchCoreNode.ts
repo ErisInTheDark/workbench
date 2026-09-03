@@ -212,7 +212,6 @@ function createWorkbenchCoreFeature(
     publish: (connectionId, snapshot) => { if (lease.isCurrent()) context.publishThreadState(connectionId, snapshot); },
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
-    storageRoot: context.legacyMigrationProjectRoot,
     transitions: worktreeGitTransitions,
   });
   const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
