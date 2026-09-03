@@ -21,15 +21,15 @@ test("observed instruction files join Git-backed orchestrator dirt", async (cont
   await git("init");
   await git("config", "user.email", "workbench@example.invalid");
   await git("config", "user.name", "Workbench test");
-  await fs.mkdir(path.join(repoRoot, "webapp"), { recursive: true });
-  await fs.writeFile(path.join(repoRoot, "webapp", "core.ts"), "export const core = 1;\n", "utf8");
+  await fs.mkdir(path.join(repoRoot, "daemon"), { recursive: true });
+  await fs.writeFile(path.join(repoRoot, "daemon", "core.ts"), "export const core = 1;\n", "utf8");
   await git("add", ".");
   await git("commit", "-m", "initial");
 
   const sourceState: ReloadNodeSourceState = {
     dependantClosure: (scopes) => [...scopes],
     descriptors: [
-      { access: "operator", description: "Core", destructive: false, paths: ["webapp/core.ts"], safeAll: false, scope: "server:core" },
+      { access: "operator", description: "Core", destructive: false, paths: ["daemon/core.ts"], safeAll: false, scope: "server:core" },
       { access: "operator", description: "Instructions", destructive: false, paths: [], safeAll: false, scope: "server:instructions" },
     ],
   };
@@ -43,7 +43,7 @@ test("observed instruction files join Git-backed orchestrator dirt", async (cont
   });
   await controller.start();
 
-  const instructionPath = path.join(repoRoot, "webapp", "live-instruction.md");
+  const instructionPath = path.join(repoRoot, "daemon", "live-instruction.md");
   await fs.writeFile(instructionPath, "# live\n", "utf8");
   observeReloadInstructionSource(instructionPath);
   assert.deepEqual((await controller.refresh()).dirtyScopes.map(({ scope }) => scope), ["server:instructions"]);

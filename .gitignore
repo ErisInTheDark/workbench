@@ -15,6 +15,6 @@ tray/target/
 .next
 *.tsbuildinfo
 shared/codex/generated/
-webapp/.debug/
+daemon/.debug/
 .workbench/
 audits/

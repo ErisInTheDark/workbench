@@ -31,8 +31,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   safeAll: false,
   scope: "harness:codex",
   sources: [
-    "webapp/orchestrator/CodexAppServerNode.ts",
-    "webapp/orchestrator/CodexAppServerRuntime.ts",
-    "webapp/orchestrator/CodexAppServer.ts",
+    "daemon/orchestrator/CodexAppServerNode.ts",
+    "daemon/orchestrator/CodexAppServerRuntime.ts",
+    "daemon/orchestrator/CodexAppServer.ts",
   ].join("\n"),
 });

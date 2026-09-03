@@ -31,7 +31,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   safeAll: false,
   scope: "harness:opencode",
   sources: [
-    "webapp/orchestrator/OpenCodeAppServerNode.ts",
-    "webapp/orchestrator/OpenCodeAppServer.ts",
+    "daemon/orchestrator/OpenCodeAppServerNode.ts",
+    "daemon/orchestrator/OpenCodeAppServer.ts",
   ].join("\n"),
 });

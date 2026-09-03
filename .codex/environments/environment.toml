@@ -9,6 +9,6 @@ script = ""
 name = "Run"
 icon = "run"
 command = '''
-cd webapp
+cd daemon
 pnpm dev
 '''

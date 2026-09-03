@@ -19,13 +19,13 @@ async function main() {
     return;
   }
 
-  const webappRoot = path.resolve(process.cwd());
-  if (path.basename(webappRoot).toLowerCase() !== "webapp") {
-    fail("Refusing transcript shadow reset outside the Workbench webapp directory.");
+  const daemonRoot = path.resolve(process.cwd());
+  if (path.basename(daemonRoot).toLowerCase() !== "daemon") {
+    fail("Refusing transcript shadow reset outside the Workbench daemon directory.");
     return;
   }
 
-  const storageRoot = path.join(path.dirname(webappRoot), ".workbench");
+  const storageRoot = path.join(path.dirname(daemonRoot), ".workbench");
   const requestPath = path.join(storageRoot, RESET_REQUEST_FILE_NAME);
   await mkdir(storageRoot, { recursive: true });
   try {

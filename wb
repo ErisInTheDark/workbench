@@ -11,7 +11,7 @@ fi
 unset WORKBENCH_CWD_REDIRECTED
 
 workbench_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-orchestrator_cli="$workbench_root/webapp/lib/workbench/cli/workbench-agent-cli.sh"
+orchestrator_cli="$workbench_root/daemon/lib/workbench/cli/workbench-agent-cli.sh"
 thread_id="${WORKBENCH_THREAD_ID:-${CODEX_THREAD_ID:-}}"
 desktop_entry="$workbench_root/app/desktop.ts"
 hook_mode=0

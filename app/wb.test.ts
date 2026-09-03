@@ -15,7 +15,7 @@ const rootDispatcherPath = path.resolve(import.meta.dirname, "..", "wb");
 async function dispatcherFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-root-wb-"));
   const dispatcherPath = path.join(root, "wb");
-  const orchestratorCliPath = path.join(root, "webapp", "lib", "workbench", "cli", "workbench-agent-cli.sh");
+  const orchestratorCliPath = path.join(root, "daemon", "lib", "workbench", "cli", "workbench-agent-cli.sh");
   const tsxCliPath = path.join(root, "app", "node_modules", "tsx", "dist", "cli.mjs");
   await fs.mkdir(path.dirname(orchestratorCliPath), { recursive: true });
   await fs.mkdir(path.dirname(tsxCliPath), { recursive: true });

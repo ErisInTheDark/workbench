@@ -541,5 +541,5 @@ test("path projection includes node-owned sources and the stable process kernel"
   const graph = defineReloadableNodeGraph([node({ scope: "server:a" })]);
   const host = new ReloadableNodeHost(null, loader(graph, graph));
   assert.deepEqual(host.getReloadScopesForPaths(["server:a.ts"]), ["server:a"]);
-  assert.deepEqual(host.getReloadScopesForPaths(["webapp/orchestrator/index.ts"]), ["server:process"]);
+  assert.deepEqual(host.getReloadScopesForPaths(["daemon/orchestrator/index.ts"]), ["server:process"]);
 });

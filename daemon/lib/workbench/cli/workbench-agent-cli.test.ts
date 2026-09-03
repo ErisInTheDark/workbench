@@ -1095,7 +1095,7 @@ test("redirects a PATH-resolved wb command to the Workbench install in cwd", asy
     const cwdAddress = cwdServer.address();
     assert(cwdAddress && typeof cwdAddress === "object");
     const workbenchRoot = path.join(temporaryDirectoryPath, "cwd-workbench");
-    const cwdRuntimePath = path.join(workbenchRoot, "webapp", "node_modules", ".bin");
+    const cwdRuntimePath = path.join(workbenchRoot, "daemon", "node_modules", ".bin");
     const pathRuntimePath = path.join(temporaryDirectoryPath, "path-workbench-bin");
     const cwdEnv = { ...process.env };
     await new WorkbenchAgentCliEnvironment({

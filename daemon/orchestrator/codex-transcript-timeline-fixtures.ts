@@ -20,7 +20,7 @@ const commandExecution = {
   aggregatedOutput: "done",
   command: "pnpm typecheck",
   commandActions: [],
-  cwd: "C:/git/web/workbench/webapp",
+  cwd: "C:/git/web/workbench/daemon",
   durationMs: 12,
   exitCode: 0,
   id: "cmd-1",

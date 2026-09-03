@@ -89,7 +89,7 @@ importers:
         specifier: ^6.0.2
         version: 6.0.2
 
-  webapp:
+  daemon:
     dependencies:
       '@github/copilot':
         specifier: 1.0.36

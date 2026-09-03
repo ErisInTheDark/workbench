@@ -77,9 +77,9 @@ export default new ReloadableNode<
 >({
   access: "agent",
   boundarySources: [
-    "webapp/lib/workbench/database/schema/**",
+    "daemon/lib/workbench/database/schema/**",
     "shared/workbench/database/schema/**",
-    "webapp/orchestrator/database/**",
+    "daemon/orchestrator/database/**",
   ].join("\n"),
   children: [WorkbenchCoreNode, CodexBridgeNode, WorkbenchWebSocketNode],
   create: (context) => {
@@ -143,7 +143,7 @@ export default new ReloadableNode<
   safeAll: true,
   scope: "server:database",
   sources: [
-    "webapp/orchestrator/WorkbenchDatabaseNode.ts",
-    "webapp/orchestrator/WorkbenchCodexSandboxNetworkController.ts",
+    "daemon/orchestrator/WorkbenchDatabaseNode.ts",
+    "daemon/orchestrator/WorkbenchCodexSandboxNetworkController.ts",
   ].join("\n"),
 });

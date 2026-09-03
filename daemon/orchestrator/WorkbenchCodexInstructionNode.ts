@@ -29,11 +29,10 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   safeAll: true,
   scope: "server:codex/instructions",
   sources: [
-    "webapp/orchestrator/WorkbenchCodexInstructionNode.ts",
-    "webapp/orchestrator/WorkbenchCodexInstructionAdapter.ts",
-    "webapp/orchestrator/workbench-codex-mcp-config.ts",
-    "webapp/orchestrator/workbench-prompt-context.ts",
-    "webapp/lib/workbench/instructions/**",
-    "!webapp/lib/workbench/instructions/**/*.md",
+    "daemon/orchestrator/WorkbenchCodexInstructionNode.ts",
+    "daemon/orchestrator/WorkbenchCodexInstructionAdapter.ts",
+    "daemon/orchestrator/workbench-codex-mcp-config.ts",
+    "daemon/orchestrator/workbench-prompt-context.ts",
+    "daemon/lib/workbench/instructions/**",
   ].join("\n"),
 });

@@ -129,14 +129,14 @@ case "${1:-}" in
 esac
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-webapp_dir="$script_dir/webapp"
+daemon_dir="$script_dir/daemon"
 log_dir="$script_dir/.workbench/logs"
 log_prefix="workbench-orchestrator"
 pause_sentinel="$script_dir/.workbench/orchestrator-loop.pause"
-runtime_topology="$webapp_dir/scripts/orchestrator/runtime-topology.mjs"
+runtime_topology="$daemon_dir/scripts/orchestrator/runtime-topology.mjs"
 
-if [[ ! -d "$webapp_dir" ]]; then
-  emit_direct "Expected webapp directory at $webapp_dir" >&2
+if [[ ! -d "$daemon_dir" ]]; then
+  emit_direct "Expected daemon directory at $daemon_dir" >&2
   exit 1
 fi
 
@@ -167,7 +167,7 @@ for command_name in node pnpm kill-by-port tee wc date sleep; do
   fi
 done
 if ! owned_ports_output="$(
-  cd "$webapp_dir" || exit 1
+  cd "$daemon_dir" || exit 1
   node --input-type=module --eval '
     import { loadWorkbenchRuntimeTopology } from "./scripts/orchestrator/runtime-topology.mjs";
     const topology = await loadWorkbenchRuntimeTopology(".env.local", { environment: process.env });
@@ -320,7 +320,7 @@ while true; do
   if ((restart_number == 0)); then
     emit_logged "$log_file" "Starting Workbench orchestrator restart loop." || exit 1
     emit_logged "$log_file" "Command: WORKBENCH_ORCHESTRATOR_LOOP=1 pnpm dev:orchestrator" || exit 1
-    emit_logged "$log_file" "Working directory: $webapp_dir" || exit 1
+    emit_logged "$log_file" "Working directory: $daemon_dir" || exit 1
     emit_logged "$log_file" "Owned ports: ${owned_ports[*]}" || exit 1
     emit_logged "$log_file" "Log directory: $log_dir" || exit 1
     emit_logged "$log_file" "Log rotation: more than $max_log_lines lines" || exit 1
@@ -336,8 +336,8 @@ while true; do
   kill_owned_ports "$log_file" || exit 1
 
   (
-    if ! cd "$webapp_dir" 2>/dev/null; then
-      emit_direct "Unable to enter orchestrator working directory: $webapp_dir" >&2
+    if ! cd "$daemon_dir" 2>/dev/null; then
+      emit_direct "Unable to enter orchestrator working directory: $daemon_dir" >&2
       exit 70
     fi
 

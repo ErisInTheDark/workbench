@@ -123,21 +123,21 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
     .map(({ scope }) => scope)
     .sort();
 
-  assert.deepEqual(owners("webapp/orchestrator/WorkbenchCoreNode.ts"), ["server:core", "server:topology"]);
-  assert.equal(descriptors.get("server:core")!.paths.includes("webapp/orchestrator/WorkbenchGitArcFeature.ts"), true);
-  assert.equal(descriptors.get("server:commands")!.paths.includes("webapp/orchestrator/WorkbenchAgentCommandController.ts"), true);
-  assert.deepEqual(owners("webapp/orchestrator/WorkbenchCodexInstructionAdapter.ts"), ["server:codex/instructions"]);
+  assert.deepEqual(owners("daemon/orchestrator/WorkbenchCoreNode.ts"), ["server:core", "server:topology"]);
+  assert.equal(descriptors.get("server:core")!.paths.includes("daemon/orchestrator/WorkbenchGitArcFeature.ts"), true);
+  assert.equal(descriptors.get("server:commands")!.paths.includes("daemon/orchestrator/WorkbenchAgentCommandController.ts"), true);
+  assert.deepEqual(owners("daemon/orchestrator/WorkbenchCodexInstructionAdapter.ts"), ["server:codex/instructions"]);
   assert.deepEqual(
-    owners("webapp/orchestrator/database/transcript/WorkbenchTranscriptRepository.ts"),
+    owners("daemon/orchestrator/database/transcript/WorkbenchTranscriptRepository.ts"),
     ["server:database"],
   );
   assert.deepEqual(
-    owners("webapp/lib/workbench/database/schema/codex-sandbox-network-schema.ts"),
+    owners("daemon/lib/workbench/database/schema/codex-sandbox-network-schema.ts"),
     ["server:database"],
   );
-  assert.deepEqual(owners("webapp/orchestrator/CodexTranscriptStore.ts"), ["server:codex"]);
+  assert.deepEqual(owners("daemon/orchestrator/CodexTranscriptStore.ts"), ["server:codex"]);
   assert.equal(descriptors.get("server:commands")!.paths.some((sourcePath) => sourcePath.endsWith(".test.ts")), false);
-  assert.equal(descriptors.get("server:process")!.paths.includes("webapp/orchestrator/WorkbenchCoreNode.ts"), false);
+  assert.equal(descriptors.get("server:process")!.paths.includes("daemon/orchestrator/WorkbenchCoreNode.ts"), false);
 });
 
 test("server branch and topology closures never acquire harness roots", () => {

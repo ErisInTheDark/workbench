@@ -111,9 +111,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   safeAll: true,
   scope: "server:browse",
   sources: [
-    "webapp/orchestrator/WorkbenchBrowseNode.ts",
-    "webapp/orchestrator/WorkbenchBrowseController.ts",
-    "webapp/orchestrator/WorkbenchBrowseResultController.ts",
-    "webapp/lib/workbench/browse/**",
+    "daemon/orchestrator/WorkbenchBrowseNode.ts",
+    "daemon/orchestrator/WorkbenchBrowseController.ts",
+    "daemon/orchestrator/WorkbenchBrowseResultController.ts",
+    "daemon/lib/workbench/browse/**",
   ].join("\n"),
 });

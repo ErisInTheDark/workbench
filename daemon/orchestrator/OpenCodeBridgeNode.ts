@@ -47,11 +47,11 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   safeAll: true,
   scope: "server:opencode",
   sources: [
-    "webapp/orchestrator/OpenCodeBridgeNode.ts",
-    "webapp/orchestrator/opencode-bridge.ts",
-    "webapp/orchestrator/opencode-live-thread-state.ts",
-    "webapp/orchestrator/opencode-thread-state.ts",
-    "webapp/orchestrator/opencode-workbench-instructions.ts",
+    "daemon/orchestrator/OpenCodeBridgeNode.ts",
+    "daemon/orchestrator/opencode-bridge.ts",
+    "daemon/orchestrator/opencode-live-thread-state.ts",
+    "daemon/orchestrator/opencode-thread-state.ts",
+    "daemon/orchestrator/opencode-workbench-instructions.ts",
     "shared/workbench/thread/workbench-thread-page.ts",
   ].join("\n"),
 });

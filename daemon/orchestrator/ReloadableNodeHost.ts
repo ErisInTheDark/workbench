@@ -15,10 +15,10 @@ export interface ReloadableNodeHostOptions extends Omit<
 > {}
 
 const PROCESS_SOURCES = [
-  "webapp/orchestrator/index.ts",
-  "webapp/orchestrator/ReloadableNodeHost.ts",
-  "webapp/orchestrator/reloadable-node-loader.ts",
-  "webapp/orchestrator/orchestrator-process-context.ts",
+  "daemon/orchestrator/index.ts",
+  "daemon/orchestrator/ReloadableNodeHost.ts",
+  "daemon/orchestrator/reloadable-node-loader.ts",
+  "daemon/orchestrator/orchestrator-process-context.ts",
   "shared/reload/**",
   "shared/source-pattern-matcher.ts",
 ].join("\n");

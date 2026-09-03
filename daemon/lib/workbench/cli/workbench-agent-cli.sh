@@ -3,7 +3,7 @@
 set -u
 
 if [[ "${WORKBENCH_CWD_REDIRECTED:-}" != "1" ]]; then
-  for cwd_workbench in "$PWD/webapp/node_modules/.bin/wb" "$PWD/node_modules/.bin/wb"; do
+  for cwd_workbench in "$PWD/daemon/node_modules/.bin/wb" "$PWD/node_modules/.bin/wb"; do
     if [[ -f "$cwd_workbench" ]] && ! [[ "$cwd_workbench" -ef "$0" ]]; then
       WORKBENCH_CWD_REDIRECTED=1 exec bash "$cwd_workbench" "$@"
     fi

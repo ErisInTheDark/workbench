@@ -25,16 +25,16 @@ function run(scriptPath: string, cwd: string, args: string[]) {
 
 test("transcript reset script writes only the exact reload-owned request after explicit confirmation", async () => {
   const root = await mkdtemp(join(tmpdir(), "workbench-reset-script-"));
-  const webapp = join(root, "webapp");
-  const script = join(webapp, "scripts", "reset-workbench-transcript-shadow.mjs");
+  const daemon = join(root, "daemon");
+  const script = join(daemon, "scripts", "reset-workbench-transcript-shadow.mjs");
   await mkdir(dirname(script), { recursive: true });
   await copyFile(sourceScript, script);
   try {
-    const refused = await run(script, webapp, []);
+    const refused = await run(script, daemon, []);
     assert.equal(refused.code, 1);
     assert.match(refused.stderr, /Refusing transcript shadow reset/);
 
-    const accepted = await run(script, webapp, ["--confirm-transcript-shadow-reset"]);
+    const accepted = await run(script, daemon, ["--confirm-transcript-shadow-reset"]);
     assert.equal(accepted.code, 0);
     assert.match(accepted.stdout, /Transcript shadow reset requested/);
     assert.equal(

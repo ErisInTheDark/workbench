@@ -83,11 +83,11 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   safeAll: true,
   scope: "server:mcp",
   sources: [
-    "webapp/orchestrator/WorkbenchMcpNode.ts",
-    "webapp/orchestrator/WorkbenchAgentMcpController.ts",
-    "webapp/orchestrator/WorkbenchOrchestratorHttpRouter.ts",
-    "webapp/orchestrator/WorkbenchShellController*.ts",
+    "daemon/orchestrator/WorkbenchMcpNode.ts",
+    "daemon/orchestrator/WorkbenchAgentMcpController.ts",
+    "daemon/orchestrator/WorkbenchOrchestratorHttpRouter.ts",
+    "daemon/orchestrator/WorkbenchShellController*.ts",
     "shared/workbench/commands/workbench-shell-command.ts",
-    "webapp/orchestrator/workbench-agent-mcp-request-registry.ts",
+    "daemon/orchestrator/workbench-agent-mcp-request-registry.ts",
   ].join("\n"),
 });

@@ -1,22 +1,22 @@
 ---
 name: opencode-diagnostics
-description: Diagnose Workbench OpenCode integration under `webapp/orchestrator/` with bounded local `@opencode-ai/sdk` probes that subscribe to events, send a tiny prompt, report event and session behavior, and abort promptly. Use when investigating OpenCode server connectivity, SDK event streams, session creation, prompt delivery, or bridge behavior; do not use for ordinary webapp endpoint testing.
+description: Diagnose Workbench OpenCode integration under `daemon/orchestrator/` with bounded local `@opencode-ai/sdk` probes that subscribe to events, send a tiny prompt, report event and session behavior, and abort promptly. Use when investigating OpenCode server connectivity, SDK event streams, session creation, prompt delivery, or bridge behavior; do not use for ordinary daemon endpoint testing.
 ---
 
 ## Safety Boundaries
 
-- Run probes from `webapp/` so the local `@opencode-ai/sdk` dependency resolves and the probe can normalize the directory back to the project root.
-- Do not treat this workflow as permission to call Workbench webapp endpoints; those calls still require explicit user approval.
+- Run probes from `daemon/` so the local `@opencode-ai/sdk` dependency resolves and the probe can normalize the directory back to the project root.
+- Do not treat this workflow as permission to call Workbench daemon endpoints; those calls still require explicit user approval.
 
 ## Minimal Probe
 
-Run this PowerShell probe from `webapp/`:
+Run this PowerShell probe from `daemon/`:
 
 ```powershell
 $script = @'
 import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 const baseUrl = process.env.OPENCODE_SERVER_URL || "http://127.0.0.1:4096";
-const directory = process.cwd().replace(/\\/g, "/").replace(/\/webapp$/i, "");
+const directory = process.cwd().replace(/\\/g, "/").replace(/\/daemon$/i, "");
 const client = createOpencodeClient({ baseUrl, directory });
 const abort = new AbortController();
 void (async () => {

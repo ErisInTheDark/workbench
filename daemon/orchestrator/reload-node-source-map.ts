@@ -61,7 +61,7 @@ function findDefiningModules(nodes: ReadonlyMap<OrchestratorReloadScope, GraphNo
 function workspacePath(filename: string) {
   const normalized = path.resolve(filename).replace(/\\/gu, "/");
   if (normalized.includes("/node_modules/")) return null;
-  const marker = normalized.lastIndexOf("/webapp/");
+  const marker = normalized.lastIndexOf("/daemon/");
   return marker < 0 ? null : normalized.slice(marker + 1);
 }
 

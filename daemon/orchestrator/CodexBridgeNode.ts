@@ -65,8 +65,8 @@ export async function recoverCodexSqliteTranscriptBeforeAvailability(
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "agent",
   boundarySources: [
-    "webapp/orchestrator/CodexTranscriptStore.ts",
-    "webapp/orchestrator/codex-transcript-*.ts",
+    "daemon/orchestrator/CodexTranscriptStore.ts",
+    "daemon/orchestrator/codex-transcript-*.ts",
   ].join("\n"),
   children: [],
   create: (context, build) => {
@@ -180,16 +180,16 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   safeAll: true,
   scope: "server:codex",
   sources: [
-    "webapp/orchestrator/CodexBridgeNode.ts",
-    "webapp/orchestrator/codex-sandbox-policy.ts",
-    "webapp/orchestrator/CodexStdioBridge.ts",
-    "webapp/orchestrator/CodexThreadWindowLoader.ts",
+    "daemon/orchestrator/CodexBridgeNode.ts",
+    "daemon/orchestrator/codex-sandbox-policy.ts",
+    "daemon/orchestrator/CodexStdioBridge.ts",
+    "daemon/orchestrator/CodexThreadWindowLoader.ts",
     "shared/workbench/thread/workbench-thread-page.ts",
-    "webapp/orchestrator/workbench-agent-mcp-request-registry.ts",
-    "webapp/orchestrator/CodexBridgeTransitionController.ts",
-    "webapp/orchestrator/CodexRecoverySupervisor.ts",
-    "webapp/orchestrator/CodexTranscriptRecordingController.ts",
-    "webapp/orchestrator/copilot-bridge.ts",
-    "webapp/orchestrator/copilot-thread-state.ts",
+    "daemon/orchestrator/workbench-agent-mcp-request-registry.ts",
+    "daemon/orchestrator/CodexBridgeTransitionController.ts",
+    "daemon/orchestrator/CodexRecoverySupervisor.ts",
+    "daemon/orchestrator/CodexTranscriptRecordingController.ts",
+    "daemon/orchestrator/copilot-bridge.ts",
+    "daemon/orchestrator/copilot-thread-state.ts",
   ].join("\n"),
 });

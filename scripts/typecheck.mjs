@@ -13,8 +13,8 @@ const projectRoot = path.resolve(path.dirname(scriptPath), "..");
 const tscPath = path.join(projectRoot, "node_modules", "typescript", "bin", "tsc");
 
 export const typecheckProjectConfigs = [
-  "webapp/tsconfig.typecheck.json",
-  "webapp/orchestrator/tsconfig.json",
+  "daemon/tsconfig.typecheck.json",
+  "daemon/orchestrator/tsconfig.json",
   "app/tsconfig.json",
   "shared/tsconfig.json",
 ];

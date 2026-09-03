@@ -6,7 +6,7 @@
       "type": "shell",
       "command": "pnpm dev",
       "options": {
-        "cwd": "${workspaceFolder}/webapp"
+        "cwd": "${workspaceFolder}/daemon"
       },
       "isBackground": true,
       "group": {
@@ -38,7 +38,7 @@
       "type": "shell",
       "command": "pnpm run typecheck",
       "options": {
-        "cwd": "${workspaceFolder}/webapp"
+        "cwd": "${workspaceFolder}"
       },
       "group": {
         "kind": "build",

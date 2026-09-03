@@ -20,7 +20,7 @@ test("generated reload sources are exact workspace paths with explicit destructi
     for (const sourcePath of descriptor.paths) {
       assert.equal(path.isAbsolute(sourcePath), false, `${descriptor.scope} leaked an absolute path`);
       assert.equal(sourcePath.includes("node_modules/"), false, `${descriptor.scope} absorbed node_modules`);
-      assert.match(sourcePath, /^(?:instructions|webapp)\//u, `${descriptor.scope} source escaped Workbench`);
+      assert.match(sourcePath, /^(?:daemon|instructions)\//u, `${descriptor.scope} source escaped Workbench`);
     }
   }
   assert.deepEqual(
@@ -67,7 +67,7 @@ test("retired graph generations stay behind the active root source boundary", ()
     const sourceState = activateReloadNodeSourceState();
     const processDescriptor = sourceState.descriptors.find(({ scope }) => scope === "server:process");
     assert.ok(processDescriptor);
-    assert.equal(processDescriptor.paths.includes("webapp/orchestrator/retired-graph-generation.ts"), false);
+    assert.equal(processDescriptor.paths.includes("daemon/orchestrator/retired-graph-generation.ts"), false);
   } finally {
     const index = mainModule.children.indexOf(retiredRoot);
     if (index >= 0) mainModule.children.splice(index, 1);

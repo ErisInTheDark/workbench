@@ -33,7 +33,7 @@ CRITICAL INSTRUCTION EDITING RULES:
 ## Contracts, Sources, and Equality
 
 - Keep shared client/server code synchronized through shared types. Do not use `any` or `unknown` in shared contracts, and do not leave API contracts or state flow half-migrated.
-- When a browser boundary rejects server, bridge, or WebSocket data with Zod, call `reportClientSchemaError` from `webapp/lib/workbench/report-client-schema-error.ts` before returning. Keep the report bounded and sanitized; never serialize the rejected payload or its values. Expected local validation of user input, URLs, or persisted layout state does not need remote-boundary logging when its rejection is fully handled.
+- When a browser boundary rejects server, bridge, or WebSocket data with Zod, call `reportClientSchemaError` from `shared/workbench/report-client-schema-error.ts` before returning. Keep the report bounded and sanitized; never serialize the rejected payload or its values. Expected local validation of user input, URLs, or persisted layout state does not need remote-boundary logging when its rejection is fully handled.
 - For app-core, shared-contract, thread-rendering, route, or instruction-generation changes, work in live-safe, compile-safe vertical slices. Preserve compatibility until all consumers are migrated. Never leave the watched app or workflow/checkpoint endpoints broken between edits or while awaiting user input.
 - Put additive Zod compatibility defaults on the schema. New browser code and old server code must work in either reload order. Read repairable persisted state through `conformToZodSchema`; do not throw for schema drift.
 - Edit Workbench-owned prompt and workflow Markdown under `instructions/`, not generated Workbench-library files. Confirm the source-to-generated path before planning.
@@ -55,7 +55,7 @@ CRITICAL INSTRUCTION EDITING RULES:
 
 ## Commands and Permission Boundaries
 
-Run project validation from `webapp/`. Run `pnpm typecheck` from the repository root.
+Run project validation from `daemon/`. Run `pnpm typecheck` from the repository root.
 
 ### Allowed Validation
 
@@ -78,7 +78,7 @@ cargo build --release --manifest-path ..\tray\Cargo.toml
 
 A direct user request to perform a specific bounded action counts as explicit permission for that exact action, including when delivered as a steer. Use a questionnaire when permission has not already been given, the request is ambiguous, or a bounded scope choice still needs user input.
 
-- Obtain explicit user permission before calling any non-GET Workbench webapp endpoint directly.
+- Obtain explicit user permission before calling any non-GET Workbench daemon endpoint directly.
 - Ask before running installs, generation, formatting, migration, cleanup, build, or other commands that write artifacts or disturb active watch/runtime state. -->
 
 ### Forbidden Shortcuts

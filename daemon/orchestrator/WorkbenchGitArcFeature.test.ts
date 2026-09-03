@@ -715,13 +715,13 @@ test("Git arc responses ignore legacy reload projections and admission claims", 
     cwd: "ignored",
     harness: "codex" as const,
     intentName: "reload",
-    paths: ["webapp/orchestrator/WorkbenchAgentMcpController.ts"],
+    paths: ["daemon/orchestrator/WorkbenchAgentMcpController.ts"],
     threadId: "thread-one",
   };
   const response = await feature.executeRequest(request);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    scopePaths: ["webapp/orchestrator/WorkbenchAgentMcpController.ts"],
+    scopePaths: ["daemon/orchestrator/WorkbenchAgentMcpController.ts"],
   });
   assert.deepEqual(await feature.listReloadScopeClaims("C:/Git/Project"), []);
 });
