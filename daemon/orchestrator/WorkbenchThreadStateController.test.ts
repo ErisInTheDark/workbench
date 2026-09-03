@@ -204,9 +204,13 @@ test("UI subscribers share headless observation and warm snapshots without ownin
   await controller.close("a");
   assert.equal(projectObservationStops, 0);
   await controller.close("b");
-  assert.equal(projectObservationStops, 0);
-  await controller.dispose();
   assert.equal(projectObservationStops, 1);
+  await controller.open("c", "project");
+  assert.equal(projectObservationStarts, 2);
+  await controller.close("c");
+  assert.equal(projectObservationStops, 2);
+  await controller.dispose();
+  assert.equal(projectObservationStops, 2);
 });
 
 test("global pinned folders import project layout, accept mixed-project members, broadcast, and remove snoozed members", async () => {
@@ -741,7 +745,7 @@ test("concurrent first opens share one project initialization and observation", 
   await controller.close("first");
   assert.equal(observationStops, 0);
   await controller.close("second");
-  assert.equal(observationStops, 0);
+  assert.equal(observationStops, 1);
   await controller.dispose();
   assert.equal(observationStops, 1);
 });
@@ -1068,12 +1072,18 @@ test("global observation returns full project sidebars and moves durable drafts 
   });
   await seedProjectState(root, "beta", { drafts: [], newThreadProfile: null, records: [], version: 4 });
   const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
+  let projectObservationStarts = 0;
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({
       data: [projectOption("alpha", path.join(root, "alpha")), projectOption("beta", path.join(root, "beta"))],
       rootPath: root,
     }),
-    projectState: projectState(),
+    projectState: projectState({
+      observe: () => {
+        projectObservationStarts += 1;
+        return () => undefined;
+      },
+    }),
     publish: (connectionId, snapshot) => { publications.push({ connectionId, snapshot }); },
     reconcileProject: async () => [],
     storageRoot: root,
@@ -1083,6 +1093,7 @@ test("global observation returns full project sidebars and moves durable drafts 
   assert.deepEqual(opened.projectSidebars.projects.map(({ projectId }) => projectId), ["alpha", "beta"]);
   assert.equal(opened.projectSidebars.projects.find(({ projectId }) => projectId === "alpha")?.entries.some((entry) => entry.entryKind === "draft"), true);
   assert.equal(publications.some(({ snapshot }) => "updateKind" in snapshot && snapshot.updateKind === "project"), false);
+  assert.equal(projectObservationStarts, 0);
 
   const response = await controller.handleRequest("global", {
     destinationProjectId: "beta",

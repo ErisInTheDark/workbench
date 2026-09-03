@@ -420,6 +420,7 @@ export default class WorkbenchThreadStateController {
     if (priorProjectId && priorProjectId !== projectId) await this.close(connectionId, priorProjectId);
     const state = await this.getProject(projectId);
     const observation: ProjectObservation = { pinnedThreadKeys: new Set(), projectId, scope: "project", version };
+    this.startProjectObservation(projectId, state);
     this.connectionProjects.set(connectionId, observation);
     state.observers.add(connectionId);
     const currentProjectUpdate = this.options.projectState.getCurrentUpdate(projectId);
@@ -482,6 +483,7 @@ export default class WorkbenchThreadStateController {
     const state = this.projects.get(projectId);
     if (!state) return;
     state.observers.delete(connectionId);
+    this.stopProjectObservationIfIdle(state);
   }
 
   private async closeGlobal(connectionId: string) {
@@ -939,7 +941,6 @@ export default class WorkbenchThreadStateController {
       }
       const state: ProjectState = { abort: null, displayOrder: stored.displayOrder ?? {}, drafts, entries, error: null, freshness: "loading", generation: 0, newThreadProfile: stored.newThreadProfile, observers: new Set(), reconcilePromise: null, revision: 0, stopProjectObservation: null };
       const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state);
-      state.stopProjectObservation = this.options.projectState.observe(projectId, (update) => this.publishUpdate(state, update));
       this.projects.set(projectId, state);
       this.updatePinnedLayoutEntries(projectId, this.naturallyOrderedEntries(state));
       const pinnedLayoutUpdate = await this.pinnedLayout.importProject(projectId, this.naturallyOrderedEntries(state), state.displayOrder);
@@ -952,6 +953,20 @@ export default class WorkbenchThreadStateController {
     const loaded = this.projects.get(projectId);
     if (!loaded) throw new Error(`Project state failed to load: ${projectId}`);
     return loaded;
+  }
+
+  private startProjectObservation(projectId: string, state: ProjectState) {
+    if (state.stopProjectObservation) return;
+    state.stopProjectObservation = this.options.projectState.observe(
+      projectId,
+      (update) => this.publishUpdate(state, update),
+    );
+  }
+
+  private stopProjectObservationIfIdle(state: ProjectState) {
+    if (state.observers.size || !state.stopProjectObservation) return;
+    state.stopProjectObservation();
+    state.stopProjectObservation = null;
   }
 
   private loadProjectStorage(projectId: string) {

@@ -24,7 +24,7 @@ import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "
 
 const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_PROJECT_SNAPSHOTS = 4;
-const DEFAULT_POLL_INTERVAL_MS = 1_500;
+const DEFAULT_POLL_INTERVAL_MS = 10_000;
 const IGNORED_TREE_SEGMENTS = new Set([".codex", ".next", ".vscode", ".workbench", "node_modules"]);
 
 type SnapshotCacheState = "coalesced" | "hit" | "miss";
