@@ -114,11 +114,8 @@ import {
     isWorkbenchApprovalRequest,
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import ThreadTranscriptParityController from "./transcript/ThreadTranscriptParityController";
-import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
-import type {
-    WorkbenchProjectedTranscriptItem,
-    WorkbenchTranscriptProjection,
-} from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import reconcileTranscriptProjectionWithLiveThread from "./transcript/reconcile-transcript-projection-with-live-thread";
+import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 
 const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
 const RATE_LIMIT_AUTO_REFRESH_INTERVAL_MS = 15_000;
@@ -946,7 +943,15 @@ function WorkbenchThreadClient(
     onProjectionChange: (projection) => {
       options.onTranscriptComparisonChange?.(transcriptComparisonAvailable, projection);
     },
-    reconcileProjection: reconcileTranscriptProjectionWithLiveThread,
+    reconcileProjection: (projection, selection) => reconcileTranscriptProjectionWithLiveThread({
+      mergeLiveTurn: (incomingTurn, liveTurn) => mergeLiveStreamingTurn(
+        incomingTurn,
+        liveTurn,
+        { settleStreamingKeys: false },
+      ),
+      projection,
+      thread: selection.thread,
+    }),
     transcripts,
     turnLimit: 4,
   });
@@ -2639,76 +2644,6 @@ function WorkbenchThreadClient(
       turnHistory,
       turns: mergeWorkbenchThreadTurnBodies(incomingThread.harness, incomingTurns, liveThread.turns, turnHistory),
     };
-  }
-
-  function isProjectedProviderItem(item: WorkbenchProjectedTranscriptItem): item is ThreadItem {
-    return item.type !== "questionnaire" && item.type !== "approval" && item.type !== "unknown";
-  }
-
-  function reconcileTranscriptProjectionWithLiveThread(
-    projection: WorkbenchTranscriptProjection,
-    selection: { thread: ThreadPayload },
-  ): WorkbenchTranscriptProjection {
-    const liveTurnsById = new Map(selection.thread.turns.map((turn) => [turn.id, turn]));
-    const liveHistoryByTurnId = new Map(selection.thread.turnHistory.map((entry) => [entry.turnId, entry]));
-    const canonicalItemIds = new Set(projection.display.orderedItems.map(({ itemId }) => itemId));
-    const replacementsById = new Map<string, ThreadItem>();
-    const virtualItemsByTurnId = new Map<string, ThreadItem[]>();
-
-    for (const turn of projection.turns) {
-      const incomingItems = turn.items.filter(isProjectedProviderItem);
-      const incomingIds = new Set(incomingItems.map(({ id }) => id));
-      const merged = mergeLiveStreamingTurn(
-        { ...turn, items: incomingItems },
-        liveTurnsById.get(turn.id),
-        { settleStreamingKeys: false },
-      );
-      for (const item of merged.items) {
-        if (incomingIds.has(item.id)) {
-          replacementsById.set(item.id, item);
-        } else if (!canonicalItemIds.has(item.id)) {
-          const virtualItems = virtualItemsByTurnId.get(turn.id) ?? [];
-          virtualItems.push(item);
-          virtualItemsByTurnId.set(turn.id, virtualItems);
-        }
-      }
-    }
-
-    const turns = projection.turns.map((turn) => {
-      const virtualItems = virtualItemsByTurnId.get(turn.id) ?? [];
-      const items = [
-        ...turn.items.map((item) => replacementsById.get(item.id) ?? item),
-        ...virtualItems,
-      ];
-      const virtualIds = new Set(virtualItems.map(({ id }) => id));
-      const liveTimeline = liveHistoryByTurnId.get(turn.id)?.itemTimeline ?? [];
-      const itemTimeline = [
-        ...turn.itemTimeline,
-        ...liveTimeline.filter(({ itemId }) => virtualIds.has(itemId)),
-      ];
-      return { ...turn, itemTimeline, items };
-    });
-    const turnsById = new Map(turns.map((turn) => [turn.id, turn]));
-    const display = planCanonicalTranscriptDisplay({
-      items: projection.display.orderedItems.map((entry) => ({
-        ...entry,
-        payload: replacementsById.get(entry.itemId) ?? entry.payload,
-      })),
-      turns: turns.map(({ id, turnIndex }) => ({ turnId: id, turnIndex })),
-      virtualTail: turns.flatMap((turn) => (
-        (virtualItemsByTurnId.get(turn.id) ?? []).map((payload) => ({ payload, turnId: turn.id }))
-      )),
-    });
-    const turnHistory = projection.turnHistory.map((entry) => {
-      const turn = turnsById.get(entry.turnId);
-      return turn ? {
-        ...entry,
-        itemCount: turn.items.length,
-        itemIds: turn.items.map(({ id }) => id),
-        itemTimeline: turn.itemTimeline,
-      } : entry;
-    });
-    return { ...projection, display, turnHistory, turns };
   }
 
   async function sendBridgeRequest<TResponse>(

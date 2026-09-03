@@ -84,6 +84,7 @@ import {
 } from "./codex-transcript-steer-history.ts";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import { CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS, createCodexTranscriptDiagnostic } from "./codex-transcript-diagnostics";
+import { shouldRecordDurableTranscriptNotification } from "./codex-transcript-event-routing";
 import {
   encodeTranscriptPathSegment,
   extractItem,
@@ -265,18 +266,10 @@ const APPROVAL_DECISION_QUESTION_ID = "decision";
 const APPROVAL_ALLOW_ONCE_LABEL = "Allow once";
 const APPROVAL_ALLOW_SESSION_LABEL = "Allow for session";
 const APPROVAL_DECLINE_LABEL = "Decline";
-const TRANSCRIPT_MAX_PENDING_TASKS = 200;
-const TRANSCRIPT_COALESCE_FLUSH_MS = 100;
-const TRANSCRIPT_COALESCE_MAX_BUFFER_BYTES = 512 * 1024;
 const WORKBENCH_REQUEST_SOURCE_FIELD = "workbenchRequestSource";
 const WORKBENCH_THREAD_HYDRATION_FIELD = "workbenchThreadHydration";
 const WORKBENCH_THREAD_CONTEXT_ENTRIES_FIELD = "workbenchThreadContextEntries";
 type WorkbenchRequestSource = "autoRefresh" | "internal" | "sqliteBaseline" | "sqliteRecovery" | "user";
-
-type CoalescedTranscriptNotification = {
-  key: string;
-  notification: JsonRpcNotification;
-};
 
 type PendingCompatibilityWindowImport = {
   thread: Thread;
@@ -467,102 +460,6 @@ function shouldHydrateThreadResponse(
       return true;
     default:
       return false;
-  }
-}
-
-function isStreamingTranscriptNotification(notification: JsonRpcNotification) {
-  switch (notification.method) {
-    case "item/agentMessage/delta":
-    case "item/plan/delta":
-    case "item/commandExecution/outputDelta":
-    case "item/reasoning/summaryPartAdded":
-    case "item/reasoning/summaryTextDelta":
-    case "item/reasoning/textDelta":
-    case "item/fileChange/patchUpdated":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function getCoalescedTranscriptNotification(notification: JsonRpcNotification): CoalescedTranscriptNotification | null {
-  if (!isStreamingTranscriptNotification(notification)) {
-    return null;
-  }
-
-  const threadId = readNotificationStringParam(notification, "threadId");
-  const turnId = readNotificationStringParam(notification, "turnId");
-  const itemId = readNotificationStringParam(notification, "itemId");
-  if (!threadId || !turnId || !itemId) {
-    return null;
-  }
-
-  const params = asRecord(notification.params) ?? {};
-  const keyParts = [notification.method, threadId, turnId, itemId];
-  if (notification.method === "item/reasoning/summaryPartAdded" || notification.method === "item/reasoning/summaryTextDelta") {
-    keyParts.push(String(readNotificationNumberParam(notification, "summaryIndex") ?? ""));
-  }
-  if (notification.method === "item/reasoning/textDelta") {
-    keyParts.push(String(readNotificationNumberParam(notification, "contentIndex") ?? ""));
-  }
-
-  const key = keyParts.join(":");
-  switch (notification.method) {
-    case "item/agentMessage/delta":
-    case "item/plan/delta":
-    case "item/commandExecution/outputDelta":
-    case "item/reasoning/summaryTextDelta":
-    case "item/reasoning/textDelta":
-      return {
-        key,
-        notification: {
-          ...notification,
-          params: {
-            ...params,
-            delta: asString(params.delta) ?? "",
-          },
-        },
-      };
-    default:
-      return { key, notification };
-  }
-}
-
-function mergeCoalescedTranscriptNotification(
-  current: JsonRpcNotification,
-  incoming: JsonRpcNotification,
-) {
-  const currentParams = asRecord(current.params) ?? {};
-  const incomingParams = asRecord(incoming.params) ?? {};
-  switch (incoming.method) {
-    case "item/agentMessage/delta":
-    case "item/plan/delta":
-    case "item/commandExecution/outputDelta":
-    case "item/reasoning/summaryTextDelta":
-    case "item/reasoning/textDelta":
-      return {
-        ...incoming,
-        params: {
-          ...incomingParams,
-          delta: `${asString(currentParams.delta) ?? ""}${asString(incomingParams.delta) ?? ""}`,
-        },
-      } satisfies JsonRpcNotification;
-    default:
-      return incoming;
-  }
-}
-
-function estimateCoalescedTranscriptNotificationBytes(notification: JsonRpcNotification) {
-  const params = asRecord(notification.params) ?? {};
-  const delta = asString(params.delta);
-  if (delta !== null) {
-    return delta.length * 2;
-  }
-
-  try {
-    return JSON.stringify(notification).length * 2;
-  } catch {
-    return 1024;
   }
 }
 
@@ -1014,10 +911,6 @@ export default class CodexStdioBridge {
   private readonly transcriptPendingTasks = new Map<number, { label: string; startedAt: number }>();
   private readonly pendingCompatibilityWindowImports = new Map<string, PendingCompatibilityWindowImport>();
   private readonly transcriptInstrumentationTimer: NodeJS.Timeout;
-  private readonly coalescedTranscriptNotifications = new Map<string, JsonRpcNotification>();
-  private coalescedTranscriptFlushTimer: NodeJS.Timeout | null = null;
-  private coalescedTranscriptFlushPromise: Promise<void> | null = null;
-  private coalescedTranscriptByteEstimate = 0;
   private nextTranscriptTaskId = 1;
   private transcriptLastLogAt: number | null = null;
   private transcriptSqliteFailureReported = false;
@@ -1100,12 +993,6 @@ export default class CodexStdioBridge {
   stop() {
     this.beginStopping();
     clearInterval(this.transcriptInstrumentationTimer);
-    if (this.coalescedTranscriptFlushTimer) {
-      clearTimeout(this.coalescedTranscriptFlushTimer);
-      this.coalescedTranscriptFlushTimer = null;
-    }
-    this.coalescedTranscriptNotifications.clear();
-    this.coalescedTranscriptByteEstimate = 0;
     this.fileChangeFailureMarkers.clear();
     this.fileChangeTurnCursors.clear();
     this.transcriptSteers.clear();
@@ -1823,10 +1710,8 @@ export default class CodexStdioBridge {
         break;
       }
     }
-    await this.flushCoalescedTranscriptNotifications();
     await Promise.allSettled(Array.from(this.transcriptTasks));
     await this.transcriptQueue.catch(() => undefined);
-    await this.flushCoalescedTranscriptNotifications();
   }
 
   private createTranscriptStore({ reload = false }: { reload?: boolean } = {}) {
@@ -2016,37 +1901,33 @@ export default class CodexStdioBridge {
       }
       this.onNotification(this.withFileChangeFailurePresentation(message));
       if (syntheticFileChangeNotification) this.onNotification(syntheticFileChangeNotification);
-      const coalescedNotification = getCoalescedTranscriptNotification(message);
-      if (coalescedNotification) {
-        await this.captureCoalescedTranscriptNotification(coalescedNotification);
+      if (!shouldRecordDurableTranscriptNotification(message.method)) {
         return;
       }
 
-      void this.flushCoalescedTranscriptNotifications().then(() => (
-        this.captureTranscript(`upstream-notification:${message.method}`, async () => {
-          const transcriptStore = this.ensureTranscriptStore();
-          const providerObservations = await this.createSqliteProviderNotificationObservations(message);
-          if (syntheticFileChangeNotification) {
-            providerObservations.push(
-              ...await this.createSqliteProviderNotificationObservations(syntheticFileChangeNotification),
-            );
-          }
-          await this.transcriptRecording.recordProviderFact({
-            observations: providerObservations,
-            recordLegacy: () => transcriptStore.recordUpstreamNotification(message),
-            recordCrossedWorkbenchFacts: async () => {
-              const steerSettlements = this.settleTranscriptSteerNotification(message);
-              if (!steerSettlements.length) return [];
-              await transcriptStore.recordSteerSettlements(steerSettlements);
-              return steerSettlements.map((entry) => ({
-                kind: "steer" as const,
-                entry,
-                observedAt: entry.resolvedAt!,
-              }));
-            },
-          });
-        })
-      ));
+      void this.captureTranscript(`upstream-notification:${message.method}`, async () => {
+        const transcriptStore = this.ensureTranscriptStore();
+        const providerObservations = await this.createSqliteProviderNotificationObservations(message);
+        if (syntheticFileChangeNotification) {
+          providerObservations.push(
+            ...await this.createSqliteProviderNotificationObservations(syntheticFileChangeNotification),
+          );
+        }
+        await this.transcriptRecording.recordProviderFact({
+          observations: providerObservations,
+          recordLegacy: () => transcriptStore.recordUpstreamNotification(message),
+          recordCrossedWorkbenchFacts: async () => {
+            const steerSettlements = this.settleTranscriptSteerNotification(message);
+            if (!steerSettlements.length) return [];
+            await transcriptStore.recordSteerSettlements(steerSettlements);
+            return steerSettlements.map((entry) => ({
+              kind: "steer" as const,
+              entry,
+              observedAt: entry.resolvedAt!,
+            }));
+          },
+        });
+      });
     }
   }
 
@@ -2090,77 +1971,6 @@ export default class CodexStdioBridge {
       level: "warning",
       source: "codex-transcript",
     });
-  }
-
-  private async captureCoalescedTranscriptNotification({ key, notification }: CoalescedTranscriptNotification) {
-    const currentNotification = this.coalescedTranscriptNotifications.get(key);
-    const currentBytes = currentNotification ? estimateCoalescedTranscriptNotificationBytes(currentNotification) : 0;
-    const nextNotification = currentNotification ? mergeCoalescedTranscriptNotification(currentNotification, notification) : notification;
-    this.coalescedTranscriptNotifications.set(
-      key,
-      nextNotification,
-    );
-    this.coalescedTranscriptByteEstimate += estimateCoalescedTranscriptNotificationBytes(nextNotification) - currentBytes;
-
-    if (this.coalescedTranscriptByteEstimate >= TRANSCRIPT_COALESCE_MAX_BUFFER_BYTES) {
-      await this.flushCoalescedTranscriptNotifications();
-      return;
-    }
-
-    if (this.coalescedTranscriptFlushTimer) {
-      return;
-    }
-    this.coalescedTranscriptFlushTimer = setTimeout(() => {
-      this.coalescedTranscriptFlushTimer = null;
-      void this.flushCoalescedTranscriptNotifications().catch((error) => {
-        this.transcriptShadowLog?.write({
-          event: "notification-flush-failed",
-          fields: { message: (error instanceof Error ? error.message : String(error)).slice(0, 500) },
-          level: "error",
-          source: "codex-transcript",
-        });
-      });
-    }, TRANSCRIPT_COALESCE_FLUSH_MS);
-    this.coalescedTranscriptFlushTimer.unref();
-  }
-
-  private async flushCoalescedTranscriptNotifications() {
-    if (this.coalescedTranscriptFlushTimer) {
-      clearTimeout(this.coalescedTranscriptFlushTimer);
-      this.coalescedTranscriptFlushTimer = null;
-    }
-
-    while (true) {
-      if (this.coalescedTranscriptFlushPromise) {
-        await this.coalescedTranscriptFlushPromise.catch(() => undefined);
-      }
-
-      const notifications = Array.from(this.coalescedTranscriptNotifications.values());
-      if (!notifications.length) {
-        return;
-      }
-
-      if (this.transcriptTasks.size >= TRANSCRIPT_MAX_PENDING_TASKS) {
-        this.logTranscriptInstrumentation();
-        await Promise.race(Array.from(this.transcriptTasks)).catch(() => undefined);
-        continue;
-      }
-
-      this.coalescedTranscriptNotifications.clear();
-      this.coalescedTranscriptByteEstimate = 0;
-      const flushPromise = this.captureTranscript(
-        "upstream-notification:coalesced",
-        () => this.ensureTranscriptStore().recordUpstreamNotifications(notifications),
-      );
-      this.coalescedTranscriptFlushPromise = flushPromise;
-      try {
-        await flushPromise;
-      } finally {
-        if (this.coalescedTranscriptFlushPromise === flushPromise) {
-          this.coalescedTranscriptFlushPromise = null;
-        }
-      }
-    }
   }
 
   private captureTranscriptClientRequest(

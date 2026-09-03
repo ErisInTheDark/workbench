@@ -9,7 +9,7 @@ import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thre
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
-import { appendCommandOutputDelta, compactCommandOutputPayload } from "workbench-shared/codex/thread-command-output";
+import { compactCommandOutputPayload } from "workbench-shared/codex/thread-command-output";
 import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
 import type { WorkbenchThreadHydrationRequest } from "../lib/codex/thread-hydration";
 import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadContextReadResponse, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
@@ -17,7 +17,7 @@ import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thr
 import { normalizeWorkbenchThreadItemTimeline } from "workbench-shared/workbench/thread/thread-item-timeline";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { hydrateThreadWithStoredTurns } from "./codex-transcript-hydration";
-import { shouldPersistRawNotificationToJournal } from "./codex-transcript-event-routing";
+import { shouldRecordDurableTranscriptNotification } from "./codex-transcript-event-routing";
 import { createFirstTurnItemOwners } from "./codex-transcript-item-ownership";
 import { mergeThreadItem } from "./codex-transcript-item-merge";
 import {
@@ -659,157 +659,9 @@ function upsertItem(turn: Turn | null, item: ThreadItem, turnId: string): Turn {
   };
 }
 
-function updateCommandOutput(turn: Turn | null, itemId: string, delta: string) {
-  if (!turn) {
-    return turn;
-  }
-
-  let changed = false;
-  const items = turn.items.map((item) => {
-    if (item.id !== itemId || item.type !== "commandExecution") {
-      return item;
-    }
-
-    changed = true;
-    return {
-      ...item,
-      aggregatedOutput: appendCommandOutputDelta(item.aggregatedOutput, delta),
-    };
-  });
-
-  return changed ? { ...turn, items } : turn;
-}
-
-function createStreamingAgentMessageItem(itemId: string): Extract<ThreadItem, { type: "agentMessage" }> {
-  return {
-    id: itemId,
-    memoryCitation: null,
-    phase: "commentary",
-    text: "",
-    type: "agentMessage",
-  };
-}
-
-function createStreamingPlanItem(itemId: string): Extract<ThreadItem, { type: "plan" }> {
-  return {
-    id: itemId,
-    text: "",
-    type: "plan",
-  };
-}
-
-function createStreamingReasoningItem(itemId: string): Extract<ThreadItem, { type: "reasoning" }> {
-  return {
-    content: [],
-    id: itemId,
-    summary: [],
-    type: "reasoning",
-  };
-}
-
-function appendIndexedText(values: string[], index: number, delta: string) {
-  const nextValues = [...values];
-  while (nextValues.length <= index) {
-    nextValues.push("");
-  }
-  nextValues[index] = `${nextValues[index] ?? ""}${delta}`;
-  return nextValues;
-}
-
-function ensureIndexedText(values: string[], index: number) {
-  const nextValues = [...values];
-  while (nextValues.length <= index) {
-    nextValues.push("");
-  }
-  return nextValues;
-}
-
-function updateOrCreateItem(
-  turn: Turn | null,
-  turnId: string,
-  itemId: string,
-  createItem: () => ThreadItem,
-  updater: (item: ThreadItem) => ThreadItem | null,
-) {
-  const baseTurn = turn ?? {
-    completedAt: null,
-    durationMs: null,
-    error: null,
-    id: turnId,
-    items: [],
-    itemsView: "full",
-    startedAt: null,
-    status: "inProgress",
-  } satisfies Turn;
-  const itemIndex = baseTurn.items.findIndex((item) => item.id === itemId);
-  if (itemIndex === -1) {
-    const nextItem = updater(createItem());
-    return nextItem
-      ? {
-        ...baseTurn,
-        items: [...baseTurn.items, nextItem],
-        itemsView: "full" as const,
-      }
-      : baseTurn;
-  }
-
-  let changed = false;
-  const nextItems = baseTurn.items.map((item, index) => {
-    if (index !== itemIndex) {
-      return item;
-    }
-
-    const nextItem = updater(item);
-    if (!nextItem) {
-      return item;
-    }
-
-    changed = true;
-    return nextItem;
-  });
-  return changed ? { ...baseTurn, items: nextItems, itemsView: "full" as const } : baseTurn;
-}
-
-function updateExistingItem(
-  turn: Turn | null,
-  itemId: string,
-  updater: (item: ThreadItem) => ThreadItem | null,
-) {
-  if (!turn) {
-    return turn;
-  }
-
-  let changed = false;
-  const items = turn.items.map((item) => {
-    if (item.id !== itemId) {
-      return item;
-    }
-
-    const nextItem = updater(item);
-    if (!nextItem) {
-      return item;
-    }
-
-    changed = true;
-    return nextItem;
-  });
-  return changed ? { ...turn, items } : turn;
-}
-
-function extractDelta(value: unknown) {
-  const params = asRecord(asRecord(value)?.params);
-  return asString(params?.delta);
-}
-
 function extractItemId(value: unknown) {
   const params = asRecord(asRecord(value)?.params);
   return asString(params?.itemId);
-}
-
-function extractNumberParam(value: unknown, key: string) {
-  const params = asRecord(asRecord(value)?.params);
-  const rawValue = params?.[key];
-  return typeof rawValue === "number" && Number.isInteger(rawValue) && rawValue >= 0 ? rawValue : null;
 }
 
 function isTurnTerminalEvent(event: CodexTranscriptRawEvent) {
@@ -970,66 +822,18 @@ export default class CodexTranscriptStore {
 
   async recordUpstreamNotification(notification: JsonRpcNotification) {
     await this.ready();
-    if (shouldPersistRawNotificationToJournal(notification.method)) {
-      await this.recordRawTraffic("upstream-notification", notification);
-    }
+    if (!shouldRecordDurableTranscriptNotification(notification.method)) return;
+    await this.recordRawTraffic("upstream-notification", notification);
 
     const threadId = extractThreadId(notification);
     const turnId = extractTurnId(notification);
-    const delta = extractDelta(notification);
     const itemId = extractItemId(notification);
     if (!threadId || !turnId || !itemId) {
       return;
     }
 
-    switch (notification.method) {
-      case "item/agentMessage/delta":
-        if (delta !== null) {
-          await this.updateAgentMessageDelta(threadId, turnId, itemId, notification.method, delta);
-          return;
-        }
-        break;
-      case "item/plan/delta":
-        if (delta !== null) {
-          await this.updatePlanDelta(threadId, turnId, itemId, notification.method, delta);
-          return;
-        }
-        break;
-      case "item/commandExecution/outputDelta":
-        if (delta !== null) {
-          await this.updateCommandOutputDelta(threadId, turnId, itemId, notification.method, delta);
-          return;
-        }
-        break;
-      case "item/fileChange/patchUpdated":
-        await this.updateFileChangePatch(threadId, turnId, itemId, notification);
-        return;
-      case "item/reasoning/summaryPartAdded":
-        await this.updateReasoningSummaryPart(threadId, turnId, itemId, notification);
-        return;
-      case "item/reasoning/summaryTextDelta":
-        if (delta !== null) {
-          await this.updateReasoningSummaryDelta(threadId, turnId, itemId, notification, delta);
-          return;
-        }
-        break;
-      case "item/reasoning/textDelta":
-        if (delta !== null) {
-          await this.updateReasoningTextDelta(threadId, turnId, itemId, notification, delta);
-          return;
-        }
-        break;
-    }
-
     if (classifyTimelineEvent(notification.method, null)) {
       await this.updateItemTimelineOnly(threadId, turnId, itemId, notification.method);
-    }
-  }
-
-  async recordUpstreamNotifications(notifications: JsonRpcNotification[]) {
-    await this.ready();
-    for (const notification of notifications) {
-      await this.recordUpstreamNotification(notification);
     }
   }
 
@@ -1771,182 +1575,6 @@ export default class CodexTranscriptStore {
         itemTimeline,
         lastTouchedAt: now(),
         turn: applyTurnTimeline(file.turn, {
-          ...file,
-          itemOrder,
-          itemTimeline,
-        }),
-      };
-    });
-    await this.touchThreadThrottled(threadId);
-  }
-
-  private async updateCommandOutputDelta(threadId: string, turnId: string, itemId: string, method: string | null, delta: string) {
-    await this.updateTurnFile(threadId, turnId, (file) => {
-      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, null, method);
-      return {
-        ...file,
-        itemOrder,
-        itemTimeline,
-        lastTouchedAt: now(),
-        turn: applyTurnTimeline(updateCommandOutput(file.turn, itemId, delta), {
-          ...file,
-          itemOrder,
-          itemTimeline,
-        }),
-      };
-    });
-    await this.touchThreadThrottled(threadId);
-  }
-
-  private async updateAgentMessageDelta(threadId: string, turnId: string, itemId: string, method: string | null, delta: string) {
-    await this.updateTurnFile(threadId, turnId, (file) => {
-      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, createStreamingAgentMessageItem(itemId), method);
-      return {
-        ...file,
-        itemOrder,
-        itemTimeline,
-        lastTouchedAt: now(),
-        turn: applyTurnTimeline(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingAgentMessageItem(itemId), (item) => (
-          item.type === "agentMessage" ? { ...item, text: `${item.text}${delta}` } : null
-        )), {
-          ...file,
-          itemOrder,
-          itemTimeline,
-        }),
-      };
-    });
-    await this.touchThreadThrottled(threadId);
-  }
-
-  private async updatePlanDelta(threadId: string, turnId: string, itemId: string, method: string | null, delta: string) {
-    await this.updateTurnFile(threadId, turnId, (file) => {
-      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, createStreamingPlanItem(itemId), method);
-      return {
-        ...file,
-        itemOrder,
-        itemTimeline,
-        lastTouchedAt: now(),
-        turn: applyTurnTimeline(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingPlanItem(itemId), (item) => (
-          item.type === "plan" ? { ...item, text: `${item.text}${delta}` } : null
-        )), {
-          ...file,
-          itemOrder,
-          itemTimeline,
-        }),
-      };
-    });
-    await this.touchThreadThrottled(threadId);
-  }
-
-  private async updateReasoningSummaryPart(threadId: string, turnId: string, itemId: string, notification: JsonRpcNotification) {
-    const summaryIndex = extractNumberParam(notification, "summaryIndex");
-    if (summaryIndex === null) {
-      return;
-    }
-
-    await this.updateTurnFile(threadId, turnId, (file) => {
-      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, createStreamingReasoningItem(itemId), notification.method);
-      return {
-        ...file,
-        itemOrder,
-        itemTimeline,
-        lastTouchedAt: now(),
-        turn: applyTurnTimeline(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingReasoningItem(itemId), (item) => (
-          item.type === "reasoning" ? { ...item, summary: ensureIndexedText(item.summary, summaryIndex) } : null
-        )), {
-          ...file,
-          itemOrder,
-          itemTimeline,
-        }),
-      };
-    });
-    await this.touchThreadThrottled(threadId);
-  }
-
-  private async updateReasoningSummaryDelta(
-    threadId: string,
-    turnId: string,
-    itemId: string,
-    notification: JsonRpcNotification,
-    delta: string,
-  ) {
-    const summaryIndex = extractNumberParam(notification, "summaryIndex");
-    if (summaryIndex === null) {
-      return;
-    }
-
-    await this.updateTurnFile(threadId, turnId, (file) => {
-      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, createStreamingReasoningItem(itemId), notification.method);
-      return {
-        ...file,
-        itemOrder,
-        itemTimeline,
-        lastTouchedAt: now(),
-        turn: applyTurnTimeline(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingReasoningItem(itemId), (item) => (
-          item.type === "reasoning"
-            ? { ...item, summary: appendIndexedText(item.summary, summaryIndex, delta) }
-            : null
-        )), {
-          ...file,
-          itemOrder,
-          itemTimeline,
-        }),
-      };
-    });
-    await this.touchThreadThrottled(threadId);
-  }
-
-  private async updateReasoningTextDelta(
-    threadId: string,
-    turnId: string,
-    itemId: string,
-    notification: JsonRpcNotification,
-    delta: string,
-  ) {
-    const contentIndex = extractNumberParam(notification, "contentIndex");
-    if (contentIndex === null) {
-      return;
-    }
-
-    await this.updateTurnFile(threadId, turnId, (file) => {
-      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, createStreamingReasoningItem(itemId), notification.method);
-      return {
-        ...file,
-        itemOrder,
-        itemTimeline,
-        lastTouchedAt: now(),
-        turn: applyTurnTimeline(updateOrCreateItem(file.turn, turnId, itemId, () => createStreamingReasoningItem(itemId), (item) => (
-          item.type === "reasoning"
-            ? { ...item, content: appendIndexedText(item.content, contentIndex, delta) }
-            : null
-        )), {
-          ...file,
-          itemOrder,
-          itemTimeline,
-        }),
-      };
-    });
-    await this.touchThreadThrottled(threadId);
-  }
-
-  private async updateFileChangePatch(threadId: string, turnId: string, itemId: string, notification: JsonRpcNotification) {
-    const changes = asRecord(notification.params)?.changes;
-    if (!Array.isArray(changes)) {
-      return;
-    }
-
-    await this.updateTurnFile(threadId, turnId, (file) => {
-      const { itemOrder, itemTimeline } = getTurnOrderingUpdate(file, itemId, null, notification.method);
-      return {
-        ...file,
-        itemOrder,
-        itemTimeline,
-        lastTouchedAt: now(),
-        turn: applyTurnTimeline(updateExistingItem(file.turn, itemId, (item) => (
-          item.type === "fileChange"
-            ? { ...item, changes: changes as Extract<ThreadItem, { type: "fileChange" }>["changes"] }
-            : null
-        )), {
           ...file,
           itemOrder,
           itemTimeline,

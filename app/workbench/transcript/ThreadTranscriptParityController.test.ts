@@ -215,7 +215,7 @@ test("repeated comparison emits one bounded report and later absence clears comp
   controller.dispose();
 });
 
-test("reconciled projections publish and every invalidation clears the browser read model", async () => {
+test("reconciled projections publish and real invalidations clear the browser read model", async () => {
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   const publications: Array<string | null> = [];
   const controller = new ThreadTranscriptParityController({
@@ -253,6 +253,42 @@ test("reconciled projections publish and every invalidation clears the browser r
   await flush();
   controller.dispose();
   assert.equal(publications.at(-1), null);
+});
+
+test("same-thread loaded-turn changes retain and reconcile the previous projection", async () => {
+  const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
+  const publications: Array<string | null> = [];
+  const controller = new ThreadTranscriptParityController({
+    available: true,
+    onProjectionChange: (projection) => {
+      publications.push(projection?.thread.title ?? null);
+    },
+    reconcileProjection: (projection, selection) => ({
+      ...projection,
+      thread: {
+        ...projection.thread,
+        title: selection.thread.turns.map(({ id }) => id).join(","),
+      },
+    }),
+    transcripts: {
+      reportParity: async () => undefined,
+      subscribe: async (params, listener) => { listeners.set(params.subscriptionId, listener); },
+      unsubscribe: async (params) => { listeners.delete(params.subscriptionId); },
+    },
+    turnLimit: 4,
+  });
+
+  controller.select({ browseResultEntries: [], thread: thread("thread", ["turn-1"]) });
+  await flush();
+  [...listeners.values()][0]?.(emptySnapshot("thread"));
+  await flushComparison();
+  assert.equal(publications.at(-1), "turn-1");
+
+  controller.select({ browseResultEntries: [], thread: thread("thread", ["turn-1", "turn-2"]) });
+  assert.equal(publications.at(-1), "turn-1");
+  await flushComparison();
+  assert.equal(publications.at(-1), "turn-1,turn-2");
+  controller.dispose();
 });
 
 test("rapid selected-thread updates defer and coalesce comparison work", async () => {

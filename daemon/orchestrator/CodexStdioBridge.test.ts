@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover app-server generation handoff, active transcript baselines, reload-safe page recovery, bridge pending cleanup, approval classification, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, reload, transcript, recovery, approval, MCP, test.
+ * - No production exports; Node tests cover app-server generation handoff, durable versus live-only transcript routing, active transcript baselines, reload-safe page recovery, bridge pending cleanup, approval classification, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, reload, transcript, live, durable, recovery, approval, MCP, test.
  */
 
 import assert from "node:assert/strict";
@@ -826,6 +826,103 @@ test("JSON records first and blocked SQLite recording holds bridge detach", asyn
     assert.equal(state.upstreamInitialized, false);
   } finally {
     releaseSqlite.resolve();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("provider-live transcript bursts bypass durable recording until item settlement", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-live-only-transcript-"));
+  const notifications: string[] = [];
+  const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification(notification) {
+      notifications.push(notification.method ?? "");
+    },
+    recordSqliteTranscript: async (observations) => {
+      sqliteBatches.push([...observations]);
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const streamingItem: ThreadItem = {
+    id: "message",
+    memoryCitation: null,
+    phase: "commentary",
+    text: "",
+    type: "agentMessage",
+  };
+  const owner = bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore };
+
+  try {
+    await bridge.handleUpstreamMessage({
+      method: "thread/started",
+      params: { thread: { ...bridgeThread(), turns: [] } },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "turn/started",
+      params: { threadId: "thread", turn: bridgeThread().turns[0] },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "item/started",
+      params: { item: streamingItem, startedAtMs: 1_000, threadId: "thread", turnId: "turn" },
+    });
+    await bridge.waitForIdle();
+    const durableBatchCount = sqliteBatches.length;
+
+    for (let index = 0; index < 200; index += 1) {
+      await bridge.handleUpstreamMessage({
+        method: "item/agentMessage/delta",
+        params: { delta: String(index % 10), itemId: "message", threadId: "thread", turnId: "turn" },
+      });
+    }
+    await bridge.handleUpstreamMessage({
+      method: "turn/diff/updated",
+      params: { diff: "large cumulative diff", threadId: "thread", turnId: "turn" },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "turn/plan/updated",
+      params: { explanation: null, plan: [], threadId: "thread", turnId: "turn" },
+    });
+    await bridge.waitForIdle();
+
+    assert.equal(notifications.filter((method) => method === "item/agentMessage/delta").length, 200);
+    assert.equal(notifications.includes("turn/diff/updated"), true);
+    assert.equal(notifications.includes("turn/plan/updated"), true);
+    assert.equal(sqliteBatches.length, durableBatchCount);
+    const liveOnlyWindow = await owner.ensureTranscriptStore().readStoredThreadWindow("thread", ["turn"]);
+    assert.equal(liveOnlyWindow?.turns[0]?.items[0]?.type, "agentMessage");
+    assert.equal(
+      liveOnlyWindow?.turns[0]?.items[0]?.type === "agentMessage"
+        ? liveOnlyWindow.turns[0].items[0].text
+        : null,
+      "",
+    );
+
+    const completedItem = { ...streamingItem, text: "settled" };
+    await bridge.handleUpstreamMessage({
+      method: "item/completed",
+      params: { completedAtMs: 2_000, item: completedItem, threadId: "thread", turnId: "turn" },
+    });
+    await bridge.waitForIdle();
+
+    assert.equal(sqliteBatches.length, durableBatchCount + 1);
+    const settledWindow = await owner.ensureTranscriptStore().readStoredThreadWindow("thread", ["turn"]);
+    assert.equal(
+      settledWindow?.turns[0]?.items[0]?.type === "agentMessage"
+        ? settledWindow.turns[0].items[0].text
+        : null,
+      "settled",
+    );
+  } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }

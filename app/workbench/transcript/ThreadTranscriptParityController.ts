@@ -117,7 +117,7 @@ export default class ThreadTranscriptParityController {
     const nextThreadId = selection?.thread.id ?? null;
     const loadedTurnsChanged = !sameTurnIds(this.#selection?.thread.turns, selection?.thread.turns);
     this.#selection = selection;
-    if (previousThreadId !== nextThreadId || loadedTurnsChanged) {
+    if (previousThreadId !== nextThreadId) {
       this.#cancelScheduledComparison();
       this.#projection = null;
       this.#onProjectionChange(null);
@@ -129,6 +129,16 @@ export default class ThreadTranscriptParityController {
       }
       this.#replaceSubscription();
       return;
+    }
+    if (loadedTurnsChanged) {
+      this.#cancelScheduledComparison();
+      this.#lastDiagnostic = null;
+      if (!this.#available) {
+        this.#generation += 1;
+        this.#activeSubscriptionId = null;
+        return;
+      }
+      this.#replaceSubscription();
     }
     this.#scheduleCompare();
   }

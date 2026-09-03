@@ -85,6 +85,7 @@ import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadGoalControl from "./ThreadGoalControl";
 import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
+import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
@@ -1604,9 +1605,7 @@ export default memo(function ThreadView ({
                   />
                 )
               ) : (
-                <p className="m-0 py-4 text-[0.92em] leading-[1.6] text-muted" role="status">
-                  Waiting for the SQLite transcript projection...
-                </p>
+                <ThreadLoadingSkeleton contained />
               )
             ) : (
               <ThreadTranscript

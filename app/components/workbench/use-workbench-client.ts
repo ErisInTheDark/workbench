@@ -139,9 +139,7 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
           },
           onTranscriptComparisonChange: (available, projection) => {
             if (cancelled) return;
-            startTransition(() => {
-              if (!cancelled) setTranscriptComparison({ available, projection });
-            });
+            setTranscriptComparison({ available, projection });
           },
         });
         if (cancelled) {
