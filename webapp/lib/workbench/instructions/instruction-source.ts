@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchInstructionSourceFile: one internal Markdown source mirrored to the Workbench Library. Keywords: instructions, source, path.
- * - readWorkbenchInstructionSources: discover and read the complete internal Markdown mirror once. Keywords: instructions, markdown, discovery.
+ * - WorkbenchInstructionSourceFile: one repository Markdown source mirrored to the Workbench Library. Keywords: instructions, source, path.
+ * - readWorkbenchInstructionSources: discover and read the complete repository Markdown mirror once. Keywords: instructions, markdown, discovery.
  * - ensureWorkbenchInstructionSourceFiles: refresh generated library files while preserving the user-owned default agent and overrides. Keywords: instructions, emission, freshness.
  */
 
@@ -30,7 +30,7 @@ function compareText(left: string, right: string) {
 }
 
 function getInstructionSourceRoot() {
-  return path.join(process.cwd(), "lib", "workbench", "instructions");
+  return path.resolve(process.cwd(), "..", "instructions");
 }
 
 function normalizeContent(value: string) {

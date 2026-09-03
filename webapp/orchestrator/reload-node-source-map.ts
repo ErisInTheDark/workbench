@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ReloadNodeSourceDescriptor/ReloadNodeSourceState: generated live source ownership and dependant metadata. Keywords: reload, source, graph, dirt.
- * - observeReloadNodeGraphSources: combine candidate-loaded module paths with explicit hostile-boundary patterns. Keywords: CommonJS, imports, worker, dynamic, ownership.
+ * - observeReloadNodeGraphSources: combine candidate-loaded module paths, root instruction reads, and explicit hostile-boundary patterns. Keywords: CommonJS, imports, worker, dynamic, ownership.
  * - activateReloadNodeSourceState/cancelReloadNodeSourceState: publish successful candidates or discard failed ones across module generations. Keywords: reload, activation, rollback.
  * - readReloadNodeSourceState: read active metadata without exposing an uncommitted candidate. Keywords: reload, generation, catalog.
  */
@@ -23,6 +23,7 @@ type GraphNode = ReloadableNode<object, object, object>;
 
 const DESTRUCTIVE_SCOPES = new Set(["server:process", "harness:codex", "harness:opencode"]);
 const SOURCE_STATE_KEY = Symbol.for("workbench.reload-node-source-state");
+const WORKBENCH_ROOT_PATH = path.resolve(__dirname, "../..");
 
 interface ReloadNodeSourceRegistry {
   active: ReloadNodeSourceState | null;
@@ -62,6 +63,18 @@ function workspacePath(filename: string) {
   if (normalized.includes("/node_modules/")) return null;
   const marker = normalized.lastIndexOf("/webapp/");
   return marker < 0 ? null : normalized.slice(marker + 1);
+}
+
+function instructionWorkspacePath(filename: string) {
+  const relativePath = path.relative(WORKBENCH_ROOT_PATH, path.resolve(filename));
+  if (
+    !relativePath
+    || path.isAbsolute(relativePath)
+    || relativePath === ".."
+    || relativePath.startsWith(`..${path.sep}`)
+  ) return null;
+  const normalized = relativePath.replace(/\\/gu, "/");
+  return normalized.startsWith("instructions/") ? normalized : null;
 }
 
 function walkModules(root: NodeModule, stop: ReadonlySet<NodeModule>, skipRoot = false) {
@@ -138,7 +151,7 @@ export function observeReloadNodeGraphSources<TContext, TObjects extends object,
   }
   for (const sourcePath of topologyInfrastructure) add("server:topology", sourcePath);
   for (const absolutePath of instructionPaths) {
-    const sourcePath = workspacePath(absolutePath);
+    const sourcePath = instructionWorkspacePath(absolutePath);
     if (sourcePath) add("server:instructions", sourcePath);
   }
 

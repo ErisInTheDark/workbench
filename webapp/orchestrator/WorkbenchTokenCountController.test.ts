@@ -18,7 +18,7 @@ function createController(
 
 test("counts exact text and stripped Workbench instructions locally", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-token-controller-"));
-  const instructionRoot = path.join(root, "webapp", "lib", "workbench", "instructions");
+  const instructionRoot = path.join(root, "instructions");
   await mkdir(instructionRoot, { recursive: true });
   await writeFile(path.join(instructionRoot, "base.md"), "Keep this. <!-- explain failure --> <harness:codex>Keep that.</harness:codex> {macro}");
   const controller = createController(root);

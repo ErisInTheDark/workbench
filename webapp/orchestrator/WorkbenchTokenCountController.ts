@@ -66,7 +66,7 @@ export default class WorkbenchTokenCountController {
     if (parsed.data.kind === "instructions") {
       try {
         const corpus = await buildWorkbenchInstructionTokenCorpus(
-          path.join(this.projectRoot, "webapp", "lib", "workbench", "instructions"),
+          path.join(this.projectRoot, "instructions"),
         );
         if (signal.aborted) throw signal.reason;
         const count = Gpt5TextTokens.count(corpus.content);

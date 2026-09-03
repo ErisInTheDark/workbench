@@ -20,5 +20,5 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   requires: [],
   safeAll: false,
   scope: "server:instructions",
-  sources: "webapp/lib/workbench/instructions/**/*.md",
+  sources: "instructions/**/*.md",
 });

@@ -10,15 +10,16 @@ test("public instruction use refreshes mirrored generated files and preserves ac
   const originalLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "instruction-loader-test-"));
   const temporaryProjectRoot = path.join(temporaryRoot, "project");
-  const temporaryInstructionRoot = path.join(temporaryProjectRoot, "lib", "workbench", "instructions");
+  const temporaryDaemonRoot = path.join(temporaryProjectRoot, "daemon");
+  const temporaryInstructionRoot = path.join(temporaryProjectRoot, "instructions");
   const temporaryLibraryRoot = path.join(temporaryRoot, "library");
-  const sourceInstructionRoot = path.join(originalCwd, "lib", "workbench", "instructions");
+  const sourceInstructionRoot = path.resolve(originalCwd, "..", "instructions");
 
   try {
-    await fs.mkdir(path.dirname(temporaryInstructionRoot), { recursive: true });
+    await fs.mkdir(temporaryDaemonRoot, { recursive: true });
     await fs.cp(sourceInstructionRoot, temporaryInstructionRoot, { recursive: true });
     process.env.WORKBENCH_LIBRARY_ROOT = temporaryLibraryRoot;
-    process.chdir(temporaryProjectRoot);
+    process.chdir(temporaryDaemonRoot);
     const promptFiles = require("./WorkbenchPromptFiles") as typeof import("./WorkbenchPromptFiles");
     const context = {
       cwd: temporaryProjectRoot,

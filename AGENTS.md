@@ -7,7 +7,7 @@
 
 ## Updating Instructions
 
-In this project, "update instructions" means update sources under `webapp/lib/workbench/instructions/`. The user will explicitly name "the root AGENTS.md" or a particular skill when intending those. 
+In this project, "update instructions" means update Markdown sources under `instructions/`. The user will explicitly name "the root AGENTS.md" or a particular skill when intending those.
 
 CRITICAL INSTRUCTION EDITING RULES:
 - "Strengthening" instructions does not mean more words!!!!! It means making the existing words more clear and EMPHASISED.
@@ -36,7 +36,7 @@ CRITICAL INSTRUCTION EDITING RULES:
 - When a browser boundary rejects server, bridge, or WebSocket data with Zod, call `reportClientSchemaError` from `webapp/lib/workbench/report-client-schema-error.ts` before returning. Keep the report bounded and sanitized; never serialize the rejected payload or its values. Expected local validation of user input, URLs, or persisted layout state does not need remote-boundary logging when its rejection is fully handled.
 - For app-core, shared-contract, thread-rendering, route, or instruction-generation changes, work in live-safe, compile-safe vertical slices. Preserve compatibility until all consumers are migrated. Never leave the watched app or workflow/checkpoint endpoints broken between edits or while awaiting user input.
 - Put additive Zod compatibility defaults on the schema. New browser code and old server code must work in either reload order. Read repairable persisted state through `conformToZodSchema`; do not throw for schema drift.
-- Edit Workbench-owned prompt and workflow sources under `webapp/lib/workbench/instructions/`, not generated Workbench-library files. Confirm the source-to-generated path before planning.
+- Edit Workbench-owned prompt and workflow Markdown under `instructions/`, not generated Workbench-library files. Confirm the source-to-generated path before planning.
 - Do not use `JSON.stringify` for equality. Compare explicit fields when the owner has meaningful equality rules, use the shared deep-equality utility for JSON-like structural data, and reserve stable serializers for serialization, signatures, logs, cache keys, request bodies, or display text.
 
 ## Endpoint and Lifecycle Invariants
