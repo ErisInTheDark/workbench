@@ -15,6 +15,7 @@ import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandbox
 import type { WorkbenchCodexSandboxNetworkDatabase } from "./WorkbenchCodexSandboxNetworkController";
 import ReloadableNode from "./ReloadableNode";
 import CodexBridgeNode from "./CodexBridgeNode";
+import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 import WorkbenchCoreNode from "./WorkbenchCoreNode";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchTranscriptShadowLog from "./database/transcript/WorkbenchTranscriptShadowLog";
@@ -81,7 +82,7 @@ export default new ReloadableNode<
     "shared/workbench/database/schema/**",
     "daemon/orchestrator/database/**",
   ].join("\n"),
-  children: [WorkbenchCoreNode, CodexBridgeNode, WorkbenchWebSocketNode],
+  children: [WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, WorkbenchWebSocketNode],
   create: (context) => {
     const {
       CaptureGapController,

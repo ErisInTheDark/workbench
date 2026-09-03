@@ -2353,7 +2353,7 @@ test("context reads bypass the operation queue and negotiate scoped entries with
   }
 });
 
-test("bounded page reads return before one deduplicated compatibility import", async () => {
+test("bounded page reads stay background while exact Thread Recall materialisation awaits its ordered import", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-known-window-"));
   const compatibilityImportStarted = deferred<void>();
   const releaseCompatibilityImport = deferred<void>();
@@ -2470,17 +2470,39 @@ test("bounded page reads return before one deduplicated compatibility import", a
       ((sameWindowResponse?.result as { thread: Thread }).thread.turns).map((turn) => turn.id),
       ["turn"],
     );
+    const upstreamRequestCountBeforeRecall = upstreamRequests.length;
+    let recallMaterialisationSettled = false;
+    const recallMaterialisationTask = bridge.handleBridgeRequest({
+      id: 121,
+      method: "workbench/thread-recall/materialize",
+      params: { threadId: "thread", turnId: "earlier" },
+    }).then((result) => {
+      recallMaterialisationSettled = true;
+      return result;
+    });
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    assert.equal(recallMaterialisationSettled, false);
     releaseCompatibilityImport.resolve();
+    const recallMaterialisation = await recallMaterialisationTask;
+    assert.equal(recallMaterialisation?.error, undefined);
+    assert.deepEqual(recallMaterialisation?.result, {
+      materializedTurnIds: ["earlier"],
+      threadId: "thread",
+    });
     assert.deepEqual(
       ((response?.result as { thread: Thread }).thread.turns).map((turn) => turn.id),
       ["turn"],
     );
     await bridge.waitForIdle();
-    assert.equal(materializationReads, 1);
-    const compatibilityWindow = sqliteBatches.flat().find((observation) => (
+    assert.equal(materializationReads, 3);
+    const compatibilityWindows = sqliteBatches.flat().filter((observation) => (
       (observation as { kind?: string }).kind === "canonicalWindow"
-    )) as { materializedTurnIds?: string[] } | undefined;
-    assert.deepEqual(compatibilityWindow?.materializedTurnIds, ["turn"]);
+    )) as Array<{ materializedTurnIds?: string[] }>;
+    assert.deepEqual(
+      compatibilityWindows.map(({ materializedTurnIds }) => materializedTurnIds),
+      [["turn"], ["earlier"]],
+    );
+    assert.equal(upstreamRequests.length, upstreamRequestCountBeforeRecall);
 
     sqliteBatches.length = 0;
     const fullResponse = await bridge.handleBridgeRequest({
@@ -2495,22 +2517,24 @@ test("bounded page reads return before one deduplicated compatibility import", a
       ["earlier", "turn"],
     );
     await bridge.waitForIdle();
-    const partialWindow = sqliteBatches.flat().find((observation) => (
+    assert.equal(sqliteBatches.flat().some((observation) => (
       (observation as { kind?: string }).kind === "canonicalWindow"
-    )) as {
-      materializedTurnIds: string[];
-      observations: Array<{ kind: string; turnId?: string; turnIndex?: number }>;
-    } | undefined;
-    assert.deepEqual(partialWindow?.materializedTurnIds, ["earlier"]);
-    assert.deepEqual(
-      partialWindow?.observations
-        .filter(({ kind }) => kind === "turn")
-        .map(({ turnId, turnIndex }) => ({ turnId, turnIndex })),
-      [
-        { turnId: "earlier", turnIndex: 0 },
-        { turnId: "turn", turnIndex: 1 },
-      ],
-    );
+    )), false);
+    const bootstrapResponse = await bridge.handleBridgeRequest({
+      id: 23,
+      method: "workbench/thread-recall/materialize",
+      params: { threadId: "thread", turnId: null },
+    });
+    assert.deepEqual(bootstrapResponse?.result, {
+      materializedTurnIds: ["turn"],
+      threadId: "thread",
+    });
+    const missingTurnResponse = await bridge.handleBridgeRequest({
+      id: 24,
+      method: "workbench/thread-recall/materialize",
+      params: { threadId: "thread", turnId: "missing" },
+    });
+    assert.match(missingTurnResponse?.error?.message ?? "", /no stored compatibility turn missing/u);
 
     const store = owner.ensureTranscriptStore() as CodexTranscriptStore & {
       readThreadContextEntries(): Promise<never>;

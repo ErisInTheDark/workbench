@@ -1300,6 +1300,9 @@ export default class CodexStdioBridge {
     if (message.method === WORKBENCH_THREAD_PAGE_READ_METHOD) {
       return await this.handleThreadPageReadRequest(message);
     }
+    if (message.method === "workbench/thread-recall/materialize") {
+      return await this.handleThreadRecallMaterializeRequest(message);
+    }
     if (message.method === "thread/context/read") {
       return await this.handleThreadContextReadRequest(message);
     }
@@ -1448,6 +1451,25 @@ export default class CodexStdioBridge {
         error: {
           code: -32000,
           message: error instanceof Error ? error.message : "Codex user-input bridge request failed.",
+        },
+      };
+    }
+  }
+
+  private async handleThreadRecallMaterializeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const requestId = message.id ?? null;
+    try {
+      this.assertAcceptingWork();
+      return {
+        id: requestId,
+        result: await this.materializeThreadRecallTurn(message.params),
+      };
+    } catch (error) {
+      return {
+        id: requestId,
+        error: {
+          code: -32000,
+          message: error instanceof Error ? error.message : "Codex Thread Recall materialisation failed.",
         },
       };
     }
@@ -2568,6 +2590,48 @@ export default class CodexStdioBridge {
       questionnaireEntries,
       steerEntries,
       thread,
+    };
+  }
+
+  private async materializeThreadRecallTurn(params: unknown) {
+    const record = asRecord(params);
+    const threadId = asString(record?.threadId)?.trim() ?? "";
+    const turnIdValue = record?.turnId;
+    const turnId = turnIdValue === null ? null : asString(turnIdValue)?.trim() ?? "";
+    if (!threadId || (turnIdValue !== null && !turnId)) {
+      throw new Error("Thread Recall materialisation requires a thread id and optional turn id.");
+    }
+    if (
+      turnId
+      && (await this.readSqliteTranscriptMaterializedTurnIds(threadId, [turnId])).includes(turnId)
+    ) {
+      return { materializedTurnIds: [turnId], threadId };
+    }
+    const transcriptStore = this.ensureTranscriptStore();
+    const thread = turnId
+      ? await transcriptStore.readStoredThreadWindow(threadId, [turnId])
+      : await transcriptStore.readStoredThreadSnapshot(threadId);
+    if (!thread?.id) {
+      throw new Error(`Thread Recall has no stored compatibility transcript for ${threadId}.`);
+    }
+    if (thread.id !== threadId) {
+      throw new Error(`Thread Recall compatibility transcript changed thread owner from ${threadId} to ${thread.id}.`);
+    }
+    if (turnId && !thread.turns.some(({ id }) => id === turnId)) {
+      throw new Error(`Thread Recall has no stored compatibility turn ${turnId}.`);
+    }
+    if (!thread.turns.length) {
+      throw new Error(`Thread Recall compatibility transcript ${threadId} has no stored turns.`);
+    }
+    const threadCwd = thread.cwd?.trim() ?? "";
+    if (!threadCwd) throw new Error("Thread Recall compatibility transcript has no readable CWD.");
+    await this.resolveProjectFromCwd(threadCwd, { endpointName: "Thread Recall" });
+    await this.captureTranscript("sqlite-thread-recall-materialisation", () => (
+      this.importSqliteCompatibilityWindow(thread, transcriptStore)
+    ), { propagateFailure: true });
+    return {
+      materializedTurnIds: thread.turns.map(({ id }) => id),
+      threadId,
     };
   }
 

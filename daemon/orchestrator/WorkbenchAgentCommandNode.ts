@@ -4,10 +4,7 @@
  */
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
-import type { WorkbenchThreadContextReadResponse } from "workbench-shared/types";
-import WorkbenchThreadRecallController, {
-  toWorkbenchThreadRecallBundle,
-} from "../lib/workbench/thread/WorkbenchThreadRecallController";
+import WorkbenchThreadRecallController from "../lib/workbench/thread/WorkbenchThreadRecallController";
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
@@ -23,6 +20,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const projectCatalog = build.get("projectCatalog");
     const subagents = build.get("subagents");
     const threadState = build.get("threadState");
+    const transcript = build.get("transcript");
     const reloadDirt = build.get("reloadDirt");
     const tokens = new WorkbenchTokenCountController({
       projectRoot: context.legacyMigrationProjectRoot,
@@ -32,17 +30,21 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     });
     const commandLogger = new WorkbenchAgentCommandLogger();
     const threadRecall = new WorkbenchThreadRecallController({
-      readBundle: async (threadId, signal) => {
+      materializeTurn: async (threadId, turnId, signal) => {
         signal.throwIfAborted();
         const response = await harnesses.request("codex", {
           id: 0,
-          method: "thread/context/read",
-          params: { includeTurns: true, threadId, workbenchReadScope: "threadRecall" },
-          workbenchThreadHydration: { mode: "legacyFull" },
+          method: "workbench/thread-recall/materialize",
+          params: { threadId, turnId },
         });
         signal.throwIfAborted();
         if (response.error) throw new Error(response.error.message);
-        return toWorkbenchThreadRecallBundle(response.result as WorkbenchThreadContextReadResponse);
+      },
+      readTranscript: async (request) => await transcript.read(request),
+      resolveProjectFromCwd: async (cwd) => {
+        await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, {
+          endpointName: "Thread Recall",
+        });
       },
     });
     const agentCommand = new WorkbenchAgentCommandController(context.localOrchestratorOrigin, {
@@ -85,7 +87,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["gitArc", "harnesses", "projectCatalog", "reloadDirt", "subagents", "threadGit", "threadState"],
+  requires: ["gitArc", "harnesses", "projectCatalog", "reloadDirt", "subagents", "threadGit", "threadState", "transcript"],
   safeAll: true,
   scope: "server:commands",
   sources: [

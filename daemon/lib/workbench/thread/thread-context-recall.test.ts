@@ -6,6 +6,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import Database from "better-sqlite3";
+
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import {
@@ -20,7 +22,9 @@ import {
 } from "./thread-context-recall-markdown.ts";
 import {
   buildWorkbenchThreadRecallRecords,
+  buildSqliteWorkbenchThreadRecallRecords,
   expandWorkbenchThreadRecall,
+  readSqliteWorkbenchThreadRecallRef,
   readWorkbenchThreadRecallCursor,
   searchWorkbenchThreadRecall,
   selectWorkbenchThreadRecallRecords,
@@ -30,6 +34,12 @@ import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/
 import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "workbench-shared/workbench/thread/thread-user-input-requests";
+import { installWorkbenchDatabaseSchema } from "../../../orchestrator/database/workbench-database-schema.ts";
+import WorkbenchTranscriptRepository from "../../../orchestrator/database/transcript/WorkbenchTranscriptRepository.ts";
+import type {
+  WorkbenchTranscriptAtomicObservation,
+  WorkbenchTranscriptObservation,
+} from "../../../orchestrator/database/transcript/workbench-transcript-types.ts";
 
 const ALL_KINDS: WorkbenchThreadRecallKind[] = [
   "agent-message",
@@ -40,6 +50,18 @@ const ALL_KINDS: WorkbenchThreadRecallKind[] = [
   "user-message",
   "user-steer",
 ];
+
+function sqliteWindow(
+  observations: WorkbenchTranscriptAtomicObservation[],
+): WorkbenchTranscriptObservation {
+  return {
+    contentVersion: 3,
+    kind: "canonicalWindow",
+    materializedTurnIds: ["turn-sqlite"],
+    observations,
+    threadId: "thread-sqlite",
+  };
+}
 
 function turn(id: string, items: ThreadItem[]) {
   return {
@@ -389,6 +411,207 @@ test("pages search matches newest-first and excludes non-narrative records", () 
       limit: 10,
       query: leakCanary,
     }).totalMatches, 0);
+  }
+});
+
+test("projects canonical SQLite narrative rows with turn-owning refs and plan dedupe", () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  const repository = new WorkbenchTranscriptRepository(database);
+  try {
+    repository.settle([sqliteWindow([{
+      activityAt: 10,
+      createdAt: 1,
+      kind: "thread",
+      projectId: "project",
+      projectRoot: "C:/project",
+      threadId: "thread-sqlite",
+      title: "SQLite recall",
+      updatedAt: 10,
+    }, {
+      createdAt: 1,
+      durationMs: 9,
+      endedAt: 10,
+      harnessId: "codex",
+      kind: "turn",
+      nativeLocation: "C:/project",
+      nativeThreadId: "native-thread",
+      nativeTurnId: "native-turn",
+      startedAt: 1,
+      state: "completed",
+      threadId: "thread-sqlite",
+      turnId: "turn-sqlite",
+      turnIndex: 4,
+    }, {
+      item: {
+        clientId: null,
+        content: [{ text: "first user", text_elements: [], type: "text" }],
+        id: "user-first",
+        type: "userMessage",
+      },
+      itemPosition: 0,
+      kind: "item",
+      lifecycle: "completed",
+      observedAt: 2,
+      threadId: "thread-sqlite",
+      turnId: "turn-sqlite",
+    }, {
+      entry: {
+        attemptedAt: 3,
+        canonicalItemId: "user-steer",
+        clientUserMessageId: null,
+        entryKey: "steer-key",
+        error: null,
+        input: [{ text: "later steer", text_elements: [], type: "text" }],
+        requestId: "steer-request",
+        resolvedAt: 4,
+        status: "sent",
+        threadId: "thread-sqlite",
+        turnId: "turn-sqlite",
+      },
+      itemPosition: 1,
+      kind: "steer",
+      observedAt: 4,
+    }, {
+      entry: {
+        attemptedAt: 4,
+        canonicalItemId: null,
+        clientUserMessageId: null,
+        entryKey: "failed-steer-key",
+        error: "delivery failed",
+        input: [{ text: "failed steer", text_elements: [], type: "text" }],
+        requestId: "failed-steer-request",
+        resolvedAt: 5,
+        status: "failed",
+        threadId: "thread-sqlite",
+        turnId: "turn-sqlite",
+      },
+      itemPosition: 2,
+      kind: "steer",
+      observedAt: 5,
+    }, {
+      entry: {
+        attemptedAt: 5,
+        canonicalItemId: null,
+        clientUserMessageId: null,
+        entryKey: "interrupted-steer-key",
+        error: "delivery interrupted",
+        input: [{ text: "interrupted steer", text_elements: [], type: "text" }],
+        requestId: "interrupted-steer-request",
+        resolvedAt: 6,
+        status: "interrupted",
+        threadId: "thread-sqlite",
+        turnId: "turn-sqlite",
+      },
+      itemPosition: 3,
+      kind: "steer",
+      observedAt: 6,
+    }, {
+      item: {
+        id: "agent",
+        memoryCitation: null,
+        phase: "commentary",
+        text: "commentary\n\n<plan>\nkeep this plan\n</plan>",
+        type: "agentMessage",
+      },
+      itemPosition: 4,
+      kind: "item",
+      lifecycle: "completed",
+      observedAt: 5,
+      threadId: "thread-sqlite",
+      turnId: "turn-sqlite",
+    }, {
+      entry: {
+        insertAfterItemId: "agent",
+        insertAfterItemIndex: 4,
+        itemId: null,
+        request: {
+          id: "request",
+          questions: [{
+            allowOther: false,
+            header: "Route",
+            id: "route",
+            isSecret: false,
+            options: [{ description: "Use SQLite.", label: "SQLite" }],
+            question: "Which route?",
+          }],
+          submitLabel: "Choose",
+          summary: "Choose route",
+          title: "Route",
+        },
+        requestKey: "request-key",
+        resolvedAt: 6,
+        response: { answers: { route: { answers: ["SQLite"] } } },
+        threadId: "thread-sqlite",
+        turnId: "turn-sqlite",
+      },
+      itemPosition: 5,
+      kind: "questionnaire",
+      observedAt: 6,
+    }, {
+      item: {
+        clientId: null,
+        content: [{
+          text: createWorkbenchAgentMessageText({
+            message: "child progress",
+            senderName: "Mimi",
+            senderThreadId: "child-thread",
+          }),
+          text_elements: [],
+          type: "text",
+        }],
+        id: "agent-input",
+        type: "userMessage",
+      },
+      itemPosition: 6,
+      kind: "item",
+      lifecycle: "completed",
+      observedAt: 7,
+      threadId: "thread-sqlite",
+      turnId: "turn-sqlite",
+    }, {
+      item: {
+        id: "agent-final",
+        memoryCitation: null,
+        phase: "final_answer",
+        text: "final response",
+        type: "agentMessage",
+      },
+      itemPosition: 7,
+      kind: "item",
+      lifecycle: "completed",
+      observedAt: 8,
+      threadId: "thread-sqlite",
+      turnId: "turn-sqlite",
+    }])]);
+    const snapshot = repository.read({ threadId: "thread-sqlite", turnLimit: 1 });
+    assert.ok(snapshot);
+    const records = buildSqliteWorkbenchThreadRecallRecords(snapshot);
+    assert.deepEqual(records.map(({ kind }) => kind), [
+      "user-message",
+      "user-steer",
+      "user-steer",
+      "user-steer",
+      "plan",
+      "commentary",
+      "questionnaire",
+      "agent-message",
+      "final-answer",
+    ]);
+    assert.deepEqual(
+      records.map(({ ref }) => readSqliteWorkbenchThreadRecallRef(ref)?.turnId),
+      Array(records.length).fill("turn-sqlite"),
+    );
+    assert.equal(
+      selectWorkbenchThreadRecallRecords(records, ["commentary", "plan"]).some(({ kind }) => kind === "plan"),
+      false,
+    );
+    assert.equal(records.some(({ text }) => text === "failed steer"), true);
+    assert.equal(records.some(({ text }) => text === "interrupted steer"), true);
+    assert.match(records.find(({ kind }) => kind === "questionnaire")?.text ?? "", /Which route\?/u);
+  } finally {
+    database.close();
   }
 });
 

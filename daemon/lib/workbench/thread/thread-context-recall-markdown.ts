@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - renderWorkbenchThreadRecallHistoryMarkdown: render a filtered newest-to-oldest history page with stable continuation commands. Keywords: thread recall, history, pagination.
+ * - renderWorkbenchThreadRecallHistoryMarkdown/renderWorkbenchThreadRecallHistoryPage: render a filtered newest-to-oldest history page and expose whether older supplied content remains. Keywords: thread recall, history, pagination.
  * - renderWorkbenchThreadRecallSearchMarkdown: render one newest-to-oldest search page with tagged snippets and an exact older-results command. Keywords: search, pagination, tags.
  * - renderWorkbenchThreadRecallExpansionMarkdown: render one fixed-budget record-content page and its exact next command. Keywords: expansion, cursor, chunking.
  */
@@ -23,6 +23,12 @@ interface ThreadRecallChunk {
   end: number;
   record: WorkbenchThreadRecallRecord;
   start: number;
+}
+
+interface WorkbenchThreadRecallHistoryRenderOptions {
+  before?: string | null;
+  kinds: readonly WorkbenchThreadRecallKind[];
+  threadId: string;
 }
 
 function commandValue(value: string) {
@@ -193,17 +199,9 @@ function findHistoryChunkStart({
     : start;
 }
 
-export function renderWorkbenchThreadRecallHistoryMarkdown(
+export function renderWorkbenchThreadRecallHistoryPage(
   records: readonly WorkbenchThreadRecallRecord[],
-  {
-    before = null,
-    kinds,
-    threadId,
-  }: {
-    before?: string | null;
-    kinds: readonly WorkbenchThreadRecallKind[];
-    threadId: string;
-  },
+  { before = null, kinds, threadId }: WorkbenchThreadRecallHistoryRenderOptions,
 ) {
   const resolvedEnd = resolveHistoryEnd(records, before);
   let index = resolvedEnd.index;
@@ -228,7 +226,19 @@ export function renderWorkbenchThreadRecallHistoryMarkdown(
   if (markdown.length > WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS) {
     throw new Error("Thread Recall could not render a history page inside the safe response budget.");
   }
-  return markdown;
+  return {
+    hasOlderContent: chunks[0]
+      ? continuationBeforeForChunk(records, chunks[0]) !== null
+      : false,
+    markdown,
+  };
+}
+
+export function renderWorkbenchThreadRecallHistoryMarkdown(
+  records: readonly WorkbenchThreadRecallRecord[],
+  options: WorkbenchThreadRecallHistoryRenderOptions,
+) {
+  return renderWorkbenchThreadRecallHistoryPage(records, options).markdown;
 }
 
 function renderSearchPage(result: WorkbenchThreadRecallSearchResult, threadId: string) {

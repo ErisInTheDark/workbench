@@ -63,7 +63,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
     "server:websocket",
   ]);
   assert.deepEqual([...parents.get("server:core")!].sort(), ["server:database", "server:turns"]);
-  assert.deepEqual([...parents.get("server:commands")!].sort(), ["server:core", "server:turns"]);
+  assert.deepEqual([...parents.get("server:commands")!].sort(), ["server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:commands", "server:core", "server:topology", "server:turns"]);
   assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:codex/instructions", "server:core", "server:database", "server:turns"]);
   assert.equal(parents.has("server:codex/instructions"), false);

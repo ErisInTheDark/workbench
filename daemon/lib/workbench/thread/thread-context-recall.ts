@@ -1,16 +1,23 @@
 /*
  * Exports:
- * - WorkbenchThreadRecallRecord/WorkbenchThreadRecallSearchResult/WorkbenchThreadRecallExpansion: recall projection and paging contracts. Keywords: thread recall, search, expansion.
- * - buildWorkbenchThreadRecallRecords/selectWorkbenchThreadRecallRecords: project and filter ordered narrative records without embedded-plan duplication. Keywords: recall, narrative, kinds, plan.
+ * - WorkbenchThreadRecallRecord/WorkbenchThreadRecallMatch/WorkbenchThreadRecallSearchResult/WorkbenchThreadRecallExpansion/WorkbenchThreadRecallCursor/SqliteWorkbenchThreadRecallRef: recall projection, paging, cursor, and SQLite ref contracts. Keywords: thread recall, search, expansion, cursor, SQLite.
+ * - buildWorkbenchThreadRecallRecords/buildSqliteWorkbenchThreadRecallRecords/selectWorkbenchThreadRecallRecords: project and filter ordered narrative records without embedded-plan duplication. Keywords: recall, narrative, kinds, plan, SQLite.
  * - searchWorkbenchThreadRecall/expandWorkbenchThreadRecall: page search matches and resolve one record-content page target. Keywords: search, pagination, cursor.
  * - createWorkbenchThreadRecallCursor/readWorkbenchThreadRecallCursor: encode and decode stable record-offset cursors. Keywords: cursor, offset, stable.
+ * - createSqliteWorkbenchThreadRecallRef/readSqliteWorkbenchThreadRecallRef: encode and decode turn-owning SQLite record refs. Keywords: SQLite, ref, turn.
  */
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type {
+  WorkbenchQuestionnaireHistoryEntry,
   WorkbenchThreadContextBundle,
   WorkbenchThreadRecallKind,
 } from "workbench-shared/types";
+import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import {
+  projectWorkbenchTranscriptItems,
+  type WorkbenchProjectedInteractionItem,
+} from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import {
   getWorkbenchThreadContextPieceRef,
   renderWorkbenchThreadContextPieceMarkdown,
@@ -18,12 +25,24 @@ import {
 import {
   buildWorkbenchThreadContextPieces,
   createWorkbenchThreadContextSortKey,
+  extractThreadPlanBlocks,
   type WorkbenchThreadContextPiece,
 } from "./thread-context-projection.ts";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
+import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
+import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
+import { SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX } from "workbench-shared/workbench/thread/thread-steer-history";
+import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 const SEARCH_SNIPPET_CHARACTERS = 500;
 const CURSOR_PREFIX = "recall-v1:";
+const SQLITE_REF_PREFIX = "sqlite-recall-v1:";
+
+export interface SqliteWorkbenchThreadRecallRef {
+  blockIndex: number | null;
+  itemId: string;
+  turnId: string;
+}
 
 export interface WorkbenchThreadRecallRecord {
   kind: WorkbenchThreadRecallKind;
@@ -59,6 +78,43 @@ export interface WorkbenchThreadRecallExpansion {
 export interface WorkbenchThreadRecallCursor {
   offset: number;
   ref: string;
+}
+
+export function createSqliteWorkbenchThreadRecallRef({
+  blockIndex = null,
+  itemId,
+  turnId,
+}: {
+  blockIndex?: number | null;
+  itemId: string;
+  turnId: string;
+}) {
+  return `${SQLITE_REF_PREFIX}${Buffer.from(JSON.stringify([turnId, itemId, blockIndex]), "utf8").toString("base64url")}`;
+}
+
+export function readSqliteWorkbenchThreadRecallRef(value: string): SqliteWorkbenchThreadRecallRef | null {
+  if (!value.startsWith(SQLITE_REF_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(value.slice(SQLITE_REF_PREFIX.length), "base64url").toString("utf8")) as unknown;
+    if (
+      !Array.isArray(parsed)
+      || parsed.length !== 3
+      || typeof parsed[0] !== "string"
+      || !parsed[0]
+      || typeof parsed[1] !== "string"
+      || !parsed[1]
+      || (parsed[2] !== null && (!Number.isSafeInteger(parsed[2]) || (parsed[2] as number) < 0))
+    ) {
+      return null;
+    }
+    return {
+      blockIndex: parsed[2] as number | null,
+      itemId: parsed[1],
+      turnId: parsed[0],
+    };
+  } catch {
+    return null;
+  }
 }
 
 function stripOuterPlanTag(value: string) {
@@ -190,6 +246,246 @@ export function buildWorkbenchThreadRecallRecords(bundle: WorkbenchThreadContext
       throw new Error(`Duplicate Thread Recall ref: ${record.ref}`);
     }
     seenRefs.add(record.ref);
+  }
+  return records;
+}
+
+function projectedInteractionPiece(
+  item: WorkbenchProjectedInteractionItem,
+  root: WorkbenchTranscriptSnapshot["rows"]["threadItems"][number],
+  sortKey: string,
+  sequence: number,
+): Extract<WorkbenchThreadContextPiece, { kind: "questionnaire" }> {
+  const entry: WorkbenchQuestionnaireHistoryEntry = {
+    insertAfterItemId: null,
+    insertAfterItemIndex: root.item_position,
+    itemId: item.id,
+    request: item.request,
+    requestKey: item.requestKey,
+    resolvedAt: item.resolvedAt,
+    response: item.response,
+    threadId: root.thread_id,
+    turnId: root.turn_id,
+  };
+  return {
+    entry,
+    itemId: item.id,
+    kind: "questionnaire",
+    sequence,
+    sortKey,
+    turnId: root.turn_id,
+  };
+}
+
+function sqliteRecord({
+  blockIndex,
+  itemId,
+  kind,
+  label,
+  parentRef = null,
+  sequence,
+  sortKey,
+  text,
+  turnId,
+}: {
+  blockIndex?: number | null;
+  itemId: string;
+  kind: WorkbenchThreadRecallKind;
+  label: string;
+  parentRef?: string | null;
+  sequence: number;
+  sortKey: string;
+  text: string;
+  turnId: string;
+}): WorkbenchThreadRecallRecord | null {
+  const normalizedText = kind === "plan" ? stripOuterPlanTag(text) : text.trim();
+  if (!normalizedText) return null;
+  return {
+    kind,
+    label,
+    parentRef,
+    ref: createSqliteWorkbenchThreadRecallRef({ blockIndex, itemId, turnId }),
+    sequence,
+    sortKey,
+    text: normalizedText,
+    turnId,
+  };
+}
+
+export function buildSqliteWorkbenchThreadRecallRecords(
+  snapshot: WorkbenchTranscriptSnapshot,
+): WorkbenchThreadRecallRecord[] {
+  const projection = projectWorkbenchTranscriptItems(snapshot.rows);
+  if ("issues" in projection) {
+    const issue = projection.issues[0];
+    throw new Error(`Unable to project SQLite Thread Recall: ${issue?.code ?? "unknown"} in ${issue?.table ?? "rows"}.`);
+  }
+  const turnIndexes = new Map(snapshot.turns.map((turn) => [turn.id, turn.turn_index]));
+  const userMessageRowsByItemId = new Map(
+    snapshot.rows.threadItemUserMessages.map((row) => [row.item_id, row]),
+  );
+  const projectedUserMessages = projection.data.filter((row) => row.item.type === "userMessage");
+  const firstVisibleUserMessageByTurn = new Map<string, string>();
+  for (const { item, root } of projectedUserMessages) {
+    if (
+      item.type !== "userMessage"
+      || isAgentScreenshotSteerUserMessage(item)
+      || isWorkbenchHiddenSystemSteerInput(item.content)
+      || readWorkbenchAgentMessageInput(item.content)
+      || unwrapWorkbenchSteerDisplayInput(item.content).length === 0
+    ) {
+      continue;
+    }
+    if (!firstVisibleUserMessageByTurn.has(root.turn_id)) {
+      firstVisibleUserMessageByTurn.set(root.turn_id, item.id);
+    }
+  }
+
+  const records: WorkbenchThreadRecallRecord[] = [];
+  let sequence = 0;
+  for (const { item, root } of projection.data) {
+    const turnIndex = turnIndexes.get(root.turn_id);
+    if (turnIndex === undefined) {
+      throw new Error(`SQLite Thread Recall item ${root.source_id} references an unknown turn.`);
+    }
+    const sortKey = createWorkbenchThreadContextSortKey(
+      turnIndex,
+      root.item_position,
+      20,
+      sequence,
+    );
+    if (item.type === "userMessage") {
+      if (
+        isAgentScreenshotSteerUserMessage(item)
+        || isWorkbenchHiddenSystemSteerInput(item.content)
+      ) {
+        continue;
+      }
+      const displayInput = unwrapWorkbenchSteerDisplayInput(item.content);
+      if (!displayInput.length) continue;
+      const agentMessage = readWorkbenchAgentMessageInput(item.content);
+      const isSteer = item.id.startsWith(SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX)
+        || firstVisibleUserMessageByTurn.get(root.turn_id) !== item.id;
+      const owner = userMessageRowsByItemId.get(root.id);
+      if (!owner) {
+        throw new Error(`SQLite Thread Recall user message ${item.id} has no durable payload row.`);
+      }
+      const piece: WorkbenchThreadContextPiece = isSteer
+        ? {
+          displayInput,
+          entry: {
+            attemptedAt: root.created_at,
+            canonicalItemId: item.id,
+            clientUserMessageId: item.clientId,
+            entryKey: item.id,
+            error: owner.error_text,
+            input: item.content,
+            requestId: item.id,
+            resolvedAt: root.updated_at,
+            status: owner.delivery_state === "delivered"
+              ? "sent"
+              : owner.delivery_state,
+            threadId: root.thread_id,
+            turnId: root.turn_id,
+          },
+          input: item.content,
+          itemId: item.id,
+          kind: "userSteer",
+          sequence,
+          sortKey,
+          turnId: root.turn_id,
+        }
+        : {
+          displayInput,
+          input: item.content,
+          itemId: item.id,
+          kind: "userMessage",
+          sequence,
+          sortKey,
+          turnId: root.turn_id,
+        };
+      const record = sqliteRecord({
+        itemId: item.id,
+        kind: agentMessage ? "agent-message" : isSteer ? "user-steer" : "user-message",
+        label: agentMessage ? `Agent message from ${agentMessage.senderName}` : isSteer ? "User steer" : "User message",
+        sequence,
+        sortKey,
+        text: renderWorkbenchThreadContextPieceMarkdown(piece),
+        turnId: root.turn_id,
+      });
+      if (record) records.push(record);
+      sequence += 1;
+      continue;
+    }
+    if (item.type === "questionnaire" || item.type === "approval") {
+      const piece = projectedInteractionPiece(item, root, sortKey, sequence);
+      const record = sqliteRecord({
+        itemId: item.id,
+        kind: "questionnaire",
+        label: "Questionnaire response",
+        sequence,
+        sortKey,
+        text: renderWorkbenchThreadContextPieceMarkdown(piece),
+        turnId: root.turn_id,
+      });
+      if (record) records.push(record);
+      sequence += 1;
+      continue;
+    }
+    if (item.type === "agentMessage" && item.text.trim()) {
+      const parentRef = createSqliteWorkbenchThreadRecallRef({ itemId: item.id, turnId: root.turn_id });
+      const record = sqliteRecord({
+        itemId: item.id,
+        kind: agentMessageKind(item),
+        label: agentMessageLabel(item),
+        sequence,
+        sortKey,
+        text: item.text,
+        turnId: root.turn_id,
+      });
+      if (record) records.push(record);
+      sequence += 1;
+      extractThreadPlanBlocks(item.text).forEach((planMarkdown, blockIndex) => {
+        const planRecord = sqliteRecord({
+          blockIndex,
+          itemId: item.id,
+          kind: "plan",
+          label: "Plan",
+          parentRef,
+          sequence,
+          sortKey: createWorkbenchThreadContextSortKey(
+            turnIndex,
+            root.item_position,
+            20,
+            blockIndex,
+          ),
+          text: planMarkdown,
+          turnId: root.turn_id,
+        });
+        if (planRecord) records.push(planRecord);
+        sequence += 1;
+      });
+      continue;
+    }
+    if (item.type === "plan" && item.text.trim()) {
+      const record = sqliteRecord({
+        itemId: item.id,
+        kind: "plan",
+        label: "Plan",
+        sequence,
+        sortKey,
+        text: item.text,
+        turnId: root.turn_id,
+      });
+      if (record) records.push(record);
+      sequence += 1;
+    }
+  }
+  records.sort((left, right) => left.sortKey.localeCompare(right.sortKey) || left.sequence - right.sequence);
+  const refs = new Set<string>();
+  for (const record of records) {
+    if (refs.has(record.ref)) throw new Error(`Duplicate Thread Recall ref: ${record.ref}`);
+    refs.add(record.ref);
   }
   return records;
 }
