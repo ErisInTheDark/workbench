@@ -1,15 +1,17 @@
 /*
  * Exports:
  * - default ThreadMarkdown: render cached thread markdown with project, workspace, and external absolute file links. Keywords: thread markdown, file links, external git roots.
+ * - Local helpers: bound rendered Markdown and external-root caches, then classify safe append presentation. Keywords: cache, markdown, append, presentation.
  */
 "use client";
 
-import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { ResolveExternalFileLinkRootsResponse } from "workbench-shared/types";
 import { collectPlaintextAbsoluteFileLinkPaths } from "../../../workbench/markdown/markdown-file-autolinks";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import { normalizeWorkbenchPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import { deriveMarkdownAppendPresentation } from "../../../workbench/markdown/markdown-append-presentation";
 import { renderThreadMarkdown } from "./thread-markdown-render";
 import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 
@@ -251,6 +253,7 @@ export default memo(function ThreadMarkdown ({
   projectFilePaths,
   projectId,
   projectRootPath,
+  revealAppends = false,
   workspaceRoots,
 }: {
   className?: string;
@@ -260,8 +263,10 @@ export default memo(function ThreadMarkdown ({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  revealAppends?: boolean;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const committedPresentationRef = useRef<{ contextKey: string; markdown: string } | null>(null);
   const projectFilePathsKey = getProjectFilePathsCacheKey(projectFilePaths);
   const externalFileLinkRoots = useExternalFileLinkRoots(markdown);
   const resolvedWorkspaceRoots = useMemo(
@@ -277,20 +282,54 @@ export default memo(function ThreadMarkdown ({
     projectRootPath,
     workspaceRoots: resolvedWorkspaceRoots,
   });
+  const contextKey = getMarkdownCacheKey({
+    inlineMentionSources,
+    markdown: "",
+    threadCwdPath,
+    projectFilePathsKey,
+    projectId,
+    projectRootPath,
+    workspaceRoots: resolvedWorkspaceRoots,
+  });
+  const renderOptions = useMemo(
+    () => ({ inlineMentionSources, threadCwdPath, projectFilePaths, projectId, projectRootPath, workspaceRoots: resolvedWorkspaceRoots }),
+    [inlineMentionSources, projectFilePaths, projectId, projectRootPath, resolvedWorkspaceRoots, threadCwdPath],
+  );
   const renderedMarkdown = useMemo(
     () => renderCachedThreadMarkdown(
       markdown,
-      { inlineMentionSources, threadCwdPath, projectFilePaths, projectId, projectRootPath, workspaceRoots: resolvedWorkspaceRoots },
+      renderOptions,
       cacheKey,
     ),
-    [cacheKey, inlineMentionSources, markdown, threadCwdPath, projectFilePaths, projectId, projectRootPath, resolvedWorkspaceRoots],
+    [cacheKey, markdown, renderOptions],
   );
+  const appendPresentation = useMemo(() => {
+    const previous = committedPresentationRef.current;
+    if (!revealAppends || !previous || previous.contextKey !== contextKey) return { kind: "instant" as const };
+    return deriveMarkdownAppendPresentation({
+      nextMarkdown: markdown,
+      options: renderOptions,
+      previousMarkdown: previous.markdown,
+      reducedMotion: typeof window !== "undefined"
+        && (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false),
+    });
+  }, [contextKey, markdown, renderOptions, revealAppends]);
+  const presentedMarkdown = useMemo(
+    () => appendPresentation.kind === "append"
+      ? renderThreadMarkdown(markdown, renderOptions, appendPresentation.target)
+      : renderedMarkdown,
+    [appendPresentation, markdown, renderOptions, renderedMarkdown],
+  );
+
+  useEffect(() => {
+    committedPresentationRef.current = { contextKey, markdown };
+  }, [contextKey, markdown]);
 
   return (
     <div
       className={joinClasses(THREAD_MARKDOWN_CLASS, className)}
     >
-      {renderedMarkdown}
+      {presentedMarkdown}
     </div>
   );
 });

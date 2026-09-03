@@ -45,7 +45,7 @@ export default class ThreadWorkbenchOverlayLayer {
     this.cacheByKey.clear();
   }
 
-  invalidate(key: string) {
+  delete(key: string) {
     this.cacheByKey.delete(key);
   }
 

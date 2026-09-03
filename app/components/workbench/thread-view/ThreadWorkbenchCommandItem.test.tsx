@@ -51,6 +51,7 @@ function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClien
       dispose: () => undefined,
       threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],
       threadSidebar: store,
+      threadTextPresentation: {} as NonNullable<WorkbenchClientController["mounted"]>["threadTextPresentation"],
     } : null,
     transcriptSource: { status: "idle" },
   };

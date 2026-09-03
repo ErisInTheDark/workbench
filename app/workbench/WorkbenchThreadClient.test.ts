@@ -228,7 +228,12 @@ async function withClient(
   let socket: FakeWebSocket | null = null;
   FakeWebSocket.intercept = null;
   globalThis.window = {
+    cancelAnimationFrame: (handle: number) => globalThis.clearTimeout(handle),
     clearTimeout: globalThis.clearTimeout,
+    requestAnimationFrame: (callback: FrameRequestCallback) => globalThis.setTimeout(
+      () => callback(performance.now()),
+      0,
+    ) as unknown as number,
     setTimeout: globalThis.setTimeout,
   } as unknown as Window & typeof globalThis;
   globalThis.WebSocket = class extends FakeWebSocket {
@@ -1829,6 +1834,109 @@ test("known hidden threads retain complete live text before later selected delta
     turnId: "background-turn",
   });
   assert.equal(readCommentary(), "complete retained prefix and selected suffix");
+}));
+
+test("selected text deltas keep canonical snapshots current without publishing the whole runtime", async () => withClient(async (client, socket) => {
+  const source = activeThread();
+  source.turns[0]!.items = [{
+    id: "commentary",
+    memoryCitation: null,
+    phase: "commentary",
+    text: "",
+    type: "agentMessage",
+  }];
+  source.turns.unshift({
+    completedAt: 1,
+    durationMs: 1,
+    error: null,
+    id: "settled-turn",
+    items: [{ id: "settled-plan", text: "settled", type: "plan" }],
+    itemsView: "full",
+    startedAt: 0,
+    status: "completed",
+  });
+  client.selectThreadPayload(source);
+  const settledTurn = client.getSnapshot().currentThread?.turns[0];
+  const key = {
+    field: "agentMessageText" as const,
+    index: null,
+    itemId: "commentary",
+    source: { kind: "json" as const, sourceKey: "codex:thread" },
+    threadId: "thread",
+    turnId: "turn",
+  };
+  const sqliteKey = {
+    ...key,
+    source: { kind: "sqlite" as const, sourceKey: "codex:thread" },
+  };
+  client.textPresentation.subscribe(key, "", () => undefined);
+  client.textPresentation.subscribe(sqliteKey, "", () => undefined);
+  let publications = 0;
+  const unsubscribe = client.subscribe(() => { publications += 1; });
+
+  socket.notify("item/agentMessage/delta", {
+    delta: "streamed ",
+    itemId: "commentary",
+    threadId: "thread",
+    turnId: "turn",
+  });
+  socket.notify("item/agentMessage/delta", {
+    delta: "text",
+    itemId: "commentary",
+    threadId: "thread",
+    turnId: "turn",
+  });
+
+  const currentItem = client.getSnapshot().currentThread?.turns
+    .find((turn) => turn.id === "turn")?.items[0];
+  assert.equal(currentItem?.type === "agentMessage" ? currentItem.text : null, "streamed text");
+  assert.equal(client.getSnapshot().currentThread?.turns[0], settledTurn);
+  assert.equal(publications, 0);
+  await waitForCondition(
+    () => client.textPresentation.getSnapshot(key) === "streamed text",
+    "expected JSON leaf presentation to catch up",
+  );
+  assert.equal(client.textPresentation.getSnapshot(sqliteKey), "streamed text");
+  unsubscribe();
+}));
+
+test("missing text shells and item completion still publish structural state", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread());
+  let publications = 0;
+  const unsubscribe = client.subscribe(() => { publications += 1; });
+
+  socket.notify("item/agentMessage/delta", {
+    delta: "first",
+    itemId: "commentary",
+    threadId: "thread",
+    turnId: "turn",
+  });
+  assert.ok(publications > 0);
+  publications = 0;
+
+  socket.notify("item/agentMessage/delta", {
+    delta: " without a mounted leaf",
+    itemId: "commentary",
+    threadId: "thread",
+    turnId: "turn",
+  });
+  assert.ok(publications > 0);
+  publications = 0;
+
+  socket.notify("item/completed", {
+    completedAtMs: 2_000,
+    item: {
+      id: "commentary",
+      memoryCitation: null,
+      phase: "commentary",
+      text: "first without a mounted leaf",
+      type: "agentMessage",
+    },
+    threadId: "thread",
+    turnId: "turn",
+  });
+  assert.ok(publications > 0);
+  unsubscribe();
 }));
 
 test("project reset during history and control awaits cannot resurrect thread state or start follow-up reads", async () => withClient(async (client, socket) => {

@@ -123,7 +123,10 @@ export default class ThreadTranscriptProjectionController {
     this.#replaceSubscription();
   }
 
-  select(selection: ThreadTranscriptProjectionSelection | null) {
+  select(
+    selection: ThreadTranscriptProjectionSelection | null,
+    { publishState = true }: { publishState?: boolean } = {},
+  ) {
     if (this.#disposed) return;
     const previousThreadId = this.#selection?.thread.id ?? null;
     const nextThreadId = selection?.thread.id ?? null;
@@ -161,7 +164,7 @@ export default class ThreadTranscriptProjectionController {
       this.#replaceSubscription();
       return;
     }
-    this.#publishProjection();
+    if (publishState) this.#publishProjection();
   }
 
   #cancelScheduledComparison() {

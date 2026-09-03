@@ -80,13 +80,12 @@ import {
 import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
 import ThreadContextStatus from "./ThreadContextStatus";
-import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadGoalControl from "./ThreadGoalControl";
 import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
-import ThreadMarkdown from "./ThreadMarkdown";
+import ThreadLiveActivity, { type LiveThreadActivity } from "./ThreadLiveActivity";
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
 import ThreadTranscript from "./ThreadTranscript";
@@ -94,11 +93,7 @@ import ThreadTranscriptComparison from "./ThreadTranscriptComparison";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import {
   getCurrentThreadReasoningActivity,
-  type ThreadReasoningStepReference,
 } from "./thread-reasoning-display";
-import {
-  ThreadWebSearchActionRow,
-} from "./ThreadWebSearchItem";
 
 const SUBTHREAD_POLL_INTERVAL_MS = 1500;
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
@@ -108,20 +103,6 @@ const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
 const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
 const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
-
-type LiveThreadActivity =
-  | {
-    body: string | null;
-    hiddenStep: ThreadReasoningStepReference | null;
-    kind: "reasoning";
-    title: string;
-  }
-  | {
-    contextItems: Extract<ThreadPayload["turns"][number]["items"][number], { type: "webSearch" }>[];
-    hiddenItemIds: string[];
-    kind: "webSearch";
-    title: string;
-  };
 
 type RelatedThreadRecord = Record<string, ThreadPayload | undefined>;
 
@@ -327,6 +308,7 @@ function getLiveThreadActivity ({
       body: null,
       hiddenStep: null,
       kind: "reasoning",
+      markdown: null,
       title: "Connecting",
     };
   }
@@ -337,6 +319,7 @@ function getLiveThreadActivity ({
       body: reasoningStep.body,
       hiddenStep: reasoningStep.hiddenStep,
       kind: "reasoning",
+      markdown: reasoningStep.markdown,
       title: reasoningStep.title,
     };
   }
@@ -382,6 +365,7 @@ function getLiveThreadActivity ({
     body: null,
     hiddenStep: null,
     kind: "reasoning",
+    markdown: null,
     title: "Thinking",
   };
 }
@@ -1544,6 +1528,10 @@ export default memo(function ThreadView ({
                     projectFilePaths={projectFilePaths}
                     projectId={projectId}
                     projectRootPath={projectRootPath}
+                    presentationSource={{
+                      kind: "sqlite",
+                      sourceKey: `codex:${activeTranscriptProjection.thread.id}`,
+                    }}
                     projection={activeTranscriptProjection}
                     relatedThreadsById={relatedThreadsById}
                     subagents={subagents}
@@ -1577,6 +1565,10 @@ export default memo(function ThreadView ({
                 onRetryPreviousTurn={() => void loadPreviousTurn({ retry: true })}
                 previousTurnEntry={previousTurnEntry}
                 previousTurnLoadStatus={previousTurnLoadStatus}
+                presentationSource={{
+                  kind: "json",
+                  sourceKey: `${(renderActiveThread ?? activeThread).harness}:${(renderActiveThread ?? activeThread).id}`,
+                }}
                 projectFilePaths={projectFilePaths}
                 projectId={projectId}
                 projectRootPath={projectRootPath}
@@ -1594,59 +1586,24 @@ export default memo(function ThreadView ({
             </div>
           )}
         </div>
-        {liveActivity ? (
-          <div className="py-4" aria-live="polite">
-            {liveActivity.kind === "webSearch" ? (
-              liveActivity.contextItems.length ? (
-                <ThreadDisclosure
-                  contentClassName="mt-2 space-y-1 pl-6"
-                  open={isLiveActivityOpen}
-                  onToggle={(event) => {
-                    const nextIsOpen = event.currentTarget.open;
-                    persistLiveActivityOpen(nextIsOpen);
-                  }}
-                  summary={<span className="thread-thinking-text">{liveActivity.title}</span>}
-                  summaryClassName="text-[0.92em] font-medium leading-[1.6]"
-                >
-                  {liveActivity.contextItems.map((item) => (
-                    <p key={item.id} className="m-0 text-[0.92em] leading-[1.6] text-muted">
-                      <ThreadWebSearchActionRow item={item} />
-                    </p>
-                  ))}
-                </ThreadDisclosure>
-              ) : (
-                <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
-                  {liveActivity.title}
-                </p>
-              )
-            ) : activeThread && liveActivity.kind === "reasoning" && liveActivity.body ? (
-              <ThreadDisclosure
-                contentClassName="mt-2"
-                open={isLiveActivityOpen}
-                onToggle={(event) => {
-                  const nextIsOpen = event.currentTarget.open;
-                  persistLiveActivityOpen(nextIsOpen);
-                }}
-                summaryClassName="text-[0.92em] font-medium leading-[1.6]"
-                summary={<span className="thread-thinking-text">{liveActivity.title}</span>}
-              >
-                <ThreadMarkdown
-                  className="text-[0.8em] text-muted"
-                  inlineMentionSources={inlineMentionSources}
-                  markdown={liveActivity.body}
-                  threadCwdPath={activeThread.cwd}
-                  projectFilePaths={projectFilePaths}
-                  projectId={projectId}
-                  projectRootPath={projectRootPath}
-                  workspaceRoots={workspaceFileLinkRoots}
-                />
-              </ThreadDisclosure>
-            ) : liveActivity.kind === "reasoning" ? (
-              <p className="thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]">
-                {liveActivity.title}
-              </p>
-            ) : null}
-          </div>
+        {liveActivity && activeThread && currentTurn ? (
+          <ThreadLiveActivity
+            activity={liveActivity}
+            inlineMentionSources={inlineMentionSources}
+            isOpen={isLiveActivityOpen}
+            onOpenChange={persistLiveActivityOpen}
+            presentationSource={{
+              kind: "json",
+              sourceKey: `${activeThread.harness}:${activeThread.id}`,
+            }}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            threadCwdPath={activeThread.cwd}
+            threadId={activeThread.id}
+            turnId={currentTurn.id}
+            workspaceRoots={workspaceFileLinkRoots}
+          />
         ) : null}
         {activeThread && !isDraftThreadView && showPlanConflicts ? (
           <ThreadGitArcIntersectionCard

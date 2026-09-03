@@ -3,6 +3,7 @@
  * - ThreadReasoningStepReference: identify one visible reasoning section without hiding its sibling steps. Keywords: reasoning, section, identity.
  * - ThreadReasoningStep: renderer-ready reasoning title, description, Markdown, and source identity. Keywords: reasoning, display, title, description.
  * - getThreadReasoningSteps: project reasoning items into ordered visible steps. Keywords: reasoning, projection, order.
+ * - projectThreadReasoningMarkdown: derive one reasoning title and body from presented Markdown. Keywords: reasoning, presentation, title.
  * - getCurrentThreadReasoningActivity: select the newest live reasoning step after pending steers. Keywords: reasoning, live, status.
  * - omitThreadReasoningStep: remove one exact live step while preserving earlier disclosure content. Keywords: reasoning, disclosure, filter.
  */
@@ -43,6 +44,14 @@ function reasoningSectionBody(value: string) {
   return lines.join("\n").trim() || null;
 }
 
+export function projectThreadReasoningMarkdown(markdown: string) {
+  const value = markdown.trim();
+  return {
+    body: reasoningSectionBody(value),
+    title: cleanReasoningTitleLine(value) ?? "Step",
+  };
+}
+
 function visibleReasoningSections(item: ReasoningItem) {
   return item.summary.length
     ? { sections: item.summary, source: "summary" as const }
@@ -55,13 +64,14 @@ export function getThreadReasoningSteps(items: readonly ReasoningItem[]): Thread
     return sections.flatMap((section, sectionIndex) => {
       const markdown = section.trim();
       if (!markdown) return [];
+      const display = projectThreadReasoningMarkdown(markdown);
       return [{
-        body: reasoningSectionBody(markdown),
+        body: display.body,
         itemId: item.id,
         markdown,
         sectionIndex,
         source,
-        title: cleanReasoningTitleLine(markdown) ?? "Step",
+        title: display.title,
       }];
     });
   });
@@ -89,9 +99,10 @@ export function getCurrentThreadReasoningActivity(turn: Turn | null) {
         sectionIndex: latestStep.sectionIndex,
         source: latestStep.source,
       } satisfies ThreadReasoningStepReference,
+      markdown: latestStep.markdown,
       title: latestStep.title,
     }
-    : { body: null, hiddenStep: null, title: "Thinking" };
+    : { body: null, hiddenStep: null, markdown: null, title: "Thinking" };
 }
 
 export function omitThreadReasoningStep(

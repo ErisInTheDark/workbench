@@ -32,6 +32,7 @@ import type {
   WorkbenchProjectedUnknownItem,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
+import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import {
   isSyntheticQuestionnaireHistoryItem,
   WORKBENCH_QUESTIONNAIRE_TOOL_NAME,
@@ -122,6 +123,7 @@ import ThreadWebSearchItem, {
 import {
   getThreadReasoningSteps,
   omitThreadReasoningStep,
+  projectThreadReasoningMarkdown,
   type ThreadReasoningStepReference,
 } from "./thread-reasoning-display";
 import { isThreadWebSearchPlaceholder } from "./thread-web-search-state";
@@ -139,10 +141,10 @@ import projectThreadRenderTurns from "./thread-render-turns";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import { getUserMessageCopyMarkdown } from "./bubble-copy";
 import ThreadBubbleCopyButton from "./ThreadBubbleCopyButton";
+import useThreadPresentedText from "./use-thread-presented-text";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
 
 const THREAD_DETAIL_INLINE_CODE_CLASS = "rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.88em] leading-[1.6] text-text";
-const LIVE_RENDER_BLOCK_TAIL_ITEM_COUNT = 8;
 const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 const EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS: ReadonlySet<string> = new Set();
 
@@ -571,10 +573,6 @@ function getRenderableBlockItems(block: ThreadRenderableBlock): readonly ThreadI
   }
 }
 
-function getRenderableBlockItemCount(block: ThreadRenderableBlock) {
-  return getRenderableBlockItems(block).length;
-}
-
 function getRenderableBlockKey(block: ThreadRenderableBlock) {
   return [
     block.kind,
@@ -589,30 +587,15 @@ function getRenderableBlockSignature(block: ThreadRenderableBlock) {
   ].join("\n");
 }
 
-function getStabilizableRenderableBlockFlags(blocks: readonly ThreadRenderableBlock[]) {
-  const flags = blocks.map(() => true);
-  let liveTailItemCount = 0;
-  for (let index = blocks.length - 1; index >= 0; index -= 1) {
-    if (liveTailItemCount >= LIVE_RENDER_BLOCK_TAIL_ITEM_COUNT) {
-      break;
-    }
-
-    flags[index] = false;
-    liveTailItemCount += getRenderableBlockItemCount(blocks[index]);
-  }
-  return flags;
-}
-
 function useStableRenderableBlocks(blocks: ThreadRenderableBlock[]) {
   const previousEntriesRef = useRef<StableRenderableBlockEntry[]>([]);
   const stableEntries = useMemo(() => {
     const previousEntriesByBlockKey = new Map(previousEntriesRef.current.map((entry) => [entry.blockKey, entry]));
-    const stabilizableFlags = getStabilizableRenderableBlockFlags(blocks);
-    return blocks.map((block, index): StableRenderableBlockEntry => {
+    return blocks.map((block): StableRenderableBlockEntry => {
       const blockKey = getRenderableBlockKey(block);
       const signature = getRenderableBlockSignature(block);
       const matchingPreviousEntry = previousEntriesByBlockKey.get(blockKey) ?? null;
-      const previousEntry = stabilizableFlags[index] && matchingPreviousEntry?.signature === signature
+      const previousEntry = matchingPreviousEntry?.signature === signature
         ? matchingPreviousEntry
         : null;
       return {
@@ -912,7 +895,10 @@ function ThreadAgentMessageItem ({
   inlineMentionSources,
   isFinal,
   item,
+  presentationSource,
   threadCwdPath,
+  threadId = "",
+  turnId = "",
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -922,21 +908,33 @@ function ThreadAgentMessageItem ({
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isFinal: boolean;
   item: Extract<ThreadItem, { type: "agentMessage" }>;
+  presentationSource?: ThreadTextPresentationSource | null;
   threadCwdPath?: string;
+  threadId?: string;
+  turnId?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const text = useThreadPresentedText({
+    canonicalText: item.text,
+    field: "agentMessageText",
+    itemId: item.id,
+    source: presentationSource,
+    threadId,
+    turnId,
+  });
   return (
     <section className="py-2">
       <ThreadMarkdown
         inlineMentionSources={inlineMentionSources}
-        markdown={item.text || "No assistant text captured."}
+        markdown={text || "No assistant text captured."}
         threadCwdPath={threadCwdPath}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
+        revealAppends={Boolean(presentationSource)}
         workspaceRoots={workspaceRoots}
       />
       {isFinal ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={completedAt} /> : null}
@@ -947,7 +945,10 @@ function ThreadAgentMessageItem ({
 function ThreadPlanItem ({
   inlineMentionSources,
   item,
+  presentationSource,
   threadCwdPath,
+  threadId = "",
+  turnId = "",
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -955,26 +956,38 @@ function ThreadPlanItem ({
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   item: Extract<ThreadItem, { type: "plan" }>;
+  presentationSource?: ThreadTextPresentationSource | null;
   threadCwdPath?: string;
+  threadId?: string;
+  turnId?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const text = useThreadPresentedText({
+    canonicalText: item.text,
+    field: "planText",
+    itemId: item.id,
+    source: presentationSource,
+    threadId,
+    turnId,
+  });
   return (
     <ThreadDisclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
-      summary={<ThreadPlanSummary markdown={item.text} />}
+      summary={<ThreadPlanSummary markdown={text} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
       <ThreadMarkdown
         inlineMentionSources={inlineMentionSources}
-        markdown={item.text || "No plan text captured."}
+        markdown={text || "No plan text captured."}
         threadCwdPath={threadCwdPath}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
+        revealAppends={Boolean(presentationSource)}
         workspaceRoots={workspaceRoots}
       />
     </ThreadDisclosure>
@@ -985,7 +998,10 @@ function ThreadReasoningSequence ({
   block,
   inlineMentionSources,
   isMostRecent,
+  presentationSource,
   threadCwdPath,
+  threadId,
+  turnId,
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -994,7 +1010,10 @@ function ThreadReasoningSequence ({
   block: Extract<ThreadRenderableBlock, { kind: "reasoningSequence" }>;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
+  presentationSource?: ThreadTextPresentationSource | null;
   threadCwdPath?: string;
+  threadId: string;
+  turnId: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -1002,10 +1021,24 @@ function ThreadReasoningSequence ({
 }) {
   const visibleItems = block.items.filter(hasReasoningSteps);
   const steps = getThreadReasoningSteps(visibleItems);
+  const canonicalOnlyStep = steps.length === 1 ? steps[0] : null;
+  const presentedOnlyStepMarkdown = useThreadPresentedText({
+    canonicalText: canonicalOnlyStep?.markdown ?? "",
+    field: canonicalOnlyStep?.source === "content" ? "reasoningContent" : "reasoningSummary",
+    index: canonicalOnlyStep?.sectionIndex ?? null,
+    itemId: canonicalOnlyStep?.itemId ?? "",
+    source: canonicalOnlyStep ? presentationSource : null,
+    threadId,
+    turnId,
+  });
   if (!steps.length) {
     return null;
   }
-  const [onlyStep] = steps;
+  const onlyStep = canonicalOnlyStep ? {
+    ...canonicalOnlyStep,
+    ...projectThreadReasoningMarkdown(presentedOnlyStepMarkdown),
+    markdown: presentedOnlyStepMarkdown,
+  } : null;
   const summary = onlyStep && steps.length === 1 ? (<>
     <span>Reasoned: </span>
     <span className="thread-item-disclosure-prominent-text-portion font-medium text-text">{onlyStep.title}</span>
@@ -1034,6 +1067,7 @@ function ThreadReasoningSequence ({
       projectId={projectId}
       projectRootPath={projectRootPath}
       workspaceRoots={workspaceRoots}
+      revealAppends={Boolean(presentationSource)}
     />
   ) : (
     <div className="space-y-4">
@@ -1042,11 +1076,14 @@ function ThreadReasoningSequence ({
           key={item.id}
           className={index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" : undefined}
           item={item}
+          presentationSource={presentationSource}
           inlineMentionSources={inlineMentionSources}
           threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
+          threadId={threadId}
+          turnId={turnId}
           workspaceRoots={workspaceRoots}
         />
       ))}
@@ -1683,6 +1720,7 @@ function ThreadSubagentCurrentActivityPreview ({
       threadCwdPath={thread.cwd}
       threadId={thread.id}
       turnCompletedAt={currentTurn.completedAt}
+      turnId={currentTurn.id}
       turnStartedAt={currentTurn.startedAt}
       turnStatus={currentTurn.status}
       workspaceRoots={workspaceRoots}
@@ -2350,8 +2388,9 @@ function ThreadCommandSequence ({
   inlineMentionSources,
   isMostRecent,
   itemTimeline = [],
-  items,
+  items: canonicalItems,
   knownSkills,
+  presentationSource,
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -2359,6 +2398,7 @@ function ThreadCommandSequence ({
   subagents,
   threadCwdPath,
   threadId,
+  turnId,
   workspaceRoots,
 }: {
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
@@ -2367,6 +2407,7 @@ function ThreadCommandSequence ({
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   items: CommandSequenceItem[];
   knownSkills?: WorkbenchSkillSummary[];
+  presentationSource?: ThreadTextPresentationSource | null;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -2374,8 +2415,25 @@ function ThreadCommandSequence ({
   subagents: readonly WorkbenchSubagentSummary[];
   threadCwdPath?: string;
   threadId: string;
+  turnId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const activeCommand = canonicalItems.findLast((item): item is CommandItem => (
+    item.type === "commandExecution" && item.status === "inProgress"
+  ));
+  const presentedOutput = useThreadPresentedText({
+    canonicalText: activeCommand?.aggregatedOutput ?? "",
+    field: "commandExecutionOutput",
+    itemId: activeCommand?.id ?? "",
+    source: activeCommand ? presentationSource : null,
+    threadId,
+    turnId,
+  });
+  const items = useMemo(() => activeCommand
+    ? canonicalItems.map((item) => item === activeCommand
+      ? { ...activeCommand, aggregatedOutput: presentedOutput }
+      : item)
+    : canonicalItems, [activeCommand, canonicalItems, presentedOutput]);
   const renderSegments = useMemo(() => buildCommandSequenceRenderSegments({
     items,
     knownSkills,
@@ -2529,6 +2587,7 @@ function ThreadRenderableBlockViewComponent ({
   itemTimeline,
   isMostRecentBlock,
   knownSkills,
+  presentationSource,
   primaryUserBlock,
   threadCwdPath,
   threadId,
@@ -2538,6 +2597,7 @@ function ThreadRenderableBlockViewComponent ({
   relatedThreadsById,
   subagents,
   turnCompletedAt,
+  turnId,
   turnStartedAt,
   turnStatus,
   workspaceRoots,
@@ -2549,6 +2609,7 @@ function ThreadRenderableBlockViewComponent ({
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   isMostRecentBlock: boolean;
   knownSkills?: WorkbenchSkillSummary[];
+  presentationSource?: ThreadTextPresentationSource | null;
   primaryUserBlock: ThreadRenderableBlock | null;
   threadCwdPath?: string;
   threadId: string;
@@ -2558,12 +2619,13 @@ function ThreadRenderableBlockViewComponent ({
   relatedThreadsById: RelatedThreadsById;
   subagents: readonly WorkbenchSubagentSummary[];
   turnCompletedAt: number | null;
+  turnId: string;
   turnStartedAt: number | null;
   turnStatus: Turn["status"];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (block.kind === "commandSequence") {
-    return <ThreadCommandSequence browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecentBlock} itemTimeline={itemTimeline} items={block.items} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
+    return <ThreadCommandSequence browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecentBlock} itemTimeline={itemTimeline} items={block.items} knownSkills={knownSkills} presentationSource={presentationSource} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath} threadId={threadId} turnId={turnId} workspaceRoots={workspaceRoots} />;
   }
 
   if (block.kind === "fileChangeSequence") {
@@ -2576,9 +2638,12 @@ function ThreadRenderableBlockViewComponent ({
         block={block}
         inlineMentionSources={inlineMentionSources}
         isMostRecent={isMostRecentBlock}
+        presentationSource={presentationSource}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         threadCwdPath={threadCwdPath}
+        threadId={threadId}
+        turnId={turnId}
         projectRootPath={projectRootPath}
         workspaceRoots={workspaceRoots}
       />
@@ -2611,11 +2676,14 @@ function ThreadRenderableBlockViewComponent ({
           completedAt={turnCompletedAt}
           isFinal={block.item.id === finalAgentMessageId}
           item={block.item}
+          presentationSource={presentationSource}
           inlineMentionSources={inlineMentionSources}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           threadCwdPath={threadCwdPath}
           projectRootPath={projectRootPath}
+          threadId={threadId}
+          turnId={turnId}
           workspaceRoots={workspaceRoots}
         />
       );
@@ -2624,10 +2692,13 @@ function ThreadRenderableBlockViewComponent ({
         <ThreadPlanItem
           inlineMentionSources={inlineMentionSources}
           item={block.item}
+          presentationSource={presentationSource}
           threadCwdPath={threadCwdPath}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
+          threadId={threadId}
+          turnId={turnId}
           workspaceRoots={workspaceRoots}
         />
       );
@@ -2726,6 +2797,8 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
   && left.itemTimeline === right.itemTimeline
   && left.isMostRecentBlock === right.isMostRecentBlock
   && left.knownSkills === right.knownSkills
+  && left.presentationSource?.kind === right.presentationSource?.kind
+  && left.presentationSource?.sourceKey === right.presentationSource?.sourceKey
   && left.primaryUserBlock === right.primaryUserBlock
   && left.threadCwdPath === right.threadCwdPath
   && left.threadId === right.threadId
@@ -2735,6 +2808,7 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
   && left.relatedThreadsById === right.relatedThreadsById
   && left.subagents === right.subagents
   && left.turnCompletedAt === right.turnCompletedAt
+  && left.turnId === right.turnId
   && left.turnStartedAt === right.turnStartedAt
   && left.turnStatus === right.turnStatus
   && left.workspaceRoots === right.workspaceRoots
@@ -2747,6 +2821,7 @@ interface ThreadTranscriptItemsDetailsProps {
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   items: readonly WorkbenchProjectedTranscriptItem[];
   knownSkills?: WorkbenchSkillSummary[];
+  presentationSource?: ThreadTextPresentationSource | null;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -2754,6 +2829,7 @@ interface ThreadTranscriptItemsDetailsProps {
   subagents?: readonly WorkbenchSubagentSummary[];
   threadCwdPath?: string;
   threadId: string;
+  turnId: string;
   turnCompletedAt: number | null;
   turnStartedAt: number | null;
   turnStatus: Turn["status"];
@@ -2767,6 +2843,7 @@ export function ThreadTranscriptItemsDetails ({
   itemTimeline,
   items,
   knownSkills = [],
+  presentationSource = null,
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -2774,6 +2851,7 @@ export function ThreadTranscriptItemsDetails ({
   subagents = [],
   threadCwdPath,
   threadId,
+  turnId,
   turnCompletedAt,
   turnStartedAt,
   turnStatus,
@@ -2827,6 +2905,7 @@ export function ThreadTranscriptItemsDetails ({
           itemTimeline={itemTimeline}
           isMostRecentBlock={index === entries.length - 1}
           knownSkills={knownSkills}
+          presentationSource={presentationSource}
           primaryUserBlock={primaryUserBlock}
           threadCwdPath={threadCwdPath}
           threadId={threadId}
@@ -2836,6 +2915,7 @@ export function ThreadTranscriptItemsDetails ({
           relatedThreadsById={relatedThreadsById}
           subagents={subagents}
           turnCompletedAt={turnCompletedAt}
+          turnId={turnId}
           turnStartedAt={turnStartedAt}
           turnStatus={turnStatus}
           workspaceRoots={workspaceRoots}
@@ -2870,6 +2950,7 @@ function ThreadTurnDetailsComponent ({
   inlineMentionSources = null,
   itemTimeline = [],
   knownSkills = [],
+  presentationSource = null,
   threadCwdPath,
   threadId,
   projectFilePaths,
@@ -2895,6 +2976,7 @@ function ThreadTurnDetailsComponent ({
   inlineMentionSources?: InlineMentionHighlightSources | null;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   knownSkills?: WorkbenchSkillSummary[];
+  presentationSource?: ThreadTextPresentationSource | null;
   threadCwdPath?: string;
   threadId: string;
   projectFilePaths?: readonly string[];
@@ -3019,6 +3101,7 @@ function ThreadTurnDetailsComponent ({
       itemTimeline={itemTimeline}
       isMostRecentBlock={block === blockList[blockList.length - 1]}
       knownSkills={knownSkills}
+      presentationSource={presentationSource}
       primaryUserBlock={primaryUserBlock}
       threadCwdPath={threadCwdPath}
       threadId={threadId}
@@ -3028,6 +3111,7 @@ function ThreadTurnDetailsComponent ({
       relatedThreadsById={relatedThreadsById}
       subagents={subagents}
       turnCompletedAt={turn.completedAt}
+      turnId={turn.id}
       turnStartedAt={turn.startedAt}
       turnStatus={turn.status}
       workspaceRoots={workspaceRoots}
@@ -3215,6 +3299,8 @@ function areThreadTurnDetailsPropsEqual (
     && left.inlineMentionSources === right.inlineMentionSources
     && left.itemTimeline === right.itemTimeline
     && left.knownSkills === right.knownSkills
+    && left.presentationSource?.kind === right.presentationSource?.kind
+    && left.presentationSource?.sourceKey === right.presentationSource?.sourceKey
     && left.threadCwdPath === right.threadCwdPath
     && left.threadId === right.threadId
     && left.projectFilePaths === right.projectFilePaths

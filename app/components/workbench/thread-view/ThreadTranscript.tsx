@@ -15,6 +15,7 @@ import type {
 } from "workbench-shared/types";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
+import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import { isWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { PreviousTurnLoadStatus } from "./previous-turn-load-state";
@@ -46,6 +47,7 @@ export default function ThreadTranscript({
   onRetryPreviousTurn,
   previousTurnEntry,
   previousTurnLoadStatus,
+  presentationSource,
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -72,6 +74,7 @@ export default function ThreadTranscript({
   onRetryPreviousTurn: () => void;
   previousTurnEntry: WorkbenchThreadTurnHistoryEntry | null;
   previousTurnLoadStatus?: PreviousTurnLoadStatus;
+  presentationSource: ThreadTextPresentationSource;
   projectFilePaths: readonly string[];
   projectId: string;
   projectRootPath: string;
@@ -133,6 +136,7 @@ export default function ThreadTranscript({
               projectFilePaths={projectFilePaths}
               projectId={projectId}
               projectRootPath={projectRootPath}
+              presentationSource={turn.status === "inProgress" ? presentationSource : null}
               relatedThreadsById={relatedThreadsById}
               subagents={subagents}
               turn={turn}

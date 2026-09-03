@@ -57,6 +57,7 @@ const client = {
     dispose: () => undefined,
     threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],
     threadSidebar: globalStore,
+    threadTextPresentation: {} as NonNullable<WorkbenchClientController["mounted"]>["threadTextPresentation"],
   },
   transcriptSource: { status: "idle" },
 } satisfies WorkbenchClientController;

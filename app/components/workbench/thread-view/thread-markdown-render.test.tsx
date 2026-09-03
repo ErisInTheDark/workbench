@@ -145,3 +145,32 @@ test("unsupported, empty, unclosed, and code-contained notices remain literal te
   assert.match(html, /<code[^>]*>&lt;notice title=&quot;Code span&quot; color=&quot;green&quot;&gt;body&lt;\/notice&gt;<\/code>/u);
   assert.match(html, /&lt;notice title=&quot;Source&quot; color=&quot;green&quot;&gt;body&lt;\/notice&gt;/u);
 });
+
+test("append presentation isolates the semantic suffix without duplicating text", () => {
+  const textAppend = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
+    "Hello world",
+    {},
+    {
+      blockIndex: 0,
+      kind: "text",
+      nodePath: [0],
+      prefixLength: 5,
+      revisionKey: "5:11",
+    },
+  )));
+  const formattedAppend = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
+    "Hello **world**",
+    {},
+    {
+      blockIndex: 0,
+      kind: "inlineTail",
+      revisionKey: "5:15",
+      startNodeIndex: 1,
+    },
+  )));
+
+  assert.match(textAppend, /Hello<span[^>]+data-thread-markdown-append-reveal="true"[^>]*> world<\/span>/u);
+  assert.equal(textAppend.replace(/<[^>]+>/gu, ""), "Hello world");
+  assert.match(formattedAppend, /Hello <span[^>]+data-thread-markdown-append-reveal="true"[^>]*><strong>world<\/strong><\/span>/u);
+  assert.equal(formattedAppend.replace(/<[^>]+>/gu, ""), "Hello world");
+});

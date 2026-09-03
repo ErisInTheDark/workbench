@@ -10,6 +10,7 @@ import {
   getCurrentThreadReasoningActivity,
   getThreadReasoningSteps,
   omitThreadReasoningStep,
+  projectThreadReasoningMarkdown,
 } from "./thread-reasoning-display";
 
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
@@ -62,9 +63,17 @@ test("live reasoning selects the newest section and omits only that exact step",
   assert.deepEqual(activity, {
     body: "live detail",
     hiddenStep: { itemId: "reasoning", sectionIndex: 1, source: "summary" },
+    markdown: "Latest\nlive detail",
     title: "Latest",
   });
   assert.deepEqual(omitThreadReasoningStep(item, activity?.hiddenStep), reasoning(["First\nold detail"]));
+});
+
+test("presented reasoning Markdown keeps title and body projection identical to settled steps", () => {
+  assert.deepEqual(projectThreadReasoningMarkdown("## Streaming title\n\nStreaming body."), {
+    body: "Streaming body.",
+    title: "Streaming title",
+  });
 });
 
 test("title-only reasoning becomes one bodyless step and exact omission removes the item", () => {

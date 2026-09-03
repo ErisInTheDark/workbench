@@ -15,6 +15,7 @@ import type {
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
+import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import { ThreadTranscriptItemsDetails } from "./thread-view-items";
@@ -58,6 +59,7 @@ export default function ThreadTranscriptProjection({
   projectFilePaths,
   projectId,
   projectRootPath,
+  presentationSource,
   projection,
   relatedThreadsById,
   subagents,
@@ -71,6 +73,7 @@ export default function ThreadTranscriptProjection({
   projectFilePaths: readonly string[];
   projectId: string;
   projectRootPath: string;
+  presentationSource: ThreadTextPresentationSource;
   projection: WorkbenchTranscriptProjection;
   relatedThreadsById: Record<string, ThreadPayload | undefined>;
   subagents: readonly WorkbenchSubagentSummary[];
@@ -126,11 +129,13 @@ export default function ThreadTranscriptProjection({
                 projectFilePaths={projectFilePaths}
                 projectId={projectId}
                 projectRootPath={projectRootPath}
+                presentationSource={turn.status === "inProgress" ? presentationSource : null}
                 relatedThreadsById={relatedThreadsById}
                 subagents={subagents}
                 threadCwdPath={projection.thread.projectRoot}
                 threadId={projection.thread.id}
                 turnCompletedAt={turn.completedAt}
+                turnId={turn.id}
                 turnStartedAt={turn.startedAt}
                 turnStatus={turn.status}
                 workspaceRoots={workspaceRoots}

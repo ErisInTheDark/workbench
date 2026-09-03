@@ -93,6 +93,7 @@ function renderItems(
       projectFilePaths={[]}
       projectId="project"
       projectRootPath="C:/project"
+      presentationSource={{ kind: "sqlite", sourceKey: "codex:thread" }}
       projection={projection}
       relatedThreadsById={{}}
       subagents={[]}
@@ -183,6 +184,7 @@ test("SQLite projection renders canonical segments and turn-owned Browse details
       projectFilePaths={[]}
       projectId="project"
       projectRootPath="C:/project"
+      presentationSource={{ kind: "sqlite", sourceKey: "codex:thread" }}
       projection={projection}
       relatedThreadsById={{}}
       subagents={[]}

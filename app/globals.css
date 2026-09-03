@@ -853,6 +853,11 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     animation: thread-thinking-shimmer 1.45s linear infinite;
   }
 
+  .thread-markdown-append-reveal {
+    position: relative;
+    animation: thread-markdown-append-reveal 180ms cubic-bezier(0.22, 0.82, 0.28, 1) both;
+  }
+
   .thread-file-change-total-tick {
     display: inline-block;
     animation: thread-file-change-total-tick 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -1008,6 +1013,20 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
     }
   }
 
+  @keyframes thread-markdown-append-reveal {
+    from {
+      top: 0.12em;
+      filter: blur(0.14em);
+      opacity: 0;
+    }
+
+    to {
+      top: 0;
+      filter: blur(0);
+      opacity: 1;
+    }
+  }
+
   @keyframes thread-file-change-total-tick {
     from {
       opacity: 0.42;
@@ -1021,6 +1040,13 @@ html[data-workbench-theme="magical-girl"] :where(.font-mono, code, pre, kbd, sam
   }
 
   @media (prefers-reduced-motion: reduce) {
+    .thread-markdown-append-reveal {
+      animation: none;
+      filter: none;
+      opacity: 1;
+      top: 0;
+    }
+
     .thread-file-change-total-tick {
       animation: none;
     }

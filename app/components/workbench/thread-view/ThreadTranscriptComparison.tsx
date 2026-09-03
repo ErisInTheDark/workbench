@@ -90,11 +90,13 @@ function TranscriptComparisonCell({
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
+        presentationSource={null}
         relatedThreadsById={relatedThreadsById}
         subagents={subagents}
         threadCwdPath={threadCwdPath}
         threadId={threadId}
         turnCompletedAt={turn.completedAt}
+        turnId={turn.id}
         turnStartedAt={turn.startedAt}
         turnStatus={turn.status}
         workspaceRoots={workspaceRoots}

@@ -10,6 +10,7 @@
  * - useWorkbenchHomeThreadDisplayOrder: read global home thread ordering. Keywords: home, order, sidebar.
  * - useWorkbenchHomeThreadDisplayOrderSupported: read global home ordering capability. Keywords: home, capability, ordering.
  * - useWorkbenchPinnedThreadLayout: read global pinned thread layout. Keywords: pinned, layout, sidebar.
+ * - useWorkbenchThreadTextPresentationField: subscribe to one exact streaming text field. Keywords: thread, text, presentation, leaf.
  */
 "use client";
 
@@ -48,6 +49,7 @@ import { getThreadDocumentFromSnapshot } from "../../workbench/thread/thread-doc
 import type { WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkbenchDomSurfaces } from "../../workbench/workbench-dom";
+import type { ThreadTextPresentationKey } from "../../workbench/thread/ThreadTextPresentationController";
 import WorkbenchClientContext, { type WorkbenchClientController } from "./workbench-client-context";
 
 const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
@@ -172,6 +174,41 @@ function useWorkbenchClientController(explicitClient?: WorkbenchClientController
     throw new Error("Workbench domain hooks require WorkbenchClientProvider.");
   }
   return client;
+}
+
+export function useWorkbenchThreadTextPresentationField(
+  key: ThreadTextPresentationKey | null,
+  canonicalText: string,
+  explicitClient?: WorkbenchClientController,
+) {
+  const providedClient = useContext(WorkbenchClientContext);
+  const controller = (explicitClient ?? providedClient)?.mounted?.threadTextPresentation ?? null;
+  const stableKey = useMemo<ThreadTextPresentationKey | null>(() => key ? {
+    field: key.field,
+    index: key.index,
+    itemId: key.itemId,
+    source: { kind: key.source.kind, sourceKey: key.source.sourceKey },
+    threadId: key.threadId,
+    turnId: key.turnId,
+  } : null, [
+    key?.field,
+    key?.index,
+    key?.itemId,
+    key?.source.kind,
+    key?.source.sourceKey,
+    key?.threadId,
+    key?.turnId,
+  ]);
+  const getSnapshot = useCallback(
+    () => stableKey ? controller?.getSnapshot(stableKey) ?? canonicalText : canonicalText,
+    [canonicalText, controller, stableKey],
+  );
+  const subscribe = useCallback((listener: () => void) => (
+    stableKey && controller
+      ? controller.subscribe(stableKey, canonicalText, listener)
+      : EMPTY_SUBSCRIBE(listener)
+  ), [canonicalText, controller, stableKey]);
+  return useSyncExternalStore(subscribe, getSnapshot, () => canonicalText);
 }
 
 function useWorkbenchThreadSidebarStore(explicitClient?: WorkbenchClientController) {

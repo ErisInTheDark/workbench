@@ -39,10 +39,11 @@ export default class ThreadRenderPipeline {
     this.materializationCountsByKey.clear();
   }
 
-  invalidate(key: string) {
-    this.layers.canonicalLayer.invalidate(key);
-    this.layers.overlayLayer.invalidate(key);
-    this.layers.visibleLayer.invalidate(key);
+  delete(key: string) {
+    this.layers.canonicalLayer.delete(key);
+    this.layers.overlayLayer.delete(key);
+    this.layers.visibleLayer.delete(key);
+    this.materializationCountsByKey.delete(key);
   }
 
   render(input: ThreadRenderPipelineInput) {

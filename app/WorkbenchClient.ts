@@ -38,6 +38,7 @@ import {
 import FileDraftStore from "./workbench/state/FileDraftStore";
 import WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController";
 import type { ThreadTranscriptProjectionState } from "./workbench/transcript/ThreadTranscriptProjectionController";
+import type ThreadTextPresentationController from "./workbench/thread/ThreadTextPresentationController";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import SessionState from "./workbench/state/SessionState";
 import { DEFAULT_EDITOR_FONT_SIZE } from "./workbench/state/workbench-settings";
@@ -75,6 +76,7 @@ export interface MountedWorkbenchClient {
   dispose: () => void;
   threadRuntime: WorkbenchThreadRuntimeStore;
   threadSidebar: WorkbenchThreadSidebarStore;
+  threadTextPresentation: ThreadTextPresentationController;
 }
 
 function readInitialEditorFontSize(controller?: WorkbenchClientStateController) {
@@ -1267,5 +1269,6 @@ export async function WorkbenchClient(
     },
     threadRuntime,
     threadSidebar: threadSidebarClient,
+    threadTextPresentation: threadClient.textPresentation,
   };
 }

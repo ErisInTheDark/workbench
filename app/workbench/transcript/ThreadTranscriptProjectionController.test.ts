@@ -331,7 +331,7 @@ test("same-thread loaded-turn changes retain and reconcile the previous projecti
   controller.dispose();
 });
 
-test("successive live text snapshots publish immediately without scheduling parity work", async () => {
+test("presentation-only selections retain reconciliation truth without publishing source state", async () => {
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   const publications: string[] = [];
   const scheduled: Array<() => void> = [];
@@ -377,10 +377,12 @@ test("successive live text snapshots publish immediately without scheduling pari
       items: turn.items.map((item) => item.type === "plan" ? { ...item, text } : item),
     })),
   });
-  controller.select({ browseResultEntries: [], thread: withText("partial") });
+  controller.select({ browseResultEntries: [], thread: withText("partial") }, { publishState: false });
+  controller.select({ browseResultEntries: [], thread: withText("partial and complete") }, { publishState: false });
+  assert.deepEqual(publications, ["planned"]);
   controller.select({ browseResultEntries: [], thread: withText("partial and complete") });
 
-  assert.deepEqual(publications.slice(-2), ["partial", "partial and complete"]);
+  assert.equal(publications.at(-1), "partial and complete");
   assert.equal(scheduled.length, 0);
   controller.dispose();
 });

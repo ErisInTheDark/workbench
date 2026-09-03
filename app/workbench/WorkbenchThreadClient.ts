@@ -88,6 +88,10 @@ import ThreadMessageAdmissionController from "./thread/ThreadMessageAdmissionCon
 import ThreadOptimisticInputStore from "./thread/ThreadOptimisticInputStore";
 import ThreadRenderPipeline from "./thread/ThreadRenderPipeline";
 import ThreadStreamingReconciler from "./thread/ThreadStreamingReconciler";
+import ThreadTextPresentationController, {
+    type ThreadTextPresentationField,
+    type ThreadTextPresentationKey,
+} from "./thread/ThreadTextPresentationController";
 import ThreadVisibleLayer from "./thread/ThreadVisibleLayer";
 import ThreadWorkbenchOverlayLayer from "./thread/ThreadWorkbenchOverlayLayer";
 import { getWorkbenchThreadHarnessCandidates } from "workbench-shared/workbench/thread/thread-harness-candidates";
@@ -252,6 +256,7 @@ interface WorkbenchThreadClient {
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
   setProjectContext: (context: { projectId?: string; root: string; rootPath: string; roots?: WorkbenchProjectRoot[] }) => void;
   subscribe: (listener: WorkbenchThreadListener) => () => void;
+  textPresentation: ThreadTextPresentationController;
 }
 
 type RateLimitSnapshotSource = "cache" | "notification" | "read";
@@ -938,6 +943,7 @@ function WorkbenchThreadClient(
   const stablePreferencesByKey = new Map<string, ThreadStablePreferenceRecord>();
   const statusRecordsByKey = new Map<string, ThreadStatusRecord>();
   const streamingReconciler = new ThreadStreamingReconciler();
+  const textPresentation = new ThreadTextPresentationController();
   const transcriptProjection = new ThreadTranscriptProjectionController({
     onError: (error) => console.error("Workbench SQLite transcript projection lifecycle failed.", error),
     onStateChange: (state) => options.onTranscriptSourceChange?.(state),
@@ -1194,6 +1200,7 @@ function WorkbenchThreadClient(
     installedDurableQuestionnaireEntries = [];
     resolvedDurableQuestionnaireKeysByThreadId.clear();
     threadRenderPipeline.clear();
+    textPresentation.clear();
     streamingReconciler.clearClientCreatedItemKeys();
     if (emitChange) {
       emit();
@@ -1309,7 +1316,6 @@ function WorkbenchThreadClient(
   function bumpOverlayRevisionForKey(key: string, revisionKey: keyof Omit<ThreadOverlayRevisionRecord, "key">) {
     const record = getOverlayRevisionRecord(key);
     record[revisionKey] += 1;
-    threadRenderPipeline.invalidate(key);
   }
 
   function bumpOverlayRevision(threadId: string, revisionKey: keyof Omit<ThreadOverlayRevisionRecord, "key">) {
@@ -1407,7 +1413,6 @@ function WorkbenchThreadClient(
     }
 
     record.revision += 1;
-    threadRenderPipeline.invalidate(key);
     if (key === threadDocuments.getSelectedThreadKey()) {
       flushSelectedThreadRendering();
     } else {
@@ -1430,7 +1435,6 @@ function WorkbenchThreadClient(
     }
 
     threadSources.update(key, (source) => ({ ...source, ...fields }));
-    threadRenderPipeline.invalidate(key);
     if (key === threadDocuments.getSelectedThreadKey()) {
       flushSelectedThreadRendering();
     } else {
@@ -1482,7 +1486,6 @@ function WorkbenchThreadClient(
       status,
     };
     statusRecordsByKey.set(key, record);
-    threadRenderPipeline.invalidate(key);
     return record;
   }
 
@@ -1819,7 +1822,6 @@ function WorkbenchThreadClient(
         : sourceThread.status,
     );
     const key = threadSources.install(sourceThread);
-    threadRenderPipeline.invalidate(key);
     return key;
   }
 
@@ -1827,7 +1829,6 @@ function WorkbenchThreadClient(
     const rawThread = stripProjectedThreadSource(thread);
     const sourceThread = prepareCanonicalThreadSource(rawThread) ?? rawThread;
     const key = threadSources.install(sourceThread);
-    threadRenderPipeline.invalidate(key);
     return key;
   }
 
@@ -1888,11 +1889,20 @@ function WorkbenchThreadClient(
     }
   }
 
-  function setProjectedCurrentThread(nextThread: ThreadPayload | null) {
+  function setProjectedCurrentThread(
+    nextThread: ThreadPayload | null,
+    {
+      publishRuntime = true,
+      publishTranscriptSource = true,
+    }: {
+      publishRuntime?: boolean;
+      publishTranscriptSource?: boolean;
+    } = {},
+  ) {
     transcriptProjection.select(nextThread && nextThread.harness === "codex" && !nextThread.isDraft ? {
       browseResultEntries: state.browseResultEntriesByThreadId.get(nextThread.id) ?? nextThread.browseResultEntries ?? [],
       thread: nextThread,
-    } : null);
+    } : null, { publishState: publishTranscriptSource });
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
       return;
     }
@@ -1902,10 +1912,11 @@ function WorkbenchThreadClient(
     state.currentThread = nextThread;
     state.currentThreadId = nextThread?.id ?? "";
     if (selectionChanged) {
+      textPresentation.clear();
       state.rateLimits = nextThread ? state.rateLimitsByHarness.get(nextThread.harness) ?? null : null;
     }
-    emit();
-    scheduleActiveTurnRateLimitRefresh();
+    if (publishRuntime) emit();
+    if (selectionChanged) scheduleActiveTurnRateLimitRefresh();
 
     if (!nextThread) {
       return;
@@ -1916,7 +1927,10 @@ function WorkbenchThreadClient(
     }
   }
 
-  function flushSelectedThreadRendering() {
+  function flushSelectedThreadRendering(options: {
+    publishRuntime?: boolean;
+    publishTranscriptSource?: boolean;
+  } = {}) {
     const selectedThreadKey = threadDocuments.getSelectedThreadKey();
     if (!selectedThreadKey) {
       threadDocuments.selectDocumentKey("");
@@ -1925,7 +1939,7 @@ function WorkbenchThreadClient(
     }
 
     const projectedThread = materializeFinalVisibleThread(selectedThreadKey, { select: true });
-    setProjectedCurrentThread(projectedThread);
+    setProjectedCurrentThread(projectedThread, options);
   }
 
   function upsertThreadDocument(
@@ -2155,7 +2169,7 @@ function WorkbenchThreadClient(
     stablePreferencesByKey.delete(key);
     statusRecordsByKey.delete(key);
     optimisticInputs.deleteThread(key);
-    threadRenderPipeline.invalidate(key);
+    threadRenderPipeline.delete(key);
     return didDeleteSource || didDeleteDocument;
   }
 
@@ -2164,6 +2178,7 @@ function WorkbenchThreadClient(
     updater: (thread: ThreadPayload) => ThreadPayload | null,
     options: {
       preserveStableServiceTier?: boolean;
+      publishSelected?: boolean;
       pruneStreamingDuplicates?: boolean;
     } = {},
   ) {
@@ -2183,7 +2198,10 @@ function WorkbenchThreadClient(
     }
     commitCanonicalThreadSource(nextThread);
     if (threadDocuments.getSelectedThreadKey() === key) {
-      flushSelectedThreadRendering();
+      flushSelectedThreadRendering({
+        publishRuntime: options.publishSelected,
+        publishTranscriptSource: options.publishSelected,
+      });
     }
     return true;
   }
@@ -3802,8 +3820,10 @@ function WorkbenchThreadClient(
     turnId: string,
     updater: (items: ThreadItem[]) => ThreadItem[] | null,
     {
+      publishSelected = true,
       pruneStreamingDuplicates = false,
     }: {
+      publishSelected?: boolean;
       pruneStreamingDuplicates?: boolean;
     } = {},
   ) {
@@ -3836,7 +3856,7 @@ function WorkbenchThreadClient(
           turns,
         }
         : null;
-    }, { pruneStreamingDuplicates: false });
+    }, { preserveStableServiceTier: false, publishSelected, pruneStreamingDuplicates: false });
   }
 
   function upsertThreadItem(threadKey: string, turnId: string, incomingItem: ThreadItem) {
@@ -4023,6 +4043,7 @@ function WorkbenchThreadClient(
     itemId: string,
     createItem: () => ThreadItem,
     updater: (item: ThreadItem, isExisting: boolean) => ThreadItem | null,
+    { publishSelected = true }: { publishSelected?: boolean } = {},
   ) {
     const itemKey = getThreadItemKey(turnId, itemId);
     ensureTurnForStreamingDelta(threadKey, turnId);
@@ -4054,7 +4075,7 @@ function WorkbenchThreadClient(
       });
 
       return updated ? nextItems : null;
-    }, { pruneStreamingDuplicates: false });
+    }, { publishSelected, pruneStreamingDuplicates: false });
   }
 
   function discardAbandonedStreamingFileChanges(threadKey: string, turnId: string, incomingItemId: string) {
@@ -4104,6 +4125,7 @@ function WorkbenchThreadClient(
     turnId: string,
     itemId: string,
     updater: (item: ThreadItem) => ThreadItem | null,
+    { publishSelected = true }: { publishSelected?: boolean } = {},
   ) {
     return updateTurnItems(threadKey, turnId, (items) => {
       let updated = false;
@@ -4122,7 +4144,123 @@ function WorkbenchThreadClient(
       });
 
       return updated ? nextItems : null;
-    }, { pruneStreamingDuplicates: false });
+    }, { publishSelected, pruneStreamingDuplicates: false });
+  }
+
+  function readPresentationText(
+    threadKey: string,
+    turnId: string,
+    itemId: string,
+    field: ThreadTextPresentationField,
+    index: number | null,
+  ) {
+    const item = threadSources.get(threadKey)?.turns
+      .find((turn) => turn.id === turnId)?.items
+      .find((candidate) => candidate.id === itemId);
+    if (!item) return null;
+    if (field === "agentMessageText") return item.type === "agentMessage" ? item.text : null;
+    if (field === "planText") return item.type === "plan" ? item.text : null;
+    if (field === "commandExecutionOutput") {
+      return item.type === "commandExecution" ? item.aggregatedOutput ?? "" : null;
+    }
+    if (item.type !== "reasoning" || index === null || index < 0) return null;
+    return field === "reasoningSummary"
+      ? item.summary[index] ?? ""
+      : item.content[index] ?? "";
+  }
+
+  function presentationKey(
+    threadKey: string,
+    threadId: string,
+    turnId: string,
+    itemId: string,
+    field: ThreadTextPresentationField,
+    index: number | null,
+    kind: "json" | "sqlite",
+  ): ThreadTextPresentationKey {
+    return {
+      field,
+      index,
+      itemId,
+      source: { kind, sourceKey: threadKey },
+      threadId,
+      turnId,
+    };
+  }
+
+  function acceptPresentationDelta({
+    apply,
+    delta,
+    field,
+    index = null,
+    itemId,
+    threadId,
+    threadKey,
+    turnId,
+  }: {
+    apply: (publishSelected: boolean) => boolean;
+    delta: string;
+    field: ThreadTextPresentationField;
+    index?: number | null;
+    itemId: string;
+    threadId: string;
+    threadKey: string;
+    turnId: string;
+  }) {
+    const priorText = readPresentationText(threadKey, turnId, itemId, field, index);
+    const isReasoningField = field === "reasoningContent" || field === "reasoningSummary";
+    const hasVisibleLeaf = priorText !== null && (!isReasoningField || Boolean(priorText.trim()));
+    const selected = threadDocuments.getSelectedThreadKey() === threadKey;
+    const keys = (["json", "sqlite"] as const).map((kind) => (
+      presentationKey(threadKey, threadId, turnId, itemId, field, index, kind)
+    ));
+    const useLeafPresentation = selected
+      && hasVisibleLeaf
+      && keys.some((key) => textPresentation.hasSubscribers(key));
+    const applied = apply(!useLeafPresentation);
+    if (!applied || !useLeafPresentation) return applied;
+    const canonicalText = readPresentationText(threadKey, turnId, itemId, field, index);
+    if (canonicalText === null) return applied;
+    for (const key of keys) {
+      textPresentation.acceptDelta({
+        canonicalText,
+        delta,
+        key,
+      });
+    }
+    return applied;
+  }
+
+  function completePresentationItem(
+    threadKey: string,
+    threadId: string,
+    turnId: string,
+    item: ThreadItem,
+  ) {
+    const fields: Array<{
+      field: ThreadTextPresentationField;
+      index: number | null;
+      text: string;
+    }> = [];
+    if (item.type === "agentMessage") {
+      fields.push({ field: "agentMessageText", index: null, text: item.text });
+    } else if (item.type === "plan") {
+      fields.push({ field: "planText", index: null, text: item.text });
+    } else if (item.type === "commandExecution") {
+      fields.push({ field: "commandExecutionOutput", index: null, text: item.aggregatedOutput ?? "" });
+    } else if (item.type === "reasoning") {
+      item.summary.forEach((text, index) => fields.push({ field: "reasoningSummary", index, text }));
+      item.content.forEach((text, index) => fields.push({ field: "reasoningContent", index, text }));
+    }
+    for (const entry of fields) {
+      for (const kind of ["json", "sqlite"] as const) {
+        textPresentation.complete(
+          presentationKey(threadKey, threadId, turnId, item.id, entry.field, entry.index, kind),
+          entry.text,
+          { snap: entry.field === "commandExecutionOutput" },
+        );
+      }
+    }
   }
 
   function appendIndexedText(values: string[], index: number, delta: string) {
@@ -4217,7 +4355,6 @@ function WorkbenchThreadClient(
       return false;
     }
 
-    threadRenderPipeline.invalidate(key);
     if (confirmedHandle) {
       bumpOverlayRevisionForKey(key, "optimisticRevision");
     }
@@ -4298,26 +4435,72 @@ function WorkbenchThreadClient(
             timestamp,
           )
           : false;
+        if (notification.method === "item/completed") {
+          completePresentationItem(
+            threadKey,
+            notification.params.threadId,
+            notification.params.turnId,
+            notification.params.item,
+          );
+        }
         return didDiscardAbandonedFileChanges || didUpdateItem || didUpdateTimeline;
       }
       case "item/agentMessage/delta":
-        return updateOrCreateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, () => createStreamingAgentMessageItem(notification.params.itemId), (item) => (
-          item.type === "agentMessage"
-            ? { ...item, text: `${item.text}${notification.params.delta}` }
-            : null
-        ));
+        return acceptPresentationDelta({
+          apply: (publishSelected) => updateOrCreateThreadItem(
+            threadKey,
+            notification.params.turnId,
+            notification.params.itemId,
+            () => createStreamingAgentMessageItem(notification.params.itemId),
+            (item) => item.type === "agentMessage"
+              ? { ...item, text: `${item.text}${notification.params.delta}` }
+              : null,
+            { publishSelected },
+          ),
+          delta: notification.params.delta,
+          field: "agentMessageText",
+          itemId: notification.params.itemId,
+          threadId: notification.params.threadId,
+          threadKey,
+          turnId: notification.params.turnId,
+        });
       case "item/plan/delta":
-        return updateOrCreateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, () => createStreamingPlanItem(notification.params.itemId), (item) => (
-          item.type === "plan"
-            ? { ...item, text: `${item.text}${notification.params.delta}` }
-            : null
-        ));
+        return acceptPresentationDelta({
+          apply: (publishSelected) => updateOrCreateThreadItem(
+            threadKey,
+            notification.params.turnId,
+            notification.params.itemId,
+            () => createStreamingPlanItem(notification.params.itemId),
+            (item) => item.type === "plan"
+              ? { ...item, text: `${item.text}${notification.params.delta}` }
+              : null,
+            { publishSelected },
+          ),
+          delta: notification.params.delta,
+          field: "planText",
+          itemId: notification.params.itemId,
+          threadId: notification.params.threadId,
+          threadKey,
+          turnId: notification.params.turnId,
+        });
       case "item/commandExecution/outputDelta":
-        return updateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, (item) => (
-          item.type === "commandExecution"
-            ? { ...item, aggregatedOutput: appendCommandOutputDelta(item.aggregatedOutput, notification.params.delta) }
-            : null
-        ));
+        return acceptPresentationDelta({
+          apply: (publishSelected) => updateThreadItem(
+            threadKey,
+            notification.params.turnId,
+            notification.params.itemId,
+            (item) => item.type === "commandExecution"
+              ? { ...item, aggregatedOutput: appendCommandOutputDelta(item.aggregatedOutput, notification.params.delta) }
+              : null,
+            { publishSelected },
+          ),
+          delta: notification.params.delta,
+          field: "commandExecutionOutput",
+          itemId: notification.params.itemId,
+          threadId: notification.params.threadId,
+          threadKey,
+          turnId: notification.params.turnId,
+        });
       case "item/fileChange/patchUpdated":
         return updateOrCreateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, () => createStreamingFileChangeItem(notification.params.itemId), (item, isExisting) => (
           item.type === "fileChange"
@@ -4333,17 +4516,45 @@ function WorkbenchThreadClient(
             : null
         ));
       case "item/reasoning/summaryTextDelta":
-        return updateOrCreateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
-          item.type === "reasoning"
-            ? { ...item, summary: appendIndexedText(item.summary, notification.params.summaryIndex, notification.params.delta) }
-            : null
-        ));
+        return acceptPresentationDelta({
+          apply: (publishSelected) => updateOrCreateThreadItem(
+            threadKey,
+            notification.params.turnId,
+            notification.params.itemId,
+            () => createStreamingReasoningItem(notification.params.itemId),
+            (item) => item.type === "reasoning"
+              ? { ...item, summary: appendIndexedText(item.summary, notification.params.summaryIndex, notification.params.delta) }
+              : null,
+            { publishSelected },
+          ),
+          delta: notification.params.delta,
+          field: "reasoningSummary",
+          index: notification.params.summaryIndex,
+          itemId: notification.params.itemId,
+          threadId: notification.params.threadId,
+          threadKey,
+          turnId: notification.params.turnId,
+        });
       case "item/reasoning/textDelta":
-        return updateOrCreateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
-          item.type === "reasoning"
-            ? { ...item, content: appendIndexedText(item.content, notification.params.contentIndex, notification.params.delta) }
-            : null
-        ));
+        return acceptPresentationDelta({
+          apply: (publishSelected) => updateOrCreateThreadItem(
+            threadKey,
+            notification.params.turnId,
+            notification.params.itemId,
+            () => createStreamingReasoningItem(notification.params.itemId),
+            (item) => item.type === "reasoning"
+              ? { ...item, content: appendIndexedText(item.content, notification.params.contentIndex, notification.params.delta) }
+              : null,
+            { publishSelected },
+          ),
+          delta: notification.params.delta,
+          field: "reasoningContent",
+          index: notification.params.contentIndex,
+          itemId: notification.params.itemId,
+          threadId: notification.params.threadId,
+          threadKey,
+          turnId: notification.params.turnId,
+        });
       case "thread/archived":
       case "thread/deleted":
       case "thread/unarchived":
@@ -5642,12 +5853,8 @@ function WorkbenchThreadClient(
     const appliedKnownUserMessage = harness === "codex" && (
       notification.method === "item/started" || notification.method === "item/completed"
     ) && applyCodexUserMessageNotificationToKnownThreadSource(notification, harness);
-    const appliedKnownThreadNotification = (
-      !appliedKnownUserMessage
-      && applyCodexNotificationToKnownThreadSource(notification, harness)
-    ) || appliedKnownUserMessage;
-    if (appliedKnownThreadNotification && doesNotificationTargetSelectedThread(notification, harness)) {
-      emit();
+    if (!appliedKnownUserMessage) {
+      applyCodexNotificationToKnownThreadSource(notification, harness);
     }
     if (
       harness === "codex"
@@ -5854,6 +6061,7 @@ function WorkbenchThreadClient(
     transcriptProjection.dispose();
     transcripts.dispose();
     threadGoals.dispose();
+    textPresentation.dispose();
     lifecycle.dispose();
   }
 
@@ -5891,6 +6099,7 @@ function WorkbenchThreadClient(
     setDraftThreadHarness,
     setProjectContext,
     subscribe,
+    textPresentation,
   };
 }
 
