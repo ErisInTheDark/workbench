@@ -8,11 +8,15 @@ import { test } from "node:test";
 
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import { workbenchTranscriptNotifications } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./WorkbenchThreadClient.ts";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission.ts";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import type {
+  WorkbenchQuestionnaireHistoryEntryState,
+  WorkbenchThreadSidebarEntry,
+  WorkbenchThreadSidebarSnapshot,
+} from "workbench-shared/workbench/thread/thread-state";
 
 type Listener = (event: { data?: string }) => void;
 type SocketRequest = {
@@ -135,7 +139,7 @@ class FakeWebSocket {
       queueMicrotask(() => this.respond(request.id, { data: [] }));
     } else if (request.method === "questionnaire/list") {
       queueMicrotask(() => this.respond(request.id, { data: [] }));
-    } else if (request.method === "questionnaire/respond") {
+    } else if (request.method === "questionnaire/respond" || request.method === "questionnaire/history/record") {
       queueMicrotask(() => this.respond(request.id, { ok: true }));
     } else if (request.method === "turn/interrupt" || request.method === "thread/compact/start" || request.method === "thread/goal/clear") {
       queueMicrotask(() => this.respond(request.id, {}));
@@ -2862,15 +2866,37 @@ test("durable detached questionnaire responses resolve after admission even when
   assert.match(input?.[0]?.text ?? "", /^<wb:questionnaire-response>/u);
   assert.deepEqual(start?.workbenchPromptContext?.activatedSkillPaths, ["C:/skills/iterate/SKILL.md"]);
   assert.equal(socket.requests.some((candidate) => candidate.method === "questionnaire/respond"), false);
+  const historyRecord = socket.requests.find((candidate) => candidate.method === "questionnaire/history/record");
+  const recordedHistory = historyRecord?.params as WorkbenchQuestionnaireHistoryEntryState | undefined;
+  assert.equal(recordedHistory?.threadId, "thread");
+  assert.equal(recordedHistory?.turnId, "turn");
+  assert.equal(recordedHistory?.requestKey, "question");
+  assert.deepEqual(recordedHistory?.response, { answers: { route: { answers: ["Approve"] } } });
   assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/thread-state/questionnaire/resolve"), true);
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
   const originalTurn = client.getSnapshot().currentThread?.turns.find((turn) => turn.id === "turn");
   assert.equal(originalTurn?.items.some((item) => item.id.startsWith("workbench:questionnaire-history:")), true);
   client.installThreadStateSources({
     activeProjectSnapshot: null,
-    durableQuestionnaireEntries: [durableEntry],
+    durableQuestionnaireEntries: [{
+      ...durableEntry,
+      pendingQuestionnaire: null,
+      questionnaireHistory: [recordedHistory!],
+    }],
   });
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
+  socket.notify("questionnaire/resolved", {
+    requestKey: "question",
+    threadId: "thread",
+    turnId: "turn",
+  });
+  await waitForRequest(socket, "questionnaire/history/list");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    client.getSnapshot().currentThread?.turns.find((turn) => turn.id === "turn")
+      ?.items.some((item) => item.id.startsWith("workbench:questionnaire-history:")),
+    true,
+  );
 
   client.installThreadStateSources({
     activeProjectSnapshot: null,
@@ -2881,6 +2907,57 @@ test("durable detached questionnaire responses resolve after admission even when
   });
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey, "next-question");
 }));
+
+test("failed detached questionnaire transcript recording still resolves durable history", async () => {
+  const statusMessages: string[] = [];
+  await withClient(async (client, socket) => {
+    const source = activeThread("codex", "thread", "interrupted");
+    client.selectThreadPayload(source);
+    const request = {
+      id: "question",
+      questions: [{ allowOther: false, header: "Route", id: "route", isSecret: false, options: [{ description: "Continue", label: "Approve" }], question: "Continue?" }],
+      submitLabel: "Send",
+      summary: "Choose",
+      title: "Questionnaire",
+    };
+    installProjectThreadState(client, {
+      entries: [{
+        activityAt: 2,
+        entryKind: "thread",
+        identity: { harness: "codex", threadId: "thread" },
+        lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" },
+        metadata: { archived: false, pinned: false, snoozed: false },
+        pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" },
+        title: "Thread",
+      }],
+      error: null,
+      freshness: "fresh",
+      projectId: "project",
+      revision: 1,
+    });
+    await waitForCondition(
+      () => client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode === "newTurn",
+      "Durable questionnaire did not reconcile as detached.",
+    );
+    FakeWebSocket.intercept = (target, candidate) => {
+      if (candidate.method !== "questionnaire/history/record") return false;
+      queueMicrotask(() => target.fail(candidate.id, "transcript unavailable"));
+      return true;
+    };
+
+    await client.submitPendingUserInputRequest(
+      "thread",
+      { answers: { route: { answers: ["Approve"] } } },
+      { turnId: "turn" },
+    );
+
+    assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/thread-state/questionnaire/resolve"), true);
+    assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
+    assert.deepEqual(statusMessages, [
+      "The questionnaire response turn started, but transcript history recording failed: transcript unavailable",
+    ]);
+  }, { onStatusMessage: (message) => statusMessages.push(message) });
+});
 
 test("failed detached questionnaire admission leaves the durable request retryable", async () => withClient(async (client, socket) => {
   const source = activeThread("codex", "thread", "interrupted");

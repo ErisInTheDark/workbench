@@ -791,6 +791,22 @@ function isTransientRolloutReadError(error: unknown) {
   return isEmptyRolloutError(error) || isMissingRolloutError(error);
 }
 
+function normalizeQuestionnaireHistoryEntryState(
+  entry: WorkbenchQuestionnaireHistoryEntryState,
+): WorkbenchQuestionnaireHistoryEntry {
+  return {
+    insertAfterItemId: entry.insertAfterItemId ?? null,
+    insertAfterItemIndex: entry.insertAfterItemIndex ?? null,
+    itemId: entry.itemId ?? null,
+    request: entry.request,
+    requestKey: entry.requestKey,
+    resolvedAt: entry.resolvedAt,
+    response: entry.response,
+    threadId: entry.threadId,
+    turnId: entry.turnId,
+  };
+}
+
 function WorkbenchThreadClient(
   options: WorkbenchThreadClientOptions = {},
   lifecycle: LifecycleScope = new LifecycleScope(),
@@ -1571,17 +1587,7 @@ function WorkbenchThreadClient(
       if (entry.entryKind === "draft") continue;
       const durableHistory = entry.questionnaireHistory ?? [];
       if (durableHistory.length) {
-        const normalizedHistory = durableHistory.map((historyEntry) => ({
-          insertAfterItemId: historyEntry.insertAfterItemId ?? null,
-          insertAfterItemIndex: historyEntry.insertAfterItemIndex ?? null,
-          itemId: historyEntry.itemId ?? null,
-          request: historyEntry.request,
-          requestKey: historyEntry.requestKey,
-          resolvedAt: historyEntry.resolvedAt,
-          response: historyEntry.response,
-          threadId: historyEntry.threadId,
-          turnId: historyEntry.turnId,
-        }));
+        const normalizedHistory = durableHistory.map(normalizeQuestionnaireHistoryEntryState);
         setQuestionnaireHistoryEntries(
           entry.identity.threadId,
           mergeQuestionnaireHistoryEntries(
@@ -3099,7 +3105,15 @@ function WorkbenchThreadClient(
   }
 
   function setQuestionnaireHistoryEntries(threadId: string, entries: WorkbenchQuestionnaireHistoryEntry[]) {
-    const nextEntries = entries.filter((entry) => entry.threadId === threadId);
+    const durableEntries = installedDurableQuestionnaireEntries.flatMap((entry) => (
+      entry.entryKind !== "draft" && entry.identity.threadId === threadId
+        ? (entry.questionnaireHistory ?? []).map(normalizeQuestionnaireHistoryEntryState)
+        : []
+    ));
+    const nextEntries = mergeQuestionnaireHistoryEntries(
+      entries.filter((entry) => entry.threadId === threadId),
+      durableEntries,
+    );
     const existingEntries = state.questionnaireHistoryByThreadId.get(threadId) ?? [];
     if (areDeeplyEqual(existingEntries, nextEntries)) {
       return false;
@@ -5702,6 +5716,19 @@ function WorkbenchThreadClient(
       if (!admittedTurnId) {
         throw new Error("The questionnaire response turn was not admitted.");
       }
+      let transcriptWarning: string | null = null;
+      if (pendingRequest.harness === "codex") {
+        try {
+          const transcriptResult = await sendBridgeRequest<{ ok: boolean; warning?: string }>("codex", {
+            method: "questionnaire/history/record",
+            params: historyEntry,
+          });
+          transcriptWarning = transcriptResult.warning ?? null;
+        } catch (error) {
+          const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+          transcriptWarning = `The questionnaire response turn started, but transcript history recording failed: ${message}`;
+        }
+      }
       const resolution = await requestWorkbench<{ accepted: boolean }>("workbench/thread-state/questionnaire/resolve", {
         entry: historyEntry,
         identity: { harness: pendingRequest.harness, threadId: pendingRequest.threadId },
@@ -5721,6 +5748,7 @@ function WorkbenchThreadClient(
       const clearedWaitingFlag = clearThreadWaitingOnUserInputFlag(threadId);
       refreshFinalVisibleQuestionnaireHistory(threadId);
       if (clearedPendingRequest || clearedWaitingFlag) emit();
+      if (transcriptWarning) emitStatusMessage(transcriptWarning);
       return;
     }
 

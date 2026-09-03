@@ -16,6 +16,7 @@ import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/t
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
+import { isWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import { ThreadTranscriptItemsDetails } from "./thread-view-items";
@@ -106,6 +107,9 @@ export default function ThreadTranscriptProjection({
         const turn = turnsById.get(segment.turnId);
         if (!turn) return null;
         const browseResultEntries = browseResultEntriesByTurnId.get(segment.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES;
+        const hideTopBorder = segment.isFirstForTurn && segment.items.some((item) => (
+          item.type === "userMessage" && isWorkbenchQuestionnaireResponseInput(item.content)
+        ));
         return (
           <Fragment key={segment.id}>
             {segment.isFirstForTurn ? (
@@ -116,7 +120,7 @@ export default function ThreadTranscriptProjection({
               />
             ) : null}
             <section className={segment.isFirstForTurn
-              ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"
+              ? `${hideTopBorder ? "" : "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]"} py-3`
               : "pb-3"}
             >
               <ThreadTranscriptItemsDetails

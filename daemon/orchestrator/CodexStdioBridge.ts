@@ -54,6 +54,7 @@ import {
   WorkbenchThreadPageReadParamsSchema,
   type WorkbenchThreadPageResponse,
 } from "workbench-shared/workbench/thread/workbench-thread-page";
+import { WorkbenchQuestionnaireHistoryEntrySchema } from "workbench-shared/workbench/thread/thread-state";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type {
   WorkbenchTranscriptAtomicObservation,
@@ -1447,6 +1448,11 @@ export default class CodexStdioBridge {
             id: requestId,
             result: await this.listQuestionnaireHistory(message.params),
           };
+        case "questionnaire/history/record":
+          return {
+            id: requestId,
+            result: await this.recordQuestionnaireHistory(message.params),
+          };
         case "steer/history/list":
           return {
             id: requestId,
@@ -2288,6 +2294,57 @@ export default class CodexStdioBridge {
     };
   }
 
+  private async recordQuestionnaireHistory(params: unknown) {
+    const parsed = WorkbenchQuestionnaireHistoryEntrySchema.safeParse(params);
+    if (!parsed.success) {
+      throw new Error("Invalid questionnaire/history/record params.");
+    }
+
+    return await this.settleQuestionnaireHistoryEntry({
+      ...parsed.data,
+      insertAfterItemId: parsed.data.insertAfterItemId ?? null,
+      insertAfterItemIndex: parsed.data.insertAfterItemIndex ?? null,
+      itemId: parsed.data.itemId ?? null,
+    });
+  }
+
+  private async settleQuestionnaireHistoryEntry(historyEntry: WorkbenchQuestionnaireHistoryEntry) {
+    let warning: string | null = null;
+    const transcriptStore = this.ensureTranscriptStore();
+    await this.captureTranscript("workbench-questionnaire-settlement", async () => {
+      try {
+        await this.transcriptRecording.recordCrossedWorkbenchMutation({
+          observations: [{
+            kind: "questionnaire",
+            entry: historyEntry,
+            observedAt: historyEntry.resolvedAt,
+          }],
+          recordLegacy: async () => {
+            try {
+              await transcriptStore.recordQuestionnaireResolved(historyEntry);
+            } catch (error) {
+              warning = "Your response was sent, but Workbench could not save it to local transcript history.";
+              this.transcriptShadowLog?.write({
+                event: "questionnaire-persist-failed",
+                fields: { message: (error instanceof Error ? error.message : String(error)).slice(0, 500) },
+                level: "error",
+                source: "codex-transcript",
+                threadId: historyEntry.threadId,
+              });
+              throw error;
+            }
+          },
+        });
+      } catch (error) {
+        if (error instanceof CodexTranscriptSqliteRecordingFailure) {
+          warning = "Your response was sent, but Workbench could not save it to SQLite transcript history.";
+        }
+        throw error;
+      }
+    });
+    return warning ? { ok: true, warning } : { ok: true };
+  }
+
   private async listSteerHistory(params: unknown) {
     const record = asRecord(params);
     const threadId = asString(record?.threadId)?.trim() ?? "";
@@ -2466,6 +2523,9 @@ export default class CodexStdioBridge {
     threadId: string;
     turnIds: readonly string[] | null;
   }) {
+    // Settle transcript facts admitted before this request before classifying turns as historical gaps.
+    const admittedTranscriptQueue = this.transcriptQueue;
+    await admittedTranscriptQueue.catch(() => undefined);
     const requestedTurnIds = turnIds ? [...new Set(turnIds)] : null;
     const materializedTurnIds = requestedTurnIds
       ? new Set(await this.readSqliteTranscriptMaterializedTurnIds(threadId, requestedTurnIds))
@@ -2748,32 +2808,7 @@ export default class CodexStdioBridge {
       id: pendingRequest.upstreamRequestId,
       result: toToolRequestUserInputResponse(resolvedResponse.response),
     });
-    let warning: string | null = null;
-    const transcriptStore = this.ensureTranscriptStore();
-    await this.captureTranscript("workbench-questionnaire-settlement", async () => {
-      await this.transcriptRecording.recordCrossedWorkbenchMutation({
-        observations: [{
-          kind: "questionnaire",
-          entry: historyEntry,
-          observedAt: historyEntry.resolvedAt,
-        }],
-        recordLegacy: async () => {
-          try {
-            await transcriptStore.recordQuestionnaireResolved(historyEntry);
-          } catch (error) {
-            warning = "Your response was sent, but Workbench could not save it to local transcript history.";
-            this.transcriptShadowLog?.write({
-              event: "questionnaire-persist-failed",
-              fields: { message: (error instanceof Error ? error.message : String(error)).slice(0, 500) },
-              level: "error",
-              source: "codex-transcript",
-              threadId: historyEntry.threadId,
-            });
-            throw error;
-          }
-        },
-      });
-    });
+    const settlement = await this.settleQuestionnaireHistoryEntry(historyEntry);
 
     this.pendingUserInputRequests.delete(pendingRequest.requestKey);
     this.onNotification({
@@ -2784,7 +2819,7 @@ export default class CodexStdioBridge {
       },
     });
 
-    return warning ? { ok: true, warning } : { ok: true };
+    return settlement;
   }
 
   private createThreadWindowStore(transcriptStore: CodexTranscriptStoreInstance): CodexThreadWindowStore {
