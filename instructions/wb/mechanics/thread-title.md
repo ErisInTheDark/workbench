@@ -1,7 +1,7 @@
 <available:thread-title>
 ## Workbench Thread Title
 
-**Hard rule: ensure the thread title is accurate.**
+**Hard rule: ensure thread title accuracy**
 
 - Keep the thread title concise; four to six words; action oriented if fits
 - On initial user message; set title as first operation. Do not get title first
