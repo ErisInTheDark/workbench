@@ -22,7 +22,11 @@
     "./reload/ReloadDirtController": "./reload/ReloadDirtController.ts",
     "./reload/ReloadDirtSnapshotRepository": "./reload/ReloadDirtSnapshotRepository.ts",
     "./reload/workbench-reload": "./reload/workbench-reload.ts",
-    "./source-pattern-matcher": "./source-pattern-matcher.ts"
+    "./source-pattern-matcher": "./source-pattern-matcher.ts",
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "9.6.0",
