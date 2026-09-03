@@ -8,7 +8,7 @@
     "dev": "bash ../run-orchestrator-loop.sh",
     "dev:orchestrator": "node --env-file-if-exists=.env.local --import tsx orchestrator/index.ts",
     "codex:generate-types": "codex app-server generate-ts --experimental --out ../shared/codex/generated/app-server",
-    "test": "node --disable-warning=ExperimentalWarning --import tsx scripts/ProjectTestRunner.ts"
+    "test": "pnpm --dir .. test"
   },
   "dependencies": {
     "@github/copilot": "1.0.36",

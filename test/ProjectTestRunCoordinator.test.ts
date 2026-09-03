@@ -1,5 +1,6 @@
 /*
- * No production exports. Node tests protect cross-process test-run serialization and stale temp-root cleanup without timer races. Keywords: tests, concurrency, sqlite, temp, lifecycle.
+ * Keywords: tests, concurrency, SQLite, temp, lifecycle.
+ * No exports. Tests protect cross-process test-run serialization and stale temp-root cleanup without timer races.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";

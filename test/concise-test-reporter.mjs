@@ -1,6 +1,7 @@
 /*
- * Default export:
- * - conciseTestReporter: renders failures, bounded process noise, slow tests, and one final summary without pass-by-pass TAP chatter. Keywords: tests, reporter, failures, stderr, slow, summary.
+ * Keywords: tests, reporter, failures, stderr, slow, summary.
+ * Exports:
+ * - default conciseTestReporter: render failures, bounded process noise, slow tests, and one final summary.
  */
 import { inspect } from "node:util";
 

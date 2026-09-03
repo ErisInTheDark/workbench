@@ -4,9 +4,14 @@
   "scripts": {
     "app": "node app/node_modules/tsx/dist/cli.mjs app/index.ts",
     "build:tray": "node scripts/build-tray.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --import tsx test/run-project-tests.mjs",
     "typecheck": "node scripts/typecheck.mjs"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "^25.6.0",
+    "better-sqlite3": "13.0.3",
+    "tsx": "4.21.0",
     "typescript": "^7.0.2"
   }
 }

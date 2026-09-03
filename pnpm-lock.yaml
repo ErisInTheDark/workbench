@@ -15,6 +15,18 @@ importers:
 
   .:
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: 9.6.0
+        version: 9.6.0
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
+      better-sqlite3:
+        specifier: 13.0.3
+        version: 13.0.3
+      tsx:
+        specifier: 4.21.0
+        version: 4.21.0(patch_hash=7e9cd751f03c6d39d7fcbeade70d8d6479b0d261b10d03b6e1d2797960db9db0)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -64,27 +76,6 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.14)
-      typescript:
-        specifier: ^6.0.2
-        version: 6.0.2
-
-  package: {}
-
-  shared:
-    dependencies:
-      zod:
-        specifier: 4.3.6
-        version: 4.3.6
-    devDependencies:
-      '@types/better-sqlite3':
-        specifier: 9.6.0
-        version: 9.6.0
-      '@types/node':
-        specifier: ^25.6.0
-        version: 25.6.0
-      better-sqlite3:
-        specifier: 13.0.3
-        version: 13.0.3
       typescript:
         specifier: ^6.0.2
         version: 6.0.2
@@ -143,6 +134,27 @@ importers:
       '@types/ws':
         specifier: 8.18.1
         version: 8.18.1
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.2
+
+  package: {}
+
+  shared:
+    dependencies:
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: 9.6.0
+        version: 9.6.0
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
+      better-sqlite3:
+        specifier: 13.0.3
+        version: 13.0.3
       typescript:
         specifier: ^6.0.2
         version: 6.0.2

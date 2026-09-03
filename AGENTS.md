@@ -55,7 +55,7 @@ CRITICAL INSTRUCTION EDITING RULES:
 
 ## Commands and Permission Boundaries
 
-Run project validation from `daemon/`. Run `pnpm typecheck` from the repository root.
+Run `pnpm test` and `pnpm typecheck` from the repository root.
 
 ### Allowed Validation
 

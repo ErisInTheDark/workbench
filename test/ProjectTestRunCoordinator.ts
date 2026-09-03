@@ -1,15 +1,17 @@
 /*
- * Default export:
- * - ProjectTestRunCoordinator: serialize project test processes through an OS-released SQLite lease and own the stable test temp directory lifecycle. Keywords: tests, concurrency, sqlite, temp, lifecycle.
- * - ProjectTestRunLease/ProjectTestRunCoordinatorOptions: expose the acquired temp root and injectable wait mechanics for the project test runner and regression tests. Keywords: tests, lease, wait, injection.
+ * Keywords: tests, concurrency, SQLite, temp, lease, lifecycle.
+ * Exports:
+ * - default ProjectTestRunCoordinator: serialize project test processes and own the stable test temp directory lifecycle.
+ * - ProjectTestRunLease/ProjectTestRunCoordinatorOptions: expose the acquired temp root and injectable wait mechanics.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import Database from "better-sqlite3";
 
-import WorkbenchTemporaryDirectory from "../lib/workbench/WorkbenchTemporaryDirectory";
-
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const PROJECT_TEMPORARY_ROOT = path.join(PROJECT_ROOT, ".workbench", "tmp");
 const TEST_RUN_RETRY_MS = 250;
 const WINDOWS_DIRECTORY_RETRY_MS = 50;
 const WINDOWS_DIRECTORY_RETRIES = 5;
@@ -61,9 +63,9 @@ export default class ProjectTestRunCoordinator {
 
   constructor(options: ProjectTestRunCoordinatorOptions = {}) {
     this.databasePath = options.databasePath
-      ?? path.join(path.dirname(WorkbenchTemporaryDirectory.projectRootPath), "runtime", "test-runner-lock.sqlite3");
+      ?? path.join(PROJECT_ROOT, ".workbench", "runtime", "test-runner-lock.sqlite3");
     this.temporaryRootPath = options.temporaryRootPath
-      ?? path.join(WorkbenchTemporaryDirectory.projectRootPath, "tests");
+      ?? path.join(PROJECT_TEMPORARY_ROOT, "tests");
     this.onWait = options.onWait ?? (() => console.log("Another Workbench test run is active; waiting for it to finish."));
     this.waitForRetry = options.waitForRetry ?? waitForRetry;
   }

@@ -1,8 +1,10 @@
 /*
- * Default export:
- * - ProjectTestRunner: deterministically discovers TypeScript tests and owns the Node test-runner child lifecycle. Keywords: tests, discovery, TypeScript, lifecycle, Windows.
- * - ProjectTestRunnerOptions/PreparedTestFixtures: inject runner-owned fixture setup and cleanup, process spawning, bounded file concurrency, and timeout. Keywords: tests, fixtures, process, concurrency, timeout.
- * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse project-wide defaults, explicit discovery inputs, and the cooperative full-suite flag. Keywords: tests, CLI, filtering, good citizen, concurrency.
+ * Keywords: tests, discovery, fixtures, CLI, lifecycle, concurrency, Windows.
+ * Exports:
+ * - default ProjectTestRunner: deterministically discover TypeScript tests and own the Node test-runner child lifecycle.
+ * - ProjectTestRunnerOptions/PreparedTestFixtures: inject runner-owned fixture setup, cleanup, process spawning, concurrency, and timeout.
+ * - parseProjectTestRunnerArguments/ProjectTestRunnerArguments: parse discovery inputs and the cooperative full-suite flag.
+ * - runProjectTests: apply parsed CLI settings to one complete project test run.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { readdir, stat } from "node:fs/promises";
@@ -14,12 +16,12 @@ import {
   partitionWorkbenchGitTestFiles,
   prepareWorkbenchGitTestFixtures,
   type WorkbenchPreparedTestFixtures,
-} from "../lib/workbench/git/WorkbenchGitTestFixtures";
-import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../lib/workbench/WorkbenchTemporaryDirectory";
+} from "../daemon/lib/workbench/git/WorkbenchGitTestFixtures";
+import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/lib/workbench/WorkbenchTemporaryDirectory";
 import ProjectTestRunCoordinator, { type ProjectTestRunLease } from "./ProjectTestRunCoordinator";
 
 const EXCLUDED_DIRECTORY_NAMES = new Set([".next", "build", "coverage", "dist", "generated", "node_modules"]);
-const DEFAULT_TEST_INPUTS = [".", "../app", "../package", "../shared"] as const;
+const DEFAULT_TEST_INPUTS = ["app", "daemon", "package", "shared", "test"] as const;
 const GIT_TEST_CONCURRENCY = 1;
 const NESTED_GIT_TEST_CONCURRENCY = 1;
 const ORDINARY_TEST_CONCURRENCY = 8;
@@ -120,7 +122,7 @@ export default class ProjectTestRunner {
         TEMP: testRun.temporaryRootPath,
         TMP: testRun.temporaryRootPath,
         TMPDIR: testRun.temporaryRootPath,
-        TSX_TSCONFIG_PATH: path.resolve(this.projectRoot, "tsconfig.json"),
+        TSX_TSCONFIG_PATH: path.resolve(this.projectRoot, "test", "tsconfig.json"),
       };
       try {
         if (this.testConcurrency === 1) return await this.runTestFiles(files, this.testConcurrency, environment);
@@ -153,8 +155,9 @@ export default class ProjectTestRunner {
     concurrency = this.testConcurrency,
     fixtureEnvironment: Record<string, string> = {},
   ) {
-    const reporter = pathToFileURL(path.join(this.projectRoot, "scripts", "concise-test-reporter.mjs")).href;
-    const testArguments = files.map((file) => path.relative(this.projectRoot, file).replaceAll("\\", "/"));
+    const testProcessRoot = path.join(this.projectRoot, "daemon");
+    const reporter = pathToFileURL(path.join(this.projectRoot, "test", "concise-test-reporter.mjs")).href;
+    const testArguments = files.map((file) => path.relative(testProcessRoot, file).replaceAll("\\", "/"));
     return await new Promise<TestProcessResult>((resolve, reject) => {
       const child = this.spawnProcess(process.execPath, [
         "--disable-warning=ExperimentalWarning",
@@ -166,7 +169,7 @@ export default class ProjectTestRunner {
         `--test-reporter=${reporter}`,
         ...testArguments,
       ], {
-        cwd: this.projectRoot,
+        cwd: testProcessRoot,
         env: { ...process.env, ...fixtureEnvironment },
         stdio: "inherit",
       });
@@ -193,24 +196,11 @@ export default class ProjectTestRunner {
   }
 }
 
-async function main() {
-  const { inputs, testConcurrency, testTimeoutMs } = parseProjectTestRunnerArguments(process.argv.slice(2));
+export async function runProjectTests(projectRoot: string, arguments_: readonly string[]) {
+  const { inputs, testConcurrency, testTimeoutMs } = parseProjectTestRunnerArguments(arguments_);
   const runnerOptions: ProjectTestRunnerOptions = {
     ...(testConcurrency === undefined ? {} : { testConcurrency }),
     ...(testTimeoutMs === undefined ? {} : { testTimeoutMs }),
   };
-  const result = await new ProjectTestRunner(process.cwd(), runnerOptions).run(inputs);
-  if (result.signal !== null) {
-    process.kill(process.pid, result.signal);
-    return;
-  }
-  process.exitCode = result.exitCode ?? 1;
-}
-
-const entryPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : null;
-if (entryPath === import.meta.url) {
-  void main().catch((error: unknown) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
+  return await new ProjectTestRunner(projectRoot, runnerOptions).run(inputs);
 }

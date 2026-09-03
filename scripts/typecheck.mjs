@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - typecheckProjectConfigs: lists every portable TypeScript project checked by the public command. Keywords: typecheck, app, orchestrator.
+ * - typecheckProjectConfigs: lists every portable TypeScript project checked by the public command. Keywords: typecheck, app, daemon, shared, test.
  * - summarizeTypecheckDiagnostics: retains bounded unique compiler diagnostics across project runs. Keywords: typecheck, diagnostics, summary.
  * - runProjectTypechecks: runs every local compiler project and preserves failure after the complete sequence. Keywords: typecheck, lifecycle, diagnostics.
  */
@@ -17,6 +17,7 @@ export const typecheckProjectConfigs = [
   "daemon/orchestrator/tsconfig.json",
   "app/tsconfig.json",
   "shared/tsconfig.json",
+  "test/tsconfig.typecheck.json",
 ];
 
 function runCompiler(configPath) {
