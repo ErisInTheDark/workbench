@@ -92,3 +92,7 @@
 - Treat command presentation as derived and replaceable.
 - Rematching can replace presentation.
 - Rematching cannot replace the source operation or durable subsystem facts.
+
+## Rich editor
+
+- Each rich-editor inline run has one full mark set and unformatted boundary whitespace; save-guard compares this canonical structure by round-tripping html -> markdown -> html.
