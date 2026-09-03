@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 
 import * as esbuild from "esbuild";
 
-import WorkbenchAppLogger from "./WorkbenchAppLogger.ts";
+import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import {
   type WorkbenchFrontendGeneration,
   WORKBENCH_STYLESHEET_GENERATION_PROPERTY,
@@ -22,7 +22,7 @@ import resolveWorkbenchLibraryRoot from "./workbench-library-root.ts";
 
 export interface WorkbenchFrontendCompilerOptions {
   environment?: NodeJS.ProcessEnv;
-  logger?: WorkbenchAppLogger;
+  logger?: WorkbenchProcessLogger;
   onDiagnostic?: (message: string) => void;
   outputDirectoryPath?: string;
   readReactDevelopmentMode?: () => boolean;
@@ -62,7 +62,7 @@ export default class WorkbenchFrontendCompiler {
 
   private readonly appDirectoryPath: string;
   private readonly environment: NodeJS.ProcessEnv;
-  private readonly logger: WorkbenchAppLogger;
+  private readonly logger: WorkbenchProcessLogger;
   private readonly onDiagnostic: (message: string) => void;
   private readonly readReactDevelopmentMode: () => boolean;
   private readonly repositoryRootPath: string;
@@ -83,7 +83,7 @@ export default class WorkbenchFrontendCompiler {
       options.outputDirectoryPath ?? path.join(workbenchLibraryRoot, "runtime", "app"),
     );
     this.readReactDevelopmentMode = options.readReactDevelopmentMode ?? (() => false);
-    this.logger = options.logger ?? new WorkbenchAppLogger();
+    this.logger = options.logger ?? new WorkbenchProcessLogger();
     this.onDiagnostic = options.onDiagnostic ?? ((message) => console.error(message));
   }
 

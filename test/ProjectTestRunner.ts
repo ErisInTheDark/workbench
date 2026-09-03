@@ -21,7 +21,7 @@ import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/lib/workbench/WorkbenchT
 import ProjectTestRunCoordinator, { type ProjectTestRunLease } from "./ProjectTestRunCoordinator";
 
 const EXCLUDED_DIRECTORY_NAMES = new Set([".next", "build", "coverage", "dist", "generated", "node_modules"]);
-const DEFAULT_TEST_INPUTS = ["app", "daemon", "package", "shared", "test"] as const;
+const DEFAULT_TEST_INPUTS = ["app", "daemon", "package", "runner", "shared", "test"] as const;
 const GIT_TEST_CONCURRENCY = 1;
 const NESTED_GIT_TEST_CONCURRENCY = 1;
 const ORDINARY_TEST_CONCURRENCY = 8;

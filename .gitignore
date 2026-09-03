@@ -18,4 +18,5 @@ tray/gen/
 shared/codex/generated/
 daemon/.debug/
 .workbench/
+.codex/
 audits/

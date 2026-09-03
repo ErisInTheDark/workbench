@@ -12,7 +12,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import WorkbenchAppLogger from "../WorkbenchAppLogger.ts";
+import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
 import WorkbenchAppRuntime from "./WorkbenchAppRuntime.ts";
@@ -80,7 +80,7 @@ function runtime() {
     },
     createCompiler: () => compiler,
     createDatabase: () => database,
-    logger: new WorkbenchAppLogger({ color: false, writeError: () => {}, writeOutput: () => {} }),
+    logger: new WorkbenchProcessLogger({ color: false, writeError: () => {}, writeOutput: () => {} }),
     outputDirectoryPath: "C:/workbench-output",
     repositoryRootPath: "C:/repo",
   });
@@ -178,7 +178,7 @@ test("reloads the database with a fresh repository constructor and no process re
         source: "setting",
       }),
     },
-    createCompiler: (readReactDevelopmentMode) => {
+    createCompiler: (_logger, readReactDevelopmentMode) => {
       return {
         close: async () => {},
         getFrontendGeneration: () => ({ javascript: "javascript-one", stylesheet: "stylesheet-one" }),
@@ -205,7 +205,7 @@ test("reloads the database with a fresh repository constructor and no process re
       };
       return repository;
     },
-    logger: new WorkbenchAppLogger({
+    logger: new WorkbenchProcessLogger({
       color: false,
       writeError: (line) => {
         if (line.includes("reload execution failed:")) rejectReload(new Error(line.trim()));

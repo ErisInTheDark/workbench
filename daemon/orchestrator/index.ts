@@ -594,7 +594,7 @@ function queueReload(scopes: OrchestratorReloadScope[]) {
 
 function handleHardOrchestratorReload(response: http.ServerResponse) {
   if (process.env.WORKBENCH_ORCHESTRATOR_LOOP !== "1") {
-    sendHttpJson(response, 409, { error: "Full orchestrator restart requires run-orchestrator-loop.sh to own relaunch." });
+    sendHttpJson(response, 409, { error: "Full orchestrator restart requires the orchestrator runner to own relaunch." });
     return;
   }
 

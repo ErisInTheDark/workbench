@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import WorkbenchAppLogger from "./WorkbenchAppLogger.ts";
+import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import WorkbenchFrontendCompiler from "./WorkbenchFrontendCompiler.ts";
 
 async function assertFile(filePath: string) {
@@ -15,7 +15,7 @@ async function assertFile(filePath: string) {
 }
 
 function quietLogger() {
-  return new WorkbenchAppLogger({
+  return new WorkbenchProcessLogger({
     color: false,
     writeError: () => undefined,
     writeOutput: () => undefined,

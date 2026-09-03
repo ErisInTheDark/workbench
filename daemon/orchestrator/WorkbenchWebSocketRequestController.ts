@@ -6,6 +6,10 @@
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import {
+  WORKBENCH_ORCHESTRATOR_HEALTH_METHOD,
+  WorkbenchOrchestratorHealthParamsSchema,
+} from "workbench-shared/workbench/orchestrator-health";
+import {
   OrchestratorReloadRequestSchema,
   WORKBENCH_RELOAD_DIRT_READ_METHOD,
   WORKBENCH_RELOAD_DIRT_UPDATED_METHOD,
@@ -242,6 +246,7 @@ export default class WorkbenchWebSocketRequestController {
     const transcriptRequest = decodeWorkbenchTranscriptRequest(method, message.params);
     const daemonRequest = this.daemonRequests.accepts(method);
     const workbenchRequest = daemonRequest || method.startsWith("workbench/thread-state/")
+      || method === WORKBENCH_ORCHESTRATOR_HEALTH_METHOD
       || method === WORKBENCH_RELOAD_METHOD
       || method === WORKBENCH_RELOAD_DIRT_READ_METHOD
       || transcriptRequest !== null;
@@ -276,6 +281,13 @@ export default class WorkbenchWebSocketRequestController {
     if (workbenchRequest && isRequest) {
       if (daemonRequest) {
         await this.sendJsonToClient(client, await this.daemonRequests.handle(message));
+        return;
+      }
+      if (method === WORKBENCH_ORCHESTRATOR_HEALTH_METHOD) {
+        const parsed = WorkbenchOrchestratorHealthParamsSchema.safeParse(message.params ?? {});
+        await this.sendJsonToClient(client, parsed.success
+          ? { id: requestId, result: { ok: true } }
+          : { id: requestId, error: { code: -32000, message: "Invalid Workbench orchestrator health request." } });
         return;
       }
       if (method === WORKBENCH_RELOAD_METHOD) {

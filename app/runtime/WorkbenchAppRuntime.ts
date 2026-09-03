@@ -7,13 +7,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import ReloadableNodeHost from "workbench-shared/reload/ReloadableNodeHost";
 import { createReloadableNodeModuleLoader } from "workbench-shared/reload/reloadable-node-loader";
+import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import {
   WORKBENCH_RELOAD_SCOPE_PATTERN,
   type WorkbenchReloadDirtSnapshot,
   type WorkbenchReloadScope,
 } from "workbench-shared/reload/workbench-reload";
 
-import type WorkbenchAppLogger from "../WorkbenchAppLogger.ts";
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
@@ -23,14 +23,14 @@ import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 const RUNTIME_PATH = "/api/workbench-app-runtime";
 const MAX_RELOAD_BODY_BYTES = 16_000;
 const requiredRegistrations = [
-  "compiler", "database", "http", "reloadController", "reloadDirt", "state", "topology",
+  "compiler", "database", "http", "logger", "reloadController", "reloadDirt", "state", "topology",
 ] as const satisfies readonly (keyof AppRuntimeObjects)[];
 
 export interface WorkbenchAppRuntimeOptions {
   appPort: WorkbenchAppPortControl;
-  createCompiler(readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
+  createCompiler(logger: WorkbenchProcessLogger, readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
   createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;
-  logger: WorkbenchAppLogger;
+  logger: WorkbenchProcessLogger;
   outputDirectoryPath: string;
   repositoryRootPath: string;
   requestProcessRestart?: () => Promise<void> | void;
@@ -87,7 +87,7 @@ export default class WorkbenchAppRuntime {
     let host!: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
     const context: AppProcessContext = {
       appPort: options.appPort,
-      createCompiler: (readReactDevelopmentMode) => options.createCompiler(() => {
+      createCompiler: (logger, readReactDevelopmentMode) => options.createCompiler(logger, () => {
         this.appliedReactDevelopmentMode ??= readReactDevelopmentMode();
         return this.appliedReactDevelopmentMode;
       }),
@@ -111,8 +111,8 @@ export default class WorkbenchAppRuntime {
         : host.getDependantClosure(scopes),
       getReloadScopeCatalog: () => host.getReloadScopeCatalog(),
       getReloadScopesForPaths: (paths) => host.getReloadScopesForPaths(paths),
-      logger: options.logger,
       outputDirectoryPath: options.outputDirectoryPath,
+      processLogger: options.logger,
       readAppliedReactDevelopmentMode: () => {
         if (this.appliedReactDevelopmentMode === null) {
           throw new Error("Workbench frontend mode is unavailable before compiler startup.");
@@ -143,11 +143,11 @@ export default class WorkbenchAppRuntime {
           "package.json",
           "app/WorkbenchApp.ts",
           "app/WorkbenchAppLaunchLease.ts",
-          "app/WorkbenchAppLogger.ts",
           "app/WorkbenchAppProcessProtocol.ts",
           "app/WorkbenchFrontendServer.ts",
           "app/runtime/WorkbenchAppRuntime.ts",
           "shared/http/HttpServer.ts",
+          "shared/process/WorkbenchProcessLogger.ts",
           "shared/package.json",
           "shared/reload/reloadable-node-loader.ts",
           "shared/reload/ReloadableNode.ts",

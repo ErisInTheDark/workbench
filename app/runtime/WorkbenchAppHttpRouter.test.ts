@@ -9,7 +9,7 @@ import test from "node:test";
 
 import HttpServer from "workbench-shared/http/HttpServer";
 
-import WorkbenchAppLogger from "../WorkbenchAppLogger.ts";
+import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppHttpRouter from "./WorkbenchAppHttpRouter.ts";
 
@@ -37,7 +37,7 @@ async function fixtureRouter(
         source: "setting",
       }),
     },
-    logger: new WorkbenchAppLogger({ color: false, writeError: (value) => errors.push(value) }),
+    logger: new WorkbenchProcessLogger({ color: false, writeError: (value) => errors.push(value) }),
     outputDirectoryPath: output,
     state,
   });

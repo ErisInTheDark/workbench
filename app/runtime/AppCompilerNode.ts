@@ -11,8 +11,10 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   access: "operator",
   children: [],
   create: (context, build) => {
+    const logger = build.get("logger");
     const state = build.get("state");
     const compiler = context.createCompiler(
+      logger,
       () => state.readGlobalPreference("reactDevelopmentMode") === true,
     );
     let detached = false;
@@ -33,7 +35,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   description: "Reload esbuild and Tailwind compiler configuration and watch lifecycles.",
   lifecycle: "handoff",
   provides: ["compiler"],
-  requires: ["state"],
+  requires: ["logger", "state"],
   safeAll: false,
   scope: "client:compiler",
   sources: [

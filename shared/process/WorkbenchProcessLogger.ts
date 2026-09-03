@@ -1,32 +1,33 @@
 /*
  * Default export:
- * - WorkbenchAppLogger: format app-owned terminal lines and frame child-process output by line. Keywords: logging, ANSI, timestamp, stream.
+ * - WorkbenchProcessLogger: frame Workbench process lines, preserve producer styling, and derive producer-formatted views. Keywords: logging, ANSI, timestamp, stream.
  */
 const ANSI_BLUE = "\u001b[34m";
 const ANSI_CYAN = "\u001b[36m";
 const ANSI_GRAY = "\u001b[90m";
 const ANSI_GREEN = "\u001b[32m";
-const ANSI_MAGENTA = "\u001b[35m";
 const ANSI_RED = "\u001b[31m";
 const ANSI_RESET = "\u001b[0m";
 const ANSI_YELLOW = "\u001b[33m";
 const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/gu;
-const DURATION_PATTERN = /(?<![\p{L}\p{N}_])(\d+(?:\.\d+)?(?:µs|ms|s))(?![\p{L}\p{N}_])/gu;
 
-type WorkbenchAppLogDomain = "app" | "client" | "esbuild" | "http" | "tailwind";
+type WorkbenchProcessLogDomain = "app" | "client" | "esbuild" | "http" | "orchestrator" | "runner" | "tailwind";
 
-interface WorkbenchAppLoggerOptions {
+interface WorkbenchProcessLoggerOptions {
   color?: boolean;
+  formatMessage?: (message: string) => string;
   now?: () => Date;
   writeError?: (value: string) => void;
   writeOutput?: (value: string) => void;
 }
 
-const domainColors: Record<WorkbenchAppLogDomain, string> = {
+const domainColors: Record<WorkbenchProcessLogDomain, string> = {
   app: ANSI_CYAN,
   client: ANSI_RED,
   esbuild: ANSI_GREEN,
   http: ANSI_BLUE,
+  orchestrator: ANSI_CYAN,
+  runner: ANSI_YELLOW,
   tailwind: ANSI_YELLOW,
 };
 
@@ -36,31 +37,45 @@ function timestamp(now: Date) {
     .join(":");
 }
 
-export default class WorkbenchAppLogger {
+export default class WorkbenchProcessLogger {
   private readonly color: boolean;
+  private readonly formatMessage: (message: string) => string;
   private readonly now: () => Date;
   private readonly writeError: (value: string) => void;
   private readonly writeOutput: (value: string) => void;
 
-  constructor(options: WorkbenchAppLoggerOptions = {}) {
-    this.color = options.color ?? !("NO_COLOR" in process.env);
+  constructor(options: WorkbenchProcessLoggerOptions = {}) {
+    this.color = options.color ?? true;
+    this.formatMessage = options.formatMessage ?? ((message) => message);
     this.now = options.now ?? (() => new Date());
     this.writeError = options.writeError ?? ((value) => process.stderr.write(value));
     this.writeOutput = options.writeOutput ?? ((value) => process.stdout.write(value));
   }
 
-  line(domain: WorkbenchAppLogDomain, message: string) {
+  line(domain: WorkbenchProcessLogDomain, message: string) {
     this.writeOutput(this.format(domain, message));
   }
 
-  error(domain: WorkbenchAppLogDomain, message: string) {
+  error(domain: WorkbenchProcessLogDomain, message: string) {
     this.writeError(this.format(domain, message));
   }
 
-  createLineStream(domain: WorkbenchAppLogDomain, error = false) {
+  withMessageFormatter(formatMessage: (message: string) => string) {
+    const current = this.formatMessage;
+    return new WorkbenchProcessLogger({
+      color: this.color,
+      formatMessage: (message) => formatMessage(current(message)),
+      now: this.now,
+      writeError: this.writeError,
+      writeOutput: this.writeOutput,
+    });
+  }
+
+  createLineStream(domain: WorkbenchProcessLogDomain, error = false, onLine: () => void = () => {}) {
     let buffered = "";
     const emit = (line: string) => {
       if (!line.trim()) return;
+      onLine();
       if (error) this.error(domain, line);
       else this.line(domain, line);
     };
@@ -77,12 +92,12 @@ export default class WorkbenchAppLogger {
     };
   }
 
-  private format(domain: WorkbenchAppLogDomain, message: string) {
-    const cleanMessage = message.replace(ANSI_PATTERN, "").trimEnd();
-    return cleanMessage.split(/\r\n|\n|\r/u).map((line) => {
+  private format(domain: WorkbenchProcessLogDomain, message: string) {
+    const formattedMessage = this.formatMessage(message).trimEnd();
+    const content = this.color ? formattedMessage : formattedMessage.replace(ANSI_PATTERN, "");
+    return content.split(/\r\n|\n|\r/u).map((line) => {
       if (!this.color) return `${timestamp(this.now())} ${domain} ${line}\n`;
-      const coloredMessage = line.replace(DURATION_PATTERN, `${ANSI_MAGENTA}$1${ANSI_RESET}`);
-      return `${ANSI_GRAY}${timestamp(this.now())}${ANSI_RESET} ${domainColors[domain]}${domain}${ANSI_RESET} ${coloredMessage}\n`;
+      return `${ANSI_GRAY}${timestamp(this.now())}${ANSI_RESET} ${domainColors[domain]}${domain}${ANSI_RESET} ${line}\n`;
     }).join("");
   }
 }

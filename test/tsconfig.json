@@ -27,6 +27,7 @@
     "../daemon/**/*.ts",
     "../daemon/**/*.tsx",
     "../package/**/*.ts",
+    "../runner/**/*.ts",
     "../shared/**/*.ts",
     "../shared/**/*.tsx"
   ],

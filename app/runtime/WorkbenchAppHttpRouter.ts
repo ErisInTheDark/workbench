@@ -5,8 +5,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import StaticHttpRequestController from "workbench-shared/http/StaticHttpRequestController";
+import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 
-import type WorkbenchAppLogger from "../WorkbenchAppLogger.ts";
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import WorkbenchAppStateRoutes from "../state/workbench-app-state-routes.ts";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
@@ -68,7 +68,7 @@ export default class WorkbenchAppHttpRouter {
 
   constructor(private readonly options: {
     appPort: WorkbenchAppPortControl;
-    logger: WorkbenchAppLogger;
+    logger: WorkbenchProcessLogger;
     outputDirectoryPath: string;
     readAppliedReactDevelopmentMode?: () => boolean;
     state: WorkbenchBrowserStateRegistry;

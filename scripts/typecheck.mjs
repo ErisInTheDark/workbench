@@ -16,6 +16,7 @@ export const typecheckProjectConfigs = [
   "daemon/tsconfig.typecheck.json",
   "daemon/orchestrator/tsconfig.json",
   "app/tsconfig.json",
+  "runner/tsconfig.json",
   "shared/tsconfig.json",
   "test/tsconfig.typecheck.json",
 ];

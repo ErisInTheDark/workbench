@@ -121,6 +121,35 @@ test("labels daemon and compatible Workbench requests with the wb namespace", as
   controller.dispose();
 });
 
+test("answers typed health requests without entering daemon or harness owners", async () => {
+  const clock = new FakeClock();
+  let daemonCalls = 0;
+  let harnessCalls = 0;
+  const sent: Array<Record<string, unknown>> = [];
+  const { controller } = createController({
+    clock,
+    daemonRequests: {
+      accepts: () => false,
+      handle: async (request) => {
+        daemonCalls += 1;
+        return { id: request.id ?? null, result: {} };
+      },
+    },
+    onHarnessMessage: () => { harnessCalls += 1; },
+  });
+  const client = createClient((data, callback) => {
+    sent.push(JSON.parse(data) as Record<string, unknown>);
+    callback?.();
+  });
+
+  await controller.handleMessage(client, "health", frame("workbench/orchestrator/health", 17, { params: {} }), false);
+
+  assert.deepEqual(sent.find((message) => message.id === 17), { id: 17, result: { ok: true } });
+  assert.equal(daemonCalls, 0);
+  assert.equal(harnessCalls, 0);
+  controller.dispose();
+});
+
 test("browser reload admission responds before starting the reserved batch", async () => {
   const clock = new FakeClock();
   const events: string[] = [];

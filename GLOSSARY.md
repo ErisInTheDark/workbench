@@ -17,6 +17,7 @@
 | logs | The persisted Workbench runtime logs under `.workbench/logs/`. Includes both orchestrator/daemon logs, and app server logs. |
 | layered sort | A sort where each layer orders only ties from earlier layers. A user override replaces later layers within its slot. |
 | daemon/orchestrator | The workbench harness, applied on top of existing harnesses. |
+| orchestrator runner | The standalone supervisor process under `runner/`. It starts and stops the daemon, owns launcher logs and silence recovery, and may expose runner-only control HTTP. It imports shared contracts but never daemon implementation code. |
 | codex app-server | Codex's harness. |
 | app | Sometimes "app server". NOT "codex app-server", which is codex's harness. May be referring to the backend or frontend of a workbench *app*. The backend has thin responsibilities related to serving the SPA, providing the tray features, and storing settings. The frontend is thinner, solely responsible for rendering and interaction. |
 | Git transition | A worktree-keyed shared-read/exclusive-write lease that coordinates Git arc and thread-state decisions across reload generations |
