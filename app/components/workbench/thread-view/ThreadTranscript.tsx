@@ -15,6 +15,7 @@ import type {
 } from "workbench-shared/types";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
+import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import { isWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { PreviousTurnLoadStatus } from "./previous-turn-load-state";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
@@ -33,7 +34,7 @@ export default function ThreadTranscript({
   canLoadPreviousTurn,
   currentTurnId,
   hiddenDynamicToolCallItemIds,
-  hiddenReasoningItemId,
+  hiddenReasoningStep,
   hiddenWebSearchItemIds,
   hideFinalAgentMessage,
   hideTerminalReasoning,
@@ -59,7 +60,7 @@ export default function ThreadTranscript({
   canLoadPreviousTurn: boolean;
   currentTurnId: string | null;
   hiddenDynamicToolCallItemIds: readonly string[];
-  hiddenReasoningItemId: string | null;
+  hiddenReasoningStep: ThreadReasoningStepReference | null;
   hiddenWebSearchItemIds?: readonly string[];
   hideFinalAgentMessage: boolean;
   hideTerminalReasoning: boolean;
@@ -136,7 +137,7 @@ export default function ThreadTranscript({
               subagents={subagents}
               turn={turn}
               workspaceRoots={workspaceRoots}
-              hiddenReasoningItemId={isCurrentTurn ? hiddenReasoningItemId : null}
+              hiddenReasoningStep={isCurrentTurn ? hiddenReasoningStep : null}
               hoistedGitArcProposalIds={isCurrentTurn
                 ? terminalGitArcProposalIds
                 : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS}

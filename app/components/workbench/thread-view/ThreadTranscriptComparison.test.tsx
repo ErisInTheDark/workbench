@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect item alignment, source gaps, and relational fallback rendering in the desktop transcript comparison. Keywords: transcript, parity, comparison, React.
+ * No production exports. Tests protect item alignment, source gaps, shared live reasoning omission, and relational fallback rendering. Keywords: transcript, parity, comparison, reasoning, React.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -114,9 +114,15 @@ function createProjection(items: WorkbenchProjectedTranscriptItem[]): WorkbenchT
 function renderComparison(
   jsonItems: ThreadItem[],
   sqliteItems: WorkbenchProjectedTranscriptItem[],
+  hiddenReasoningStep?: {
+    itemId: string;
+    sectionIndex: number;
+    source: "content" | "summary";
+  },
 ) {
   return renderToStaticMarkup(
     <ThreadTranscriptComparison
+      hiddenReasoningStep={hiddenReasoningStep}
       jsonBrowseResultEntries={[]}
       jsonThread={createThread(jsonItems)}
       knownSkills={[]}
@@ -257,4 +263,21 @@ test("comparison includes SQLite-only turns outside the JSON visible turn set", 
 
   assert.match(html, /SQLite extra turn/u);
   assert.match(html, /Missing sqlite-extra/u);
+});
+
+test("comparison keeps the shared live reasoning step out of both transcript cells", () => {
+  const reasoning: Extract<ThreadItem, { type: "reasoning" }> = {
+    content: [],
+    id: "reasoning",
+    summary: ["Earlier title", "Latest title\nLive detail."],
+    type: "reasoning",
+  };
+  const html = renderComparison([reasoning], [reasoning], {
+    itemId: "reasoning",
+    sectionIndex: 1,
+    source: "summary",
+  });
+
+  assert.equal((html.match(/Earlier title/gu) ?? []).length, 2);
+  assert.doesNotMatch(html, /Latest title|Live detail/u);
 });

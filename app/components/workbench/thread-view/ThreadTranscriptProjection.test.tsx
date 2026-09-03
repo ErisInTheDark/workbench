@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect canonical SQLite segment order, turn ownership, Browse attachment, and JSON-independent rendering. Keywords: transcript, SQLite, projection, canonical, Browse.
+ * No production exports. Tests protect canonical SQLite order, shared grouping, reasoning display, turn ownership, and Browse attachment. Keywords: transcript, SQLite, projection, grouping, reasoning, Browse.
  */
 import assert from "node:assert/strict";
 import { createRef } from "react";
@@ -14,6 +14,7 @@ import type {
   WorkbenchProjectedTranscriptTurn,
   WorkbenchTranscriptProjection,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 
 function turn(id: string, turnIndex: number, items: ThreadItem[]): WorkbenchProjectedTranscriptTurn {
@@ -29,6 +30,75 @@ function turn(id: string, turnIndex: number, items: ThreadItem[]): WorkbenchProj
     status: "completed",
     turnIndex,
   };
+}
+
+function command(id: string, value: string): Extract<ThreadItem, { type: "commandExecution" }> {
+  return {
+    aggregatedOutput: "",
+    command: value,
+    commandActions: [],
+    cwd: "C:/project",
+    durationMs: 10,
+    exitCode: 0,
+    id,
+    pluginId: null,
+    processId: null,
+    scriptPath: null,
+    source: "agent",
+    status: "completed",
+    type: "commandExecution",
+  };
+}
+
+function renderItems(
+  items: ThreadItem[],
+  hiddenReasoningStep: ThreadReasoningStepReference | null = null,
+  durableItemCount = items.length,
+) {
+  const turns = [turn("turn", 0, items)];
+  const projection: WorkbenchTranscriptProjection = {
+    browseResultEntries: [],
+    display: planCanonicalTranscriptDisplay({
+      items: items.slice(0, durableItemCount).map((payload, itemIndex) => ({
+        itemId: payload.id,
+        itemIndex,
+        payload,
+        turnId: "turn",
+      })),
+      turns: [{ turnId: "turn", turnIndex: 0 }],
+      virtualTail: items.slice(durableItemCount).map((payload) => ({
+        payload,
+        turnId: "turn",
+      })),
+    }),
+    hasPreviousTurns: false,
+    thread: {
+      activityAt: 3_000,
+      createdAt: 1_000,
+      id: "thread",
+      projectId: "project",
+      projectRoot: "C:/project",
+      title: "Thread",
+      updatedAt: 3_000,
+    },
+    turnHistory: [],
+    turns,
+  };
+  return renderToStaticMarkup(
+    <ThreadTranscriptProjection
+      canLoadPreviousTurn={false}
+      hiddenReasoningStep={hiddenReasoningStep}
+      historySentinelRef={createRef<HTMLDivElement>()}
+      knownSkills={[]}
+      projectFilePaths={[]}
+      projectId="project"
+      projectRootPath="C:/project"
+      projection={projection}
+      relatedThreadsById={{}}
+      subagents={[]}
+      workspaceRoots={[]}
+    />,
+  );
 }
 
 test("SQLite projection renders canonical segments and turn-owned Browse details without JSON", () => {
@@ -129,4 +199,48 @@ test("SQLite projection renders canonical segments and turn-owned Browse details
   assert.equal(firstIndex < lastIndex && lastIndex < browseIndex, true);
   assert.equal((html.match(/data-thread-history-turn-id="turn-one"/gu) ?? []).length, 1);
   assert.equal((html.match(/data-thread-history-turn-id="turn-two"/gu) ?? []).length, 1);
+});
+
+test("SQLite normal projection shares command grouping and compact reasoning display", () => {
+  const commandHtml = renderItems([
+    command("one", "alpha --one"),
+    command("two", "beta --two"),
+  ], null, 1);
+  assert.match(commandHtml.replace(/<[^>]+>/gu, ""), /Ran 2 commands/u);
+
+  const detailedHtml = renderItems([{
+    content: [],
+    id: "reasoning",
+    summary: ["Careful title\nUseful description."],
+    type: "reasoning",
+  }]);
+  assert.equal((detailedHtml.match(/Careful title/gu) ?? []).length, 1);
+  assert.match(detailedHtml, /Useful description\./u);
+  assert.match(detailedHtml, /<details/u);
+
+  const staticHtml = renderItems([{
+    content: [],
+    id: "reasoning",
+    summary: ["Static title"],
+    type: "reasoning",
+  }]);
+  assert.match(staticHtml, /Reasoned:\s*<\/span><span[^>]*>Static title/u);
+  assert.doesNotMatch(staticHtml, /<details/u);
+});
+
+test("SQLite normal projection removes only the newest live reasoning section", () => {
+  const html = renderItems([{
+    content: [],
+    id: "reasoning",
+    summary: ["Earlier title\nEarlier detail.", "Latest title\nLatest detail."],
+    type: "reasoning",
+  }], {
+    itemId: "reasoning",
+    sectionIndex: 1,
+    source: "summary",
+  });
+
+  assert.match(html, /Earlier title/u);
+  assert.match(html, /Earlier detail\./u);
+  assert.doesNotMatch(html, /Latest title|Latest detail/u);
 });

@@ -1,6 +1,6 @@
 /*
  * ThreadTranscriptParitySelection: selected JSON oracle and renderer-side Browse facts. Keywords: transcript, parity, selection.
- * default ThreadTranscriptParityController: owns one serialized selected-thread subscription and deduplicated semantic mismatch reporting. Keywords: transcript, subscription, parity, lifecycle.
+ * default ThreadTranscriptParityController: owns immediate live projection publication plus serialized subscription and deferred parity reporting. Keywords: transcript, projection, subscription, parity, lifecycle.
  */
 import type { ThreadPayload, WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import type WorkbenchTranscriptClient from "../database/transcript/WorkbenchTranscriptClient";
@@ -138,9 +138,11 @@ export default class ThreadTranscriptParityController {
         this.#activeSubscriptionId = null;
         return;
       }
+      this.#publishProjection();
       this.#replaceSubscription();
+      return;
     }
-    this.#scheduleCompare();
+    this.#publishProjection();
   }
 
   #cancelScheduledComparison() {
@@ -160,16 +162,8 @@ export default class ThreadTranscriptParityController {
   }
 
   #compare() {
-    if (!this.#selection || !this.#projection) return;
-    let projection: WorkbenchTranscriptProjection;
-    try {
-      projection = this.#reconcileProjection(this.#projection, this.#selection);
-    } catch (error) {
-      this.#onProjectionChange(null);
-      this.#onError(error instanceof Error ? error : new Error(String(error)));
-      return;
-    }
-    this.#onProjectionChange(projection);
+    const projection = this.#reconcileCurrentProjection();
+    if (!projection || !this.#selection) return;
     const result = compareWorkbenchTranscriptParity({
       jsonBrowseResultEntries: this.#selection.browseResultEntries,
       jsonThread: this.#selection.thread,
@@ -180,6 +174,26 @@ export default class ThreadTranscriptParityController {
       return;
     }
     this.#report(result.diagnostic);
+  }
+
+  #reconcileCurrentProjection() {
+    if (!this.#selection || !this.#projection) return null;
+    let projection: WorkbenchTranscriptProjection;
+    try {
+      projection = this.#reconcileProjection(this.#projection, this.#selection);
+    } catch (error) {
+      this.#onProjectionChange(null);
+      this.#onError(error instanceof Error ? error : new Error(String(error)));
+      return null;
+    }
+    return projection;
+  }
+
+  #publishProjection() {
+    const projection = this.#reconcileCurrentProjection();
+    if (!projection) return false;
+    this.#onProjectionChange(projection);
+    return true;
   }
 
   #receiveSnapshot(generation: number, snapshot: WorkbenchTranscriptSnapshot | null) {
@@ -200,7 +214,7 @@ export default class ThreadTranscriptParityController {
       return;
     }
     this.#projection = result.data;
-    this.#scheduleCompare();
+    if (this.#publishProjection()) this.#scheduleCompare();
   }
 
   #reportError(stage: "report" | "subscription", error: unknown) {

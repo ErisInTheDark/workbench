@@ -1903,9 +1903,6 @@ function WorkbenchThreadClient(
 
     const previousThread = state.currentThread;
     const selectionChanged = !previousThread || !nextThread || previousThread.id !== nextThread.id || previousThread.harness !== nextThread.harness;
-    if (selectionChanged) {
-      streamingReconciler.clearClientCreatedItemKeys();
-    }
     state.currentThread = nextThread;
     state.currentThreadId = nextThread?.id ?? "";
     if (selectionChanged) {
@@ -2166,15 +2163,15 @@ function WorkbenchThreadClient(
     return didDeleteSource || didDeleteDocument;
   }
 
-  function updateCurrentThread(
+  function updateThreadSource(
+    key: string,
     updater: (thread: ThreadPayload) => ThreadPayload | null,
     options: {
       preserveStableServiceTier?: boolean;
       pruneStreamingDuplicates?: boolean;
     } = {},
   ) {
-    const selectedThreadKey = threadDocuments.getSelectedThreadKey();
-    const currentSource = selectedThreadKey ? threadSources.get(selectedThreadKey) : null;
+    const currentSource = threadSources.get(key);
     if (!currentSource) {
       return false;
     }
@@ -2185,17 +2182,32 @@ function WorkbenchThreadClient(
     }
 
     const nextKey = getThreadSourceKey(nextThread);
-    if (nextKey !== selectedThreadKey) {
-      throw new Error(`Canonical thread update cannot change key from ${selectedThreadKey} to ${nextKey}.`);
+    if (nextKey !== key) {
+      throw new Error(`Canonical thread update cannot change key from ${key} to ${nextKey}.`);
     }
     commitCanonicalThreadSource(nextThread);
-    flushSelectedThreadRendering();
+    if (threadDocuments.getSelectedThreadKey() === key) {
+      flushSelectedThreadRendering();
+    }
     return true;
   }
 
-  function updateCurrentThreadFields(fields: Partial<Omit<ThreadPayload, "turns">>) {
+  function updateCurrentThread(
+    updater: (thread: ThreadPayload) => ThreadPayload | null,
+    options: {
+      preserveStableServiceTier?: boolean;
+      pruneStreamingDuplicates?: boolean;
+    } = {},
+  ) {
+    const selectedThreadKey = threadDocuments.getSelectedThreadKey();
+    return selectedThreadKey
+      ? updateThreadSource(selectedThreadKey, updater, options)
+      : false;
+  }
+
+  function updateCanonicalThreadFields(key: string, fields: Partial<Omit<ThreadPayload, "turns">>) {
     const hasField = (field: keyof Omit<ThreadPayload, "turns">) => Object.prototype.hasOwnProperty.call(fields, field);
-    return updateCurrentThread((thread) => ({
+    return updateThreadSource(key, (thread) => ({
       ...thread,
       ...fields,
       agentNickname: hasField("agentNickname") ? fields.agentNickname ?? null : thread.agentNickname,
@@ -2207,6 +2219,11 @@ function WorkbenchThreadClient(
       serviceTier: hasField("serviceTier") ? fields.serviceTier ?? null : thread.serviceTier,
       tokenUsage: hasField("tokenUsage") ? fields.tokenUsage ?? null : thread.tokenUsage,
     }), { preserveStableServiceTier: false });
+  }
+
+  function updateCurrentThreadFields(fields: Partial<Omit<ThreadPayload, "turns">>) {
+    const selectedThreadKey = threadDocuments.getSelectedThreadKey();
+    return selectedThreadKey ? updateCanonicalThreadFields(selectedThreadKey, fields) : false;
   }
 
   function mergeLiveStreamingItem(incomingItem: ThreadItem, liveItem: ThreadItem) {
@@ -3761,8 +3778,8 @@ function WorkbenchThreadClient(
     };
   }
 
-  function upsertTurnMetadata(incomingTurn: Turn) {
-    return updateCurrentThread((thread) => {
+  function upsertTurnMetadata(threadKey: string, incomingTurn: Turn) {
+    return updateThreadSource(threadKey, (thread) => {
       const turnIndex = thread.turns.findIndex((turn) => turn.id === incomingTurn.id);
       if (turnIndex === -1) {
         const turnHistory = mergeThreadTurnHistory([createLoadedTurnHistoryEntry(incomingTurn)], thread.turnHistory);
@@ -3785,6 +3802,7 @@ function WorkbenchThreadClient(
   }
 
   function updateTurnItems(
+    threadKey: string,
     turnId: string,
     updater: (items: ThreadItem[]) => ThreadItem[] | null,
     {
@@ -3793,7 +3811,7 @@ function WorkbenchThreadClient(
       pruneStreamingDuplicates?: boolean;
     } = {},
   ) {
-    return updateCurrentThread((thread) => {
+    return updateThreadSource(threadKey, (thread) => {
       let updated = false;
       const turns = thread.turns.map((turn) => {
         if (turn.id !== turnId) {
@@ -3825,9 +3843,9 @@ function WorkbenchThreadClient(
     }, { pruneStreamingDuplicates: false });
   }
 
-  function upsertThreadItem(turnId: string, incomingItem: ThreadItem) {
+  function upsertThreadItem(threadKey: string, turnId: string, incomingItem: ThreadItem) {
     const compactedIncomingItem = compactCommandExecutionItemOutput(incomingItem);
-    return updateTurnItems(turnId, (items) => {
+    return updateTurnItems(threadKey, turnId, (items) => {
       const itemIndex = items.findIndex((item) => item.id === compactedIncomingItem.id);
       if (itemIndex === -1) {
         const contextCompactionItemIndex = findContextCompactionLifecycleItemIndex(items, compactedIncomingItem);
@@ -3861,12 +3879,13 @@ function WorkbenchThreadClient(
   }
 
   function upsertThreadItemTimeline(
+    threadKey: string,
     turnId: string,
     incomingItem: ThreadItem,
     method: "item/started" | "item/completed",
     timestamp: number,
   ) {
-    return updateCurrentThread((thread) => {
+    return updateThreadSource(threadKey, (thread) => {
       const turn = thread.turns.find((candidate) => candidate.id === turnId);
       if (!turn) {
         return null;
@@ -3985,12 +4004,13 @@ function WorkbenchThreadClient(
     };
   }
 
-  function ensureTurnForStreamingDelta(turnId: string) {
-    if (!state.currentThread || state.currentThread.turns.some((turn) => turn.id === turnId)) {
+  function ensureTurnForStreamingDelta(threadKey: string, turnId: string) {
+    const source = threadSources.get(threadKey);
+    if (!source || source.turns.some((turn) => turn.id === turnId)) {
       return false;
     }
 
-    return updateCurrentThread((thread) => {
+    return updateThreadSource(threadKey, (thread) => {
       const turn = createStreamingTurn(turnId);
       return {
         ...thread,
@@ -4002,14 +4022,15 @@ function WorkbenchThreadClient(
   }
 
   function updateOrCreateThreadItem(
+    threadKey: string,
     turnId: string,
     itemId: string,
     createItem: () => ThreadItem,
     updater: (item: ThreadItem, isExisting: boolean) => ThreadItem | null,
   ) {
     const itemKey = getThreadItemKey(turnId, itemId);
-    ensureTurnForStreamingDelta(turnId);
-    return updateTurnItems(turnId, (items) => {
+    ensureTurnForStreamingDelta(threadKey, turnId);
+    return updateTurnItems(threadKey, turnId, (items) => {
       const itemIndex = items.findIndex((item) => item.id === itemId);
       if (itemIndex === -1) {
         const nextItem = updater(createItem(), false);
@@ -4040,8 +4061,8 @@ function WorkbenchThreadClient(
     }, { pruneStreamingDuplicates: false });
   }
 
-  function discardAbandonedStreamingFileChanges(turnId: string, incomingItemId: string) {
-    return updateTurnItems(turnId, (items) => {
+  function discardAbandonedStreamingFileChanges(threadKey: string, turnId: string, incomingItemId: string) {
+    return updateTurnItems(threadKey, turnId, (items) => {
       const abandonedItemIds = items
         .filter((item) => (
           item.id !== incomingItemId
@@ -4083,11 +4104,12 @@ function WorkbenchThreadClient(
   }
 
   function updateThreadItem(
+    threadKey: string,
     turnId: string,
     itemId: string,
     updater: (item: ThreadItem) => ThreadItem | null,
   ) {
-    return updateTurnItems(turnId, (items) => {
+    return updateTurnItems(threadKey, turnId, (items) => {
       let updated = false;
       const nextItems = items.map((item) => {
         if (item.id !== itemId) {
@@ -4124,27 +4146,22 @@ function WorkbenchThreadClient(
     return nextValues;
   }
 
-  function doesNotificationTargetCurrentThread(
-    notification: CodexAppServerNotification,
-    harness: WorkbenchHarness,
-  ) {
-    if (state.currentThread?.harness !== harness) {
-      return false;
-    }
-
-    return "threadId" in notification.params
-      ? notification.params.threadId === state.currentThreadId
-      : "thread" in notification.params
-        ? notification.params.thread.id === state.currentThreadId
-        : false;
-  }
-
   function getNotificationTargetThreadId(notification: CodexAppServerNotification) {
     return "threadId" in notification.params
       ? notification.params.threadId
       : "thread" in notification.params
         ? notification.params.thread.id
         : null;
+  }
+
+  function doesNotificationTargetSelectedThread(
+    notification: CodexAppServerNotification,
+    harness: WorkbenchHarness,
+  ) {
+    const threadId = getNotificationTargetThreadId(notification);
+    return threadId !== null
+      && state.currentThread?.harness === harness
+      && state.currentThreadId === threadId;
   }
 
   function doesNotificationTargetKnownThread(
@@ -4214,21 +4231,27 @@ function WorkbenchThreadClient(
     return true;
   }
 
-  function applyCodexNotificationToCurrentThread(
+  function applyCodexNotificationToKnownThreadSource(
     notification: CodexAppServerNotification,
     harness: WorkbenchHarness,
   ) {
-    if (!state.currentThread || !doesNotificationTargetCurrentThread(notification, harness)) {
+    const threadId = getNotificationTargetThreadId(notification);
+    if (!threadId) {
+      return false;
+    }
+    const threadKey = getThreadStateKey(harness, threadId);
+    const targetThread = threadSources.get(threadKey);
+    if (!targetThread) {
       return false;
     }
 
     switch (notification.method) {
       case "thread/started": {
         const summary = toThreadSummary(notification.params.thread, harness);
-        return updateCurrentThreadFields({
+        return updateCanonicalThreadFields(threadKey, {
           ...summary,
           isDraft: false,
-          preview: summary.preview.trim() || state.currentThread.preview,
+          preview: summary.preview.trim() || targetThread.preview,
         });
       }
       case "thread/status/changed":
@@ -4236,18 +4259,18 @@ function WorkbenchThreadClient(
           const status = state.pendingUserInputRequestsByThreadId.has(notification.params.threadId)
             ? addThreadActiveFlag(formatThreadStatus(notification.params.status), "waitingOnUserInput")
             : formatThreadStatus(notification.params.status);
-          setThreadStatusSource(state.currentThread, status);
-          return updateCurrentThreadFields({ status });
+          setThreadStatusSource(targetThread, status);
+          return updateCanonicalThreadFields(threadKey, { status });
         }
       case "thread/name/updated":
-        return updateCurrentThreadFields({
+        return updateCanonicalThreadFields(threadKey, {
           name: notification.params.threadName ?? null,
         });
       case "thread/tokenUsage/updated":
-        updateStablePreferenceSource(state.currentThread, (record) => {
+        updateStablePreferenceSource(targetThread, (record) => {
           record.tokenUsage = notification.params.tokenUsage;
         });
-        return updateCurrentThreadFields({
+        return updateCanonicalThreadFields(threadKey, {
           tokenUsage: notification.params.tokenUsage,
         });
       case "turn/started":
@@ -4256,21 +4279,23 @@ function WorkbenchThreadClient(
           notification.method === "turn/completed"
           && notification.params.turn.status === "interrupted"
           && updatePendingOptimisticSteersForTurn(harness, notification.params.threadId, notification.params.turn.id, "interrupted")
+          && threadDocuments.getSelectedThreadKey() === threadKey
         ) {
           refreshCurrentThreadOptimisticUserMessages();
         }
-        return upsertTurnMetadata(notification.params.turn);
+        return upsertTurnMetadata(threadKey, notification.params.turn);
       case "item/started":
       case "item/completed": {
         const didDiscardAbandonedFileChanges = notification.method === "item/started"
-          ? discardAbandonedStreamingFileChanges(notification.params.turnId, notification.params.item.id)
+          ? discardAbandonedStreamingFileChanges(threadKey, notification.params.turnId, notification.params.item.id)
           : false;
-        const didUpdateItem = upsertThreadItem(notification.params.turnId, notification.params.item);
+        const didUpdateItem = upsertThreadItem(threadKey, notification.params.turnId, notification.params.item);
         const timestamp = notification.method === "item/started"
           ? notification.params.startedAtMs
           : notification.params.completedAtMs;
         const didUpdateTimeline = Number.isFinite(timestamp)
           ? upsertThreadItemTimeline(
+            threadKey,
             notification.params.turnId,
             notification.params.item,
             notification.method,
@@ -4280,25 +4305,25 @@ function WorkbenchThreadClient(
         return didDiscardAbandonedFileChanges || didUpdateItem || didUpdateTimeline;
       }
       case "item/agentMessage/delta":
-        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingAgentMessageItem(notification.params.itemId), (item) => (
+        return updateOrCreateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, () => createStreamingAgentMessageItem(notification.params.itemId), (item) => (
           item.type === "agentMessage"
             ? { ...item, text: `${item.text}${notification.params.delta}` }
             : null
         ));
       case "item/plan/delta":
-        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingPlanItem(notification.params.itemId), (item) => (
+        return updateOrCreateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, () => createStreamingPlanItem(notification.params.itemId), (item) => (
           item.type === "plan"
             ? { ...item, text: `${item.text}${notification.params.delta}` }
             : null
         ));
       case "item/commandExecution/outputDelta":
-        return updateThreadItem(notification.params.turnId, notification.params.itemId, (item) => (
+        return updateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, (item) => (
           item.type === "commandExecution"
             ? { ...item, aggregatedOutput: appendCommandOutputDelta(item.aggregatedOutput, notification.params.delta) }
             : null
         ));
       case "item/fileChange/patchUpdated":
-        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingFileChangeItem(notification.params.itemId), (item, isExisting) => (
+        return updateOrCreateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, () => createStreamingFileChangeItem(notification.params.itemId), (item, isExisting) => (
           item.type === "fileChange"
             ? isExisting && areFileChangeSnapshotsEqual(item.changes, notification.params.changes)
               ? null
@@ -4306,19 +4331,19 @@ function WorkbenchThreadClient(
             : null
         ));
       case "item/reasoning/summaryPartAdded":
-        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
+        return updateOrCreateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
           item.type === "reasoning"
             ? { ...item, summary: ensureIndexedText(item.summary, notification.params.summaryIndex) }
             : null
         ));
       case "item/reasoning/summaryTextDelta":
-        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
+        return updateOrCreateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
           item.type === "reasoning"
             ? { ...item, summary: appendIndexedText(item.summary, notification.params.summaryIndex, notification.params.delta) }
             : null
         ));
       case "item/reasoning/textDelta":
-        return updateOrCreateThreadItem(notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
+        return updateOrCreateThreadItem(threadKey, notification.params.turnId, notification.params.itemId, () => createStreamingReasoningItem(notification.params.itemId), (item) => (
           item.type === "reasoning"
             ? { ...item, content: appendIndexedText(item.content, notification.params.contentIndex, notification.params.delta) }
             : null
@@ -5621,7 +5646,11 @@ function WorkbenchThreadClient(
     const appliedKnownUserMessage = harness === "codex" && (
       notification.method === "item/started" || notification.method === "item/completed"
     ) && applyCodexUserMessageNotificationToKnownThreadSource(notification, harness);
-    if ((!appliedKnownUserMessage && applyCodexNotificationToCurrentThread(notification, harness)) || appliedKnownUserMessage) {
+    const appliedKnownThreadNotification = (
+      !appliedKnownUserMessage
+      && applyCodexNotificationToKnownThreadSource(notification, harness)
+    ) || appliedKnownUserMessage;
+    if (appliedKnownThreadNotification && doesNotificationTargetSelectedThread(notification, harness)) {
       emit();
     }
     if (

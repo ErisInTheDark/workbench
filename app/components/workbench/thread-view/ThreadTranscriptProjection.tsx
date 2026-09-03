@@ -16,12 +16,42 @@ import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/t
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
-import { ThreadTranscriptItemDetails } from "./thread-view-items";
+import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
+import { ThreadTranscriptItemsDetails } from "./thread-view-items";
 
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 
+function mergeAdjacentTurnSegments(
+  segments: WorkbenchTranscriptProjection["display"]["segments"],
+) {
+  return segments.reduce<Array<{
+    id: string;
+    isFirstForTurn: boolean;
+    items: WorkbenchTranscriptProjection["display"]["segments"][number]["items"];
+    turnId: string;
+  }>>((result, segment) => {
+    const previous = result.at(-1);
+    if (previous?.turnId === segment.turnId) {
+      result[result.length - 1] = {
+        ...previous,
+        id: `${previous.id}:${segment.id}`,
+        items: [...previous.items, ...segment.items],
+      };
+    } else {
+      result.push({
+        id: segment.id,
+        isFirstForTurn: segment.isFirstForTurn,
+        items: segment.items,
+        turnId: segment.turnId,
+      });
+    }
+    return result;
+  }, []);
+}
+
 export default function ThreadTranscriptProjection({
   canLoadPreviousTurn,
+  hiddenReasoningStep,
   historySentinelRef,
   inlineMentionSources,
   knownSkills,
@@ -34,6 +64,7 @@ export default function ThreadTranscriptProjection({
   workspaceRoots,
 }: {
   canLoadPreviousTurn: boolean;
+  hiddenReasoningStep?: ThreadReasoningStepReference | null;
   historySentinelRef: RefObject<HTMLDivElement | null>;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills: WorkbenchSkillSummary[];
@@ -50,8 +81,12 @@ export default function ThreadTranscriptProjection({
     [projection.turns],
   );
   const browseResultEntriesByTurnId = useStableBrowseResultEntriesByTurn(projection.browseResultEntries);
+  const renderSegments = useMemo(
+    () => mergeAdjacentTurnSegments(projection.display.segments),
+    [projection.display.segments],
+  );
 
-  if (!projection.display.segments.length) {
+  if (!renderSegments.length) {
     return (
       <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4 text-[0.92em] leading-[1.6] text-muted">
         No turns were returned for this thread yet.
@@ -64,7 +99,7 @@ export default function ThreadTranscriptProjection({
       {canLoadPreviousTurn ? (
         <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
       ) : null}
-      {projection.display.segments.map((segment) => {
+      {renderSegments.map((segment) => {
         const turn = turnsById.get(segment.turnId);
         if (!turn) return null;
         const browseResultEntries = browseResultEntriesByTurnId.get(segment.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES;
@@ -81,29 +116,25 @@ export default function ThreadTranscriptProjection({
               ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"
               : "pb-3"}
             >
-              <div className="space-y-2">
-                {segment.items.map((item) => (
-                  <ThreadTranscriptItemDetails
-                    key={item.id}
-                    browseResultEntries={browseResultEntries}
-                    inlineMentionSources={inlineMentionSources}
-                    item={item}
-                    itemTimeline={turn.itemTimeline}
-                    knownSkills={knownSkills}
-                    projectFilePaths={projectFilePaths}
-                    projectId={projectId}
-                    projectRootPath={projectRootPath}
-                    relatedThreadsById={relatedThreadsById}
-                    subagents={subagents}
-                    threadCwdPath={projection.thread.projectRoot}
-                    threadId={projection.thread.id}
-                    turnCompletedAt={turn.completedAt}
-                    turnStartedAt={turn.startedAt}
-                    turnStatus={turn.status}
-                    workspaceRoots={workspaceRoots}
-                  />
-                ))}
-              </div>
+              <ThreadTranscriptItemsDetails
+                browseResultEntries={browseResultEntries}
+                hiddenReasoningStep={hiddenReasoningStep}
+                inlineMentionSources={inlineMentionSources}
+                items={segment.items}
+                itemTimeline={turn.itemTimeline}
+                knownSkills={knownSkills}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                relatedThreadsById={relatedThreadsById}
+                subagents={subagents}
+                threadCwdPath={projection.thread.projectRoot}
+                threadId={projection.thread.id}
+                turnCompletedAt={turn.completedAt}
+                turnStartedAt={turn.startedAt}
+                turnStatus={turn.status}
+                workspaceRoots={workspaceRoots}
+              />
             </section>
           </Fragment>
         );

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover thread reads, lifecycle fencing, canonical placement, message admission, and durable global-home questionnaires. Keywords: workbench, thread, lifecycle, read, message, questionnaire, global home, test.
+ * - No production exports; Node tests cover thread reads, lifecycle fencing, canonical placement, known-thread live streaming, message admission, and durable global-home questionnaires. Keywords: workbench, thread, lifecycle, read, streaming, message, questionnaire, global home, test.
  */
 
 import assert from "node:assert/strict";
@@ -1752,6 +1752,80 @@ test("known non-selected and unknown canonical notifications do not retarget or 
   assert.equal(client.getSnapshot().currentThread?.id, "selected");
   assert.equal(client.getSnapshot().threadDocuments.documentsByKey["codex:unknown"], undefined);
   assert.deepEqual(client.getSnapshot().threadDocuments.documentsByKey["codex:background"]?.turns[0]?.items, []);
+}));
+
+test("known hidden threads retain complete live text before later selected deltas append", async () => withClient(async (client, socket) => {
+  const background = activeThread("codex", "background");
+  client.selectThreadPayload(background);
+  client.selectThreadPayload(activeThread("codex", "selected"));
+  let visibleEmissions = 0;
+  const unsubscribe = client.subscribe(() => {
+    visibleEmissions += 1;
+  });
+
+  socket.notify("item/started", {
+    item: {
+      id: "background-commentary",
+      memoryCitation: null,
+      phase: "commentary",
+      text: "",
+      type: "agentMessage",
+    },
+    threadId: "background",
+    turnId: "background-turn",
+  });
+  socket.notify("item/agentMessage/delta", {
+    delta: "complete retained ",
+    itemId: "background-commentary",
+    threadId: "background",
+    turnId: "background-turn",
+  });
+  socket.notify("item/agentMessage/delta", {
+    delta: "prefix",
+    itemId: "background-commentary",
+    threadId: "background",
+    turnId: "background-turn",
+  });
+
+  assert.equal(client.getSnapshot().currentThread?.id, "selected");
+  assert.deepEqual(
+    client.getSnapshot().threadDocuments.documentsByKey["codex:background"]?.turns[0]?.items,
+    [],
+  );
+  assert.equal(visibleEmissions, 0);
+  unsubscribe();
+
+  let pageRequest: SocketRequest | null = null;
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method !== "workbench/thread/page/read" || request.params?.threadId !== "background") {
+      return false;
+    }
+    pageRequest = request;
+    return true;
+  };
+  const opening = client.openThread("background", { harness: "codex" });
+  await waitForRequest(socket, "workbench/thread/page/read");
+  socket.respond(pageRequest!.id, {
+    browseResultEntries: [],
+    nextCursor: null,
+    questionnaireEntries: [],
+    steerEntries: [],
+    thread: wireThread("background"),
+  });
+  assert.equal((await opening).kind, "success");
+
+  const readCommentary = () => client.getSnapshot().currentThread?.turns[0]?.items.find(
+    (item): item is Extract<ThreadItem, { type: "agentMessage" }> => item.id === "background-commentary" && item.type === "agentMessage",
+  )?.text;
+  assert.equal(readCommentary(), "complete retained prefix");
+
+  socket.notify("item/agentMessage/delta", {
+    delta: " and selected suffix",
+    itemId: "background-commentary",
+    threadId: "background",
+    turnId: "background-turn",
+  });
+  assert.equal(readCommentary(), "complete retained prefix and selected suffix");
 }));
 
 test("project reset during history and control awaits cannot resurrect thread state or start follow-up reads", async () => withClient(async (client, socket) => {

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect serialized selected-thread subscription replacement and deduplicated parity reporting. Keywords: transcript, parity, lifecycle, subscription.
+ * No production exports. Tests protect immediate live projection publication, serialized subscription replacement, and deferred deduplicated parity reporting. Keywords: transcript, projection, parity, lifecycle, subscription.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -285,9 +285,61 @@ test("same-thread loaded-turn changes retain and reconcile the previous projecti
   assert.equal(publications.at(-1), "turn-1");
 
   controller.select({ browseResultEntries: [], thread: thread("thread", ["turn-1", "turn-2"]) });
-  assert.equal(publications.at(-1), "turn-1");
-  await flushComparison();
   assert.equal(publications.at(-1), "turn-1,turn-2");
+  controller.dispose();
+});
+
+test("successive live text snapshots publish immediately without scheduling parity work", async () => {
+  const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
+  const publications: string[] = [];
+  const scheduled: Array<() => void> = [];
+  const controller = new ThreadTranscriptParityController({
+    available: true,
+    cancelComparison: () => undefined,
+    onProjectionChange: (projection) => {
+      if (projection) publications.push(projection.thread.title);
+    },
+    reconcileProjection: (projection, selection) => {
+      const item = selection.thread.turns[0]?.items[0];
+      return {
+        ...projection,
+        thread: {
+          ...projection.thread,
+          title: item?.type === "plan" ? item.text : "",
+        },
+      };
+    },
+    scheduleComparison: (callback) => {
+      scheduled.push(callback);
+      return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+    },
+    transcripts: {
+      reportParity: async () => undefined,
+      subscribe: async (params, listener) => { listeners.set(params.subscriptionId, listener); },
+      unsubscribe: async (params) => { listeners.delete(params.subscriptionId); },
+    },
+    turnLimit: 4,
+  });
+  const selected = thread("thread");
+  controller.select({ browseResultEntries: [], thread: selected });
+  await flush();
+  [...listeners.values()][0]?.(emptySnapshot("thread"));
+  assert.deepEqual(publications, ["planned"]);
+  assert.equal(scheduled.length, 1);
+  scheduled.shift()?.();
+
+  const withText = (text: string): ThreadPayload => ({
+    ...selected,
+    turns: selected.turns.map((turn) => ({
+      ...turn,
+      items: turn.items.map((item) => item.type === "plan" ? { ...item, text } : item),
+    })),
+  });
+  controller.select({ browseResultEntries: [], thread: withText("partial") });
+  controller.select({ browseResultEntries: [], thread: withText("partial and complete") });
+
+  assert.deepEqual(publications.slice(-2), ["partial", "partial and complete"]);
+  assert.equal(scheduled.length, 0);
   controller.dispose();
 });
 

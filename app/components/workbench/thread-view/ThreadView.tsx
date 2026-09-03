@@ -53,7 +53,6 @@ import { getThreadDocumentFromSnapshot } from "../../../workbench/thread/thread-
 import resolveThreadComposerProfileSlot from "../../../workbench/thread/thread-composer-profile-slot";
 import { ThreadMessageNotSentError } from "../../../workbench/thread/thread-message-submission";
 import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadLifecycle, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
-import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import {
   filterSubagentsByParentThreadId,
   getNextSubagentHydrationBatch,
@@ -93,6 +92,10 @@ import ThreadTranscript from "./ThreadTranscript";
 import ThreadTranscriptComparison from "./ThreadTranscriptComparison";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import {
+  getCurrentThreadReasoningActivity,
+  type ThreadReasoningStepReference,
+} from "./thread-reasoning-display";
+import {
   ThreadWebSearchActionRow,
 } from "./ThreadWebSearchItem";
 
@@ -108,7 +111,7 @@ const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
 type LiveThreadActivity =
   | {
     body: string | null;
-    hiddenItemId: string | null;
+    hiddenStep: ThreadReasoningStepReference | null;
     kind: "reasoning";
     title: string;
   }
@@ -307,78 +310,6 @@ function setSvgCodeBlockPreviewButtonState (button: HTMLButtonElement, isPreview
   button.title = isPreviewing ? "Show SVG source" : "Preview SVG code block";
 }
 
-function cleanReasoningTitleLine (value: string) {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean)
-    ?.replace(/^#{1,6}\s+/, "")
-    .replace(/^\*\*(.+)\*\*$/, "$1")
-    .replace(/^\[(.+)\]$/, "$1")
-    .replace(/:$/, "")
-    .trim() || null;
-}
-
-function getReasoningStepBody (sections: string[]) {
-  const bodySections: string[] = [];
-  let removedTitle = false;
-
-  for (const section of sections) {
-    const lines = section.split(/\r?\n/);
-    if (!removedTitle) {
-      const firstTextLineIndex = lines.findIndex((line) => line.trim());
-      if (firstTextLineIndex !== -1) {
-        lines.splice(firstTextLineIndex, 1);
-        removedTitle = true;
-      }
-    }
-
-    const bodySection = lines.join("\n").trim();
-    if (bodySection) {
-      bodySections.push(bodySection);
-    }
-  }
-
-  return bodySections.join("\n\n").trim() || null;
-}
-
-function getCurrentReasoningStep (turn: ThreadPayload["turns"][number] | null) {
-  if (!turn || turn.status !== "inProgress") {
-    return null;
-  }
-
-  let latestActivityItemIndex = turn.items.length - 1;
-  while (
-    latestActivityItemIndex >= 0
-    && isWorkbenchPendingSteerUserMessage(turn.items[latestActivityItemIndex]!)
-  ) {
-    latestActivityItemIndex -= 1;
-  }
-
-  const latestItem = turn.items[latestActivityItemIndex];
-  if (!latestItem || latestItem.type !== "reasoning") {
-    return null;
-  }
-
-  const visibleSections = latestItem.summary.length ? latestItem.summary : latestItem.content;
-  for (const section of visibleSections) {
-    const title = cleanReasoningTitleLine(section);
-    if (title) {
-      return {
-        body: getReasoningStepBody(visibleSections),
-        id: latestItem.id,
-        title,
-      };
-    }
-  }
-
-  return {
-    body: getReasoningStepBody(visibleSections),
-    id: latestItem.id,
-    title: "Thinking",
-  };
-}
-
 function getLiveThreadActivity ({
   pendingUserInputRequest,
   turn,
@@ -393,17 +324,17 @@ function getLiveThreadActivity ({
   if (turn.items.some(isPendingInitialOptimisticInputItem)) {
     return {
       body: null,
-      hiddenItemId: null,
+      hiddenStep: null,
       kind: "reasoning",
       title: "Connecting",
     };
   }
 
-  const reasoningStep = getCurrentReasoningStep(turn);
+  const reasoningStep = getCurrentThreadReasoningActivity(turn);
   if (reasoningStep) {
     return {
       body: reasoningStep.body,
-      hiddenItemId: reasoningStep.id,
+      hiddenStep: reasoningStep.hiddenStep,
       kind: "reasoning",
       title: reasoningStep.title,
     };
@@ -448,7 +379,7 @@ function getLiveThreadActivity ({
 
   return {
     body: null,
-    hiddenItemId: null,
+    hiddenStep: null,
     kind: "reasoning",
     title: "Thinking",
   };
@@ -1575,6 +1506,7 @@ export default memo(function ThreadView ({
                       <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
                     ) : null}
                     <ThreadTranscriptComparison
+                      hiddenReasoningStep={liveActivity?.kind === "reasoning" ? liveActivity.hiddenStep : null}
                       inlineMentionSources={inlineMentionSources}
                       jsonBrowseResultEntries={activeThreadBrowseResultEntries}
                       jsonThread={renderActiveThread}
@@ -1592,6 +1524,7 @@ export default memo(function ThreadView ({
                 ) : (
                   <ThreadTranscriptProjection
                     canLoadPreviousTurn={canLoadPreviousTurn}
+                    hiddenReasoningStep={liveActivity?.kind === "reasoning" ? liveActivity.hiddenStep : null}
                     historySentinelRef={historySentinelRef}
                     inlineMentionSources={inlineMentionSources}
                     knownSkills={workbenchSkills}
@@ -1613,7 +1546,7 @@ export default memo(function ThreadView ({
                 canLoadPreviousTurn={canLoadPreviousTurn}
                 currentTurnId={currentTurn?.id ?? null}
                 hiddenDynamicToolCallItemIds={hiddenDynamicToolCallItemIds}
-                hiddenReasoningItemId={liveActivity?.kind === "reasoning" ? liveActivity.hiddenItemId : null}
+                hiddenReasoningStep={liveActivity?.kind === "reasoning" ? liveActivity.hiddenStep : null}
                 hiddenWebSearchItemIds={liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
                 hideFinalAgentMessage={hideFinalAgentMessage}
                 hideTerminalReasoning={activeGitArcSelection?.lifecycle.kind === "completed"}

@@ -19,6 +19,7 @@ import {
   type WorkbenchTranscriptComparisonItem,
 } from "../../../workbench/transcript/thread-transcript-parity";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
 import { ThreadTranscriptItemDetails } from "./thread-view-items";
 
@@ -37,6 +38,7 @@ function groupBrowseEntriesByTurn(entries: readonly WorkbenchBrowseResultEntry[]
 function TranscriptComparisonCell({
   browseResultEntries,
   entry,
+  hiddenReasoningStep,
   inlineMentionSources,
   knownSkills,
   missingIdentity,
@@ -52,6 +54,7 @@ function TranscriptComparisonCell({
 }: {
   browseResultEntries: readonly WorkbenchBrowseResultEntry[];
   entry: WorkbenchTranscriptComparisonItem | null;
+  hiddenReasoningStep?: ThreadReasoningStepReference | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills: WorkbenchSkillSummary[];
   missingIdentity: string;
@@ -79,6 +82,7 @@ function TranscriptComparisonCell({
     <div className="min-w-0">
       <ThreadTranscriptItemDetails
         browseResultEntries={browseResultEntries}
+        hiddenReasoningStep={hiddenReasoningStep}
         inlineMentionSources={inlineMentionSources}
         item={entry.item}
         itemTimeline={"itemTimeline" in turn ? turn.itemTimeline : undefined}
@@ -100,6 +104,7 @@ function TranscriptComparisonCell({
 }
 
 export default function ThreadTranscriptComparison({
+  hiddenReasoningStep,
   inlineMentionSources,
   jsonBrowseResultEntries,
   jsonThread,
@@ -113,6 +118,7 @@ export default function ThreadTranscriptComparison({
   visibleTurnIds,
   workspaceRoots,
 }: {
+  hiddenReasoningStep?: ThreadReasoningStepReference | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   jsonBrowseResultEntries: readonly WorkbenchBrowseResultEntry[];
   jsonThread: ThreadPayload;
@@ -198,6 +204,7 @@ export default function ThreadTranscriptComparison({
                   ? jsonBrowseEntriesByTurnId.get(row.json.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES
                   : EMPTY_BROWSE_RESULT_ENTRIES}
                 entry={row.json}
+                hiddenReasoningStep={hiddenReasoningStep}
                 inlineMentionSources={inlineMentionSources}
                 knownSkills={knownSkills}
                 missingIdentity={identity}
@@ -216,6 +223,7 @@ export default function ThreadTranscriptComparison({
                   ? sqliteBrowseEntriesByTurnId.get(row.sqlite.turnId) ?? EMPTY_BROWSE_RESULT_ENTRIES
                   : EMPTY_BROWSE_RESULT_ENTRIES}
                 entry={row.sqlite}
+                hiddenReasoningStep={hiddenReasoningStep}
                 inlineMentionSources={inlineMentionSources}
                 knownSkills={knownSkills}
                 missingIdentity={identity}

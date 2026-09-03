@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - ThreadTranscriptItemDetails: render one provider or relational transcript item with the established item UI. Keywords: workbench, transcript, comparison, item.
+ * - ThreadTranscriptItemsDetails: render adjacent provider or relational items through shared command and reasoning grouping. Keywords: workbench, transcript, grouping, items.
  * - ThreadTurnDetails: render one thread turn with grouped commands and typed item sections. Keywords: workbench, thread, turn.
  * - ThreadThreadContent: render all turns for one thread payload without composer chrome. Keywords: workbench, thread, subagent, preview.
  * - ThreadTurnLoadingSkeleton: render a lightweight placeholder for unloaded lazy-history turns. Keywords: workbench, thread, lazy history, skeleton.
@@ -118,6 +119,11 @@ import ThreadUserImage from "./ThreadUserImage";
 import ThreadWebSearchItem, {
   ThreadWebSearchSequence,
 } from "./ThreadWebSearchItem";
+import {
+  getThreadReasoningSteps,
+  omitThreadReasoningStep,
+  type ThreadReasoningStepReference,
+} from "./thread-reasoning-display";
 import { isThreadWebSearchPlaceholder } from "./thread-web-search-state";
 import {
   getThreadSubagentWaitTiming,
@@ -165,7 +171,7 @@ interface HiddenThreadItemIds {
   controlUserMessages?: boolean;
   dynamicToolCallIds?: ReadonlySet<string> | null;
   itemIds?: ReadonlySet<string> | null;
-  reasoningItemId?: string | null;
+  reasoningStep?: ThreadReasoningStepReference | null;
   webSearchItemIds?: ReadonlySet<string> | null;
 }
 
@@ -485,14 +491,15 @@ function buildRenderableBlocks (
     }
 
     if (item.type === "reasoning") {
-      if (item.id === hiddenItemIds.reasoningItemId || !hasReasoningSteps(item)) {
+      const visibleItem = omitThreadReasoningStep(item, hiddenItemIds.reasoningStep);
+      if (!visibleItem || !hasReasoningSteps(visibleItem)) {
         continue;
       }
 
       flushPendingCommands();
       flushPendingFileChanges();
       flushPendingWebSearches();
-      pendingReasoning.push(item);
+      pendingReasoning.push(visibleItem);
       continue;
     }
 
@@ -683,30 +690,6 @@ function isHiddenCommandExecution (command: string) {
 function hasReasoningSteps (item: ReasoningItem) {
   return item.summary.some((section) => section.trim())
     || item.content.some((section) => section.trim());
-}
-
-function formatReasoningStepTitle (value: string) {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean)
-    ?.replace(/^#{1,6}\s+/, "")
-    .replace(/^\*\*(.+)\*\*$/, "$1")
-    .replace(/^\[(.+)\]$/, "$1")
-    .replace(/:$/, "")
-    .trim() || null;
-}
-
-function getReasoningStepTitle (item: ReasoningItem) {
-  const visibleSections = item.summary.length ? item.summary : item.content;
-  for (const section of visibleSections) {
-    const title = formatReasoningStepTitle(section);
-    if (title) {
-      return title;
-    }
-  }
-
-  return "Step";
 }
 
 function ThreadUserInputLine ({
@@ -1018,14 +1001,41 @@ function ThreadReasoningSequence ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const visibleItems = block.items.filter(hasReasoningSteps);
-  const totalItems = visibleItems.reduce((sum, item) => (
-    sum + (item.summary.filter((section) => section.trim()).length || item.content.filter((section) => section.trim()).length)
-  ), 0);
-  if (!totalItems) {
+  const steps = getThreadReasoningSteps(visibleItems);
+  if (!steps.length) {
     return null;
   }
+  const [onlyStep] = steps;
+  const summary = onlyStep && steps.length === 1 ? (<>
+    <span>Reasoned: </span>
+    <span className="thread-item-disclosure-prominent-text-portion font-medium text-text">{onlyStep.title}</span>
+  </>) : (<>
+    <span>Reasoned over </span>
+    <span className="thread-item-disclosure-prominent-text-portion text-text">{steps.length}</span>
+    <span> steps</span>
+  </>);
 
-  const content = (
+  if (onlyStep && steps.length === 1 && !onlyStep.body) {
+    return (
+      <ThreadDisclosureStaticRow
+        summary={summary}
+        summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      />
+    );
+  }
+
+  const content = onlyStep && steps.length === 1 ? (
+    <ThreadMarkdown
+      className="text-[0.8em] text-muted"
+      inlineMentionSources={inlineMentionSources}
+      markdown={onlyStep.body ?? ""}
+      threadCwdPath={threadCwdPath}
+      projectFilePaths={projectFilePaths}
+      projectId={projectId}
+      projectRootPath={projectRootPath}
+      workspaceRoots={workspaceRoots}
+    />
+  ) : (
     <div className="space-y-4">
       {visibleItems.map((item, index) => (
         <ThreadReasoningItem
@@ -1048,14 +1058,7 @@ function ThreadReasoningSequence ({
       className="py-2"
       contentClassName="mt-2 space-y-4 pl-6"
       defaultOpen={isMostRecent}
-      summary={totalItems === 1 ? (<>
-        <span>Reasoned: </span>
-        <span className="thread-item-disclosure-prominent-text-portion font-medium text-text">{getReasoningStepTitle(visibleItems[0])}</span>
-      </>) : (<>
-        <span>Reasoned over </span>
-        <span className="thread-item-disclosure-prominent-text-portion text-text">{totalItems}</span>
-        <span> steps</span>
-      </>)}
+      summary={summary}
       summaryClassName="text-[0.92em] leading-[1.6] text-muted"
     >
       {content}
@@ -2737,28 +2740,12 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
   && left.workspaceRoots === right.workspaceRoots
 ));
 
-export function ThreadTranscriptItemDetails ({
-  browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
-  inlineMentionSources,
-  item,
-  itemTimeline,
-  knownSkills = [],
-  projectFilePaths,
-  projectId,
-  projectRootPath,
-  relatedThreadsById = {},
-  subagents = [],
-  threadCwdPath,
-  threadId,
-  turnCompletedAt,
-  turnStartedAt,
-  turnStatus,
-  workspaceRoots,
-}: {
+interface ThreadTranscriptItemsDetailsProps {
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
+  hiddenReasoningStep?: ThreadReasoningStepReference | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
-  item: WorkbenchProjectedTranscriptItem;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
+  items: readonly WorkbenchProjectedTranscriptItem[];
   knownSkills?: WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -2771,31 +2758,74 @@ export function ThreadTranscriptItemDetails ({
   turnStartedAt: number | null;
   turnStatus: Turn["status"];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
-  if (item.type === "unknown") {
-    return <ThreadFallbackItem item={item} />;
-  }
+}
 
-  const renderItem = isProjectedInteractionItem(item)
-    ? adaptProjectedInteractionItem(item)
-    : item;
-  const blocks = buildRenderableBlocks([renderItem], {}, threadCwdPath);
-  const primaryUserBlock = blocks.find((block) => isUserMessageBlock(block)) ?? null;
-  const finalAgentMessageId = renderItem.type === "agentMessage" && renderItem.phase === "final_answer"
-    ? renderItem.id
-    : null;
+export function ThreadTranscriptItemsDetails ({
+  browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
+  hiddenReasoningStep = null,
+  inlineMentionSources,
+  itemTimeline,
+  items,
+  knownSkills = [],
+  projectFilePaths,
+  projectId,
+  projectRootPath,
+  relatedThreadsById = {},
+  subagents = [],
+  threadCwdPath,
+  threadId,
+  turnCompletedAt,
+  turnStartedAt,
+  turnStatus,
+  workspaceRoots,
+}: ThreadTranscriptItemsDetailsProps) {
+  type RenderEntry =
+    | { block: ThreadRenderableBlock; kind: "block" }
+    | { item: Extract<WorkbenchProjectedTranscriptItem, { type: "unknown" }>; kind: "unknown" };
+  const entries: RenderEntry[] = [];
+  let pendingItems: ThreadItem[] = [];
+  const flushItems = () => {
+    if (!pendingItems.length) return;
+    entries.push(...buildRenderableBlocks(
+      pendingItems,
+      { reasoningStep: hiddenReasoningStep },
+      threadCwdPath,
+    ).map((block) => ({ block, kind: "block" as const })));
+    pendingItems = [];
+  };
+  for (const item of items) {
+    if (item.type === "unknown") {
+      flushItems();
+      entries.push({ item, kind: "unknown" });
+    } else {
+      pendingItems.push(isProjectedInteractionItem(item)
+        ? adaptProjectedInteractionItem(item)
+        : item);
+    }
+  }
+  flushItems();
+
+  const primaryUserBlock = entries.flatMap((entry) => (
+    entry.kind === "block" && isUserMessageBlock(entry.block) ? [entry.block] : []
+  )).at(0) ?? null;
+  const finalAgentMessageId = [...items].reverse().find((item) => (
+    item.type === "agentMessage" && item.phase === "final_answer"
+  ))?.id
+    ?? null;
 
   return (
     <div className="space-y-2">
-      {blocks.map((block, index) => (
+      {entries.map((entry, index) => entry.kind === "unknown" ? (
+        <ThreadFallbackItem key={`unknown:${entry.item.id}`} item={entry.item} />
+      ) : (
         <ThreadRenderableBlockView
-          key={`${item.id}:${index}`}
-          block={block}
+          key={`${getRenderableBlockKey(entry.block)}:${index}`}
+          block={entry.block}
           browseResultEntries={browseResultEntries}
           finalAgentMessageId={finalAgentMessageId}
           inlineMentionSources={inlineMentionSources}
           itemTimeline={itemTimeline}
-          isMostRecentBlock={index === blocks.length - 1}
+          isMostRecentBlock={index === entries.length - 1}
           knownSkills={knownSkills}
           primaryUserBlock={primaryUserBlock}
           threadCwdPath={threadCwdPath}
@@ -2815,6 +2845,15 @@ export function ThreadTranscriptItemDetails ({
   );
 }
 
+export function ThreadTranscriptItemDetails ({
+  item,
+  ...props
+}: Omit<ThreadTranscriptItemsDetailsProps, "items"> & {
+  item: WorkbenchProjectedTranscriptItem;
+}) {
+  return <ThreadTranscriptItemsDetails {...props} items={[item]} />;
+}
+
 function ThreadTurnDetailsComponent ({
   defaultOpenCompletedWork = false,
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
@@ -2825,7 +2864,7 @@ function ThreadTurnDetailsComponent ({
   hideTopBorder = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = false,
-  hiddenReasoningItemId = null,
+  hiddenReasoningStep = null,
   hoistedGitArcProposalIds = EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS,
   hiddenWebSearchItemIds = [],
   inlineMentionSources = null,
@@ -2850,7 +2889,7 @@ function ThreadTurnDetailsComponent ({
   hideTopBorder?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
-  hiddenReasoningItemId?: string | null;
+  hiddenReasoningStep?: ThreadReasoningStepReference | null;
   hoistedGitArcProposalIds?: ReadonlySet<string>;
   hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
@@ -2883,11 +2922,11 @@ function ThreadTurnDetailsComponent ({
     controlAgentMessages: hideWorkbenchControlAgentMessages && isWorkbenchControlTurn,
     controlUserMessages: hideWorkbenchControlUserMessages,
     dynamicToolCallIds: hiddenDynamicToolCallIds,
-    reasoningItemId: hiddenReasoningItemId,
+    reasoningStep: hiddenReasoningStep,
     webSearchItemIds: hiddenWebSearchIds,
   } satisfies HiddenThreadItemIds), [
     hiddenDynamicToolCallIds,
-    hiddenReasoningItemId,
+    hiddenReasoningStep,
     hiddenWebSearchIds,
     hideWorkbenchControlAgentMessages,
     hideWorkbenchControlUserMessages,
@@ -3169,7 +3208,7 @@ function areThreadTurnDetailsPropsEqual (
     && left.hideTopBorder === right.hideTopBorder
     && left.hideWorkbenchControlAgentMessages === right.hideWorkbenchControlAgentMessages
     && left.hideWorkbenchControlUserMessages === right.hideWorkbenchControlUserMessages
-    && left.hiddenReasoningItemId === right.hiddenReasoningItemId
+    && left.hiddenReasoningStep === right.hiddenReasoningStep
     && left.hoistedGitArcProposalIds === right.hoistedGitArcProposalIds
     && left.hiddenWebSearchItemIds === right.hiddenWebSearchItemIds
     && left.browseResultEntries === right.browseResultEntries
@@ -3197,7 +3236,7 @@ export function ThreadThreadContent ({
   hideFirstTurnTopBorder = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = false,
-  hiddenReasoningItemId = null,
+  hiddenReasoningStep = null,
   hiddenWebSearchItemIds = [],
   inlineMentionSources = null,
   knownSkills = [],
@@ -3219,7 +3258,7 @@ export function ThreadThreadContent ({
   hideFirstTurnTopBorder?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
-  hiddenReasoningItemId?: string | null;
+  hiddenReasoningStep?: ThreadReasoningStepReference | null;
   hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills?: WorkbenchSkillSummary[];
@@ -3284,7 +3323,7 @@ export function ThreadThreadContent ({
             hideTopBorder={hideFirstTurnTopBorder && index === 0}
             hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
             hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
-            hiddenReasoningItemId={hiddenReasoningItemId}
+            hiddenReasoningStep={hiddenReasoningStep}
             hiddenWebSearchItemIds={hiddenWebSearchItemIds}
             inlineMentionSources={inlineMentionSources}
             itemTimeline={entry.itemTimeline}
