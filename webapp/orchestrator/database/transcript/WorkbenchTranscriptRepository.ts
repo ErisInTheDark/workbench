@@ -5,18 +5,18 @@
  */
 import type Database from "better-sqlite3";
 
-import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem.ts";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import {
   mergeThreadItem,
   reconcileCompleteThreadItems,
-} from "../../../lib/codex/thread-item-normalization.ts";
-import { SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX } from "../../../lib/workbench/thread/thread-steer-history.ts";
-import type { WorkbenchFileChangeItem } from "../../../lib/workbench/thread/workbench-file-change.ts";
-import type { WorkbenchThreadItemTimelineEntry } from "../../../lib/workbench/thread/thread-item-timeline.ts";
+} from "workbench-shared/codex/thread-item-normalization";
+import { SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX } from "workbench-shared/workbench/thread/thread-steer-history";
+import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
+import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import {
   projectWorkbenchTranscriptItems,
   type WorkbenchProjectedTranscriptItem,
-} from "../../../lib/workbench/database/transcript/workbench-transcript-item-projection.ts";
+} from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import type {
   ColumnDefinition,
   CurrentTableDefinition,

@@ -9,12 +9,12 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type {
   WorkbenchBrowseResultEntry,
   WorkbenchQuestionnaireHistoryEntry,
   WorkbenchSteerHistoryEntry,
-} from "../lib/types";
+} from "workbench-shared/types";
 import CodexTranscriptStore from "./CodexTranscriptStore";
 import type { JsonRpcRequest } from "./bridge-types";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";

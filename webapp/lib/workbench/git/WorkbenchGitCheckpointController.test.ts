@@ -10,7 +10,7 @@ import { after, before, test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import GitArcPublishState from "./GitArcPublishState";
-import { GitArcProposalAlreadyCommittedError } from "./git-arc-failures";
+import { GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcAcceptedProposalsError } from "./GitArcProposalController";
 import createGitArcStartDiagnosticError, { GitArcStartDiagnosticError } from "./git-arc-start-diagnostics";
 import { GitCheckpointDirtyPathsError } from "./GitArcPlanController";

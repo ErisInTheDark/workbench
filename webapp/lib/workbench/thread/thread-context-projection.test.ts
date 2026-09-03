@@ -6,11 +6,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { ThreadPayload, WorkbenchThreadContextBundle } from "../../types.ts";
-import { createWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
+import type { ThreadPayload, WorkbenchThreadContextBundle } from "workbench-shared/types";
+import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { renderWorkbenchThreadContextPieceMarkdown } from "./thread-context-markdown.ts";
 import { buildWorkbenchThreadContextPieces } from "./thread-context-projection.ts";
-import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "./thread-recovery-message.ts";
+import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 function thread(): ThreadPayload {
   return {

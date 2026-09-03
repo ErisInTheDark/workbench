@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { WorkbenchThreadContextBundle } from "../../types";
+import type { WorkbenchThreadContextBundle } from "workbench-shared/types";
 import WorkbenchThreadRecallController from "./WorkbenchThreadRecallController";
 
 function bundle(): WorkbenchThreadContextBundle {

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import { CopilotBridge } from "./copilot-bridge";
 import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
 

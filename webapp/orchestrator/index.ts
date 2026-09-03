@@ -13,16 +13,16 @@ import path from "node:path";
 
 import { WebSocketServer } from "ws";
 
-import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import { createInitializeCapabilities, createInitializeRequest } from "../lib/codex/protocol";
+import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
 import type {
     OrchestratorReloadResponse,
     OrchestratorReloadScope,
     WorkbenchBrowseResultEntry,
     WorkbenchHarness,
-} from "../lib/types";
-import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+} from "workbench-shared/types";
+import type { WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { BridgeClient, HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexRecoverySupervisor from "./CodexRecoverySupervisor";
 import type CodexStdioBridge from "./CodexStdioBridge";

@@ -5,18 +5,18 @@
  */
 import { randomUUID } from "node:crypto";
 
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import { CodexAppServerClient } from "../lib/codex/app-server-client";
-import { createQuestionnaireCollaborationMode, isCodexJsonRpcFailure } from "../lib/codex/protocol";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
+import { createQuestionnaireCollaborationMode, isCodexJsonRpcFailure } from "workbench-shared/codex/protocol";
 import type {
   WorkbenchComposerProfile,
   WorkbenchHarness,
   WorkbenchPendingUserInputRequest,
   WorkbenchSubagentRelationship,
   WorkbenchSubagentSummary,
-} from "../lib/types";
+} from "workbench-shared/types";
 import {
   resolveAgentEndpointProjectFromCwd,
   type AgentEndpointProjectResolution,
@@ -27,9 +27,9 @@ import {
   renderSubagentTurnOutput,
   renderSubagentWaitResultOutput,
 } from "../lib/workbench/subagent/subagent-output";
-import { createWorkbenchAgentMessageText } from "../lib/workbench/thread/thread-agent-message";
-import { getWorkbenchThreadHarnessCandidates } from "../lib/workbench/thread/thread-harness-candidates";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "../lib/workbench/thread/thread-state";
+import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import { getWorkbenchThreadHarnessCandidates } from "workbench-shared/workbench/thread/thread-harness-candidates";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";

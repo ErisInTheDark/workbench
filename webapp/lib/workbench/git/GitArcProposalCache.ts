@@ -11,7 +11,7 @@ import { z } from "zod";
 import {
   GitCheckpointFileChangeSchema,
   type GitCheckpointFileChange,
-} from "./checkpoint-contracts";
+} from "workbench-shared/workbench/git/checkpoint-contracts";
 
 const CacheFileSchema = z.object({
   baseTree: z.string().regex(/^[a-f0-9]{40,64}$/u),

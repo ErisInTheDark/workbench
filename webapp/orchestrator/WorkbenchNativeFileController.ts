@@ -11,7 +11,7 @@ import type {
   OpenFileInEditorRequest,
   ResolveExternalFileLinkRootsRequest,
   RevealProjectEntryRequest,
-} from "../lib/types";
+} from "workbench-shared/types";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 
 function isLocalAbsolutePath(filePath: string) {

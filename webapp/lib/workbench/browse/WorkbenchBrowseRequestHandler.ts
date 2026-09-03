@@ -24,7 +24,7 @@ import type {
   WorkbenchBrowseSessionListRequest,
   WorkbenchBrowseSessionListResponse,
   WorkbenchBrowseSessionMode,
-} from "../../types";
+} from "workbench-shared/types";
 import WorkbenchBrowseSessionController from "./WorkbenchBrowseSessionController";
 import {
   normalizeWorkbenchBrowseAgentRequest,

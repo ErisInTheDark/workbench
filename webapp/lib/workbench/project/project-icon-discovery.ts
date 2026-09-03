@@ -7,7 +7,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { WorkbenchProjectIcon, WorkbenchProjectRoot } from "../../types";
+import type { WorkbenchProjectIcon, WorkbenchProjectRoot } from "workbench-shared/types";
 import { listGitVisibleFiles } from "../../git";
 
 const PROJECT_ICON_PATHSPECS = [

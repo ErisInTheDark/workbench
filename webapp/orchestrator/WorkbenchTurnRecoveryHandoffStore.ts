@@ -10,9 +10,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import type { JsonRpcRequest } from "./bridge-types";
-import { WORKBENCH_THREAD_RECOVERY_ID_PREFIX } from "../lib/workbench/thread/thread-recovery-message";
+import { WORKBENCH_THREAD_RECOVERY_ID_PREFIX } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 export type WorkbenchRecoveryHarness = "codex" | "opencode";
 

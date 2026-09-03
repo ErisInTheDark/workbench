@@ -11,7 +11,7 @@ import {
   type GitArcRegistryEntry,
 } from "./GitArcRegistry";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
-import type { GitArcHarness } from "./git-arc-storage";
+import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
 
 const MAX_COMMITS = 8;
 const MAX_PATHS = 20;

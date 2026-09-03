@@ -6,8 +6,8 @@ import fs from "node:fs/promises";
 
 import { getHeadFileContent } from "../lib/git";
 import { resolveProjectFilePath } from "../lib/project";
-import type { ChangeSummary, SaveConflictPayload } from "../lib/types";
-import { isWorkbenchOpenableFile } from "../lib/workbench/project/tree-utils";
+import type { ChangeSummary, SaveConflictPayload } from "workbench-shared/types";
+import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 
 export default class WorkbenchProjectFileController {

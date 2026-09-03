@@ -5,14 +5,14 @@
  */
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands.ts";
 import { renderSubagentListOutput, renderSubagentSettleOutput } from "../subagent/subagent-output";
-import type { WorkbenchSubagentSummary } from "../../types";
-import { formatGitArcFailureReceipt, GitArcFailureEnvelopeSchema } from "../git/git-arc-failures";
+import type { WorkbenchSubagentSummary } from "workbench-shared/types";
+import { formatGitArcFailureReceipt, GitArcFailureEnvelopeSchema } from "workbench-shared/workbench/git/git-arc-failures";
 import {
   GIT_ARC_DIFF_PAGE_CHARACTER_LIMIT,
   GIT_ARC_DIFF_TRAILER_PREFIX,
-} from "../git/git-arc-diff-pages";
-import { formatGitArcReceipt, type GitArcAction } from "../git/git-arc-receipts";
-import { normalizeOrchestratorReloadScopes } from "../orchestrator-reload";
+} from "workbench-shared/workbench/git/git-arc-diff-pages";
+import { formatGitArcReceipt, type GitArcAction } from "workbench-shared/workbench/git/git-arc-receipts";
+import { normalizeOrchestratorReloadScopes } from "workbench-shared/workbench/orchestrator-reload";
 
 export interface WorkbenchAgentCliAdaptedResponse {
   exitCode: number;

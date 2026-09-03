@@ -8,7 +8,7 @@ import path from "node:path";
 
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
-import { createWorkbenchActivatedSkillsInput } from "../lib/workbench/thread/thread-activated-skills";
+import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import type { JsonRpcRequest } from "./bridge-types";
 import { logError } from "./process-helpers";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";

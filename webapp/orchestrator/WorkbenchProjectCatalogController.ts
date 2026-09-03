@@ -9,7 +9,7 @@ import type http from "node:http";
 import path from "node:path";
 
 import { discoverProjects, isPathWithinRoot, normalizeRelativePath, projectsRoot, resolveProjectRootFromProjects } from "../lib/project";
-import type { WorkbenchProjectOption, WorkbenchProjectsPayload } from "../lib/types";
+import type { WorkbenchProjectOption, WorkbenchProjectsPayload } from "workbench-shared/types";
 import {
   resolveAgentEndpointProjectFromProjects,
   type AgentEndpointProjectResolution,

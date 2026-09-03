@@ -14,7 +14,7 @@ node_modules
 tray/target/
 .next
 *.tsbuildinfo
-webapp/lib/codex/generated/
+shared/codex/generated/
 webapp/.debug/
 .workbench/
 audits/

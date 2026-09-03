@@ -6,13 +6,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
-import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import {
   WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS,
   type WorkbenchThreadContextBundle,
   type WorkbenchThreadRecallKind,
-} from "../../types.ts";
+} from "workbench-shared/types";
 import {
   renderWorkbenchThreadRecallExpansionMarkdown,
   renderWorkbenchThreadRecallHistoryMarkdown,
@@ -26,10 +26,10 @@ import {
   selectWorkbenchThreadRecallRecords,
   type WorkbenchThreadRecallRecord,
 } from "./thread-context-recall.ts";
-import { createWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
-import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "./thread-recovery-message.ts";
-import { createWorkbenchAgentMessageText } from "./thread-agent-message.ts";
-import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "./thread-user-input-requests.ts";
+import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
+import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "workbench-shared/workbench/thread/thread-user-input-requests";
 
 const ALL_KINDS: WorkbenchThreadRecallKind[] = [
   "agent-message",

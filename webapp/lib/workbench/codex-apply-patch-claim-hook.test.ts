@@ -8,7 +8,7 @@ import {
   denyCodexApplyPatch,
   parseCodexApplyPatchClaimHook,
 } from "./codex-apply-patch-claim-hook";
-import { createWorkbenchFileChangeFailureSystemMessage } from "./thread/workbench-file-change";
+import { createWorkbenchFileChangeFailureSystemMessage } from "workbench-shared/workbench/thread/workbench-file-change";
 
 function hookInput(command: string, overrides: Record<string, unknown> = {}) {
   return JSON.stringify({

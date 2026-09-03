@@ -4,7 +4,7 @@
  */
 import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
 import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
@@ -344,9 +344,10 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/lib/thread-bootstrap.ts",
     "webapp/lib/workbench-library.ts",
     "webapp/lib/workbench/git/**",
+    "shared/workbench/git/**",
     "webapp/lib/workbench/instructions/**",
     "!webapp/lib/workbench/instructions/**/*.md",
-    "webapp/lib/workbench/thread/thread-display-order.ts",
-    "webapp/lib/workbench/thread/thread-state.ts",
+    "shared/workbench/thread/thread-display-order.ts",
+    "shared/workbench/thread/thread-state.ts",
   ].join("\n"),
 });

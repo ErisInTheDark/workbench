@@ -6,18 +6,18 @@
 import path from "node:path";
 import { z } from "zod";
 
-import { areDeeplyEqual } from "../lib/workbench/deep-equality";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   moveWorkbenchHomeThreadDisplayItem,
   normalizeWorkbenchHomeThreadDisplayOrder,
   removeWorkbenchHomeThreadDisplayMember,
   replaceWorkbenchHomeThreadDisplayMember,
   WorkbenchHomeThreadDisplayOrderSchema,
-} from "../lib/workbench/thread/home-thread-display-order";
-import { getProjectQualifiedThreadDisplayKey, type ThreadDisplayLayoutEntry } from "../lib/workbench/thread/thread-display-layout";
-import type { WorkbenchThreadDisplaySection } from "../lib/workbench/thread/thread-display-order";
-import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
-import type { WorkbenchHomeThreadDisplayOrderSnapshot } from "../lib/workbench/thread/thread-state";
+} from "workbench-shared/workbench/thread/home-thread-display-order";
+import { getProjectQualifiedThreadDisplayKey, type ThreadDisplayLayoutEntry } from "workbench-shared/workbench/thread/thread-display-layout";
+import type { WorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
+import type { WorkbenchHomeThreadDisplayOrderSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import AtomicJsonStore from "./AtomicJsonStore";
 import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 

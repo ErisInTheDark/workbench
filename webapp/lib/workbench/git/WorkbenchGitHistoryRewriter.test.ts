@@ -20,7 +20,7 @@ import {
   HISTORY_CONFLICT_READY_FIXTURE,
   HISTORY_LINEAR_FIXTURE,
 } from "./WorkbenchGitTestFixtures";
-import { type ArcOutcome, outcomeRef } from "./git-arc-storage";
+import { type ArcOutcome, outcomeRef } from "workbench-shared/workbench/git/git-arc-storage";
 
 const execFileAsync = promisify(execFile);
 const fixtureCache = new GitTestFixtureCache();

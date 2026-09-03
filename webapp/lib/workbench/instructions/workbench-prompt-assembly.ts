@@ -17,7 +17,7 @@ import {
 import type {
   WorkbenchAgentDefinition,
   WorkbenchProjectRoot,
-} from "../../types";
+} from "workbench-shared/types";
 import {
   buildWorkbenchActivatedSkillCatalog as buildActivatedSkillCatalog,
   buildWorkbenchSkillBodyCatalog,
@@ -32,7 +32,7 @@ import {
 import {
   isWorkbenchLibraryAgentPath,
   normalizeWorkbenchAgentPath,
-} from "../agent-paths";
+} from "workbench-shared/workbench/agent-paths";
 import {
   createLibraryInstructionFileGeneration,
   type LibraryInstructionFileGeneration,

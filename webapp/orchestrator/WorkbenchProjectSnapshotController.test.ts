@@ -10,8 +10,8 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 
 import { deleteProjectFile } from "../lib/project";
-import type { ProjectSnapshot } from "../lib/types";
-import type { WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
+import type { ProjectSnapshot } from "workbench-shared/types";
+import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
 
 class FakeWatcher {

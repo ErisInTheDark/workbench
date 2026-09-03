@@ -52,6 +52,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/orchestrator/opencode-live-thread-state.ts",
     "webapp/orchestrator/opencode-thread-state.ts",
     "webapp/orchestrator/opencode-workbench-instructions.ts",
-    "webapp/lib/workbench/thread/workbench-thread-page.ts",
+    "shared/workbench/thread/workbench-thread-page.ts",
   ].join("\n"),
 });

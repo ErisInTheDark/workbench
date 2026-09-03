@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import type { JsonRpcRequest } from "./bridge-types";
 import WorkbenchHarnessController, { type WorkbenchHarnessAdapter } from "./WorkbenchHarnessController";
 

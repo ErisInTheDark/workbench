@@ -7,21 +7,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
-import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot } from "../lib/types";
-import { areDeeplyEqual } from "../lib/workbench/deep-equality";
-import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
-import { mergeQuestionnaireHistoryEntries } from "../lib/workbench/thread/thread-questionnaire-identity";
-import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
+import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
+import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
   getWorkbenchHomeThreadKey,
   removeWorkbenchThreadFromProjectFolder,
   resolveWorkbenchHomeThreadSectionKeys,
-} from "../lib/workbench/thread/home-thread-display-order";
+} from "workbench-shared/workbench/thread/home-thread-display-order";
 import {
   getProjectQualifiedThreadDisplayKey,
   parseProjectQualifiedThreadDisplayKey,
   type ThreadDisplayLayoutEntry,
-} from "../lib/workbench/thread/thread-display-layout";
+} from "workbench-shared/workbench/thread/thread-display-layout";
 import {
   createWorkbenchThreadFolder,
   findWorkbenchThreadFolder,
@@ -36,7 +36,7 @@ import {
   resolveWorkbenchThreadDisplayOrder,
   sortThreadSidebarEntries,
   type WorkbenchThreadDisplayOrder,
-} from "../lib/workbench/thread/thread-display-order";
+} from "workbench-shared/workbench/thread/thread-display-order";
 import {
   areAllUnsnoozedThreadEntriesSettlementReady,
   createWorkbenchProjectThreadSummary,
@@ -70,7 +70,7 @@ import {
   type WorkbenchThreadStateOpenResult,
   type WorkbenchThreadStateRequest,
   type WorkbenchThreadStateSnapshot,
-} from "../lib/workbench/thread/thread-state";
+} from "workbench-shared/workbench/thread/thread-state";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import WorkbenchHomeThreadDisplayOrderStore from "./WorkbenchHomeThreadDisplayOrderStore";

@@ -78,6 +78,7 @@ export default new ReloadableNode<
   access: "agent",
   boundarySources: [
     "webapp/lib/workbench/database/schema/**",
+    "shared/workbench/database/schema/**",
     "webapp/orchestrator/database/**",
   ].join("\n"),
   children: [WorkbenchCoreNode, CodexBridgeNode, WorkbenchWebSocketNode],

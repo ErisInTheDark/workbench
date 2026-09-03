@@ -6,7 +6,7 @@
  * - buildThreadTitleBootstrapInstructions: create managed-thread CLI instructions for setting and reading a thread title through wb. Keywords: thread title, instructions, cli, bootstrap.
  * - buildCodexThreadBootstrapInstructions: compose optional Codex agent activation/definition content together with the shared title bootstrap instructions. Keywords: codex, agent, developer instructions, bootstrap.
  */
-import type { WorkbenchAgentDefinition, WorkbenchHarness } from "./types";
+import type { WorkbenchAgentDefinition, WorkbenchHarness } from "workbench-shared/types";
 import { WORKBENCH_FILE_LINK_INSTRUCTIONS } from "./workbench/thread/workbench-file-link-instructions";
 
 const MAX_THREAD_TITLE_LENGTH = 80;

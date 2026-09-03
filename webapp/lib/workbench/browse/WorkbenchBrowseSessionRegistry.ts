@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { projectRoot } from "../../project";
-import type { WorkbenchBrowseSessionMode } from "../../types";
+import type { WorkbenchBrowseSessionMode } from "workbench-shared/types";
 
 export interface WorkbenchBrowseSessionRecord {
   cwd: string | null;

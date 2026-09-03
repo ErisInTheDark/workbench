@@ -10,13 +10,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { ResolvedProjectRoot } from "../lib/project";
-import type { WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
   GitArcRootPaths,
   GitCheckpointFileChange,
   GitCheckpointRequest,
-} from "../lib/workbench/git/checkpoint-contracts";
-import { createGitArcDiffPage } from "../lib/workbench/git/git-arc-diff-pages";
+} from "workbench-shared/workbench/git/checkpoint-contracts";
+import { createGitArcDiffPage } from "workbench-shared/workbench/git/git-arc-diff-pages";
 import WorkbenchGitCheckpointController, {
   type GitArcLifecycleState,
   type GitArcPlanClaimCollisionResult,

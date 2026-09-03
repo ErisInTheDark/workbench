@@ -10,7 +10,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { CancelledNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import { adaptWorkbenchAgentCliResponse } from "../lib/workbench/cli/workbench-agent-cli-responses";
-import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
+import type { OrchestratorReloadScopeDescriptor } from "workbench-shared/workbench/orchestrator-reload";
 import { listWorkbenchAgentCommands } from "../lib/workbench/commands/workbench-agent-command-registry";
 import {
   getWorkbenchAgentCommandToolName,
@@ -22,7 +22,7 @@ import {
   WORKBENCH_SHELL_MCP_TOOL_NAME,
   WorkbenchShellInputSchema,
   WorkbenchShellResultSchema,
-} from "../lib/workbench/commands/workbench-shell-command";
+} from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { logError } from "./process-helpers";
 import {

@@ -4,12 +4,12 @@
  */
 import path from "node:path";
 
-import type { WorkbenchComposerProfile, WorkbenchComposerProfileMutation, WorkbenchComposerProfileStorePayload } from "../lib/types";
+import type { WorkbenchComposerProfile, WorkbenchComposerProfileMutation, WorkbenchComposerProfileStorePayload } from "workbench-shared/types";
 import {
   applyComposerProfileMutation,
   normalizeComposerProfile,
   normalizeComposerProfileMutation,
-} from "../lib/workbench/state/composer-profile-state";
+} from "workbench-shared/workbench/state/composer-profile-state";
 import AtomicJsonStore from "./AtomicJsonStore";
 
 interface StoredProfiles {

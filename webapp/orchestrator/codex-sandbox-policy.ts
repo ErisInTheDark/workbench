@@ -1,7 +1,7 @@
 /*
  * applyServerCodexSandboxPolicy: overwrite one Codex turn with a server-owned workspace sandbox policy. Keywords: Codex, sandbox, network, policy, security.
  */
-import type { SandboxPolicy } from "../lib/codex/generated/app-server/v2/SandboxPolicy";
+import type { SandboxPolicy } from "workbench-shared/codex/generated/app-server/v2/SandboxPolicy";
 import type { JsonRpcRequest } from "./bridge-types";
 
 type WorkspaceWriteSandboxPolicy = Extract<SandboxPolicy, { type: "workspaceWrite" }>;

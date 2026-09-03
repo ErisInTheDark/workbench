@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type WorkbenchGitCheckpointController from "../lib/workbench/git/WorkbenchGitCheckpointController";
-import { WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema } from "../lib/workbench/thread/thread-state";
+import { WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcController";
 

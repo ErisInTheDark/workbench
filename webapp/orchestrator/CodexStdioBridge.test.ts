@@ -14,14 +14,14 @@ import Database from "better-sqlite3";
 
 import type CodexAppServer from "./CodexAppServer";
 import type CodexTranscriptStore from "./CodexTranscriptStore";
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
-import type { WorkbenchBrowseResultEntry } from "../lib/types";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import {
   createWorkbenchFileChangeFailureSystemMessage,
   type WorkbenchFileChangeItem,
-} from "../lib/workbench/thread/workbench-file-change";
-import type { WorkbenchThreadPageResponse } from "../lib/workbench/thread/workbench-thread-page";
+} from "workbench-shared/workbench/thread/workbench-file-change";
+import type { WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";

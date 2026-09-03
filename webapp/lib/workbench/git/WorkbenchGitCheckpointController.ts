@@ -13,8 +13,8 @@ import type {
   GitArcMoveRequest,
   GitCheckpointFileChange,
   GitCheckpointProposal,
-} from "./checkpoint-contracts";
-import { GitArcMissingClaimSetError } from "./git-arc-failures";
+} from "workbench-shared/workbench/git/checkpoint-contracts";
+import { GitArcMissingClaimSetError } from "workbench-shared/workbench/git/git-arc-failures";
 import GitArcRegistry, {
   findGitArcCollisions,
   getGitArcLiveClaimPaths,
@@ -22,8 +22,8 @@ import GitArcRegistry, {
   type GitArcCollision,
   type GitArcRegistryEntry,
 } from "./GitArcRegistry";
-import { gitArcPathsOverlap } from "./git-arc-paths";
-import { createGitArcDiffPage, type GitArcDiffPage } from "./git-arc-diff-pages";
+import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
+import { createGitArcDiffPage, type GitArcDiffPage } from "workbench-shared/workbench/git/git-arc-diff-pages";
 import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
 import GitArcPlanController, {
   createGitArcNoopResult,
@@ -54,9 +54,9 @@ import {
   normalizeCommit,
   normalizeThreadId,
   parseMarkedMetadata,
-} from "./git-arc-storage";
+} from "workbench-shared/workbench/git/git-arc-storage";
 
-export type { GitArcProposalStatus } from "./git-arc-storage";
+export type { GitArcProposalStatus } from "workbench-shared/workbench/git/git-arc-storage";
 export { GitCheckpointDirtyPathsError, GitCheckpointIgnoredPathsError } from "./GitArcPlanController";
 export type { GitArcPlanState } from "./GitArcPlanController";
 export type { GitArcNoopResult } from "./GitArcPlanController";

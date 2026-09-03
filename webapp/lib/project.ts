@@ -19,7 +19,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { getGitChanges } from "./git";
-import type { ProjectSnapshot, TreeNode, WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "./types";
+import type { ProjectSnapshot, TreeNode, WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "workbench-shared/types";
 import { discoverWorkbenchProjectIcon } from "./workbench/project/project-icon-discovery";
 import { createGitignoreMatcher } from "./workbench/gitignore-matcher";
 import {

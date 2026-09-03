@@ -4,8 +4,8 @@
  * - renderSubagentQuestionnaireOutput/renderSubagentTurnOutput: produce native wait stdout for paused and settled subagent turns. Keywords: subagent, wait, commentary, final.
  * - renderSubagentWaitResultOutput: identify which child triggered a multiplexed wait while preserving singular output. Keywords: subagent, multiplex, wait, output.
  */
-import type { Thread } from "../../codex/generated/app-server/v2/Thread";
-import type { WorkbenchSubagentSummary, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "../../types";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { WorkbenchSubagentSummary, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 
 export function createEmptySubagentQuestionnaireResponse(request: WorkbenchUserInputRequest): WorkbenchUserInputResponse {
   return { answers: Object.fromEntries(request.questions.map((question) => [question.id, { answers: [] }])) };

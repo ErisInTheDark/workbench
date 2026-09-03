@@ -7,7 +7,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
-import type { WorkbenchBrowseSessionListRequest } from "../lib/types";
+import type { WorkbenchBrowseSessionListRequest } from "workbench-shared/types";
 import type { WorkbenchBrowseResultSink } from "../lib/workbench/browse/browse-result-events";
 import WorkbenchBrowseController from "./WorkbenchBrowseController";
 import WorkbenchBrowseRuntime from "../lib/workbench/browse/WorkbenchBrowseRuntime";

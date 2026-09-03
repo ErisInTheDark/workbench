@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { OrchestratorReloadScope } from "../lib/types";
-import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
+import type { OrchestratorReloadScope } from "workbench-shared/types";
+import type { OrchestratorReloadScopeDescriptor } from "workbench-shared/workbench/orchestrator-reload";
 import WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReloadController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 

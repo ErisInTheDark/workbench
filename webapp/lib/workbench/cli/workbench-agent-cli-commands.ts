@@ -7,7 +7,7 @@
  */
 import path from "node:path";
 
-import type { OrchestratorReloadScopeDescriptor } from "../orchestrator-reload";
+import type { OrchestratorReloadScopeDescriptor } from "workbench-shared/workbench/orchestrator-reload";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry";
 import type {
   WorkbenchAgentCommandDefinition,

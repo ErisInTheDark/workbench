@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { proposalMessage, proposalNamespace, type ProposalMetadata } from "./git-arc-storage";
+import { proposalMessage, proposalNamespace, type ProposalMetadata } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcRegistry from "./GitArcRegistry";
 import GitTestFixtureCache from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";

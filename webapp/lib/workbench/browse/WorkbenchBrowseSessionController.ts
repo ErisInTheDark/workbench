@@ -13,7 +13,7 @@ import type {
   WorkbenchBrowseSessionMode,
   WorkbenchBrowseSessionSource,
   WorkbenchBrowseSessionSummary,
-} from "../../types";
+} from "workbench-shared/types";
 import WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
 import WorkbenchBrowseRuntime from "./WorkbenchBrowseRuntime";
 import WorkbenchBrowseSessionRegistry, { type WorkbenchBrowseSessionRecord } from "./WorkbenchBrowseSessionRegistry";

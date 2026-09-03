@@ -4,7 +4,7 @@
  */
 import { z } from "zod";
 
-import { parseGitArcMoveArguments, type GitArcMoveArguments } from "../git/git-arc-move-arguments";
+import { parseGitArcMoveArguments, type GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
 import { preservePowerShellTrailingPaths, WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import {
   defineWorkbenchAgentCommand,

@@ -8,11 +8,11 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import type { CodexJsonRpcResponse } from "../lib/codex/protocol";
-import type { WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "../lib/types";
-import { readWorkbenchAgentMessageInput } from "../lib/workbench/thread/thread-agent-message";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { CodexJsonRpcResponse } from "workbench-shared/codex/protocol";
+import type { WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "workbench-shared/types";
+import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 

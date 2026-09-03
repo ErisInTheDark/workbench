@@ -8,9 +8,9 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { CodexJsonRpcResponse } from "../lib/codex/protocol";
-import type { WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "../lib/types";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { CodexJsonRpcResponse } from "workbench-shared/codex/protocol";
+import type { WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "workbench-shared/types";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";

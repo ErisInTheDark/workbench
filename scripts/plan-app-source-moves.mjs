@@ -1,6 +1,6 @@
 /*
  * Build a deterministic, executable `wb git arc mv --map` plan that moves
- * browser-only Workbench source into app and browser/daemon source into shared.
+ * browser-only Workbench source into app and cross-process source into shared.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -17,7 +17,7 @@ const codeFilePattern = /\.[cm]?[jt]sx?$/u;
 const testFilePattern = /\.(?:spec|test)\.[cm]?[jt]sx?$/u;
 const extensionCandidates = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".json"];
 const maxMappingsPerCommand = 200;
-const maxCommandLength = 24_000;
+const maxCommandLength = 7_500;
 
 function normalisePath(filePath) {
   return filePath.replaceAll(path.sep, "/");
@@ -105,6 +105,10 @@ function transitiveClosure(graph, roots) {
 }
 
 function destinationFor(source, owner) {
+  if (source.startsWith("app/")) {
+    if (owner !== "shared") throw new Error(`App source cannot move to app again: ${source}`);
+    return `shared/${source.slice("app/".length)}`;
+  }
   if (source.startsWith("webapp/components/")) {
     if (owner !== "app") throw new Error(`Frontend component has mixed ownership: ${source}`);
     return `app/components/${source.slice("webapp/components/".length)}`;
@@ -192,13 +196,13 @@ async function main() {
   const componentRoots = codeFiles.filter((file) => (
     file.startsWith("webapp/components/") && !testFilePattern.test(file)
   ));
-  const frontendRoots = ["app/browser-entry.tsx", ...componentRoots];
-  if (!knownFiles.has(frontendRoots[0])) throw new Error(`Frontend entry is missing: ${frontendRoots[0]}`);
-  const frontendClosure = transitiveClosure(graph, frontendRoots);
-  const frontendWebappFiles = [...frontendClosure].filter((file) => file.startsWith("webapp/"));
+  const appRoots = codeFiles.filter((file) => file.startsWith("app/") && !testFilePattern.test(file));
+  if (!knownFiles.has("app/browser-entry.tsx")) throw new Error("Frontend entry is missing: app/browser-entry.tsx");
+  const appClosure = transitiveClosure(graph, [...appRoots, ...componentRoots]);
+  const frontendWebappFiles = [...appClosure].filter((file) => file.startsWith("webapp/"));
   const daemonRoots = codeFiles.filter((file) => (
     file.startsWith("webapp/")
-    && !frontendClosure.has(file)
+    && !appClosure.has(file)
     && !file.startsWith("webapp/components/")
     && !testFilePattern.test(file)
   ));
@@ -211,6 +215,14 @@ async function main() {
       throw new Error(`Daemon source imports a frontend component: ${source}`);
     }
     owners.set(source, owner);
+  }
+
+  for (const source of appRoots.filter((file) => daemonClosure.has(file))) {
+    owners.set(source, "shared");
+  }
+
+  for (const source of files.filter((file) => file.startsWith("webapp/lib/codex/generated/"))) {
+    owners.set(source, "shared");
   }
 
   for (const source of files.filter((file) => file.startsWith("webapp/components/"))) {
@@ -264,13 +276,15 @@ async function main() {
 
   const appCount = mappings.filter(({ owner }) => owner === "app").length;
   const sharedCount = mappings.length - appCount;
+  const commandLengths = batches.map((batch) => commandFor(batch).length);
+  const batchSizes = batches.map((batch) => batch.length);
   console.error(
     [
       `planned ${mappings.length} moves in ${batches.length} commands`,
       `app: ${appCount}`,
       `shared: ${sharedCount}`,
-      `largest command: ${Math.max(...batches.map((batch) => commandFor(batch).length))} characters`,
-      `largest batch: ${Math.max(...batches.map((batch) => batch.length))} mappings`,
+      `largest command: ${Math.max(0, ...commandLengths)} characters`,
+      `largest batch: ${Math.max(0, ...batchSizes)} mappings`,
     ].join("\n"),
   );
 }

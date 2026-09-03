@@ -9,7 +9,7 @@ import {
   type GitArcFailureEnvelope,
   GitArcMissingClaimSetError,
   GitArcProposalAlreadyCommittedError,
-} from "../lib/workbench/git/git-arc-failures";
+} from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcAcceptedProposalsError } from "../lib/workbench/git/GitArcProposalController";
 import { GitCheckpointIgnoredPathsError } from "../lib/workbench/git/GitArcPlanController";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
@@ -400,7 +400,7 @@ test("atomic claim collisions use structured owner and path diagnostics", async 
       throw new GitArcCollisionError([{
         entry: {
           checkpointCommit: "b".repeat(40),
-          claimedPaths: ["webapp/components/workbench"],
+          claimedPaths: ["app/components/workbench"],
           harness: "opencode",
           intentDescription: "",
           intentName: "change rendering",
@@ -409,8 +409,8 @@ test("atomic claim collisions use structured owner and path diagnostics", async 
           updatedAt: "2026-08-21T00:00:00.000Z",
         },
         overlaps: [{
-          claimedPath: "webapp/components/workbench",
-          requestedPath: "webapp/components/workbench/thread-view/ThreadView.tsx",
+          claimedPath: "app/components/workbench",
+          requestedPath: "app/components/workbench/thread-view/ThreadView.tsx",
         }],
       }]);
     },
@@ -428,12 +428,12 @@ test("atomic claim collisions use structured owner and path diagnostics", async 
   assert.equal(result.gitArcFailure.code, "siblingClaimCollision");
   assert.equal(result.gitArcFailure.action, "arcStart");
   assert.match(result.error, /opencode\/owner-thread.*Render ownership.*completed/u);
-  assert.match(result.error, /claims webapp\/components\/workbench through requested path webapp\/components\/workbench\/thread-view\/ThreadView\.tsx/u);
+  assert.match(result.error, /claims app\/components\/workbench through requested path app\/components\/workbench\/thread-view\/ThreadView\.tsx/u);
   if (result.gitArcFailure.code !== "siblingClaimCollision") throw new Error("Expected a collision failure.");
   assert.deepEqual(result.gitArcFailure.conflicts[0], {
     overlaps: [{
-      claimedPath: "webapp/components/workbench",
-      requestedPath: "webapp/components/workbench/thread-view/ThreadView.tsx",
+      claimedPath: "app/components/workbench",
+      requestedPath: "app/components/workbench/thread-view/ThreadView.tsx",
     }],
     owner: {
       checkpointCommit: "b".repeat(40),

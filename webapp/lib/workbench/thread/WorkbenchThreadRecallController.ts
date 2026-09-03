@@ -9,8 +9,8 @@ import type {
   WorkbenchThreadContextReadResponse,
   WorkbenchThreadRecallKind,
   WorkbenchThreadRecallRequest,
-} from "../../types";
-import { toThreadPayload } from "../../codex/thread-adapter";
+} from "workbench-shared/types";
+import { toThreadPayload } from "workbench-shared/codex/thread-adapter";
 import {
   renderWorkbenchThreadRecallExpansionMarkdown,
   renderWorkbenchThreadRecallHistoryMarkdown,

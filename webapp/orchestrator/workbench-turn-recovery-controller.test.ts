@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { WORKBENCH_UNFINISHED_TURN_MESSAGE } from "../lib/workbench/thread/thread-recovery-message";
+import { WORKBENCH_UNFINISHED_TURN_MESSAGE } from "workbench-shared/workbench/thread/thread-recovery-message";
 import WorkbenchTurnRecoveryController, { MAX_AUTOMATIC_RECOVERY_THREADS } from "./WorkbenchTurnRecoveryController";
 import WorkbenchTurnRecoveryHandoffStore from "./WorkbenchTurnRecoveryHandoffStore";
 

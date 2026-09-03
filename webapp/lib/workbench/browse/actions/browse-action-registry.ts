@@ -3,7 +3,7 @@
  * - WorkbenchBrowseAgentCleanupCommand/WorkbenchBrowseAgentForgetCommand/WorkbenchBrowseAgentRequestNormalization: normalized typed Browse action contracts. Keywords: browse, action, registry, cleanup, forget.
  * - normalizeWorkbenchBrowseAgentRequest: validate a typed Browse request through grouped action builders and emit direct runtime metadata. Keywords: browse, registry, validation, runtime.
  */
-import type { WorkbenchBrowseAgentAction, WorkbenchBrowseAgentCleanupRequest } from "../../../types";
+import type { WorkbenchBrowseAgentAction, WorkbenchBrowseAgentCleanupRequest } from "workbench-shared/types";
 import { elementInputActionBuilders } from "./element-input-actions";
 import { mouseActionBuilders } from "./mouse-actions";
 import { navigationActionBuilders } from "./navigation-actions";

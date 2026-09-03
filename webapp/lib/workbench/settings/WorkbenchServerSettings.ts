@@ -10,7 +10,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { projectRoot } from "../../project";
-import type { WorkbenchLocalCapabilitySettings } from "../../types";
+import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 
 export const DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS: WorkbenchLocalCapabilitySettings = {
   browseRawCommandsEnabled: false,

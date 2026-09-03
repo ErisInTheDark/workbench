@@ -14,7 +14,7 @@ import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
-import type { WorkbenchTranscriptSnapshot } from "../lib/workbench/database/transcript/workbench-transcript-contract";
+import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type {
   WorkbenchDatabaseMutation,
   WorkbenchDatabaseQuery,

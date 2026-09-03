@@ -9,10 +9,10 @@ import {
   GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
   GitCheckpointRequestSchema,
-} from "./checkpoint-contracts.ts";
+} from "workbench-shared/workbench/git/checkpoint-contracts";
+import { remapArcOutcome } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
-import { remapArcOutcome } from "./git-arc-storage";
 
 function registryFromState(entries: object[]) {
   let nextBlob = 0;

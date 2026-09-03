@@ -17,7 +17,7 @@ import {
   remapCheckpointMetadata,
   remapProposalMetadata,
   type ArcOutcome,
-} from "./git-arc-storage";
+} from "workbench-shared/workbench/git/git-arc-storage";
 
 export const COMMIT_REWRITE_MAP_REF = "refs/worktree/workbench/commit-rewrites";
 

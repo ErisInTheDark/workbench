@@ -7,8 +7,8 @@
  */
 import { randomUUID } from "node:crypto";
 
-import type { GitCheckpointProposal } from "./checkpoint-contracts";
-import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "./git-arc-failures";
+import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
+import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import GitArcProposalCache from "./GitArcProposalCache";
 import GitArcPublishState from "./GitArcPublishState";
@@ -30,7 +30,7 @@ import {
   type ProposalMetadata,
   remapArcOutcome,
   remapProposalMetadata,
-} from "./git-arc-storage";
+} from "workbench-shared/workbench/git/git-arc-storage";
 
 interface ArcIdentityInput {
   cwd: string;

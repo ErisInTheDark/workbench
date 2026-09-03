@@ -16,13 +16,13 @@ import {
   GitArcMissingClaimSetError,
   GitArcProposalAlreadyCommittedError,
   type GitArcFailure,
-} from "../lib/workbench/git/git-arc-failures";
+} from "workbench-shared/workbench/git/git-arc-failures";
 import { GitCheckpointDirtyPathsError, GitCheckpointIgnoredPathsError } from "../lib/workbench/git/GitArcPlanController";
 import { GitArcStartDiagnosticError } from "../lib/workbench/git/git-arc-start-diagnostics";
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
-import type { WorkbenchHarness } from "../lib/types";
-import { GitCheckpointRequestSchema, type GitCheckpointRequest } from "../lib/workbench/git/checkpoint-contracts";
+import type { WorkbenchHarness } from "workbench-shared/types";
+import { GitCheckpointRequestSchema, type GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchThreadClaimContext } from "./WorkbenchThreadStateController";

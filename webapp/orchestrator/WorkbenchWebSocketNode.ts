@@ -38,7 +38,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   safeAll: true,
   scope: "server:websocket",
   sources: [
-    "webapp/lib/workbench/websocket-stream.ts",
+    "shared/workbench/websocket-stream.ts",
     "webapp/orchestrator/WorkbenchWebSocketNode.ts",
     "webapp/orchestrator/websocket-log-format.ts",
     "webapp/orchestrator/WorkbenchWebSocketRequestController.ts",

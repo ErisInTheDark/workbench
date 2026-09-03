@@ -9,21 +9,21 @@
  * - WorkbenchTranscriptSettlement: semantic commit result used to refresh subscriptions. Keywords: transcript, settlement, subscription.
  * - WorkbenchTranscriptReadRequest/WorkbenchTranscriptSnapshot/WorkbenchTranscriptSnapshotRows: shared hydration-bounded relational read contract re-exports. Keywords: transcript, snapshot, hydration.
  */
-import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem.ts";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type {
   WorkbenchBrowseResultEntry,
   WorkbenchQuestionnaireHistoryEntry,
   WorkbenchSteerHistoryEntry,
-} from "../../../lib/types.ts";
-import type { WorkbenchThreadItemTimelineEntry } from "../../../lib/workbench/thread/thread-item-timeline.ts";
-import type { WorkbenchFileChangeItem } from "../../../lib/workbench/thread/workbench-file-change.ts";
-import type { CoreSchemaRows } from "../../../lib/workbench/database/schema/core-schema.ts";
-import type { EvidenceSchemaRows } from "../../../lib/workbench/database/schema/evidence-schema.ts";
+} from "workbench-shared/types";
+import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
+import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
+import type { CoreSchemaRows } from "workbench-shared/workbench/database/schema/core-schema";
+import type { EvidenceSchemaRows } from "workbench-shared/workbench/database/schema/evidence-schema";
 export type {
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptSnapshot,
   WorkbenchTranscriptSnapshotRows,
-} from "../../../lib/workbench/database/transcript/workbench-transcript-contract.ts";
+} from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 
 export type WorkbenchTranscriptItemLifecycle = "streaming" | "completed" | "interrupted";
 

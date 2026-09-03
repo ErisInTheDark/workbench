@@ -5,13 +5,13 @@
  * transformQuestionnaireEntry: convert one settled Workbench interaction to typed relational rows. Keywords: transcript, questionnaire, approval.
  * transformSteerEntry: convert one settled Workbench steer to a canonical user-message row. Keywords: transcript, steer, user message.
  */
-import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem.ts";
-import { resolveQuestionnaireHistoryItemId } from "../../../lib/workbench/thread/thread-questionnaire-identity.ts";
-import { createSyntheticSteerHistoryItemId } from "../../../lib/workbench/thread/thread-steer-history.ts";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import { createSyntheticSteerHistoryItemId } from "workbench-shared/workbench/thread/thread-steer-history";
 import type {
   WorkbenchQuestionnaireHistoryEntry,
   WorkbenchSteerHistoryEntry,
-} from "../../../lib/types.ts";
+} from "workbench-shared/types";
 import { interactionTables, itemTables } from "../workbench-database-schema.ts";
 import {
   deleteRows,

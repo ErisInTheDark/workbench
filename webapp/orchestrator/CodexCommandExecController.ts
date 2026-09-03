@@ -6,7 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import type { SandboxPolicy } from "../lib/codex/generated/app-server/v2/SandboxPolicy";
+import type { SandboxPolicy } from "workbench-shared/codex/generated/app-server/v2/SandboxPolicy";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { logError } from "./process-helpers";
 

@@ -8,28 +8,28 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { ApplyPatchApprovalParams } from "../lib/codex/generated/app-server/ApplyPatchApprovalParams";
-import type { ExecCommandApprovalParams } from "../lib/codex/generated/app-server/ExecCommandApprovalParams";
-import type { ReviewDecision } from "../lib/codex/generated/app-server/ReviewDecision";
-import type { ServerRequest } from "../lib/codex/generated/app-server/ServerRequest";
-import type { CommandExecutionApprovalDecision } from "../lib/codex/generated/app-server/v2/CommandExecutionApprovalDecision";
-import type { CommandExecutionRequestApprovalParams } from "../lib/codex/generated/app-server/v2/CommandExecutionRequestApprovalParams";
-import type { FileChangeApprovalDecision } from "../lib/codex/generated/app-server/v2/FileChangeApprovalDecision";
-import type { FileChangeRequestApprovalParams } from "../lib/codex/generated/app-server/v2/FileChangeRequestApprovalParams";
-import type { GrantedPermissionProfile } from "../lib/codex/generated/app-server/v2/GrantedPermissionProfile";
-import type { PermissionsRequestApprovalParams } from "../lib/codex/generated/app-server/v2/PermissionsRequestApprovalParams";
-import type { RequestPermissionProfile } from "../lib/codex/generated/app-server/v2/RequestPermissionProfile";
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
-import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
-import type { ThreadResumeResponse } from "../lib/codex/generated/app-server/v2/ThreadResumeResponse";
-import { getCurrentInProgressTurn, isThreadStatusActive } from "../lib/codex/thread-state";
-import type { ToolRequestUserInputParams } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputParams";
-import type { ToolRequestUserInputQuestion } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
-import type { ToolRequestUserInputResponse } from "../lib/codex/generated/app-server/v2/ToolRequestUserInputResponse";
-import type { TurnSteerResponse } from "../lib/codex/generated/app-server/v2/TurnSteerResponse";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
+import type { ApplyPatchApprovalParams } from "workbench-shared/codex/generated/app-server/ApplyPatchApprovalParams";
+import type { ExecCommandApprovalParams } from "workbench-shared/codex/generated/app-server/ExecCommandApprovalParams";
+import type { ReviewDecision } from "workbench-shared/codex/generated/app-server/ReviewDecision";
+import type { ServerRequest } from "workbench-shared/codex/generated/app-server/ServerRequest";
+import type { CommandExecutionApprovalDecision } from "workbench-shared/codex/generated/app-server/v2/CommandExecutionApprovalDecision";
+import type { CommandExecutionRequestApprovalParams } from "workbench-shared/codex/generated/app-server/v2/CommandExecutionRequestApprovalParams";
+import type { FileChangeApprovalDecision } from "workbench-shared/codex/generated/app-server/v2/FileChangeApprovalDecision";
+import type { FileChangeRequestApprovalParams } from "workbench-shared/codex/generated/app-server/v2/FileChangeRequestApprovalParams";
+import type { GrantedPermissionProfile } from "workbench-shared/codex/generated/app-server/v2/GrantedPermissionProfile";
+import type { PermissionsRequestApprovalParams } from "workbench-shared/codex/generated/app-server/v2/PermissionsRequestApprovalParams";
+import type { RequestPermissionProfile } from "workbench-shared/codex/generated/app-server/v2/RequestPermissionProfile";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import type { ThreadResumeResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeResponse";
+import { getCurrentInProgressTurn, isThreadStatusActive } from "workbench-shared/codex/thread-state";
+import type { ToolRequestUserInputParams } from "workbench-shared/codex/generated/app-server/v2/ToolRequestUserInputParams";
+import type { ToolRequestUserInputQuestion } from "workbench-shared/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
+import type { ToolRequestUserInputResponse } from "workbench-shared/codex/generated/app-server/v2/ToolRequestUserInputResponse";
+import type { TurnSteerResponse } from "workbench-shared/codex/generated/app-server/v2/TurnSteerResponse";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkbenchThreadHydrationRequest } from "../lib/codex/thread-hydration";
 import type {
     WorkbenchApprovalCommandContext,
@@ -40,20 +40,20 @@ import type {
     WorkbenchUserInputQuestion,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
-} from "../lib/types";
+} from "workbench-shared/types";
 import type { resolveAgentEndpointProjectFromCwd } from "../lib/workbench/project/agent-endpoint-project";
 import {
   getWorkbenchFileChangeFailureKey,
   readWorkbenchFileChangeFailureMarker,
   withWorkbenchFileChangeFailure,
   type WorkbenchFileChangeFailureMarker,
-} from "../lib/workbench/thread/workbench-file-change";
+} from "workbench-shared/workbench/thread/workbench-file-change";
 import {
   readWorkbenchThreadPageNextCursor,
   WORKBENCH_THREAD_PAGE_READ_METHOD,
   WorkbenchThreadPageReadParamsSchema,
   type WorkbenchThreadPageResponse,
-} from "../lib/workbench/thread/workbench-thread-page";
+} from "workbench-shared/workbench/thread/workbench-thread-page";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type {
   WorkbenchTranscriptAtomicObservation,

@@ -6,7 +6,7 @@
  * - createGitArcNoopResult/GitArcNoopResult: report ignored ownership requests that changed no refs or registry state. Keywords: git, arc, ignored paths, no-op.
  * - GitArcPlanResult/GitArcPlanState/GitArcStartResult: typed immutable plan, current-plan projection, and visible claim-transition receipts. Keywords: git, plan, start, claims.
  */
-import type { GitCheckpointFileChange } from "./checkpoint-contracts";
+import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 import createGitArcStartDiagnosticError from "./git-arc-start-diagnostics";
 import GitArcRegistry, {
   findGitArcCollisions,
@@ -15,7 +15,7 @@ import GitArcRegistry, {
 } from "./GitArcRegistry";
 import GitCheckpointStore, { type StoredCheckpoint } from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
-import { type CheckpointMetadata, type GitArcHarness } from "./git-arc-storage";
+import { type CheckpointMetadata, type GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
 
 interface PlanInput {
   adoptPaths?: string[];

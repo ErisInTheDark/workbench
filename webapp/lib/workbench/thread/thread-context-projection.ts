@@ -6,21 +6,21 @@
  * - buildWorkbenchThreadContextPieces: build ordered reorientation pieces from a thread context bundle. Keywords: context, questionnaire, steer, user message.
  */
 
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "../../codex/generated/app-server/v2/Turn";
-import type { UserInput } from "../../codex/generated/app-server/v2/UserInput";
-import { areUserInputsEquivalentForUserMessageDedupe } from "../../codex/thread-item-normalization.ts";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/codex/thread-item-normalization";
 import type {
   WorkbenchQuestionnaireHistoryEntry,
   WorkbenchSteerHistoryEntry,
   WorkbenchThreadContextBundle,
-} from "../../types";
+} from "workbench-shared/types";
 import {
   isAgentScreenshotSteerInput,
   isAgentScreenshotSteerUserMessage,
-} from "./thread-steer-markers.ts";
-import { unwrapWorkbenchSteerDisplayInput } from "./thread-steer-display.ts";
-import { isWorkbenchHiddenSystemSteerInput } from "./thread-recovery-message.ts";
+} from "workbench-shared/workbench/thread/thread-steer-markers";
+import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
+import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 type ContextPieceKind = "planBlock" | "questionnaire" | "userMessage" | "userSteer";
 

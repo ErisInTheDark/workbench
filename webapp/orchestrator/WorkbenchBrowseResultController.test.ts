@@ -5,8 +5,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
-import type { WorkbenchBrowseResultEntry } from "../lib/types";
+import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import type { WorkbenchBrowseResultEvent } from "../lib/workbench/browse/browse-result-events";
 import WorkbenchBrowseResultController from "./WorkbenchBrowseResultController";
 

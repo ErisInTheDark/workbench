@@ -3,10 +3,10 @@
  * - hydrateThreadWithStoredTurns: merge disk transcript turns into an upstream thread snapshot. Keywords: codex, transcript, hydration, turns.
  * - mergeStoredTurnIntoUpstreamTurn: preserve richer stored items and backfill omitted lifecycle facts without replacing provider truth. Keywords: turn merge, itemsView, lifecycle.
  */
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
-import { normalizeThreadItems } from "../lib/codex/thread-item-normalization";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
 import type { CodexTranscriptTurnTimelineEntry } from "./codex-transcript-types";
 import { mergeThreadItem } from "./codex-transcript-item-merge";
 import { orderMergedItemsByTimeline } from "./codex-transcript-timeline";

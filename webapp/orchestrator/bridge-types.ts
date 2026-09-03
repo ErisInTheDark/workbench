@@ -4,7 +4,7 @@
  * - JsonRpcRequest/JsonRpcResponse/JsonRpcNotification: shared transport shapes for the local WebSocket bridge. Keywords: json-rpc, websocket, bridge.
  * - BridgeClient: minimal websocket client contract used by the orchestrator modules. Keywords: websocket, client, bridge.
  */
-import type { WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness } from "workbench-shared/types";
 
 export type HarnessKind = WorkbenchHarness;
 

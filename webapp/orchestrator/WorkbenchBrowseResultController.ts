@@ -6,12 +6,12 @@
  */
 import { createHash } from "node:crypto";
 
-import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import { getCurrentInProgressTurn } from "../lib/codex/thread-state";
-import type { WorkbenchBrowseResultEntry, WorkbenchHarness } from "../lib/types";
+import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import { getCurrentInProgressTurn } from "workbench-shared/codex/thread-state";
+import type { WorkbenchBrowseResultEntry, WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchBrowseResultEvent, WorkbenchBrowseResultSink } from "../lib/workbench/browse/browse-result-events";
-import { createAgentScreenshotSteerText } from "../lib/workbench/thread/thread-steer-markers";
+import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 const IDLE_TAIL = Promise.resolve();
 

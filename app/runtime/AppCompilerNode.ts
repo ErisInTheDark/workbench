@@ -40,6 +40,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
     "app/runtime/AppCompilerNode.ts",
     "app/WorkbenchFrontendCompiler.ts",
     "app/workbench-library-root.ts",
+    "shared/frontend-generation.ts",
     "static/**",
   ].join("\n"),
 });

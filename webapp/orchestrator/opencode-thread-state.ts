@@ -18,17 +18,17 @@ import type {
   SessionStatus,
 } from "@opencode-ai/sdk/v2";
 
-import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
-import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/JsonValue";
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
-import type { ThreadStatus } from "../lib/codex/generated/app-server/v2/ThreadStatus";
-import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
+import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
+import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadStatus } from "workbench-shared/codex/generated/app-server/v2/ThreadStatus";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type {
   WorkbenchModelOption,
   WorkbenchUserInputRequest,
-} from "../lib/types";
+} from "workbench-shared/types";
 
 export type OpenCodeMessageEntry = {
   info: Message;

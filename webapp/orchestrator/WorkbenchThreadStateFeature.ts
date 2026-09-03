@@ -5,13 +5,13 @@
  * - normalizeProviderSidebarEntry/normalizeSubagentProviderLifecycle/mapProviderLifecycleNotification/mapProviderActivityNotification: normalize provider rows, subagent defaults, lifecycle, and activity notifications. Keywords: timestamp, lifecycle, harness.
  * - default WorkbenchThreadStateFeature: own reconciliation, project observation, SQLite store injection, provider-backed title and status commands, notification observation, and the current controller. Keywords: sidebar, project, lifecycle, title, sqlite, reloadable feature.
  */
-import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
-import { getCurrentTurn } from "../lib/codex/thread-state";
+import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import { getCurrentTurn } from "workbench-shared/codex/thread-state";
 import { normalizeThreadTitle } from "../lib/thread-bootstrap";
-import type { WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship } from "../lib/types";
+import type { WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { GitArcActiveClaim, GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
-import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
-import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
+import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";

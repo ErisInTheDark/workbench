@@ -5,15 +5,15 @@
  * - getWorkbenchThreadContextPieceRef: derive one stable stateless ref for a projected context piece. Keywords: thread context, ref.
  */
 
-import type { UserInput } from "../../codex/generated/app-server/v2/UserInput";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import {
   getQuestionnairePromptText,
   getQuestionnaireTopicLabel,
   getSingleQuestionnaireSummaryLabel,
-} from "./thread-questionnaire-transcript.ts";
-import { readWorkbenchAgentMessageInput } from "./thread-agent-message.ts";
+} from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
+import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 import type { WorkbenchThreadContextPiece } from "./thread-context-projection.ts";
-import { unwrapWorkbenchSteerDisplayInput } from "./thread-steer-display.ts";
+import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 
 const IMAGE_PLACEHOLDER = "<an image was sent>";
 

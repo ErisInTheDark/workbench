@@ -1,7 +1,7 @@
 /*
  * transformOperationTranscriptItem: convert process, callable-tool, and collaboration source items to relational mutations. Keywords: transcript, transform, operation.
  */
-import type { JsonValue } from "../../../lib/codex/generated/app-server/serde_json/JsonValue.ts";
+import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
 import { operationSourceTables } from "../workbench-database-schema.ts";
 import {
   deleteRows,

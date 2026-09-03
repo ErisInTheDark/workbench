@@ -7,7 +7,7 @@ import type {
   WorkbenchBrowseAgentActionName,
   WorkbenchBrowseResultEntryDetailKind,
   WorkbenchBrowseResultEntryState,
-} from "../../types";
+} from "workbench-shared/types";
 
 export interface WorkbenchBrowseResultEvent {
   action: WorkbenchBrowseAgentActionName | string;

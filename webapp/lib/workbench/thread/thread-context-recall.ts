@@ -6,11 +6,11 @@
  * - createWorkbenchThreadRecallCursor/readWorkbenchThreadRecallCursor: encode and decode stable record-offset cursors. Keywords: cursor, offset, stable.
  */
 
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type {
   WorkbenchThreadContextBundle,
   WorkbenchThreadRecallKind,
-} from "../../types";
+} from "workbench-shared/types";
 import {
   getWorkbenchThreadContextPieceRef,
   renderWorkbenchThreadContextPieceMarkdown,
@@ -20,7 +20,7 @@ import {
   createWorkbenchThreadContextSortKey,
   type WorkbenchThreadContextPiece,
 } from "./thread-context-projection.ts";
-import { readWorkbenchAgentMessageInput } from "./thread-agent-message.ts";
+import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 
 const SEARCH_SNIPPET_CHARACTERS = 500;
 const CURSOR_PREFIX = "recall-v1:";

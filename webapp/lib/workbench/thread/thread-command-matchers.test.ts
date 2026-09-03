@@ -6,15 +6,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { JsonValue } from "../../codex/generated/app-server/serde_json/JsonValue.ts";
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
+import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
 import { getWorkbenchAgentCommandToolName } from "../commands/workbench-agent-command-definition.ts";
-import type { ThreadCommandDisplayPart } from "./command-matchers/types.ts";
+import type { ThreadCommandDisplayPart } from "../../../../app/workbench/thread/command-matchers/types.ts";
 import {
   WORKBENCH_COMMAND_PRESENTATION_NAMES,
   type WorkbenchCommandPresentationName,
-} from "./command-matchers/workbench-command-rendering.ts";
+} from "../../../../app/workbench/thread/command-matchers/workbench-command-rendering.ts";
 
 import {
   getGitArcMatcherAction,
@@ -33,7 +33,7 @@ import {
   parseWorkbenchSubagentCommand,
   parseWorkbenchThreadStatusCommand,
   parseWorkbenchThreadTitleCommand,
-} from "./thread-command-matchers.ts";
+} from "../../../../app/workbench/thread/thread-command-matchers.ts";
 
 const PROJECT_ROOT = "C:/git/web/workbench";
 
@@ -349,7 +349,7 @@ test("failed Recall MCP calls use the generic error renderer", () => {
 
 test("PowerShell ripgrep summaries do not treat an uppercase context value as the query", () => {
   const display = getThreadCommandDisplay({
-    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'rg -n -C 8 "rotate|selectedHarness|onHarness|HarnessIcon|harness" webapp/components/workbench.tsx | Select-Object -First 180'`,
+    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'rg -n -C 8 "rotate|selectedHarness|onHarness|HarnessIcon|harness" app/components/workbench.tsx | Select-Object -First 180'`,
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -357,13 +357,13 @@ test("PowerShell ripgrep summaries do not treat an uppercase context value as th
 
   assert.equal(display.claimedBy, "powershell.search-rg,powershell.select-object-limit");
   assert.deepEqual(codeOperands(display.summaryParts), ["rotate|selectedHarness|onHarness|HarnessIcon|harness"]);
-  assert.deepEqual(pathOperands(display.summaryParts), ["webapp/components/workbench.tsx"]);
+  assert.deepEqual(pathOperands(display.summaryParts), ["app/components/workbench.tsx"]);
   assert.equal(display.summaryStats.searchedFiles, 1);
 });
 
 test("PowerShell ripgrep summaries preserve lowercase count flags as non-consuming", () => {
   const display = getThreadCommandDisplay({
-    command: "pwsh -Command 'rg -n -c needle webapp/components/workbench.tsx'",
+    command: "pwsh -Command 'rg -n -c needle app/components/workbench.tsx'",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -371,22 +371,22 @@ test("PowerShell ripgrep summaries preserve lowercase count flags as non-consumi
 
   assert.equal(display.claimedBy, "powershell.search-rg");
   assert.deepEqual(codeOperands(display.summaryParts), ["needle"]);
-  assert.deepEqual(pathOperands(display.summaryParts), ["webapp/components/workbench.tsx"]);
+  assert.deepEqual(pathOperands(display.summaryParts), ["app/components/workbench.tsx"]);
 });
 
 test("typed ripgrep summaries exactly match the shell ripgrep presentation", () => {
   const cases = [
     {
-      args: ["-n", "-C", "3", "needle|thread", "webapp/components/workbench.tsx"],
-      command: String.raw`pwsh -Command 'rg -n -C 3 "needle|thread" webapp/components/workbench.tsx'`,
+      args: ["-n", "-C", "3", "needle|thread", "app/components/workbench.tsx"],
+      command: String.raw`pwsh -Command 'rg -n -C 3 "needle|thread" app/components/workbench.tsx'`,
     },
     {
       args: ["-n", "-e", String.raw`needle\(thread`, "webapp/orchestrator"],
       command: String.raw`pwsh -Command 'rg -n -e "needle\(thread" webapp/orchestrator'`,
     },
     {
-      args: ["-n", "-g", "*.ts", "needle", "webapp/lib"],
-      command: String.raw`pwsh -Command 'rg -n -g "*.ts" needle webapp/lib'`,
+      args: ["-n", "-g", "*.ts", "needle", "app/workbench"],
+      command: String.raw`pwsh -Command 'rg -n -g "*.ts" needle app/workbench'`,
     },
     {
       args: ["needle"],
@@ -1005,7 +1005,7 @@ wb git arc propose --title \"dynamic proposal\" --description $description"`,
 
 test("PowerShell numbered reads resolve a preceding literal path assignment", () => {
   const display = getThreadCommandDisplay({
-    command: String.raw`"c:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '$p='"'"'webapp\\lib\\workbench\\thread\\command-matchers\\workbench-cli.ts'"'"'; $c=Get-Content $p; $c[80..116]'`,
+    command: String.raw`"c:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '$p='"'"'app\\workbench\\thread\\command-matchers\\workbench-cli.ts'"'"'; $c=Get-Content $p; $c[80..116]'`,
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -1013,10 +1013,10 @@ test("PowerShell numbered reads resolve a preceding literal path assignment", ()
 
   assert.equal(display.claimedBy, "powershell.hide-trivial-assignment,powershell.read-numbered-lines");
   assert.deepEqual(pathOperands(display.summaryParts), [
-    "webapp/lib/workbench/thread/command-matchers/workbench-cli.ts",
+    "app/workbench/thread/command-matchers/workbench-cli.ts",
   ]);
   assert.deepEqual(pathOperands(display.ongoingSummaryParts), [
-    "webapp/lib/workbench/thread/command-matchers/workbench-cli.ts",
+    "app/workbench/thread/command-matchers/workbench-cli.ts",
   ]);
 });
 

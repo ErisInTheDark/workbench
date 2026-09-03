@@ -10,7 +10,7 @@ import type {
   WorkbenchBrowseAgentSessionRequest,
   WorkbenchBrowseCommandRequest,
   WorkbenchBrowseSessionMode,
-} from "../../../types";
+} from "workbench-shared/types";
 
 export type BrowseJsonValue = boolean | number | string | null | BrowseJsonValue[] | { [key: string]: BrowseJsonValue };
 export type BrowseRuntimeRequest =

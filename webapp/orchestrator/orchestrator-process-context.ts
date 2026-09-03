@@ -3,10 +3,10 @@
  * - ORCHESTRATOR_PROCESS_REQUIRED_REGISTRATIONS: live registry keys consumed directly by the stable process shell. Keywords: registry, shell, contract.
  * - OrchestratorProcessContext: stable process-shell ports available to every reloadable node generation. Keywords: process, ports, graph.
  */
-import type { OrchestratorReloadScope, WorkbenchHarness, WorkbenchSubagentRelationship } from "../lib/types";
+import type { OrchestratorReloadScope, WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchBrowseProjectIdResolver, WorkbenchBrowseProjectResolver } from "../lib/workbench/browse/WorkbenchBrowseRuntime";
-import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
-import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import type { OrchestratorReloadScopeDescriptor } from "workbench-shared/workbench/orchestrator-reload";
+import type { WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { BrowseSessionCleanupSupervisorOptions } from "./BrowseSessionCleanupSupervisor";
 import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";

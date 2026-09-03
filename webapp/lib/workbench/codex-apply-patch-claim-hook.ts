@@ -6,7 +6,7 @@
  */
 import path from "node:path";
 
-import type { PatchChangeKind } from "../codex/generated/app-server/v2/PatchChangeKind";
+import type { PatchChangeKind } from "workbench-shared/codex/generated/app-server/v2/PatchChangeKind";
 
 export interface CodexApplyPatchClaimHookChange {
   additions: number;

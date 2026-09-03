@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { WorkbenchBrowseCommandResponse } from "../../types";
+import type { WorkbenchBrowseCommandResponse } from "workbench-shared/types";
 import type WorkbenchBrowseDownloadMonitor from "./WorkbenchBrowseDownloadMonitor";
 import { killProcessTree } from "../../../orchestrator/process-helpers";
 

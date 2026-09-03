@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import type { WorkbenchProjectRoot } from "../../types";
+import type { WorkbenchProjectRoot } from "workbench-shared/types";
 import { buildProjectInstructionContent } from "./project-instruction-files";
 
 async function write(rootPath: string, relativePath: string, content: string) {

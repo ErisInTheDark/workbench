@@ -5,8 +5,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { Thread } from "../../codex/generated/app-server/v2/Thread.ts";
-import type { WorkbenchUserInputRequest } from "../../types.ts";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { WorkbenchUserInputRequest } from "workbench-shared/types";
 import {
   createEmptySubagentQuestionnaireResponse,
   renderSubagentQuestionnaireOutput,

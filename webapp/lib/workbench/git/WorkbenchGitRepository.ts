@@ -10,7 +10,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
-import type { GitCheckpointFileChange } from "./checkpoint-contracts";
+import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 
 const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;

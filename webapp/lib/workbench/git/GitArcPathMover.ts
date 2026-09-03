@@ -8,7 +8,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 
-import type { GitArcMoveRequest } from "./checkpoint-contracts";
+import type { GitArcMoveRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 export const MAX_GIT_ARC_MOVE_MAPPINGS = 200;

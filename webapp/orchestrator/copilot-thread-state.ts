@@ -9,15 +9,15 @@ import { randomUUID } from "node:crypto";
 
 import type { SessionEvent, SessionMetadata } from "@github/copilot-sdk";
 
-import type { DynamicToolCallOutputContentItem } from "../lib/codex/generated/app-server/v2/DynamicToolCallOutputContentItem";
-import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { ThreadActiveFlag } from "../lib/codex/generated/app-server/v2/ThreadActiveFlag";
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
-import type { ThreadStatus } from "../lib/codex/generated/app-server/v2/ThreadStatus";
-import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import { appendCommandOutputDelta, compactCommandOutput } from "../lib/codex/thread-command-output";
+import type { DynamicToolCallOutputContentItem } from "workbench-shared/codex/generated/app-server/v2/DynamicToolCallOutputContentItem";
+import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadActiveFlag } from "workbench-shared/codex/generated/app-server/v2/ThreadActiveFlag";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadStatus } from "workbench-shared/codex/generated/app-server/v2/ThreadStatus";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import { appendCommandOutputDelta, compactCommandOutput } from "workbench-shared/codex/thread-command-output";
 import type { JsonRpcNotification } from "./bridge-types";
 
 export type CopilotThreadState = {

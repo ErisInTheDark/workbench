@@ -7,13 +7,13 @@
  * - default WorkbenchOrchestratorReloadController: own user-requested reload execution, dirt observation, handoff completion, and hard reload. Keywords: reload, user, lifecycle.
  */
 import type { WorkbenchReloadDirtSnapshot } from "workbench-shared/reload/workbench-reload";
-import type { OrchestratorReloadRequest, OrchestratorReloadResponse, OrchestratorReloadScope } from "../lib/types";
+import type { OrchestratorReloadRequest, OrchestratorReloadResponse, OrchestratorReloadScope } from "workbench-shared/types";
 import {
   expandOrchestratorReloadScopes,
   resolveOrchestratorReloadSelections,
   validateOrchestratorReloadScopeCombination,
   type OrchestratorReloadScopeDescriptor,
-} from "../lib/workbench/orchestrator-reload";
+} from "workbench-shared/workbench/orchestrator-reload";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 
 interface ReloadBatch { scopes: OrchestratorReloadScope[] }

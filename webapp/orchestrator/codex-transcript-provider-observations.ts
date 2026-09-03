@@ -9,16 +9,16 @@
  * - createCodexTranscriptProviderThreadObservations: project one complete provider thread response into ordered atomic facts. Keywords: codex, transcript, provider, snapshot.
  * - createCodexTranscriptProviderThreadScopeObservation: project complete turns from one provider thread response into a replacement boundary. Keywords: codex, transcript, provider, replacement.
  */
-import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/JsonValue.ts";
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem.ts";
-import type { Turn } from "../lib/codex/generated/app-server/v2/Turn.ts";
+import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptItemLifecycle,
   WorkbenchTranscriptProviderTurnScopeObservation,
 } from "./database/transcript/workbench-transcript-types.ts";
-import { normalizeThreadItems } from "../lib/codex/thread-item-normalization.ts";
+import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
 import type { JsonRpcRequest } from "./bridge-types.ts";
 import { createFirstTurnItemOwners } from "./codex-transcript-item-ownership.ts";
 import { mergeThreadItem } from "./codex-transcript-item-merge.ts";

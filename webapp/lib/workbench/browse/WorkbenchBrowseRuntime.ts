@@ -12,7 +12,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { appRoot, normalizeRelativePath, resolveProjectRoot, type ResolvedProject } from "../../project";
-import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "../../types";
+import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
 import { killProcessTreeAsync } from "../../../orchestrator/process-helpers";
 import {
   resolveAgentEndpointProjectFromCwd,

@@ -5,7 +5,7 @@
  */
 import path from "node:path";
 
-import type { WorkbenchSubagentRelationship } from "../lib/types";
+import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 
 export interface WorkbenchSubagentStoreState {
   initializationPromise: Promise<void> | null;

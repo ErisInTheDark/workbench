@@ -21,7 +21,12 @@
   },
   "include": [
     "**/*.ts",
-    "**/*.tsx"
+    "**/*.tsx",
+    "../app/**/*.ts",
+    "../app/**/*.tsx",
+    "../package/**/*.ts",
+    "../shared/**/*.ts",
+    "../shared/**/*.tsx"
   ],
   "exclude": [
     "node_modules"

@@ -17,7 +17,7 @@ import WorkbenchAppLogger from "./WorkbenchAppLogger.ts";
 import {
   type WorkbenchFrontendGeneration,
   WORKBENCH_STYLESHEET_GENERATION_PROPERTY,
-} from "./frontend-generation.ts";
+} from "workbench-shared/frontend-generation";
 import resolveWorkbenchLibraryRoot from "./workbench-library-root.ts";
 
 export interface WorkbenchFrontendCompilerOptions {
@@ -34,7 +34,7 @@ const defaultRepositoryRootPath = path.resolve(moduleDirectoryPath, "..");
 const require = createRequire(import.meta.url);
 const tailwindCliPath = path.join(path.dirname(require.resolve("@tailwindcss/cli/package.json")), "dist", "index.mjs");
 const FRONTEND_GENERATION_NAMESPACE = "workbench-frontend-generation";
-const FRONTEND_GENERATION_MODULE_PATH = "frontend-generation.ts";
+const FRONTEND_GENERATION_MODULE_SPECIFIER = "workbench-shared/frontend-generation";
 const STYLESHEET_GENERATION_PATTERN = new RegExp(
   String.raw`\n:root\{${WORKBENCH_STYLESHEET_GENERATION_PROPERTY}:[a-f0-9]{64}\}\n`,
   "gu",
@@ -191,11 +191,8 @@ export default class WorkbenchFrontendCompiler {
           candidateGeneration = randomUUID();
           startedAt = performance.now();
         });
-        build.onResolve({ filter: /^\.\/frontend-generation\.ts$/ }, (args) => {
-          if (path.resolve(args.resolveDir, args.path) !== path.join(this.appDirectoryPath, FRONTEND_GENERATION_MODULE_PATH)) {
-            return undefined;
-          }
-          return { namespace: FRONTEND_GENERATION_NAMESPACE, path: FRONTEND_GENERATION_MODULE_PATH };
+        build.onResolve({ filter: /^workbench-shared\/frontend-generation$/ }, () => {
+          return { namespace: FRONTEND_GENERATION_NAMESPACE, path: FRONTEND_GENERATION_MODULE_SPECIFIER };
         });
         build.onLoad({ filter: /.*/, namespace: FRONTEND_GENERATION_NAMESPACE }, () => ({
           contents: [
@@ -206,6 +203,7 @@ export default class WorkbenchFrontendCompiler {
           watchFiles: [
             path.join(this.appDirectoryPath, "globals.css"),
             path.join(this.appDirectoryPath, "tailwind.css"),
+            path.join(this.repositoryRootPath, "shared", "frontend-generation.ts"),
           ],
         }));
         build.onEnd((result) => {
@@ -258,7 +256,7 @@ export default class WorkbenchFrontendCompiler {
       "--output",
       path.join(this.outputDirectoryPath, "assets", "app.css"),
       "--cwd",
-      path.join(this.repositoryRootPath, "webapp"),
+      this.appDirectoryPath,
       "--map",
       path.join(this.outputDirectoryPath, "assets", "app.css.map"),
       ...(watch ? ["--watch=always"] : []),

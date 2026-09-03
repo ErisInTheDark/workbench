@@ -7,8 +7,8 @@ import test from "node:test";
 
 import type { Session } from "@opencode-ai/sdk/v2";
 
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import { createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput } from "../lib/workbench/thread/thread-recovery-message";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import { createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import {
   createOpenCodeReasoningConfig,
   createOpenCodeRecoveryStartRequest,

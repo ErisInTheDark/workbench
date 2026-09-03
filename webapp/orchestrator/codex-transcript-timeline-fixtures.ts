@@ -2,8 +2,8 @@
  * Exports:
  * - No production exports; typechecked manual fixtures for transcript timeline helpers. Keywords: codex, transcript, fixtures.
  */
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
-import { normalizeThreadItems } from "../lib/codex/thread-item-normalization";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
 import { mergeThreadItem } from "./codex-transcript-item-merge";
 import { orderMergedItemsByTimeline, rememberTimelineItem } from "./codex-transcript-timeline";
 import type { CodexTranscriptTurnTimelineEntry } from "./codex-transcript-types";

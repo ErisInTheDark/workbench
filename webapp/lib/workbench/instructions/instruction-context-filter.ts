@@ -5,7 +5,7 @@
  * - filterWorkbenchInstructionContent: strip HTML comments and apply harness, shell, and mechanics-availability blocks without rejecting prompt assembly. Keywords: filter, tolerant parser, final payload.
  */
 
-import type { WorkbenchHarness } from "../../types";
+import type { WorkbenchHarness } from "workbench-shared/types";
 
 type SelectorAxis = "available" | "harness" | "shell";
 type WorkbenchShell = "bash" | "pwsh";

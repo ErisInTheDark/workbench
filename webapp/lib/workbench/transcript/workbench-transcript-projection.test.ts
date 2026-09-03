@@ -6,16 +6,16 @@ import test from "node:test";
 
 import Database from "better-sqlite3";
 
-import type { WorkbenchQuestionnaireHistoryEntry } from "../../types";
-import type { WorkbenchFileChangeItem } from "../thread/workbench-file-change";
+import type { WorkbenchQuestionnaireHistoryEntry } from "workbench-shared/types";
+import { projectWorkbenchTranscriptItems } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
+import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
+import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { installWorkbenchDatabaseSchema } from "../../../orchestrator/database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "../../../orchestrator/database/transcript/WorkbenchTranscriptRepository";
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
 } from "../../../orchestrator/database/transcript/workbench-transcript-types";
-import { projectWorkbenchTranscriptItems } from "../database/transcript/workbench-transcript-item-projection";
-import { projectWorkbenchTranscript } from "./workbench-transcript-projection";
 
 function createRepository() {
   const database = new Database(":memory:");

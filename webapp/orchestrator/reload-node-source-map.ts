@@ -12,8 +12,8 @@ import type {
   ReloadDirtSourceState,
 } from "workbench-shared/reload/ReloadDirtController";
 
-import type { OrchestratorReloadScope } from "../lib/types";
-import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
+import type { OrchestratorReloadScope } from "workbench-shared/types";
+import type { OrchestratorReloadScopeDescriptor } from "workbench-shared/workbench/orchestrator-reload";
 import ReloadableNode, { type ReloadableNodeGraph } from "./ReloadableNode";
 
 export type ReloadNodeSourceDescriptor = ReloadDirtSourceDescriptor & OrchestratorReloadScopeDescriptor;

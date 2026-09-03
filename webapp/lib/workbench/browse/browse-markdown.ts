@@ -11,7 +11,7 @@ import type {
   WorkbenchBrowseAgentWaitSelectorState,
   WorkbenchBrowseAgentWaitState,
   WorkbenchBrowseSessionMode,
-} from "../../types";
+} from "workbench-shared/types";
 
 export interface WorkbenchBrowseMarkdownCompileOptions {
   cwd: string;

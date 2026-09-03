@@ -3,7 +3,7 @@
  * - WorkbenchPromptContext/WorkbenchPromptInstructions: prompt assembly input and output contracts. Keywords: prompt, context, instructions.
  */
 
-import type { WorkbenchHarness, WorkbenchProjectRoot } from "../../types";
+import type { WorkbenchHarness, WorkbenchProjectRoot } from "workbench-shared/types";
 
 export interface WorkbenchPromptContext {
   readonly agentPath?: string | null;

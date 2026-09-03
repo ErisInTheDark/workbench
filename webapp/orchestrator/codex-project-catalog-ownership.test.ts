@@ -9,7 +9,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type CodexAppServer from "./CodexAppServer";
 import CodexStdioBridge from "./CodexStdioBridge";
 import type { JsonRpcRequest } from "./bridge-types";

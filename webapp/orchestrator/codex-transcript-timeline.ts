@@ -5,8 +5,8 @@
  * - extractTimelineItemKey: extract timeline item keys from app-server messages. Keywords: itemId, callId.
  * - normalizeTurnTimeline/orderMergedItemsByTimeline: normalize and apply compact turn item ordering. Keywords: hydration, ordering.
  */
-import type { DynamicToolCallParams } from "../lib/codex/generated/app-server/v2/DynamicToolCallParams";
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
+import type { DynamicToolCallParams } from "workbench-shared/codex/generated/app-server/v2/DynamicToolCallParams";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { CodexTranscriptTurnFile, CodexTranscriptTurnTimelineEntry } from "./codex-transcript-types";
 
 type TimelineClassification = "anchor" | "non-anchor" | null;

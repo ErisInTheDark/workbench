@@ -5,9 +5,9 @@
  * - encodeTranscriptPathSegment: encode thread, turn, and request ids for filesystem paths. Keywords: base64url, path segment.
  * - extractThread/extractTurn/extractThreadId/extractTurnId/extractItem: pull thread-scoped entities from app-server traffic. Keywords: codex, transcript, normalization.
  */
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { SerializableJson } from "./codex-transcript-types";
 
 export function asRecord(value: unknown) {

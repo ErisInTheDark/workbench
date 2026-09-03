@@ -7,7 +7,7 @@ import {
   proposalMessage,
   proposalNamespace,
   type ProposalMetadata,
-} from "./git-arc-storage";
+} from "workbench-shared/workbench/git/git-arc-storage";
 import GitCheckpointStore from "./GitCheckpointStore";
 import type WorkbenchGitRepository from "./WorkbenchGitRepository";
 import type { GitCommitBatch, GitCommitIdentity } from "./WorkbenchGitRepository";

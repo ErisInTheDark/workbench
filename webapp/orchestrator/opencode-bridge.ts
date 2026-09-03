@@ -22,23 +22,23 @@ import type {
   V2Event,
 } from "@opencode-ai/sdk/v2";
 
-import type { GetAccountRateLimitsResponse } from "../lib/codex/generated/app-server/v2/GetAccountRateLimitsResponse";
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { ThreadStatus } from "../lib/codex/generated/app-server/v2/ThreadStatus";
-import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import { getCurrentTurn } from "../lib/codex/thread-state";
-import type { WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "../lib/types";
+import type { GetAccountRateLimitsResponse } from "workbench-shared/codex/generated/app-server/v2/GetAccountRateLimitsResponse";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadStatus } from "workbench-shared/codex/generated/app-server/v2/ThreadStatus";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import { getCurrentTurn } from "workbench-shared/codex/thread-state";
+import type { WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import {
   createWorkbenchThreadRecoveryInput,
   isWorkbenchThreadRecoveryInput,
   isWorkbenchThreadRecoveryUserMessage,
-} from "../lib/workbench/thread/thread-recovery-message";
+} from "workbench-shared/workbench/thread/thread-recovery-message";
 import {
   WORKBENCH_THREAD_PAGE_READ_METHOD,
   WorkbenchThreadPageReadParamsSchema,
   type WorkbenchThreadPageResponse,
-} from "../lib/workbench/thread/workbench-thread-page";
+} from "workbench-shared/workbench/thread/workbench-thread-page";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { OpenCodeLiveThreadState } from "./opencode-live-thread-state";
 import type OpenCodeAppServer from "./OpenCodeAppServer";

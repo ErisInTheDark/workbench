@@ -4,12 +4,12 @@
  */
 import { z } from "zod";
 
-import type { OrchestratorReloadScope } from "../../types";
+import type { OrchestratorReloadScope } from "workbench-shared/types";
 import {
   expandOrchestratorReloadScopes,
   type OrchestratorReloadScopeDescriptor,
   resolveOrchestratorReloadSelections,
-} from "../orchestrator-reload";
+} from "workbench-shared/workbench/orchestrator-reload";
 import { defineWorkbenchAgentCommand, getWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
 type ReloadAccess = OrchestratorReloadScopeDescriptor["access"];

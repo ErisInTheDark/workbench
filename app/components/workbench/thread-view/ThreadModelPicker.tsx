@@ -1,0 +1,203 @@
+/*
+ * Exports:
+ * - default ThreadModelPicker: render model selection, priority, refresh, and return-to-message controls for a thread composer. Keywords: thread, model, picker, refresh.
+ * - Local helpers: format model context windows, feature pills, and model priority arrows. Keywords: model metadata, priority.
+ */
+"use client";
+
+import { JSX, type KeyboardEvent } from "react";
+import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
+import { ReloadIcon } from "../workbench-icons";
+import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
+import ThreadPickerGroupMoveButton from "./ThreadPickerGroupMoveButton";
+import { formatHarnessLabel } from "./harness-label";
+
+function formatContextWindow (tokens: number | null) {
+	if (!tokens) {
+		return null;
+	}
+
+	if (tokens >= 1_000_000) {
+		return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+	}
+
+	if (tokens >= 1_000) {
+		return `${Math.round(tokens / 1_000)}k`;
+	}
+
+	return `${tokens}`;
+}
+
+function buildFeatureList (model: WorkbenchModelOption) {
+	const features: (string | JSX.Element)[] = [];
+
+	if (model.billingMultiplier !== undefined && model.billingMultiplier !== null) {
+		features.push(<span className={
+			model.billingMultiplier === 0 ? "text-blue-400"
+				: model.billingMultiplier < 0.5 ? "text-green-400"
+					: model.billingMultiplier <= 1 ? "text-yellow-500"
+						: "text-rose-500"
+		}>{model.billingMultiplier}x</span>);
+	}
+
+	const contextWindow = formatContextWindow(model.maxContextWindowTokens);
+	if (contextWindow) {
+		features.push(contextWindow);
+	}
+
+	if (model.isDefault) {
+		features.push("Default");
+	}
+	if (model.supportsVision) {
+		features.push("Vision");
+	}
+	if (model.supportsReasoningEffort) {
+		features.push(`Effort`);
+	}
+	if (model.supportsPersonality) {
+		features.push("Personality");
+	}
+
+	// if (model.additionalSpeedTiers.length) {
+	// 	features.push(`Speed tiers: ${model.additionalSpeedTiers.join(", ")}`);
+	// }
+
+	return features;
+}
+
+export default function ThreadModelPicker ({
+	appliesOnNextTurnOnly,
+	deprioritizedModelIds,
+	error,
+	harness,
+	isLoading,
+	isRefreshDisabled,
+	isRefreshing,
+	models,
+	onClose,
+	onRefresh,
+	onSelectModel,
+	onToggleModelPriority,
+	selectedModelId,
+	showsPriorityControls = true,
+}: {
+	appliesOnNextTurnOnly: boolean;
+	deprioritizedModelIds: string[];
+	error: string;
+	harness: WorkbenchHarness;
+	isLoading: boolean;
+	isRefreshDisabled: boolean;
+	isRefreshing: boolean;
+	models: WorkbenchModelOption[];
+	onClose: () => void;
+	onRefresh: () => void;
+	onSelectModel: (model: WorkbenchModelOption) => void;
+	onToggleModelPriority: (modelId: string) => void;
+	selectedModelId: string | null;
+	showsPriorityControls?: boolean;
+}) {
+	const visibleModels = models.filter((model) => model.policyState !== "disabled");
+	const topGroup = visibleModels.filter((model) => !deprioritizedModelIds.includes(model.id));
+	const bottomGroup = visibleModels.filter((model) => deprioritizedModelIds.includes(model.id));
+	const harnessLabel = formatHarnessLabel(harness);
+
+	const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>, model: WorkbenchModelOption) => {
+		if (event.key !== "Enter" && event.key !== " ") {
+			return;
+		}
+
+		event.preventDefault();
+		onSelectModel(model);
+	};
+
+	const renderModelCard = (model: WorkbenchModelOption, deprioritized: boolean) => {
+		const featureList = buildFeatureList(model);
+		const isSelected = selectedModelId === model.id;
+
+		return (
+			<div
+				key={model.id}
+				role="radio"
+				aria-checked={isSelected}
+				tabIndex={0}
+				className={[
+					"rounded-[1rem] border px-4 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
+					isSelected
+						? "border-text bg-[color-mix(in_srgb,var(--text)_6%,transparent)]"
+						: "border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_98%,transparent)] hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_3%,transparent)]",
+					deprioritized && "opacity-55",
+				].filter(Boolean).join(" ")}
+				onClick={() => {
+					onSelectModel(model);
+				}}
+				onKeyDown={(event) => {
+					handleCardKeyDown(event, model);
+				}}
+			>
+				<div className="flex flex-wrap items-start justify-between gap-3">
+					<div>
+						<p className="m-0 flex items-center gap-3 text-[0.96em] font-semibold text-text">
+							<span>{model.displayName}</span>
+							{featureList.length ? (
+								<span className="inline-flex flex-wrap gap-2 text-[0.76em] leading-[1.5] text-muted">
+									{featureList.map((feature, index) => (
+										<span
+											key={index}
+											className="rounded-full bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-2.5 py-1"
+										>
+											{feature}
+										</span>
+									))}
+								</span>
+							) : null}
+						</p>
+						{model.description ? (
+							<p className="mt-1 mb-0 text-[0.7em] leading-[1.7] text-muted">{model.description}</p>
+						) : null}
+					</div>
+					{showsPriorityControls ? <div className="flex items-center gap-2">
+						<ThreadPickerGroupMoveButton direction={deprioritized ? "up" : "down"} label={deprioritized ? `Move ${model.displayName} back to the top group` : `Move ${model.displayName} to the bottom group`} onClick={() => onToggleModelPriority(model.id)} />
+					</div> : null}
+				</div>
+			</div>
+		);
+	};
+
+	return (
+		<>
+			<ThreadComposerPickerHeader
+				actions={[{
+					disabled: isRefreshDisabled,
+					icon: <span className={isRefreshing ? "animate-spin [animation-direction:reverse]" : ""}><ReloadIcon /></span>,
+					label: isRefreshing ? "Refreshing models" : "Refresh models",
+					onClick: onRefresh,
+				}]}
+				onClose={onClose}
+				supportingText={appliesOnNextTurnOnly ? "Changes apply to the next new turn." : null}
+				title={`Choose a ${harnessLabel} model`}
+			/>
+			{error ? (
+				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
+			) : null}
+			{isLoading ? (
+				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-muted">Loading models...</p>
+			) : (
+				<div className="mt-3 space-y-4">
+					<div role="radiogroup" aria-label={`${harness} models`} className="grid gap-3">
+						{topGroup.map((model) => renderModelCard(model, false))}
+					</div>
+					{bottomGroup.length ? (
+						<div className="space-y-3">
+							<div role="radiogroup" aria-label={`${harness} deprioritized models`} className="grid gap-3">
+								{bottomGroup.map((model) => renderModelCard(model, true))}
+							</div>
+						</div>
+					) : null}
+					{!visibleModels.length && !error ? (
+						<p className="m-0 text-[0.84em] leading-[1.6] text-muted">No models are available for this harness.</p>
+					) : null}
+				</div>
+			)}
+		</>
+	);
+}

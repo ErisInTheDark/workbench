@@ -10,7 +10,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import type { ResolvedProject } from "../lib/project";
-import type { WorkbenchProjectOption } from "../lib/types";
+import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 

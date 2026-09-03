@@ -8,8 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "../lib/types";
-import type { WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchDatabaseMutation, WorkbenchDatabaseQuery, WorkbenchDatabaseRow, WorkbenchDatabaseValue } from "workbench-shared/database/workbench-database-statements";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";

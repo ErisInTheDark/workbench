@@ -3,8 +3,8 @@
  * - WorkbenchSubagentFeatureContext: current-generation project, relationship, and thread-state ports. Keywords: subagent, feature, dependency injection, reload.
  * - default WorkbenchSubagentFeature: own the reloadable subagent controller and durable relationship-store wrapper. Keywords: subagent, feature, lifecycle, store, controller.
  */
-import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "../lib/types";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { JsonRpcRequest } from "./bridge-types";
 import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";

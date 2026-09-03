@@ -23,7 +23,7 @@ import {
   legacyCheckpointNamespace,
   normalizeCommit,
   type ProposalMetadata,
-} from "./git-arc-storage";
+} from "workbench-shared/workbench/git/git-arc-storage";
 
 export interface GitArcProposalSummary {
   committedSha: string | null;

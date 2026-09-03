@@ -6,8 +6,8 @@ import { test } from "node:test";
 
 import Database from "better-sqlite3";
 
-import type { WorkbenchSteerHistoryEntry } from "../../../lib/types.ts";
-import { createSyntheticSteerHistoryItemId } from "../../../lib/workbench/thread/thread-steer-history.ts";
+import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
+import { createSyntheticSteerHistoryItemId } from "workbench-shared/workbench/thread/thread-steer-history";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
 import type {

@@ -2,20 +2,20 @@
  * CodexTranscriptSqliteImportInput: one hydrated Codex turn window plus its scoped Workbench facts. Keywords: codex, transcript, import, window.
  * createCodexTranscriptSqliteImport: convert one hydrated Codex turn window into stable Workbench observations. Keywords: codex, sqlite, transcript, import, window.
  */
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
-import { toThreadPayload } from "../lib/codex/thread-adapter.ts";
-import { applyQuestionnaireHistoryToThread } from "../lib/workbench/thread/thread-questionnaire-history.ts";
-import { createSyntheticQuestionnaireHistoryItemId } from "../lib/workbench/thread/thread-questionnaire-identity.ts";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import { toThreadPayload } from "workbench-shared/codex/thread-adapter";
+import { applyQuestionnaireHistoryToThread } from "workbench-shared/workbench/thread/thread-questionnaire-history";
+import { createSyntheticQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import {
   applySteerHistoryToThread,
   createSyntheticSteerHistoryItemId,
-} from "../lib/workbench/thread/thread-steer-history.ts";
-import { findWorkbenchThreadItemTimelineEntry } from "../lib/workbench/thread/thread-item-timeline.ts";
+} from "workbench-shared/workbench/thread/thread-steer-history";
+import { findWorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type {
   WorkbenchBrowseResultEntry,
   WorkbenchQuestionnaireHistoryEntry,
   WorkbenchSteerHistoryEntry,
-} from "../lib/types.ts";
+} from "workbench-shared/types";
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,

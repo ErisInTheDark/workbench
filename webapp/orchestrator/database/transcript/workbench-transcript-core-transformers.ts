@@ -1,8 +1,8 @@
 /*
  * transformCoreTranscriptItem: convert visible message, reasoning, plan, file-change, compaction, and unknown items to relational mutations. Keywords: transcript, transform, canonical item.
  */
-import type { ThreadItem } from "../../../lib/codex/generated/app-server/v2/ThreadItem.ts";
-import type { WorkbenchFileChangeItem } from "../../../lib/workbench/thread/workbench-file-change.ts";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { itemTables } from "../workbench-database-schema.ts";
 import {
   deleteRows,

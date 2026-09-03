@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { WorkbenchThreadPageResponse } from "../lib/workbench/thread/workbench-thread-page";
+import type { WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
 import CodexThreadPageReadController from "./CodexThreadPageReadController";
 
 function deferred<TValue>() {

@@ -6,7 +6,7 @@
 import { WORKBENCH_BROWSE_COMMANDS } from "./browse-command-definitions";
 import { WORKBENCH_GIT_ARC_COMMANDS } from "./git-arc-command-definitions";
 import { WORKBENCH_GIT_COMMANDS } from "./git-command-definitions";
-import type { OrchestratorReloadScopeDescriptor } from "../orchestrator-reload";
+import type { OrchestratorReloadScopeDescriptor } from "workbench-shared/workbench/orchestrator-reload";
 import { createWorkbenchReloadCommands } from "./reload-command-definitions";
 import { WORKBENCH_RIPGREP_COMMANDS } from "./ripgrep-command-definition";
 import { WORKBENCH_SUBAGENT_COMMANDS } from "./subagent-command-definitions";

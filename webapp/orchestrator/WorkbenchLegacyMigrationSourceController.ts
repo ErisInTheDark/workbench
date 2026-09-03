@@ -8,7 +8,7 @@ import type http from "node:http";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import type { WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
 const MAX_BODY_BYTES = 64 * 1024;

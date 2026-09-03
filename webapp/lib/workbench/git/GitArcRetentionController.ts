@@ -9,7 +9,7 @@ import {
   checkpointNamespace,
   legacyCheckpointNamespace,
   type GitArcHarness,
-} from "./git-arc-storage";
+} from "workbench-shared/workbench/git/git-arc-storage";
 
 export interface GitArcRetentionResult {
   prunedRefCount: number;

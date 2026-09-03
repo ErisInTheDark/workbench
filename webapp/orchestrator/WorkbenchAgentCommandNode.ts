@@ -4,7 +4,7 @@
  */
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
-import type { WorkbenchThreadContextReadResponse } from "../lib/types";
+import type { WorkbenchThreadContextReadResponse } from "workbench-shared/types";
 import WorkbenchThreadRecallController, {
   toWorkbenchThreadRecallBundle,
 } from "../lib/workbench/thread/WorkbenchThreadRecallController";

@@ -14,7 +14,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "./types";
+import type { WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "workbench-shared/types";
 import {
   normalizeWorkbenchLibraryPath,
   safeResolveWorkbenchLibraryPath,

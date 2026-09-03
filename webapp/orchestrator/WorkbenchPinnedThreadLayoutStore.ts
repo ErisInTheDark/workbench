@@ -6,7 +6,7 @@
 import path from "node:path";
 import { z } from "zod";
 
-import { areDeeplyEqual } from "../lib/workbench/deep-equality";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   createThreadDisplayFolder,
   getProjectQualifiedThreadDisplayKey,
@@ -18,18 +18,18 @@ import {
   ThreadDisplayLayoutSchema,
   type ThreadDisplayLayout,
   type ThreadDisplayLayoutEntry,
-} from "../lib/workbench/thread/thread-display-layout";
+} from "workbench-shared/workbench/thread/thread-display-layout";
 import {
   getWorkbenchThreadDisplayKey,
   getWorkbenchThreadDisplaySection,
   type WorkbenchThreadDisplayOrder,
-} from "../lib/workbench/thread/thread-display-order";
-import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
+} from "workbench-shared/workbench/thread/thread-display-order";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type {
   WorkbenchPinnedThreadLayoutSnapshot,
   WorkbenchThreadSidebarEntry,
   WorkbenchThreadStateRequest,
-} from "../lib/workbench/thread/thread-state";
+} from "workbench-shared/workbench/thread/thread-state";
 import AtomicJsonStore from "./AtomicJsonStore";
 import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 

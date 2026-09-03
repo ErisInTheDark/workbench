@@ -4,19 +4,19 @@
  * - WorkbenchWebSocketRequestControllerOptions: injected routing, clock, scheduler, and log ports. Keywords: websocket, dependency injection, diagnostics.
  * - default WorkbenchWebSocketRequestController: route browser WebSocket messages and compose request timing with aggregate event-stream health. Keywords: websocket, json-rpc, latency, stream, lifecycle.
  */
-import type { WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import {
   OrchestratorReloadRequestSchema,
   WORKBENCH_RELOAD_DIRT_READ_METHOD,
   WORKBENCH_RELOAD_DIRT_UPDATED_METHOD,
   WORKBENCH_RELOAD_METHOD,
-} from "../lib/workbench/orchestrator-reload";
+} from "workbench-shared/workbench/orchestrator-reload";
 import {
   decodeWorkbenchTranscriptRequest,
   WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION,
   type WorkbenchTranscriptRequest,
   workbenchTranscriptNotifications,
-} from "../lib/workbench/database/transcript/workbench-transcript-contract";
+} from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type {
   OrchestratorTranscriptRegistration,
   OrchestratorTranscriptShadowLog,
@@ -25,7 +25,7 @@ import {
   WORKBENCH_EVENT_STREAM_ACK_METHOD,
   WorkbenchEventStreamAckSchema,
   type WorkbenchEventStreamHealth,
-} from "../lib/workbench/websocket-stream";
+} from "workbench-shared/workbench/websocket-stream";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";

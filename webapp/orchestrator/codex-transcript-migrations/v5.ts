@@ -9,7 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
-import { compactCommandOutputPayload } from "../../lib/codex/thread-command-output";
+import { compactCommandOutputPayload } from "workbench-shared/codex/thread-command-output";
 import type AtomicJsonStore from "../AtomicJsonStore";
 import type { OrchestratorTranscriptShadowLog } from "../orchestrator-runtime-objects";
 

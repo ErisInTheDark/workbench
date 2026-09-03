@@ -30,11 +30,11 @@ class BrowseExecution implements OrchestratorBrowseExecution {
   }
 
   async listSessions(request: object) {
-    return await this.getController().listSessions(request as import("../lib/types").WorkbenchBrowseSessionListRequest);
+    return await this.getController().listSessions(request as import("workbench-shared/types").WorkbenchBrowseSessionListRequest);
   }
 
   async controlSession(request: object) {
-    return await this.getController().controlSession(request as import("../lib/types").WorkbenchBrowseSessionControlRequest);
+    return await this.getController().controlSession(request as import("workbench-shared/types").WorkbenchBrowseSessionControlRequest);
   }
 
   handleBrowseHttpRequest: WorkbenchBrowseController["handleBrowseHttpRequest"] = async (request, response) => {

@@ -18,9 +18,9 @@ import {
   type ResolvedProject,
 } from "../lib/project";
 import { isGitTrackedFile } from "../lib/git";
-import type { CreateEntryPayload, DeleteFileResponse, ProjectSnapshot } from "../lib/types";
-import { areDeeplyEqual } from "../lib/workbench/deep-equality";
-import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
+import type { CreateEntryPayload, DeleteFileResponse, ProjectSnapshot } from "workbench-shared/types";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 
 const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_PROJECT_SNAPSHOTS = 4;

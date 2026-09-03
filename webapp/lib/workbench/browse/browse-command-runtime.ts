@@ -8,7 +8,7 @@ import type {
   WorkbenchBrowseAgentSequenceProgressEvent,
   WorkbenchBrowseAgentSequenceResponse,
   WorkbenchBrowseCommandResponse,
-} from "../../types";
+} from "workbench-shared/types";
 
 export function createBrowseCommandResponse(payload: WorkbenchBrowseCommandResponse, init?: ResponseInit) {
   return Response.json(payload, {

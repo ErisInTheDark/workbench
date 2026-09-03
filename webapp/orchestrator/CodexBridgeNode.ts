@@ -184,7 +184,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "webapp/orchestrator/codex-sandbox-policy.ts",
     "webapp/orchestrator/CodexStdioBridge.ts",
     "webapp/orchestrator/CodexThreadWindowLoader.ts",
-    "webapp/lib/workbench/thread/workbench-thread-page.ts",
+    "shared/workbench/thread/workbench-thread-page.ts",
     "webapp/orchestrator/workbench-agent-mcp-request-registry.ts",
     "webapp/orchestrator/CodexBridgeTransitionController.ts",
     "webapp/orchestrator/CodexRecoverySupervisor.ts",

@@ -8,7 +8,7 @@ import path from "node:path";
 import type {
   WorkbenchHarness,
   WorkbenchSubagentRelationship,
-} from "../lib/types";
+} from "workbench-shared/types";
 import AtomicJsonStore from "./AtomicJsonStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import {

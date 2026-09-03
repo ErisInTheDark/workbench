@@ -5,11 +5,11 @@
  * - CodexThreadWindowStore: provider-window recording port used by bounded loading and recovery. Keywords: codex, thread, window, store.
  * - default CodexThreadWindowLoader: fetch one requested provider turn window and admit it for recording. Keywords: codex, thread, pagination, window.
  */
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { ThreadTurnsListParams } from "../lib/codex/generated/app-server/v2/ThreadTurnsListParams";
-import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadTurnsListParams } from "workbench-shared/codex/generated/app-server/v2/ThreadTurnsListParams";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { WorkbenchThreadHydrationRequest } from "../lib/codex/thread-hydration";
-import type { WorkbenchThreadTurnHistoryEntry } from "../lib/types";
+import type { WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 export interface CodexThreadWindowRecord {
   catalog?: {

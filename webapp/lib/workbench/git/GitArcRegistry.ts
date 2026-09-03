@@ -4,9 +4,9 @@
  * - GitArcIdentity/GitArcRegistryEntry/GitArcRegistryMutation: typed registry identities, entries, and prepared atomic transitions. Keywords: git, arc, registry, transaction.
  * - findGitArcCollisions/getGitArcLiveClaimPaths: share exact live-claim semantics with diagnostics and registry enforcement. Keywords: git, arc, collision, overlap, diagnostics.
  */
-import { areDeeplyEqual } from "../deep-equality";
-import type { OrchestratorReloadScope } from "../../types";
-import { gitArcPathsOverlap } from "./git-arc-paths";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import type { OrchestratorReloadScope } from "workbench-shared/types";
+import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 
 export const REGISTRY_REF = "refs/worktree/workbench/active-arcs";

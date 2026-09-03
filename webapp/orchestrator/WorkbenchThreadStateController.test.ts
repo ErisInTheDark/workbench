@@ -6,11 +6,11 @@ import path from "node:path";
 import test from "node:test";
 import WorkbenchThreadStateControllerOwner, { type WorkbenchThreadStateControllerOptions } from "./WorkbenchThreadStateController";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
-import type { WorkbenchProjectStateUpdate } from "../lib/workbench/project/project-state";
-import type { WorkbenchComposerProfileTargetSelection, WorkbenchReloadDirtSnapshot } from "../lib/types";
-import { getProjectQualifiedThreadDisplayKey } from "../lib/workbench/thread/thread-display-layout";
-import { getWorkbenchHomeFolderKey } from "../lib/workbench/thread/home-thread-display-order";
-import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
+import type { WorkbenchComposerProfileTargetSelection, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
+import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
+import { getWorkbenchHomeFolderKey } from "workbench-shared/workbench/thread/home-thread-display-order";
+import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 

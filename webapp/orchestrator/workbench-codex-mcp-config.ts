@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 
 import { listWorkbenchAgentCodeModeToolNames } from "../lib/workbench/commands/workbench-agent-command-registry";
-import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "../lib/workbench/commands/workbench-shell-command";
+import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "workbench-shared/workbench/commands/workbench-shell-command";
 
 const WORKBENCH_CODE_MODE_MCP_TOOL_TIMEOUT_SECONDS = 6 * 60 * 60;
 const WORKBENCH_DIRECT_MCP_TOOL_TIMEOUT_SECONDS = 30 * 60;

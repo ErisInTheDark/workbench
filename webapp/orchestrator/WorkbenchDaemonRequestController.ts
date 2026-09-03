@@ -12,26 +12,26 @@ import type WorkbenchNativeFileController from "./WorkbenchNativeFileController"
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
-import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotSchema } from "../lib/workbench/thread/thread-state";
+import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotSchema } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import {
   GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
-} from "../lib/workbench/git/checkpoint-contracts";
+} from "workbench-shared/workbench/git/checkpoint-contracts";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
   parseGitArcFailureEnvelope,
-} from "../lib/workbench/git/git-arc-failures";
+} from "workbench-shared/workbench/git/git-arc-failures";
 import {
   WORKBENCH_GIT_ARC_ACTION_BY_METHOD,
   type WorkbenchDaemonGitArcMethod,
-} from "../lib/workbench/daemon/workbench-daemon-requests";
+} from "workbench-shared/workbench/daemon/workbench-daemon-requests";
 import type {
   OpenFileInEditorRequest,
   ResolveExternalFileLinkRootsRequest,
   RevealProjectEntryRequest,
-} from "../lib/types";
+} from "workbench-shared/types";
 
 export interface WorkbenchBrowseSessionPort {
   controlSession(params: object): Promise<object>;

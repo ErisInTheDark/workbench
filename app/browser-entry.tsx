@@ -4,7 +4,7 @@
 import WorkbenchBrowserLogForwarder from "./WorkbenchBrowserLogForwarder.ts";
 import frontendJavaScriptGeneration, {
   WORKBENCH_STYLESHEET_GENERATION_PROPERTY,
-} from "./frontend-generation.ts";
+} from "workbench-shared/frontend-generation";
 
 const logForwarder = new WorkbenchBrowserLogForwarder();
 logForwarder.install();
@@ -22,13 +22,13 @@ async function start() {
     { default: WorkbenchBrowserApp },
   ] = await Promise.all([
     import("react-dom/client"),
-    import("../webapp/components/ReactScan.tsx"),
-    import("../webapp/lib/workbench/state/WorkbenchClientStateController.ts"),
-    import("../webapp/lib/workbench/app/WorkbenchAppRuntimeClient.ts"),
-    import("../webapp/lib/workbench/app/workbench-app-port-client.ts"),
-    import("../webapp/lib/workbench/state/workbench-browser-state-identity.ts"),
-    import("../shared/navigation/workbench-route-path.ts"),
-    import("../webapp/lib/workbench/navigation/browser-navigation.ts"),
+    import("./components/ReactScan.tsx"),
+    import("./workbench/state/WorkbenchClientStateController.ts"),
+    import("./workbench/app/WorkbenchAppRuntimeClient.ts"),
+    import("./workbench/app/workbench-app-port-client.ts"),
+    import("./workbench/state/workbench-browser-state-identity.ts"),
+    import("workbench-shared/navigation/workbench-route-path"),
+    import("./workbench/navigation/browser-navigation.ts"),
     import("./WorkbenchBrowserApp.tsx"),
   ]);
   installBrowserNavigationEvents();

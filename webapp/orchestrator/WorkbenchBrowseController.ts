@@ -4,7 +4,7 @@
  */
 import type http from "node:http";
 
-import type { WorkbenchBrowseSessionControlRequest, WorkbenchBrowseSessionListRequest } from "../lib/types";
+import type { WorkbenchBrowseSessionControlRequest, WorkbenchBrowseSessionListRequest } from "workbench-shared/types";
 import WorkbenchBrowseRequestHandler from "../lib/workbench/browse/WorkbenchBrowseRequestHandler";
 import type { WorkbenchBrowseResultSink } from "../lib/workbench/browse/browse-result-events";
 import WorkbenchBrowseRuntime from "../lib/workbench/browse/WorkbenchBrowseRuntime";

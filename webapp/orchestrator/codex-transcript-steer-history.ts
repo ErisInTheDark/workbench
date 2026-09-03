@@ -11,11 +11,11 @@
  * updatePendingSteerEntriesForInterruptedTurn: settle legacy steers from one interrupted provider turn. Keywords: codex, transcript, steer, interrupted.
  * updateSteerEntryStatus: apply one terminal or delivered steer state. Keywords: codex, transcript, steer, state.
  */
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem.ts";
-import type { Turn } from "../lib/codex/generated/app-server/v2/Turn.ts";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput.ts";
-import { areUserInputsEquivalentForUserMessageDedupe } from "../lib/codex/thread-item-normalization.ts";
-import type { WorkbenchSteerHistoryEntry } from "../lib/types.ts";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/codex/thread-item-normalization";
+import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types.ts";
 import { asRecord, asString } from "./codex-transcript-normalizers.ts";
 import type { CodexTranscriptThreadFile } from "./codex-transcript-types.ts";

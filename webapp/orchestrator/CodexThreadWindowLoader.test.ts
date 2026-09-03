@@ -5,9 +5,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
-import type { WorkbenchThreadTurnHistoryEntry } from "../lib/types";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexThreadWindowLoader from "./CodexThreadWindowLoader";
 

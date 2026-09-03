@@ -14,9 +14,9 @@ import { allowCodexApplyPatch, denyCodexApplyPatch, parseCodexApplyPatchClaimHoo
 import {
   createWorkbenchFileChangeFailureSystemMessage,
   WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX,
-} from "../lib/workbench/thread/workbench-file-change";
-import type { WorkbenchHarness, WorkbenchReloadDirtSnapshot } from "../lib/types";
-import type { OrchestratorReloadScopeDescriptor } from "../lib/workbench/orchestrator-reload";
+} from "workbench-shared/workbench/thread/workbench-file-change";
+import type { WorkbenchHarness, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
+import type { OrchestratorReloadScopeDescriptor } from "workbench-shared/workbench/orchestrator-reload";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import WorkbenchMarkdownTocController from "./WorkbenchMarkdownTocController";

@@ -12,11 +12,12 @@ import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../lib/workbench/WorkbenchTemporar
 import ProjectTestRunner from "./ProjectTestRunner";
 
 test("routes fixtures and test children through the acquired temp root before disposing both owners", async () => {
-  const temporaryRootPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "runner-temp-root");
+  const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const temporaryRootPath = path.join(projectRoot, "scripts", "runner-temp-root");
   const disposed: string[] = [];
   let childEnvironment: NodeJS.ProcessEnv | null = null;
   let fixtureRootPath = "";
-  const runner = new ProjectTestRunner(path.dirname(fileURLToPath(import.meta.url)), {
+  const runner = new ProjectTestRunner(projectRoot, {
     acquireTestRun: async () => ({
       dispose: async () => { disposed.push("run"); },
       temporaryRootPath,
@@ -44,6 +45,7 @@ test("routes fixtures and test children through the acquired temp root before di
   assert.equal(childEnvironment?.TEMP, temporaryRootPath);
   assert.equal(childEnvironment?.TMP, temporaryRootPath);
   assert.equal(childEnvironment?.TMPDIR, temporaryRootPath);
+  assert.equal(childEnvironment?.TSX_TSCONFIG_PATH, path.resolve(projectRoot, "tsconfig.json"));
   assert.equal(childEnvironment?.[WORKBENCH_TEMPORARY_ROOT_ENV], temporaryRootPath);
   assert.equal(childEnvironment?.WORKBENCH_FIXTURE_SENTINEL, "ready");
   assert.deepEqual(disposed, ["fixtures", "run"]);

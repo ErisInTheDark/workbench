@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread.ts";
-import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "../lib/types.ts";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import { createCodexTranscriptSqliteImport } from "./codex-transcript-sqlite-import.ts";
 
 function thread(): Thread & { workbenchTurnHistory: WorkbenchThreadTurnHistoryEntry[] } {

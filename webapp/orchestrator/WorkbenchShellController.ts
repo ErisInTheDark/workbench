@@ -13,7 +13,7 @@ import type { JsonValue } from "../lib/workbench/commands/workbench-agent-comman
 import {
   WorkbenchShellInputSchema,
   type WorkbenchShell,
-} from "../lib/workbench/commands/workbench-shell-command";
+} from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import CodexCommandExecController from "./CodexCommandExecController";
 

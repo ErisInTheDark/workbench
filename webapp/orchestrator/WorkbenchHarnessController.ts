@@ -4,9 +4,9 @@
  * - WorkbenchHarnessAdapter: exhaustive provider capability registration. Keywords: harness, capability, recovery.
  * - default WorkbenchHarnessController: validate registrations and own browser, server, Browse, and recovery routing. Keywords: harness, routing, recovery.
  */
-import type { ThreadReadResponse } from "../lib/codex/generated/app-server/v2/ThreadReadResponse";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import type { WorkbenchHarness } from "../lib/types";
+import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { WorkbenchTurnRecoveryPort } from "./WorkbenchTurnRecoveryController";
 

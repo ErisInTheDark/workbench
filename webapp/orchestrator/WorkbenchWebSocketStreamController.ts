@@ -7,11 +7,11 @@
  * - WorkbenchWebSocketStreamControllerOptions: injected clock, scheduler, and log ports. Keywords: websocket, diagnostics, test.
  * - default WorkbenchWebSocketStreamController: own provider-event sequencing, receipts, stream health, lag reports, reload handoff, and cleanup. Keywords: websocket, backpressure, health, lifecycle.
  */
-import type { WorkbenchHarness } from "../lib/types";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import {
   WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD,
   type WorkbenchEventStreamHealth,
-} from "../lib/workbench/websocket-stream";
+} from "workbench-shared/workbench/websocket-stream";
 import type { BridgeClient } from "./bridge-types";
 import { dimWebSocketDetail } from "./websocket-log-format";
 

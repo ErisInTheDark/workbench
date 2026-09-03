@@ -9,7 +9,7 @@ import path from "node:path";
 import test from "node:test";
 
 import WorkbenchTurnRecoveryHandoffStore, { type WorkbenchTurnRecoveryHandoff } from "./WorkbenchTurnRecoveryHandoffStore";
-import { createWorkbenchThreadRecoveryId } from "../lib/workbench/thread/thread-recovery-message";
+import { createWorkbenchThreadRecoveryId } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 function handoff(count: number, createdAt = Date.now()): WorkbenchTurnRecoveryHandoff {
   return {

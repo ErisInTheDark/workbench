@@ -22,7 +22,7 @@ import {
   outcomeRef,
   proposalMessage,
   type ProposalMetadata,
-} from "./git-arc-storage";
+} from "workbench-shared/workbench/git/git-arc-storage";
 
 const LINEAR_COMMITS = [
   {

@@ -28,7 +28,7 @@ import {
   parseMarkedMetadata,
   PROPOSAL_METADATA_MARKER,
   type ProposalMetadata,
-} from "./git-arc-storage";
+} from "workbench-shared/workbench/git/git-arc-storage";
 
 const execFileAsync = promisify(execFile);
 const fixtureCache = new GitTestFixtureCache();

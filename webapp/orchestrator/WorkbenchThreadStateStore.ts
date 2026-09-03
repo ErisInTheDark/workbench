@@ -7,9 +7,9 @@
  */
 import { selectRows, upsertRow, type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
 
-import { areDeeplyEqual } from "../lib/workbench/deep-equality";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { WorkbenchDatabaseMutationResult } from "./database/workbench-database-protocol";
-import { threadStateTables } from "./database/workbench-database-schema";
+import { threadStateTables } from "../lib/workbench/database/schema/thread-state-schema";
 
 export type WorkbenchThreadStateGlobalDocumentId = "homeDisplayOrder" | "pinnedLayout";
 

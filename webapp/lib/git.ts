@@ -10,7 +10,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import type { ChangeSummary } from "./types";
+import type { ChangeSummary } from "workbench-shared/types";
 
 const execFileAsync = promisify(execFile);
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);

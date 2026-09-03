@@ -3,7 +3,7 @@
  * - WORKBENCH_PROMPT_CONTEXT_FIELD: private bridge request key carrying Workbench prompt context. Keywords: prompt, context, bridge.
  * - readWorkbenchPromptContext: parse Workbench prompt context from a bridge request. Keywords: prompt, parser, harness, cwd.
  */
-import type { WorkbenchProjectRoot } from "../lib/types";
+import type { WorkbenchProjectRoot } from "workbench-shared/types";
 import type { WorkbenchPromptContext } from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { JsonRpcRequest } from "./bridge-types";
 

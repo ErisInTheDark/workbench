@@ -2,7 +2,7 @@
  * Exports:
  * - elementInputActionBuilders: validate and build direct element, text-input, evaluation, snapshot, and selection Browse actions. Keywords: browse, registry, element, input, snapshot.
  */
-import type { WorkbenchBrowseAgentAction } from "../../../types";
+import type { WorkbenchBrowseAgentAction } from "workbench-shared/types";
 import {
   BROWSE_ACTION_NORMAL_TIMEOUT_MS,
   BROWSE_ACTION_SELECTOR_MAX_LENGTH,

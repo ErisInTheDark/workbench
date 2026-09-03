@@ -20,8 +20,8 @@ import {
   type WorkbenchAgentCliRequest,
 } from "./workbench-agent-cli-commands.ts";
 import { adaptWorkbenchAgentCliResponse } from "./workbench-agent-cli-responses.ts";
-import { parseGitArcFailureReceipt } from "../git/git-arc-failures.ts";
-import { parseGitArcReceipt } from "../git/git-arc-receipts.ts";
+import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
+import { parseGitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
 
 const execFileAsync = promisify(execFile);

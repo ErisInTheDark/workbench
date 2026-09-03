@@ -2,11 +2,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import * as coreSchemaModule from "./core-schema.ts";
-import * as evidenceSchemaModule from "./evidence-schema.ts";
-import * as interactionSchemaModule from "./interaction-schema.ts";
-import * as itemSchemaModule from "./item-schema.ts";
-import * as operationSourceSchemaModule from "./operation-source-schema.ts";
+import * as coreSchemaModule from "workbench-shared/workbench/database/schema/core-schema";
+import * as evidenceSchemaModule from "workbench-shared/workbench/database/schema/evidence-schema";
+import * as interactionSchemaModule from "workbench-shared/workbench/database/schema/interaction-schema";
+import * as itemSchemaModule from "workbench-shared/workbench/database/schema/item-schema";
+import * as operationSourceSchemaModule from "workbench-shared/workbench/database/schema/operation-source-schema";
 import * as threadStateSchemaModule from "./thread-state-schema.ts";
 
 test("subsystem modules do not export versioned table descriptors", () => {

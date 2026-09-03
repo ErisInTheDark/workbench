@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import type { WorkbenchSubagentRelationship } from "../lib/types";
+import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
 import { createWorkbenchSubagentStoreState } from "./workbench-subagent-store-state";

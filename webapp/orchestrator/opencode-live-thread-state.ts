@@ -10,10 +10,10 @@ import type {
   V2Event,
 } from "@opencode-ai/sdk/v2";
 
-import type { ThreadItem } from "../lib/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "../lib/codex/generated/app-server/v2/Turn";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
-import type { JsonValue } from "../lib/codex/generated/app-server/serde_json/JsonValue";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
 import type { JsonRpcNotification } from "./bridge-types";
 
 type OnNotification = (notification: JsonRpcNotification) => void;

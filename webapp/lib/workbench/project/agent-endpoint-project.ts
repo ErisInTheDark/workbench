@@ -13,7 +13,7 @@ import {
   resolveDiscoveredProject,
   type ResolvedProject,
 } from "../../project";
-import type { WorkbenchProjectOption } from "../../types";
+import type { WorkbenchProjectOption } from "workbench-shared/types";
 
 export interface AgentEndpointProjectResolution {
   cwd: string;

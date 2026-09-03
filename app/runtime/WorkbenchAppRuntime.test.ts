@@ -22,11 +22,17 @@ const execFileAsync = promisify(execFile);
 const nonServerSourcePaths = new Set([
   "app/browser-entry.tsx",
   "app/desktop.ts",
-  "app/frontend-generation.ts",
   "app/WorkbenchBrowserApp.tsx",
   "app/WorkbenchBrowserLogForwarder.ts",
+  "app/WorkbenchClient.ts",
   "app/WorkbenchDesktopLauncher.ts",
 ]);
+
+function isNonServerSourcePath(sourcePath: string) {
+  return nonServerSourcePaths.has(sourcePath)
+    || sourcePath.startsWith("app/components/")
+    || sourcePath.startsWith("app/workbench/");
+}
 
 class TestResponse extends EventEmitter {
   body = "";
@@ -102,11 +108,11 @@ test("assigns every app server source to a reloadable node or the explicit proce
   const owners = (path: string) => target.getReloadScopesForPaths([path]).sort();
   const sourcePaths = await appProductionSourcePaths();
   const unownedServerSources = sourcePaths
-    .filter((sourcePath) => !nonServerSourcePaths.has(sourcePath))
+    .filter((sourcePath) => !isNonServerSourcePath(sourcePath))
     .filter((sourcePath) => owners(sourcePath).length === 0);
   assert.deepEqual(unownedServerSources, []);
   assert.deepEqual(
-    sourcePaths.filter((sourcePath) => nonServerSourcePaths.has(sourcePath) && owners(sourcePath).length > 0),
+    sourcePaths.filter((sourcePath) => isNonServerSourcePath(sourcePath) && owners(sourcePath).length > 0),
     [],
   );
 

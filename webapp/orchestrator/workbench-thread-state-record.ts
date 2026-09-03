@@ -7,7 +7,7 @@
  */
 import { z } from "zod";
 
-import { conformToZodSchema } from "../lib/workbench/zod-schema-conformer";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
   WorkbenchComposerProfileSelectionSchema,
   WorkbenchHarnessSchema,
@@ -15,7 +15,7 @@ import {
   type WorkbenchComposerProfileSelectionState,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadLifecycle,
-} from "../lib/workbench/thread/thread-state";
+} from "workbench-shared/workbench/thread/thread-state";
 
 type WorkbenchProviderSidebarEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
 type WithoutWaiting<TValue> = TValue extends unknown ? Omit<TValue, "waitingFor"> : never;

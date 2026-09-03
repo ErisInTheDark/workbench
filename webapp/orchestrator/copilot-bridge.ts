@@ -14,21 +14,21 @@ import {
     type SessionMetadata,
 } from "@github/copilot-sdk";
 
-import type { GetAccountRateLimitsResponse } from "../lib/codex/generated/app-server/v2/GetAccountRateLimitsResponse";
-import type { RateLimitSnapshot } from "../lib/codex/generated/app-server/v2/RateLimitSnapshot";
-import type { Thread } from "../lib/codex/generated/app-server/v2/Thread";
-import type { UserInput } from "../lib/codex/generated/app-server/v2/UserInput";
+import type { GetAccountRateLimitsResponse } from "workbench-shared/codex/generated/app-server/v2/GetAccountRateLimitsResponse";
+import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type {
     WorkbenchModelOption,
     WorkbenchUserInputQuestion,
     WorkbenchUserInputRequest,
     WorkbenchUserInputResponse,
-} from "../lib/types";
+} from "workbench-shared/types";
 import {
   WORKBENCH_THREAD_PAGE_READ_METHOD,
   WorkbenchThreadPageReadParamsSchema,
   type WorkbenchThreadPageResponse,
-} from "../lib/workbench/thread/workbench-thread-page";
+} from "workbench-shared/workbench/thread/workbench-thread-page";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { CopilotThreadState } from "./copilot-thread-state";
 import { appendCopilotEventLog, log, logError } from "./process-helpers";

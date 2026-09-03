@@ -120,6 +120,7 @@ export default class ProjectTestRunner {
         TEMP: testRun.temporaryRootPath,
         TMP: testRun.temporaryRootPath,
         TMPDIR: testRun.temporaryRootPath,
+        TSX_TSCONFIG_PATH: path.resolve(this.projectRoot, "tsconfig.json"),
       };
       try {
         if (this.testConcurrency === 1) return await this.runTestFiles(files, this.testConcurrency, environment);

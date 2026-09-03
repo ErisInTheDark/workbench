@@ -8,7 +8,7 @@
 import {
   WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS,
   type WorkbenchThreadRecallKind,
-} from "../../types.ts";
+} from "workbench-shared/types";
 import {
   createWorkbenchThreadRecallCursor,
   readWorkbenchThreadRecallCursor,

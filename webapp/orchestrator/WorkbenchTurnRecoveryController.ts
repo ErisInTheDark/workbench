@@ -7,9 +7,9 @@
  * - default WorkbenchTurnRecoveryController: own live multi-harness candidates, explicit resume handoffs, goal exclusion, recency caps, and recovery progress. Keywords: recovery, registry, codex, opencode.
  */
 
-import type { WorkbenchHarness } from "../lib/types";
-import { createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput } from "../lib/workbench/thread/thread-recovery-message";
-import type { WorkbenchThreadLifecycle } from "../lib/workbench/thread/thread-state";
+import type { WorkbenchHarness } from "workbench-shared/types";
+import { createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcNotification, JsonRpcRequest } from "./bridge-types";
 import WorkbenchTurnRecoveryHandoffStore, { createCodexTurnRecoveryResumeRequest } from "./WorkbenchTurnRecoveryHandoffStore";
 import type {
