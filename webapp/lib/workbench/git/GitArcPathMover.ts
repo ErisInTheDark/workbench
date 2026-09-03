@@ -173,9 +173,7 @@ export default class GitArcPathMover {
       const trimmed = root.trim();
       return trimmed === "." ? "." : this.repository.normalizePaths([trimmed])[0]!;
     });
-    const paths = (await this.repository.run([
-      "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...normalizedRoots,
-    ])).split("\0").filter(Boolean).sort((left, right) => left.localeCompare(right));
+    const paths = await this.repository.listWorktreePaths(normalizedRoots);
     const result = await this.evaluateRegex(paths, pattern, replacement);
     return {
       mappings: result.mappings,

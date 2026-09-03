@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; bounded concurrent Node tests cover full checkpoints, arc claims, proposals, commit isolation, and restore. Keywords: git, checkpoint, arc, proposal, restore, concurrency, test.
+ * - No production exports; bounded concurrent Node tests cover full checkpoints, arc claims, proposals, commit isolation, branch replacement, and restore. Keywords: git, checkpoint, arc, proposal, restore, rebase, branch replacement, concurrency, test.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -779,7 +779,7 @@ checkpointTest("manual commits resolve exact proposals without treating committe
   assert.equal(dirtyComparison.hasUncommittedChanges, true);
 });
 
-checkpointTest("proposals rebase across compatible commits and reject selected or incompatible history", 7, async (context) => {
+checkpointTest("proposals follow selected content across fast-forward and replacement history", 7, async (context) => {
   const fixture = await fixtureCache.copy(CHECKPOINT_REBASE_READY_FIXTURE);
   context.after(fixture.dispose);
   const repoRoot = fixture.root;
@@ -826,10 +826,53 @@ checkpointTest("proposals rebase across compatible commits and reject selected o
   assert.equal(conflicted.unavailableReasonCode ?? null, null);
   assert.match(conflicted.unavailableReason ?? "", /newer commit changed files/u);
 
+  const replacementThreadId = "thread-replacement";
+  const replacementPlan = await createGitPlan({
+    cwd: repoRoot,
+    intentName: "Rebase across replacement history",
+    paths: ["unrelated.txt"],
+    threadId: replacementThreadId,
+  });
+  await startGitArc({
+    checkpointCommit: replacementPlan.checkpointCommit,
+    cwd: repoRoot,
+    threadId: replacementThreadId,
+  });
+  await write(repoRoot, "unrelated.txt", "replacement proposal version\n");
+  const replacementProposal = await createGitCheckpointProposal({
+    cwd: repoRoot,
+    description: "",
+    threadId: replacementThreadId,
+    title: "Commit replacement-safe work",
+  });
+
   await git(repoRoot, ["checkout", "--quiet", "--detach", rootCommit]);
   await write(repoRoot, "branch-only.txt", "alternate advance\n");
-  await git(repoRoot, ["add", "--", "branch-only.txt"]);
+  await write(repoRoot, "literal[1].txt", "replacement branch conflict\n");
+  await git(repoRoot, ["add", "--", "branch-only.txt", "literal[1].txt"]);
   await git(repoRoot, ["commit", "-m", "advance alternate branch"]);
+  const replacementHead = (await git(repoRoot, ["rev-parse", "HEAD"])).trim();
+  const replacementRebased = await readGitCheckpointProposal({
+    cwd: repoRoot,
+    includeNewer: false,
+    proposalId: replacementProposal.proposalId,
+    threadId: replacementThreadId,
+  });
+  assert.equal(replacementRebased.status, "proposed");
+  assert.equal(replacementRebased.baseCommit, replacementHead);
+  assert.deepEqual(replacementRebased.changes.map((change) => change.path), ["unrelated.txt"]);
+  const replacementCommitted = await commitGitCheckpointProposal({
+    cwd: repoRoot,
+    description: "",
+    includeNewer: false,
+    proposalId: replacementProposal.proposalId,
+    threadId: replacementThreadId,
+    title: "Commit replacement-safe work",
+  });
+  assert.equal(replacementCommitted.status, "committed");
+  assert.equal((await git(repoRoot, ["rev-parse", "HEAD^"])).trim(), replacementHead);
+  assert.equal(await git(repoRoot, ["show", "HEAD:unrelated.txt"]), "replacement proposal version\n");
+
   const incompatible = await readGitCheckpointProposal({
     cwd: repoRoot,
     includeNewer: false,
@@ -837,7 +880,33 @@ checkpointTest("proposals rebase across compatible commits and reject selected o
     threadId: incompatibleThreadId,
   });
   assert.equal(incompatible.status, "unavailable");
-  assert.match(incompatible.unavailableReason ?? "", /branch changed/u);
+
+  await write(repoRoot, "literal[1].txt", "literal checkpoint\n");
+  await git(repoRoot, ["add", "--", "literal[1].txt"]);
+  await git(repoRoot, ["commit", "-m", "restore proposal path"]);
+  const restoredHead = (await git(repoRoot, ["rev-parse", "HEAD"])).trim();
+  await write(repoRoot, "literal[1].txt", "alternate-branch proposal version\n");
+  const recovered = await readGitCheckpointProposal({
+    cwd: repoRoot,
+    includeNewer: false,
+    proposalId: incompatibleProposalId,
+    threadId: incompatibleThreadId,
+  });
+  assert.equal(recovered.status, "proposed");
+  assert.equal(recovered.baseCommit, restoredHead);
+  assert.equal(recovered.unavailableReason, null);
+  assert.deepEqual(recovered.changes.map((change) => change.path), ["literal[1].txt"]);
+  const recoveredCommit = await commitGitCheckpointProposal({
+    cwd: repoRoot,
+    description: "",
+    includeNewer: false,
+    proposalId: incompatibleProposalId,
+    threadId: incompatibleThreadId,
+    title: "Commit recovered proposal",
+  });
+  assert.equal(recoveredCommit.status, "committed");
+  assert.equal((await git(repoRoot, ["rev-parse", "HEAD^"])).trim(), restoredHead);
+  assert.equal(await git(repoRoot, ["show", "HEAD:literal[1].txt"]), "alternate-branch proposal version\n");
 });
 
 test("Git checkpoint controller operations", { concurrency: true }, async (context) => {

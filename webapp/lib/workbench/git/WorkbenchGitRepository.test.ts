@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards cover index-normalized ref publication, retry safety, object reads, and exact combined file-change inspection. Keywords: git, repository, index, ref, retry, object, diff.
+ * No production exports. Regression wards cover index-normalized ref publication, retry safety, object reads, exact combined file-change inspection, and large stdin pathsets. Keywords: git, repository, index, ref, retry, object, diff, pathspec, stdin, argv, large path set.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -115,7 +115,7 @@ test("every ref transaction advances generation even when ref values repeat", as
   assert.equal(await repository.readRef(GIT_STATE_GENERATION_REF), secondGeneration);
 });
 
-test("reads ref objects and inspects text, binary, and literal-path changes with real Git", async (context) => {
+test("reads objects and preserves exact changes across literal, binary, and large pathsets with real Git", async (context) => {
   const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
   context.after(fixture.dispose);
   const repository = await WorkbenchGitRepository.open(fixture.root);
@@ -167,4 +167,28 @@ test("reads ref objects and inspects text, binary, and literal-path changes with
   assert(changes.every(({ diff }) => diff.startsWith("diff --git ")));
   assert.match(changes.find(({ path: filePath }) => filePath === "binary.bin")?.diff ?? "", /GIT binary patch/u);
   assert.match(changes.find(({ path: filePath }) => filePath === "literal[1].txt")?.diff ?? "", /literal addition/u);
+
+  const bulkDirectory = path.join(fixture.root, "bulk");
+  await fs.mkdir(bulkDirectory);
+  const bulkPaths = Array.from({ length: 250 }, (_value, index) => (
+    `bulk/${String(index).padStart(4, "0")}-${"x".repeat(125)}.txt`
+  ));
+  assert.ok(Buffer.byteLength(bulkPaths.map((candidate) => `:(top,literal)${candidate}`).join("\0")) > 32 * 1024);
+  await Promise.all(bulkPaths.map(async (filePath, index) => {
+    await fs.writeFile(path.join(fixture.root, filePath), `${index}\n`, "utf8");
+  }));
+
+  const bulkTree = await repository.writeScopedWorktreeTree(bulkPaths);
+  assert.deepEqual(await repository.listChangedPaths(head, bulkTree, bulkPaths), bulkPaths);
+  assert.deepEqual(await repository.listTreePaths(bulkTree, bulkPaths), bulkPaths);
+  assert.equal(await repository.writeTreeWithPathsFromSource(head, bulkTree, bulkPaths), bulkTree);
+
+  const bulkCommit = await repository.createCommitFromTree(bulkTree, head, "large pathset");
+  await repository.resetMixedPaths(bulkCommit, bulkPaths);
+  await Promise.all(bulkPaths.map(async (filePath) => {
+    await fs.writeFile(path.join(fixture.root, filePath), "dirty\n", "utf8");
+  }));
+  await repository.restorePaths(bulkCommit, bulkPaths);
+  assert.equal(await fs.readFile(path.join(fixture.root, bulkPaths[0]!), "utf8"), "0\n");
+  assert.equal(await fs.readFile(path.join(fixture.root, bulkPaths.at(-1)!), "utf8"), "249\n");
 });

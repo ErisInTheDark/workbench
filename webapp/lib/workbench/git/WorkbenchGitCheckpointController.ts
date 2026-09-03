@@ -5,13 +5,10 @@
  * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: identify paths rejected before an arc operation that cannot skip them. Keywords: git, checkpoint, dirty paths, ignored paths.
  * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult/GitArcRetentionResult: typed controller operation results. Keywords: git, checkpoint, arc, move, proposal, retention, result.
  */
-import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import { projectRoot } from "../../project";
-import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import type {
   GitArcMoveRequest,
   GitCheckpointFileChange,
@@ -66,8 +63,6 @@ export type { GitArcNoopResult } from "./GitArcPlanController";
 export type { GitArcLifecycleState, GitCheckpointProposalReceipt } from "./GitArcProposalController";
 export type { GitArcRetentionResult } from "./GitArcRetentionController";
 
-const execFileAsync = promisify(execFile);
-const GIT_MAX_BUFFER = 32 * 1024 * 1024;
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^[a-f0-9]{64}$/u;
 
 export interface GitArcActiveClaim extends GitArcRegistryEntry {
@@ -142,12 +137,6 @@ interface ReadCheckpointResult {
   parent: string;
 }
 
-interface HeadMovement {
-  changedPaths: string[];
-  currentHead: string;
-  kind: "fast-forward" | "incompatible" | "same";
-}
-
 function isArcMetadata(metadata: CheckpointMetadata | null): metadata is CheckpointMetadata {
   return Boolean(metadata && (metadata.kind === "arc" || metadata.kind === "implement") && metadata.scopePaths.length);
 }
@@ -163,21 +152,8 @@ function pathIsCoveredBy(candidate: string, scopePath: string) {
   return candidate === scopePath || candidate.startsWith(`${scopePath}/`);
 }
 
-async function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
-  const { stdout } = await execFileAsync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env,
-    maxBuffer: GIT_MAX_BUFFER,
-    windowsHide: true,
-  });
-  return stdout;
-}
-
 async function resolveRepoRoot(cwd: string) {
-  const repoRoot = (await runGit(cwd, ["rev-parse", "--show-toplevel"])).trim();
-  if (!repoRoot) throw new Error("Unable to find Git repository root.");
-  return path.resolve(repoRoot);
+  return (await WorkbenchGitRepository.open(cwd)).root;
 }
 
 function normalizeHarness(harness: string | undefined): GitArcHarness {
@@ -204,116 +180,6 @@ async function prepareArcOutcome(
   return await new GitCheckpointStore(repository).prepareOutcome(harness, threadId, outcome);
 }
 
-function isWithinRoot(candidatePath: string, rootPath: string) {
-  const candidate = path.resolve(candidatePath).replace(/\\/g, "/").toLowerCase();
-  const root = path.resolve(rootPath).replace(/\\/g, "/").toLowerCase();
-  return candidate === root || candidate.startsWith(`${root}/`);
-}
-
-function normalizePaths(repoRoot: string, paths: string[]) {
-  if (!Array.isArray(paths) || !paths.length) throw new Error("At least one checkpoint path is required.");
-  const normalized = paths.map((candidate) => {
-    const value = String(candidate ?? "").trim();
-    if (!value) throw new Error("Checkpoint paths must not be empty.");
-    const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(repoRoot, value);
-    if (!isWithinRoot(absolute, repoRoot)) throw new Error("Checkpoint paths must stay inside the Git repository.");
-    const relative = path.relative(repoRoot, absolute).replace(/\\/g, "/");
-    if (!relative || relative.startsWith("../")) throw new Error("Checkpoint paths must identify content inside the Git repository.");
-    return relative;
-  });
-  return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));
-}
-
-function literalPathspec(relativePath: string) {
-  return `:(top,literal)${relativePath}`;
-}
-
-function parseNullPaths(output: string) {
-  return output.split("\0").filter(Boolean);
-}
-
-async function withTemporaryIndex<T>(callback: (indexPath: string, directory: string) => Promise<T>) {
-  const temporaryDirectory = await WorkbenchTemporaryDirectory.create("workbench-checkpoint-index-");
-  try {
-    return await callback(path.join(temporaryDirectory.path, "index"), temporaryDirectory.path);
-  } finally {
-    await temporaryDirectory.dispose();
-  }
-}
-
-async function writeWorktreeTree(repoRoot: string) {
-  return await withTemporaryIndex(async (indexPath) => {
-    const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-    await runGit(repoRoot, ["read-tree", "HEAD"], env);
-    const transcriptIsIgnored = await runGit(
-      repoRoot,
-      ["check-ignore", "-q", "--no-index", ".workbench/transcripts"],
-    ).then(() => true, () => false);
-    await runGit(repoRoot, [
-      "add", "-A", "--", ".",
-      ...(transcriptIsIgnored ? [] : [":(top,glob,exclude).workbench/transcripts/**"]),
-    ], env);
-    return (await runGit(repoRoot, ["write-tree"], env)).trim();
-  });
-}
-
-async function writeScopedWorktreeTree(repoRoot: string, paths: string[], baseTreeish = "HEAD") {
-  return await withTemporaryIndex(async (indexPath) => {
-    const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-    await runGit(repoRoot, ["read-tree", baseTreeish], env);
-    const matchedPaths = [...new Set(parseNullPaths(await runGit(repoRoot, [
-      "ls-files",
-      "-z",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "--",
-      ...paths.map(literalPathspec),
-    ], env)))].sort((left, right) => left.localeCompare(right));
-    if (matchedPaths.length) {
-      await runGit(repoRoot, ["add", "-A", "--", ...matchedPaths.map(literalPathspec)], env);
-    }
-    return (await runGit(repoRoot, ["write-tree"], env)).trim();
-  });
-}
-
-async function writeTreeWithPathsFromSource(
-  repoRoot: string,
-  baseTreeish: string,
-  sourceTreeish: string,
-  paths: string[],
-) {
-  return await withTemporaryIndex(async (indexPath, directory) => {
-    const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-    const patchPath = path.join(directory, "paths.patch");
-    await runGit(repoRoot, ["read-tree", baseTreeish], env);
-    const patch = await runGit(repoRoot, [
-      "diff", "--binary", "--no-renames", baseTreeish, sourceTreeish, "--", ...paths.map(literalPathspec),
-    ]);
-    if (patch) {
-      await fs.writeFile(patchPath, patch, "utf8");
-      await runGit(repoRoot, ["apply", "--cached", "--binary", "--whitespace=nowarn", patchPath], env);
-    }
-    return (await runGit(repoRoot, ["write-tree"], env)).trim();
-  });
-}
-
-async function createCommitFromTree(
-  repoRoot: string,
-  tree: string,
-  parent: string,
-  message: string,
-) {
-  const temporaryDirectory = await WorkbenchTemporaryDirectory.create("workbench-checkpoint-message-");
-  const messagePath = path.join(temporaryDirectory.path, "message.txt");
-  try {
-    await fs.writeFile(messagePath, message, "utf8");
-    return (await runGit(repoRoot, ["commit-tree", tree, "-p", parent, "-F", messagePath])).trim();
-  } finally {
-    await temporaryDirectory.dispose();
-  }
-}
-
 async function checkpointRefName(repoRoot: string, harness: GitArcHarness, threadId: string, commit: string) {
   return await new GitCheckpointStore(new WorkbenchGitRepository(repoRoot)).checkpointRefName(harness, threadId, commit);
 }
@@ -323,8 +189,9 @@ async function readCheckpoint(repoRoot: string, harness: GitArcHarness, threadId
 }
 
 async function readRestorableCheckpoint(repoRoot: string, harness: GitArcHarness, threadId: string, rawCommit: string) {
+  const repository = new WorkbenchGitRepository(repoRoot);
   const checkpoint = await readCheckpoint(repoRoot, harness, threadId, rawCommit);
-  const currentHead = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
+  const currentHead = await repository.currentHead();
   if (checkpoint.parent !== currentHead) throw new Error("Checkpoint parent differs from current HEAD. Ask the user before overriding.");
   return checkpoint;
 }
@@ -339,43 +206,6 @@ function diffArtifactPath(threadId: string, artifactId: string) {
     normalizeThreadId(threadId),
     `${artifactId}.diff`,
   );
-}
-
-async function listChangedPaths(repoRoot: string, from: string, to: string, paths: string[]) {
-  return parseNullPaths(await runGit(repoRoot, [
-    "diff", "--name-only", "-z", "--no-renames", from, to, "--", ...paths.map(literalPathspec),
-  ])).sort((left, right) => left.localeCompare(right));
-}
-
-async function classifyHeadMovement(
-  repoRoot: string,
-  ancestryBaseCommit: string,
-  paths: string[],
-  contentBaseline = ancestryBaseCommit,
-): Promise<HeadMovement> {
-  const currentHead = (await runGit(repoRoot, ["rev-parse", "HEAD"])).trim();
-  if (currentHead === ancestryBaseCommit) {
-    return {
-      changedPaths: contentBaseline === currentHead
-        ? []
-        : await listChangedPaths(repoRoot, contentBaseline, currentHead, paths),
-      currentHead,
-      kind: "same",
-    };
-  }
-  const commitsOnlyOnBase = (await runGit(repoRoot, [
-    "rev-list", "--max-count=1", `${currentHead}..${ancestryBaseCommit}`,
-  ])).trim();
-  if (commitsOnlyOnBase) return { changedPaths: [], currentHead, kind: "incompatible" };
-  return {
-    changedPaths: await listChangedPaths(repoRoot, contentBaseline, currentHead, paths),
-    currentHead,
-    kind: "fast-forward",
-  };
-}
-
-async function buildFileChanges(repoRoot: string, from: string, to: string, paths: string[]) {
-  return await new WorkbenchGitRepository(repoRoot).buildFileChanges(from, to, paths);
 }
 
 export default class WorkbenchGitCheckpointController {
@@ -1111,9 +941,10 @@ export default class WorkbenchGitCheckpointController {
       if (!metadata || metadata.kind !== "plan") {
         throw new Error("Explicit arc inspection refs must identify this thread's current active arc or an inactive or historical plan.");
       }
-      const paths = input.paths?.length ? normalizePaths(repoRoot, input.paths) : metadata.scopePaths;
-      const currentTree = await writeScopedWorktreeTree(repoRoot, paths);
-      const changes = await buildFileChanges(repoRoot, checkpoint.checkpointCommit, currentTree, paths);
+      const repository = new WorkbenchGitRepository(repoRoot);
+      const paths = input.paths?.length ? repository.normalizePaths(input.paths) : metadata.scopePaths;
+      const currentTree = await repository.writeScopedWorktreeTree(paths);
+      const changes = await repository.buildFileChanges(checkpoint.checkpointCommit, currentTree, paths);
       return {
         changes,
         checkpointCommit: checkpoint.checkpointCommit,
@@ -1250,9 +1081,9 @@ export default class WorkbenchGitCheckpointController {
     if (!rawPaths?.length && !confirmRestore) throw new Error("Checkpoint restore requires confirmation or selected paths.");
     const repoRoot = await resolveRepoRoot(cwd);
     const harness = normalizeHarness(rawHarness);
+    const repository = new WorkbenchGitRepository(repoRoot);
 
     if (!rawPaths?.length) {
-      const repository = new WorkbenchGitRepository(repoRoot);
       const registry = new GitArcRegistry(repository);
       const active = await registry.find({ harness, threadId });
       const owningArc = active?.phase === "active" ? active : null;
@@ -1284,19 +1115,14 @@ export default class WorkbenchGitCheckpointController {
           threadId,
         });
       }
-      const currentTree = await writeWorktreeTree(repoRoot);
-      const changedPaths = parseNullPaths(await runGit(repoRoot, [
-        "diff", "--name-only", "-z", "--no-renames", checkpoint.checkpointCommit, currentTree, "--", ".",
-      ]));
-      const checkpointPaths = new Set(parseNullPaths(await runGit(repoRoot, [
-        "ls-tree", "-r", "--name-only", "-z", checkpoint.checkpointCommit,
-      ])));
+      const currentTree = await repository.writeWorktreeTree();
+      const changedPaths = await repository.listAllChangedPaths(checkpoint.checkpointCommit, currentTree);
+      const checkpointPaths = new Set(await repository.listTreePaths(checkpoint.checkpointCommit));
       const addedPaths = changedPaths.filter((filePath) => !checkpointPaths.has(filePath));
       await Promise.all(addedPaths.map(async (filePath) => {
-        const absolute = path.resolve(repoRoot, filePath);
-        if (isWithinRoot(absolute, repoRoot)) await fs.rm(absolute, { force: true, recursive: true });
+        await fs.rm(repository.resolvePath(filePath), { force: true, recursive: true });
       }));
-      await runGit(repoRoot, ["restore", "--source", checkpoint.checkpointCommit, "--worktree", "--", "."]);
+      await repository.run(["restore", "--source", checkpoint.checkpointCommit, "--worktree", "--", "."]);
       const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
         committedSha: null,
         proposalId: null,
@@ -1324,7 +1150,7 @@ export default class WorkbenchGitCheckpointController {
         throw new Error("The restore ref does not match this thread's active Git arc.");
       }
     }
-    const paths = normalizePaths(repoRoot, rawPaths);
+    const paths = repository.normalizePaths(rawPaths);
     if (releasingArc && (
       paths.length !== releasingArc.active.claimedPaths.length
       || paths.some((filePath, index) => filePath !== releasingArc.active.claimedPaths[index])
@@ -1344,8 +1170,7 @@ export default class WorkbenchGitCheckpointController {
         threadId,
       })
       : checkpoint.checkpointCommit;
-    const headMovement = await classifyHeadMovement(
-      repoRoot,
+    const headMovement = await repository.classifyHeadMovement(
       releasingArc ? restoreSource : checkpoint.parent,
       paths,
       restoreSource,
@@ -1356,22 +1181,15 @@ export default class WorkbenchGitCheckpointController {
     if (headMovement.changedPaths.length) {
       throw new Error(`Selected restore paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
     }
-    const currentTree = await writeScopedWorktreeTree(repoRoot, paths, restoreSource);
-    const changedPaths = await listChangedPaths(repoRoot, restoreSource, currentTree, paths);
-    const checkpointPaths = new Set(parseNullPaths(await runGit(repoRoot, [
-      "ls-tree", "-r", "--name-only", "-z", restoreSource, "--", ...paths.map(literalPathspec),
-    ])));
+    const currentTree = await repository.writeScopedWorktreeTree(paths, restoreSource);
+    const changedPaths = await repository.listChangedPaths(restoreSource, currentTree, paths);
+    const checkpointPaths = new Set(await repository.listTreePaths(restoreSource, paths));
     const addedPaths = changedPaths.filter((filePath) => !checkpointPaths.has(filePath));
     const sourcePaths = changedPaths.filter((filePath) => checkpointPaths.has(filePath));
     await Promise.all(addedPaths.map(async (filePath) => {
-      const absolute = path.resolve(repoRoot, filePath);
-      if (isWithinRoot(absolute, repoRoot)) await fs.rm(absolute, { force: true, recursive: true });
+      await fs.rm(repository.resolvePath(filePath), { force: true, recursive: true });
     }));
-    if (sourcePaths.length) {
-      await runGit(repoRoot, [
-        "restore", "--source", restoreSource, "--worktree", "--", ...sourcePaths.map(literalPathspec),
-      ]);
-    }
+    await repository.restorePaths(restoreSource, sourcePaths);
     if (releasingArc) {
       const proposalUpdates = await this.proposals.prepareUnavailableUpdates({
         cwd: releasingArc.repository.root,

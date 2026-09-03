@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchGitRepository: own raw Git process, snapshot, path, tree, ref, worktree timestamps, index-normalized publication, and ancestry mechanics for one repository. Keywords: git, repository, snapshot, ref, mtime, index, transaction.
+ * - default WorkbenchGitRepository: own raw Git process, stdin pathspec transport, snapshot, path, tree, ref, worktree timestamps, index-normalized publication, and ancestry mechanics for one repository. Keywords: git, repository, pathspec, stdin, argv, large path set, snapshot, ref, mtime, index, transaction.
  * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit: typed Git history, ancestry, object-read, and atomic ref-update inputs. Keywords: git, commit, paths, head, object, ref, transaction.
  */
 import { execFile, spawn } from "node:child_process";
@@ -72,6 +72,24 @@ function isWithinRoot(candidatePath: string, rootPath: string) {
 
 function parseNullPaths(output: string) {
   return output.split("\0").filter(Boolean);
+}
+
+function filterPathsByScopes(candidates: string[], scopes: readonly string[]) {
+  if (!scopes.length || scopes.includes(".")) return candidates;
+  const scopeSet = new Set(scopes);
+  return candidates.filter((candidate) => {
+    if (scopeSet.has(candidate)) return true;
+    let separator = candidate.lastIndexOf("/");
+    while (separator > 0) {
+      if (scopeSet.has(candidate.slice(0, separator))) return true;
+      separator = candidate.lastIndexOf("/", separator - 1);
+    }
+    return false;
+  });
+}
+
+function pathspecInput(paths: readonly string[]) {
+  return `${paths.map((candidate) => `:(top,literal)${candidate}`).join("\0")}\0`;
 }
 
 function parseCommitActor(line: string, label: string) {
@@ -153,11 +171,13 @@ export default class WorkbenchGitRepository {
     input: string,
     env: NodeJS.ProcessEnv,
     acceptedExitCodes: readonly number[],
+    signal?: AbortSignal,
   ) {
     return await new Promise<{ exitCode: number; stdout: string }>((resolve, reject) => {
       const child = spawn("git", args, {
         cwd: this.root,
         env,
+        signal,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
@@ -176,8 +196,8 @@ export default class WorkbenchGitRepository {
     });
   }
 
-  async runWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env) {
-    return (await this.runWithInputResult(args, input, env, [0])).stdout;
+  async runWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal) {
+    return (await this.runWithInputResult(args, input, env, [0], signal)).stdout;
   }
 
   async runBufferWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env) {
@@ -440,33 +460,41 @@ export default class WorkbenchGitRepository {
     });
   }
 
+  async listWorktreePaths(
+    scopes: readonly string[] = [],
+    env: NodeJS.ProcessEnv = process.env,
+    signal?: AbortSignal,
+  ) {
+    const candidates = [...new Set(parseNullPaths(await this.run([
+      "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+    ], env, signal)))].sort((left, right) => left.localeCompare(right));
+    return filterPathsByScopes(candidates, scopes);
+  }
+
   async writeScopedWorktreeTree(paths: string[], baseTreeish = "HEAD", signal?: AbortSignal) {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       await this.run(["read-tree", baseTreeish], env, signal);
-      const matchedPaths = [...new Set(parseNullPaths(await this.run([
-        "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
-        ...paths.map((candidate) => this.literalPathspec(candidate)),
-      ], env, signal)))].sort((left, right) => left.localeCompare(right));
+      const matchedPaths = await this.listWorktreePaths(paths, env, signal);
       if (matchedPaths.length) {
-        await this.run(["add", "-A", "--", ...matchedPaths.map((candidate) => this.literalPathspec(candidate))], env, signal);
+        await this.runWithInput([
+          "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
+        ], pathspecInput(matchedPaths), env, signal);
       }
       return (await this.run(["write-tree"], env, signal)).trim();
     });
   }
 
   async writeTreeWithPathsFromSource(baseTreeish: string, sourceTreeish: string, paths: string[]) {
-    return await this.withTemporaryIndex(async (indexPath, directory) => {
+    return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      const patchPath = path.join(directory, "paths.patch");
       await this.run(["read-tree", baseTreeish], env);
-      const patch = await this.run([
-        "diff", "--binary", "--no-renames", baseTreeish, sourceTreeish, "--",
-        ...paths.map((candidate) => this.literalPathspec(candidate)),
-      ]);
-      if (patch) {
-        await fs.writeFile(patchPath, patch, "utf8");
-        await this.run(["apply", "--cached", "--binary", "--whitespace=nowarn", patchPath], env);
+      const changedPaths = await this.listChangedPaths(baseTreeish, sourceTreeish, paths);
+      if (changedPaths.length) {
+        await this.runWithInput([
+          "restore", "--source", sourceTreeish, "--staged",
+          "--pathspec-from-file=-", "--pathspec-file-nul",
+        ], pathspecInput(changedPaths), env);
       }
       return (await this.run(["write-tree"], env)).trim();
     });
@@ -531,10 +559,7 @@ export default class WorkbenchGitRepository {
   }
 
   async listChangedPaths(from: string, to: string, paths: string[], signal?: AbortSignal) {
-    return parseNullPaths(await this.run([
-      "diff", "--name-only", "-z", "--no-renames", from, to, "--",
-      ...paths.map((candidate) => this.literalPathspec(candidate)),
-    ], process.env, signal)).sort((left, right) => left.localeCompare(right));
+    return filterPathsByScopes(await this.listAllChangedPaths(from, to, signal), paths);
   }
 
   async listAllChangedPaths(from: string, to: string, signal?: AbortSignal) {
@@ -630,14 +655,17 @@ export default class WorkbenchGitRepository {
   }
 
   async listTreePaths(treeish: string, paths?: string[]) {
-    return parseNullPaths(await this.run([
+    const candidates = parseNullPaths(await this.run([
       "ls-tree", "-r", "--name-only", "-z", treeish,
-      ...(paths?.length ? ["--", ...paths.map((candidate) => this.literalPathspec(candidate))] : []),
     ]));
+    return filterPathsByScopes(candidates, paths ?? []);
   }
 
   async resetMixedPaths(commit: string, paths: string[]) {
-    await this.run(["reset", "--mixed", "--quiet", commit, "--", ...paths.map((candidate) => this.literalPathspec(candidate))]);
+    if (!paths.length) return;
+    await this.runWithInput([
+      "reset", "--mixed", "--quiet", "--pathspec-from-file=-", "--pathspec-file-nul", commit,
+    ], pathspecInput(paths));
   }
 
   async writeIndexTree() {
@@ -676,7 +704,9 @@ export default class WorkbenchGitRepository {
 
   async restorePaths(source: string, paths: string[]) {
     if (!paths.length) return;
-    await this.run(["restore", "--source", source, "--worktree", "--", ...paths.map((candidate) => this.literalPathspec(candidate))]);
+    await this.runWithInput([
+      "restore", "--source", source, "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul",
+    ], pathspecInput(paths));
   }
 
   async remotes() {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcProposalController: own proposal creation, replacement, rescission, acceptance, receipts, and lifecycle projection. Keywords: git, arc, proposal, acceptance, lifecycle.
+ * - default GitArcProposalController: own proposal creation, replacement, rescission, acceptance, receipts, and lifecycle projection. Keywords: git, arc, proposal, acceptance, lifecycle, rebase, branch replacement.
  * - GitArcLifecycleState: durable active or resolved arc projection with ordered visible proposal summaries. Keywords: git, arc, lifecycle, sidebar, proposals.
  * - GitArcAcceptedProposalsError: preserve accepted proposal receipts and remaining claims when continuation must stop. Keywords: git, arc, proposal, accepted, error.
  * - GitCheckpointProposalReceipt: durable proposal identity returned after proposal publication. Keywords: git, proposal, receipt, commit.
@@ -37,6 +37,8 @@ interface ArcIdentityInput {
   harness?: GitArcHarness;
   threadId: string;
 }
+
+const BRANCH_CHANGED_UNAVAILABLE_REASON = "The branch changed after this proposal was created, so it can no longer be committed as proposed.";
 
 export interface GitCheckpointProposalReceipt {
   baseCommit: string;
@@ -349,8 +351,17 @@ async function resolveProposalState(repository: WorkbenchGitRepository, harness:
   let currentTree: string | null = null;
   const legacyCommittedHistoryReason = proposal.metadata.status === "unavailable"
     && proposal.metadata.unavailableReason?.startsWith("Proposed paths changed in committed history:");
-  if (proposal.metadata.status === "proposed" || legacyCommittedHistoryReason) {
+  const branchChangeUnavailable = proposal.metadata.status === "unavailable"
+    && proposal.metadata.unavailableReason === BRANCH_CHANGED_UNAVAILABLE_REASON;
+  if (proposal.metadata.status === "proposed" || legacyCommittedHistoryReason || branchChangeUnavailable) {
     const headMovement = await repository.classifyHeadMovement(proposal.metadata.liveBaseCommit, proposal.metadata.livePaths);
+    const replayableBranchReplacement = headMovement.kind === "incompatible"
+      && proposal.metadata.mode === "commit"
+      && !(await repository.listChangedPaths(
+        proposal.metadata.liveBaseCommit,
+        headMovement.currentHead,
+        proposal.metadata.livePaths,
+      )).length;
     const committedOutsideProposal = headMovement.kind === "fast-forward"
       && headMovement.changedPaths.length > 0
       && !(await repository.listChangedPaths(
@@ -358,31 +369,42 @@ async function resolveProposalState(repository: WorkbenchGitRepository, harness:
         headMovement.currentHead,
         proposal.metadata.livePaths,
       )).length;
-    let unavailableReason: string | null = headMovement.kind === "incompatible"
-      ? "The branch changed after this proposal was created, so it can no longer be committed as proposed."
+    let unavailableReason: string | null = headMovement.kind === "incompatible" && !replayableBranchReplacement
+      ? BRANCH_CHANGED_UNAVAILABLE_REASON
       : committedOutsideProposal
         ? "These changes were committed outside this proposal."
       : headMovement.changedPaths.length
         ? "A newer commit changed files in this proposal, so it can no longer be committed as proposed."
         : null;
-    if (proposal.metadata.status === "proposed" && !unavailableReason && headMovement.kind === "fast-forward") {
-      if (proposal.metadata.mode === "commit") {
-        const rebasedTree = await repository.writeTreeWithPathsFromSource(
-          headMovement.currentHead,
-          proposal.proposalCommit,
-          proposal.metadata.paths,
-        );
-        proposal = await transitionProposal(repository, proposal, {
-          ...proposal.metadata,
-          baseCommit: headMovement.currentHead,
-          liveBaseCommit: headMovement.currentHead,
-        }, rebasedTree);
-      } else {
-        proposal = await transitionProposal(repository, proposal, {
-          ...proposal.metadata,
-          liveBaseCommit: headMovement.currentHead,
-        });
-      }
+    const canRebaseCommit = proposal.metadata.mode === "commit"
+      && !unavailableReason
+      && (headMovement.kind === "fast-forward" || replayableBranchReplacement);
+    if ((proposal.metadata.status === "proposed" || branchChangeUnavailable) && canRebaseCommit) {
+      const rebasedTree = await repository.writeTreeWithPathsFromSource(
+        headMovement.currentHead,
+        proposal.proposalCommit,
+        proposal.metadata.paths,
+      );
+      proposal = await transitionProposal(repository, proposal, {
+        ...proposal.metadata,
+        baseCommit: headMovement.currentHead,
+        liveBaseCommit: headMovement.currentHead,
+        status: "proposed",
+        unavailableReason: null,
+        unavailableReasonCode: null,
+      }, rebasedTree);
+    } else if (proposal.metadata.status === "proposed" && !unavailableReason && headMovement.kind === "fast-forward") {
+      proposal = await transitionProposal(repository, proposal, {
+        ...proposal.metadata,
+        liveBaseCommit: headMovement.currentHead,
+      });
+    } else if (branchChangeUnavailable && !unavailableReason) {
+      proposal = await transitionProposal(repository, proposal, {
+        ...proposal.metadata,
+        status: "proposed",
+        unavailableReason: null,
+        unavailableReasonCode: null,
+      });
     }
     if (proposal.metadata.status === "proposed" && !unavailableReason && !proposal.metadata.messageOnly) {
       currentTree = await repository.writeScopedWorktreeTree(proposal.metadata.livePaths, proposal.metadata.liveBaseCommit);
@@ -394,12 +416,17 @@ async function resolveProposalState(repository: WorkbenchGitRepository, harness:
       const cleanPath = proposal.metadata.livePaths.find((filePath) => !changedNow.has(filePath));
       if (cleanPath) unavailableReason = `${cleanPath} no longer has working-tree changes.`;
     }
-    if (unavailableReason) {
+    const unavailableReasonCode = committedOutsideProposal ? "committed-outside-proposal" : null;
+    if (unavailableReason && (
+      proposal.metadata.status !== "unavailable"
+      || proposal.metadata.unavailableReason !== unavailableReason
+      || proposal.metadata.unavailableReasonCode !== unavailableReasonCode
+    )) {
       proposal = await transitionProposal(repository, proposal, {
         ...proposal.metadata,
         status: "unavailable",
         unavailableReason,
-        unavailableReasonCode: committedOutsideProposal ? "committed-outside-proposal" : null,
+        unavailableReasonCode,
       });
     }
   }

@@ -5,6 +5,10 @@
 - Convert external data into shared Workbench types before core code uses it.
 - Do not replace an existing owner as part of an additive change.
 
+## Git arc proposals
+
+- Git arc commit proposals only become invalid if HEAD movement intersects with the proposal's changed files.
+
 ## Managed instructions
 
 - Codex start, resume, and fork rebuild one compact thread-owned Workbench payload from current sources. Unchanged sources and selections must produce identical payloads.
