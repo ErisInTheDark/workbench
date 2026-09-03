@@ -63,8 +63,6 @@ test("agent tabs keep a persistent settled toggle and durable thread routing", a
   assert.match(source, /href=\{getThreadHref\(tab\.id\)\}/u);
   assert.match(source, /href=\{getThreadHref\(mainThreadId\)\}/u);
   assert.match(source, /handleThreadLinkClick/u);
-  assert.match(source, /threadSidebarStore\?\.getSnapshot\(\)\?\.entries\.find/u);
-  assert.match(source, /candidate\.identity\.harness === mainThreadHarness/u);
   assert.match(threadViewSource, /getThreadHref\?\.\(target\) \?\? createThreadHref\(projectId, target\)/u);
   assert.match(workbenchSource, /getThreadHref=\{\(target\) => !activeProjectId[\s\S]*?createHomeThreadHref\(threadProjectId, target\)[\s\S]*?createPinnedThreadHref\(activeProjectId, threadProjectId, target\)/u);
 });

@@ -66,7 +66,7 @@ import {
 import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/ThreadOptimisticInputStore";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
-import { useWorkbenchThread } from "../WorkbenchClientProvider";
+import { useWorkbenchThread, useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import projectThreadRenderTurns from "./thread-render-turns";
@@ -99,7 +99,6 @@ const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
 const EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS: ReadonlySet<string> = new Set();
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
-const EMPTY_THREAD_SIDEBAR_SUBSCRIBE = () => () => undefined;
 const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
 const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
 
@@ -654,7 +653,6 @@ export default memo(function ThreadView ({
   const threads = activeThreadController.threads;
   const threadDocuments = threads.documents;
   const threadGoalControls = threads.goals;
-  const threadSidebarStore = threads.sidebar;
   const rateLimits = threads.rateLimits;
   const [areSettledSubagentsVisible, setAreSettledSubagentsVisible] = useState(false);
   const [subthreadsById, setSubthreadsById] = useState<Record<string, ThreadPayload>>({});
@@ -714,26 +712,20 @@ export default memo(function ThreadView ({
   const activeThread = activeThreadId === thread.id
     ? getThreadDocumentFromSnapshot(threadDocuments, thread.id) ?? thread
     : relatedThreadsById[activeThreadId] ?? null;
-  const activeGitArcSelectionRef = useRef<{ gitArc: WorkbenchGitArcLifecycleState | null; gitArcPlan: WorkbenchGitArcPlanState | null; lifecycle: WorkbenchThreadLifecycle } | null>(null);
-  const getActiveGitArcSelection = useCallback(() => {
-    if (!activeThread) return null;
-    const entry = threadSidebarStore?.getSnapshot()?.entries.find((candidate) => (
-      candidate.entryKind !== "draft"
-      && candidate.identity.harness === activeThread.harness
-      && candidate.identity.threadId === activeThread.id
-    ));
-    const next = entry && entry.entryKind !== "draft"
-      ? { gitArc: entry.gitArc ?? null, gitArcPlan: entry.gitArcPlan ?? null, lifecycle: entry.lifecycle }
-      : null;
-    if (areDeeplyEqual(activeGitArcSelectionRef.current, next)) return activeGitArcSelectionRef.current;
-    activeGitArcSelectionRef.current = next;
-    return next;
-  }, [activeThread, threadSidebarStore]);
-  const activeGitArcSelection = useSyncExternalStore(
-    threadSidebarStore?.subscribe ?? EMPTY_THREAD_SIDEBAR_SUBSCRIBE,
-    getActiveGitArcSelection,
-    getActiveGitArcSelection,
+  const activeSidebarEntry = useWorkbenchThreadSidebarEntry(
+    projectId,
+    activeThread?.harness ?? thread.harness,
+    activeThread?.id ?? "",
   );
+  const activeGitArcSelection = useMemo<{
+    gitArc: WorkbenchGitArcLifecycleState | null;
+    gitArcPlan: WorkbenchGitArcPlanState | null;
+    lifecycle: WorkbenchThreadLifecycle;
+  } | null>(() => activeSidebarEntry ? {
+    gitArc: activeSidebarEntry.gitArc ?? null,
+    gitArcPlan: activeSidebarEntry.gitArcPlan ?? null,
+    lifecycle: activeSidebarEntry.lifecycle,
+  } : null, [activeSidebarEntry]);
   const activeProfileSlot = useMemo(() => activeThread
     ? resolveThreadComposerProfileSlot(projectId, threadTarget, activeThread)
     : null, [activeThread?.harness, activeThread?.id, projectId, threadTarget]);
@@ -1501,7 +1493,7 @@ export default memo(function ThreadView ({
       onSelectThread={handleSubthreadSelection}
       onTogglePin={handleSubagentPinToggle}
       onToggleSettlement={handleSubagentSettlementToggle}
-      threadSidebarStore={threadSidebarStore}
+      projectId={projectId}
       tabs={tabDefinitions.map((tab) => {
         const tabThread = relatedThreadsById[tab.id] ?? null;
         return {
@@ -1539,7 +1531,6 @@ export default memo(function ThreadView ({
         onOpenThread,
         projectId,
         proposalIntents: visibleGitArcProposalIntents,
-        threadSidebarStore,
       }}>
       <div
         ref={threadViewRef}
@@ -1693,7 +1684,6 @@ export default memo(function ThreadView ({
             harness={activeThread.harness}
             onOpenThread={onOpenThread}
             projectId={projectId}
-            store={threadSidebarStore}
             threadId={activeThread.id}
           />
         ) : null}

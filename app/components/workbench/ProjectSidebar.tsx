@@ -5,9 +5,9 @@
  */
 "use client";
 
-import { useMemo, useSyncExternalStore, type MouseEvent } from "react";
+import { useMemo, type MouseEvent } from "react";
 
-import type { WorkbenchProjectOption, WorkbenchThreadSidebarStore } from "workbench-shared/types";
+import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { createProjectHref } from "workbench-shared/workbench/navigation/workbench-route";
 import { getFirstSidebarProjectGroup, groupSidebarProjects, type ProjectSidebarProject } from "./project-sidebar-groups";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
@@ -19,8 +19,7 @@ import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosu
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButton";
-
-const EMPTY_PROJECT_THREAD_SUMMARIES = { projects: [] };
+import { useWorkbenchProjectThreadSummaries } from "./use-workbench-client";
 
 function getProjectActivityLabel(activityAt: number | null, nowMs: number) {
   return activityAt === null ? "" : formatThreadRelativeTimestamp(activityAt / 1000, nowMs);
@@ -156,19 +155,13 @@ export default function ProjectSidebar({
   activeProjectId,
   onProjectLinkClick,
   projects,
-  store,
 }: {
   activeProjectId: string;
   onProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, projectId: string): void;
   projects: readonly WorkbenchProjectOption[];
-  store: WorkbenchThreadSidebarStore | null;
 }) {
   const { preferences, setProjectTimeGroupCount } = useWorkbenchSidebarPreferences();
-  const summaries = useSyncExternalStore(
-    store?.subscribe ?? (() => () => undefined),
-    store?.getProjectThreadSummaries ?? (() => EMPTY_PROJECT_THREAD_SUMMARIES),
-    () => EMPTY_PROJECT_THREAD_SUMMARIES,
-  );
+  const summaries = useWorkbenchProjectThreadSummaries();
   const grouped = useMemo(() => groupSidebarProjects(projects, summaries.projects), [projects, summaries.projects]);
   const entriesByProjectId = useMemo(() => new Map(
     [...grouped.alwaysVisibleProjects, ...grouped.timeGroups.flatMap(({ projects: entries }) => entries)]

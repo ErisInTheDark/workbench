@@ -1112,6 +1112,7 @@ export interface WorkbenchThreadSidebarStore {
   getHomeThreadDisplayOrder?: () => WorkbenchHomeThreadDisplayOrderSnapshot;
   getHomeThreadDisplayOrderSupported?: () => boolean;
   getPinnedThreadLayout?: () => WorkbenchPinnedThreadLayoutSnapshot;
+  getProjectSnapshot: (projectId: string) => WorkbenchThreadSidebarSnapshot | null;
   getProjectThreadSidebars?: () => WorkbenchProjectThreadSidebars;
   getProjectThreadSummaries?: () => WorkbenchProjectThreadSummaries;
   getSnapshot: () => WorkbenchThreadSidebarSnapshot | null;

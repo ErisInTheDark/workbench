@@ -10,7 +10,7 @@ import type { ThreadPayload, ThreadSummary } from "workbench-shared/types";
 import ThreadLoadingSkeleton from "../thread-view/ThreadLoadingSkeleton";
 import ThreadScrollViewport from "../thread-view/ThreadScrollViewport";
 import ThreadView from "../thread-view/ThreadView";
-import { useWorkbenchThread } from "../WorkbenchClientProvider";
+import { useWorkbenchThread } from "../use-workbench-client";
 import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-formatters";
 import { workbenchIconButtonClassName } from "../workbench-class-names";

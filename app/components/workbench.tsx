@@ -21,7 +21,6 @@ import type {
     WorkbenchProjectOption,
     WorkbenchQuestionnaireDraft,
     WorkbenchSendThreadMessageOptions,
-    WorkbenchThreadSidebarStore,
 } from "workbench-shared/types";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -160,10 +159,14 @@ import WorkbenchAllProjectsThreadSidebar from "./workbench/WorkbenchAllProjectsT
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
 import WorkbenchAppPortSetting from "./workbench/WorkbenchAppPortSetting";
 import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
-import WorkbenchClientProvider, {
+import WorkbenchClientProvider from "./workbench/WorkbenchClientProvider";
+import {
     useWorkbenchClientMount,
+    useWorkbenchProjectThreadSidebar,
+    useWorkbenchProjectThreadSidebars,
+    useWorkbenchProjectThreadSummaries,
     useWorkbenchThreads,
-} from "./workbench/WorkbenchClientProvider";
+} from "./workbench/use-workbench-client";
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
@@ -181,9 +184,6 @@ import WorkbenchThreadSidebarActionsProvider from "./workbench/WorkbenchThreadSi
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
 
 installBrowserRandomUuidPolyfill();
-
-const EMPTY_THREAD_SIDEBAR_SUBSCRIBE = (_listener: () => void) => () => {};
-const EMPTY_PROJECT_THREAD_SUMMARIES = { projects: [] };
 
 const MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX = 24;
 const MOBILE_SHELL_HEADER_SHOW_THRESHOLD_PX = 8;
@@ -449,12 +449,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   });
   const threads = useWorkbenchThreads(workbenchClient);
   const explorer = workbenchClient.explorer;
-  const threadSidebarStore = threads.sidebar;
-  const projectThreadSummaries = useSyncExternalStore(
-    threadSidebarStore?.subscribe ?? EMPTY_THREAD_SIDEBAR_SUBSCRIBE,
-    threadSidebarStore?.getProjectThreadSummaries ?? (() => EMPTY_PROJECT_THREAD_SUMMARIES),
-    () => EMPTY_PROJECT_THREAD_SUMMARIES,
-  );
+  const projectThreadSidebars = useWorkbenchProjectThreadSidebars(workbenchClient);
+  const projectThreadSummaries = useWorkbenchProjectThreadSummaries(workbenchClient);
   const groupedSidebarProjects = useMemo(
     () => groupSidebarProjects(explorer.projects, projectThreadSummaries.projects),
     [explorer.projects, projectThreadSummaries.projects],
@@ -627,6 +623,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const selectedThreadProjectId = route.view === "thread"
     ? route.threadOwnerProjectId || explorer.currentProjectId || route.projectId
     : explorer.currentProjectId;
+  const selectedThreadSidebar = useWorkbenchProjectThreadSidebar(selectedThreadProjectId, workbenchClient);
   const threadComposerDraftsByThreadId = useMemo(() => (
     !selectedThreadProjectId ? {} : Object.fromEntries(
       clientState.records.flatMap((record) => (
@@ -1369,17 +1366,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const activeSidebarDraftId = route.view === "thread" && route.threadTarget?.kind === "draft"
     ? route.threadTarget.draftId
     : "";
-  const selectActiveSidebarDraft = useCallback((snapshot: ReturnType<WorkbenchThreadSidebarStore["getSnapshot"]>) => {
+  const activeSidebarDraft = useMemo(() => {
     if (!activeSidebarDraftId) return null;
-    const entry = snapshot?.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === activeSidebarDraftId);
+    const entry = selectedThreadSidebar?.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === activeSidebarDraftId);
     return entry?.entryKind === "draft" ? entry.draft : null;
-  }, [activeSidebarDraftId]);
-  const getActiveSidebarDraft = useCallback(() => selectActiveSidebarDraft(threadSidebarStore?.getSnapshot() ?? null), [selectActiveSidebarDraft, threadSidebarStore]);
-  const activeSidebarDraft = useSyncExternalStore(
-    threadSidebarStore?.subscribe ?? EMPTY_THREAD_SIDEBAR_SUBSCRIBE,
-    getActiveSidebarDraft,
-    getActiveSidebarDraft,
-  );
+  }, [activeSidebarDraftId, selectedThreadSidebar]);
   const selectedPinnedThreadDraft = route.view === "thread"
     && route.threadTarget?.kind === "draft"
     && route.threadOwnerProjectId
@@ -1405,9 +1396,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const getThreadComposerDraftForTarget = useCallback((target: WorkbenchThreadTarget | null | undefined): WorkbenchComposerInputDraft | null => {
     if (!target || target.kind === "new") return null;
     if (target.kind === "provider" || target.kind === "subagent") return threadComposerDraftsByThreadId[target.threadId] ?? null;
-    const entry = threadSidebarStore?.getSnapshot()?.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === target.draftId);
+    const entry = selectedThreadSidebar?.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === target.draftId);
     return entry?.entryKind === "draft" ? getSidebarDraftComposerInput(entry.draft) : null;
-  }, [getSidebarDraftComposerInput, threadComposerDraftsByThreadId, threadSidebarStore]);
+  }, [getSidebarDraftComposerInput, selectedThreadSidebar, threadComposerDraftsByThreadId]);
 
   const activeThreadComposerDraft = route.view === "thread" && route.threadTarget?.kind === "draft"
     ? getSidebarDraftComposerInput(activeRouteDraft)
@@ -1791,7 +1782,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         questionnaireDraft={questionnaireDraft}
         spellCheck={resolvedSettings.composerSpellCheck}
         threadId={threadId}
-        threadSidebarStore={threadSidebarStore}
         workspaceRoots={projectFileLinkRoots}
       />
     );
@@ -1809,21 +1799,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     submitUserInputRequest,
     threads,
     threadQuestionnaireDraftsByKey,
-    threadSidebarStore,
     threadSummariesById,
     visibleUserInputRequestsByThreadId,
   ]);
-  const getSidebarLifecycleSignal = useCallback(() => {
-    const entries = threadSidebarStore?.getSnapshot()?.entries ?? [];
+  const sidebarLifecycleSignal = useMemo(() => {
+    const entries = projectThreadSidebars.projects.flatMap(({ entries: projectEntries }) => projectEntries);
     if (entries.some((entry) => entry.entryKind !== "draft" && entry.lifecycle.kind === "needsAttention")) return "needsAttention";
     if (entries.some((entry) => entry.entryKind !== "draft" && entry.lifecycle.kind === "working")) return "working";
     return "idle";
-  }, [threadSidebarStore]);
-  const sidebarLifecycleSignal = useSyncExternalStore(
-    threadSidebarStore?.subscribe ?? EMPTY_THREAD_SIDEBAR_SUBSCRIBE,
-    getSidebarLifecycleSignal,
-    getSidebarLifecycleSignal,
-  );
+  }, [projectThreadSidebars]);
   const hasPendingQuestionnaire = Boolean(currentThread
     && pendingQuestionnaireThreadIds.has(currentThread.id)
     && isThreadStatusWaitingOnUserInput(currentThread.status))
@@ -2652,7 +2636,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   onOpenThread={openThreadFromExplorer}
                   onThreadSettled={handleThreadSettled}
                   projectId={explorer.currentProjectId || route.projectId}
-                  store={threadSidebarStore}
                   threadSummariesById={threadSummariesById}
                 >
                   {activeProjectId ? (
@@ -2669,7 +2652,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     activeProjectId={activeProjectId}
                     onProjectLinkClick={selectProjectFromLink}
                     projects={explorer.projects}
-                    store={threadSidebarStore}
                   />
                   {activeProjectId && currentProject ? <WorkbenchCurrentProjectHeading project={currentProject} /> : null}
                   <section className="shrink-0 pb-5">

@@ -4,9 +4,8 @@
  */
 "use client";
 
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useMemo } from "react";
 
-import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
 import {
   createWorkbenchThreadPlanIntersectionSelector,
   type WorkbenchHarnessId,
@@ -15,8 +14,7 @@ import {
 import ThreadDisclosure from "./ThreadDisclosure";
 import { GitArcConflictIcon, GitArcWaitIcon } from "./GitArcIcon";
 import ThreadGitArcConflictList from "./ThreadGitArcConflictList";
-
-const EMPTY_UNSUBSCRIBE = () => undefined;
+import { useWorkbenchProjectThreadSidebar } from "../use-workbench-client";
 
 function formatThreadCount(count: number, state: "active" | "snoozed") {
   return `${count} ${state} ${count === 1 ? "thread" : "threads"}`;
@@ -28,7 +26,6 @@ export default function ThreadGitArcIntersectionCard({
   onOpenThread,
   presentation = "full",
   projectId,
-  store,
   threadId,
 }: {
   harness: WorkbenchHarnessId;
@@ -36,13 +33,11 @@ export default function ThreadGitArcIntersectionCard({
   onOpenThread: (target: WorkbenchThreadTarget) => void;
   presentation?: "compact" | "full";
   projectId: string;
-  store: WorkbenchThreadSidebarStore | null;
   threadId: string;
 }) {
   const selector = useMemo(() => createWorkbenchThreadPlanIntersectionSelector({ harness, threadId }), [harness, threadId]);
-  const subscribe = useCallback((listener: () => void) => store?.subscribe(listener) ?? EMPTY_UNSUBSCRIBE, [store]);
-  const getSelection = useCallback(() => selector(store?.getSnapshot() ?? null), [selector, store]);
-  const intersections = useSyncExternalStore(subscribe, getSelection, getSelection);
+  const projectSidebar = useWorkbenchProjectThreadSidebar(projectId);
+  const intersections = useMemo(() => selector(projectSidebar), [projectSidebar, selector]);
   if (!intersections.hasPlannedClaims) return null;
   const waiting = mode === "wait";
   const compact = presentation === "compact" || waiting;

@@ -139,7 +139,6 @@ export default function ThreadWorkbenchCommandItem({
           mode="wait"
           onOpenThread={gitArcPresentation.onOpenThread}
           projectId={gitArcPresentation.projectId}
-          store={gitArcPresentation.threadSidebarStore ?? null}
           threadId={threadId}
         />
       );

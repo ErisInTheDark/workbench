@@ -3,11 +3,13 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkbenchPendingUserInputRequest, WorkbenchThreadSidebarStore } from "workbench-shared/types";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import WorkbenchClientProvider from "./WorkbenchClientProvider";
+import type { WorkbenchClientController } from "./workbench-client-context";
 import WorkbenchContextMenuProvider from "./WorkbenchContextMenuProvider";
 import WorkbenchThreadTooltipDetails from "./WorkbenchThreadTooltipDetails";
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
@@ -44,12 +46,10 @@ function renderDetails(
   options: {
     pendingRequest?: WorkbenchPendingUserInputRequest | null;
     proposalId?: string | null;
-    threadSidebarStore?: WorkbenchThreadSidebarStore | null;
+    sidebarStore?: WorkbenchThreadSidebarStore | null;
   } = {},
 ) {
-  return renderToStaticMarkup(createElement(
-    WorkbenchContextMenuProvider,
-    null,
+  return renderWithClient(
     createElement(WorkbenchThreadTooltipDetails, {
       cwd,
       harness: "codex",
@@ -65,8 +65,32 @@ function renderDetails(
       questionnaireDraft: null,
       spellCheck: true,
       threadId: "thread",
-      threadSidebarStore: options.threadSidebarStore ?? null,
     }),
+    options.sidebarStore ?? null,
+  );
+}
+
+function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClientController {
+  return {
+    controls: null,
+    explorer: {} as WorkbenchClientController["explorer"],
+    mounted: store ? {
+      controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
+      dispose: () => undefined,
+      threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],
+      threadSidebar: store,
+    } : null,
+    transcriptComparison: { available: false, projection: null },
+  };
+}
+
+function renderWithClient(content: ReactNode, store: WorkbenchThreadSidebarStore | null) {
+  return renderToStaticMarkup(createElement(
+    WorkbenchClientProvider,
+    {
+      children: createElement(WorkbenchContextMenuProvider, null, content),
+      client: createClient(store),
+    },
   ));
 }
 
@@ -110,14 +134,17 @@ const plannedIntersection = planThread("planned intersection", null, {
   scopePaths: ["src/feature/other.ts"],
   updatedAt: "2026-08-27T00:00:00.000Z",
 });
-const planStore = {
-  getSnapshot: () => ({
+const planSnapshot = {
     entries: [planOwner, activeIntersection, plannedIntersection],
     error: null,
     freshness: "fresh" as const,
     projectId: "project",
     revision: 1,
-  }),
+};
+const planStore = {
+  getProjectSnapshot: (projectId: string) => projectId === "project" ? planSnapshot : null,
+  getProjectThreadSidebars: () => ({ projects: [planSnapshot] }),
+  getSnapshot: () => null,
   subscribe: () => () => undefined,
 } satisfies WorkbenchThreadSidebarStore;
 
@@ -152,38 +179,34 @@ test("planned-work tooltips keep active intersection navigation and omit planned
   const compactHtml = renderDetails(false, "C:/workspace", true, {
     pendingRequest: null,
     proposalId: null,
-    threadSidebarStore: planStore,
+    sidebarStore: planStore,
   });
   assert.match(compactHtml, /href="\/project\/@\/thread\/active%20intersection"/u);
   assert.doesNotMatch(compactHtml, /href="\/project\/@\/thread\/planned%20intersection"|<details/u);
 
-  const fullHtml = renderToStaticMarkup(createElement(
-    WorkbenchContextMenuProvider,
-    null,
+  const fullHtml = renderWithClient(
     createElement(ThreadGitArcIntersectionCard, {
       harness: "codex",
       onOpenThread: () => undefined,
       projectId: "project",
-      store: planStore,
       threadId: "thread",
     }),
-  ));
+    planStore,
+  );
   assert.match(fullHtml, /<details/u);
 });
 
 test("Git arc waits show active claim owners without planned-only intersections", () => {
-  const html = renderToStaticMarkup(createElement(
-    WorkbenchContextMenuProvider,
-    null,
+  const html = renderWithClient(
     createElement(ThreadGitArcIntersectionCard, {
       harness: "codex",
       mode: "wait",
       onOpenThread: () => undefined,
       projectId: "project",
-      store: planStore,
       threadId: "thread",
     }),
-  ));
+    planStore,
+  );
 
   assert.match(html, /data-thread-git-arc-intersection-card="wait"/u);
   assert.match(html, /href="\/project\/@\/thread\/active%20intersection"/u);

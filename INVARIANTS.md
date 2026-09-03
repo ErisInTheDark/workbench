@@ -5,6 +5,12 @@
 - Convert external data into shared Workbench types before core code uses it.
 - Do not replace an existing owner as part of an additive change.
 
+## Thread view parity
+
+- Home, project, pinned, and mosaic thread routes use the same project-qualified thread-state hooks.
+- Route shells may pass display state such as layout and navigation. They must not change thread actions, lifecycle, questionnaire, or Git arc behaviour.
+- Shared thread state is consumed through domain hooks, not drilled through display props or presentation context.
+
 ## Git arc proposals
 
 - Git arc commit proposals only become invalid if HEAD movement intersects with the proposal's changed files.

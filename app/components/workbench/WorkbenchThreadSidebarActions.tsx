@@ -4,9 +4,9 @@
  */
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import type { ThreadSummary, WorkbenchControls, WorkbenchThreadSidebarStore } from "workbench-shared/types";
+import type { ThreadSummary, WorkbenchControls } from "workbench-shared/types";
 import { writeTextToClipboard } from "../../workbench/dom/clipboard";
 import { findWorkbenchThreadFolder, getWorkbenchThreadDisplayKey, type WorkbenchThreadDisplayOrder, type WorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
@@ -21,6 +21,14 @@ import {
   type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import { getNeedsAttentionThreadStatusTone } from "./workbench-thread-status-colors";
+import {
+  useWorkbenchHomeThreadDisplayOrder,
+  useWorkbenchHomeThreadDisplayOrderSupported,
+  useWorkbenchPinnedThreadLayout,
+  useWorkbenchProjectThreadSidebar,
+  useWorkbenchProjectThreadSidebars,
+  useWorkbenchProjectThreadSummaries,
+} from "./use-workbench-client";
 import {
   ArchiveIcon,
   CompletedThreadIcon,
@@ -37,11 +45,6 @@ import {
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 
 const THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
-const EMPTY_UNSUBSCRIBE = () => {};
-const EMPTY_PROJECT_THREAD_SUMMARIES: WorkbenchProjectThreadSummaries = { projects: [] };
-const EMPTY_PROJECT_THREAD_SIDEBARS: WorkbenchProjectThreadSidebars = { projects: [] };
-const EMPTY_HOME_THREAD_DISPLAY_ORDER = { displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder" as const };
-const EMPTY_PINNED_THREAD_LAYOUT = { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" as const };
 type ThreadListEntry = WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry;
 
 function isPinnedDraftSummaryEntry(entry: ThreadListEntry): entry is Extract<WorkbenchPinnedThreadSummaryEntry, { entryKind: "draft" }> {
@@ -94,7 +97,6 @@ function WorkbenchThreadSidebarActionsProvider({
   onOpenThread,
   onThreadSettled,
   projectId,
-  store,
   threadSummariesById,
 }: {
   children: ReactNode;
@@ -102,41 +104,14 @@ function WorkbenchThreadSidebarActionsProvider({
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   onThreadSettled: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projectId: string;
-  store: WorkbenchThreadSidebarStore | null;
   threadSummariesById: ReadonlyMap<string, ThreadSummary>;
 }) {
-  const snapshot = useSyncExternalStore(
-    store?.subscribe ?? (() => EMPTY_UNSUBSCRIBE),
-    store?.getSnapshot ?? (() => null),
-    () => null,
-  );
-  const projectThreadSummaries = useSyncExternalStore(
-    store?.subscribe ?? (() => EMPTY_UNSUBSCRIBE),
-    store?.getProjectThreadSummaries ?? (() => EMPTY_PROJECT_THREAD_SUMMARIES),
-    () => EMPTY_PROJECT_THREAD_SUMMARIES,
-  );
-  const projectThreadSidebars = useSyncExternalStore(
-    store?.subscribe ?? (() => EMPTY_UNSUBSCRIBE),
-    store?.getProjectThreadSidebars ?? (() => snapshot ? { projects: [snapshot] } : EMPTY_PROJECT_THREAD_SIDEBARS),
-    () => EMPTY_PROJECT_THREAD_SIDEBARS,
-  );
-  const homeThreadDisplayOrder = useSyncExternalStore(
-    store?.subscribe ?? (() => EMPTY_UNSUBSCRIBE),
-    store?.getHomeThreadDisplayOrder ?? (() => EMPTY_HOME_THREAD_DISPLAY_ORDER),
-    () => EMPTY_HOME_THREAD_DISPLAY_ORDER,
-  );
-  const homeDisplayOrderSupported = useSyncExternalStore(
-    store?.subscribe ?? (() => EMPTY_UNSUBSCRIBE),
-    store?.getHomeThreadDisplayOrderSupported ?? (() => false),
-    () => false,
-  );
-  const pinnedThreadLayout = useSyncExternalStore(
-    store?.subscribe ?? (() => EMPTY_UNSUBSCRIBE),
-    store?.getPinnedThreadLayout ?? (() => EMPTY_PINNED_THREAD_LAYOUT),
-    () => EMPTY_PINNED_THREAD_LAYOUT,
-  );
-  const currentSidebar = projectThreadSidebars.projects.find((candidate) => candidate.projectId === projectId)
-    ?? (snapshot?.projectId === projectId ? snapshot : null);
+  const currentSidebar = useWorkbenchProjectThreadSidebar(projectId);
+  const projectThreadSummaries = useWorkbenchProjectThreadSummaries();
+  const projectThreadSidebars = useWorkbenchProjectThreadSidebars();
+  const homeThreadDisplayOrder = useWorkbenchHomeThreadDisplayOrder();
+  const homeDisplayOrderSupported = useWorkbenchHomeThreadDisplayOrderSupported();
+  const pinnedThreadLayout = useWorkbenchPinnedThreadLayout();
   const entries = currentSidebar?.entries ?? [];
   const entryCount = projectThreadSidebars.projects.reduce((total, sidebar) => total + sidebar.entries.length, 0);
   const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
@@ -218,8 +193,7 @@ function WorkbenchThreadSidebarActionsProvider({
     const localDisplayKey = isPinnedDraftSummaryEntry(entry) ? `draft:${entry.draftId}` : getWorkbenchThreadDisplayKey(entry);
     const useProjectFolder = !projectId || group !== "pinned";
     const displayKey = useProjectFolder ? localDisplayKey : getProjectQualifiedThreadDisplayKey(ownerProjectId, localDisplayKey);
-    const ownerSidebar = projectThreadSidebars.projects.find((candidate) => candidate.projectId === ownerProjectId)
-      ?? (snapshot?.projectId === ownerProjectId ? snapshot : null);
+    const ownerSidebar = projectThreadSidebars.projects.find((candidate) => candidate.projectId === ownerProjectId) ?? null;
     const folder = useProjectFolder
       ? findWorkbenchThreadFolder(ownerSidebar?.displayOrder, displayKey)
       : findWorkbenchThreadFolder(pinnedThreadLayout.displayOrder, displayKey);
@@ -319,7 +293,7 @@ function WorkbenchThreadSidebarActionsProvider({
       });
     }
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}` };
-  }, [controls, mutateEntry, onOpenThread, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars.projects, snapshot, stopThread, threadSummariesById]);
+  }, [controls, mutateEntry, onOpenThread, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars.projects, stopThread, threadSummariesById]);
 
   const value = useMemo<WorkbenchThreadSidebarActionsValue>(() => ({
     autoFocusFolderId,

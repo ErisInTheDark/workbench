@@ -70,6 +70,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   readonly getHomeThreadDisplayOrder = () => this.homeThreadDisplayOrder;
   readonly getHomeThreadDisplayOrderSupported = () => this.homeThreadDisplayOrderSupported;
   readonly getPinnedThreadLayout = () => this.pinnedThreadLayout;
+  readonly getProjectSnapshot = (projectId: string) => this.projectThreadSidebars.projects.find((snapshot) => snapshot.projectId === projectId) ?? null;
   readonly getProjectThreadSidebars = () => this.projectThreadSidebars;
   readonly getProjectThreadSummaries = () => this.projectThreadSummaries;
   readonly subscribe = (listener: () => void) => {
@@ -387,7 +388,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     if (this.mode === "project" && this.projectId === snapshot.projectId) this.snapshot = snapshot;
   }
   private getProjectSidebar(projectId: string) {
-    return this.projectThreadSidebars.projects.find((snapshot) => snapshot.projectId === projectId) ?? null;
+    return this.getProjectSnapshot(projectId);
   }
   private findDraftProjectId(draftId: string) {
     return this.projectThreadSidebars.projects.find(({ entries }) => entries.some((entry) => (

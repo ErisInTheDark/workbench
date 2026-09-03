@@ -219,6 +219,22 @@ test("optimistic draft edits preserve pushed pin and snooze metadata", async () 
   assert.deepEqual(optimistic?.entryKind === "draft" ? optimistic.metadata : null, { archived: false, pinned: true, snoozed: true });
 });
 
+test("project-qualified snapshots preserve the route snapshot identity in project mode", async () => {
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => snapshot(1),
+      upsertDraft: async () => undefined,
+    },
+  });
+
+  await client.open("project");
+  assert.equal(client.getProjectSnapshot("project"), client.getSnapshot());
+  assert.equal(client.getProjectSnapshot("other"), null);
+});
+
 test("folder draft creation is optimistic, carries one placement write, and transfers pinned membership on materialization", async () => {
   const folderId = "00000000-0000-4000-8000-000000000010";
   const source = {
@@ -589,6 +605,9 @@ test("global observation owns full project sidebars and project-qualified draft 
   assert.equal(client.getHomeThreadDisplayOrderSupported(), true);
   assert.equal(client.getHomeThreadDisplayOrder().revision, 1);
   assert.deepEqual(client.getProjectThreadSidebars().projects.map(({ projectId }) => projectId), ["alpha", "beta"]);
+  assert.equal(client.getProjectSnapshot("alpha"), client.getProjectThreadSidebars().projects[0]);
+  assert.equal(client.getProjectSnapshot("beta"), client.getProjectThreadSidebars().projects[1]);
+  assert.equal(client.getProjectSnapshot("missing"), null);
   client.acceptHomeThreadDisplayOrder({
     displayOrder: { pinned: { "alpha/codex%3Athread": { above: [], below: [] } } },
     revision: 2,

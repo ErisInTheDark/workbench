@@ -10,7 +10,6 @@ import type {
   WorkbenchPendingUserInputRequest,
   WorkbenchQuestionnaireDraft,
   WorkbenchSubmitUserInputRequestOptions,
-  WorkbenchThreadSidebarStore,
   WorkbenchUserInputResponse,
 } from "workbench-shared/types";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
@@ -38,7 +37,6 @@ export default function WorkbenchThreadTooltipDetails({
   questionnaireDraft,
   spellCheck,
   threadId,
-  threadSidebarStore,
   workspaceRoots,
 }: {
   cwd: string | null;
@@ -57,7 +55,6 @@ export default function WorkbenchThreadTooltipDetails({
   questionnaireDraft: WorkbenchQuestionnaireDraft | null;
   spellCheck: boolean;
   threadId: string;
-  threadSidebarStore: WorkbenchThreadSidebarStore | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const questionnaireIsLive = Boolean(pendingRequest && !materialized && onReadThread);
@@ -132,7 +129,6 @@ export default function WorkbenchThreadTooltipDetails({
         onOpenThread={onOpenThread}
         presentation="compact"
         projectId={projectId}
-        store={threadSidebarStore}
         threadId={threadId}
       />
     </div>

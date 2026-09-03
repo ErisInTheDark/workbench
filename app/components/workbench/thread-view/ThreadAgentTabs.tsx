@@ -2,13 +2,14 @@
  * Exports:
  * - default ThreadAgentTabs: render lifecycle-ordered agent tabs, shared Lock controls, status icons, and settled-history disclosure. Keywords: thread, subagent, tabs, lock, lifecycle.
  */
-import { useCallback, useSyncExternalStore, type MouseEvent } from "react";
+import type { MouseEvent } from "react";
 
-import type { ThreadPayload, WorkbenchSubagentSummary, WorkbenchThreadSidebarStore } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import ContextMenuCapability from "../ContextMenuCapability";
 import { CompletedThreadIcon, LockIcon, NeedsAttentionThreadIcon, RestoreThreadIcon, SettleThreadIcon, StoppedThreadIcon, UnlockIcon, WorkingThreadIcon } from "../workbench-icons";
 import { getThreadAgentAccentColor } from "../../../workbench/thread/thread-subagents";
+import { useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
 import ThreadAgentName from "./ThreadAgentName";
 
 interface SubagentTab {
@@ -33,8 +34,6 @@ function handleThreadLinkClick(event: MouseEvent<HTMLAnchorElement>, onSelect: (
 const tabClassName = "relative inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1.5 py-1.5 text-[0.95rem] font-medium leading-none transition-[color,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft";
 const selectedTabClassName = "text-text";
 const unselectedTabClassName = "text-muted opacity-60 hover:opacity-80 hover:text-text";
-const EMPTY_THREAD_SIDEBAR_SUBSCRIBE = () => () => undefined;
-
 function SelectedTabUnderline({ color }: { color: string }) {
   return <span aria-hidden="true" className="pointer-events-none absolute inset-x-1 bottom-0 border-t border-dotted" style={{ borderColor: color }} />;
 }
@@ -63,8 +62,8 @@ export default function ThreadAgentTabs ({
   onSelectThread,
   onTogglePin,
   onToggleSettlement,
+  projectId,
   tabs,
-  threadSidebarStore,
 }: {
   activeThreadId: string;
   getThreadHref: (threadId: string) => string;
@@ -77,22 +76,10 @@ export default function ThreadAgentTabs ({
   onSelectThread: (threadId: string) => void;
   onTogglePin: (threadId: string) => void;
   onToggleSettlement: (threadId: string, settled: boolean) => void;
+  projectId: string;
   tabs: readonly SubagentTab[];
-  threadSidebarStore: WorkbenchThreadSidebarStore | null;
 }) {
-  const getMainThreadLifecycle = useCallback(() => {
-    const entry = threadSidebarStore?.getSnapshot()?.entries.find((candidate) => (
-      candidate.entryKind !== "draft"
-      && candidate.identity.harness === mainThreadHarness
-      && candidate.identity.threadId === mainThreadId
-    ));
-    return entry && entry.entryKind !== "draft" ? entry.lifecycle : null;
-  }, [mainThreadHarness, mainThreadId, threadSidebarStore]);
-  const mainThreadLifecycle = useSyncExternalStore(
-    threadSidebarStore?.subscribe ?? EMPTY_THREAD_SIDEBAR_SUBSCRIBE,
-    getMainThreadLifecycle,
-    getMainThreadLifecycle,
-  );
+  const mainThreadLifecycle = useWorkbenchThreadSidebarEntry(projectId, mainThreadHarness, mainThreadId)?.lifecycle ?? null;
   if (!tabs.length && !hasSettledSubagents) return null;
   const unsettledTabs = tabs.filter((tab) => !tab.subagent?.lifecycle?.settled);
   const settledTabs = tabs.filter((tab) => tab.subagent?.lifecycle?.settled);

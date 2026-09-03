@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useCallback, useContext, useSyncExternalStore } from "react";
+import { useContext } from "react";
 
 import { describeGitArcFailure, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -14,9 +14,7 @@ import { GitArcConflictIcon } from "./GitArcIcon";
 import ThreadGitArcConflictList from "./ThreadGitArcConflictList";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
-
-const EMPTY_SUBSCRIBE = () => () => undefined;
-const EMPTY_SNAPSHOT = () => null;
+import { useWorkbenchProjectThreadSidebar } from "../use-workbench-client";
 
 type ProviderThreadSidebarEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
 
@@ -38,10 +36,8 @@ export default function ThreadGitArcFailure({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const presentationContext = useContext(ThreadGitArcPresentationContext);
-  const store = presentationContext?.threadSidebarStore ?? null;
-  const subscribe = useCallback((listener: () => void) => store?.subscribe(listener) ?? EMPTY_SUBSCRIBE(), [store]);
-  const getSnapshot = useCallback(() => store?.getSnapshot() ?? EMPTY_SNAPSHOT(), [store]);
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const resolvedProjectId = projectId ?? presentationContext?.projectId ?? null;
+  const snapshot = useWorkbenchProjectThreadSidebar(resolvedProjectId);
   const presentation = describeGitArcFailure(failure);
   const conflicts = failure.code === "siblingClaimCollision" || failure.code === "planDrift" ? failure.conflicts : [];
   const conflictKeys = new Set(conflicts.map(({ owner }) => identityKey(owner.harness, owner.threadId)));
@@ -50,7 +46,6 @@ export default function ThreadGitArcFailure({
   ));
   const liveKeys = new Set(liveEntries.map((entry) => identityKey(entry.identity.harness, entry.identity.threadId)));
   const missingOwners = conflicts.map(({ owner }) => owner).filter((owner) => !liveKeys.has(identityKey(owner.harness, owner.threadId)));
-  const resolvedProjectId = projectId ?? presentationContext?.projectId ?? null;
   const canRenderLiveThreads = Boolean(liveEntries.length && resolvedProjectId && presentationContext?.onOpenThread);
   const hasStructuredFacts = Boolean(
     (failure.code === "planDrift" && failure.commits.length)

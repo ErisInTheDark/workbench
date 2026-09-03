@@ -11,6 +11,8 @@ import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/
 import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
 import { getWorkbenchMcpCommandRoute } from "../../../workbench/thread/thread-command-matchers";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import WorkbenchClientProvider from "../WorkbenchClientProvider";
+import type { WorkbenchClientController } from "../workbench-client-context";
 import WorkbenchContextMenuProvider from "../WorkbenchContextMenuProvider";
 import ThreadGitArcPresentationContext, { type ThreadGitArcPresentation } from "./ThreadGitArcPresentationContext";
 import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
@@ -40,26 +42,50 @@ function makeItem(
   };
 }
 
-function renderSpecialized(item: McpItem, presentation: ThreadGitArcPresentation | null = null) {
+function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClientController {
+  return {
+    controls: null,
+    explorer: {} as WorkbenchClientController["explorer"],
+    mounted: store ? {
+      controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
+      dispose: () => undefined,
+      threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],
+      threadSidebar: store,
+    } : null,
+    transcriptComparison: { available: false, projection: null },
+  };
+}
+
+function renderSpecialized(
+  item: McpItem,
+  presentation: ThreadGitArcPresentation | null = null,
+  store: WorkbenchThreadSidebarStore | null = null,
+) {
   const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
   assert.equal(route?.kind, "specialized");
   if (!route || route.kind !== "specialized") throw new Error("Expected specialized wb route.");
   return renderToStaticMarkup(createElement(
-    WorkbenchContextMenuProvider,
-    null,
-    createElement(
-      ThreadGitArcPresentationContext.Provider,
-      { value: presentation },
-      createElement(ThreadWorkbenchCommandItem, {
-        item,
-        relatedThreadsById: {},
-        renderRecallRecord: () => null,
-        route,
-        subagents: [],
-        threadCwdPath: "C:/workspace",
-        threadId: "thread-one",
-      }),
-    ),
+    WorkbenchClientProvider,
+    {
+      children: createElement(
+        WorkbenchContextMenuProvider,
+        null,
+        createElement(
+          ThreadGitArcPresentationContext.Provider,
+          { value: presentation },
+          createElement(ThreadWorkbenchCommandItem, {
+            item,
+            relatedThreadsById: {},
+            renderRecallRecord: () => null,
+            route,
+            subagents: [],
+            threadCwdPath: "C:/workspace",
+            threadId: "thread-one",
+          }),
+        ),
+      ),
+      client: createClient(store),
+    },
   ));
 }
 
@@ -139,25 +165,27 @@ test("Git arc waits use live intersections while running and the start card afte
     proposals: [],
     updatedAt: "2026-08-28T00:00:00.000Z",
   });
-  const store = {
-    getSnapshot: () => ({
+  const snapshot = {
       entries: [owner, blocker],
       error: null,
       freshness: "fresh" as const,
       projectId: "project",
       revision: 1,
-    }),
+  };
+  const store = {
+    getProjectSnapshot: (projectId: string) => projectId === "project" ? snapshot : null,
+    getSnapshot: () => null,
     subscribe: () => () => undefined,
   } satisfies WorkbenchThreadSidebarStore;
   const presentation = {
     harness: "codex" as const,
     onOpenThread: () => undefined,
     projectId: "project",
-    threadSidebarStore: store,
   };
   const runningHtml = renderSpecialized(
     makeItem("git_arc_wait", { ref: "a".repeat(40) }, "", "inProgress"),
     presentation,
+    store,
   );
 
   assert.match(runningHtml, /data-thread-git-arc-intersection-card="wait"/u);
