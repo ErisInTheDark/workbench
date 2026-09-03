@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - No production exports; Node tests protect WebSocket pending warnings, stream receipt routing, terminal completion, handoff, socket isolation, and send failures. Keywords: websocket, stream, latency, timer, handoff, test.
+ * - No production exports; Node tests protect WebSocket pending warnings, transcript materialisation, stream receipt routing, terminal completion, handoff, socket isolation, and send failures. Keywords: websocket, transcript, stream, latency, timer, handoff, test.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
+import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReloadController";
 import WorkbenchWebSocketRequestController, { type WorkbenchWebSocketRequestControllerOptions } from "./WorkbenchWebSocketRequestController";
 
@@ -57,6 +57,7 @@ function createController(options: {
   lines?: string[];
   onDisconnect?: (connectionId: string) => void;
   onHarnessMessage?: (message: JsonRpcRequest, client: BridgeClient) => Promise<void> | void;
+  onHarnessRequest?: (message: JsonRpcRequest) => Promise<JsonRpcResponse> | JsonRpcResponse;
   reload?: WorkbenchWebSocketRequestControllerOptions["reload"];
   transcript?: WorkbenchWebSocketRequestControllerOptions["transcript"];
   transcriptShadowLog?: WorkbenchWebSocketRequestControllerOptions["transcriptShadowLog"];
@@ -67,6 +68,10 @@ function createController(options: {
     ...(options.daemonRequests ? { daemonRequests: options.daemonRequests } : {}),
     harnesses: {
       handleBrowserMessage: async (_harness, message, client) => await options.onHarnessMessage?.(message, client),
+      request: async (_harness, message) => await options.onHarnessRequest?.(message) ?? {
+        id: message.id ?? null,
+        result: {},
+      },
       resolveHarness: (value, resolveOptions) => {
         if ((value === undefined || value === null || value === "") && resolveOptions?.defaultToCodex) return "codex";
         if (value === "codex" || value === "copilot" || value === "opencode") return value;
@@ -508,8 +513,10 @@ test("orders reload dirt observation across bootstrap, handoff, and disconnect",
   replacement.controller.dispose();
 });
 
-test("controller reload drops transcript subscriptions and advertises a fresh capability generation", async () => {
+test("controller materialises the exact transcript window before subscribing and drops it on reload", async () => {
   const clock = new FakeClock();
+  const events: string[] = [];
+  const harnessRequests: JsonRpcRequest[] = [];
   const sent: Array<Record<string, unknown>> = [];
   const subscriptions: unknown[] = [];
   const unsubscriptions: string[] = [];
@@ -522,10 +529,21 @@ test("controller reload drops transcript subscriptions and advertises a fresh ca
     subscribe: async ({ id, request }: {
       id: string;
       request: { threadId: string; turnIds?: string[]; turnLimit: number };
-    }) => { subscriptions.push({ id, request }); },
+    }) => {
+      events.push("subscribe");
+      subscriptions.push({ id, request });
+    },
     unsubscribe: (id: string) => { unsubscriptions.push(id); },
   };
-  const first = createController({ clock, transcript });
+  const first = createController({
+    clock,
+    onHarnessRequest: (request) => {
+      events.push("materialise");
+      harnessRequests.push(request);
+      return { id: request.id ?? null, result: { materializedTurnIds: ["turn-2", "turn-4"], threadId: "thread" } };
+    },
+    transcript,
+  });
   await first.controller.handleMessage(client, "connection-1", frame("thread/read", 1), false);
   await first.controller.handleMessage(client, "connection-1", frame("workbench/transcript/subscribe", 2, {
     params: {
@@ -547,6 +565,14 @@ test("controller reload drops transcript subscriptions and advertises a fresh ca
       turnLimit: 4,
     },
   }]);
+  assert.deepEqual(events, ["materialise", "subscribe"]);
+  assert.deepEqual(harnessRequests.map(({ method, params }) => ({ method, params })), [{
+    method: "workbench/transcript/materialize",
+    params: {
+      threadId: "thread",
+      turnIds: ["turn-2", "turn-4"],
+    },
+  }]);
 
   const state = first.controller.detachForReload();
   assert.deepEqual(unsubscriptions, ["connection-1\0selected-thread"]);
@@ -559,6 +585,90 @@ test("controller reload drops transcript subscriptions and advertises a fresh ca
     2,
   );
   replacement.controller.dispose();
+});
+
+test("transcript materialisation failure rejects subscription without disturbing the source", async () => {
+  const clock = new FakeClock();
+  const sent: Array<Record<string, unknown>> = [];
+  let subscriptions = 0;
+  const { controller } = createController({
+    clock,
+    onHarnessRequest: (request) => ({
+      error: { code: -32000, message: "historical window is missing" },
+      id: request.id ?? null,
+    }),
+    transcript: {
+      read: async () => { throw new Error("Unexpected transcript read."); },
+      subscribe: async () => { subscriptions += 1; },
+      unsubscribe: () => undefined,
+    },
+  });
+  const client = createClient((data, callback) => {
+    sent.push(JSON.parse(String(data)) as Record<string, unknown>);
+    callback?.();
+  });
+
+  await controller.handleMessage(client, "connection-1", frame("workbench/transcript/subscribe", 2, {
+    params: {
+      subscriptionId: "selected-thread",
+      threadId: "thread",
+      turnIds: ["missing-turn"],
+      turnLimit: 4,
+    },
+  }), false);
+
+  assert.equal(subscriptions, 0);
+  assert.equal(
+    (sent.find((message) => message.id === 2)?.error as { message?: string } | undefined)?.message,
+    "historical window is missing",
+  );
+  controller.dispose();
+});
+
+test("a superseded transcript materialisation cannot install its stale subscription", async () => {
+  const clock = new FakeClock();
+  const releases: Array<(response: JsonRpcResponse) => void> = [];
+  const subscribedTurnIds: Array<readonly string[] | undefined> = [];
+  const { controller } = createController({
+    clock,
+    onHarnessRequest: async () => await new Promise<JsonRpcResponse>((resolve) => {
+      releases.push(resolve);
+    }),
+    transcript: {
+      read: async () => { throw new Error("Unexpected transcript read."); },
+      subscribe: async ({ request }) => { subscribedTurnIds.push(request.turnIds); },
+      unsubscribe: () => undefined,
+    },
+  });
+  const client = createClient();
+  const subscribe = (id: number, turnId: string) => controller.handleMessage(
+    client,
+    "connection-1",
+    frame("workbench/transcript/subscribe", id, {
+      params: {
+        subscriptionId: "selected-thread",
+        threadId: "thread",
+        turnIds: [turnId],
+        turnLimit: 4,
+      },
+    }),
+    false,
+  );
+
+  const stale = subscribe(1, "turn-1");
+  await new Promise<void>((resolve) => { setImmediate(resolve); });
+  const current = subscribe(2, "turn-2");
+  await new Promise<void>((resolve) => { setImmediate(resolve); });
+  assert.equal(releases.length, 2);
+
+  releases[0]?.({ id: 1, result: {} });
+  await stale;
+  assert.deepEqual(subscribedTurnIds, []);
+
+  releases[1]?.({ id: 2, result: {} });
+  await current;
+  assert.deepEqual(subscribedTurnIds, [["turn-2"]]);
+  controller.dispose();
 });
 
 test("an unregistered transcript-like method receives no Workbench routing privilege", async () => {

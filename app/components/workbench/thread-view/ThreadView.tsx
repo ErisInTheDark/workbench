@@ -65,6 +65,7 @@ import {
 } from "../../../workbench/thread/thread-subagents";
 import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/ThreadOptimisticInputStore";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import type { ThreadTranscriptProjectionState } from "../../../workbench/transcript/ThreadTranscriptProjectionController";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { useWorkbenchThread, useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
@@ -529,7 +530,7 @@ export default memo(function ThreadView ({
   threadComposerDraftsByThreadId,
   threadQuestionnaireDraftsByKey,
   transcriptMode = "json",
-  transcriptComparisonProjection = null,
+  transcriptSource = { status: "idle" },
   thread,
   threadTarget,
   viewInstanceKey = thread.id,
@@ -572,7 +573,7 @@ export default memo(function ThreadView ({
   threadComposerDraftsByThreadId: Record<string, WorkbenchComposerInputDraft | undefined>;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
   transcriptMode?: WorkbenchTranscriptModeValue;
-  transcriptComparisonProjection?: WorkbenchTranscriptProjection | null;
+  transcriptSource?: ThreadTranscriptProjectionState;
   thread: ThreadPayload;
   threadTarget: WorkbenchThreadTarget | null;
   viewInstanceKey?: string;
@@ -1446,11 +1447,23 @@ export default memo(function ThreadView ({
   const terminalGitArcProposalIds = useMemo(() => terminalGitArc
     ? new Set(terminalGitArc.proposals.map(({ proposalId }) => proposalId))
     : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS, [terminalGitArc]);
-  const activeTranscriptProjection = transcriptMode !== "json"
+  const activeTranscriptSource = transcriptMode !== "json"
     && renderActiveThread
-    && transcriptComparisonProjection?.thread.id === renderActiveThread.id
-    ? transcriptComparisonProjection
+    && "threadId" in transcriptSource
+    && transcriptSource.threadId === renderActiveThread.id
+    ? transcriptSource
     : null;
+  const activeTranscriptProjection: WorkbenchTranscriptProjection | null = activeTranscriptSource
+    && "projection" in activeTranscriptSource
+    ? activeTranscriptSource.projection
+    : null;
+  const transcriptSourceMessage = activeTranscriptSource?.status === "failed"
+    ? activeTranscriptSource.message
+    : activeTranscriptSource?.status === "absent"
+      ? "No SQLite transcript exists for this window."
+      : activeTranscriptSource?.status === "unavailable"
+        ? "The SQLite transcript source is unavailable."
+        : null;
 
   return (
     <ProjectFilePathDisplayProvider
@@ -1538,7 +1551,13 @@ export default memo(function ThreadView ({
                   />
                 )
               ) : (
-                <ThreadLoadingSkeleton contained />
+                transcriptSourceMessage ? (
+                  <div className="flex min-h-48 items-center justify-center px-4 text-center text-sm text-muted">
+                    {transcriptSourceMessage}
+                  </div>
+                ) : (
+                  <ThreadLoadingSkeleton contained />
+                )
               )
             ) : (
               <ThreadTranscript

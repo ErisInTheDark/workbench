@@ -113,9 +113,10 @@ import {
     hasWorkbenchApprovalDecisionSelection,
     isWorkbenchApprovalRequest,
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
-import ThreadTranscriptParityController from "./transcript/ThreadTranscriptParityController";
+import ThreadTranscriptProjectionController, {
+    type ThreadTranscriptProjectionState,
+} from "./transcript/ThreadTranscriptProjectionController";
 import reconcileTranscriptProjectionWithLiveThread from "./transcript/reconcile-transcript-projection-with-live-thread";
-import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 
 const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
 const RATE_LIMIT_AUTO_REFRESH_INTERVAL_MS = 15_000;
@@ -199,7 +200,7 @@ export interface WorkbenchThreadClientOptions {
   clientStateController?: WorkbenchClientStateController;
   onStatusMessage?: (message: string) => void;
   onThreadStarted?: (thread: ThreadPayload) => void;
-  onTranscriptComparisonChange?: (available: boolean, projection: WorkbenchTranscriptProjection | null) => void;
+  onTranscriptSourceChange?: (state: ThreadTranscriptProjectionState) => void;
   publishAcceptedIntent?: (event: WorkbenchAcceptedIntent) => Promise<void>;
 }
 
@@ -937,12 +938,9 @@ function WorkbenchThreadClient(
   const stablePreferencesByKey = new Map<string, ThreadStablePreferenceRecord>();
   const statusRecordsByKey = new Map<string, ThreadStatusRecord>();
   const streamingReconciler = new ThreadStreamingReconciler();
-  let transcriptComparisonAvailable = false;
-  const transcriptParity = new ThreadTranscriptParityController({
-    onError: (error) => console.error("Workbench transcript parity lifecycle failed.", error),
-    onProjectionChange: (projection) => {
-      options.onTranscriptComparisonChange?.(transcriptComparisonAvailable, projection);
-    },
+  const transcriptProjection = new ThreadTranscriptProjectionController({
+    onError: (error) => console.error("Workbench SQLite transcript projection lifecycle failed.", error),
+    onStateChange: (state) => options.onTranscriptSourceChange?.(state),
     reconcileProjection: (projection, selection) => reconcileTranscriptProjectionWithLiveThread({
       mergeLiveTurn: (incomingTurn, liveTurn) => mergeLiveStreamingTurn(
         incomingTurn,
@@ -956,9 +954,7 @@ function WorkbenchThreadClient(
     turnLimit: 4,
   });
   lifecycle.addUnsubscribe(transcripts.onAvailabilityChange((available) => {
-    transcriptComparisonAvailable = available;
-    transcriptParity.setAvailable(available);
-    options.onTranscriptComparisonChange?.(available, null);
+    transcriptProjection.setAvailable(available);
   }));
   async function publishAcceptedIntent({
     draftId,
@@ -1173,7 +1169,7 @@ function WorkbenchThreadClient(
     state.threads = [];
     state.currentThread = null;
     state.currentThreadId = "";
-    transcriptParity.select(null);
+    transcriptProjection.select(null);
     state.threadsError = "";
     state.hasLoadedThreads = false;
     state.isLoading = Boolean(getProjectRootPaths(state).length);
@@ -1893,7 +1889,7 @@ function WorkbenchThreadClient(
   }
 
   function setProjectedCurrentThread(nextThread: ThreadPayload | null) {
-    transcriptParity.select(nextThread && nextThread.harness === "codex" && !nextThread.isDraft ? {
+    transcriptProjection.select(nextThread && nextThread.harness === "codex" && !nextThread.isDraft ? {
       browseResultEntries: state.browseResultEntriesByThreadId.get(nextThread.id) ?? nextThread.browseResultEntries ?? [],
       thread: nextThread,
     } : null);
@@ -5691,7 +5687,7 @@ function WorkbenchThreadClient(
     messageAdmissionIntentRevision += 1;
     state.currentThreadId = "";
     state.currentThread = null;
-    transcriptParity.select(null);
+    transcriptProjection.select(null);
     setRateLimits(null);
     emit();
   }
@@ -5855,8 +5851,7 @@ function WorkbenchThreadClient(
     disposed = true;
     resetProjectThreadState({ emitChange: false });
     listeners.clear();
-    transcriptComparisonAvailable = false;
-    transcriptParity.dispose();
+    transcriptProjection.dispose();
     transcripts.dispose();
     threadGoals.dispose();
     lifecycle.dispose();

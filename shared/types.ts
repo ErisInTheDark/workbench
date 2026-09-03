@@ -169,7 +169,6 @@ import type { WorkbenchReloadDirtSnapshot as SharedWorkbenchReloadDirtSnapshot, 
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex.ts";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline.ts";
 import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state.ts";
-import type { WorkbenchTranscriptProjection } from "./workbench/transcript/workbench-transcript-projection.ts";
 import type { WorkbenchFrontendGeneration } from "./frontend-generation.ts";
 
 export type WorkbenchHarness = "codex" | "copilot" | "opencode";
@@ -1202,7 +1201,6 @@ export interface WorkbenchThreadGoalControls {
 export interface WorkbenchBindings {
   initialRoute?: WorkbenchRoute;
   onExplorerStateChange?: (snapshot: ExplorerSnapshot) => void;
-  onTranscriptComparisonChange?: (available: boolean, projection: WorkbenchTranscriptProjection | null) => void;
 }
 
 export interface FilePayload {

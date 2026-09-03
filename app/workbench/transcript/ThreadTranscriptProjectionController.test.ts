@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect immediate live projection publication, serialized subscription replacement, and deferred deduplicated parity reporting. Keywords: transcript, projection, parity, lifecycle, subscription.
+ * No production exports. Tests protect explicit SQLite source state, immediate live projection publication, serialized subscription replacement, and deferred deduplicated parity reporting. Keywords: transcript, projection, parity, lifecycle, subscription.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -12,7 +12,7 @@ import {
   type WorkbenchTranscriptSnapshotRows,
   type WorkbenchTranscriptSubscribeParams,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
-import ThreadTranscriptParityController from "./ThreadTranscriptParityController";
+import ThreadTranscriptProjectionController from "./ThreadTranscriptProjectionController";
 
 function flush() {
   return new Promise<void>((resolve) => setImmediate(resolve));
@@ -99,7 +99,7 @@ function emptySnapshot(threadId: string): WorkbenchTranscriptSnapshot {
 
 test("selection changes serialize unsubscribe before the replacement subscription", async () => {
   const events: string[] = [];
-  const controller = new ThreadTranscriptParityController({
+  const controller = new ThreadTranscriptProjectionController({
     available: true,
     transcripts: {
       reportParity: async () => undefined,
@@ -116,7 +116,7 @@ test("selection changes serialize unsubscribe before the replacement subscriptio
   await flush();
 
   assert.equal(events[0], "subscribe:one");
-  assert.match(events[1] ?? "", /^unsubscribe:thread-transcript-parity:1$/u);
+  assert.match(events[1] ?? "", /^unsubscribe:thread-transcript-projection:1$/u);
   assert.equal(events[2], "subscribe:two");
   controller.dispose();
 });
@@ -124,10 +124,12 @@ test("selection changes serialize unsubscribe before the replacement subscriptio
 test("a failed subscription reports immediately without poisoning replacement work", async () => {
   const errors: Error[] = [];
   const events: string[] = [];
+  const states: string[] = [];
   let subscriptions = 0;
-  const controller = new ThreadTranscriptParityController({
+  const controller = new ThreadTranscriptProjectionController({
     available: true,
     onError: (error) => { errors.push(error); },
+    onStateChange: (state) => { states.push(state.status); },
     transcripts: {
       reportParity: async () => undefined,
       subscribe: async (params) => {
@@ -143,15 +145,16 @@ test("a failed subscription reports immediately without poisoning replacement wo
   controller.select({ browseResultEntries: [], thread: thread("one") });
   await flush();
   assert.deepEqual(errors.map(({ message }) => message), [
-    "Workbench transcript parity lifecycle failed. stage=subscription threadId=one turnIds=turn: subscription failed",
+    "Workbench transcript projection lifecycle failed. stage=subscription threadId=one turnIds=turn: subscription failed",
   ]);
+  assert.equal(states.at(-1), "failed");
 
   controller.select({ browseResultEntries: [], thread: thread("two") });
   await flush();
   await flush();
   assert.deepEqual(events, [
     "subscribe:one",
-    "unsubscribe:thread-transcript-parity:1",
+    "unsubscribe:thread-transcript-projection:1",
     "subscribe:two",
   ]);
   controller.dispose();
@@ -160,7 +163,7 @@ test("a failed subscription reports immediately without poisoning replacement wo
 test("disposal owns an in-flight subscription failure without reporting it", async () => {
   const errors: Error[] = [];
   let rejectSubscription: ((error: Error) => void) | null = null;
-  const controller = new ThreadTranscriptParityController({
+  const controller = new ThreadTranscriptProjectionController({
     available: true,
     onError: (error) => { errors.push(error); },
     transcripts: {
@@ -186,7 +189,7 @@ test("disposal owns an in-flight subscription failure without reporting it", asy
 test("repeated comparison emits one bounded report and later absence clears comparison state", async () => {
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   const reports: WorkbenchTranscriptParityDiagnostic[] = [];
-  const controller = new ThreadTranscriptParityController({
+  const controller = new ThreadTranscriptProjectionController({
     available: true,
     transcripts: {
       reportParity: async (diagnostic) => { reports.push(diagnostic); },
@@ -217,11 +220,15 @@ test("repeated comparison emits one bounded report and later absence clears comp
 
 test("reconciled projections publish and real invalidations clear the browser read model", async () => {
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
-  const publications: Array<string | null> = [];
-  const controller = new ThreadTranscriptParityController({
+  const publications: Array<{ status: string; threadId: string | null }> = [];
+  const controller = new ThreadTranscriptProjectionController({
     available: true,
-    onProjectionChange: (projection) => {
-      publications.push(projection?.thread.id ?? null);
+    onError: () => undefined,
+    onStateChange: (state) => {
+      publications.push({
+        status: state.status,
+        threadId: "threadId" in state ? state.threadId : null,
+      });
     },
     transcripts: {
       reportParity: async () => undefined,
@@ -235,33 +242,68 @@ test("reconciled projections publish and real invalidations clear the browser re
   await flush();
   [...listeners.values()][0]?.(emptySnapshot("one"));
   await flushComparison();
-  assert.equal(publications.at(-1), "one");
+  assert.deepEqual(publications.at(-1), { status: "ready", threadId: "one" });
 
   [...listeners.values()][0]?.(null);
-  assert.equal(publications.at(-1), null);
+  assert.deepEqual(publications.at(-1), { status: "absent", threadId: "one" });
 
   controller.select({ browseResultEntries: [], thread: thread("two") });
-  assert.equal(publications.at(-1), null);
+  assert.deepEqual(publications.at(-1), { status: "loading", threadId: "two" });
   await flush();
   [...listeners.values()][0]?.(emptySnapshot("two"));
   await flushComparison();
-  assert.equal(publications.at(-1), "two");
+  assert.deepEqual(publications.at(-1), { status: "ready", threadId: "two" });
 
   controller.setAvailable(false);
-  assert.equal(publications.at(-1), null);
+  assert.deepEqual(publications.at(-1), { status: "unavailable", threadId: "two" });
   controller.setAvailable(true);
+  assert.deepEqual(publications.at(-1), { status: "loading", threadId: "two" });
   await flush();
   controller.dispose();
-  assert.equal(publications.at(-1), null);
+  assert.deepEqual(publications.at(-1), { status: "idle", threadId: null });
+});
+
+test("projection reconciliation failure becomes a terminal source failure", async () => {
+  const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
+  const states: Array<{ message?: string; status: string }> = [];
+  const controller = new ThreadTranscriptProjectionController({
+    available: true,
+    onError: () => undefined,
+    onStateChange: (state) => {
+      states.push({
+        ...("message" in state ? { message: state.message } : {}),
+        status: state.status,
+      });
+    },
+    reconcileProjection: () => {
+      throw new Error("reconciliation exploded");
+    },
+    transcripts: {
+      reportParity: async () => undefined,
+      subscribe: async (params, listener) => { listeners.set(params.subscriptionId, listener); },
+      unsubscribe: async (params) => { listeners.delete(params.subscriptionId); },
+    },
+    turnLimit: 4,
+  });
+
+  controller.select({ browseResultEntries: [], thread: thread("thread") });
+  await flush();
+  [...listeners.values()][0]?.(emptySnapshot("thread"));
+
+  assert.deepEqual(states.at(-1), {
+    message: "SQLite transcript projection failed: reconciliation exploded",
+    status: "failed",
+  });
+  controller.dispose();
 });
 
 test("same-thread loaded-turn changes retain and reconcile the previous projection", async () => {
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   const publications: Array<string | null> = [];
-  const controller = new ThreadTranscriptParityController({
+  const controller = new ThreadTranscriptProjectionController({
     available: true,
-    onProjectionChange: (projection) => {
-      publications.push(projection?.thread.title ?? null);
+    onStateChange: (state) => {
+      publications.push("projection" in state ? state.projection?.thread.title ?? null : null);
     },
     reconcileProjection: (projection, selection) => ({
       ...projection,
@@ -293,11 +335,11 @@ test("successive live text snapshots publish immediately without scheduling pari
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   const publications: string[] = [];
   const scheduled: Array<() => void> = [];
-  const controller = new ThreadTranscriptParityController({
+  const controller = new ThreadTranscriptProjectionController({
     available: true,
     cancelComparison: () => undefined,
-    onProjectionChange: (projection) => {
-      if (projection) publications.push(projection.thread.title);
+    onStateChange: (state) => {
+      if ("projection" in state && state.projection) publications.push(state.projection.thread.title);
     },
     reconcileProjection: (projection, selection) => {
       const item = selection.thread.turns[0]?.items[0];
@@ -348,7 +390,7 @@ test("rapid selected-thread updates defer and coalesce comparison work", async (
   const reports: WorkbenchTranscriptParityDiagnostic[] = [];
   const scheduled = new Map<number, () => void>();
   let nextTimer = 0;
-  const controller = new ThreadTranscriptParityController({
+  const controller = new ThreadTranscriptProjectionController({
     available: true,
     cancelComparison: (timer) => { scheduled.delete(timer as unknown as number); },
     scheduleComparison: (callback) => {
@@ -386,7 +428,7 @@ test("the subscription follows the exact loaded turns and replaces itself when t
     | { kind: "subscribe"; params: WorkbenchTranscriptSubscribeParams }
     | { kind: "unsubscribe"; subscriptionId: string }
   > = [];
-  const controller = new ThreadTranscriptParityController({
+  const controller = new ThreadTranscriptProjectionController({
     available: true,
     transcripts: {
       reportParity: async () => undefined,
@@ -406,17 +448,17 @@ test("the subscription follows the exact loaded turns and replaces itself when t
     {
       kind: "subscribe",
       params: {
-        subscriptionId: "thread-transcript-parity:1",
+        subscriptionId: "thread-transcript-projection:1",
         threadId: "thread",
         turnIds: ["turn-2"],
         turnLimit: 4,
       },
     },
-    { kind: "unsubscribe", subscriptionId: "thread-transcript-parity:1" },
+    { kind: "unsubscribe", subscriptionId: "thread-transcript-projection:1" },
     {
       kind: "subscribe",
       params: {
-        subscriptionId: "thread-transcript-parity:2",
+        subscriptionId: "thread-transcript-projection:2",
         threadId: "thread",
         turnIds: ["turn-1", "turn-2"],
         turnLimit: 4,
@@ -428,7 +470,9 @@ test("the subscription follows the exact loaded turns and replaces itself when t
 
 test("selection stays inert until capability and reconnect capability creates a fresh subscription", async () => {
   const events: string[] = [];
-  const controller = new ThreadTranscriptParityController({
+  const states: string[] = [];
+  const controller = new ThreadTranscriptProjectionController({
+    onStateChange: (state) => { states.push(state.status); },
     transcripts: {
       reportParity: async () => undefined,
       subscribe: async (params) => { events.push(`subscribe:${params.subscriptionId}`); },
@@ -440,18 +484,20 @@ test("selection stays inert until capability and reconnect capability creates a 
   controller.select({ browseResultEntries: [], thread: thread("thread") });
   await flush();
   assert.deepEqual(events, []);
+  assert.equal(states.at(-1), "loading");
 
   controller.setAvailable(true);
   await flush();
-  assert.deepEqual(events, ["subscribe:thread-transcript-parity:2"]);
+  assert.deepEqual(events, ["subscribe:thread-transcript-projection:2"]);
 
   controller.setAvailable(false);
+  assert.equal(states.at(-1), "unavailable");
   controller.setAvailable(true);
   await flush();
   await flush();
   assert.deepEqual(events, [
-    "subscribe:thread-transcript-parity:2",
-    "subscribe:thread-transcript-parity:4",
+    "subscribe:thread-transcript-projection:2",
+    "subscribe:thread-transcript-projection:4",
   ]);
   controller.dispose();
 });
@@ -460,7 +506,7 @@ test("a queued parity report cannot cross a disconnect generation", async () => 
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   const reports: string[] = [];
   let releaseFirstReport: (() => void) | null = null;
-  const controller = new ThreadTranscriptParityController({
+  const controller = new ThreadTranscriptProjectionController({
     available: true,
     transcripts: {
       reportParity: async (diagnostic) => {

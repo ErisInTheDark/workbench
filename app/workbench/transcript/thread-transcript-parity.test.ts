@@ -141,6 +141,43 @@ test("parity compares renderer semantics rather than unsupported provider detail
   }), { equal: true });
 });
 
+test("timeline parity ignores recorder clocks when renderer-effective lifecycle matches", () => {
+  const item: ThreadItem = { id: "plan", text: "planned", type: "plan" };
+  const jsonThread = thread([item]);
+  const jsonTimeline = jsonThread.turnHistory[0]!.itemTimeline![0]!;
+  jsonTimeline.firstSeenAt = 900;
+  jsonTimeline.lastSeenAt = 3_250;
+  const sqliteProjection = projection([item]);
+  const sqliteTimeline = sqliteProjection.turns[0]!.itemTimeline[0]!;
+  sqliteTimeline.firstSeenAt = 975;
+  sqliteTimeline.lastSeenAt = 3_080;
+
+  assert.deepEqual(compareWorkbenchTranscriptParity({
+    jsonBrowseResultEntries: [],
+    jsonThread,
+    sqliteProjection,
+  }), { equal: true });
+
+  sqliteTimeline.startedAt = 1_001;
+  const lifecycleMismatch = compareWorkbenchTranscriptParity({
+    jsonBrowseResultEntries: [],
+    jsonThread,
+    sqliteProjection,
+  });
+  assert.equal(lifecycleMismatch.equal, false);
+  if (!lifecycleMismatch.equal) assert.equal(lifecycleMismatch.diagnostic.scope, "timeline");
+
+  sqliteTimeline.startedAt = 1_000;
+  sqliteTimeline.aliases = ["different-alias"];
+  const aliasMismatch = compareWorkbenchTranscriptParity({
+    jsonBrowseResultEntries: [],
+    jsonThread,
+    sqliteProjection,
+  });
+  assert.equal(aliasMismatch.equal, false);
+  if (!aliasMismatch.equal) assert.equal(aliasMismatch.diagnostic.scope, "timeline");
+});
+
 test("settled questionnaire projection equals the current synthetic renderer item", () => {
   const request = {
     id: "request",

@@ -1,6 +1,7 @@
 /*
- * ThreadTranscriptParitySelection: selected JSON oracle and renderer-side Browse facts. Keywords: transcript, parity, selection.
- * default ThreadTranscriptParityController: owns immediate live projection publication plus serialized subscription and deferred parity reporting. Keywords: transcript, projection, subscription, parity, lifecycle.
+ * ThreadTranscriptProjectionSelection: selected JSON oracle and renderer-side Browse facts. Keywords: transcript, parity, selection.
+ * ThreadTranscriptProjectionState: explicit SQLite transcript source lifecycle. Keywords: transcript, projection, source, lifecycle.
+ * default ThreadTranscriptProjectionController: owns SQLite source publication, serialized subscription, and deferred parity reporting. Keywords: transcript, projection, subscription, parity, lifecycle.
  */
 import type { ThreadPayload, WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import type WorkbenchTranscriptClient from "../database/transcript/WorkbenchTranscriptClient";
@@ -18,10 +19,18 @@ import {
   type WorkbenchTranscriptProjection,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 
-export interface ThreadTranscriptParitySelection {
+export interface ThreadTranscriptProjectionSelection {
   browseResultEntries: readonly WorkbenchBrowseResultEntry[];
   thread: ThreadPayload;
 }
+
+export type ThreadTranscriptProjectionState =
+  | { status: "idle" }
+  | { status: "unavailable"; threadId: string }
+  | { status: "loading"; threadId: string; projection: WorkbenchTranscriptProjection | null }
+  | { status: "ready"; threadId: string; projection: WorkbenchTranscriptProjection }
+  | { status: "absent"; threadId: string }
+  | { status: "failed"; threadId: string; message: string };
 
 function sameTurnIds(
   left: readonly { id: string }[] | null | undefined,
@@ -31,52 +40,53 @@ function sameTurnIds(
     && (left ?? []).every((turn, index) => turn.id === right?.[index]?.id);
 }
 
-interface ThreadTranscriptParityControllerOptions {
+interface ThreadTranscriptProjectionControllerOptions {
   available?: boolean;
   cancelComparison?: (timer: ReturnType<typeof setTimeout>) => void;
   onError?: (error: Error) => void;
-  onProjectionChange?: (projection: WorkbenchTranscriptProjection | null) => void;
+  onStateChange?: (state: ThreadTranscriptProjectionState) => void;
   reconcileProjection?: (
     projection: WorkbenchTranscriptProjection,
-    selection: ThreadTranscriptParitySelection,
+    selection: ThreadTranscriptProjectionSelection,
   ) => WorkbenchTranscriptProjection;
   scheduleComparison?: (callback: () => void) => ReturnType<typeof setTimeout>;
   transcripts: Pick<WorkbenchTranscriptClient, "reportParity" | "subscribe" | "unsubscribe">;
   turnLimit: number;
 }
 
-export default class ThreadTranscriptParityController {
-  readonly #cancelComparison: NonNullable<ThreadTranscriptParityControllerOptions["cancelComparison"]>;
-  readonly #onError: NonNullable<ThreadTranscriptParityControllerOptions["onError"]>;
-  readonly #onProjectionChange: NonNullable<ThreadTranscriptParityControllerOptions["onProjectionChange"]>;
-  readonly #reconcileProjection: NonNullable<ThreadTranscriptParityControllerOptions["reconcileProjection"]>;
-  readonly #scheduleComparison: NonNullable<ThreadTranscriptParityControllerOptions["scheduleComparison"]>;
-  readonly #transcripts: ThreadTranscriptParityControllerOptions["transcripts"];
+export default class ThreadTranscriptProjectionController {
+  readonly #cancelComparison: NonNullable<ThreadTranscriptProjectionControllerOptions["cancelComparison"]>;
+  readonly #onError: NonNullable<ThreadTranscriptProjectionControllerOptions["onError"]>;
+  readonly #onStateChange: NonNullable<ThreadTranscriptProjectionControllerOptions["onStateChange"]>;
+  readonly #reconcileProjection: NonNullable<ThreadTranscriptProjectionControllerOptions["reconcileProjection"]>;
+  readonly #scheduleComparison: NonNullable<ThreadTranscriptProjectionControllerOptions["scheduleComparison"]>;
+  readonly #transcripts: ThreadTranscriptProjectionControllerOptions["transcripts"];
   readonly #turnLimit: number;
   #activeSubscriptionId: string | null = null;
   #available: boolean;
   #comparisonTimer: ReturnType<typeof setTimeout> | null = null;
   #disposed = false;
   #generation = 0;
+  #hasBeenAvailable = false;
   #lastDiagnostic: WorkbenchTranscriptParityDiagnostic | null = null;
   #lifecycle = Promise.resolve();
   #projection: WorkbenchTranscriptProjection | null = null;
   #reporting = Promise.resolve();
-  #selection: ThreadTranscriptParitySelection | null = null;
+  #selection: ThreadTranscriptProjectionSelection | null = null;
 
   constructor({
     available = false,
     cancelComparison = (timer) => clearTimeout(timer),
-    onError = (error) => console.error("Workbench transcript parity failed.", error),
-    onProjectionChange = () => undefined,
+    onError = (error) => console.error("Workbench transcript projection failed.", error),
+    onStateChange = () => undefined,
     reconcileProjection = (projection) => projection,
     scheduleComparison = (callback) => setTimeout(callback, 0),
     transcripts,
     turnLimit,
-  }: ThreadTranscriptParityControllerOptions) {
+  }: ThreadTranscriptProjectionControllerOptions) {
     this.#cancelComparison = cancelComparison;
     this.#onError = onError;
-    this.#onProjectionChange = onProjectionChange;
+    this.#onStateChange = onStateChange;
     this.#available = available;
     this.#reconcileProjection = reconcileProjection;
     this.#scheduleComparison = scheduleComparison;
@@ -90,7 +100,7 @@ export default class ThreadTranscriptParityController {
     this.#cancelScheduledComparison();
     this.#selection = null;
     this.#projection = null;
-    this.#onProjectionChange(null);
+    this.#onStateChange({ status: "idle" });
     this.#lastDiagnostic = null;
     this.#generation += 1;
     this.#activeSubscriptionId = null;
@@ -99,19 +109,21 @@ export default class ThreadTranscriptParityController {
   setAvailable(available: boolean) {
     if (this.#disposed || this.#available === available) return;
     this.#available = available;
+    if (available) this.#hasBeenAvailable = true;
     this.#cancelScheduledComparison();
     this.#projection = null;
-    this.#onProjectionChange(null);
     this.#lastDiagnostic = null;
     if (!available) {
       this.#generation += 1;
       this.#activeSubscriptionId = null;
+      this.#publishUnavailableOrIdle();
       return;
     }
+    this.#publishLoadingOrIdle();
     this.#replaceSubscription();
   }
 
-  select(selection: ThreadTranscriptParitySelection | null) {
+  select(selection: ThreadTranscriptProjectionSelection | null) {
     if (this.#disposed) return;
     const previousThreadId = this.#selection?.thread.id ?? null;
     const nextThreadId = selection?.thread.id ?? null;
@@ -120,13 +132,19 @@ export default class ThreadTranscriptParityController {
     if (previousThreadId !== nextThreadId) {
       this.#cancelScheduledComparison();
       this.#projection = null;
-      this.#onProjectionChange(null);
       this.#lastDiagnostic = null;
+      if (!selection) {
+        this.#onStateChange({ status: "idle" });
+        this.#replaceSubscription();
+        return;
+      }
       if (!this.#available) {
         this.#generation += 1;
         this.#activeSubscriptionId = null;
+        this.#publishDisconnectedOrLoading();
         return;
       }
+      this.#publishLoadingOrIdle();
       this.#replaceSubscription();
       return;
     }
@@ -136,9 +154,10 @@ export default class ThreadTranscriptParityController {
       if (!this.#available) {
         this.#generation += 1;
         this.#activeSubscriptionId = null;
+        this.#publishDisconnectedOrLoading();
         return;
       }
-      this.#publishProjection();
+      if (!this.#publishProjection("loading")) this.#publishLoadingOrIdle();
       this.#replaceSubscription();
       return;
     }
@@ -182,18 +201,52 @@ export default class ThreadTranscriptParityController {
     try {
       projection = this.#reconcileProjection(this.#projection, this.#selection);
     } catch (error) {
-      this.#onProjectionChange(null);
-      this.#onError(error instanceof Error ? error : new Error(String(error)));
+      const cause = error instanceof Error ? error : new Error(String(error));
+      this.#projection = null;
+      this.#onStateChange({
+        message: `SQLite transcript projection failed: ${cause.message}`.slice(0, 500),
+        status: "failed",
+        threadId: this.#selection.thread.id,
+      });
+      this.#onError(cause);
       return null;
     }
     return projection;
   }
 
-  #publishProjection() {
+  #publishProjection(status: "loading" | "ready" = "ready") {
     const projection = this.#reconcileCurrentProjection();
     if (!projection) return false;
-    this.#onProjectionChange(projection);
+    this.#onStateChange({
+      projection,
+      status,
+      threadId: projection.thread.id,
+    });
     return true;
+  }
+
+  #publishLoadingOrIdle() {
+    const threadId = this.#selection?.thread.id;
+    if (!threadId) {
+      this.#onStateChange({ status: "idle" });
+      return;
+    }
+    this.#onStateChange({ projection: null, status: "loading", threadId });
+  }
+
+  #publishUnavailableOrIdle() {
+    const threadId = this.#selection?.thread.id;
+    this.#onStateChange(threadId
+      ? { status: "unavailable", threadId }
+      : { status: "idle" });
+  }
+
+  #publishDisconnectedOrLoading() {
+    if (this.#hasBeenAvailable) {
+      this.#publishUnavailableOrIdle();
+      return;
+    }
+    this.#publishLoadingOrIdle();
   }
 
   #receiveSnapshot(generation: number, snapshot: WorkbenchTranscriptSnapshot | null) {
@@ -201,7 +254,10 @@ export default class ThreadTranscriptParityController {
     if (snapshot === null) {
       this.#cancelScheduledComparison();
       this.#projection = null;
-      this.#onProjectionChange(null);
+      const threadId = this.#selection?.thread.id;
+      this.#onStateChange(threadId
+        ? { status: "absent", threadId }
+        : { status: "idle" });
       this.#lastDiagnostic = null;
       return;
     }
@@ -209,7 +265,11 @@ export default class ThreadTranscriptParityController {
     const result = projectWorkbenchTranscript(snapshot);
     if ("issues" in result) {
       this.#projection = null;
-      this.#onProjectionChange(null);
+      this.#onStateChange({
+        message: "SQLite transcript data could not be projected.",
+        status: "failed",
+        threadId: snapshot.thread.id,
+      });
       this.#report(createWorkbenchTranscriptProjectionFailureDiagnostic(snapshot.thread.id, result.issues));
       return;
     }
@@ -217,13 +277,21 @@ export default class ThreadTranscriptParityController {
     if (this.#publishProjection()) this.#scheduleCompare();
   }
 
-  #reportError(stage: "report" | "subscription", error: unknown) {
+  #reportError(stage: "report" | "subscription", error: unknown, generation = this.#generation) {
     if (this.#disposed || !this.#available) return;
     const cause = error instanceof Error ? error : new Error(String(error));
     const threadId = this.#selection?.thread.id ?? "none";
     const turnIds = this.#selection?.thread.turns.map(({ id }) => id).join(",") || "none";
+    if (stage === "subscription" && generation === this.#generation && this.#selection) {
+      this.#projection = null;
+      this.#onStateChange({
+        message: `Unable to load the SQLite transcript: ${cause.message}`.slice(0, 500),
+        status: "failed",
+        threadId: this.#selection.thread.id,
+      });
+    }
     this.#onError(new Error(
-      `Workbench transcript parity lifecycle failed. stage=${stage} threadId=${threadId} turnIds=${turnIds}: ${cause.message}`,
+      `Workbench transcript projection lifecycle failed. stage=${stage} threadId=${threadId} turnIds=${turnIds}: ${cause.message}`,
       { cause },
     ));
   }
@@ -243,7 +311,7 @@ export default class ThreadTranscriptParityController {
           await this.#transcripts.unsubscribe({ subscriptionId: activeSubscriptionId });
         }
         if (this.#disposed || !this.#available || generation !== this.#generation || !selection) return;
-        const subscriptionId = `thread-transcript-parity:${generation}`;
+        const subscriptionId = `thread-transcript-projection:${generation}`;
         this.#activeSubscriptionId = subscriptionId;
         await this.#transcripts.subscribe({
           subscriptionId,
@@ -258,7 +326,7 @@ export default class ThreadTranscriptParityController {
           await this.#transcripts.unsubscribe({ subscriptionId });
         }
       })
-      .catch((error) => this.#reportError("subscription", error));
+      .catch((error) => this.#reportError("subscription", error, generation));
   }
 
   #report(diagnostic: WorkbenchTranscriptParityDiagnostic) {

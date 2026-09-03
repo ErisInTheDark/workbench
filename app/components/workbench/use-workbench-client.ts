@@ -114,9 +114,8 @@ interface WorkbenchClientMountOptions {
 export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): WorkbenchClientController {
   const [mounted, setMounted] = useState<MountedWorkbenchClient | null>(null);
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
-  const [transcriptComparison, setTranscriptComparison] = useState<WorkbenchClientController["transcriptComparison"]>({
-    available: false,
-    projection: null,
+  const [transcriptSource, setTranscriptSource] = useState<WorkbenchClientController["transcriptSource"]>({
+    status: "idle",
   });
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -137,9 +136,9 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
               if (!cancelled) setExplorer(snapshot);
             });
           },
-          onTranscriptComparisonChange: (available, projection) => {
+          onTranscriptSourceChange: (state) => {
             if (cancelled) return;
-            setTranscriptComparison({ available, projection });
+            setTranscriptSource(state);
           },
         });
         if (cancelled) {
@@ -162,8 +161,8 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
     controls: mounted?.controls ?? null,
     explorer,
     mounted,
-    transcriptComparison,
-  }), [explorer, mounted, transcriptComparison]);
+    transcriptSource,
+  }), [explorer, mounted, transcriptSource]);
 }
 
 function useWorkbenchClientController(explicitClient?: WorkbenchClientController) {

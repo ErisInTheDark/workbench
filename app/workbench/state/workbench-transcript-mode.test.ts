@@ -11,6 +11,7 @@ import {
   canPersistWorkbenchTranscriptMode,
   getNextWorkbenchTranscriptMode,
   readWorkbenchTranscriptMode,
+  resolveWorkbenchTranscriptMode,
   writeWorkbenchTranscriptMode,
 } from "./workbench-transcript-mode";
 
@@ -19,6 +20,13 @@ test("transcript mode defaults to JSON and rotates through comparison and SQLite
   assert.equal(getNextWorkbenchTranscriptMode("json"), "compare");
   assert.equal(getNextWorkbenchTranscriptMode("compare"), "sqlite");
   assert.equal(getNextWorkbenchTranscriptMode("sqlite"), "json");
+});
+
+test("mobile transcript mode rotates only JSON and SQLite without overwriting a desktop comparison choice", () => {
+  assert.equal(resolveWorkbenchTranscriptMode("compare", { includeComparison: false }), "sqlite");
+  assert.equal(getNextWorkbenchTranscriptMode("json", { includeComparison: false }), "sqlite");
+  assert.equal(getNextWorkbenchTranscriptMode("compare", { includeComparison: false }), "json");
+  assert.equal(getNextWorkbenchTranscriptMode("sqlite", { includeComparison: false }), "json");
 });
 
 test("transcript mode waits for the additive app-state schema capability", () => {

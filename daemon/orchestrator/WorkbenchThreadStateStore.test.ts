@@ -12,7 +12,7 @@ import { threadStateTables } from "./database/workbench-database-schema";
 import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 import { insertRow } from "workbench-shared/database/workbench-database-statements";
 
-test("thread-state documents round trip, replace, stay isolated, survive reopen, and outlive transcript reset", async () => {
+test("thread-state documents round trip, replace, stay isolated, and survive reopen", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-thread-state-store-"));
   const databasePath = join(directory, "workbench.sqlite3");
   const database = new WorkbenchDatabaseController({ databasePath });
@@ -36,10 +36,6 @@ test("thread-state documents round trip, replace, stay isolated, survive reopen,
     assert.deepEqual(await store.readProject("first"), replacedProject);
     assert.deepEqual(await store.readProject("second"), secondProject);
     assert.deepEqual(await store.readGlobal("homeDisplayOrder"), home);
-    assert.deepEqual(await store.readGlobal("pinnedLayout"), pinned);
-
-    await database.resetTranscript();
-    assert.deepEqual(await store.readProject("first"), replacedProject);
     assert.deepEqual(await store.readGlobal("pinnedLayout"), pinned);
 
     await database.close();

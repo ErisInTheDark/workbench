@@ -89,7 +89,7 @@ interface PendingRequest extends WorkbenchWebSocketPendingRequestState {
 export interface WorkbenchWebSocketRequestControllerOptions {
   clearTimeout?: (timer: Timer) => void;
   daemonRequests?: Pick<WorkbenchDaemonRequestController, "accepts" | "handle">;
-  harnesses: Pick<WorkbenchHarnessController, "handleBrowserMessage" | "resolveHarness">;
+  harnesses: Pick<WorkbenchHarnessController, "handleBrowserMessage" | "request" | "resolveHarness">;
   initialState?: WorkbenchWebSocketRequestControllerState;
   now?: () => number;
   reload: Pick<
@@ -543,6 +543,20 @@ export default class WorkbenchWebSocketRequestController {
     const key = this.transcriptSubscriptionKey(subscription.connectionId, subscription.subscriptionId);
     this.transcriptSubscriptions.set(key, subscription);
     try {
+      if (subscription.turnIds?.length) {
+        const response = await this.harnesses.request("codex", {
+          id: `workbench:transcript:materialize:${key}`,
+          method: "workbench/transcript/materialize",
+          params: {
+            threadId: subscription.threadId,
+            turnIds: subscription.turnIds,
+          },
+        });
+        if (response.error) {
+          throw new Error(response.error.message);
+        }
+        if (this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
+      }
       await this.transcript.subscribe({
         id: key,
         request: {
@@ -563,8 +577,10 @@ export default class WorkbenchWebSocketRequestController {
         },
       });
     } catch (error) {
-      if (this.transcriptSubscriptions.get(key) === subscription) this.transcriptSubscriptions.delete(key);
-      this.transcript.unsubscribe(key);
+      if (this.transcriptSubscriptions.get(key) === subscription) {
+        this.transcriptSubscriptions.delete(key);
+        this.transcript.unsubscribe(key);
+      }
       throw error;
     }
   }

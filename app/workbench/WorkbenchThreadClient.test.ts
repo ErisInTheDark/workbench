@@ -344,23 +344,26 @@ test("normal message admission stays independent until transcript capability is 
   await waitForRequest(socket, "workbench/transcript/subscribe");
 }));
 
-test("transcript comparison capability publishes through the thread client and clears on disconnect", async () => {
-  const publications: Array<{ available: boolean; threadId: string | null }> = [];
+test("SQLite transcript source lifecycle publishes through the thread client and becomes unavailable on disconnect", async () => {
+  const publications: Array<{ status: string; threadId: string | null }> = [];
   await withClient(async (client, socket) => {
     client.selectThreadPayload(activeThread("codex", "thread", "completed"));
     socket.notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 1 });
     await waitForRequest(socket, "workbench/transcript/subscribe");
-    assert.deepEqual(publications.at(-1), { available: true, threadId: null });
+    assert.deepEqual(publications.at(-1), { status: "loading", threadId: "thread" });
 
     socket.close();
     await waitForCondition(
-      () => publications.at(-1)?.available === false,
-      "expected transcript comparison capability to clear after disconnect",
+      () => publications.at(-1)?.status === "unavailable",
+      "expected SQLite transcript source to become unavailable after disconnect",
     );
-    assert.deepEqual(publications.at(-1), { available: false, threadId: null });
+    assert.deepEqual(publications.at(-1), { status: "unavailable", threadId: "thread" });
   }, {
-    onTranscriptComparisonChange: (available, projection) => {
-      publications.push({ available, threadId: projection?.thread.id ?? null });
+    onTranscriptSourceChange: (state) => {
+      publications.push({
+        status: state.status,
+        threadId: "threadId" in state ? state.threadId : null,
+      });
     },
   });
 });

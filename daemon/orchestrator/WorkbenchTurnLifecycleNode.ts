@@ -43,10 +43,6 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const reloadDirt = new WorkbenchReloadDirtController({
       activateSourceState: activateReloadNodeSourceState,
       cancelSourceState: cancelReloadNodeSourceState,
-      externalDirtSources: [{
-        path: ".workbench/reset-workbench-sqlite",
-        scope: "server:database",
-      }],
       getSourceState: readReloadNodeSourceState,
       repoRoot: context.legacyMigrationProjectRoot,
     }, state?.reloadDirt);

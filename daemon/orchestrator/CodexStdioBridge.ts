@@ -1190,6 +1190,9 @@ export default class CodexStdioBridge {
     if (message.method === "workbench/thread-recall/materialize") {
       return await this.handleThreadRecallMaterializeRequest(message);
     }
+    if (message.method === "workbench/transcript/materialize") {
+      return await this.handleTranscriptMaterializeRequest(message);
+    }
     if (message.method === "thread/context/read") {
       return await this.handleThreadContextReadRequest(message);
     }
@@ -1357,6 +1360,39 @@ export default class CodexStdioBridge {
         error: {
           code: -32000,
           message: error instanceof Error ? error.message : "Codex Thread Recall materialisation failed.",
+        },
+      };
+    }
+  }
+
+  private async handleTranscriptMaterializeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const requestId = message.id ?? null;
+    try {
+      this.assertAcceptingWork();
+      const record = asRecord(message.params);
+      const threadId = asString(record?.threadId)?.trim() ?? "";
+      const turnIdsValue = record?.turnIds;
+      const turnIds = Array.isArray(turnIdsValue)
+        ? turnIdsValue.map((value) => asString(value)?.trim() ?? "")
+        : null;
+      if (!threadId || !turnIds || turnIds.some((turnId) => !turnId)) {
+        throw new Error("Transcript materialisation requires a thread id and exact turn ids.");
+      }
+      return {
+        id: requestId,
+        result: await this.materializeSqliteTranscriptWindow({
+          endpointName: "Workbench transcript",
+          source: "sqlite-transcript-materialisation",
+          threadId,
+          turnIds: [...new Set(turnIds)],
+        }),
+      };
+    } catch (error) {
+      return {
+        id: requestId,
+        error: {
+          code: -32000,
+          message: error instanceof Error ? error.message : "Workbench transcript materialisation failed.",
         },
       };
     }
@@ -2411,36 +2447,59 @@ export default class CodexStdioBridge {
     if (!threadId || (turnIdValue !== null && !turnId)) {
       throw new Error("Thread Recall materialisation requires a thread id and optional turn id.");
     }
-    if (
-      turnId
-      && (await this.readSqliteTranscriptMaterializedTurnIds(threadId, [turnId])).includes(turnId)
-    ) {
-      return { materializedTurnIds: [turnId], threadId };
+    return await this.materializeSqliteTranscriptWindow({
+      endpointName: "Thread Recall",
+      source: "sqlite-thread-recall-materialisation",
+      threadId,
+      turnIds: turnId ? [turnId] : null,
+    });
+  }
+
+  private async materializeSqliteTranscriptWindow({
+    endpointName,
+    source,
+    threadId,
+    turnIds,
+  }: {
+    endpointName: string;
+    source: string;
+    threadId: string;
+    turnIds: readonly string[] | null;
+  }) {
+    const requestedTurnIds = turnIds ? [...new Set(turnIds)] : null;
+    const materializedTurnIds = requestedTurnIds
+      ? new Set(await this.readSqliteTranscriptMaterializedTurnIds(threadId, requestedTurnIds))
+      : new Set<string>();
+    const missingTurnIds = requestedTurnIds?.filter((turnId) => !materializedTurnIds.has(turnId)) ?? null;
+    if (missingTurnIds?.length === 0) {
+      return { materializedTurnIds: requestedTurnIds ?? [], threadId };
     }
     const transcriptStore = this.ensureTranscriptStore();
-    const thread = turnId
-      ? await transcriptStore.readStoredThreadWindow(threadId, [turnId])
+    const thread = missingTurnIds
+      ? await transcriptStore.readStoredThreadWindow(threadId, missingTurnIds)
       : await transcriptStore.readStoredThreadSnapshot(threadId);
     if (!thread?.id) {
-      throw new Error(`Thread Recall has no stored compatibility transcript for ${threadId}.`);
+      throw new Error(`${endpointName} has no stored compatibility transcript for ${threadId}.`);
     }
     if (thread.id !== threadId) {
-      throw new Error(`Thread Recall compatibility transcript changed thread owner from ${threadId} to ${thread.id}.`);
+      throw new Error(`${endpointName} compatibility transcript changed thread owner from ${threadId} to ${thread.id}.`);
     }
-    if (turnId && !thread.turns.some(({ id }) => id === turnId)) {
-      throw new Error(`Thread Recall has no stored compatibility turn ${turnId}.`);
+    const storedTurnIds = new Set(thread.turns.map(({ id }) => id));
+    const missingStoredTurnId = missingTurnIds?.find((turnId) => !storedTurnIds.has(turnId));
+    if (missingStoredTurnId) {
+      throw new Error(`${endpointName} has no stored compatibility turn ${missingStoredTurnId}.`);
     }
     if (!thread.turns.length) {
-      throw new Error(`Thread Recall compatibility transcript ${threadId} has no stored turns.`);
+      throw new Error(`${endpointName} compatibility transcript ${threadId} has no stored turns.`);
     }
     const threadCwd = thread.cwd?.trim() ?? "";
-    if (!threadCwd) throw new Error("Thread Recall compatibility transcript has no readable CWD.");
-    await this.resolveProjectFromCwd(threadCwd, { endpointName: "Thread Recall" });
-    await this.captureTranscript("sqlite-thread-recall-materialisation", () => (
+    if (!threadCwd) throw new Error(`${endpointName} compatibility transcript has no readable CWD.`);
+    await this.resolveProjectFromCwd(threadCwd, { endpointName });
+    await this.captureTranscript(source, () => (
       this.importSqliteCompatibilityWindow(thread, transcriptStore)
     ), { propagateFailure: true });
     return {
-      materializedTurnIds: thread.turns.map(({ id }) => id),
+      materializedTurnIds: requestedTurnIds ?? thread.turns.map(({ id }) => id),
       threadId,
     };
   }

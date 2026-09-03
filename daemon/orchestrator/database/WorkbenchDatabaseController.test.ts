@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, transcript reset and materialization, and relational discriminator constraints. Keywords: database, worker, schema, transcript, reset, test.
+ * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, transcript materialization, and relational discriminator constraints. Keywords: database, worker, schema, transcript, test.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rename, rm } from "node:fs/promises";
@@ -11,7 +11,6 @@ import Database from "better-sqlite3";
 
 import WorkbenchDatabaseController, { WorkbenchDatabaseRequestFailure } from "./WorkbenchDatabaseController";
 import {
-  codexSandboxNetworkTables,
   coreTables,
   installWorkbenchDatabaseSchema,
   WORKBENCH_DATABASE_SCHEMA_VERSION,
@@ -238,73 +237,6 @@ test("typed statement transactions preserve stable rows and roll back incomplete
       [],
     );
     assert.deepEqual((await controller.getInventory()).tableNames, [...WORKBENCH_DATABASE_TABLE_NAMES].sort());
-  } finally {
-    await controller.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("the worker resets transcript data without clearing another database domain", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-database-transcript-reset-"));
-  const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
-  try {
-    await controller.executeTransaction([
-      insertRow(codexSandboxNetworkTables.codexSandboxNetworkGlobalSettings, {
-        enabled: 1,
-        id: "global",
-      }),
-      insertRow(codexSandboxNetworkTables.codexSandboxNetworkProjectOverrides, {
-        enabled: 0,
-        project_id: "project",
-      }),
-    ]);
-    await controller.settleTranscript([{
-      kind: "canonicalWindow",
-      contentVersion: 3,
-      materializedTurnIds: ["turn"],
-      threadId: "thread",
-      observations: [
-        {
-          kind: "thread",
-          threadId: "thread",
-          projectId: "project",
-          projectRoot: "C:/project",
-          title: "Thread",
-          createdAt: 1,
-          updatedAt: 1,
-          activityAt: 1,
-        },
-        {
-          kind: "turn",
-          threadId: "thread",
-          turnId: "turn",
-          turnIndex: 0,
-          harnessId: "codex",
-          nativeLocation: "C:/project",
-          nativeThreadId: "thread",
-          nativeTurnId: "turn",
-          state: "completed",
-          createdAt: 1,
-          startedAt: 1,
-          endedAt: 2,
-          durationMs: 1,
-        },
-      ],
-    }]);
-
-    await controller.resetTranscript();
-
-    assert.equal(await controller.readTranscript({ threadId: "thread", turnLimit: 1 }), null);
-    assert.deepEqual(
-      await controller.query(selectRows(codexSandboxNetworkTables.codexSandboxNetworkGlobalSettings)),
-      [{ enabled: 1, id: "global" }],
-    );
-    assert.deepEqual(
-      await controller.query(selectRows(codexSandboxNetworkTables.codexSandboxNetworkProjectOverrides)),
-      [{ enabled: 0, project_id: "project" }],
-    );
-    assert.equal(controller.state, "ready");
-    assert.doesNotThrow(() => controller.assertReady());
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });

@@ -58,7 +58,7 @@ const client = {
     threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],
     threadSidebar: globalStore,
   },
-  transcriptComparison: { available: false, projection: null },
+  transcriptSource: { status: "idle" },
 } satisfies WorkbenchClientController;
 
 function ThreadStateProbe({ projectId }: { projectId: string }) {

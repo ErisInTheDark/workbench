@@ -37,6 +37,7 @@ import {
 } from "workbench-shared/workbench/navigation/workbench-route";
 import FileDraftStore from "./workbench/state/FileDraftStore";
 import WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController";
+import type { ThreadTranscriptProjectionState } from "./workbench/transcript/ThreadTranscriptProjectionController";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import SessionState from "./workbench/state/SessionState";
 import { DEFAULT_EDITOR_FONT_SIZE } from "./workbench/state/workbench-settings";
@@ -287,6 +288,7 @@ export async function WorkbenchClient(
   bindings: WorkbenchBindings & {
     clientStateController?: WorkbenchClientStateController;
     dom?: WorkbenchDomSurfaces | null;
+    onTranscriptSourceChange?: (state: ThreadTranscriptProjectionState) => void;
   } = {},
 ): Promise<MountedWorkbenchClient> {
   const { ...workbenchBindings } = bindings;
@@ -311,9 +313,7 @@ export async function WorkbenchClient(
       }
       emitExplorerStateChange();
     },
-    onTranscriptComparisonChange: (available, projection) => {
-      workbenchBindings.onTranscriptComparisonChange?.(available, projection);
-    },
+    onTranscriptSourceChange: (state) => workbenchBindings.onTranscriptSourceChange?.(state),
     publishAcceptedIntent: (event) => coordinateAcceptedIntent(event),
   });
   const daemon = new WorkbenchDaemonClient({

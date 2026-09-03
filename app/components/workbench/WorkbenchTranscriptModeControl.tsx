@@ -6,7 +6,6 @@
 
 import type { WorkbenchTranscriptModeValue } from "workbench-shared/state/workbench-client-state";
 
-import { getNextWorkbenchTranscriptMode } from "../../workbench/state/workbench-transcript-mode";
 import WorkbenchRotatorButton from "./WorkbenchRotatorButton";
 
 const TRANSCRIPT_MODE_LABELS = {
@@ -16,18 +15,23 @@ const TRANSCRIPT_MODE_LABELS = {
 } as const satisfies Record<WorkbenchTranscriptModeValue, string>;
 
 export default function WorkbenchTranscriptModeControl({
+  disabled = false,
   mode,
+  nextMode,
   onRotate,
 }: {
+  disabled?: boolean;
   mode: WorkbenchTranscriptModeValue;
-  onRotate: () => void;
+  nextMode: WorkbenchTranscriptModeValue;
+  onRotate: (mode: WorkbenchTranscriptModeValue) => void;
 }) {
   const label = TRANSCRIPT_MODE_LABELS[mode];
-  const nextLabel = TRANSCRIPT_MODE_LABELS[getNextWorkbenchTranscriptMode(mode)];
+  const nextLabel = TRANSCRIPT_MODE_LABELS[nextMode];
   return (
     <WorkbenchRotatorButton
-      ariaLabel={`Transcript projection: ${label}. Click to show ${nextLabel}.`}
-      onRotate={onRotate}
+      ariaLabel={`Transcript view: ${label}. Click to show ${nextLabel}.`}
+      disabled={disabled}
+      onRotate={() => onRotate(nextMode)}
       title={`Show ${nextLabel}`}
     >
       <span>{label}</span>

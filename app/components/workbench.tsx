@@ -82,6 +82,7 @@ import {
     canPersistWorkbenchTranscriptMode,
     getNextWorkbenchTranscriptMode,
     readWorkbenchTranscriptMode,
+    resolveWorkbenchTranscriptMode,
     writeWorkbenchTranscriptMode,
 } from "../workbench/state/workbench-transcript-mode";
 import {
@@ -467,8 +468,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     [groupedSidebarProjects],
   );
   const currentThread = threads.current;
-  const isTranscriptComparisonAvailable = workbenchClient.transcriptComparison.available;
-  const transcriptComparisonProjection = workbenchClient.transcriptComparison.projection;
+  const transcriptSource = workbenchClient.transcriptSource;
   const transcriptMode = useMemo(
     () => readWorkbenchTranscriptMode(clientState.records),
     [clientState.records],
@@ -477,14 +477,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
   const harnessUserInputRequestsByThreadId = threads.pendingQuestionnairesByThreadId;
   const [selectionError, setSelectionError] = useState("");
-  const rotateTranscriptMode = useCallback(() => {
+  const rotateTranscriptMode = useCallback((nextMode: ReturnType<typeof getNextWorkbenchTranscriptMode>) => {
     void writeWorkbenchTranscriptMode(
       clientStateController,
-      getNextWorkbenchTranscriptMode(transcriptMode),
+      nextMode,
     ).catch((error: Error) => {
       setSelectionError(error.message);
     });
-  }, [clientStateController, transcriptMode]);
+  }, [clientStateController]);
   const [isProjectRotationPending, setIsProjectRotationPending] = useState(false);
   const controls = workbenchClient.controls;
   useEffect(() => {
@@ -1884,13 +1884,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const shouldRenderMainLayout = Boolean(mainLayoutForRender);
   const isDirectThreadSurface = showThreadView && !shouldRenderMainLayout;
   const isDirectMobileThreadSurface = isMobile && isDirectThreadSurface;
-  const canRotateSelectedTranscriptMode = isDirectThreadSurface
-    && !isMobile
-    && canPersistWorkbenchTranscriptMode(clientState.schemaVersion)
-    && isTranscriptComparisonAvailable
+  const canShowSelectedTranscriptMode = isDirectThreadSurface
     && threadForThreadView?.harness === "codex"
     && !threadForThreadView.isDraft;
-  const effectiveTranscriptMode = canRotateSelectedTranscriptMode ? transcriptMode : "json";
+  const canPersistSelectedTranscriptMode = canPersistWorkbenchTranscriptMode(clientState.schemaVersion);
+  const effectiveTranscriptMode = canShowSelectedTranscriptMode
+    ? resolveWorkbenchTranscriptMode(transcriptMode, { includeComparison: !isMobile })
+    : "json";
+  const nextTranscriptMode = getNextWorkbenchTranscriptMode(effectiveTranscriptMode, {
+    includeComparison: !isMobile,
+  });
 
   useEffect(() => {
     if (!showMosaicView || !controls) {
@@ -2890,9 +2893,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       <span className="sr-only">Back to file explorer</span>
                     </button>
                     <div className="flex items-center gap-1.5">
-                      {canRotateSelectedTranscriptMode ? (
+                      {canShowSelectedTranscriptMode ? (
                         <WorkbenchTranscriptModeControl
-                          mode={transcriptMode}
+                          disabled={!canPersistSelectedTranscriptMode}
+                          mode={effectiveTranscriptMode}
+                          nextMode={nextTranscriptMode}
                           onRotate={rotateTranscriptMode}
                         />
                       ) : null}
@@ -2991,7 +2996,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       threadComposerDraft={activeThreadComposerDraft}
                       threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                       threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
-                      transcriptComparisonProjection={transcriptComparisonProjection}
+                      transcriptSource={transcriptSource}
                       transcriptMode={effectiveTranscriptMode}
                       viewInstanceKey={threadViewInstanceKey}
                     />

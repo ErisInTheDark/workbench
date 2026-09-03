@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - canPersistWorkbenchTranscriptMode: report whether the app-state server admits the transcript mode preference. Keywords: transcript, mode, schema, compatibility.
- * - getNextWorkbenchTranscriptMode: rotate through JSON, comparison, and SQLite transcript projections. Keywords: transcript, mode, rotator.
+ * - getNextWorkbenchTranscriptMode: rotate through the transcript modes available on the current viewport. Keywords: transcript, mode, rotator.
+ * - resolveWorkbenchTranscriptMode: map a persisted mode to the presentation available on the current viewport. Keywords: transcript, mode, mobile, comparison.
  * - readWorkbenchTranscriptMode: read one normalised browser-global transcript projection preference. Keywords: transcript, app state, global preference.
  * - writeWorkbenchTranscriptMode: persist one browser-global transcript projection preference. Keywords: transcript, app state, persistence.
  */
@@ -29,9 +30,21 @@ export function canPersistWorkbenchTranscriptMode(schemaVersion: number) {
 
 export function getNextWorkbenchTranscriptMode(
   mode: WorkbenchTranscriptModeValue,
+  options: { includeComparison?: boolean } = {},
 ): WorkbenchTranscriptModeValue {
-  const index = WORKBENCH_TRANSCRIPT_MODES.indexOf(mode);
-  return WORKBENCH_TRANSCRIPT_MODES[(index + 1) % WORKBENCH_TRANSCRIPT_MODES.length] ?? "json";
+  const modes: readonly WorkbenchTranscriptModeValue[] = options.includeComparison === false
+    ? WORKBENCH_TRANSCRIPT_MODES.filter((candidate) => candidate !== "compare")
+    : WORKBENCH_TRANSCRIPT_MODES;
+  const resolvedMode = resolveWorkbenchTranscriptMode(mode, options);
+  const index = modes.indexOf(resolvedMode);
+  return modes[(index + 1) % modes.length] ?? "json";
+}
+
+export function resolveWorkbenchTranscriptMode(
+  mode: WorkbenchTranscriptModeValue,
+  options: { includeComparison?: boolean } = {},
+): WorkbenchTranscriptModeValue {
+  return options.includeComparison === false && mode === "compare" ? "sqlite" : mode;
 }
 
 export function readWorkbenchTranscriptMode(

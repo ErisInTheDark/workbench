@@ -1,7 +1,7 @@
 /*
  * default WorkbenchDatabaseNode: own mandatory SQLite readiness, transcript and Codex sandbox network registrations, reload replacement, and closure. Keywords: database, transcript, Codex, network, graph, lifecycle.
  */
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
@@ -23,9 +23,7 @@ import { logError } from "./process-helpers";
 
 type DatabaseControllerConstructor = new (
   options: { databasePath: string },
-) => OrchestratorDatabaseRegistration & WorkbenchCodexSandboxNetworkDatabase & {
-  resetTranscript(): Promise<void>;
-};
+) => OrchestratorDatabaseRegistration & WorkbenchCodexSandboxNetworkDatabase;
 
 type CodexSandboxNetworkControllerConstructor = new (
   database: WorkbenchCodexSandboxNetworkDatabase,
@@ -41,17 +39,6 @@ type TranscriptControllerConstructor = new (
 type CaptureGapControllerConstructor = new (
   options: { markerPath: string },
 ) => CaptureGapController;
-
-const TRANSCRIPT_RESET_REQUEST = "workbench-transcript-shadow-reset-v2\n";
-
-async function readSqliteResetRequest(requestPath: string) {
-  try {
-    return await readFile(requestPath, "utf8");
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null;
-    throw error;
-  }
-}
 
 function loadDatabaseControllers() {
   const DatabaseController = (
@@ -96,7 +83,6 @@ export default new ReloadableNode<
       ".workbench",
       "workbench-transcript-capture-gap.json",
     );
-    const resetRequestPath = join(context.legacyMigrationProjectRoot, ".workbench", "reset-workbench-sqlite");
     const shadowLogPath = join(context.legacyMigrationProjectRoot, ".workbench", "logs", "workbench-transcript-shadow.jsonl");
     const database = new DatabaseController({ databasePath });
     const codexSandboxNetwork = new CodexSandboxNetworkController(database);
@@ -118,20 +104,8 @@ export default new ReloadableNode<
       registrations: { codexSandboxNetwork, database, transcript, transcriptShadowLog },
       start: async () => {
         await mkdir(dirname(databasePath), { recursive: true });
-        const resetRequest = await readSqliteResetRequest(resetRequestPath);
-        if (resetRequest !== null) {
-          if (resetRequest !== TRANSCRIPT_RESET_REQUEST) {
-            throw new Error(`Unexpected transcript reset request: ${resetRequestPath}`);
-          }
-          await database.start();
-          await database.resetTranscript();
-          for (const target of [captureGapMarkerPath, shadowLogPath]) {
-            await rm(target, { force: true });
-          }
-        }
         await transcriptShadowLog.start();
         await transcript.start();
-        if (resetRequest !== null) await rm(resetRequestPath);
       },
       detachForReload: shutdown,
       dispose: shutdown,

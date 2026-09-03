@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic settlement, provider replacement, reset, and bounded reads. Keywords: transcript, repository, provider, replacement, transaction.
+ * - default WorkbenchTranscriptRepository: own atomic settlement, provider replacement, and bounded reads. Keywords: transcript, repository, provider, replacement, transaction.
  * Local helpers: classify timestamps, provider projection items, and one transaction-local canonical item index. Keywords: transcript, item, timeline, projection, index.
  */
 import type Database from "better-sqlite3";
@@ -103,15 +103,6 @@ export default class WorkbenchTranscriptRepository {
 
   constructor(database: Database.Database) {
     this.#database = database;
-  }
-
-  reset() {
-    this.#database.transaction(() => {
-      this.#database.prepare("DELETE FROM transcript_native_records").run();
-      this.#database.prepare("DELETE FROM workbench_threads").run();
-      this.#database.prepare("DELETE FROM transcript_assets").run();
-      this.#database.prepare("DELETE FROM workbench_harnesses").run();
-    })();
   }
 
   settle(observations: readonly WorkbenchTranscriptObservation[]): WorkbenchTranscriptSettlement {

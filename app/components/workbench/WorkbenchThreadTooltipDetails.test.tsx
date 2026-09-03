@@ -80,7 +80,7 @@ function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClien
       threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],
       threadSidebar: store,
     } : null,
-    transcriptComparison: { available: false, projection: null },
+    transcriptSource: { status: "idle" },
   };
 }
 

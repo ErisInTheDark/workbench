@@ -114,12 +114,6 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({ id: request.id, type: "queryResult", rows });
     return;
   }
-  if (request.type === "resetTranscript") {
-    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
-    transcriptRepository.reset();
-    post({ id: request.id, type: "transcriptReset" });
-    return;
-  }
   if (request.type === "settleTranscript") {
     if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
     post({

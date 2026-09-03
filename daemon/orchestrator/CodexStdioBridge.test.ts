@@ -2565,7 +2565,7 @@ test("context reads bypass the operation queue and negotiate scoped entries with
   }
 });
 
-test("bounded page reads stay background while exact Thread Recall materialisation awaits its ordered import", async () => {
+test("exact transcript windows await ordered import and Thread Recall reuses their materialisation owner", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-known-window-"));
   const compatibilityImportStarted = deferred<void>();
   const releaseCompatibilityImport = deferred<void>();
@@ -2683,20 +2683,29 @@ test("bounded page reads stay background while exact Thread Recall materialisati
       ["turn"],
     );
     const upstreamRequestCountBeforeRecall = upstreamRequests.length;
-    let recallMaterialisationSettled = false;
-    const recallMaterialisationTask = bridge.handleBridgeRequest({
+    let transcriptMaterialisationSettled = false;
+    const transcriptMaterialisationTask = bridge.handleBridgeRequest({
       id: 121,
-      method: "workbench/thread-recall/materialize",
-      params: { threadId: "thread", turnId: "earlier" },
+      method: "workbench/transcript/materialize",
+      params: { threadId: "thread", turnIds: ["earlier", "turn"] },
     }).then((result) => {
-      recallMaterialisationSettled = true;
+      transcriptMaterialisationSettled = true;
       return result;
     });
     await new Promise<void>((resolve) => { setImmediate(resolve); });
-    assert.equal(recallMaterialisationSettled, false);
+    assert.equal(transcriptMaterialisationSettled, false);
     releaseCompatibilityImport.resolve();
-    const recallMaterialisation = await recallMaterialisationTask;
-    assert.equal(recallMaterialisation?.error, undefined);
+    const transcriptMaterialisation = await transcriptMaterialisationTask;
+    assert.equal(transcriptMaterialisation?.error, undefined);
+    assert.deepEqual(transcriptMaterialisation?.result, {
+      materializedTurnIds: ["earlier", "turn"],
+      threadId: "thread",
+    });
+    const recallMaterialisation = await bridge.handleBridgeRequest({
+      id: 122,
+      method: "workbench/thread-recall/materialize",
+      params: { threadId: "thread", turnId: "earlier" },
+    });
     assert.deepEqual(recallMaterialisation?.result, {
       materializedTurnIds: ["earlier"],
       threadId: "thread",
@@ -2706,7 +2715,7 @@ test("bounded page reads stay background while exact Thread Recall materialisati
       ["turn"],
     );
     await bridge.waitForIdle();
-    assert.equal(materializationReads, 3);
+    assert.equal(materializationReads, 4);
     const compatibilityWindows = sqliteBatches.flat().filter((observation) => (
       (observation as { kind?: string }).kind === "canonicalWindow"
     )) as Array<{ materializedTurnIds?: string[] }>;
@@ -2841,6 +2850,7 @@ test("bounded context reads bootstrap unseen threads through one full turn page"
       ["turn"],
     );
   } finally {
+    await bridge.waitForIdle();
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }
