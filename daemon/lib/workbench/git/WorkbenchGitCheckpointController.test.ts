@@ -650,7 +650,6 @@ sharedControllerTest("workspace dirt reports only recent files outside every liv
     proposalId: null,
     threadId: "sibling-thread",
   });
-
   const threadCreatedAt = Date.UTC(2026, 7, 30, 12);
   await Promise.all([
     fs.writeFile(path.join(source, "one.txt"), "owned current change\n", "utf8"),
@@ -669,6 +668,40 @@ sharedControllerTest("workspace dirt reports only recent files outside every liv
     await controller.listUnclaimedWorkspaceDirt({ cwd: source, modifiedSince: threadCreatedAt }),
     ["recent.txt"],
   );
+});
+
+isolatedControllerTest("live claim checks distinguish owned and absent claims", async (context) => {
+  const { source } = await copyRepository(context, CONTROLLER_ADOPT_READY_FIXTURE);
+  const controller = new WorkbenchGitCheckpointController();
+  assert.equal(await controller.hasLiveClaimsAtRepoRoot({
+    cwd: source, harness: "codex", threadId: "adopt-thread",
+  }), true);
+  assert.equal(await controller.hasLiveClaimsAtRepoRoot({
+    cwd: source, harness: "codex", threadId: "missing-thread",
+  }), false);
+});
+
+isolatedControllerTest("one inspection snapshot keeps compare and workspace dirt on the same worktree view", async (context) => {
+  const { source } = await copyRepository(context, CONTROLLER_ADOPT_READY_FIXTURE);
+  const controller = new WorkbenchGitCheckpointController();
+  await fs.writeFile(path.join(source, "one.txt"), "captured claimed change\n", "utf8");
+  await fs.writeFile(path.join(source, "captured-unclaimed.txt"), "captured unclaimed change\n", "utf8");
+  const snapshot = await controller.createInspectionSnapshot(source);
+  await fs.writeFile(path.join(source, "one.txt"), "later claimed change\n", "utf8");
+  await fs.writeFile(path.join(source, "later-unclaimed.txt"), "later unclaimed change\n", "utf8");
+
+  const [comparison, unclaimedDirtPaths] = await Promise.all([
+    controller.compare({
+      cwd: source,
+      harness: "codex",
+      threadId: "adopt-thread",
+    }, snapshot),
+    controller.listUnclaimedWorkspaceDirt({ cwd: source, modifiedSince: 0 }, snapshot),
+  ]);
+
+  assert.match(comparison.changes[0]?.diff ?? "", /captured claimed change/u);
+  assert.doesNotMatch(comparison.changes[0]?.diff ?? "", /later claimed change/u);
+  assert.deepEqual(unclaimedDirtPaths, ["captured-unclaimed.txt"]);
 });
 
 isolatedControllerTest("failed arc adoption publishes neither a successor ref nor a replacement registry entry", async (context) => {
@@ -787,6 +820,90 @@ isolatedControllerTest("accepted proposals narrow claims, continue through succe
     assert.match(error.message, /resolved and owns no live claims/u);
     return true;
   });
+});
+
+isolatedControllerTest("proposal reads derive rebases and materialize newer content only when requested", async (context) => {
+  const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
+  const controller = new WorkbenchGitCheckpointController();
+  await fs.writeFile(path.join(source, "one.txt"), "proposed content\n", "utf8");
+  const receipt = await controller.createProposal({
+    cwd: source,
+    description: "",
+    harness: "codex",
+    paths: ["one.txt"],
+    threadId: "partial-thread",
+    title: "pure proposal read",
+  });
+  const store = new GitCheckpointStore(repository);
+  const stored = await store.readProposal("codex", "partial-thread", receipt.proposalId);
+  const proposalRefBefore = await repository.readRef(stored.proposalRef);
+  const advancedHead = await advanceHead(repository, "advance without touching proposal paths");
+  await fs.writeFile(path.join(source, "one.txt"), "newer worktree content\n", "utf8");
+  const newerBlob = (await repository.run(["hash-object", "--", "one.txt"])).trim();
+  assert.equal(await repository.succeeds(["cat-file", "-e", newerBlob]), false);
+
+  const defaultCard = await controller.getProposal({
+    cwd: source,
+    harness: "codex",
+    includeNewer: false,
+    proposalId: receipt.proposalId,
+    threadId: "partial-thread",
+  });
+  assert.equal(defaultCard.baseCommit, advancedHead);
+  assert.equal(defaultCard.status, "proposed");
+  assert.equal(defaultCard.includeNewerAvailable, true);
+  assert.match(defaultCard.changes[0]?.diff ?? "", /proposed content/u);
+  assert.doesNotMatch(defaultCard.changes[0]?.diff ?? "", /newer worktree content/u);
+  assert.equal(await repository.succeeds(["cat-file", "-e", newerBlob]), false);
+  assert.equal(await repository.readRef(stored.proposalRef), proposalRefBefore);
+
+  const newerCard = await controller.getProposal({
+    cwd: source,
+    harness: "codex",
+    includeNewer: true,
+    proposalId: receipt.proposalId,
+    threadId: "partial-thread",
+  });
+  assert.match(newerCard.changes[0]?.diff ?? "", /newer worktree content/u);
+  assert.equal(await repository.succeeds(["cat-file", "-e", newerBlob]), true);
+  assert.equal(await repository.readRef(stored.proposalRef), proposalRefBefore);
+
+  const committed = await controller.commitProposal({
+    cwd: source,
+    description: "",
+    harness: "codex",
+    includeNewer: true,
+    proposalId: receipt.proposalId,
+    threadId: "partial-thread",
+    title: "pure proposal read",
+  });
+  assert.equal(committed.status, "committed");
+  assert.notEqual(await repository.readRef(stored.proposalRef), proposalRefBefore);
+  assert.equal(await fs.readFile(path.join(source, "one.txt"), "utf8"), "newer worktree content\n");
+});
+
+isolatedControllerTest("committed proposal reads stay local while amendment mutation refreshes remotes", async (context) => {
+  const { source, state } = await copyRepository(context, CONTROLLER_REPLACEMENT_READY_FIXTURE);
+  const controller = new WorkbenchGitCheckpointController();
+  await git(source, ["remote", "add", "haunted", path.join(source, "missing-remote")]);
+
+  const card = await controller.getProposal({
+    cwd: source,
+    harness: "codex",
+    includeNewer: false,
+    proposalId: state.commitTargetProposalId,
+    threadId: "partial-thread",
+  });
+  assert.deepEqual(card.amendability, { status: "available" });
+  await assert.rejects(controller.commitProposal({
+    cwd: source,
+    description: card.description,
+    harness: "codex",
+    includeNewer: false,
+    proposalId: card.proposalId,
+    threadId: "partial-thread",
+    title: `${card.title} changed`,
+  }), /Unable to refresh remote refs/u);
 });
 
 isolatedControllerTest("targeted message amendments need no active arc and preserve unrelated worktree and index state", async (context) => {

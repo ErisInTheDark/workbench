@@ -174,6 +174,11 @@ export default class WorkbenchGitArcFeature {
     return state;
   }
 
+  async hasLiveClaims(cwd: string, harness: WorkbenchHarness, threadId: string) {
+    const project = await this.resolveProject(cwd);
+    return await this.workspaceController.hasLiveClaims(project, harness, threadId);
+  }
+
   async listLifecycleStates(cwd: string): Promise<WorkbenchGitArcLifecycleState[]> {
     const project = await this.resolveProject(cwd);
     return await this.workspaceController.listLifecycleStates(project);
@@ -528,27 +533,35 @@ export default class WorkbenchGitArcFeature {
       case "arcMove": return Response.json(await this.controller.moveInArc({ ...common, move: input.move }));
       case "arcRemove": return Response.json(await this.controller.removeFromArc({ ...common, paths: input.paths }));
       case "arcRelease": return Response.json(await this.controller.releaseArc({ ...common, disown: input.disown }));
-      case "compare": return Response.json({
-        ...await this.controller.compare({
-          ...common, ...(input.paths ? { paths: input.paths } : {}), ...(input.ref ? { ref: input.ref } : {}),
-        }),
-        unclaimedDirtPaths: await this.controller.listUnclaimedWorkspaceDirt({
-          cwd: input.cwd,
-          modifiedSince: requireInspectionModifiedSince(modifiedSince),
-        }),
-      });
-      case "diff": return Response.json({
-        ...await this.controller.diff({
-          ...common,
-          ...(input.page !== undefined ? { page: input.page } : {}),
-          ...(input.paths ? { paths: input.paths } : {}),
-          ...(input.ref ? { ref: input.ref } : {}),
-        }),
-        unclaimedDirtPaths: await this.controller.listUnclaimedWorkspaceDirt({
-          cwd: input.cwd,
-          modifiedSince: requireInspectionModifiedSince(modifiedSince),
-        }),
-      });
+      case "compare": {
+        const inspection = await this.controller.createInspectionSnapshot(input.cwd);
+        const [result, unclaimedDirtPaths] = await Promise.all([
+          this.controller.compare({
+            ...common, ...(input.paths ? { paths: input.paths } : {}), ...(input.ref ? { ref: input.ref } : {}),
+          }, inspection),
+          this.controller.listUnclaimedWorkspaceDirt({
+            cwd: input.cwd,
+            modifiedSince: requireInspectionModifiedSince(modifiedSince),
+          }, inspection),
+        ]);
+        return Response.json({ ...result, unclaimedDirtPaths });
+      }
+      case "diff": {
+        const inspection = await this.controller.createInspectionSnapshot(input.cwd);
+        const [result, unclaimedDirtPaths] = await Promise.all([
+          this.controller.diff({
+            ...common,
+            ...(input.page !== undefined ? { page: input.page } : {}),
+            ...(input.paths ? { paths: input.paths } : {}),
+            ...(input.ref ? { ref: input.ref } : {}),
+          }, inspection),
+          this.controller.listUnclaimedWorkspaceDirt({
+            cwd: input.cwd,
+            modifiedSince: requireInspectionModifiedSince(modifiedSince),
+          }, inspection),
+        ]);
+        return Response.json({ ...result, unclaimedDirtPaths });
+      }
       case "proposalCreate": return Response.json(await this.controller.createProposal({
         ...common, amend: input.amend, description: input.description,
         ...(input.amendProposalId ? { amendProposalId: input.amendProposalId } : {}),

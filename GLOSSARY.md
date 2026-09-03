@@ -19,3 +19,4 @@
 | daemon/orchestrator | The workbench harness, applied on top of existing harnesses. |
 | codex app-server | Codex's harness. |
 | app | Sometimes "app server". NOT "codex app-server", which is codex's harness. May be referring to the backend or frontend of a workbench *app*. The backend has thin responsibilities related to serving the SPA, providing the tray features, and storing settings. The frontend is thinner, solely responsible for rendering and interaction. |
+| Git transition | A worktree-keyed shared-read/exclusive-write lease that coordinates Git arc and thread-state decisions across reload generations |

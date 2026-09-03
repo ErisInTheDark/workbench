@@ -50,6 +50,7 @@ export interface WorkbenchThreadStateFeatureContext {
   database: WorkbenchThreadStateStoreDatabase;
   gitArcs: {
     findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcActiveClaim | null>;
+    hasLiveClaims?(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<boolean>;
     findLifecycleState?(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcLifecycleState | RepoGitArcLifecycleState | null>;
     findPlanState?(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcPlanState | RepoGitArcPlanState | null>;
     listActiveClaims(cwd: string): Promise<GitArcActiveClaim[]>;
@@ -239,6 +240,16 @@ export default class WorkbenchThreadStateFeature {
         const project = await context.resolveProjectById(projectId);
         const state = await context.gitArcs.findPlanState(project.rootPath, harness, threadId);
         return projectGitArcPlan(state ?? undefined);
+      },
+      hasLiveGitArcClaims: async (projectId, harness, threadId) => {
+        const project = await context.resolveProjectById(projectId);
+        if (context.gitArcs.hasLiveClaims) {
+          return await context.gitArcs.hasLiveClaims(project.rootPath, harness, threadId);
+        }
+        const state = context.gitArcs.findLifecycleState
+          ? await context.gitArcs.findLifecycleState(project.rootPath, harness, threadId)
+          : await context.gitArcs.findActiveClaim(project.rootPath, harness, threadId);
+        return Boolean(state && state.claimedPaths.length);
       },
       runGitArcReadTransition: async (projectId, operation) => {
         const project = await context.resolveProjectById(projectId);

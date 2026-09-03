@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchGitRepository: own raw Git process, stdin pathspec transport, snapshot, path, tree, ref, worktree timestamps, index-normalized publication, and ancestry mechanics for one repository. Keywords: git, repository, pathspec, stdin, argv, large path set, snapshot, ref, mtime, index, transaction.
- * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit: typed Git history, ancestry, object-read, and atomic ref-update inputs. Keywords: git, commit, paths, head, object, ref, transaction.
+ * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitWorktreeSnapshot: typed Git history, ancestry, object-read, worktree-snapshot, and atomic ref-update inputs. Keywords: git, commit, paths, head, object, snapshot, ref, transaction.
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -62,6 +62,11 @@ export interface GitResolvedBlob {
 export interface GitResolvedCommit {
   commit: string;
   identity: GitCommitIdentity;
+}
+
+export interface GitWorktreeSnapshot {
+  head: string;
+  tree: string;
 }
 
 function isWithinRoot(candidatePath: string, rootPath: string) {
@@ -446,18 +451,26 @@ export default class WorkbenchGitRepository {
     }
   }
 
-  async writeWorktreeTree() {
+  async writeWorktreeTree(baseTreeish = "HEAD", signal?: AbortSignal) {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await this.run(["read-tree", "HEAD"], env);
+      await this.run(["read-tree", baseTreeish], env, signal);
       const transcriptIsIgnored = await this.succeeds([
         "check-ignore", "-q", "--no-index", ".workbench/transcripts",
       ]);
       await this.run([
         "add", "-A", "--", ".", ...(transcriptIsIgnored ? [] : [WORKBENCH_TRANSCRIPT_EXCLUSION]),
-      ], env);
-      return (await this.run(["write-tree"], env)).trim();
+      ], env, signal);
+      return (await this.run(["write-tree"], env, signal)).trim();
     });
+  }
+
+  async writeWorktreeSnapshot(signal?: AbortSignal): Promise<GitWorktreeSnapshot> {
+    const head = await this.currentHead();
+    return {
+      head,
+      tree: await this.writeWorktreeTree(head, signal),
+    };
   }
 
   async listWorktreePaths(
@@ -469,6 +482,24 @@ export default class WorkbenchGitRepository {
       "ls-files", "-z", "--cached", "--others", "--exclude-standard",
     ], env, signal)))].sort((left, right) => left.localeCompare(right));
     return filterPathsByScopes(candidates, scopes);
+  }
+
+  async listWorktreeChangedPaths(
+    baseTreeish: string,
+    scopes: readonly string[] = [],
+    signal?: AbortSignal,
+  ) {
+    return await this.withTemporaryIndex(async (indexPath) => {
+      const env = { ...process.env, GIT_INDEX_FILE: indexPath };
+      await this.run(["read-tree", baseTreeish], env, signal);
+      const [tracked, untracked] = await Promise.all([
+        this.run(["diff", "--name-only", "-z", "--no-renames", "--"], env, signal),
+        this.run(["ls-files", "-z", "--others", "--exclude-standard", "--"], env, signal),
+      ]);
+      const changedPaths = [...new Set([...parseNullPaths(tracked), ...parseNullPaths(untracked)])]
+        .sort((left, right) => left.localeCompare(right));
+      return filterPathsByScopes(changedPaths, scopes);
+    });
   }
 
   async writeScopedWorktreeTree(paths: string[], baseTreeish = "HEAD", signal?: AbortSignal) {

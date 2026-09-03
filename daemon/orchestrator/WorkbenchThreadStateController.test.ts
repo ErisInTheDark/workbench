@@ -13,8 +13,8 @@ import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationR
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchThreadStateStore, { type WorkbenchThreadStateGlobalDocumentId, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 
-type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">
-  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">>
+type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">
+  & Partial<Pick<WorkbenchThreadStateControllerOptions, "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">>
   & {
     storageRoot: string;
   };
@@ -58,6 +58,7 @@ class WorkbenchThreadStateController extends WorkbenchThreadStateControllerOwner
       ...controllerOptions
     } = options;
     super({
+      hasLiveGitArcClaims: async () => false,
       resolveGitArc: async () => null,
       resolveGitArcPlan: async () => null,
       runGitArcReadTransition: async (_projectId, operation) => await operation(),
@@ -2468,7 +2469,6 @@ test("manual status persists, restores settled threads, and rejects provider-own
   let gitArcTransitions = 0;
   let terminalHasGitArc = false;
   let terminalGitArcResolved = false;
-  let terminalProposalStatus: "proposed" | null = null;
   const terminal: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1,
     entryKind: "thread",
@@ -2493,23 +2493,15 @@ test("manual status persists, restores settled threads, and rejects provider-own
   };
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
+    hasLiveGitArcClaims: async (_projectId, _harness, threadId) => {
+      assert.equal(insideGitArcTransition, true);
+      return terminalHasGitArc && !terminalGitArcResolved && threadId === "terminal";
+    },
     projectState: projectState(),
     publish: (_connectionId, snapshot) => published.push(snapshot),
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       acceptProviderSnapshot("codex", [terminal, pending, working], { complete: true });
       return [];
-    },
-    resolveGitArc: async (_projectId, _harness, threadId) => {
-      assert.equal(insideGitArcTransition, true);
-      return terminalHasGitArc && threadId === "terminal" ? {
-        checkpointCommit: "a".repeat(40),
-        claimedPaths: terminalGitArcResolved ? [] : ["owned.ts"],
-        intentDescription: "",
-        intentName: "Keep owned work",
-        proposalId: terminalProposalStatus ? "proposal-one" : null,
-        proposalStatus: terminalProposalStatus,
-        updatedAt: new Date(0).toISOString(),
-      } : null;
     },
     runGitArcReadTransition: async (_projectId, operation) => {
       gitArcTransitions += 1;
@@ -2597,7 +2589,6 @@ test("manual status persists, restores settled threads, and rejects provider-own
   });
   assert.equal("result" in claimedSettle ? (claimedSettle.result as { accepted?: boolean }).accepted : true, false);
   terminalGitArcResolved = true;
-  terminalProposalStatus = "proposed";
   const proposedSettle = await controller.handleRequest("observer", {
     identity: terminal.identity, method: "workbench/thread-state/settle", projectId: "project",
   });

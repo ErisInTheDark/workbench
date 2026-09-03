@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards cover index-normalized ref publication, retry safety, object reads, exact combined file-change inspection, and large stdin pathsets. Keywords: git, repository, index, ref, retry, object, diff, pathspec, stdin, argv, large path set.
+ * No production exports. Regression wards cover index-normalized ref publication, retry safety, object reads, exact combined file-change inspection, direct worktree dirt, and large stdin pathsets. Keywords: git, repository, index, ref, retry, object, diff, dirt, pathspec, stdin, argv, large path set.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -113,6 +113,33 @@ test("every ref transaction advances generation even when ref values repeat", as
   ), /state-generation/u);
   assert.equal(await repository.readRef(blockedRef), null);
   assert.equal(await repository.readRef(GIT_STATE_GENERATION_REF), secondGeneration);
+});
+
+test("direct worktree dirt uses final file content across staged, deleted, untracked, ignored, and unusual paths", async (context) => {
+  const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const head = await repository.currentHead();
+  const unusualPath = "odd [name].txt";
+  await fs.writeFile(path.join(fixture.root, "selected.txt"), "staged intermediate\n", "utf8");
+  await repository.run(["add", "--", "selected.txt"]);
+  await fs.writeFile(path.join(fixture.root, "selected.txt"), "final worktree content\n", "utf8");
+  await fs.rm(path.join(fixture.root, "ordinary.txt"));
+  await fs.writeFile(path.join(fixture.root, unusualPath), "untracked content\n", "utf8");
+  await fs.writeFile(path.join(fixture.root, ".gitignore"), "ignored/\n", "utf8");
+  await fs.mkdir(path.join(fixture.root, "ignored"));
+  await fs.writeFile(path.join(fixture.root, "ignored", "output.txt"), "ignored content\n", "utf8");
+  const indexBefore = await repository.run(["diff", "--cached", "--binary"]);
+  const expected = [".gitignore", "ordinary.txt", "selected.txt", unusualPath]
+    .sort((left, right) => left.localeCompare(right));
+  const scopes = [...expected, "ignored"];
+
+  assert.deepEqual(await repository.listWorktreeChangedPaths(head, scopes), expected);
+  const worktreeTree = await repository.writeScopedWorktreeTree(expected, head);
+  assert.deepEqual(await repository.listWorktreeChangedPaths(worktreeTree, scopes), []);
+  await fs.writeFile(path.join(fixture.root, unusualPath), "newer untracked content\n", "utf8");
+  assert.deepEqual(await repository.listWorktreeChangedPaths(worktreeTree, scopes), [unusualPath]);
+  assert.equal(await repository.run(["diff", "--cached", "--binary"]), indexBefore);
 });
 
 test("reads objects and preserves exact changes across literal, binary, and large pathsets with real Git", async (context) => {

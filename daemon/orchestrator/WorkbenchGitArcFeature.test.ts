@@ -304,18 +304,25 @@ test("compare forwards an explicit inspection ref to the controller", async () =
   });
   let receivedRef: string | undefined;
   let receivedModifiedSince: number | undefined;
+  const inspectionSnapshot = {};
+  let compareSnapshot: object | undefined;
+  let dirtSnapshot: object | undefined;
   const internal = (feature as unknown as {
     controller: {
-      compare: (input: { ref?: string }) => Promise<object>;
-      listUnclaimedWorkspaceDirt: (input: { modifiedSince: number }) => Promise<string[]>;
+      createInspectionSnapshot: (cwd: string) => Promise<object>;
+      compare: (input: { ref?: string }, snapshot?: object) => Promise<object>;
+      listUnclaimedWorkspaceDirt: (input: { modifiedSince: number }, snapshot?: object) => Promise<string[]>;
     };
   }).controller;
-  internal.compare = async (input) => {
+  internal.createInspectionSnapshot = async () => inspectionSnapshot;
+  internal.compare = async (input, snapshot) => {
     receivedRef = input.ref;
+    compareSnapshot = snapshot;
     return {};
   };
-  internal.listUnclaimedWorkspaceDirt = async (input) => {
+  internal.listUnclaimedWorkspaceDirt = async (input, snapshot) => {
     receivedModifiedSince = input.modifiedSince;
+    dirtSnapshot = snapshot;
     return ["unclaimed.ts"];
   };
 
@@ -330,6 +337,8 @@ test("compare forwards an explicit inspection ref to the controller", async () =
   assert.equal(response.status, 200);
   assert.equal(receivedRef, "proposal-one");
   assert.equal(receivedModifiedSince, 42);
+  assert.equal(compareSnapshot, inspectionSnapshot);
+  assert.equal(dirtSnapshot, inspectionSnapshot);
   assert.deepEqual(await response.json(), { unclaimedDirtPaths: ["unclaimed.ts"] });
 });
 
@@ -739,6 +748,7 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
     transitions: { run: async (_key, operation) => await operation() },
   });
   const internal = (feature as unknown as { controller: Record<string, (...args: never[]) => Promise<object>> }).controller;
+  internal.createInspectionSnapshot = async () => ({});
   for (const method of ["createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "startArc", "rescindProposal", "diff", "createProposal"] as const) {
     internal[method] = async () => { calls.push(method); return {}; };
   }

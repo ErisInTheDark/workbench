@@ -2,6 +2,7 @@
  * Exports:
  * - default WorkbenchGitCheckpointController: route plan and proposal owners while owning active claim mutation, compare, paged diff, unclaimed workspace dirt, and restore orchestration. Keywords: git, checkpoint, arc, claims, diff, mtime, restore.
  * - GitArcActiveClaim/GitArcPlanState/GitArcProposalStatus: expose active-claim, inactive-plan, and proposal lifecycle for thread-state projection. Keywords: git, arc, claim, plan, proposal, status.
+ * - GitArcInspectionSnapshot: one repository, HEAD, worktree tree, and registry view shared by one inspection request. Keywords: git, arc, inspection, snapshot, registry.
  * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: identify paths rejected before an arc operation that cannot skip them. Keywords: git, checkpoint, dirty paths, ignored paths.
  * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult/GitArcRetentionResult: typed controller operation results. Keywords: git, checkpoint, arc, move, proposal, retention, result.
  */
@@ -40,7 +41,7 @@ import GitArcProposalController, {
 } from "./GitArcProposalController";
 import GitArcRetentionController, { type GitArcRetentionResult } from "./GitArcRetentionController";
 import GitCheckpointStore from "./GitCheckpointStore";
-import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import WorkbenchGitRepository, { type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
 import {
   type ArcOutcome,
   CHECKPOINT_METADATA_MARKER,
@@ -74,6 +75,11 @@ export interface GitArcPlanClaimCollisionResult {
   collisions: GitArcCollision[];
   repoRoot: string;
   scopePaths: string[];
+}
+
+export interface GitArcInspectionSnapshot extends GitWorktreeSnapshot {
+  entries: GitArcRegistryEntry[];
+  repository: WorkbenchGitRepository;
 }
 
 
@@ -212,6 +218,15 @@ export default class WorkbenchGitCheckpointController {
   private readonly plans = new GitArcPlanController();
   private readonly proposals = new GitArcProposalController();
 
+  async createInspectionSnapshot(cwd: string): Promise<GitArcInspectionSnapshot> {
+    const repository = await WorkbenchGitRepository.open(cwd);
+    const [snapshot, entries] = await Promise.all([
+      repository.writeWorktreeSnapshot(),
+      new GitArcRegistry(repository).list(),
+    ]);
+    return { ...snapshot, entries, repository };
+  }
+
   async findPlanClaimCollisions({
     checkpointCommit: requestedCommit,
     cwd,
@@ -238,11 +253,18 @@ export default class WorkbenchGitCheckpointController {
     };
   }
 
-  private async requireActiveArc({ cwd, harness: rawHarness, threadId }: ControllerInput) {
-    const repository = await WorkbenchGitRepository.open(cwd);
+  private async requireActiveArc(
+    { cwd, harness: rawHarness, threadId }: ControllerInput,
+    inspection?: GitArcInspectionSnapshot,
+  ) {
+    const repository = inspection?.repository ?? await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
     const registry = new GitArcRegistry(repository);
-    const active = await registry.find({ harness, threadId });
+    const active = inspection
+      ? inspection.entries.find((entry) => (
+        entry.harness === harness && entry.threadId === normalizeThreadId(threadId)
+      )) ?? null
+      : await registry.find({ harness, threadId });
     if (!active || active.phase !== "active") throw new Error("This thread does not own an active Git arc.");
     const checkpoint = await readCheckpoint(repository.root, harness, threadId, active.checkpointCommit);
     const metadata = requireArcMetadata(checkpoint);
@@ -467,6 +489,12 @@ export default class WorkbenchGitCheckpointController {
 
   async findLifecycleState(input: ControllerInput): Promise<GitArcLifecycleState | null> {
     return await this.proposals.findLifecycleState(input);
+  }
+
+  async hasLiveClaimsAtRepoRoot({ cwd, harness: rawHarness, threadId }: ControllerInput) {
+    const harness = normalizeHarness(rawHarness);
+    const entry = await new GitArcRegistry(new WorkbenchGitRepository(cwd)).find({ harness, threadId });
+    return Boolean(entry && getGitArcLiveClaimPaths(entry).length);
   }
 
   async listPlanStates({ cwd }: { cwd: string }): Promise<GitArcPlanState[]> {
@@ -883,41 +911,46 @@ export default class WorkbenchGitCheckpointController {
     };
   }
 
-  private async compareActiveArc({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths?: string[] }): Promise<GitCheckpointCompareResult> {
-    const { checkpoint, harness, metadata, repository } = await this.requireActiveArc({ cwd, harness: rawHarness, threadId });
+  private async compareActiveArc(
+    { cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths?: string[] },
+    inspection: GitArcInspectionSnapshot,
+  ): Promise<GitCheckpointCompareResult> {
+    const { checkpoint, harness, metadata, repository } = await this.requireActiveArc(
+      { cwd, harness: rawHarness, threadId },
+      inspection,
+    );
     const paths = rawPaths?.length ? repository.normalizePaths(rawPaths) : repository.normalizePaths(metadata.scopePaths);
     const baseline = await this.proposals.logicalBaseline({
       checkpointCommit: checkpoint.checkpointCommit,
       cwd: repository.root,
       fallbackHead: checkpoint.parent,
       harness,
+      repository,
       threadId,
     });
-    const currentTree = await repository.writeScopedWorktreeTree(paths, baseline);
-    const currentHead = await repository.currentHead();
-    const currentWorktreeTree = currentHead === baseline
-      ? currentTree
-      : await repository.writeScopedWorktreeTree(paths, currentHead);
     return {
-      changes: await repository.buildFileChanges(baseline, currentTree, paths),
+      changes: await repository.buildFileChanges(baseline, inspection.tree, paths),
       checkpointCommit: checkpoint.checkpointCommit,
       checkpointRef: checkpoint.checkpointRef,
-      hasUncommittedChanges: (await repository.listChangedPaths(currentHead, currentWorktreeTree, paths)).length > 0,
+      hasUncommittedChanges: (await repository.listChangedPaths(inspection.head, inspection.tree, paths)).length > 0,
       intentName: metadata.intentName ?? null,
       repoRoot: repository.root,
       scopePaths: metadata.scopePaths,
     };
   }
 
-  async compare(input: ControllerInput & { paths?: string[]; ref?: string }): Promise<GitCheckpointCompareResult> {
+  async compare(
+    input: ControllerInput & { paths?: string[]; ref?: string },
+    existingInspection?: GitArcInspectionSnapshot,
+  ): Promise<GitCheckpointCompareResult> {
+    const inspection = existingInspection ?? await this.createInspectionSnapshot(input.cwd);
+    const repository = inspection.repository;
     if (input.ref && !/^[a-f0-9]{7,64}$/iu.test(input.ref)) {
-      const repository = await WorkbenchGitRepository.open(input.cwd);
       const harness = normalizeHarness(input.harness);
       const proposal = await new GitCheckpointStore(repository).readProposal(harness, input.threadId, input.ref);
       const paths = input.paths?.length ? repository.normalizePaths(input.paths) : repository.normalizePaths(proposal.metadata.paths);
-      const currentTree = await repository.writeScopedWorktreeTree(paths, proposal.proposalCommit);
       return {
-        changes: await repository.buildFileChanges(proposal.proposalCommit, currentTree, paths),
+        changes: await repository.buildFileChanges(proposal.proposalCommit, inspection.tree, paths),
         checkpointCommit: proposal.proposalCommit,
         checkpointRef: proposal.proposalRef,
         intentName: null,
@@ -927,24 +960,24 @@ export default class WorkbenchGitCheckpointController {
       };
     }
     if (input.ref) {
-      const repoRoot = await resolveRepoRoot(input.cwd);
+      const repoRoot = repository.root;
       const harness = normalizeHarness(input.harness);
       const checkpoint = await readCheckpoint(repoRoot, harness, input.threadId, input.ref);
       const metadata = checkpoint.metadata;
       if (metadata?.kind === "arc") {
-        const active = await new GitArcRegistry(new WorkbenchGitRepository(repoRoot)).find({ harness, threadId: input.threadId });
+        const active = inspection.entries.find((entry) => (
+          entry.harness === harness && entry.threadId === normalizeThreadId(input.threadId)
+        ));
         if (!active || active.phase !== "active" || active.checkpointCommit !== checkpoint.checkpointCommit) {
           throw new Error("Explicit arc inspection refs must identify this thread's current active arc or an inactive or historical plan.");
         }
-        return await this.compareActiveArc(input);
+        return await this.compareActiveArc(input, inspection);
       }
       if (!metadata || metadata.kind !== "plan") {
         throw new Error("Explicit arc inspection refs must identify this thread's current active arc or an inactive or historical plan.");
       }
-      const repository = new WorkbenchGitRepository(repoRoot);
       const paths = input.paths?.length ? repository.normalizePaths(input.paths) : metadata.scopePaths;
-      const currentTree = await repository.writeScopedWorktreeTree(paths);
-      const changes = await repository.buildFileChanges(checkpoint.checkpointCommit, currentTree, paths);
+      const changes = await repository.buildFileChanges(checkpoint.checkpointCommit, inspection.tree, paths);
       return {
         changes,
         checkpointCommit: checkpoint.checkpointCommit,
@@ -954,30 +987,28 @@ export default class WorkbenchGitCheckpointController {
         scopePaths: metadata.scopePaths,
       };
     }
-    return await this.compareActiveArc(input);
+    return await this.compareActiveArc(input, inspection);
   }
 
-  async listUnclaimedWorkspaceDirt({ cwd, modifiedSince }: { cwd: string; modifiedSince: number }) {
-    const repository = await WorkbenchGitRepository.open(cwd);
-    const [head, entries] = await Promise.all([
-      repository.currentHead(),
-      new GitArcRegistry(repository).list(),
-    ]);
-    const worktreeTree = await repository.writeWorktreeTree();
-    const changedPaths = await repository.listAllChangedPaths(head, worktreeTree);
-    const liveClaims = entries.flatMap((entry) => getGitArcLiveClaimPaths(entry));
+  async listUnclaimedWorkspaceDirt(
+    { cwd, modifiedSince }: { cwd: string; modifiedSince: number },
+    existingInspection?: GitArcInspectionSnapshot,
+  ) {
+    const inspection = existingInspection ?? await this.createInspectionSnapshot(cwd);
+    const changedPaths = await inspection.repository.listAllChangedPaths(inspection.head, inspection.tree);
+    const liveClaims = inspection.entries.flatMap((entry) => getGitArcLiveClaimPaths(entry));
     const unclaimedPaths = changedPaths.filter((candidate) => (
       !liveClaims.some((claimedPath) => gitArcPathsOverlap(candidate, claimedPath))
     ));
-    return await repository.listPathsModifiedSince(unclaimedPaths, modifiedSince);
+    return await inspection.repository.listPathsModifiedSince(unclaimedPaths, modifiedSince);
   }
 
   async diff(input: ControllerInput & {
     page?: number;
     paths?: string[];
     ref?: string;
-  }): Promise<GitCheckpointDiffResult> {
-    const result = await this.compare(input);
+  }, existingInspection?: GitArcInspectionSnapshot): Promise<GitCheckpointDiffResult> {
+    const result = await this.compare(input, existingInspection);
     return {
       ...result,
       ...createGitArcDiffPage(

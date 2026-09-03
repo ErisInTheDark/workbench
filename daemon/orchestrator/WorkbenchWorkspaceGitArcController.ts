@@ -135,6 +135,14 @@ export default class WorkbenchWorkspaceGitArcController {
     return await this.findLifecycleStateInMembers(project, members, harness, threadId);
   }
 
+  async hasLiveClaims(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {
+    const members = await this.resolveRepoMembers(project);
+    const claims = await Promise.all(members.map(async (member) => (
+      await this.local.hasLiveClaimsAtRepoRoot({ cwd: member.repoRoot, harness, threadId })
+    )));
+    return claims.some(Boolean);
+  }
+
   private async findLifecycleStateInMembers(
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
@@ -676,19 +684,26 @@ export default class WorkbenchWorkspaceGitArcController {
     if (!selected.length) throw new Error("This workspace Git arc has no matching repository members.");
     const selectedRepos = new Set(selected.map(({ repoRoot }) => repoRoot));
     const values = await this.runMembers(members, async (member) => {
-      const unclaimedDirtPaths = await this.local.listUnclaimedWorkspaceDirt({
+      const inspectionSnapshot = await this.local.createInspectionSnapshot(member.repoRoot);
+      const unclaimedDirt = this.local.listUnclaimedWorkspaceDirt({
         cwd: member.repoRoot,
         modifiedSince,
-      });
-      if (!selectedRepos.has(member.repoRoot)) return { inspection: null, unclaimedDirtPaths };
+      }, inspectionSnapshot);
+      if (!selectedRepos.has(member.repoRoot)) {
+        return { inspection: null, unclaimedDirtPaths: await unclaimedDirt };
+      }
       const group = groups.find((candidate) => candidate.member.repoRoot === member.repoRoot);
       const input = {
         cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
         ...(group?.paths.length ? { paths: group.paths } : {}),
         ...(refs.get(member.repoRoot) ? { ref: refs.get(member.repoRoot) } : {}),
       };
+      const [inspection, unclaimedDirtPaths] = await Promise.all([
+        this.local.compare(input, inspectionSnapshot),
+        unclaimedDirt,
+      ]);
       return {
-        inspection: await this.local.compare(input),
+        inspection,
         unclaimedDirtPaths,
       };
     }, undefined, "read");

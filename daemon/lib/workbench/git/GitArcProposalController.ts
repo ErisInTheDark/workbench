@@ -310,10 +310,13 @@ async function buildProposalResult(
   target: string,
   harness: GitArcHarness,
   threadId: string,
-  includeNewerAvailable = false,
+  options: { includeNewerAvailable?: boolean; refreshAmendability?: boolean } = {},
 ): Promise<GitCheckpointProposal> {
   const classifiedAmendability = metadata.status === "committed" && metadata.committedSha
-    ? await new WorkbenchGitHistoryRewriter(repository).classifyAmendability(metadata.committedSha)
+    ? await new WorkbenchGitHistoryRewriter(repository).classifyAmendability(
+      metadata.committedSha,
+      { refresh: options.refreshAmendability ?? true },
+    )
     : null;
   const amendability: GitCheckpointProposal["amendability"] = classifiedAmendability?.status === "available"
     ? { status: "available" }
@@ -325,7 +328,7 @@ async function buildProposalResult(
     changes: await buildProposalFileChanges(repository, metadata, target, harness, threadId),
     committedSha: metadata.committedSha,
     description: metadata.description,
-    includeNewerAvailable,
+    includeNewerAvailable: options.includeNewerAvailable ?? false,
     mode: metadata.mode,
     paths: metadata.paths,
     proposalId: metadata.proposalId,
@@ -338,16 +341,40 @@ async function buildProposalResult(
   };
 }
 
-async function transitionProposal(repository: WorkbenchGitRepository, proposal: StoredProposal, metadata: ProposalMetadata, treeish?: string) {
+function deriveProposalTransition(
+  proposal: StoredProposal,
+  metadata: ProposalMetadata,
+  treeish?: string,
+) {
+  return { ...proposal, metadata, tree: treeish ?? proposal.tree };
+}
+
+async function persistProposalTransition(
+  repository: WorkbenchGitRepository,
+  proposal: StoredProposal,
+  metadata: ProposalMetadata,
+  treeish?: string,
+) {
   const tree = treeish ?? proposal.tree;
   const stateCommit = await repository.createCommitFromTree(tree, metadata.baseCommit, proposalMessage(metadata));
   await repository.updateRefs([{ newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef }]);
   return { ...proposal, metadata, proposalCommit: stateCommit, tree };
 }
 
-async function resolveProposalState(repository: WorkbenchGitRepository, harness: GitArcHarness, threadId: string, proposalId: string) {
+async function resolveProposalState(
+  repository: WorkbenchGitRepository,
+  harness: GitArcHarness,
+  threadId: string,
+  proposalId: string,
+  options: { includeNewer: boolean; persistTransitions: boolean },
+) {
   const store = new GitCheckpointStore(repository);
   let proposal = await store.readProposal(harness, threadId, proposalId);
+  const applyTransition = async (metadata: ProposalMetadata, treeish?: string) => (
+    options.persistTransitions
+      ? await persistProposalTransition(repository, proposal, metadata, treeish)
+      : deriveProposalTransition(proposal, metadata, treeish)
+  );
   let currentTree: string | null = null;
   const legacyCommittedHistoryReason = proposal.metadata.status === "unavailable"
     && proposal.metadata.unavailableReason?.startsWith("Proposed paths changed in committed history:");
@@ -385,7 +412,7 @@ async function resolveProposalState(repository: WorkbenchGitRepository, harness:
         proposal.proposalCommit,
         proposal.metadata.paths,
       );
-      proposal = await transitionProposal(repository, proposal, {
+      proposal = await applyTransition({
         ...proposal.metadata,
         baseCommit: headMovement.currentHead,
         liveBaseCommit: headMovement.currentHead,
@@ -394,25 +421,26 @@ async function resolveProposalState(repository: WorkbenchGitRepository, harness:
         unavailableReasonCode: null,
       }, rebasedTree);
     } else if (proposal.metadata.status === "proposed" && !unavailableReason && headMovement.kind === "fast-forward") {
-      proposal = await transitionProposal(repository, proposal, {
+      proposal = await applyTransition({
         ...proposal.metadata,
         liveBaseCommit: headMovement.currentHead,
       });
     } else if (branchChangeUnavailable && !unavailableReason) {
-      proposal = await transitionProposal(repository, proposal, {
+      proposal = await applyTransition({
         ...proposal.metadata,
         status: "proposed",
         unavailableReason: null,
         unavailableReasonCode: null,
       });
     }
+    let changedFromProposal: string[] = [];
     if (proposal.metadata.status === "proposed" && !unavailableReason && !proposal.metadata.messageOnly) {
-      currentTree = await repository.writeScopedWorktreeTree(proposal.metadata.livePaths, proposal.metadata.liveBaseCommit);
-      const changedNow = new Set(await repository.listChangedPaths(
-        proposal.metadata.liveBaseCommit,
-        currentTree,
-        proposal.metadata.livePaths,
-      ));
+      const [changedFromBase, changedSinceProposal] = await Promise.all([
+        repository.listWorktreeChangedPaths(proposal.metadata.liveBaseCommit, proposal.metadata.livePaths),
+        repository.listWorktreeChangedPaths(proposal.tree, proposal.metadata.livePaths),
+      ]);
+      const changedNow = new Set(changedFromBase);
+      changedFromProposal = changedSinceProposal;
       const cleanPath = proposal.metadata.livePaths.find((filePath) => !changedNow.has(filePath));
       if (cleanPath) unavailableReason = `${cleanPath} no longer has working-tree changes.`;
     }
@@ -422,18 +450,24 @@ async function resolveProposalState(repository: WorkbenchGitRepository, harness:
       || proposal.metadata.unavailableReason !== unavailableReason
       || proposal.metadata.unavailableReasonCode !== unavailableReasonCode
     )) {
-      proposal = await transitionProposal(repository, proposal, {
+      proposal = await applyTransition({
         ...proposal.metadata,
         status: "unavailable",
         unavailableReason,
         unavailableReasonCode,
       });
     }
+    const includeNewerAvailable = proposal.metadata.status === "proposed"
+      && changedFromProposal.length > 0;
+    if (options.includeNewer && includeNewerAvailable) {
+      currentTree = await repository.writeScopedWorktreeTree(
+        proposal.metadata.livePaths,
+        proposal.metadata.liveBaseCommit,
+      );
+    }
+    return { currentTree, includeNewerAvailable, proposal };
   }
-  const includeNewerAvailable = proposal.metadata.status === "proposed"
-    && currentTree !== null
-    && (await repository.listChangedPaths(proposal.proposalCommit, currentTree, proposal.metadata.livePaths)).length > 0;
-  return { currentTree, includeNewerAvailable, proposal };
+  return { currentTree, includeNewerAvailable: false, proposal };
 }
 
 export default class GitArcProposalController {
@@ -488,8 +522,12 @@ export default class GitArcProposalController {
     }
   }
 
-  async logicalBaseline(input: ArcIdentityInput & { checkpointCommit: string; fallbackHead: string }) {
-    const repository = await WorkbenchGitRepository.open(input.cwd);
+  async logicalBaseline(input: ArcIdentityInput & {
+    checkpointCommit: string;
+    fallbackHead: string;
+    repository?: WorkbenchGitRepository;
+  }) {
+    const repository = input.repository ?? await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
     const outcome = await new GitCheckpointStore(repository).readOutcome(harness, input.threadId, input.checkpointCommit);
     return outcome?.acceptedProposals?.at(-1)?.headSha ?? input.fallbackHead;
@@ -736,13 +774,22 @@ export default class GitArcProposalController {
   async getProposal({ cwd, harness: rawHarness, includeNewer, proposalId, threadId }: ArcIdentityInput & { includeNewer: boolean; proposalId: string }) {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
-    const { currentTree, includeNewerAvailable, proposal } = await resolveProposalState(repository, harness, threadId, proposalId);
+    const { currentTree, includeNewerAvailable, proposal } = await resolveProposalState(
+      repository,
+      harness,
+      threadId,
+      proposalId,
+      { includeNewer, persistTransitions: false },
+    );
     const target = (proposal.metadata.status === "committed" || proposal.metadata.status === "superseded") && proposal.metadata.committedSha
       ? proposal.metadata.committedSha
       : includeNewer && includeNewerAvailable && currentTree
         ? currentTree
-        : proposal.proposalCommit;
-    return await buildProposalResult(repository, proposal.metadata, target, harness, threadId, includeNewerAvailable);
+        : proposal.tree;
+    return await buildProposalResult(repository, proposal.metadata, target, harness, threadId, {
+      includeNewerAvailable,
+      refreshAmendability: false,
+    });
   }
 
   async getProposalPaths({ cwd, harness: rawHarness, proposalId, threadId }: ArcIdentityInput & { proposalId: string }) {
@@ -886,7 +933,13 @@ export default class GitArcProposalController {
   }: ArcIdentityInput & { description: string; includeNewer: boolean; proposalId: string; title: string }): Promise<GitCheckpointProposal> {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
-    const resolved = await resolveProposalState(repository, harness, threadId, proposalId);
+    const resolved = await resolveProposalState(
+      repository,
+      harness,
+      threadId,
+      proposalId,
+      { includeNewer, persistTransitions: true },
+    );
     const proposal = resolved.proposal;
     if (proposal.metadata.status === "committed") {
       return await this.commitMessageAmendment({ description, harness, proposal, repository, threadId, title });

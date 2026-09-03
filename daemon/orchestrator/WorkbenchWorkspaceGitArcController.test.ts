@@ -1,4 +1,4 @@
-/* No production exports. Tests protect workspace arc membership, global diff paging, workspace dirt, patch claim coverage, ignored-path skips, root-qualified projection, repo deduplication, per-root proposals, and amendment routing. */
+/* No production exports. Tests protect workspace arc membership, shared inspection snapshots, claim-presence reads, global diff paging, workspace dirt, patch claim coverage, ignored-path skips, root-qualified projection, repo deduplication, per-root proposals, and amendment routing. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -17,15 +17,19 @@ const execFileAsync = promisify(execFile);
 
 class FakeLocalGitArcController {
   readonly blockedRoots = new Set<string>();
+  readonly claimPresenceCalls: string[] = [];
   readonly collisionCalls: Array<{ checkpointCommit?: string; cwd: string }> = [];
   readonly compareCalls: Array<{ cwd: string; ref?: string }> = [];
+  readonly compareSnapshots: object[] = [];
   readonly dirtyRoots = new Set<string>();
+  readonly dirtSnapshots: object[] = [];
   readonly diffContents = new Map<string, string>();
   readonly unclaimedDirt = new Map<string, string[]>();
   readonly lifecycleFindCalls: string[] = [];
   readonly lifecycleListCalls: string[] = [];
   readonly proposalDetailCalls: string[] = [];
   readonly proposalPathCalls: string[] = [];
+  readonly snapshotCalls: string[] = [];
   readonly startCalls: string[] = [];
   private nextProposal = 0;
   private readonly plans = new Map<string, { checkpointCommit: string; harness: string; intentDescription: string; intentName: string; scopePaths: string[]; threadId: string; updatedAt: string }>();
@@ -72,8 +76,14 @@ class FakeLocalGitArcController {
     return { checkpointCommit: plan.checkpointCommit, checkpointRef: `refs/${plan.checkpointCommit}`, changes: [], intentName: plan.intentName, repoRoot: input.cwd, scopePaths: plan.scopePaths };
   }
 
-  async compare(input: { cwd: string; ref?: string }) {
+  async createInspectionSnapshot(cwd: string) {
+    this.snapshotCalls.push(cwd);
+    return { cwd };
+  }
+
+  async compare(input: { cwd: string; ref?: string }, snapshot?: object) {
     this.compareCalls.push(input);
+    if (snapshot) this.compareSnapshots.push(snapshot);
     const state = this.states.get(input.cwd)!;
     const proposal = input.ref ? this.proposals.get(input.ref) : null;
     const scopePaths = proposal?.paths ?? state.claimedPaths;
@@ -92,7 +102,8 @@ class FakeLocalGitArcController {
     };
   }
 
-  async listUnclaimedWorkspaceDirt(input: { cwd: string }) {
+  async listUnclaimedWorkspaceDirt(input: { cwd: string }, snapshot?: object) {
+    if (snapshot) this.dirtSnapshots.push(snapshot);
     return this.unclaimedDirt.get(input.cwd) ?? [];
   }
 
@@ -100,6 +111,17 @@ class FakeLocalGitArcController {
     this.lifecycleFindCalls.push(input.cwd);
     const state = this.states.get(input.cwd);
     return state?.harness === input.harness && state.threadId === input.threadId ? state : null;
+  }
+
+  async hasLiveClaimsAtRepoRoot(input: { cwd: string; harness: string; threadId: string }) {
+    this.claimPresenceCalls.push(input.cwd);
+    const state = this.states.get(input.cwd);
+    return Boolean(
+      state
+      && state.harness === input.harness
+      && state.threadId === input.threadId
+      && state.claimedPaths.length,
+    );
   }
 
   async assertArcReleasable(input: { cwd: string }) {
@@ -441,6 +463,10 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
   assert.doesNotThrow(() => WorkbenchGitArcPlanStateSchema.parse(sidebarPlan));
   const refs = plan.members.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId }));
   await controller.execute(project, { action: "arcStart", refs, ...identity });
+  const lifecycleReadsBeforeClaims = local.lifecycleFindCalls.length + local.lifecycleListCalls.length;
+  assert.equal(await controller.hasLiveClaims(project, "codex", identity.threadId), true);
+  assert.deepEqual(local.claimPresenceCalls, [apiRoot, webRoot]);
+  assert.equal(local.lifecycleFindCalls.length + local.lifecycleListCalls.length, lifecycleReadsBeforeClaims);
 
   const comparison = await controller.execute(project, {
     action: "compare", refs: [], roots: [], ...identity,
@@ -541,6 +567,7 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
   }) as { releasedClaims: string[] };
   assert.deepEqual(released.releasedClaims, ["api:one.txt", "web:two.txt"]);
   assert.equal(await controller.findLifecycleState(project, "codex", identity.threadId), null);
+  assert.equal(await controller.hasLiveClaims(project, "codex", identity.threadId), false);
 });
 
 test("workspace diff uses one packed page budget and reports dirt from every repository", async () => {
@@ -599,6 +626,10 @@ test("workspace diff uses one packed page budget and reports dirt from every rep
   assert.equal(first.nextPage, 2);
   assert.equal(second.nextPage, null);
   assert.deepEqual(first.unclaimedDirtPaths, ["api:loose-api.ts", "web:loose-web.ts"]);
+  assert.equal(local.snapshotCalls.length, 4);
+  assert.equal(local.compareSnapshots.length, 4);
+  assert.equal(local.dirtSnapshots.length, 4);
+  assert(local.compareSnapshots.every((snapshot) => local.dirtSnapshots.includes(snapshot)));
 });
 
 test("workspace roots in one repository share one member while keeping qualified root paths", async () => {

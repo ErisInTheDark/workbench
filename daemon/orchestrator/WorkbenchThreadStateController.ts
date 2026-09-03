@@ -131,6 +131,7 @@ function reconcileProviderLifecycle(
 export interface WorkbenchThreadStateControllerOptions {
   getProjectCatalog: () => WorkbenchProjectsPayload;
   getReloadDirt?: () => WorkbenchReloadDirtSnapshot;
+  hasLiveGitArcClaims: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<boolean>;
   log?: (message: string) => void;
   now?: () => number;
   projectState: {
@@ -1830,7 +1831,7 @@ export default class WorkbenchThreadStateController {
       }
       if (
         request.method === "workbench/thread-state/settle"
-        && gitArcPreventsThreadSettlement(normalizeResolvedGitArc(await this.options.resolveGitArc(request.projectId, entry.identity.harness, entry.identity.threadId)))
+        && await this.options.hasLiveGitArcClaims(request.projectId, entry.identity.harness, entry.identity.threadId)
       ) {
         return { accepted: false, revision: state.revision };
       }
