@@ -65,8 +65,13 @@ test("UUID databases clone, diverge, reopen, and share one coalesced first open"
     action: "put",
     record: { kind: "globalPreference", preference: { key: "theme", value: "magical-girl" } },
   });
+  await registry.mutateBrowser(BROWSER_A, {
+    action: "put",
+    record: { kind: "globalPreference", preference: { key: "transcriptProjectionMode", value: "sqlite" } },
+  });
 
   assert.equal(globalPreference(records(await registry.readBrowser(BROWSER_A)), "theme")?.preference.value, "magical-girl");
+  assert.equal(globalPreference(records(await registry.readBrowser(BROWSER_A)), "transcriptProjectionMode")?.preference.value, "sqlite");
   assert.equal(globalPreference(records(await registry.readBrowser(BROWSER_B)), "theme")?.preference.value, "winter");
   assert.deepEqual(
     (await fs.readdir(path.join(directory, "browser-state"))).filter((name) => name === `${BROWSER_A}.sqlite3`),
@@ -80,6 +85,7 @@ test("UUID databases clone, diverge, reopen, and share one coalesced first open"
   });
   reopened.start();
   assert.equal(globalPreference(records(await reopened.readBrowser(BROWSER_A)), "theme")?.preference.value, "magical-girl");
+  assert.equal(globalPreference(records(await reopened.readBrowser(BROWSER_A)), "transcriptProjectionMode")?.preference.value, "sqlite");
   await reopened.close();
 });
 

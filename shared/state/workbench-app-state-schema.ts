@@ -243,6 +243,45 @@ const globalPreferencesV5 = defineTable("global_preferences", {
   ],
 }));
 
+const globalPreferencesV6 = defineTable("global_preferences", {
+  key: enumText(
+    "appPort",
+    "composerSpellCheck",
+    "editorFontFamily",
+    "editorFontSize",
+    "editorSpellCheck",
+    "fileOpenBehavior",
+    "harness",
+    "projectStatusCountsExpanded",
+    "projectsOpen",
+    "projectTimeGroupCount",
+    "reactDevelopmentMode",
+    "reloadNecessaryOpen",
+    "selectedProjectPinPlacement",
+    "showUnopenableFiles",
+    "sidebarCollapsed",
+    "theme",
+    "threadCodeBlockWrap",
+    "threadLiveActivityOpen",
+    "transcriptProjectionMode",
+  ).primaryKey(),
+  boolean_value: booleanInteger(),
+  integer_value: integer(),
+  text_value: text(),
+  ...revisionColumns(),
+}, (table) => ({
+  constraints: [
+    check(sql`
+      (${table.deleted} = ${literal(1)} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.deleted} = ${literal(0)} AND (
+        (${table.key} IN (${literal("composerSpellCheck")}, ${literal("editorSpellCheck")}, ${literal("projectStatusCountsExpanded")}, ${literal("projectsOpen")}, ${literal("reactDevelopmentMode")}, ${literal("reloadNecessaryOpen")}, ${literal("showUnopenableFiles")}, ${literal("sidebarCollapsed")}, ${literal("threadCodeBlockWrap")}, ${literal("threadLiveActivityOpen")}) AND ${table.boolean_value} IS NOT NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+        OR (${table.key} IN (${literal("appPort")}, ${literal("editorFontSize")}, ${literal("projectTimeGroupCount")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NOT NULL AND ${table.text_value} IS NULL)
+        OR (${table.key} IN (${literal("editorFontFamily")}, ${literal("fileOpenBehavior")}, ${literal("harness")}, ${literal("selectedProjectPinPlacement")}, ${literal("theme")}, ${literal("transcriptProjectionMode")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NOT NULL)
+      ))
+    `),
+  ],
+}));
+
 const globalPreferencesHistory = defineTableHistory({
   versions: [
     tableVersion({ migration: createTable(globalPreferencesV1), schemaVersion: 1, table: globalPreferencesV1 }),
@@ -266,8 +305,13 @@ const globalPreferencesHistory = defineTableHistory({
       schemaVersion: 5,
       table: globalPreferencesV5,
     }),
+    tableVersion({
+      migration: rebuildTable({ from: globalPreferencesV5, to: globalPreferencesV6 }),
+      schemaVersion: 6,
+      table: globalPreferencesV6,
+    }),
   ],
-  current: globalPreferencesV5,
+  current: globalPreferencesV6,
 });
 
 const projectPreferencesV1 = defineTable("project_preferences", {

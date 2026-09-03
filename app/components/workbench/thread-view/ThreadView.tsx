@@ -9,6 +9,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, use
 
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import { getCurrentInProgressTurn, mergeTurnsPreservingLiveItems } from "workbench-shared/codex/thread-state";
+import type { WorkbenchTranscriptModeValue } from "workbench-shared/state/workbench-client-state";
 import type {
   ThreadPayload,
   WorkbenchBrowseResultEntry,
@@ -89,6 +90,7 @@ import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
 import ThreadTranscript from "./ThreadTranscript";
 import ThreadTranscriptComparison from "./ThreadTranscriptComparison";
+import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import {
   ThreadWebSearchActionRow,
 } from "./ThreadWebSearchItem";
@@ -594,7 +596,7 @@ export default memo(function ThreadView ({
   threadComposerDraft,
   threadComposerDraftsByThreadId,
   threadQuestionnaireDraftsByKey,
-  transcriptComparisonOpen = false,
+  transcriptMode = "json",
   transcriptComparisonProjection = null,
   thread,
   threadTarget,
@@ -637,7 +639,7 @@ export default memo(function ThreadView ({
   threadComposerDraft: WorkbenchComposerInputDraft | null;
   threadComposerDraftsByThreadId: Record<string, WorkbenchComposerInputDraft | undefined>;
   threadQuestionnaireDraftsByKey: Record<string, WorkbenchQuestionnaireDraft | undefined>;
-  transcriptComparisonOpen?: boolean;
+  transcriptMode?: WorkbenchTranscriptModeValue;
   transcriptComparisonProjection?: WorkbenchTranscriptProjection | null;
   thread: ThreadPayload;
   threadTarget: WorkbenchThreadTarget | null;
@@ -1512,7 +1514,7 @@ export default memo(function ThreadView ({
   const terminalGitArcProposalIds = useMemo(() => terminalGitArc
     ? new Set(terminalGitArc.proposals.map(({ proposalId }) => proposalId))
     : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS, [terminalGitArc]);
-  const activeTranscriptComparisonProjection = transcriptComparisonOpen
+  const activeTranscriptProjection = transcriptMode !== "json"
     && renderActiveThread
     && transcriptComparisonProjection?.thread.id === renderActiveThread.id
     ? transcriptComparisonProjection
@@ -1564,32 +1566,48 @@ export default memo(function ThreadView ({
 
         <div hidden={isDraftThreadView}>
           {activeThread ? (
-            transcriptComparisonOpen && renderActiveThread ? (
-              <>
-                {canLoadPreviousTurn ? (
-                  <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
-                ) : null}
-                {activeTranscriptComparisonProjection ? (
-                  <ThreadTranscriptComparison
+            transcriptMode !== "json" && renderActiveThread ? (
+              activeTranscriptProjection ? (
+                transcriptMode === "compare" ? (
+                  <>
+                    {canLoadPreviousTurn ? (
+                      <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
+                    ) : null}
+                    <ThreadTranscriptComparison
+                      inlineMentionSources={inlineMentionSources}
+                      jsonBrowseResultEntries={activeThreadBrowseResultEntries}
+                      jsonThread={renderActiveThread}
+                      knownSkills={workbenchSkills}
+                      projectFilePaths={projectFilePaths}
+                      projectId={projectId}
+                      projectRootPath={projectRootPath}
+                      relatedThreadsById={relatedThreadsById}
+                      sqliteProjection={activeTranscriptProjection}
+                      subagents={subagents}
+                      visibleTurnIds={visibleLoadedTurnIds}
+                      workspaceRoots={workspaceFileLinkRoots}
+                    />
+                  </>
+                ) : (
+                  <ThreadTranscriptProjection
+                    canLoadPreviousTurn={canLoadPreviousTurn}
+                    historySentinelRef={historySentinelRef}
                     inlineMentionSources={inlineMentionSources}
-                    jsonBrowseResultEntries={activeThreadBrowseResultEntries}
-                    jsonThread={renderActiveThread}
                     knownSkills={workbenchSkills}
                     projectFilePaths={projectFilePaths}
                     projectId={projectId}
                     projectRootPath={projectRootPath}
+                    projection={activeTranscriptProjection}
                     relatedThreadsById={relatedThreadsById}
-                    sqliteProjection={activeTranscriptComparisonProjection}
                     subagents={subagents}
-                    visibleTurnIds={visibleLoadedTurnIds}
                     workspaceRoots={workspaceFileLinkRoots}
                   />
-                ) : (
-                  <p className="m-0 py-4 text-[0.92em] leading-[1.6] text-muted" role="status">
-                    Waiting for the SQLite transcript projection...
-                  </p>
-                )}
-              </>
+                )
+              ) : (
+                <p className="m-0 py-4 text-[0.92em] leading-[1.6] text-muted" role="status">
+                  Waiting for the SQLite transcript projection...
+                </p>
+              )
             ) : (
               <ThreadTranscript
                 browseResultEntries={activeThreadBrowseResultEntries}

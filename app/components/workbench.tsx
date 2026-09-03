@@ -79,6 +79,12 @@ import {
     type MobilePane,
 } from "../workbench/state/mobile-pane-url-state";
 import {
+    canPersistWorkbenchTranscriptMode,
+    getNextWorkbenchTranscriptMode,
+    readWorkbenchTranscriptMode,
+    writeWorkbenchTranscriptMode,
+} from "../workbench/state/workbench-transcript-mode";
+import {
     createDefaultProjectWorkbenchSettings,
     MAX_EDITOR_FONT_SIZE,
     MIN_EDITOR_FONT_SIZE,
@@ -182,6 +188,7 @@ import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/Workbe
 import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
 import WorkbenchThreadSidebarActionsProvider from "./workbench/WorkbenchThreadSidebarActions";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
+import WorkbenchTranscriptModeControl from "./workbench/WorkbenchTranscriptModeControl";
 
 installBrowserRandomUuidPolyfill();
 
@@ -461,12 +468,23 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   );
   const currentThread = threads.current;
   const isTranscriptComparisonAvailable = workbenchClient.transcriptComparison.available;
-  const [isTranscriptComparisonOpen, setIsTranscriptComparisonOpen] = useState(false);
   const transcriptComparisonProjection = workbenchClient.transcriptComparison.projection;
+  const transcriptMode = useMemo(
+    () => readWorkbenchTranscriptMode(clientState.records),
+    [clientState.records],
+  );
   const threadDocuments = threads.documents;
   const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
   const harnessUserInputRequestsByThreadId = threads.pendingQuestionnairesByThreadId;
   const [selectionError, setSelectionError] = useState("");
+  const rotateTranscriptMode = useCallback(() => {
+    void writeWorkbenchTranscriptMode(
+      clientStateController,
+      getNextWorkbenchTranscriptMode(transcriptMode),
+    ).catch((error: Error) => {
+      setSelectionError(error.message);
+    });
+  }, [clientStateController, transcriptMode]);
   const [isProjectRotationPending, setIsProjectRotationPending] = useState(false);
   const controls = workbenchClient.controls;
   useEffect(() => {
@@ -1678,12 +1696,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const selectedThreadIdForView = effectiveThreadTarget?.kind === "new" && threadForThreadView
     ? threadForThreadView.id
     : effectiveSelectedThreadId;
-  useEffect(() => {
-    setIsTranscriptComparisonOpen(false);
-  }, [isMobile, selectedThreadIdForView, threadForThreadView?.harness]);
-  useEffect(() => {
-    if (!isTranscriptComparisonAvailable) setIsTranscriptComparisonOpen(false);
-  }, [isTranscriptComparisonAvailable]);
   const activeThreadId = showThreadView ? threadViewInstanceKey : "";
   const activeFilePath = showFileView ? effectiveFilePath : "";
   const visibleUserInputRequestsByThreadId = harnessUserInputRequestsByThreadId;
@@ -1872,11 +1884,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const shouldRenderMainLayout = Boolean(mainLayoutForRender);
   const isDirectThreadSurface = showThreadView && !shouldRenderMainLayout;
   const isDirectMobileThreadSurface = isMobile && isDirectThreadSurface;
-  const canCompareSelectedTranscript = isDirectThreadSurface
+  const canRotateSelectedTranscriptMode = isDirectThreadSurface
     && !isMobile
+    && canPersistWorkbenchTranscriptMode(clientState.schemaVersion)
     && isTranscriptComparisonAvailable
     && threadForThreadView?.harness === "codex"
     && !threadForThreadView.isDraft;
+  const effectiveTranscriptMode = canRotateSelectedTranscriptMode ? transcriptMode : "json";
 
   useEffect(() => {
     if (!showMosaicView || !controls) {
@@ -2876,17 +2890,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       <span className="sr-only">Back to file explorer</span>
                     </button>
                     <div className="flex items-center gap-1.5">
-                      {canCompareSelectedTranscript ? (
-                        <button
-                          type="button"
-                          aria-label="Compare JSON and SQLite transcripts"
-                          aria-pressed={isTranscriptComparisonOpen}
-                          title={isTranscriptComparisonOpen ? "Show JSON transcript only" : "Compare JSON and SQLite transcripts"}
-                          className={`${workbenchIconButtonClassName} px-2 text-[0.68rem] font-semibold tracking-[0.08em]${isTranscriptComparisonOpen ? " text-accent" : ""}`}
-                          onClick={() => setIsTranscriptComparisonOpen((open) => !open)}
-                        >
-                          JSON / SQL
-                        </button>
+                      {canRotateSelectedTranscriptMode ? (
+                        <WorkbenchTranscriptModeControl
+                          mode={transcriptMode}
+                          onRotate={rotateTranscriptMode}
+                        />
                       ) : null}
                       <button
                         id="zoom-out"
@@ -2983,8 +2991,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       threadComposerDraft={activeThreadComposerDraft}
                       threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                       threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
-                      transcriptComparisonOpen={isTranscriptComparisonOpen}
                       transcriptComparisonProjection={transcriptComparisonProjection}
+                      transcriptMode={effectiveTranscriptMode}
                       viewInstanceKey={threadViewInstanceKey}
                     />
                   ) : selectionError ? (

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchHarnessValue/WorkbenchThemeValue/WorkbenchEditorFontFamilyValue/WorkbenchFileOpenBehaviorValue/WorkbenchSelectedProjectPinPlacementValue: preference value contracts. Keywords: app, settings, value.
+ * - WorkbenchHarnessValue/WorkbenchThemeValue/WorkbenchEditorFontFamilyValue/WorkbenchFileOpenBehaviorValue/WorkbenchSelectedProjectPinPlacementValue/WorkbenchTranscriptModeValue: preference value contracts. Keywords: app, settings, transcript, value.
  * - WorkbenchGlobalPreference/WorkbenchProjectPreference/WorkbenchSidebarPreference: typed preference records. Keywords: app, settings, state.
  * - WorkbenchFileDraftValue/WorkbenchComposerDraftValue/WorkbenchQuestionnaireDraftValue: recoverable browser draft values. Keywords: app, draft, state.
  * - WorkbenchClientStateRecord/WorkbenchClientStateIdentity/WorkbenchClientStateMutation: app state records, identities, and mutations. Keywords: app, state, contract.
@@ -16,6 +16,7 @@ export type WorkbenchThemeValue = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamilyValue = "mono" | "sans" | "serif";
 export type WorkbenchFileOpenBehaviorValue = "vscode" | "workbench" | "workbench-or-vscode";
 export type WorkbenchSelectedProjectPinPlacementValue = "pinned-section" | "threads-section";
+export type WorkbenchTranscriptModeValue = "compare" | "json" | "sqlite";
 
 export type WorkbenchGlobalPreference =
   | {
@@ -37,7 +38,8 @@ export type WorkbenchGlobalPreference =
   | { key: "fileOpenBehavior"; value: WorkbenchFileOpenBehaviorValue }
   | { key: "harness"; value: WorkbenchHarnessValue }
   | { key: "selectedProjectPinPlacement"; value: WorkbenchSelectedProjectPinPlacementValue }
-  | { key: "theme"; value: WorkbenchThemeValue };
+  | { key: "theme"; value: WorkbenchThemeValue }
+  | { key: "transcriptProjectionMode"; value: WorkbenchTranscriptModeValue };
 
 export type WorkbenchProjectPreference =
   | { enabled: boolean; key: "composerSpellCheck" | "editorSpellCheck" | "showUnopenableFiles" | "threadCodeBlockWrap"; value: boolean }

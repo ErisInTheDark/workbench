@@ -6,6 +6,7 @@
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { HarnessIcon } from "../workbench-icons";
+import WorkbenchRotatorButton from "../WorkbenchRotatorButton";
 import { formatHarnessLabel } from "./harness-label";
 
 export default function ThreadHarnessControl({ canToggle = false, harness, onToggle }: {
@@ -13,8 +14,15 @@ export default function ThreadHarnessControl({ canToggle = false, harness, onTog
   harness: WorkbenchHarness;
   onToggle?: () => void;
 }) {
-  const content = <><HarnessIcon className="size-4" harness={harness} /><span>{formatHarnessLabel(harness)}</span></>;
+  const label = formatHarnessLabel(harness);
+  const content = <><HarnessIcon className="size-4" harness={harness} /><span>{label}</span></>;
   return canToggle ? (
-    <button type="button" className="inline-flex min-w-28 items-center justify-center gap-2 rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-1.5 font-semibold text-text transition hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft" onClick={onToggle}>{content}</button>
+    <WorkbenchRotatorButton
+      ariaLabel={`Current harness: ${label}. Click to use the next harness.`}
+      onRotate={() => onToggle?.()}
+      title={label}
+    >
+      {content}
+    </WorkbenchRotatorButton>
   ) : <span className="inline-flex items-center gap-2 font-semibold text-text">{content}</span>;
 }
