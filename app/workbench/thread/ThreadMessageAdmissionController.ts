@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - CodexMessageRequestClient: minimal transport used by selected Codex message admission. Keywords: codex, message, transport.
+ * - CodexMessageRequestClient: minimal transport used by existing Codex message admission. Keywords: codex, message, transport.
  * - ThreadMessageAdmissionLifecycleState: client lifecycle values that fence message preparation. Keywords: message, lifecycle, fence.
- * - ThreadMessageAdmissionRequest: resume/start/steer adapters for one selected Codex admission. Keywords: resume, start, steer, adapter.
+ * - ThreadMessageAdmissionRequest: resume/start/steer adapters for one existing Codex admission. Keywords: resume, start, steer, adapter.
  * - ThreadMessageAdmissionResult: admitted steer or started-turn result. Keywords: message, admission, result.
- * - ThreadMessageAdmissionController: selected existing Codex message admission owner. Keywords: codex, message, admission, controller.
+ * - ThreadMessageAdmissionTarget: exact source and selection ownership for one Codex admission. Keywords: codex, message, target, selection.
+ * - ThreadMessageAdmissionController: existing Codex message admission owner. Keywords: codex, message, admission, controller.
  * - default ThreadMessageAdmissionController: create the message admission owner. Keywords: codex, message, create.
  */
 
@@ -41,6 +42,12 @@ export interface ThreadMessageAdmissionLifecycleState {
   projectRootPath: string;
 }
 
+export interface ThreadMessageAdmissionTarget {
+  readonly selectionBound: boolean;
+  readonly startNewTurn: boolean;
+  readonly threadKey: string;
+}
+
 export interface ThreadMessageAdmissionRequest {
   projectStartedTurn: (context: {
     clientUserMessageId: string;
@@ -70,16 +77,18 @@ interface ThreadMessageAdmissionControllerOptions {
   client: CodexMessageRequestClient;
   documents: ThreadDocumentStoreApi;
   emitWarning: (message: string) => void;
-  getLifecycleState: () => ThreadMessageAdmissionLifecycleState;
+  getLifecycleState: (threadId: string) => ThreadMessageAdmissionLifecycleState;
   getThreadStatus: (thread: ThreadPayload) => string;
   optimisticInputs: ThreadOptimisticInputStore;
-  publishAccepted?: (event: { correlationHandle: string; projectId: string; threadId: string; turnId: string }) => void;
+  publishAccepted?: (event: { correlationHandle: string; projectId: string; threadId: string; title: string; turnId: string }) => void;
   renderSource: (key: string) => void;
   sources: ThreadSourceStore;
 }
 
 interface AdmissionCapture extends ThreadMessageAdmissionLifecycleState {
-  selectedThreadKey: string;
+  selectionBound: boolean;
+  startNewTurn: boolean;
+  threadKey: string;
   threadId: string;
 }
 
@@ -94,35 +103,47 @@ function ThreadMessageAdmissionController({
   renderSource,
   sources,
 }: ThreadMessageAdmissionControllerOptions) {
-  function reportAccepted(capture: AdmissionCapture, correlationHandle: string, turnId: string) {
-    publishAccepted?.({ correlationHandle, projectId: capture.projectId, threadId: capture.threadId, turnId });
+  function reportAccepted(capture: AdmissionCapture, correlationHandle: string, turnId: string, input: UserInput[]) {
+    const title = capture.selectionBound
+      ? "New thread"
+      : input.find((entry) => entry.type === "text")?.text ?? "New thread";
+    publishAccepted?.({ correlationHandle, projectId: capture.projectId, threadId: capture.threadId, title, turnId });
   }
-  function captureOwner(threadId: string): AdmissionCapture {
-    const lifecycle = getLifecycleState();
+  function captureOwner(threadId: string, target?: ThreadMessageAdmissionTarget): AdmissionCapture {
+    const lifecycle = getLifecycleState(threadId);
     const selectedThreadKey = documents.getSelectedThreadKey();
-    const thread = selectedThreadKey ? sources.get(selectedThreadKey) : null;
+    const threadKey = target?.threadKey ?? selectedThreadKey;
+    const selectionBound = target?.selectionBound ?? true;
+    const thread = threadKey ? sources.get(threadKey) : null;
     if (
       lifecycle.disposed
-      || !selectedThreadKey
+      || !threadKey
       || !thread
       || thread.harness !== "codex"
       || thread.isDraft
       || thread.id !== threadId
+      || (selectionBound && selectedThreadKey !== threadKey)
     ) {
       throw new ThreadMessageNotSentError();
     }
 
-    return { ...lifecycle, selectedThreadKey, threadId };
+    return {
+      ...lifecycle,
+      selectionBound,
+      startNewTurn: target?.startNewTurn ?? false,
+      threadId,
+      threadKey,
+    };
   }
 
   function revalidateOwner(expected: AdmissionCapture) {
-    const current = captureOwner(expected.threadId);
+    const current = captureOwner(expected.threadId, expected);
     if (
       current.projectContextGeneration !== expected.projectContextGeneration
       || current.projectId !== expected.projectId
       || current.projectRootPath !== expected.projectRootPath
-      || current.messageAdmissionIntentRevision !== expected.messageAdmissionIntentRevision
-      || current.selectedThreadKey !== expected.selectedThreadKey
+      || (expected.selectionBound && current.messageAdmissionIntentRevision !== expected.messageAdmissionIntentRevision)
+      || current.threadKey !== expected.threadKey
     ) {
       throw new ThreadMessageNotSentError();
     }
@@ -130,14 +151,14 @@ function ThreadMessageAdmissionController({
   }
 
   function isCapturedOwnerCurrent(expected: AdmissionCapture) {
-    const lifecycle = getLifecycleState();
-    const thread = sources.get(expected.selectedThreadKey);
+    const lifecycle = getLifecycleState(expected.threadId);
+    const thread = sources.get(expected.threadKey);
     return !lifecycle.disposed
       && lifecycle.projectContextGeneration === expected.projectContextGeneration
       && lifecycle.projectId === expected.projectId
       && lifecycle.projectRootPath === expected.projectRootPath
-      && lifecycle.messageAdmissionIntentRevision === expected.messageAdmissionIntentRevision
-      && documents.getSelectedThreadKey() === expected.selectedThreadKey
+      && (!expected.selectionBound || lifecycle.messageAdmissionIntentRevision === expected.messageAdmissionIntentRevision)
+      && (!expected.selectionBound || documents.getSelectedThreadKey() === expected.threadKey)
       && Boolean(thread);
   }
 
@@ -161,7 +182,7 @@ function ThreadMessageAdmissionController({
     }
 
     const entry = optimisticInputs.enqueueSteer(thread, activeTurn.id, input);
-    render(capture.selectedThreadKey);
+    render(capture.threadKey);
 
     let response: CodexJsonRpcResponse<TurnSteerResponse>;
     try {
@@ -178,8 +199,8 @@ function ThreadMessageAdmissionController({
       });
     } catch (error) {
       const status = optimisticInputs.transition(entry.handle, "failed");
-      if (sources.has(capture.selectedThreadKey)) {
-        render(capture.selectedThreadKey);
+      if (sources.has(capture.threadKey)) {
+        render(capture.threadKey);
       }
       if (status === "sent") {
         return { handle: entry.handle, kind: "admitted" };
@@ -189,8 +210,8 @@ function ThreadMessageAdmissionController({
 
     if (isCodexJsonRpcFailure(response)) {
       const status = optimisticInputs.transition(entry.handle, "failed");
-      if (sources.has(capture.selectedThreadKey)) {
-        render(capture.selectedThreadKey);
+      if (sources.has(capture.threadKey)) {
+        render(capture.threadKey);
       }
       if (status === "sent") {
         return { handle: entry.handle, kind: "admitted" };
@@ -203,8 +224,8 @@ function ThreadMessageAdmissionController({
       : "";
     if (!acknowledgedTurnId) {
       const status = optimisticInputs.transition(entry.handle, "failed");
-      if (sources.has(capture.selectedThreadKey)) {
-        render(capture.selectedThreadKey);
+      if (sources.has(capture.threadKey)) {
+        render(capture.threadKey);
       }
       if (status === "sent") {
         return { handle: entry.handle, kind: "admitted" };
@@ -217,8 +238,8 @@ function ThreadMessageAdmissionController({
       if (status === null && !isCapturedOwnerCurrent(capture)) {
         return { handle: entry.handle, kind: "admitted" };
       }
-      if (sources.has(capture.selectedThreadKey)) {
-        render(capture.selectedThreadKey);
+      if (sources.has(capture.threadKey)) {
+        render(capture.threadKey);
       }
       if (status === "sent") {
         return { handle: entry.handle, kind: "admitted" };
@@ -231,8 +252,8 @@ function ThreadMessageAdmissionController({
     if (acknowledgedTurnId === activeTurn.id) {
       return { handle: entry.handle, kind: "admitted" };
     }
-    if (sources.has(capture.selectedThreadKey)) {
-      render(capture.selectedThreadKey);
+    if (sources.has(capture.threadKey)) {
+      render(capture.threadKey);
     }
     emitWarning(`Codex admitted the steer to unexpected turn ${acknowledgedTurnId}; reconciling the thread.`);
     return { acknowledgedTurnId, handle: entry.handle, kind: "admittedNeedsReconciliation" };
@@ -244,7 +265,7 @@ function ThreadMessageAdmissionController({
     request: ThreadMessageAdmissionRequest,
   ): Promise<ThreadMessageAdmissionResult> {
     const clientUserMessageId = optimisticInputs.createClientUserMessageId();
-    const sourceRevision = sources.getRevision(capture.selectedThreadKey);
+    const sourceRevision = sources.getRevision(capture.threadKey);
     const startRequest = {
       ...request.startRequest,
       params: {
@@ -262,7 +283,7 @@ function ThreadMessageAdmissionController({
         params: {
           resumeRequest: request.resumeRequest,
           startRequest,
-          steerRequest: request.steerRequest,
+          ...(!capture.startNewTurn ? { steerRequest: request.steerRequest } : {}),
           threadId: capture.threadId,
         },
         workbenchHarness: "codex",
@@ -281,7 +302,7 @@ function ThreadMessageAdmissionController({
         if (!isCapturedOwnerCurrent(capture)) throw new ThreadMessageNotSentError();
         throw new Error("Managed message admission returned an empty steer turn id.");
       }
-      reportAccepted(capture, clientUserMessageId, turnId);
+      reportAccepted(capture, clientUserMessageId, turnId, input);
       return { handle: clientUserMessageId, kind: "admitted" };
     }
     const turn = response.result?.kind === "started" ? response.result.turn : null;
@@ -294,10 +315,10 @@ function ThreadMessageAdmissionController({
       input,
       projectContextGeneration: capture.projectContextGeneration,
       sourceRevision,
-      threadKey: capture.selectedThreadKey,
+      threadKey: capture.threadKey,
       turn,
     });
-    reportAccepted(capture, clientUserMessageId, turn.id);
+    reportAccepted(capture, clientUserMessageId, turn.id, input);
     return { clientUserMessageId, kind: "turnStarted", turn };
   }
 
@@ -305,8 +326,9 @@ function ThreadMessageAdmissionController({
     threadId: string,
     input: UserInput[],
     request: ThreadMessageAdmissionRequest,
+    target?: ThreadMessageAdmissionTarget,
   ): Promise<ThreadMessageAdmissionResult> {
-    const initial = captureOwner(threadId);
+    const initial = captureOwner(threadId, target);
     try {
       await client.connect();
     } catch (error) {
@@ -316,11 +338,15 @@ function ThreadMessageAdmissionController({
       throw error;
     }
     const connected = revalidateOwner(initial);
-    const connectedThread = sources.get(connected.selectedThreadKey);
+    const connectedThread = sources.get(connected.threadKey);
     if (!connectedThread) {
       throw new ThreadMessageNotSentError();
     }
-    if (isThreadStatusActive(getThreadStatus(connectedThread)) && getCurrentInProgressTurn(connectedThread)) {
+    if (
+      !connected.startNewTurn
+      && isThreadStatusActive(getThreadStatus(connectedThread))
+      && getCurrentInProgressTurn(connectedThread)
+    ) {
       return await dispatchSteer(connected, connectedThread, input, request);
     }
 

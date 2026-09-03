@@ -760,22 +760,10 @@ test("managed admission fails closed when provider-active state has no turn iden
 
 test("detached new-turn admission rejects authoritative active lifecycle evidence", async () => withClient(async (client, socket) => {
   const detached = activeThread("codex", "detached", "interrupted");
-  const active = wireThread("detached", "provider-turn", "inProgress");
   FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/read") {
-      queueMicrotask(() => target.respond(request.id, { thread: active }));
-      return true;
-    }
-    if (request.method === "thread/resume") {
-      queueMicrotask(() => target.respond(request.id, {
-        model: "model",
-        reasoningEffort: null,
-        serviceTier: null,
-        thread: active,
-      }));
-      return true;
-    }
-    return false;
+    if (request.method !== "workbench/codex/message/admit") return false;
+    queueMicrotask(() => target.fail(request.id, "The questionnaire response cannot start a new turn while the provider reports an active turn."));
+    return true;
   };
 
   await assert.rejects(
@@ -786,31 +774,19 @@ test("detached new-turn admission rejects authoritative active lifecycle evidenc
     ),
     /provider reports an active turn/u,
   );
+  const admission = socket.requests.find((request) => request.method === "workbench/codex/message/admit");
+  assert.ok(admission);
+  assert.equal((admission.params as { steerRequest?: unknown }).steerRequest, undefined);
   assert.equal(socket.requests.some((request) => request.method === "turn/start"), false);
   assert.equal(socket.requests.some((request) => request.method === "turn/steer"), false);
 }));
 
 test("detached new-turn admission fails closed when active lifecycle has no turn identity", async () => withClient(async (client, socket) => {
   const detached = activeThread("codex", "detached", "interrupted");
-  const activeWithoutTurn = {
-    ...wireThread("detached", "provider-turn", "inProgress"),
-    turns: [],
-  };
   FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/read") {
-      queueMicrotask(() => target.respond(request.id, { thread: activeWithoutTurn }));
-      return true;
-    }
-    if (request.method === "thread/resume") {
-      queueMicrotask(() => target.respond(request.id, {
-        model: "model",
-        reasoningEffort: null,
-        serviceTier: null,
-        thread: activeWithoutTurn,
-      }));
-      return true;
-    }
-    return false;
+    if (request.method !== "workbench/codex/message/admit") return false;
+    queueMicrotask(() => target.fail(request.id, "Active Codex thread detached has no current in-progress turn."));
+    return true;
   };
 
   await assert.rejects(
@@ -819,7 +795,7 @@ test("detached new-turn admission fails closed when active lifecycle has no turn
       [{ text: "do not guess", text_elements: [], type: "text" }],
       { selectThread: false, startNewTurn: true },
     ),
-    /active thread without a turn identity/u,
+    /no current in-progress turn/u,
   );
   assert.equal(socket.requests.some((request) => (
     request.method === "turn/start" || request.method === "turn/steer"
@@ -829,25 +805,23 @@ test("detached new-turn admission fails closed when active lifecycle has no turn
 test("an accepted background child turn publishes Working before the send returns", async () => withClient(async (client, socket) => {
   client.selectThreadPayload(activeThread("codex", "parent"));
   const child = activeThread("codex", "child", "completed");
-  FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/read" && request.params?.threadId === "child") {
-      queueMicrotask(() => target.respond(request.id, {
-        thread: wireThread("child", "child-turn", "completed"),
-      }));
-      return true;
-    }
-    return false;
-  };
   const result = await client.sendThreadMessage(
     child,
     [{ text: "continue", text_elements: [], type: "text" }],
     { selectThread: false },
   );
   assert.equal(result?.id, "child");
-  const startIndex = socket.requests.findIndex((request) => request.method === "turn/start" && request.params?.threadId === "child");
+  const startIndex = socket.requests.findIndex((request) => request.method === "workbench/codex/message/admit" && request.params?.threadId === "child");
   const acceptedIndex = socket.requests.findIndex((request) => request.method === "workbench/thread-state/intent/accept" && (request.params?.identity as { threadId?: string } | undefined)?.threadId === "child");
   assert.ok(startIndex >= 0);
   assert.ok(acceptedIndex > startIndex);
+  const admission = socket.requests[startIndex]!;
+  const admissionParams = admission.params as {
+    resumeRequest?: SocketRequest;
+    startRequest?: SocketRequest;
+  };
+  assert.equal(admissionParams.resumeRequest?.method, "thread/resume");
+  assert.equal(admissionParams.startRequest?.method, "turn/start");
   assert.deepEqual(socket.requests[acceptedIndex]?.params, {
     identity: { harness: "codex", threadId: "child" },
     projectId: "project",
@@ -2660,12 +2634,12 @@ test("durable detached questionnaire responses resolve after admission even when
   admitted.turns[0]!.items = [questionnairePrompt];
   let turnStarted = false;
   FakeWebSocket.intercept = (target, candidate) => {
-    if (!turnStarted && respondDetachedQuestionnaireLifecycle(target, candidate)) {
-      return true;
-    }
-    if (candidate.method === "turn/start") {
+    if (candidate.method === "workbench/codex/message/admit") {
       turnStarted = true;
-      queueMicrotask(() => target.respond(candidate.id, { turn: admitted.turns[1] }));
+      queueMicrotask(() => target.respond(candidate.id, {
+        kind: "started",
+        turn: admitted.turns[1],
+      }));
       return true;
     }
     if (turnStarted && candidate.method === "thread/read") {
@@ -2681,12 +2655,24 @@ test("durable detached questionnaire responses resolve after admission even when
     insertAfterItemIndex: 0,
     turnId: "turn",
   });
-  const start = socket.requests.find((candidate) => candidate.method === "turn/start");
+  const admission = socket.requests.find((candidate) => candidate.method === "workbench/codex/message/admit");
+  const admissionParams = admission?.params as {
+    resumeRequest?: SocketRequest;
+    startRequest?: SocketRequest;
+    steerRequest?: SocketRequest;
+  } | undefined;
+  const resume = admissionParams?.resumeRequest;
+  const start = admissionParams?.startRequest;
   const readIndex = socket.requests.findIndex((candidate) => candidate.method === "thread/read");
-  const startIndex = socket.requests.findIndex((candidate) => candidate.method === "turn/start");
+  const startIndex = socket.requests.findIndex((candidate) => candidate.method === "workbench/codex/message/admit");
+  assert.ok(startIndex >= 0);
   assert.ok(readIndex >= 0);
-  assert.ok(startIndex > readIndex);
+  assert.ok(readIndex > startIndex);
   assert.equal(socket.requests.some((candidate) => candidate.method === "thread/resume"), false);
+  assert.equal(socket.requests.some((candidate) => candidate.method === "turn/start"), false);
+  assert.equal(resume?.method, "thread/resume");
+  assert.deepEqual(resume?.workbenchPromptContext?.workflowIds, ["default"]);
+  assert.equal(admissionParams?.steerRequest, undefined);
   const input = start?.params?.input as Array<{ text?: string; type?: string }> | undefined;
   assert.match(input?.[0]?.text ?? "", /^<wb:questionnaire-response>/u);
   assert.deepEqual(start?.workbenchPromptContext?.activatedSkillPaths, ["C:/skills/iterate/SKILL.md"]);
@@ -2727,8 +2713,7 @@ test("failed detached questionnaire admission leaves the durable request retryab
   });
   await waitForCondition(() => client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode === "newTurn", "Durable questionnaire did not reconcile as detached.");
   FakeWebSocket.intercept = (target, candidate) => {
-    if (respondDetachedQuestionnaireLifecycle(target, candidate)) return true;
-    if (candidate.method !== "turn/start") return false;
+    if (candidate.method !== "workbench/codex/message/admit") return false;
     queueMicrotask(() => target.fail(candidate.id, "admission failed"));
     return true;
   };

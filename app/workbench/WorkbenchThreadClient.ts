@@ -1028,17 +1028,20 @@ function WorkbenchThreadClient(
     client: codexClient,
     documents: threadDocuments,
     emitWarning: emitStatusMessage,
-    getLifecycleState: () => ({
-      disposed,
-      projectContextGeneration,
-      projectId: state.projectId,
-      projectRootPath: state.projectRootPath,
-      messageAdmissionIntentRevision,
-    }),
+    getLifecycleState: (threadId) => {
+      const projectContext = effectiveThreadProjectContext("codex", threadId);
+      return {
+        disposed,
+        projectContextGeneration,
+        projectId: projectContext.projectId,
+        projectRootPath: projectContext.projectRootPath,
+        messageAdmissionIntentRevision,
+      };
+    },
     getThreadStatus: (thread) => statusRecordsByKey.get(getThreadStateKey(thread.harness, thread.id))?.status ?? thread.status,
     optimisticInputs,
-    publishAccepted: ({ projectId, threadId, turnId }) => {
-      void publishAcceptedIntent({ harness: "codex", projectId, threadId, title: "New thread", turnId });
+    publishAccepted: ({ projectId, threadId, title, turnId }) => {
+      void publishAcceptedIntent({ harness: "codex", projectId, threadId, title, turnId });
     },
     renderSource: renderOptimisticSource,
     sources: threadSources,
@@ -4428,32 +4431,36 @@ function WorkbenchThreadClient(
     setCurrentThread(thread);
   }
 
-  function canUseSelectedCodexMessageAdmission(
+  function prepareCodexMessageAdmission(
     thread: ThreadPayload,
     sendOptions: WorkbenchSendThreadMessageOptions,
   ) {
     if (
-      selectedThreadProjectContext
-      || sendOptions.selectThread === false
-      || sendOptions.onTurnAdmitted !== undefined
-      || thread.harness !== "codex"
+      thread.harness !== "codex"
       || thread.isDraft
       || !thread.id.trim()
     ) {
-      return false;
+      return null;
     }
 
     const key = getThreadStateKey(thread.harness, thread.id);
-    if (threadDocuments.getSelectedThreadKey() !== key) {
-      return false;
+    if (sendOptions.selectThread !== false && threadDocuments.getSelectedThreadKey() !== key) {
+      throw new ThreadMessageNotSentError();
     }
-    const source = threadSources.get(key);
-    return Boolean(
-      source
-      && source.harness === thread.harness
-      && source.id === thread.id
-      && source.cwd === thread.cwd,
-    );
+    let source = threadSources.get(key);
+    if (!source) {
+      installAuthoritativeThreadSource(thread);
+      source = threadSources.get(key);
+    }
+    if (
+      !source
+      || source.harness !== thread.harness
+      || source.id !== thread.id
+      || source.cwd !== thread.cwd
+    ) {
+      throw new ThreadMessageNotSentError();
+    }
+    return key;
   }
 
   async function reconcileAdmittedThreadMessage(context: ReconcileAdmittedThreadMessageContext) {
@@ -4664,8 +4671,9 @@ function WorkbenchThreadClient(
       throw new Error("Message input cannot be empty.");
     }
 
-    if (canUseSelectedCodexMessageAdmission(thread, sendOptions)) {
-      const threadKey = getThreadStateKey("codex", thread.id);
+    const codexAdmissionThreadKey = prepareCodexMessageAdmission(thread, sendOptions);
+    if (codexAdmissionThreadKey) {
+      const threadKey = codexAdmissionThreadKey;
       const admission = await messageAdmissionController.admit(thread.id, normalizedInput, {
         projectStartedTurn: ({
           clientUserMessageId,
@@ -4706,6 +4714,7 @@ function WorkbenchThreadClient(
           if (!committedSource) {
             return;
           }
+          sendOptions.onTurnAdmitted?.(turn.id);
           const entry = optimisticInputs.enqueueInitial(committedSource, turn.id, startedInput, {
             clientUserMessageId,
             status: "sent",
@@ -4763,8 +4772,15 @@ function WorkbenchThreadClient(
           ),
           params: {},
         },
+      }, {
+        selectionBound: sendOptions.selectThread !== false,
+        startNewTurn: sendOptions.startNewTurn === true,
+        threadKey,
       });
-      if (admission.kind === "admitted" || admission.kind === "turnStarted") {
+      if (sendOptions.selectThread !== false && (
+        admission.kind === "admitted"
+        || admission.kind === "turnStarted"
+      )) {
         return null;
       }
       const source = threadSources.get(threadKey);
@@ -4775,7 +4791,11 @@ function WorkbenchThreadClient(
         harness: "codex",
         isDraftThread,
         normalizedInput,
-        optimisticTurnId: admission.acknowledgedTurnId,
+        optimisticTurnId: admission.kind === "turnStarted"
+          ? admission.turn.id
+          : admission.kind === "admittedNeedsReconciliation"
+            ? admission.acknowledgedTurnId
+            : getCurrentInProgressTurn(source)?.id ?? null,
         previousThread,
         resolvedThreadId: thread.id,
         resumedThread: source,

@@ -2211,6 +2211,29 @@ test("managed admission steers a provider-confirmed active turn without changing
     assert.equal(prepared, false);
     assert.deepEqual(acceptedSteers, ["thread"]);
     assert.deepEqual(response?.result, { kind: "steered", turnId: "turn" });
+
+    const startOnlyOffset = upstreamRequests.length;
+    const startOnly = await bridge.handleBridgeRequest({
+      id: 721,
+      method: "workbench/codex/message/admit",
+      params: {
+        resumeRequest: { method: "thread/resume", params: { threadId: "thread" } },
+        startRequest: {
+          method: "turn/start",
+          params: {
+            clientUserMessageId: "new-turn-message",
+            input: [{ text: "new turn only", text_elements: [], type: "text" }],
+            threadId: "thread",
+          },
+        },
+        threadId: "thread",
+      },
+    });
+    assert.match(startOnly.error?.message ?? "", /cannot start a new turn while the provider reports an active turn/u);
+    assert.deepEqual(
+      upstreamRequests.slice(startOnlyOffset).map(({ method }) => method),
+      ["thread/read", "thread/turns/list"],
+    );
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();

@@ -2945,7 +2945,16 @@ export default class CodexStdioBridge {
   ): Promise<JsonRpcResponse> {
     const startParams = asRecord(startRequest.params);
     const clientUserMessageId = asString(startParams?.clientUserMessageId)?.trim();
-    if (!steerRequest || !clientUserMessageId || !Array.isArray(startParams?.input)) {
+    if (!steerRequest) {
+      return {
+        id: requestId,
+        error: {
+          code: -32000,
+          message: "The questionnaire response cannot start a new turn while the provider reports an active turn.",
+        },
+      };
+    }
+    if (!clientUserMessageId || !Array.isArray(startParams?.input)) {
       return { id: requestId, error: { code: -32602, message: "Managed Codex steer context and message input are required." } };
     }
     const response = await this.dispatchManagedProviderRequest({

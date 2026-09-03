@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover selected Codex message admission ordering and lifecycle races. Keywords: codex, message, admission, test.
+ * - No production exports; Node tests cover existing Codex message admission ordering and lifecycle races. Keywords: codex, message, admission, test.
  */
 
 import assert from "node:assert/strict";
@@ -148,6 +148,50 @@ test("idle thread sends one managed admission with the exact resume context and 
   assert.equal(params.startRequest?.params?.threadId, "thread");
   assert.equal(params.steerRequest?.method, "turn/steer");
   assert.equal(result.events.at(-1), "accepted:new-turn");
+});
+
+test("detached new-turn admission keeps its exact source across unrelated selection changes", async () => {
+  let release!: () => void;
+  const connected = new Promise<void>((resolve) => { release = resolve; });
+  const requests: AdmissionRequest[] = [];
+  const result = setup(async <TResponse>(message: AdmissionRequest) => {
+    requests.push(message);
+    return {
+      id: 1,
+      result: { kind: "started", turn: { ...thread().turns[0]!, id: "detached-turn" } },
+    } as CodexJsonRpcResponse<TResponse>;
+  }, { connect: () => connected });
+  const other = { ...thread(), id: "other" };
+  result.sources.install(other);
+  result.documents.upsertDocument(other, { select: true });
+
+  const admission = result.controller.admit("thread", [{
+    text: "answer",
+    text_elements: [],
+    type: "text",
+  }], {
+    projectStartedTurn: () => undefined,
+    resumeRequest: { method: "thread/resume", params: { threadId: "thread" } },
+    startRequest: { method: "turn/start", params: {} },
+    steerRequest: { method: "turn/steer", params: {} },
+  }, {
+    selectionBound: false,
+    startNewTurn: true,
+    threadKey: "codex:thread",
+  });
+  result.lifecycle.messageAdmissionIntentRevision += 1;
+  release();
+
+  assert.equal((await admission).kind, "turnStarted");
+  assert.deepEqual(requests.map(({ method }) => method), ["workbench/codex/message/admit"]);
+  const params = requests[0]?.params as {
+    resumeRequest?: { method?: string };
+    startRequest?: { method?: string };
+    steerRequest?: { method?: string };
+  };
+  assert.equal(params.resumeRequest?.method, "thread/resume");
+  assert.equal(params.startRequest?.method, "turn/start");
+  assert.equal(params.steerRequest, undefined);
 });
 
 test("source churn during managed admission does not create a second browser lifecycle path", async () => {
