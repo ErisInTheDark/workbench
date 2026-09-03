@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default PlaintextEditable: contenteditable plaintext input with overlays and optional mention suggestions. Keywords: composer, questionnaire, mentions, autocomplete.
+ * - default PlaintextEditable: contenteditable plaintext input with autofocus, overlays, and optional mention suggestions. Keywords: composer, questionnaire, focus, mentions, autocomplete.
  * - Local helpers: caret measurement/restoration, highlight rendering, and mention popup rendering. Keywords: contenteditable, caret, highlights.
  */
 "use client";
@@ -189,6 +189,7 @@ function InlineMentionSuggestionsPopup ({
 
 export default function PlaintextEditable ({
   ariaLabel,
+  autoFocus = false,
   className,
   disabled = false,
   id,
@@ -207,6 +208,7 @@ export default function PlaintextEditable ({
   value,
 }: {
   ariaLabel?: string;
+  autoFocus?: boolean;
   className?: string;
   disabled?: boolean;
   id?: string;
@@ -288,6 +290,18 @@ export default function PlaintextEditable ({
       restoreEditableCaretOffset(element, caretOffset);
     }
   }, [value]);
+
+  useLayoutEffect(() => {
+    const element = elementRef.current;
+    if (!autoFocus || disabled || readOnly || !element) {
+      return;
+    }
+
+    const nextCaretOffset = element.textContent?.length ?? 0;
+    element.focus();
+    restoreEditableCaretOffset(element, nextCaretOffset);
+    setCaretOffset(nextCaretOffset);
+  }, [autoFocus, disabled, readOnly]);
 
   const updateCaretOffset = () => {
     const element = elementRef.current;

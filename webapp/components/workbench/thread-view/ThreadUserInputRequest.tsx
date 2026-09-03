@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default ThreadUserInputRequest: render full or compact live, preview, and historical questionnaire requests. Keywords: questionnaire, custom input, thread, compact.
- * - Local helpers: question display normalization, answered value derivation, pasted image attachments, and submit handling. Keywords: options, answers, drafts, images, presentation.
+ * - default ThreadUserInputRequest: render full or compact live, preview, historical, and one-option quick-response questionnaires. Keywords: questionnaire, custom input, quick response, thread, compact.
+ * - Local helpers: question display normalization, answered value derivation, pasted image attachments, and submit handling. Keywords: options, answers, drafts, images, presentation, focus.
  */
 "use client";
 
@@ -190,9 +190,16 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
   const interactiveDraft = interactiveProps?.draft ?? null;
   const onInteractiveDraftChange = interactiveProps?.onDraftChange;
   const onInteractiveDraftClear = interactiveProps?.onDraftClear;
+  const quickResponseQuestion = isInteractiveMode
+    && !request.approval
+    && request.questions.length === 1
+    && request.questions[0]?.options.length === 1
+    ? request.questions[0]
+    : null;
   const [selectedValues, setSelectedValues] = useState<Record<string, string[]>>(interactiveDraft?.selectedValues ?? {});
   const [customValues, setCustomValues] = useState<Record<string, string>>(interactiveDraft?.customValues ?? {});
   const [attachments, setAttachments] = useState<WorkbenchThreadComposerAttachmentDraft[]>(interactiveDraft?.attachments ?? []);
+  const [customInputRequestId, setCustomInputRequestId] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pendingAttachmentReads, setPendingAttachmentReads] = useState(0);
@@ -217,6 +224,13 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
     updatedAt: Date.now(),
   };
   const isAttaching = pendingAttachmentReads > 0;
+  const hasCustomResponseContent = Object.values(customValues).some((value) => value.trim())
+    || attachments.length > 0;
+  const useQuickResponseLayout = Boolean(
+    quickResponseQuestion
+    && customInputRequestId !== request.id
+    && !hasCustomResponseContent,
+  );
 
   useEffect(() => {
     if (!interactiveProps) {
@@ -229,6 +243,7 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
       submissionSucceededRef.current = false;
       hydratedRequestIdRef.current = request.id;
       hydratedDraftKeyRef.current = draftKey;
+      setCustomInputRequestId("");
       setSelectedValues(interactiveDraft?.selectedValues ?? {});
       setCustomValues(interactiveDraft?.customValues ?? {});
       setAttachments(interactiveDraft?.attachments ?? []);
@@ -301,36 +316,26 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
     onInteractiveDraftClearRef.current?.();
   };
 
-  const handleSubmit = async () => {
+  const submitResponse = async (
+    response: WorkbenchUserInputResponse,
+    responseAttachments: WorkbenchThreadComposerAttachmentDraft[],
+    responseCustomValues: Record<string, string>,
+  ) => {
     if (!interactiveProps || isSubmitting || isAttaching) {
       return;
     }
 
-    const answers: WorkbenchUserInputResponse["answers"] = {};
-    for (const question of request.questions) {
-      const selectedQuestionValues = selectedValues[question.id] ?? [];
-      const customValue = customValues[question.id]?.trim();
-
-      answers[question.id] = {
-        answers: [
-          ...selectedQuestionValues,
-          ...(customValue ? [customValue] : []),
-        ],
-      };
-    }
-
-    const response = { answers };
     if (isWorkbenchApprovalRequest(request) && !hasWorkbenchApprovalDecisionSelection(request, response)) {
       setError(APPROVAL_OPTION_REQUIRED_MESSAGE);
       return;
     }
 
-    const supplementalInput: UserInput[] = attachments.map((attachment) => ({
+    const supplementalInput: UserInput[] = responseAttachments.map((attachment) => ({
       type: "image",
       url: attachment.url,
     }));
     const activatedSkillPaths = highlightSources
-      ? getActivatedWorkbenchSkillPathsForTextValues(Object.values(customValues), highlightSources)
+      ? getActivatedWorkbenchSkillPathsForTextValues(Object.values(responseCustomValues), highlightSources)
       : [];
     setIsSubmitting(true);
     setError("");
@@ -346,6 +351,36 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
       setError(submissionError instanceof Error ? submissionError.message : "Unable to submit that response.");
       setIsSubmitting(false);
     }
+  };
+
+  const handleSubmit = async () => {
+    const answers: WorkbenchUserInputResponse["answers"] = {};
+    for (const question of request.questions) {
+      const selectedQuestionValues = selectedValues[question.id] ?? [];
+      const customValue = customValues[question.id]?.trim();
+
+      answers[question.id] = {
+        answers: [
+          ...selectedQuestionValues,
+          ...(customValue ? [customValue] : []),
+        ],
+      };
+    }
+
+    await submitResponse({ answers }, attachments, customValues);
+  };
+
+  const handleQuickResponse = async (
+    question: WorkbenchUserInputQuestion,
+    optionLabel: string,
+  ) => {
+    await submitResponse({
+      answers: {
+        [question.id]: {
+          answers: [optionLabel],
+        },
+      },
+    }, [], {});
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
@@ -467,6 +502,9 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
             const customValueHighlights = highlightSources
               ? buildInlineMentionHighlights(customValue, highlightSources)
               : [];
+            const quickResponseOption = quickResponseQuestion?.id === question.id
+              ? quickResponseQuestion.options[0] ?? null
+              : null;
 
             return (
               <section
@@ -486,146 +524,210 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
                   </div>
                 ) : null}
                 <div className={compact ? "mt-2 space-y-0.5" : "mt-3 space-y-2"}>
-                  {question.options.map((option, index) => {
-                    const optionId = `${request.id}:${question.id}:option:${index}`;
-                    const isChecked = selectedQuestionValues.includes(option.label);
-
-                    if (isReadOnlyMode) {
-                      return (
-                        <WorkbenchOptionCard
-                          key={optionId}
-                          description={option.description}
-                          isChecked={isChecked}
-                          isHistoryMode
-                          isSingleChoice={isSingleChoice}
-                          label={option.label}
-                          markerId={optionId}
-                          presentation={compact ? "compact-inline" : "card"}
-                        />
-                      );
-                    }
-
-                    return (
+                  {useQuickResponseLayout && quickResponseOption ? (
+                    <div className="flex items-stretch gap-2">
                       <WorkbenchOptionCard
-                        key={optionId}
-                        description={option.description}
-                        isChecked={isChecked}
-                        isSingleChoice={isSingleChoice}
-                        label={option.label}
-                        markerId={optionId}
-                        presentation={compact ? "compact-inline" : "card"}
+                        className="min-w-0 flex-1"
+                        description={quickResponseOption.description}
+                        disabled={isSubmitting || isAttaching}
+                        isChecked={selectedQuestionValues.includes(quickResponseOption.label)}
+                        isSingleChoice={false}
+                        label={quickResponseOption.label}
+                        presentation={compact ? "compact-card" : "card"}
+                        showMarker={false}
                         onClick={() => {
-                          setSelectedValues((current) => {
-                            const next = { ...current };
-                            const currentQuestionValues = next[question.id] ?? [];
-                            if (isSingleChoice) {
-                              if (currentQuestionValues.includes(option.label)) {
-                                delete next[question.id];
-                              } else {
-                                next[question.id] = [option.label];
-                              }
-                              return next;
-                            }
-
-                            if (currentQuestionValues.includes(option.label)) {
-                              const nextQuestionValues = currentQuestionValues.filter((value) => value !== option.label);
-                              if (nextQuestionValues.length) {
-                                next[question.id] = nextQuestionValues;
-                              } else {
-                                delete next[question.id];
-                              }
-                            } else {
-                              next[question.id] = [...currentQuestionValues, option.label];
-                            }
-                            if (!next[question.id]?.length) {
-                              delete next[question.id];
-                            }
-                            return next;
-                          });
+                          void handleQuickResponse(question, quickResponseOption.label);
+                        }}
+                      />
+                      <WorkbenchOptionCard
+                        ariaLabel="Write a custom response"
+                        className={joinClasses(
+                          "shrink-0 self-stretch !items-center justify-center",
+                          compact ? "!w-10 !px-2" : "!w-16 !px-3",
+                        )}
+                        disabled={isSubmitting || isAttaching}
+                        isChecked={false}
+                        isSingleChoice={false}
+                        label={(
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="24"
+                            height="24"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className={joinClasses(
+                              "lucide lucide-feather-icon lucide-feather",
+                              compact ? "size-5" : "size-8",
+                            )}
+                            aria-hidden="true"
+                          >
+                            <path d="M14.086 18.412A2 2 0 0112.67 19H5v-7.672a2 2 0 01.586-1.414L11.75 3.75a6 6 0 118.49 8.49z" />
+                            <path d="M16 8 2 22" />
+                            <path d="M17.488 15H9" />
+                          </svg>
+                        )}
+                        presentation={compact ? "compact-card" : "card"}
+                        showMarker={false}
+                        onClick={() => {
+                          setCustomInputRequestId(request.id);
                           if (error) {
                             setError("");
                           }
                         }}
                       />
-                    );
-                  })}
-                  {isReadOnlyMode ? (
-                    customValue ? (
-                      <PlaintextEditable
-                        id={`${request.id}:${question.id}:custom`}
-                        ariaLabel={`${headerText} answer`}
-                        className="thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none"
-                        readOnly
-                        spellCheck={false}
-                        highlights={customValueHighlights}
-                        value={customValue}
-                      />
-                    ) : (
-                      !isLastQuestion ? (
-                        <div
-                          aria-hidden="true"
-                          className={EMPTY_HISTORY_CUSTOM_TEXT_SPACER_CLASS}
-                        />
-                      ) : null
-                    )
-                  ) : compact && isLastQuestion ? (
-                    <div
-                      className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 [&:has([data-empty=false])]:grid-cols-1"
-                      data-thread-questionnaire-custom-layout="compact-flow"
-                    >
-                      <PlaintextEditable
-                        id={`${request.id}:${question.id}:custom`}
-                        ariaLabel={`${headerText} answer`}
-                        className="thread-plaintext-editable min-h-8 w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none"
-                        spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
-                        highlights={customValueHighlights}
-                        mentionSources={highlightSources}
-                        mentionSuggestionsPlacement="below"
-                        value={customValue}
-                        onChange={(nextValue) => {
-                          setCustomValues((current) => ({
-                            ...current,
-                            [question.id]: nextValue,
-                          }));
-                          if (error) {
-                            setError("");
-                          }
-                        }}
-                        onKeyDown={handleLastQuestionKeyDown}
-                        onPaste={handlePaste}
-                      />
-                      {renderSubmitButton()}
                     </div>
                   ) : (
-                    <PlaintextEditable
-                      id={`${request.id}:${question.id}:custom`}
-                      ariaLabel={`${headerText} answer`}
-                      className={joinClasses(
-                        "thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition",
-                        customValue
-                          ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] py-3 mt-1 mb-3"
-                          : `
-                          hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:py-3 hover:mb-3
-                          focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:py-3 focus-visible:mt-1 focus-visible:mb-3
-                        `,
-                      )}
-                      spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
-                      highlights={customValueHighlights}
-                      mentionSources={highlightSources}
-                      mentionSuggestionsPlacement="below"
-                      value={customValue}
-                      onChange={(nextValue) => {
-                        setCustomValues((current) => ({
-                          ...current,
-                          [question.id]: nextValue,
-                        }));
-                        if (error) {
-                          setError("");
+                    <>
+                      {question.options.map((option, index) => {
+                        const optionId = `${request.id}:${question.id}:option:${index}`;
+                        const isChecked = selectedQuestionValues.includes(option.label);
+
+                        if (isReadOnlyMode) {
+                          return (
+                            <WorkbenchOptionCard
+                              key={optionId}
+                              description={option.description}
+                              isChecked={isChecked}
+                              isHistoryMode
+                              isSingleChoice={isSingleChoice}
+                              label={option.label}
+                              markerId={optionId}
+                              presentation={compact ? "compact-inline" : "card"}
+                            />
+                          );
                         }
-                      }}
-                      onKeyDown={isLastQuestion ? handleLastQuestionKeyDown : undefined}
-                      onPaste={handlePaste}
-                    />
+
+                        return (
+                          <WorkbenchOptionCard
+                            key={optionId}
+                            description={option.description}
+                            isChecked={isChecked}
+                            isSingleChoice={isSingleChoice}
+                            label={option.label}
+                            markerId={optionId}
+                            presentation={compact ? "compact-inline" : "card"}
+                            onClick={() => {
+                              setSelectedValues((current) => {
+                                const next = { ...current };
+                                const currentQuestionValues = next[question.id] ?? [];
+                                if (isSingleChoice) {
+                                  if (currentQuestionValues.includes(option.label)) {
+                                    delete next[question.id];
+                                  } else {
+                                    next[question.id] = [option.label];
+                                  }
+                                  return next;
+                                }
+
+                                if (currentQuestionValues.includes(option.label)) {
+                                  const nextQuestionValues = currentQuestionValues.filter((value) => value !== option.label);
+                                  if (nextQuestionValues.length) {
+                                    next[question.id] = nextQuestionValues;
+                                  } else {
+                                    delete next[question.id];
+                                  }
+                                } else {
+                                  next[question.id] = [...currentQuestionValues, option.label];
+                                }
+                                if (!next[question.id]?.length) {
+                                  delete next[question.id];
+                                }
+                                return next;
+                              });
+                              if (error) {
+                                setError("");
+                              }
+                            }}
+                          />
+                        );
+                      })}
+                      {isReadOnlyMode ? (
+                        customValue ? (
+                          <PlaintextEditable
+                            id={`${request.id}:${question.id}:custom`}
+                            ariaLabel={`${headerText} answer`}
+                            className="thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none"
+                            readOnly
+                            spellCheck={false}
+                            highlights={customValueHighlights}
+                            value={customValue}
+                          />
+                        ) : (
+                          !isLastQuestion ? (
+                            <div
+                              aria-hidden="true"
+                              className={EMPTY_HISTORY_CUSTOM_TEXT_SPACER_CLASS}
+                            />
+                          ) : null
+                        )
+                      ) : compact && isLastQuestion ? (
+                        <div
+                          className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 [&:has([data-empty=false])]:grid-cols-1"
+                          data-thread-questionnaire-custom-layout="compact-flow"
+                        >
+                          <PlaintextEditable
+                            id={`${request.id}:${question.id}:custom`}
+                            ariaLabel={`${headerText} answer`}
+                            autoFocus={customInputRequestId === request.id}
+                            className="thread-plaintext-editable min-h-8 w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none"
+                            spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
+                            highlights={customValueHighlights}
+                            mentionSources={highlightSources}
+                            mentionSuggestionsPlacement="below"
+                            value={customValue}
+                            onChange={(nextValue) => {
+                              setCustomInputRequestId(request.id);
+                              setCustomValues((current) => ({
+                                ...current,
+                                [question.id]: nextValue,
+                              }));
+                              if (error) {
+                                setError("");
+                              }
+                            }}
+                            onKeyDown={handleLastQuestionKeyDown}
+                            onPaste={handlePaste}
+                          />
+                          {renderSubmitButton()}
+                        </div>
+                      ) : (
+                        <PlaintextEditable
+                          id={`${request.id}:${question.id}:custom`}
+                          ariaLabel={`${headerText} answer`}
+                          autoFocus={customInputRequestId === request.id}
+                          className={joinClasses(
+                            "thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition",
+                            customValue
+                              ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] py-3 mt-1 mb-3"
+                              : `
+                              hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:py-3 hover:mb-3
+                              focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:py-3 focus-visible:mt-1 focus-visible:mb-3
+                            `,
+                          )}
+                          spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
+                          highlights={customValueHighlights}
+                          mentionSources={highlightSources}
+                          mentionSuggestionsPlacement="below"
+                          value={customValue}
+                          onChange={(nextValue) => {
+                            setCustomInputRequestId(request.id);
+                            setCustomValues((current) => ({
+                              ...current,
+                              [question.id]: nextValue,
+                            }));
+                            if (error) {
+                              setError("");
+                            }
+                          }}
+                          onKeyDown={isLastQuestion ? handleLastQuestionKeyDown : undefined}
+                          onPaste={handlePaste}
+                        />
+                      )}
+                    </>
                   )}
                 </div>
               </section>
@@ -680,7 +782,7 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
             {interactiveProps?.leadingActions}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
-            {!compact ? renderSubmitButton() : null}
+            {!compact && !useQuickResponseLayout ? renderSubmitButton() : null}
             {interactiveProps?.actions}
           </div>
         </div>

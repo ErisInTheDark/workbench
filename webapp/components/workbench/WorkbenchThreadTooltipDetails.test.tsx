@@ -22,7 +22,10 @@ const pendingRequest = {
       header: "Choice",
       id: "choice",
       isSecret: false,
-      options: [{ description: "Keep one owner.", label: "Shared" }],
+      options: [
+        { description: "Keep one owner.", label: "Shared" },
+        { description: "Create a drifting clone.", label: "Clone" },
+      ],
       question: "Choose a component.",
     }],
     submitLabel: "Send answer",

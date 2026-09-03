@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect compact questionnaire preview and live modes while preserving the shared renderer. Keywords: questionnaire, compact, preview, live, draft.
+ * No production exports. Tests protect one-option quick responses plus compact questionnaire preview, live, and hydrated draft modes. Keywords: questionnaire, quick response, quill, compact, preview, live, draft.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -38,6 +38,53 @@ const emptyDraft = {
   ...draft,
   customValues: {},
 } satisfies WorkbenchQuestionnaireDraft;
+
+const quickResponseRequest = {
+  ...request,
+  id: "quick-questionnaire",
+  questions: [{
+    ...request.questions[0],
+    options: [request.questions[0].options[0]],
+  }],
+} satisfies WorkbenchUserInputRequest;
+
+test("one-option live questionnaire renders immediate option and custom-response actions", () => {
+  const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
+    draft: null,
+    mode: "live",
+    onDraftChange: () => undefined,
+    onDraftClear: () => undefined,
+    onSubmit: async () => undefined,
+    presentation: "compact",
+    request: quickResponseRequest,
+    spellCheck: true,
+  }));
+  assert.equal(html.match(/<button/gu)?.length, 2);
+  assert.equal(html.match(/<button[^>]*aria-label=/gu)?.length, 1);
+  assert.match(html, />Shared</u);
+  assert.doesNotMatch(html, /aria-pressed/u);
+  assert.doesNotMatch(html, /role="textbox"/u);
+  assert.doesNotMatch(html, /data-thread-questionnaire-submit/u);
+});
+
+test("one-option questionnaire with hydrated custom text starts in normal mode without taking focus", () => {
+  const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
+    draft: {
+      ...draft,
+      selectedValues: {},
+    },
+    mode: "live",
+    onDraftChange: () => undefined,
+    onDraftClear: () => undefined,
+    onSubmit: async () => undefined,
+    request: quickResponseRequest,
+    spellCheck: true,
+  }));
+  assert.match(html, /role="textbox"/u);
+  assert.match(html, /Keep one owner\./u);
+  assert.doesNotMatch(html, /autofocus/u);
+  assert.match(html, /data-thread-questionnaire-submit="true"/u);
+});
 
 test("compact questionnaire preview renders persisted answers without mutation controls", () => {
   const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {

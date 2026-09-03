@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchOptionCard: reusable questionnaire option with card and compact-inline presentations. Keywords: settings, questionnaire, option, card, compact.
+ * - WorkbenchOptionCard: reusable selectable or markerless action card with full, compact-card, and compact-inline presentations. Keywords: settings, questionnaire, option, action, card, compact.
  * - default WorkbenchOptionCards: reusable radio/checkbox-style option row group. Keywords: settings, questionnaire, options, reusable.
  */
 
@@ -25,6 +25,7 @@ type WorkbenchOptionCardsProps<T extends string | boolean | number> = {
 };
 
 type WorkbenchOptionCardProps = {
+  ariaLabel?: string;
   className?: string;
   description?: string;
   disabled?: boolean;
@@ -34,7 +35,8 @@ type WorkbenchOptionCardProps = {
   label: ReactNode;
   markerId?: string;
   onClick?: () => void;
-  presentation?: "card" | "compact-inline";
+  presentation?: "card" | "compact-card" | "compact-inline";
+  showMarker?: boolean;
 };
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -42,6 +44,7 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
 }
 
 export function WorkbenchOptionCard ({
+  ariaLabel,
   className,
   description = "",
   disabled = false,
@@ -52,13 +55,17 @@ export function WorkbenchOptionCard ({
   markerId,
   onClick,
   presentation = "card",
+  showMarker = true,
 }: WorkbenchOptionCardProps) {
   const optionDescription = description.trim();
   const compactInline = presentation === "compact-inline";
+  const compactPresentation = presentation !== "card";
   const optionCardClassName = joinClasses(
     compactInline
       ? "flex w-full min-w-0 items-center gap-2 border-0 bg-transparent px-0 py-1 text-left transition"
-      : "flex w-full items-start gap-3 rounded-[0.95rem] border px-3 py-2.5 text-left transition",
+      : presentation === "compact-card"
+        ? "flex w-full min-w-0 items-center gap-2 rounded-[0.75rem] border px-2 py-1.5 text-left transition"
+        : "flex w-full items-start gap-3 rounded-[0.95rem] border px-3 py-2.5 text-left transition",
     !compactInline && (isChecked
       ? "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-[color-mix(in_srgb,var(--text)_5%,transparent)]"
       : isHistoryMode || disabled
@@ -70,7 +77,7 @@ export function WorkbenchOptionCard ({
   );
   const optionBody = (
     <>
-      {!compactInline && isSingleChoice ? (
+      {showMarker && !compactPresentation && isSingleChoice ? (
         <span
           id={markerId}
           aria-hidden="true"
@@ -81,18 +88,18 @@ export function WorkbenchOptionCard ({
               : "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-transparent",
           )}
         />
-      ) : (
+      ) : showMarker ? (
         <WorkbenchCheckboxMarker checked={isChecked} className={compactInline ? undefined : "mt-1"} disabled={disabled} />
-      )}
-      <span className={compactInline ? "flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden" : "min-w-0"}>
-        <span className={compactInline
-          ? "max-w-[55%] shrink-0 truncate text-[0.84em] font-medium leading-[1.4] text-text"
+      ) : null}
+      <span className={compactPresentation ? "flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden" : "min-w-0"}>
+        <span className={compactPresentation
+          ? "shrink-0 truncate text-[0.84em] font-medium leading-[1.4] text-text"
           : "block text-[0.86em] font-medium leading-[1.5] text-text"}
         >
           {label}
         </span>
         {optionDescription ? (
-          compactInline ? (
+          compactPresentation ? (
             <>
               <span className="shrink-0 text-[0.72em] text-muted" aria-hidden="true">·</span>
               <span className="min-w-0 flex-1 truncate text-[0.76em] leading-[1.4] text-muted">
@@ -112,7 +119,8 @@ export function WorkbenchOptionCard ({
   if (isHistoryMode) {
     return (
       <div
-        aria-pressed={isChecked}
+        aria-label={ariaLabel}
+        aria-pressed={showMarker ? isChecked : undefined}
         className={optionCardClassName}
         data-workbench-option-presentation={presentation}
       >
@@ -124,7 +132,8 @@ export function WorkbenchOptionCard ({
   return (
     <button
       type="button"
-      aria-pressed={isChecked}
+      aria-label={ariaLabel}
+      aria-pressed={showMarker ? isChecked : undefined}
       className={optionCardClassName}
       data-workbench-option-presentation={presentation}
       disabled={disabled}
