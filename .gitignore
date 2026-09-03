@@ -12,6 +12,7 @@
 Thumbs.db
 node_modules
 tray/target/
+tray/gen/
 .next
 *.tsbuildinfo
 shared/codex/generated/
