@@ -3003,15 +3003,34 @@ export default class CodexStdioBridge {
     const readResponse = await this.dispatchManagedProviderRequest({
       id: `workbench:admission-read:${String(requestId ?? Date.now())}`,
       method: "thread/read",
-      params: { includeTurns: true, threadId },
-      workbenchThreadHydration: { mode: "latest" },
+      params: { includeTurns: false, threadId },
     });
     if (readResponse.error) return { id: requestId, error: readResponse.error };
     const readThread = asRecord(readResponse.result)?.thread as ThreadReadResponse["thread"] | undefined;
     if (!readThread) return { id: requestId, error: { code: -32000, message: "Codex admission could not read the thread." } };
-    const activeTurn = this.readManagedActiveTurn(readThread, readThread.turns);
-    if (activeTurn) {
-      return await this.dispatchManagedMessageSteer(requestId, threadId, activeTurn, startRequest, steerRequest);
+    if (isThreadStatusActive(readThread.status)) {
+      const activeTurnResponse = await this.dispatchManagedProviderRequest({
+        id: `workbench:admission-active-turn:${String(requestId ?? Date.now())}`,
+        method: "thread/turns/list",
+        params: {
+          itemsView: "notLoaded",
+          limit: 1,
+          sortDirection: "desc",
+          threadId,
+        },
+      });
+      if (activeTurnResponse.error) return { id: requestId, error: activeTurnResponse.error };
+      const activeTurns = asRecord(activeTurnResponse.result)?.data;
+      if (!Array.isArray(activeTurns)) {
+        return { id: requestId, error: { code: -32000, message: "Codex admission could not read the active turn." } };
+      }
+      return await this.dispatchManagedMessageSteer(
+        requestId,
+        threadId,
+        this.readManagedActiveTurn(readThread, activeTurns as Turn[]),
+        startRequest,
+        steerRequest,
+      );
     }
     if (
       readThread.status.type !== "idle"

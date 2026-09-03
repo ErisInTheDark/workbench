@@ -2016,6 +2016,10 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
       "send:turn/start",
       "receive:notification",
     ]);
+    assert.deepEqual(upstreamRequests[0]?.params, {
+      includeTurns: false,
+      threadId: "thread",
+    });
     const resumeParams = upstreamRequests[2]?.params as {
       baseInstructions?: string | null;
       developerInstructions?: string | null;
@@ -2038,11 +2042,15 @@ test("managed admission steers a provider-confirmed active turn without changing
   const acceptedSteers: string[] = [];
   let prepared = false;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const activeTurn = { ...bridgeThread().turns[0]!, items: [], itemsView: "notLoaded" as const };
+  const activeThread = { ...bridgeThread(), turns: [] };
   const appServer = {
     send(message: JsonRpcRequest) {
       upstreamRequests.push(message);
       const result = message.method === "thread/read"
-        ? { thread: bridgeThread() }
+        ? { thread: activeThread }
+        : message.method === "thread/turns/list"
+          ? { data: [activeTurn], nextCursor: null }
         : message.method === "turn/steer"
           ? { turnId: "turn" }
           : null;
@@ -2082,8 +2090,22 @@ test("managed admission steers a provider-confirmed active turn without changing
         threadId: "thread",
       },
     });
-    assert.deepEqual(upstreamRequests.map(({ method }) => method), ["thread/read", "turn/steer"]);
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), [
+      "thread/read",
+      "thread/turns/list",
+      "turn/steer",
+    ]);
+    assert.deepEqual(upstreamRequests[0]?.params, {
+      includeTurns: false,
+      threadId: "thread",
+    });
     assert.deepEqual(upstreamRequests[1]?.params, {
+      itemsView: "notLoaded",
+      limit: 1,
+      sortDirection: "desc",
+      threadId: "thread",
+    });
+    assert.deepEqual(upstreamRequests[2]?.params, {
       clientUserMessageId: "message-id",
       expectedTurnId: "turn",
       input: [{ text: "steer me", text_elements: [], type: "text" }],
@@ -2092,6 +2114,72 @@ test("managed admission steers a provider-confirmed active turn without changing
     assert.equal(prepared, false);
     assert.deepEqual(acceptedSteers, ["thread"]);
     assert.deepEqual(response?.result, { kind: "steered", turnId: "turn" });
+  } finally {
+    await bridge.waitForIdle();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("managed admission rejects active metadata without a newest in-progress turn", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-active-turn-missing-"));
+  const upstreamRequests: JsonRpcRequest[] = [];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      const result = message.method === "thread/read"
+        ? { thread: { ...bridgeThread(), turns: [] } }
+        : message.method === "thread/turns/list"
+          ? {
+              data: [{
+                ...bridgeThread().turns[0]!,
+                items: [],
+                itemsView: "notLoaded",
+                status: "completed",
+              }],
+              nextCursor: null,
+            }
+          : null;
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage(result
+          ? { id: message.id ?? null, result }
+          : { error: { code: -32000, message: `unexpected ${message.method}` }, id: message.id ?? null });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    prepareTurnStart: async () => undefined,
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    await assert.rejects(bridge.handleBridgeRequest({
+      id: 73,
+      method: "workbench/codex/message/admit",
+      params: {
+        resumeRequest: { method: "thread/resume", params: { threadId: "thread" } },
+        startRequest: {
+          method: "turn/start",
+          params: {
+            clientUserMessageId: "message-id",
+            input: [{ text: "do not misroute me", text_elements: [], type: "text" }],
+            threadId: "thread",
+          },
+        },
+        steerRequest: { method: "turn/steer", params: {} },
+        threadId: "thread",
+      },
+    }), /no current in-progress turn/u);
+    assert.deepEqual(upstreamRequests.map(({ method }) => method), [
+      "thread/read",
+      "thread/turns/list",
+    ]);
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
@@ -2256,6 +2344,10 @@ test("managed inactive admissions serialize complete resume and start lifecycles
     const second = admit("two");
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.deepEqual(upstreamRequests.map(({ method }) => method), ["thread/read"]);
+    assert.deepEqual(upstreamRequests[0]?.params, {
+      includeTurns: false,
+      threadId: "one",
+    });
 
     const firstRead = heldRead!;
     heldRead = firstRead;
