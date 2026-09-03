@@ -269,8 +269,9 @@ If the mechanics are impossible, stop and re-brief. User approval does not autho
 
 ## Real Ownership
 
-- Put code with the concept that owns it: value, lifecycle, controller, transform, adapter, registry, or boundary.
-- Put behavior at the smallest real owner. Avoid helpers that only move meaning away from the concept.
+<!-- Failure: agents copy referenced work without inspecting or reusing its owner. -->
+- Keep each concept with its smallest real owner. Avoid helpers that only move meaning.
+- For matching work, inspect the existing owner before planning. Reuse it, extract a shared owner, or explain why not.
 - Keep long-running async work owned by a clear controller, state model, or lifecycle boundary.
 - Before adding counters, Sets, caches, registries, or other derived lifecycle state, inspect whether an existing owned structure already encodes the same invariant. Prefer deriving from the existing owner unless performance, async boundaries, or external protocol constraints make duplicated state necessary. If duplicated state is proposed, explicitly justify why it cannot drift or why the drift risk is acceptable.
 - Avoid stacked timeouts, nested retries, hidden Promise state, swallowed failures, racing fallbacks, and multiple layers owning the same cancel or retry behavior.
