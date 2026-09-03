@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ReloadDirtSnapshotRepositoryPort: narrow Git tree and ref operations required by reload dirt reconciliation. Keywords: reload, Git, snapshot, port.
- * - default ReloadDirtSnapshotRepository: materialize ignored-safe worktree snapshots without touching the real index. Keywords: reload, Git, worktree.
+ * - default ReloadDirtSnapshotRepository: materialize ignored-safe worktree snapshots without touching the real index. Keywords: reload, Git, worktree, stdin, pathspec, command length.
  */
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -22,6 +22,14 @@ function hasExitCode(error: unknown, code: number) {
     && typeof error === "object"
     && "code" in error
     && error.code === code;
+}
+
+function matchesSelectedPath(candidate: string, selectedPaths: ReadonlySet<string>) {
+  if (selectedPaths.has(candidate) || selectedPaths.has(".")) return true;
+  for (const selectedPath of selectedPaths) {
+    if (candidate.startsWith(selectedPath.endsWith("/") ? selectedPath : `${selectedPath}/`)) return true;
+  }
+  return false;
 }
 
 export interface ReloadDirtSnapshotRepositoryPort {
@@ -48,10 +56,12 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
   }
 
   async listChangedPaths(from: string, to: string, paths: string[], signal?: AbortSignal) {
+    const selectedPaths = new Set(paths);
     return parseNullPaths(await this.run([
-      "diff", "--name-only", "-z", "--no-renames", from, to, "--",
-      ...paths.map((candidate) => this.literalPathspec(candidate)),
-    ], process.env, signal)).sort((left, right) => left.localeCompare(right));
+      "diff", "--name-only", "-z", "--no-renames", from, to,
+    ], process.env, signal))
+      .filter((candidate) => matchesSelectedPath(candidate, selectedPaths))
+      .sort((left, right) => left.localeCompare(right));
   }
 
   async listWorktreePaths(signal?: AbortSignal) {
@@ -77,14 +87,16 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       await this.run(["read-tree", baseTreeish], env, signal);
+      const selectedPaths = new Set(paths);
       const matchedPaths = [...new Set(parseNullPaths(await this.run([
-        "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--",
-        ...paths.map((candidate) => this.literalPathspec(candidate)),
-      ], env, signal)))].sort((left, right) => left.localeCompare(right));
+        "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+      ], env, signal)))]
+        .filter((candidate) => matchesSelectedPath(candidate, selectedPaths))
+        .sort((left, right) => left.localeCompare(right));
       if (matchedPaths.length) {
-        await this.run([
-          "add", "-A", "--", ...matchedPaths.map((candidate) => this.literalPathspec(candidate)),
-        ], env, signal);
+        await this.runWithInput([
+          "--literal-pathspecs", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
+        ], `${matchedPaths.join("\0")}\0`, env, signal);
       }
       return (await this.run(["write-tree"], env, signal)).trim();
     });
@@ -120,11 +132,17 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
     return stdout;
   }
 
-  private async runWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env) {
+  private async runWithInput(
+    args: string[],
+    input: string,
+    env: NodeJS.ProcessEnv = process.env,
+    signal?: AbortSignal,
+  ) {
     return await new Promise<string>((resolve, reject) => {
       const child = spawn("git", args, {
         cwd: this.root,
         env,
+        signal,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
@@ -135,6 +153,7 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
       child.stdout.on("data", (chunk: string) => { stdout += chunk; });
       child.stderr.on("data", (chunk: string) => { stderr += chunk; });
       child.once("error", reject);
+      child.stdin.once("error", reject);
       child.once("close", (code) => {
         if (code === 0) resolve(stdout);
         else reject(new Error(stderr.trim() || `git ${args[0] ?? "command"} failed with exit code ${code}.`));
