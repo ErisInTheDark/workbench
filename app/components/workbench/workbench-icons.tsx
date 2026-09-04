@@ -2,7 +2,7 @@
  * Exports:
  * - CodexIcon/CopilotIcon/OpenCodeIcon/HarnessIcon: render harness-specific icons for thread and rate-limit UI. Keywords: workbench, icon, harness, codex, copilot, opencode.
  * - SaveIcon: render the save control icon with its disabled slash overlay. Keywords: workbench, icon, save.
- * - DraftThreadIcon/NeedsAttentionThreadIcon/CompletedThreadIcon/ProposedCommitThreadIcon/WorkingThreadIcon/StoppedThreadIcon: render shared sidebar lifecycle glyphs. Keywords: thread, status, sidebar, commit.
+ * - DraftThreadIcon/ComposerDraftIcon/NeedsAttentionThreadIcon/CompletedThreadIcon/ProposedCommitThreadIcon/WorkingThreadIcon/StoppedThreadIcon: render shared sidebar lifecycle and composer-draft glyphs. Keywords: thread, status, sidebar, draft, commit.
  * - DiscardDraftIcon/SettleThreadIcon/RestoreThreadIcon/UnsnoozeThreadIcon/SnoozedThreadIcon: render shared sidebar action and snooze glyphs. Keywords: draft, settle, restore, snooze.
  * - BinIcon: render the discard-draft bin icon. Keywords: workbench, icon, reset.
  * - ZoomOutIcon: render the decrease text size icon. Keywords: workbench, icon, zoom.
@@ -362,6 +362,9 @@ function MessageCircleIcon({ className, paths }: IconProps & { paths: readonly s
 
 export function DraftThreadIcon({ className = "size-4" }: IconProps) {
   return <MessageCircleIcon className={className} paths={["M10.1 2.182a10 10 0 0 1 3.8 0", "M13.9 21.818a10 10 0 0 1-3.8 0", "M17.609 3.72a10 10 0 0 1 2.69 2.7", "M2.182 13.9a10 10 0 0 1 0-3.8", "M20.28 17.61a10 10 0 0 1-2.7 2.69", "M21.818 10.1a10 10 0 0 1 0 3.8", "M3.721 6.391a10 10 0 0 1 2.7-2.69", "m6.163 21.117-2.906.85a1 1 0 0 1-1.236-1.169l.965-2.98"]} />;
+}
+export function ComposerDraftIcon({ className = "size-4" }: IconProps) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" /></svg>;
 }
 export function NeedsAttentionThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3", "M12 17h.01"]} />; }
 export function CompletedThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "m9 12 2 2 4-4"]} />; }

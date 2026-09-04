@@ -42,6 +42,7 @@ import {
   SnoozedThreadIcon,
   StoppedThreadIcon,
 } from "./workbench-icons";
+import WorkbenchComposerDraftPresenceProvider from "./WorkbenchComposerDraftPresenceProvider";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 
 const THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
@@ -367,7 +368,13 @@ function WorkbenchThreadSidebarActionsProvider({
     projectThreadSummaries,
   }), [autoFocusFolderId, controls, currentSidebar, entries, getThreadContextMenu, homeDisplayOrderSupported, homeThreadDisplayOrder.displayOrder, mutateEntry, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars, projectThreadSummaries, relativeTimeNowMs]);
 
-  return <WorkbenchThreadSidebarActionsContext.Provider value={value}>{children}</WorkbenchThreadSidebarActionsContext.Provider>;
+  return (
+    <WorkbenchComposerDraftPresenceProvider>
+      <WorkbenchThreadSidebarActionsContext.Provider value={value}>
+        {children}
+      </WorkbenchThreadSidebarActionsContext.Provider>
+    </WorkbenchComposerDraftPresenceProvider>
+  );
 }
 
 export default Object.assign(WorkbenchThreadSidebarActionsProvider, {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, direct navigation, tooltip detail, and explicit context-menu access. Keywords: thread, project, sidebar, navigation, tooltip, context menu, claim, priority, pin, snooze, compact.
+ * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, draft presence, direct navigation, tooltip detail, and explicit context-menu access. Keywords: thread, project, sidebar, navigation, tooltip, context menu, claim, composer, draft, priority, pin, snooze, compact.
  * - Local helpers: derive full or compact pinned-draft row targets and render bounded thread tooltip details. Keywords: thread, draft, target, tooltip, status.
  */
 "use client";
@@ -29,6 +29,7 @@ import {
 } from "./workbench-thread-status-colors";
 import {
   CompletedThreadIcon,
+  ComposerDraftIcon,
   DiscardDraftIcon,
   DraftThreadIcon,
   FlagIcon,
@@ -43,6 +44,7 @@ import {
   UnsnoozeThreadIcon,
   WorkingThreadIcon,
 } from "./workbench-icons";
+import { useWorkbenchComposerDraftPresence } from "./WorkbenchComposerDraftPresenceProvider";
 import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
@@ -168,6 +170,10 @@ export default function WorkbenchThreadListItem({
   tooltipDetails?: ReactNode;
 }) {
   const { openContextMenu } = useWorkbenchContextMenu();
+  const hasComposerDraft = useWorkbenchComposerDraftPresence(
+    projectId,
+    entry.entryKind === "draft" ? null : entry.identity.threadId,
+  );
   const target = targetForEntry(entry);
   const group = isPinnedDraftSummaryEntry(entry) ? "pinned" : getThreadSidebarGroup(entry);
   const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
@@ -175,6 +181,7 @@ export default function WorkbenchThreadListItem({
   const hasActiveGitArc = gitArc?.phase === "active";
   const claimedPaths = gitArc?.claimedPaths ?? [];
   const claimedFileCount = claimedPaths.length;
+  const showComposerDraft = claimedFileCount === 0 && hasComposerDraft;
   const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
   const waiting = entry.entryKind !== "draft" && Boolean(entry.waitingFor);
   const showProposedCommit = !waiting && lifecycle?.kind === "completed" && hasProposedCommit;
@@ -213,7 +220,7 @@ export default function WorkbenchThreadListItem({
   const ActionIcon = action === "discard" ? DiscardDraftIcon : action === "restore" ? RestoreThreadIcon : action === "wake" ? UnsnoozeThreadIcon : SettleThreadIcon;
   const actionLabel = action === "complete" ? "Completed" : action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Wake";
   const projectName = project ? `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
-  const rowName = `${projectName}${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} claimed ${claimedFileCount === 1 ? "file" : "files"}` : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
+  const rowName = `${projectName}${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} claimed ${claimedFileCount === 1 ? "file" : "files"}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
   const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled"));
   const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
@@ -309,7 +316,13 @@ export default function WorkbenchThreadListItem({
           eyebrow={project ? <WorkbenchProjectLabel project={project} variant="thread" /> : undefined}
           metadata={(
             <span className="grid items-center">
-              {claimedFileCount ? <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true"><FlagIcon className="size-3.5" /><span>{claimedFileCount}</span></span> : null}
+              {claimedFileCount ? (
+                <span data-role="thread-file-claim" className="inline-flex items-center gap-0.5" aria-hidden="true"><FlagIcon className="size-3.5" /><span>{claimedFileCount}</span></span>
+              ) : showComposerDraft ? (
+                <span data-role="thread-composer-draft" className="inline-flex size-4 items-center justify-center" title="Unsent draft">
+                  <ComposerDraftIcon className="size-3.5" />
+                </span>
+              ) : null}
             </span>
           )}
           statusIcon={<Icon className={`size-3.5 ${statusClassName}`} />}

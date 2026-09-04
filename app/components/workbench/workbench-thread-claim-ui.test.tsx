@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; rendered regression checks protect active claim counts, proposed-commit presentation, settlement suppression, home pinned priority ordering, and settled pin visibility. Keywords: sidebar, thread, pinned, project, claim, proposal, commit, settlement.
+ * - No production exports; rendered regression checks protect active claim counts, composer-draft indication, proposed-commit presentation, settlement suppression, home pinned priority ordering, and settled pin visibility. Keywords: sidebar, thread, pinned, project, claim, composer, draft, proposal, commit, settlement.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -9,6 +9,7 @@ import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
+import WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
 import {
   WorkbenchThreadSidebarEntrySchema,
   type WorkbenchProjectThreadSidebars,
@@ -16,6 +17,8 @@ import {
   type WorkbenchThreadSidebarEntry,
 } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchPinnedThreadList from "./WorkbenchPinnedThreadList";
+import WorkbenchClientStateProvider from "./WorkbenchClientStateProvider";
+import WorkbenchComposerDraftPresenceProvider from "./WorkbenchComposerDraftPresenceProvider";
 import WorkbenchHomeThreadList from "./WorkbenchHomeThreadList";
 import ThreadRateLimits from "./thread-view/ThreadRateLimits";
 import WorkbenchSidebarPreferencesProvider from "./WorkbenchSidebarPreferencesProvider";
@@ -208,6 +211,41 @@ function renderThreadItem(
   ));
 }
 
+async function renderThreadItemWithComposerDraft(
+  entry: ThreadEntry,
+  value: { attachments: Array<{ id: string; url: string }>; text: string; updatedAt: number },
+  rowProjectId = "project",
+) {
+  const controller = new WorkbenchClientStateController({ mode: "memory" });
+  await controller.put({
+    daemonRegistrationId: "memory",
+    kind: "composerDraft",
+    projectId: "project",
+    threadId: entry.identity.threadId,
+    value,
+  });
+  return renderToStaticMarkup(createElement(
+    WorkbenchClientStateProvider,
+    {
+      children: createElement(
+        WorkbenchComposerDraftPresenceProvider,
+        {
+          children: createElement(
+            WorkbenchContextMenuContext.Provider,
+            { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
+            createElement(WorkbenchThreadListItem, {
+              entry,
+              href: "/agent/thread/thread-one",
+              projectId: rowProjectId,
+            }),
+          ),
+        },
+      ),
+      controller,
+    },
+  ));
+}
+
 test("thread rows render counts only for active file claims", () => {
   const claimedHtml = renderThreads([createThreadEntry({
     claimedPaths: ["src/one.ts", "src/two.ts", "src/three.ts"],
@@ -219,6 +257,41 @@ test("thread rows render counts only for active file claims", () => {
 
   const unclaimedHtml = renderThreads([createThreadEntry({ threadId: "planned", title: "Planned work" })]);
   assert.doesNotMatch(unclaimedHtml, /data-role="thread-file-claim"|claimed files/u);
+});
+
+test("claim-free thread rows show only non-empty composer drafts in the claim slot", async () => {
+  const draftValue = { attachments: [], text: "send this later", updatedAt: 1 };
+  const draftHtml = await renderThreadItemWithComposerDraft(
+    createThreadEntry({ threadId: "drafted", title: "Drafted work" }),
+    draftValue,
+  );
+  assert.match(draftHtml, /data-role="thread-composer-draft"/u);
+
+  const attachmentHtml = await renderThreadItemWithComposerDraft(
+    createThreadEntry({ threadId: "attached", title: "Attached work" }),
+    { attachments: [{ id: "image-one", url: "data:image/png;base64,AA==" }], text: " ", updatedAt: 1 },
+  );
+  assert.match(attachmentHtml, /data-role="thread-composer-draft"/u);
+
+  const emptyHtml = await renderThreadItemWithComposerDraft(
+    createThreadEntry({ threadId: "empty", title: "Empty work" }),
+    { attachments: [], text: " ", updatedAt: 1 },
+  );
+  assert.doesNotMatch(emptyHtml, /thread-composer-draft|unsent draft/u);
+
+  const claimedHtml = await renderThreadItemWithComposerDraft(
+    createThreadEntry({ claimedPaths: ["src/claimed.ts"], threadId: "claimed-draft", title: "Claimed draft" }),
+    draftValue,
+  );
+  assert.match(claimedHtml, /data-role="thread-file-claim"/u);
+  assert.doesNotMatch(claimedHtml, /thread-composer-draft|unsent draft/u);
+
+  const otherProjectHtml = await renderThreadItemWithComposerDraft(
+    createThreadEntry({ threadId: "drafted", title: "Other project work" }),
+    draftValue,
+    "other-project",
+  );
+  assert.doesNotMatch(otherProjectHtml, /thread-composer-draft|unsent draft/u);
 });
 
 test("thread rows expose waiting as a neutral working-icon status", () => {
