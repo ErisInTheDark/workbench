@@ -114,3 +114,29 @@ test("Git arc requests return exact domain results and preserve structured failu
       && assert.deepEqual(error.failure, failure) === undefined,
   );
 });
+
+test("search responses require the complete discriminated result contract", async () => {
+  const response = {
+    results: [{
+      actionId: "home",
+      detail: "Ctrl+H",
+      id: "action:home",
+      kind: "action" as const,
+      title: "Home",
+    }],
+  };
+  const valid = new WorkbenchDaemonClient({
+    request: async <TResponse>() => response as TResponse,
+  });
+  assert.deepEqual(await valid.request("search/query", { projectId: "", query: "home" }), response);
+
+  const malformed = new WorkbenchDaemonClient({
+    request: async <TResponse>() => ({
+      results: [{ id: "action:home", kind: "action", title: "Home" }],
+    }) as TResponse,
+  });
+  await assert.rejects(
+    malformed.request("search/query", { projectId: "", query: "home" }),
+    /response was invalid/u,
+  );
+});

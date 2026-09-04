@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, transcript materialization, and relational discriminator constraints. Keywords: database, worker, schema, transcript, test.
+ * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, transcript materialization, search, and relational discriminator constraints. Keywords: database, worker, schema, transcript, search, test.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rename, rm } from "node:fs/promises";
@@ -343,6 +343,189 @@ test("typed statement transactions preserve stable rows and roll back incomplete
       [],
     );
     assert.deepEqual((await controller.getInventory()).tableNames, [...WORKBENCH_DATABASE_TABLE_NAMES].sort());
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("workspace search ranks relational sources and keeps settled transcript bodies asleep", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-database-search-"));
+  const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
+  try {
+    const observations = [
+      {
+        kind: "thread" as const,
+        threadId: "active-thread",
+        projectId: "project",
+        projectRoot: "C:/project",
+        title: "Active search thread",
+        createdAt: 1,
+        updatedAt: 10,
+        activityAt: 10,
+      },
+      {
+        kind: "turn" as const,
+        threadId: "active-thread",
+        turnId: "active-turn",
+        turnIndex: 0,
+        harnessId: "codex",
+        nativeLocation: "C:/project",
+        nativeThreadId: "active-native",
+        nativeTurnId: "active-turn",
+        state: "completed" as const,
+        createdAt: 1,
+        startedAt: 1,
+        endedAt: 2,
+        durationMs: 1,
+      },
+      {
+        kind: "item" as const,
+        threadId: "active-thread",
+        turnId: "active-turn",
+        lifecycle: "completed" as const,
+        observedAt: 2,
+        item: {
+          clientId: "active-user",
+          content: [{ text: "midvalue narwhal", text_elements: [], type: "text" as const }],
+          id: "active-user",
+          type: "userMessage" as const,
+        },
+      },
+      {
+        kind: "item" as const,
+        threadId: "active-thread",
+        turnId: "active-turn",
+        lifecycle: "completed" as const,
+        observedAt: 3,
+        item: {
+          id: "active-commentary",
+          memoryCitation: null,
+          phase: "commentary" as const,
+          text: "lowvalue comet",
+          type: "agentMessage" as const,
+        },
+      },
+      {
+        kind: "item" as const,
+        threadId: "active-thread",
+        turnId: "active-turn",
+        lifecycle: "completed" as const,
+        observedAt: 4,
+        item: {
+          id: "active-final",
+          memoryCitation: null,
+          phase: "final_answer" as const,
+          text: "finalsecret",
+          type: "agentMessage" as const,
+        },
+      },
+      {
+        kind: "thread" as const,
+        threadId: "settled-thread",
+        projectId: "project",
+        projectRoot: "C:/project",
+        title: "Settled archive",
+        createdAt: 1,
+        updatedAt: 9,
+        activityAt: 9,
+      },
+      {
+        kind: "turn" as const,
+        threadId: "settled-thread",
+        turnId: "settled-turn",
+        turnIndex: 0,
+        harnessId: "codex",
+        nativeLocation: "C:/project",
+        nativeThreadId: "settled-native",
+        nativeTurnId: "settled-turn",
+        state: "completed" as const,
+        createdAt: 1,
+        startedAt: 1,
+        endedAt: 2,
+        durationMs: 1,
+      },
+      {
+        kind: "item" as const,
+        threadId: "settled-thread",
+        turnId: "settled-turn",
+        lifecycle: "completed" as const,
+        observedAt: 2,
+        item: {
+          clientId: "settled-user",
+          content: [{ text: "sleepyhidden badger", text_elements: [], type: "text" as const }],
+          id: "settled-user",
+          type: "userMessage" as const,
+        },
+      },
+      {
+        kind: "item" as const,
+        threadId: "settled-thread",
+        turnId: "settled-turn",
+        lifecycle: "completed" as const,
+        observedAt: 3,
+        item: {
+          id: "settled-commentary",
+          memoryCitation: null,
+          phase: "commentary" as const,
+          text: "sleepyhidden otter",
+          type: "agentMessage" as const,
+        },
+      },
+    ];
+    await controller.settleTranscript([
+      {
+        kind: "canonicalWindow",
+        contentVersion: 3,
+        materializedTurnIds: ["active-turn"],
+        observations: observations.filter((observation) => observation.threadId === "active-thread"),
+        threadId: "active-thread",
+      },
+      {
+        kind: "canonicalWindow",
+        contentVersion: 3,
+        materializedTurnIds: ["settled-turn"],
+        observations: observations.filter((observation) => observation.threadId === "settled-thread"),
+        threadId: "settled-thread",
+      },
+    ]);
+    await controller.executeTransaction([
+      insertRow(coreTables.workbenchThreadLifecycle, {
+        agent_status: "completed",
+        lifecycle_kind: "completed",
+        reason: "agentCompleted",
+        request_key: null,
+        settled: 0,
+        thread_id: "active-thread",
+        turn_id: "active-turn",
+        updated_at: 10,
+      }),
+      insertRow(coreTables.workbenchThreadLifecycle, {
+        agent_status: "completed",
+        lifecycle_kind: "completed",
+        reason: "agentCompleted",
+        request_key: null,
+        settled: 1,
+        thread_id: "settled-thread",
+        turn_id: "settled-turn",
+        updated_at: 9,
+      }),
+    ]);
+    await controller.replaceSearchProjects([
+      { id: "project", name: "Project", rootPath: "C:/project" },
+      { id: "other", name: "Other project", rootPath: "C:/other" },
+    ]);
+    await controller.replaceSearchProjectFiles("project", ["src/lowestvalue-needle.ts"]);
+    await controller.replaceSearchProjectFiles("other", ["src/other-only.ts"]);
+
+    assert.equal((await controller.search({ projectId: "project", query: "search" })).results[0]?.title, "Active search thread");
+    assert.equal((await controller.search({ projectId: "project", query: "narwhal" })).results[0]?.title, "Active search thread");
+    assert.equal((await controller.search({ projectId: "project", query: "comet" })).results[0]?.title, "Active search thread");
+    assert.equal((await controller.search({ projectId: "project", query: "settled archive" })).results[0]?.title, "Settled archive");
+    assert.deepEqual((await controller.search({ projectId: "project", query: "sleepyhidden" })).results, []);
+    assert.deepEqual((await controller.search({ projectId: "project", query: "finalsecret" })).results, []);
+    assert.equal((await controller.search({ projectId: "project", query: "\"lowestvalue\"" })).results[0]?.kind, "file");
+    assert.deepEqual((await controller.search({ projectId: "project", query: "other-only" })).results, []);
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });

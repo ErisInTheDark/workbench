@@ -67,6 +67,8 @@ export default new ReloadableNode<
   boundarySources: [
     "daemon/lib/workbench/database/schema/**",
     "shared/workbench/database/schema/**",
+    "shared/workbench/search/**",
+    "shared/workbench/settings/**",
     "daemon/orchestrator/database/**",
   ].join("\n"),
   children: [WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, WorkbenchWebSocketNode],

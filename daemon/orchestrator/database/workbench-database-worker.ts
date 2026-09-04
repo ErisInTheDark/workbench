@@ -1,5 +1,5 @@
 /*
- * No production exports. This worker owns the one better-sqlite3 connection, schema installation, readiness proof, and close boundary. Keywords: database, worker, sqlite, lifecycle.
+ * No production exports. This worker owns the one better-sqlite3 connection, schema installation, search/transcript repositories, readiness proof, and close boundary. Keywords: database, worker, sqlite, search, transcript, lifecycle.
  */
 import { parentPort } from "node:worker_threads";
 
@@ -13,12 +13,14 @@ import {
 } from "workbench-shared/database/workbench-database-statements";
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository.ts";
 import WorkbenchThreadStateRelationalRepository from "./thread-state/WorkbenchThreadStateRelationalRepository.ts";
+import WorkbenchSearchRepository from "./search/WorkbenchSearchRepository.ts";
 
 if (!parentPort) throw new Error("Workbench database worker requires a parent port");
 
 let database: Database.Database | null = null;
 let transcriptRepository: WorkbenchTranscriptRepository | null = null;
 let threadStateShadowRepository: WorkbenchThreadStateRelationalRepository | null = null;
+let searchRepository: WorkbenchSearchRepository | null = null;
 
 function boundedError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -54,6 +56,7 @@ function post(response: WorkbenchDatabaseResponse) {
 function closeDatabase() {
   transcriptRepository = null;
   threadStateShadowRepository = null;
+  searchRepository = null;
   const activeDatabase = database;
   database = null;
   if (!activeDatabase) return null;
@@ -162,10 +165,28 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     });
     return;
   }
+  if (request.type === "replaceSearchProjects") {
+    if (!searchRepository) throw new Error("Workbench search repository is not initialized");
+    searchRepository.replaceProjects(request.projects);
+    post({ id: request.id, type: "mutationResult", result: { changes: request.projects.length } });
+    return;
+  }
+  if (request.type === "replaceSearchProjectFiles") {
+    if (!searchRepository) throw new Error("Workbench search repository is not initialized");
+    searchRepository.replaceProjectFiles(request.projectId, request.paths);
+    post({ id: request.id, type: "mutationResult", result: { changes: request.paths.length } });
+    return;
+  }
+  if (request.type === "search") {
+    if (!searchRepository) throw new Error("Workbench search repository is not initialized");
+    post({ id: request.id, type: "searchResult", result: searchRepository.search(request.request) });
+    return;
+  }
   if (!database) throw new Error("Workbench database is not initialized");
   database.close();
   transcriptRepository = null;
   threadStateShadowRepository = null;
+  searchRepository = null;
   database = null;
   post({ id: request.id, type: "closed" });
   parentPort!.close();
@@ -182,6 +203,7 @@ parentPort.on("message", (request: WorkbenchDatabaseRequest) => {
       proveReadWrite();
       transcriptRepository = new WorkbenchTranscriptRepository(database);
       threadStateShadowRepository = new WorkbenchThreadStateRelationalRepository(database);
+      searchRepository = new WorkbenchSearchRepository(database);
       post({ id: request.id, type: "ready", inventory: inventory() });
     } catch (error) {
       postFatalFailure(request, error, "Workbench database initialization failed.");

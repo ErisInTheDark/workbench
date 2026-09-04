@@ -37,6 +37,10 @@ import type {
   GitCheckpointProposal,
   GitCheckpointRequest,
 } from "../git/checkpoint-contracts.ts";
+import type {
+  WorkbenchSearchRequest,
+  WorkbenchSearchResponse,
+} from "../search/workbench-search.ts";
 
 export interface WorkbenchInstructionPack {
   content: string;
@@ -107,6 +111,7 @@ export interface WorkbenchDaemonRequestMap {
   "project/file/read": { params: { path: string; projectId: string }; result: FilePayload };
   "project/file/reset": { params: { expectedMtimeMs: number; force?: boolean; path: string; projectId: string }; result: WorkbenchFileWriteResult };
   "project/file/save": { params: { content: string; expectedMtimeMs: number; force?: boolean; path: string; projectId: string }; result: WorkbenchFileWriteResult };
+  "search/query": { params: WorkbenchSearchRequest; result: WorkbenchSearchResponse };
   "skills/read": { params: { projectId: string | null }; result: WorkbenchSkillCatalogResponse };
 }
 

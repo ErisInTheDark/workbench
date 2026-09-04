@@ -15,42 +15,34 @@
 import type {
   WorkbenchClientStateRecord,
   WorkbenchGlobalPreference,
-  WorkbenchSelectedProjectPinPlacementValue,
   WorkbenchSidebarPreference,
 } from "workbench-shared/state/workbench-client-state";
+import {
+  WORKBENCH_SETTING_DEFINITIONS,
+  type WorkbenchEditorFontFamily,
+  type WorkbenchFileOpenBehavior,
+  type WorkbenchGlobalSettings,
+  type WorkbenchSelectedProjectPinPlacement,
+  type WorkbenchSettingKey,
+  type WorkbenchTheme,
+} from "workbench-shared/workbench/settings/workbench-setting-definitions";
 
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
+
+export {
+  WORKBENCH_SETTING_DEFINITIONS,
+  type WorkbenchEditorFontFamily,
+  type WorkbenchFileOpenBehavior,
+  type WorkbenchGlobalSettings,
+  type WorkbenchSelectedProjectPinPlacement,
+  type WorkbenchSettingDefinition,
+  type WorkbenchSettingKey,
+  type WorkbenchTheme,
+} from "workbench-shared/workbench/settings/workbench-setting-definitions";
 
 export const DEFAULT_EDITOR_FONT_SIZE = 1.08;
 export const MIN_EDITOR_FONT_SIZE = 0.84;
 export const MAX_EDITOR_FONT_SIZE = 1.72;
-
-export type WorkbenchTheme = "default" | "magical-girl" | "winter";
-export type WorkbenchEditorFontFamily = "sans" | "serif" | "mono";
-export type WorkbenchFileOpenBehavior = "workbench" | "workbench-or-vscode" | "vscode";
-export type WorkbenchSelectedProjectPinPlacement = WorkbenchSelectedProjectPinPlacementValue;
-export type WorkbenchSettingKey =
-  | "theme"
-  | "editorFontFamily"
-  | "editorSpellCheck"
-  | "composerSpellCheck"
-  | "editorFontSize"
-  | "fileOpenBehavior"
-  | "selectedProjectPinPlacement"
-  | "showUnopenableFiles"
-  | "threadCodeBlockWrap";
-
-export interface WorkbenchGlobalSettings {
-  composerSpellCheck: boolean;
-  editorFontFamily: WorkbenchEditorFontFamily;
-  editorFontSize: number;
-  editorSpellCheck: boolean;
-  fileOpenBehavior: WorkbenchFileOpenBehavior;
-  selectedProjectPinPlacement: WorkbenchSelectedProjectPinPlacement;
-  showUnopenableFiles: boolean;
-  theme: WorkbenchTheme;
-  threadCodeBlockWrap: boolean;
-}
 
 export type WorkbenchResolvedSettings = WorkbenchGlobalSettings;
 
@@ -86,141 +78,6 @@ export interface WorkbenchProjectSidebarPreferences {
 export type WorkbenchSidebarPreferences =
   & WorkbenchGlobalSidebarPreferences
   & WorkbenchProjectSidebarPreferences;
-
-export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = WorkbenchSettingKey> = {
-  columns?: "one" | "two";
-  description: string;
-  key: K;
-  label: string;
-  options?: Array<{
-    description: string;
-    label: string;
-    value: WorkbenchGlobalSettings[K];
-  }>;
-  type: "boolean" | "number" | "select";
-};
-
-export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: WorkbenchSettingDefinition<K> } = {
-  composerSpellCheck: {
-    description: "Controls spellcheck in thread composers and questionnaire text answers.",
-    key: "composerSpellCheck",
-    label: "Composer spellcheck",
-    type: "boolean",
-  },
-  editorFontFamily: {
-    description: "Controls the body font used by the rich markdown editor.",
-    key: "editorFontFamily",
-    label: "Editor font",
-    options: [
-      {
-        description: "Agentic default for technical editing.",
-        label: "Sans",
-        value: "sans",
-      },
-      {
-        description: "Story-writing style with a literary feel.",
-        label: "Serif",
-        value: "serif",
-      },
-      {
-        description: "Code-adjacent and compact.",
-        label: "Mono",
-        value: "mono",
-      },
-    ],
-    type: "select",
-  },
-  editorFontSize: {
-    description: "Controls editor and thread text scale.",
-    key: "editorFontSize",
-    label: "Text size",
-    type: "number",
-  },
-  fileOpenBehavior: {
-    description: "Controls whether project file links open in Workbench or VS Code.",
-    key: "fileOpenBehavior",
-    label: "Open files with",
-    options: [
-      {
-        description: "Open supported markdown files in Workbench and ignore unsupported files.",
-        label: "Workbench only",
-        value: "workbench",
-      },
-      {
-        description: "Open markdown in Workbench and use VS Code for files Workbench cannot open.",
-        label: "Workbench, then VS Code",
-        value: "workbench-or-vscode",
-      },
-      {
-        description: "Always ask the local server to open file links in VS Code.",
-        label: "VS Code",
-        value: "vscode",
-      },
-    ],
-    type: "select",
-  },
-  selectedProjectPinPlacement: {
-    columns: "two",
-    description: "Choose where pinned threads from the selected project appear.",
-    key: "selectedProjectPinPlacement",
-    label: "Selected-project pin placement",
-    options: [
-      {
-        description: "Keep them in the global pinned threads list.",
-        label: "Pinned threads",
-        value: "pinned-section",
-      },
-      {
-        description: "A pinned section at the top of the project's threads.",
-        label: "Threads",
-        value: "threads-section",
-      },
-    ],
-    type: "select",
-  },
-  showUnopenableFiles: {
-    description: "Controls whether the project sidebar shows files Workbench cannot open directly.",
-    key: "showUnopenableFiles",
-    label: "Show unsupported files",
-    type: "boolean",
-  },
-  threadCodeBlockWrap: {
-    description: "Controls whether thread markdown code blocks wrap long lines instead of using horizontal scrolling.",
-    key: "threadCodeBlockWrap",
-    label: "Wrap thread code blocks",
-    type: "boolean",
-  },
-  editorSpellCheck: {
-    description: "Controls browser spellcheck in the rich markdown editor.",
-    key: "editorSpellCheck",
-    label: "Editor spellcheck",
-    type: "boolean",
-  },
-  theme: {
-    columns: "two",
-    description: "Controls Workbench colors and font personality.",
-    key: "theme",
-    label: "Theme",
-    options: [
-      {
-        description: "Current quiet Workbench colors and fonts.",
-        label: "Default",
-        value: "default",
-      },
-      {
-        description: "Pink sparkles with Sour Gummy and Comic Code Light.",
-        label: "Magical girl mode",
-        value: "magical-girl",
-      },
-      {
-        description: "Snowy day and night colors with the normal Workbench fonts.",
-        label: "Winter",
-        value: "winter",
-      },
-    ],
-    type: "select",
-  },
-};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);

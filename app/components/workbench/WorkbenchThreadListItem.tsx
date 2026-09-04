@@ -262,6 +262,7 @@ export default function WorkbenchThreadListItem({
           interactive
         >
           <a
+            data-workbench-sidebar-thread-link="true"
             ref={anchorRef}
             draggable={draggable}
             href={href}

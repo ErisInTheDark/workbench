@@ -38,6 +38,7 @@ import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
+import WorkbenchSearchController from "./WorkbenchSearchController";
 import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
@@ -129,6 +130,11 @@ function createWorkbenchCoreFeature(
   const projectSnapshot = new WorkbenchProjectSnapshotController({
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
   });
+  const search = new WorkbenchSearchController({
+    database,
+    readCatalog: () => projectCatalog.readCatalog(),
+    readProjectSnapshot: (projectId) => projectSnapshot.readProjectSnapshot(projectId),
+  });
   const worktreeGitTransitions = createWorktreeGitTransitions(context.threadTransitions);
   let threadState: WorkbenchThreadStateFeature | null = null;
   const requireThreadState = () => {
@@ -183,6 +189,7 @@ function createWorkbenchCoreFeature(
       setComposerProfileTarget: async (slot, selection) => await requireThreadState().controller.setComposerProfileTarget(slot, selection),
     },
     projects: projectCatalog,
+    search,
     settings: new WorkbenchServerSettings(),
   });
   const threadGit = new WorkbenchThreadGitFeature({
@@ -315,6 +322,8 @@ function createWorkbenchCoreFeature(
       await threadState.dispose();
       reportPhase("thread-state shadow disposal");
       await threadStateShadow.dispose();
+      reportPhase("search disposal");
+      await search.dispose();
       reportPhase("project snapshot disposal");
       projectSnapshot.dispose();
       reportPhase("project catalog disposal");
@@ -393,6 +402,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchLegacyMigrationSourceController.ts",
     "daemon/orchestrator/WorkbenchProjectCatalogController.ts",
     "daemon/orchestrator/WorkbenchProjectSnapshotController.ts",
+    "daemon/orchestrator/WorkbenchSearchController.ts",
     "daemon/orchestrator/WorkbenchSubagentFeature.ts",
     "daemon/orchestrator/WorkbenchSubagentController.ts",
     "daemon/orchestrator/WorkbenchSubagentStore.ts",

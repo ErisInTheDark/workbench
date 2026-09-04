@@ -25,6 +25,7 @@ import type {
   WorkbenchTranscriptRecordingContext,
 } from "./database/transcript/workbench-transcript-types";
 import type { WorkbenchDatabaseMutationResult } from "./database/workbench-database-protocol";
+import type { WorkbenchSearchRequest, WorkbenchSearchResponse } from "workbench-shared/workbench/search/workbench-search";
 import type {
   WorkbenchThreadStateShadowRefresh,
   WorkbenchThreadStateShadowStatus,
@@ -103,6 +104,9 @@ export interface OrchestratorDatabaseRegistration {
   query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Promise<Row[]>;
   rebuildThreadStateShadow(request: WorkbenchThreadStateShadowRefresh): Promise<WorkbenchThreadStateShadowStatus>;
   readThreadStateShadowStatus(): Promise<WorkbenchThreadStateShadowStatus | null>;
+  replaceSearchProjectFiles(projectId: string, paths: readonly string[]): Promise<void>;
+  replaceSearchProjects(projects: readonly { id: string; name: string; rootPath: string }[]): Promise<void>;
+  search(request: WorkbenchSearchRequest): Promise<WorkbenchSearchResponse>;
   start(): Promise<object>;
   readonly state: "starting" | "ready" | "failed" | "closed";
 }

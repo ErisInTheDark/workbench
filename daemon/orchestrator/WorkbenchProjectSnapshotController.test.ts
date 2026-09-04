@@ -146,6 +146,17 @@ test("dormant HTTP reads reuse the snapshot cache without starting observation",
   assert.deepEqual(JSON.parse(second.body), createSnapshot("alpha"));
 });
 
+test("domain snapshot reads reuse the same coalesced cache owner", async () => {
+  const harness = createHarness();
+  const [first, second] = await Promise.all([
+    harness.controller.readProjectSnapshot("alpha"),
+    harness.controller.readProjectSnapshot("alpha"),
+  ]);
+  assert.deepEqual(first, createSnapshot("alpha"));
+  assert.deepEqual(second, first);
+  assert.equal(harness.snapshotReads, 1);
+});
+
 test("coalesces concurrent dormant snapshot misses", async () => {
   const harness = createHarness();
   const gate = deferred<ProjectSnapshot>();

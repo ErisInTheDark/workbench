@@ -21,6 +21,10 @@ import type {
   WorkbenchThreadStateShadowRefresh,
   WorkbenchThreadStateShadowStatus,
 } from "./thread-state/workbench-thread-state-shadow-types.ts";
+import type {
+  WorkbenchSearchRequest,
+  WorkbenchSearchResponse,
+} from "workbench-shared/workbench/search/workbench-search";
 
 export type WorkbenchDatabaseControllerState = "starting" | "ready" | "failed" | "closed";
 
@@ -43,6 +47,9 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "settleTranscript"; observations: readonly WorkbenchTranscriptObservation[] }
   | { type: "readTranscript"; request: WorkbenchTranscriptReadRequest }
   | { type: "readTranscriptMaterializedTurnIds"; threadId: string; turnIds: readonly string[] }
+  | { type: "replaceSearchProjects"; projects: readonly { id: string; name: string; rootPath: string }[] }
+  | { type: "replaceSearchProjectFiles"; projectId: string; paths: readonly string[] }
+  | { type: "search"; request: WorkbenchSearchRequest }
   | { type: "close" };
 
 export type WorkbenchDatabaseRequest = WorkbenchDatabaseRequestPayload & { id: number };
@@ -56,6 +63,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "transcriptSettlement"; settlement: WorkbenchTranscriptSettlement }
   | { id: number; type: "transcriptSnapshot"; snapshot: WorkbenchTranscriptSnapshot | null }
   | { id: number; type: "transcriptMaterializedTurnIds"; turnIds: string[] }
+  | { id: number; type: "searchResult"; result: WorkbenchSearchResponse }
   | { id: number; type: "closed" }
   | { id: number; type: "requestFailure"; message: string }
   | { id: number; type: "fatalFailure"; message: string };

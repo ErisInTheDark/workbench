@@ -9,3 +9,4 @@
 - Do not build one table with unrelated nullable fields.
 - Validate old or external data at its boundary.
 - Convert accepted data into the current domain type before storage or core use.
+- Workspace search reads only SQLite relational rows and SQLite-backed project/file projections; settled threads contribute titles only, actions and setting definitions come from shared registries seeded into SQLite, and provider transcript JSON is never searched.

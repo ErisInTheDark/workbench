@@ -25,6 +25,7 @@ import {
 import reportClientSchemaError from "../report-client-schema-error.ts";
 import { WorkbenchProjectsPayloadSchema } from "../project/project-state.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../thread/thread-state.ts";
+import { WorkbenchSearchResponseSchema } from "../search/workbench-search.ts";
 
 export interface WorkbenchDaemonTransport {
   request<TResponse>(method: string, params: object): Promise<TResponse>;
@@ -60,6 +61,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     }).strict();
     case "project/file/reset":
     case "project/file/save": return fileWriteSchema;
+    case "search/query": return WorkbenchSearchResponseSchema;
     case "local-capabilities/read":
     case "local-capabilities/update": return z.object({
       localCapabilities: z.object({ browseRawCommandsEnabled: z.boolean() }).strict(),

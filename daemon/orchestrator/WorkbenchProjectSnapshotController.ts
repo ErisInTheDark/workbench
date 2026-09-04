@@ -215,6 +215,10 @@ export default class WorkbenchProjectSnapshotController {
     return (await this.readSnapshot(projectId)).snapshot;
   }
 
+  async readProjectSnapshot(projectId: string) {
+    return (await this.readSnapshot(projectId)).snapshot;
+  }
+
   private async createEntry(request: Extract<WorkbenchProjectStateRequest, { method: "workbench/thread-state/project/entry/create" }>): Promise<CreateEntryPayload> {
     const resolvedProject = await this.resolveProjectById(request.projectId);
     const resolvedParent = this.operations.resolveProjectFilePath(resolvedProject, request.parentPath);

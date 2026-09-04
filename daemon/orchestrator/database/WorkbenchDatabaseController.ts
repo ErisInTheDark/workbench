@@ -24,6 +24,7 @@ import type {
   WorkbenchTranscriptReadRequest,
 } from "./transcript/workbench-transcript-types";
 import type { WorkbenchThreadStateShadowRefresh } from "./thread-state/workbench-thread-state-shadow-types";
+import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
 
 export interface WorkbenchDatabaseControllerOptions {
   databasePath: string;
@@ -165,6 +166,31 @@ export default class WorkbenchDatabaseController {
       throw new WorkbenchDatabaseFailure(`Unexpected transcript materialization response: ${response.type}`);
     }
     return response.turnIds;
+  }
+
+  async replaceSearchProjects(projects: readonly { id: string; name: string; rootPath: string }[]) {
+    await this.start();
+    const response = await this.#request({ type: "replaceSearchProjects", projects });
+    if (response.type !== "mutationResult") {
+      throw new WorkbenchDatabaseFailure(`Unexpected search project replacement response: ${response.type}`);
+    }
+  }
+
+  async replaceSearchProjectFiles(projectId: string, paths: readonly string[]) {
+    await this.start();
+    const response = await this.#request({ type: "replaceSearchProjectFiles", projectId, paths });
+    if (response.type !== "mutationResult") {
+      throw new WorkbenchDatabaseFailure(`Unexpected search file replacement response: ${response.type}`);
+    }
+  }
+
+  async search(request: WorkbenchSearchRequest) {
+    await this.start();
+    const response = await this.#request({ type: "search", request });
+    if (response.type !== "searchResult") {
+      throw new WorkbenchDatabaseFailure(`Unexpected search response: ${response.type}`);
+    }
+    return response.result;
   }
 
   async close() {

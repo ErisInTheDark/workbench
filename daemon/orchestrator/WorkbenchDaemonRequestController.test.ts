@@ -15,6 +15,7 @@ function createController(options: { gitArcResponse?: Response; rejectProjectId?
   const gitArcRequests: object[] = [];
   const targetReads: object[] = [];
   const targetWrites: object[] = [];
+  const searchRequests: object[] = [];
   const controller = new WorkbenchDaemonRequestController({
     agents: {
       listAgents: async () => ({ data: [] }),
@@ -80,12 +81,18 @@ function createController(options: { gitArcResponse?: Response; rejectProjectId?
         return { id: projectId, kind: "git", root: "", rootPath: "", roots: [] };
       },
     },
+    search: {
+      search: async (request) => {
+        searchRequests.push(request);
+        return { results: [] };
+      },
+    },
     settings: {
       readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
       updateLocalCapabilities: async (update) => update({ browseRawCommandsEnabled: false }),
     },
   });
-  return { controller, fileWrites, gitArcRequests, networkWrites, targetReads, targetWrites };
+  return { controller, fileWrites, gitArcRequests, networkWrites, searchRequests, targetReads, targetWrites };
 }
 
 test("dispatch validates semantic parameters without corrupting valid empty file content", async () => {
@@ -139,6 +146,23 @@ test("Browse registration swaps atomically and stale disposal cannot remove its 
     (await controller.handle({ id: 3, method: "browse/sessions/read", params: {} })).error?.message ?? "",
     /reloading/u,
   );
+});
+
+test("search query dispatch preserves empty text and validates project ids", async () => {
+  const { controller, searchRequests } = createController({ rejectProjectId: "missing" });
+  assert.deepEqual(
+    (await controller.handle({ id: 1, method: "search/query", params: { projectId: "project", query: "" } })).result,
+    { results: [] },
+  );
+  assert.deepEqual(searchRequests, [{ projectId: "project", query: "" }]);
+
+  const invalid = await controller.handle({
+    id: 2,
+    method: "search/query",
+    params: { projectId: "missing", query: "nope" },
+  });
+  assert.equal(invalid.error?.code, -32602);
+  assert.equal(searchRequests.length, 1);
 });
 
 test("Codex sandbox network requests validate project ownership and preserve explicit override intent", async () => {

@@ -14,6 +14,7 @@ import type WorkbenchProjectFileController from "./WorkbenchProjectFileControlle
 import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotSchema } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import type WorkbenchSearchController from "./WorkbenchSearchController";
 import {
   GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
@@ -48,6 +49,7 @@ const METHODS = new Set([
   "profiles/delete", "profiles/read", "profiles/target/read", "profiles/target/set", "profiles/upsert",
   "project/catalog/read",
   "project/file/read", "project/file/reset", "project/file/save",
+  "search/query",
   "skills/read",
 ]);
 
@@ -126,6 +128,7 @@ export default class WorkbenchDaemonRequestController {
     profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
     profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
     projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "resolveProjectById">;
+    search: Pick<WorkbenchSearchController, "search">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
   }) {}
 
@@ -188,6 +191,23 @@ export default class WorkbenchDaemonRequestController {
           projectId: requiredString(params, "projectId"),
           resetToHead: true,
         }); break;
+        case "search/query": {
+          const projectId = params.projectId === null || params.projectId === ""
+            ? null
+            : requiredString(params, "projectId");
+          if (projectId) {
+            try {
+              await this.owners.projects.resolveProjectById(projectId);
+            } catch (error) {
+              throw new InvalidParamsError(error instanceof Error ? error.message : "Unknown project.");
+            }
+          }
+          result = await this.owners.search.search({
+            projectId,
+            query: requiredText(params, "query"),
+          });
+          break;
+        }
         case "local-capabilities/read": result = { localCapabilities: await this.owners.settings.readLocalCapabilities() }; break;
         case "local-capabilities/update": {
           const local = record(params.localCapabilities);

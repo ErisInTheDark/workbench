@@ -2,7 +2,7 @@
 
 /*
  * Exports:
- * - default Workbench: domain-hook client shell for project browsing, editing, project-aware pinned navigation, and thread interaction. Keywords: workbench, project, pinned, editor, thread controller, global home.
+ * - default Workbench: domain-hook client shell for project browsing, editing, search, project-aware pinned navigation, and thread interaction. Keywords: workbench, project, search, action, pinned, editor, thread controller, global home.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -24,6 +24,7 @@ import type {
 } from "workbench-shared/types";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
 import { writeTextToClipboard } from "../workbench/dom/clipboard";
 import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../workbench/layout/workbench-drag";
 import WorkbenchMainLayout, {
@@ -178,6 +179,14 @@ import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContex
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
 import WorkbenchDaemonClientContext from "./workbench/WorkbenchDaemonClientContext";
+import WorkbenchSearchDialog from "./workbench/WorkbenchSearchDialog";
+import WorkbenchSearchInput from "./workbench/WorkbenchSearchInput";
+import WorkbenchSearchController from "../workbench/search/WorkbenchSearchController";
+import {
+    handleWorkbenchActionShortcut,
+    runWorkbenchAction,
+    type WorkbenchActionContext,
+} from "../workbench/search/workbench-action-registry";
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./workbench/WorkbenchOptionCards";
 import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
@@ -559,12 +568,20 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const pendingEditorFontSizeSyncRef = useRef<number | null>(null);
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
   const threadViewInstanceKeysByThreadIdRef = useRef(new Map<string, string>());
+  const searchActivationRef = useRef<(result: WorkbenchSearchResult) => void>(() => undefined);
+  const searchController = useMemo(() => new WorkbenchSearchController({
+    activate: (result) => searchActivationRef.current(result),
+    request: async (request) => controls
+      ? await controls.daemon.request("search/query", request)
+      : { results: [] },
+  }), [controls]);
   const workbenchDragController = useMemo(() => new WorkbenchDragController(), []);
   const workbenchDragActivity = useSyncExternalStore(workbenchDragController.subscribe, workbenchDragController.getActivitySnapshot, workbenchDragController.getActivitySnapshot);
   const activeWorkbenchDrag = workbenchDragActivity.active && workbenchDragActivity.payload
     ? { payload: workbenchDragActivity.payload }
     : null;
   useEffect(() => () => { workbenchDragController.dispose(); }, [workbenchDragController]);
+  useEffect(() => () => { searchController.dispose(); }, [searchController]);
 
   function getWorkbenchDomSurfaces (): WorkbenchDomSurfaces | null {
     if (
@@ -1172,6 +1189,56 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         : createPinnedThreadRoute(viewedProjectId, targetProjectId, target));
     return true;
   }, [explorer.currentProjectId, navigateToRoute, route]);
+  const searchActionContext = useMemo<WorkbenchActionContext>(() => ({
+    createThread: () => {
+      if (activeProjectId) navigateToRoute(createThreadRoute(activeProjectId, { kind: "new" }));
+    },
+    getSidebarThreadLinks: () => Array.from(document.querySelector("aside")?.querySelectorAll<HTMLElement>("[data-workbench-sidebar-thread-link='true']") ?? [])
+      .filter((link) => !link.closest("[hidden]")),
+    hasDesktopSidebar: !isMobile,
+    hasProject: Boolean(activeProjectId),
+    home: () => navigateToRoute(createHomeRoute()),
+    openSearch: () => searchController.open(),
+    openSettings: () => navigateToRoute(createSettingsRoute(activeProjectId, "global")),
+    toggleSidebar: () => {
+      if (!isMobile) document.querySelector<HTMLElement>("[aria-label='Hide sidebar'], [aria-label='Show sidebar']")?.click();
+    },
+    zoomIn: () => zoomInButtonRef.current?.click(),
+    zoomOut: () => zoomOutButtonRef.current?.click(),
+  }), [activeProjectId, isMobile, navigateToRoute, searchController]);
+  searchActivationRef.current = (result) => {
+    switch (result.kind) {
+      case "action":
+        runWorkbenchAction(result.actionId, searchActionContext);
+        break;
+      case "project":
+        navigateToRoute(createProjectRoute(result.projectId));
+        break;
+      case "projectSetting":
+        navigateToRoute(createSettingsRoute(result.projectId, "project"));
+        break;
+      case "thread":
+        void openThreadFromExplorer({
+          harness: result.harnessId as WorkbenchHarness,
+          kind: "provider",
+          threadId: result.threadId,
+        }, result.projectId);
+        break;
+      case "file":
+        void openFileByPolicy({ path: result.path, projectId: result.projectId });
+        break;
+    }
+  };
+  useEffect(() => {
+    searchController.setProjectId(activeProjectId || null);
+  }, [activeProjectId, searchController]);
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      handleWorkbenchActionShortcut(event, searchActionContext);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [searchActionContext]);
   const updateBrowseSession = useCallback(async (session: WorkbenchBrowseSessionSummary, action: "forget" | "stop", options: { force?: boolean } = {}) => {
     if (!activeProjectId) {
       return;
@@ -2566,6 +2633,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         >
           {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
           <WorkbenchTabIcon state={tabIconState} />
+          <WorkbenchSearchDialog controller={searchController} />
           {isEffectiveDesktopSidebarCollapsed ? (
             <>
               <button
@@ -2648,6 +2716,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     </button>
                   ) : null}
                 </header>
+                <WorkbenchSearchInput onOpen={() => searchController.open()} />
                 <WorkbenchThreadSidebarActionsProvider
                   controls={controls}
                   onOpenThread={openThreadFromExplorer}
