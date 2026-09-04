@@ -160,8 +160,8 @@ Use Decision mode to get explicit user direction.
 In Decision mode:
 
 - ask whether the user approves the plan, wants revisions, wants more inspection, or wants another route
-- use request_user_input when it is available and useful
-- explain the question and options in chat before using request_user_input
+- use `tools.mcp__wb__request_user_input` through Workbench Long Wait when useful
+- explain the question and options in chat before invoking it
 - keep questionnaire options faithful to the visible plan and the user's stated architecture
 - if the right answer is not represented by the options, treat the user's free-form answer as a steer and classify it before discarding any approval it contains
 - do not treat vague agreement as approval

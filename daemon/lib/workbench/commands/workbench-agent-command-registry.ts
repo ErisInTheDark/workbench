@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - listWorkbenchAgentCommands: assemble canonical typed wb commands with reload definitions from the active topology catalog. Keywords: workbench, commands, registry, MCP, CLI, toc.
- * - listWorkbenchAgentCodeModeToolNames: list the explicit default-deny subset safe for nested Code Mode calls. Keywords: workbench, MCP, Code Mode, tools, toc.
+ * - listWorkbenchAgentCommands: assemble canonical typed wb commands with reload definitions from the active topology catalog. Keywords: workbench, commands, registry, MCP, CLI, questionnaire.
+ * - listWorkbenchAgentCodeModeToolNames: list the explicit default-deny subset safe for nested Code Mode calls. Keywords: workbench, MCP, Code Mode, tools, questionnaire.
  */
 import { WORKBENCH_BROWSE_COMMANDS } from "./browse-command-definitions";
 import { WORKBENCH_GIT_ARC_COMMANDS } from "./git-arc-command-definitions";
 import { WORKBENCH_GIT_COMMANDS } from "./git-command-definitions";
 import type { OrchestratorReloadScopeDescriptor } from "workbench-shared/workbench/orchestrator-reload";
+import { WORKBENCH_QUESTIONNAIRE_COMMANDS } from "./questionnaire-command-definition";
 import { createWorkbenchReloadCommands } from "./reload-command-definitions";
 import { WORKBENCH_RIPGREP_COMMANDS } from "./ripgrep-command-definition";
 import { WORKBENCH_SUBAGENT_COMMANDS } from "./subagent-command-definitions";
@@ -21,6 +22,7 @@ import {
 const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Object.freeze([
   ...WORKBENCH_TOC_COMMANDS,
   ...WORKBENCH_RIPGREP_COMMANDS,
+  ...WORKBENCH_QUESTIONNAIRE_COMMANDS,
   ...WORKBENCH_SUBAGENT_COMMANDS,
   ...WORKBENCH_THREAD_COMMANDS,
   ...WORKBENCH_TOKEN_COMMANDS,

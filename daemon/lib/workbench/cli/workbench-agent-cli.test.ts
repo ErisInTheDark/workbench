@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover wb parsing, paged arc output, transport, response text, and generated shims. Keywords: workbench, cli, git arc, page, test, output, shim, allowlist.
+ * - No production exports; Node tests cover wb parsing, questionnaire JSON, paged arc output, transport, response text, and generated shims. Keywords: workbench, cli, questionnaire, git arc, test, output, shim, allowlist.
  */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
@@ -219,6 +219,41 @@ after(async () => {
 });
 
 test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", async () => {
+  const questions = [{
+    header: "details",
+    id: "details",
+    options: [],
+    question: "What should change?",
+  }];
+  const questionnaire = await parseWorkbenchAgentCliCommand([
+    "request", "user", "input", "--questions-json", JSON.stringify(questions),
+  ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
+  assert.equal(questionnaire.kind, "request");
+  const questionnaireRequestKey = questionnaire.request.body?.requestKey;
+  assert.match(String(questionnaireRequestKey), /^workbench-mcp:/u);
+  assert.deepEqual(questionnaire.request, {
+    body: {
+      callerThreadId: "thread/1",
+      cwd: "C:/workspace",
+      questions,
+      requestKey: questionnaireRequestKey,
+    },
+    method: "POST",
+    path: "/api/request-user-input",
+    responseKind: "json",
+  });
+  assert.equal((await parseWorkbenchAgentCliCommand([
+    "request", "user", "input", "--questions-json", JSON.stringify([...questions, ...questions, ...questions, ...questions]),
+  ], { callerThreadId: "thread/1", cwd: "C:/workspace" })).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand([
+    "request", "user", "input", "--questions-json", JSON.stringify([{ ...questions[0], options: [
+      { description: "", label: "one" },
+      { description: "", label: "two" },
+      { description: "", label: "three" },
+      { description: "", label: "four" },
+    ] }]),
+  ], { callerThreadId: "thread/1", cwd: "C:/workspace" })).kind, "error");
+
   const title = await parseWorkbenchAgentCliCommand([
     "thread", "title", "--title", "A title", "--current-title", "Current title",
   ], { callerThreadId: "thread/1", cwd: "C:/workspace" });

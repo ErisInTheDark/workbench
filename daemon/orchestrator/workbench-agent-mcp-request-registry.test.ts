@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { WorkbenchAgentCommandRequest } from "../lib/workbench/commands/workbench-agent-command-definition";
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   isWorkbenchAgentMcpSteerInterruption,
@@ -105,6 +106,13 @@ test("thread wait observation derives every active interruptible tool from live 
   const ordinary = registry.register("client-1", 2, {
     owner, threadId: "parent-thread", toolName: "thread_title_get",
   });
+  const replayed: Array<{ threadId: string; toolNames: string[] }> = [];
+  const stopReplay = registry.subscribeThreadWaits((state) => replayed.push(state));
+  assert.deepEqual(replayed, [{
+    threadId: "parent-thread",
+    toolNames: ["git_arc_wait", "subagent_wait"],
+  }]);
+  stopReplay();
   arc.unregister();
   subagent.unregister();
   ordinary.unregister();
@@ -115,6 +123,74 @@ test("thread wait observation derives every active interruptible tool from live 
     { threadId: "parent-thread", toolNames: ["subagent_wait"] },
     { threadId: "parent-thread", toolNames: [] },
   ]);
+});
+
+test("command executor replacement retries one built request without surfacing reload", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const oldOwner = {};
+  const newOwner = {};
+  const request = {
+    body: { callerThreadId: "thread-1" },
+    method: "POST",
+    path: "/api/subagents",
+    responseKind: "native",
+  } satisfies WorkbenchAgentCommandRequest;
+  let oldSignal: AbortSignal | null = null;
+  registry.activateCommandExecutor(oldOwner, async (_request, signal) => {
+    oldSignal = signal;
+    return await new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  });
+  const waiting = registry.executeCommand(request, new AbortController().signal);
+  await Promise.resolve();
+  registry.activateCommandExecutor(newOwner, async (retried) => {
+    assert.strictEqual(retried, request);
+    return new Response("completed after reload");
+  });
+  assert.equal(oldSignal?.aborted, true);
+  assert.equal(await (await waiting).text(), "completed after reload");
+  registry.releaseCommandExecutor(oldOwner);
+  registry.releaseCommandExecutor(newOwner);
+});
+
+test("successful retiring command wins and executor shutdown stays terminal", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const oldOwner = {};
+  const newOwner = {};
+  const request = {
+    method: "POST",
+    path: "/api/git-checkpoint",
+    responseKind: "git-arc-wait",
+  } satisfies WorkbenchAgentCommandRequest;
+  let finishOld!: () => void;
+  registry.activateCommandExecutor(oldOwner, async () => {
+    await new Promise<void>((resolve) => { finishOld = resolve; });
+    return new Response("retiring success");
+  });
+  const waiting = registry.executeCommand(request, new AbortController().signal);
+  await Promise.resolve();
+  let replacementCalls = 0;
+  registry.activateCommandExecutor(newOwner, async () => {
+    replacementCalls += 1;
+    return new Response("replacement");
+  });
+  finishOld();
+  assert.equal(await (await waiting).text(), "retiring success");
+  assert.equal(replacementCalls, 0);
+  registry.releaseCommandExecutor(oldOwner);
+  registry.releaseCommandExecutor(newOwner);
+
+  const shutdownOwner = {};
+  registry.activateCommandExecutor(shutdownOwner, async (_request, signal) => (
+    await new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    })
+  ));
+  const shuttingDown = registry.executeCommand(request, new AbortController().signal);
+  await Promise.resolve();
+  registry.releaseCommandExecutor(shutdownOwner);
+  await assert.rejects(shuttingDown, /shutting down/u);
 });
 
 test("runtime drain cancels only matching policies in the retiring generation", () => {

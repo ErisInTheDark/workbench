@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect permanent questionnaire item identity when provider request keys repeat across turns.
+ * No production exports. Tests protect native Workbench request identity and permanent questionnaire item identity when provider keys repeat across turns.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -12,10 +12,17 @@ import {
 } from "./thread-questionnaire-history.ts";
 import {
   createSyntheticQuestionnaireHistoryItemId,
+  isWorkbenchMcpQuestionnaireRequestKey,
   mergeQuestionnaireHistoryEntries,
   readSyntheticQuestionnaireHistoryItemId,
   resolveQuestionnaireHistoryItemId,
 } from "./thread-questionnaire-identity.ts";
+
+test("Workbench MCP questionnaire keys keep a strict native-response namespace", () => {
+  assert.equal(isWorkbenchMcpQuestionnaireRequestKey("workbench-mcp:question"), true);
+  assert.equal(isWorkbenchMcpQuestionnaireRequestKey("workbench-mcpish:question"), false);
+  assert.equal(isWorkbenchMcpQuestionnaireRequestKey("provider-question"), false);
+});
 
 function turn(id: string, item: ThreadItem): Turn {
   return {

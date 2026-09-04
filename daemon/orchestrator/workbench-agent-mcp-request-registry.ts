@@ -1,16 +1,31 @@
 /*
  * Exports:
  * - WorkbenchAgentMcpPendingRequest: bounded active-request detail for runtime-drain diagnostics. Keywords: workbench, MCP, drain, diagnostics.
- * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation handles, thread-steer interruption, generation drain policy, and duplicate-ID guards. Keywords: workbench, MCP, cancellation, steer, registry.
+ * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, wait observation, and reload-safe command generation re-entry. Keywords: workbench, MCP, cancellation, steer, registry, reload.
  * - getProcessWorkbenchAgentMcpRequestRegistry: wrap reload-stable process state without retaining stale module methods. Keywords: workbench, MCP, reload, process.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across reloadable MCP module generations. Keywords: workbench, MCP, steer, cancellation, error.
  */
-import type { WorkbenchAgentMcpRuntimeDrainPolicy } from "../lib/workbench/commands/workbench-agent-command-definition";
+import {
+  createWorkbenchAgentMcpRuntimeReloadInterruption,
+  isWorkbenchAgentMcpRuntimeReloadInterruption,
+  type WorkbenchAgentCommandRequest,
+  type WorkbenchAgentMcpRuntimeDrainPolicy,
+} from "../lib/workbench/commands/workbench-agent-command-definition";
 
 type WorkbenchAgentMcpRequestId = number | string;
 type WorkbenchAgentMcpClientScope = string;
 type WorkbenchAgentMcpRuntimeOwner = object;
 type WorkbenchAgentMcpRuntimeDrainPhase = "deadline" | "immediate";
+type WorkbenchAgentMcpCommandExecutor = (
+  request: WorkbenchAgentCommandRequest,
+  signal: AbortSignal,
+) => Promise<Response>;
+
+interface WorkbenchAgentMcpCommandGeneration {
+  controller: AbortController;
+  execute: WorkbenchAgentMcpCommandExecutor;
+  owner: object;
+}
 
 interface WorkbenchAgentMcpRequestEntry {
   controller: AbortController;
@@ -29,6 +44,7 @@ interface WorkbenchAgentMcpRuntimeOwnerState {
 }
 
 interface WorkbenchAgentMcpRequestRegistryState {
+  commandGeneration: WorkbenchAgentMcpCommandGeneration | null;
   disposed: boolean;
   exitHookInstalled: boolean;
   threadWaitListeners: Set<(state: WorkbenchAgentMcpThreadWaitState) => void>;
@@ -70,6 +86,7 @@ export function isWorkbenchAgentMcpSteerInterruption(error: unknown) {
 
 function createState(): WorkbenchAgentMcpRequestRegistryState {
   return {
+    commandGeneration: null,
     disposed: false,
     exitHookInstalled: false,
     threadWaitListeners: new Set(),
@@ -81,6 +98,8 @@ function createState(): WorkbenchAgentMcpRequestRegistryState {
 function disposeState(state: WorkbenchAgentMcpRequestRegistryState, reason: string) {
   if (state.disposed) return;
   state.disposed = true;
+  state.commandGeneration?.controller.abort(new Error(reason));
+  state.commandGeneration = null;
   for (const requests of state.requestsByClient.values()) {
     for (const entry of requests.values()) {
       if (!entry.controller.signal.aborted) entry.controller.abort(new Error(reason));
@@ -97,6 +116,7 @@ function getProcessState() {
     state = createState();
     Reflect.set(globalThis, PROCESS_REGISTRY_KEY, state);
   }
+  state.commandGeneration ??= null;
   state.threadWaitListeners ??= new Set();
   if (!state.exitHookInstalled) {
     state.exitHookInstalled = true;
@@ -158,9 +178,74 @@ export class WorkbenchAgentMcpRequestRegistry {
     };
   }
 
+  activateCommandExecutor(owner: object, execute: WorkbenchAgentMcpCommandExecutor) {
+    if (this.state.disposed) throw new Error("Workbench MCP request registry is disposed.");
+    const previous = this.state.commandGeneration;
+    const current = { controller: new AbortController(), execute, owner };
+    this.state.commandGeneration = current;
+    if (previous && !previous.controller.signal.aborted) {
+      previous.controller.abort(createWorkbenchAgentMcpRuntimeReloadInterruption());
+    }
+  }
+
+  releaseCommandExecutor(owner: object) {
+    const current = this.state.commandGeneration;
+    if (!current || current.owner !== owner) return;
+    this.state.commandGeneration = null;
+    if (!current.controller.signal.aborted) {
+      current.controller.abort(new Error("Workbench command runtime is shutting down."));
+    }
+  }
+
+  async executeCommand(request: WorkbenchAgentCommandRequest, callerSignal: AbortSignal) {
+    while (true) {
+      callerSignal.throwIfAborted();
+      const generation = this.state.commandGeneration;
+      if (!generation) throw new Error("Workbench command runtime is unavailable.");
+      const signal = AbortSignal.any([callerSignal, generation.controller.signal]);
+      try {
+        const response = await generation.execute(request, signal);
+        callerSignal.throwIfAborted();
+        if (!generation.controller.signal.aborted) return response;
+        const reason = generation.controller.signal.reason;
+        if (!isWorkbenchAgentMcpRuntimeReloadInterruption(reason)) throw reason;
+        if (response.ok) return response;
+        if (this.state.commandGeneration === generation) throw reason;
+      } catch (error) {
+        callerSignal.throwIfAborted();
+        if (
+          !generation.controller.signal.aborted
+          || !isWorkbenchAgentMcpRuntimeReloadInterruption(generation.controller.signal.reason)
+        ) {
+          throw error;
+        }
+        if (this.state.commandGeneration === generation) throw generation.controller.signal.reason;
+      }
+    }
+  }
+
   subscribeThreadWaits(listener: (state: WorkbenchAgentMcpThreadWaitState) => void) {
     this.state.threadWaitListeners.add(listener);
+    for (const state of this.listThreadWaitStates()) listener(state);
     return () => this.state.threadWaitListeners.delete(listener);
+  }
+
+  private listThreadWaitStates() {
+    const toolNamesByThreadId = new Map<string, Set<string>>();
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (!entry.steerInterruptible || !entry.threadId) continue;
+        const toolNames = toolNamesByThreadId.get(entry.threadId) ?? new Set<string>();
+        toolNames.add(entry.toolName);
+        toolNamesByThreadId.set(entry.threadId, toolNames);
+      }
+    }
+    return [...toolNamesByThreadId]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([threadId, toolNames]) => ({
+        threadId,
+        toolNames: [...toolNames].sort((left, right) => left.localeCompare(right)),
+      }));
   }
 
   private notifyThreadWaits(threadId: string) {

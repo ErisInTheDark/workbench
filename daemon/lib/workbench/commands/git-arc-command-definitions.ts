@@ -156,7 +156,7 @@ const wait = defineWorkbenchAgentCommand({
     }, "git-arc-wait");
   },
   mcpCodeModeEligible: true,
-  mcpRuntimeDrainPolicy: "abort-immediately",
+  mcpRuntimeDrainPolicy: "preserve-across-reload",
   mcpSteerInterruptible: true,
 });
 

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover app-server generation handoff, durable versus live-only transcript routing, active transcript baselines, reload-safe page recovery, bridge pending cleanup, approval classification, file-change failure ordering, turn-start preflight, context reads, managed MCP config, and scoped-entry negotiation. Keywords: codex, bridge, reload, transcript, live, durable, recovery, approval, MCP, test.
+ * - No production exports; Node tests cover app-server handoff, Workbench/provider questionnaires, transcript routing, reload recovery, approvals, turn-start preflight, context reads, and MCP config. Keywords: codex, bridge, questionnaire, reload, transcript, recovery, approval, MCP, test.
  */
 
 import assert from "node:assert/strict";
@@ -989,6 +989,100 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
     ]);
   } finally {
     releaseSqlite.resolve();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("Workbench questionnaires share native listing, response, and transcript history routes", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-owned-questionnaire-"));
+  const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
+  const upstreamMessages: unknown[] = [];
+  const request = {
+    id: "workbench-mcp:question",
+    questions: [{
+      allowOther: true,
+      header: "details",
+      id: "details",
+      isSecret: false,
+      options: [],
+      question: "What should change?",
+    }],
+    submitLabel: "Submit",
+    summary: "",
+    title: "Questionnaire",
+  };
+  const pending = {
+    itemId: null,
+    request,
+    requestKey: "workbench-mcp:question",
+    threadId: "thread",
+    turnId: "turn",
+  };
+  let receivedResponse: unknown = null;
+  const bridge = new CodexStdioBridge({
+    appServer: { send(message: unknown) { upstreamMessages.push(message); } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    questionnaires: {
+      list: () => ({ data: [pending] }),
+      respond: async (response) => {
+        if (response.requestKey !== pending.requestKey || response.threadId !== pending.threadId) return null;
+        receivedResponse = response;
+        return { ...pending, response: response.response };
+      },
+    },
+    recordSqliteTranscript: async (observations) => {
+      sqliteBatches.push([...observations]);
+    },
+    resolveProjectFromCwd: async () => null,
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    const listed = await bridge.handleBridgeRequest({
+      id: "list",
+      method: "questionnaire/list",
+      params: null,
+    });
+    assert.deepEqual(listed?.result, { data: [pending] });
+
+    const response = { answers: { details: { answers: ["Keep one owner."] } } };
+    const settled = await bridge.handleBridgeRequest({
+      id: "answer",
+      method: "questionnaire/respond",
+      params: {
+        requestKey: pending.requestKey,
+        response,
+        threadId: pending.threadId,
+        turnId: pending.turnId,
+      },
+    });
+    assert.deepEqual(receivedResponse, {
+      requestKey: pending.requestKey,
+      response,
+      threadId: pending.threadId,
+    });
+    assert.deepEqual(settled?.result, { ok: true });
+    assert.equal(upstreamMessages.length, 0);
+    assert.equal(sqliteBatches.length, 1);
+    assert.deepEqual(sqliteBatches[0]?.[0], {
+      entry: {
+        insertAfterItemId: null,
+        insertAfterItemIndex: null,
+        itemId: null,
+        request,
+        requestKey: pending.requestKey,
+        resolvedAt: (sqliteBatches[0]?.[0] as { observedAt?: number } | undefined)?.observedAt,
+        response,
+        threadId: pending.threadId,
+        turnId: pending.turnId,
+      },
+      kind: "questionnaire",
+      observedAt: (sqliteBatches[0]?.[0] as { observedAt?: number } | undefined)?.observedAt,
+    });
+  } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }

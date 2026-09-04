@@ -486,6 +486,9 @@ function buildRenderableBlocks (
         server: item.server,
         tool: item.tool,
       });
+      if (route?.kind === "simple" && route.rendering.result.omitFromDisplay) {
+        continue;
+      }
       if (route?.kind === "simple" && route.rendering.claimedBy !== "browse.command") {
         appendCommandItem(item);
         continue;

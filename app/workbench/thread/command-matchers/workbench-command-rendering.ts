@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WorkbenchCommandPresentationName/WORKBENCH_COMMAND_PRESENTATION_NAMES: canonical wb tool inventory shared by CLI and MCP adapters. Keywords: workbench, command, inventory, toc.
- * - WorkbenchCommandRoute/WorkbenchSpecializedOperation/WorkbenchCommandPresentationContext: route one wb operation with optional path context to a dedicated or simple renderer. Keywords: workbench, command, route, renderer, toc.
- * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay/getWorkbenchCommandRouteSummaryDisplay: resolve structured arguments and routes into shared rendering metadata. Keywords: workbench, CLI, MCP, rendering, toc.
+ * - WorkbenchCommandPresentationName/WORKBENCH_COMMAND_PRESENTATION_NAMES: canonical wb tool inventory shared by CLI and MCP adapters. Keywords: workbench, command, inventory, questionnaire.
+ * - WorkbenchCommandRoute/WorkbenchSpecializedOperation/WorkbenchCommandPresentationContext: route one wb operation with optional path context to a dedicated or simple renderer. Keywords: workbench, command, route, renderer, questionnaire.
+ * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay/getWorkbenchCommandRouteSummaryDisplay: resolve structured arguments and routes into shared rendering metadata. Keywords: workbench, CLI, MCP, rendering, questionnaire.
  */
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
 
@@ -28,6 +28,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "tokens",
   "tokens_instructions",
   "tokens_project",
+  "request_user_input",
   "subagent_list",
   "subagent_profiles",
   "subagent_create",
@@ -160,6 +161,7 @@ function rendering({
   detailRows,
   hideCommandCwd = false,
   hideCommandOutput = false,
+  omitFromDisplay = false,
   ongoing,
   stats,
   summary,
@@ -168,6 +170,7 @@ function rendering({
   detailRows?: ThreadCommandDetailRow[];
   hideCommandCwd?: boolean;
   hideCommandOutput?: boolean;
+  omitFromDisplay?: boolean;
   ongoing: string | ThreadCommandDisplayPart[];
   stats?: Partial<ThreadCommandSummaryStats>;
   summary: string | ThreadCommandDisplayPart[];
@@ -178,6 +181,7 @@ function rendering({
       detailRows,
       hideCommandCwd,
       hideCommandOutput,
+      omitFromDisplay,
       ongoingSummaryParts: typeof ongoing === "string" ? [CommandMatcher.Text(ongoing)] : ongoing,
       remainingCommand: null,
       stop: true,
@@ -194,6 +198,18 @@ function simple(
   stats?: Partial<ThreadCommandSummaryStats>,
 ) {
   return { kind: "simple", rendering: rendering({ claimedBy, ongoing, stats, summary }) } satisfies WorkbenchCommandRoute;
+}
+
+function hidden(claimedBy: string) {
+  return {
+    kind: "simple",
+    rendering: rendering({
+      claimedBy,
+      omitFromDisplay: true,
+      ongoing: [],
+      summary: [],
+    }),
+  } satisfies WorkbenchCommandRoute;
 }
 
 function specialized(
@@ -497,6 +513,8 @@ export function getWorkbenchCommandRoute(
   switch (name) {
     case "git_arc_wait":
       return specialized("git-arc.wait", { kind: "gitArcWait", ref: readString(args.ref) });
+    case "request_user_input":
+      return hidden("workbench-cli.questionnaire");
     case "toc": {
       const file = readString(args.file) || "Markdown file";
       return simple(

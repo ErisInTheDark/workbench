@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchAgentCommandNode: own shared wb CLI and MCP command execution below core and above MCP adaptation. Keywords: agent command, CLI, MCP, reload graph.
+ * - default WorkbenchAgentCommandNode: own shared wb CLI and MCP command execution below core and above MCP adaptation. Keywords: agent command, CLI, MCP, questionnaire, reload graph.
  */
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
+import { WorkbenchRequestUserInputCommandSchema } from "../lib/workbench/commands/questionnaire-command-definition";
 import WorkbenchThreadRecallController from "../lib/workbench/thread/WorkbenchThreadRecallController";
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
@@ -18,6 +19,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const gitArc = build.get("gitArc");
     const harnesses = build.get("harnesses");
     const projectCatalog = build.get("projectCatalog");
+    const questionnaires = build.get("questionnaires");
     const subagents = build.get("subagents");
     const threadState = build.get("threadState");
     const transcript = build.get("transcript");
@@ -51,6 +53,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       checkApplyPatchClaims: async ({ cwd, harness, paths, threadId }) => await gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths),
       executeBrowseRequest: context.executeBrowseRequest,
       executeGitArcRequest: async (body, signal) => await gitArc.executeRequest(body, signal),
+      executeQuestionnaireRequest: async (body, signal) => Response.json(
+        await questionnaires.request(WorkbenchRequestUserInputCommandSchema.parse(body), signal),
+      ),
       executeThreadGitRequest: async (body, signal) => {
         signal.throwIfAborted();
         return await build.get("threadGit").executeRequest(body);
@@ -87,7 +92,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["gitArc", "harnesses", "projectCatalog", "reloadDirt", "subagents", "threadGit", "threadState", "transcript"],
+  requires: ["gitArc", "harnesses", "projectCatalog", "questionnaires", "reloadDirt", "subagents", "threadGit", "threadState", "transcript"],
   safeAll: true,
   scope: "server:commands",
   sources: [

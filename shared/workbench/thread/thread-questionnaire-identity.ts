@@ -1,5 +1,6 @@
 /*
  * SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX: item id prefix reserved for Workbench questionnaire overlays. Keywords: synthetic, questionnaire, identity.
+ * WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX/isWorkbenchMcpQuestionnaireRequestKey: identify Workbench-owned native questionnaire waits. Keywords: questionnaire, MCP, native, identity.
  * resolveQuestionnaireHistoryItemId: resolve the permanent item identity for one settled questionnaire. Keywords: questionnaire, identity, item.
  * mergeQuestionnaireHistoryEntries: merge settled questionnaire history by permanent item identity. Keywords: questionnaire, identity, collection, merge.
  * createSyntheticQuestionnaireHistoryItemId: wrap permanent questionnaire identity for the JSON transcript overlay. Keywords: synthetic, questionnaire, identity.
@@ -8,6 +9,11 @@
 import type { WorkbenchQuestionnaireHistoryEntry } from "../../types.ts";
 
 export const SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX = "workbench:questionnaire-history:";
+export const WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX = "workbench-mcp:";
+
+export function isWorkbenchMcpQuestionnaireRequestKey(requestKey: string) {
+  return requestKey.startsWith(WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX);
+}
 
 type QuestionnaireHistoryIdentity = Pick<
   WorkbenchQuestionnaireHistoryEntry,

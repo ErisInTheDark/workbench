@@ -1,4 +1,4 @@
-/* No production exports. Tests protect pending cadence, terminal outcomes, cancellation, and timer cleanup for CLI/MCP timing logs. */
+/* No production exports. Tests protect pending cadence and omission, questionnaire waits, terminal outcomes, cancellation, and timer cleanup for CLI/MCP timing logs. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -49,11 +49,13 @@ test("omits pending warnings for normal long waits while preserving completion l
 
   await logger.run("wb shell", new AbortController().signal, async () => "done");
   await logger.run("wb git arc wait", new AbortController().signal, async () => "done");
+  await logger.run("wb request user input", new AbortController().signal, async () => "done");
 
   assert.equal(scheduled, 0);
   assert.deepEqual(lines, [
     " CLI wb shell ok in 0ms",
     " CLI wb git arc wait ok in 0ms",
+    " CLI wb request user input ok in 0ms",
   ]);
 });
 
@@ -79,4 +81,28 @@ test("reports failed responses and cancelled exceptions without leaking timers",
   assert.match(lines[0] ?? "", /CLI wb git arc diff error in/u);
   assert.match(lines[1] ?? "", /CLI wb shell cancelled in/u);
   assert.equal(activeTimers, 0);
+});
+
+test("keeps internal reload re-entry out of terminal command logs", async () => {
+  const lines: string[] = [];
+  const cancellation = new AbortController();
+  const logger = new WorkbenchAgentCommandLogger({
+    schedule: () => 1 as never,
+    writeLine: (line) => { lines.push(line); },
+  });
+  const reload = new Error("Workbench command generation was replaced.");
+  Reflect.set(reload, Symbol.for("workbench.agentMcpRuntimeReloadInterruption.v1"), true);
+
+  await assert.rejects(logger.run("wb request user input", cancellation.signal, async () => {
+    cancellation.abort(reload);
+    throw reload;
+  }), /generation was replaced/u);
+  assert.deepEqual(lines, []);
+
+  const successfulRetirement = new AbortController();
+  assert.equal(await logger.run("wb git arc wait", successfulRetirement.signal, async () => {
+    successfulRetirement.abort(reload);
+    return "started";
+  }), "started");
+  assert.match(lines[0] ?? "", /wb git arc wait.*ok/u);
 });

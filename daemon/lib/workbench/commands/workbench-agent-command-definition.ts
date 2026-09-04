@@ -5,6 +5,8 @@
  * - defineWorkbenchAgentCommand: preserve command-specific Zod inference while exposing one uniform registry boundary. Keywords: workbench, command, zod, schema.
  * - getWorkbenchAgentCommandToolName: derive the canonical typed MCP name from a command definition. Keywords: workbench, command, MCP, name.
  * - getWorkbenchAgentCommand/postWorkbenchAgentCommand/queryWorkbenchAgentCommandPath: request-building helpers for command families. Keywords: workbench, command, request, query.
+ * - createWorkbenchAgentMcpRuntimeReloadInterruption: create private reload re-entry control flow. Keywords: MCP, reload, interruption.
+ * - isWorkbenchAgentMcpRuntimeReloadInterruption: recognise reload re-entry across module generations. Keywords: MCP, reload, interruption.
  */
 import { z } from "zod";
 
@@ -62,7 +64,22 @@ export interface WorkbenchAgentCommandEffects {
   readOnly?: boolean;
 }
 
-export type WorkbenchAgentMcpRuntimeDrainPolicy = "abort-at-deadline" | "abort-immediately";
+export type WorkbenchAgentMcpRuntimeDrainPolicy =
+  | "abort-at-deadline"
+  | "abort-immediately"
+  | "preserve-across-reload";
+
+const MCP_RUNTIME_RELOAD_INTERRUPTION_KEY = Symbol.for("workbench.agentMcpRuntimeReloadInterruption.v1");
+
+export function createWorkbenchAgentMcpRuntimeReloadInterruption() {
+  const error = new Error("Workbench command generation was replaced.");
+  Reflect.set(error, MCP_RUNTIME_RELOAD_INTERRUPTION_KEY, true);
+  return error;
+}
+
+export function isWorkbenchAgentMcpRuntimeReloadInterruption(error: unknown) {
+  return error instanceof Error && Reflect.get(error, MCP_RUNTIME_RELOAD_INTERRUPTION_KEY) === true;
+}
 
 export interface WorkbenchAgentCommandDefinition {
   aliases?: readonly (readonly string[])[];

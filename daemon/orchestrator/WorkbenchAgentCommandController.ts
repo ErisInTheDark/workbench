@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute shared structured commands while preserving reload, search, toc, token, streaming, and direct-port lifecycle. Keywords: workbench, agent, command, shell, orchestrator, reload, search, toc, tokens, transport.
+ * - default WorkbenchAgentCommandController: parse native-shell wb argv and execute shared structured commands while preserving reload, questionnaire, search, token, streaming, and direct-port lifecycle. Keywords: workbench, agent, command, shell, orchestrator, reload, questionnaire, cancellation, transport.
  */
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
@@ -28,6 +28,7 @@ interface WorkbenchAgentDirectPort {
   checkApplyPatchClaims?: (request: { cwd: string; harness: WorkbenchHarness; paths: string[]; threadId: string }) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeQuestionnaireRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeThreadGitRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeThreadRecallRequest?: (request: WorkbenchAgentCliRequest, signal: AbortSignal) => Promise<Response>;
   executeTokenCount?: (body: object, signal: AbortSignal) => Promise<Response>;
@@ -348,6 +349,9 @@ export default class WorkbenchAgentCommandController {
     }
     if (request.path === "/api/git-checkpoint" && request.body && this.direct.executeGitArcRequest) {
       return await this.direct.executeGitArcRequest(request.body, signal);
+    }
+    if (request.path === "/api/request-user-input" && request.body && this.direct.executeQuestionnaireRequest) {
+      return await this.direct.executeQuestionnaireRequest(request.body, signal);
     }
     if (request.path === "/api/git" && request.body && this.direct.executeThreadGitRequest) {
       return await this.direct.executeThreadGitRequest(request.body, signal);

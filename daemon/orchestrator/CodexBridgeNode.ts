@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - recoverCodexSqliteTranscriptBeforeAvailability: settle marked recovery and active provider baselines before reopening Codex. Keywords: codex, transcript, recovery, baseline.
- * - default CodexBridgeNode: own reloadable Codex bridge code while preserving the parent app-server process. Keywords: codex, bridge, handoff.
+ * - default CodexBridgeNode: own reloadable Codex bridge code and questionnaire routing while preserving the parent app-server process. Keywords: codex, bridge, questionnaire, handoff.
  */
 import CodexStdioBridge from "./CodexStdioBridge";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
@@ -76,6 +76,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const codexInstructions = build.get("codexInstructions");
     const harnesses = build.get("harnesses");
     const projectCatalog = build.get("projectCatalog");
+    const questionnaires = build.get("questionnaires");
     const transcript = build.get("transcript");
     const threadState = build.get("threadState");
     const turnRecovery = build.get("turnRecovery");
@@ -110,6 +111,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
       instructions: codexInstructions,
       prepareTurnStart,
+      questionnaires,
       readSqliteTranscriptMaterializedTurnIds: (threadId, turnIds) => (
         transcript.readMaterializedTurnIds(threadId, turnIds)
       ),
@@ -176,7 +178,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge"],
-  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "harnesses", "projectCatalog", "threadState", "transcript", "transcriptShadowLog", "turnRecovery"],
+  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "harnesses", "projectCatalog", "questionnaires", "threadState", "transcript", "transcriptShadowLog", "turnRecovery"],
   safeAll: true,
   scope: "server:codex",
   sources: [

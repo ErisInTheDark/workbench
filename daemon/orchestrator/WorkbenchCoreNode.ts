@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchCoreNode: own core state, Git, harness, project, and supervisor registrations plus direct child declarations. Keywords: core, graph, registry.
+ * - default WorkbenchCoreNode: own core state, Git, questionnaire, harness, project, and supervisor registrations plus direct child declarations. Keywords: core, graph, registry.
  */
 import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "../lib/workbench-library";
 import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
@@ -38,6 +38,7 @@ import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
+import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
@@ -222,6 +223,54 @@ function createWorkbenchCoreFeature(
     shadow: threadStateShadow,
     transitions: worktreeGitTransitions,
   });
+  const questionnaires = new WorkbenchQuestionnaireController({
+    clearPending: async (threadId, requestKey) => {
+      await threadState!.controller.observeLifecycle("codex", threadId, { kind: "inputResolved", requestKey });
+    },
+    logError: (message) => {
+      transcriptShadowLog.write({
+        event: "questionnaire",
+        fields: { message },
+        level: "error",
+        source: "questionnaire",
+      });
+    },
+    publishPending: async (threadId, questionnaire) => {
+      await threadState!.controller.observeLifecycle("codex", threadId, {
+        kind: "pendingInput",
+        questionnaire,
+        requestKey: questionnaire.requestKey,
+        turnId: questionnaire.turnId,
+      });
+    },
+    resolveThread: async (cwd, threadId) => {
+      const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, {
+        endpointName: "Questionnaire",
+      });
+      const snapshot = await threadState!.controller.getSnapshot(resolved.project.id);
+      const entry = snapshot.entries.find((candidate) => (
+        candidate.entryKind !== "draft"
+        && candidate.identity.harness === "codex"
+        && candidate.identity.threadId === threadId
+      ));
+      if (!entry || entry.entryKind === "draft") {
+        throw new Error("The questionnaire caller does not have an active observed turn in this cwd project.");
+      }
+      const turnId = getWorkbenchLifecycleTurnId(entry.lifecycle);
+      if (!turnId) {
+        throw new Error("The questionnaire caller does not have an active observed turn in this cwd project.");
+      }
+      return { projectId: resolved.project.id, turnId };
+    },
+    subscribePending: (listener) => threadState!.controller.subscribe((projectId, entry) => {
+      if (entry.entryKind === "draft" || entry.identity.harness !== "codex") return;
+      listener({
+        projectId,
+        requestKey: entry.pendingQuestionnaire?.requestKey ?? null,
+        threadId: entry.identity.threadId,
+      });
+    }),
+  });
   const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
   const legacyMigrationSource = new WorkbenchLegacyMigrationSourceController({
     allowedProjectIds,
@@ -247,7 +296,7 @@ function createWorkbenchCoreFeature(
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
   const registrations: Pick<OrchestratorRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
-    bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, legacyMigrationSource, modules, projectCatalog, projectSnapshot, subagents, threadGit, threadState,
+    bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, legacyMigrationSource, modules, projectCatalog, projectSnapshot, questionnaires, subagents, threadGit, threadState,
   };
   return new WorkbenchCoreFeature({
     beginRuntimeDrain: () => { subagents.beginRuntimeDrain(); },
@@ -260,6 +309,8 @@ function createWorkbenchCoreFeature(
       subagents.dispose();
       reportPhase("Git arc disposal");
       gitArc.dispose();
+      reportPhase("questionnaire disposal");
+      await questionnaires.dispose();
       reportPhase("thread-state disposal");
       await threadState.dispose();
       reportPhase("thread-state shadow disposal");
@@ -349,6 +400,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchThreadStateController.ts",
     "daemon/orchestrator/WorkbenchThreadStateStore.ts",
     "daemon/orchestrator/WorkbenchThreadStateShadowController.ts",
+    "daemon/orchestrator/WorkbenchQuestionnaireController.ts",
     "daemon/orchestrator/BrowseSessionCleanupSupervisor.ts",
     "daemon/orchestrator/CodexHealthMonitor.ts",
     "daemon/lib/project.ts",

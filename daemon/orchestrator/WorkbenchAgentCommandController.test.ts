@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover direct Browse/subagent/thread/toc dispatch, snapshot-owned reload dirt, response adaptation, and caller cancellation. Keywords: workbench, agent, command, browse, subagent, thread, toc, dirt, cancellation, transport, test.
+ * - No production exports; Node tests cover direct Browse/subagent/thread/questionnaire dispatch, snapshot-owned reload dirt, response adaptation, and caller cancellation. Keywords: workbench, agent, command, browse, questionnaire, thread, dirt, cancellation, transport, test.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -144,6 +144,29 @@ test("direct Git arc dispatch receives the caller cancellation signal", async ()
     method: "POST",
     path: "/api/git-checkpoint",
     responseKind: "git-arc-wait",
+  }, cancellation.signal);
+  assert.equal(response.status, 200);
+  assert.equal(receivedSignal, cancellation.signal);
+});
+
+test("direct questionnaire dispatch receives the caller cancellation signal", async () => {
+  let receivedSignal: AbortSignal | null = null;
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      executeQuestionnaireRequest: async (_body, signal) => {
+        receivedSignal = signal;
+        return Response.json({ answers: { details: { answers: ["answer"] } } });
+      },
+    },
+  );
+  const cancellation = new AbortController();
+  const response = await controller.executeStructuredRequest({
+    body: { callerThreadId: "thread-one", cwd: "C:/repo", questions: [] },
+    method: "POST",
+    path: "/api/request-user-input",
+    responseKind: "json",
   }, cancellation.signal);
   assert.equal(response.status, 200);
   assert.equal(receivedSignal, cancellation.signal);

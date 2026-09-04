@@ -103,7 +103,10 @@ import { getTurnRenderSignature } from "./thread/thread-item-signature";
 import { upsertWorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission";
 import { applyQuestionnaireHistoryToThread, isSyntheticQuestionnaireHistoryItem } from "workbench-shared/workbench/thread/thread-questionnaire-history";
-import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import {
+    isWorkbenchMcpQuestionnaireRequestKey,
+    mergeQuestionnaireHistoryEntries,
+} from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import {
     createWorkbenchQuestionnaireResponseInput,
     createWorkbenchThreadRecoveryId,
@@ -2870,7 +2873,9 @@ function WorkbenchThreadClient(
           itemId: entry.pendingQuestionnaire.itemId ?? null,
           request: entry.pendingQuestionnaire.request,
           requestKey: entry.pendingQuestionnaire.requestKey,
-          responseMode: "newTurn",
+          responseMode: isWorkbenchMcpQuestionnaireRequestKey(entry.pendingQuestionnaire.requestKey)
+            ? "native"
+            : "newTurn",
           threadId: entry.identity.threadId,
           turnId: entry.pendingQuestionnaire.turnId ?? null,
         });

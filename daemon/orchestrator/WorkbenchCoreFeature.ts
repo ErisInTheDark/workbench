@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WORKBENCH_CORE_FEATURE_KEYS: feature keys owned by the core lifecycle node. Keywords: core, ownership, graph.
- * - default WorkbenchCoreFeature: core node value and lifecycle owner for state, Git, harness routing, and supervisors. Keywords: core, lifecycle, disposal.
+ * - WORKBENCH_CORE_FEATURE_KEYS: feature keys owned by the core lifecycle node. Keywords: core, ownership, graph, questionnaire.
+ * - default WorkbenchCoreFeature: core node value and lifecycle owner for state, Git, questionnaire waits, harness routing, and supervisors. Keywords: core, lifecycle, disposal.
  */
 import type { ReloadableNodeInstance } from "./ReloadableNode";
 import type { OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
@@ -17,6 +17,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "modules",
   "projectCatalog",
   "projectSnapshot",
+  "questionnaires",
   "subagents",
   "threadGit",
   "threadState",

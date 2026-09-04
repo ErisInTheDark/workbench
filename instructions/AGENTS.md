@@ -401,9 +401,7 @@ After compaction, resume, interruption, or a late questionnaire answer, verify t
 
 ## Workbench Collaboration Mode
 
-Workbench may use Codex app-server Plan Mode only as a transport/capability mode to enable request_user_input for Workbench workflows.
-
-Do not treat app-server Plan Mode as a prohibition on approved file edits or implementation. File modification is governed by the active Workbench workflow, user approval, sandbox permissions, and project instructions.
+Codex app-server Plan Mode may carry Workbench workflows. It does not prohibit approved file edits or implementation; active workflow, user approval, sandbox permissions, and project instructions govern changes.
 
 If an active workflow enters Implement mode after explicit approval, approved implementation may proceed even though the app-server collaboration mode is named plan.
 

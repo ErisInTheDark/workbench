@@ -26,9 +26,9 @@ After a still-running result, call `functions.wait` with the returned cell id:
 }
 ```
 
-If `functions.wait` returns another still-running result, call it again with the same cell id and arguments. Repeat until the cell completes or a user steer interrupts it.
+If `functions.wait` returns another still-running result, call it again with the same cell id and arguments. Repeat until the cell completes. Scoped reloads preserve the call. A steer interrupts only tools that declare steer interruption; `request_user_input` survives steers.
 
 Do not call the original Workbench wait tool again. Do not add a timeout to the original tool call. Do not sleep, poll, start a parallel wait, or write timeout commentary. A 25-minute cell yield is not a lifecycle deadline, failure, or reason to set blocked status.
 
-Apply the newest interrupting steer before more work.
+If a steer interrupts the wait, apply it before more work.
 </available:long-waits>

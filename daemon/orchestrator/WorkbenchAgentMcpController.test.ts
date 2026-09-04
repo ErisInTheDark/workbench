@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover typed MCP inventory, paged Git diff input, trusted identity, structured dispatch, bounded errors, and cancellation. Keywords: workbench, MCP, HTTP, git, page, tools, identity, cancellation, test.
+ * - No production exports; Node tests cover typed MCP inventory, paged Git diff input, trusted identity, structured dispatch, bounded errors, questionnaire waits, and steer cancellation. Keywords: workbench, MCP, HTTP, git, tools, questionnaire, steer, cancellation, test.
  */
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -472,14 +472,14 @@ test("releases HTTP admission and propagates caller cancellation across controll
   }
 });
 
-test("thread steer interruption silently ends declared long waits but preserves ordinary MCP calls", { timeout: 5_000 }, async () => {
+test("thread steer interruption ends declared waits but preserves questionnaires and ordinary MCP calls", { timeout: 5_000 }, async () => {
   const executions = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
   const allStarted = deferred<void>();
   const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
   const controller = new WorkbenchAgentMcpController({
     executeCommand: async (request, signal) => await new Promise<Response>((resolve) => {
       executions.set(request.responseKind, { resolve, signal });
-      if (executions.size === 2) allStarted.resolve();
+      if (executions.size === 3) allStarted.resolve();
       signal.addEventListener("abort", () => resolve(new Response(
         "This expected steer interruption must not reach MCP output.",
         { status: 409 },
@@ -504,6 +504,13 @@ test("thread steer interruption silently ends declared long waits but preserves 
       arguments: {},
       name: "thread_title_get",
     });
+    const questionnaireCall = client.callTool({
+      _meta: { threadId: "thread-1" },
+      arguments: {
+        questions: [{ header: "details", id: "details", options: [], question: "What should change?" }],
+      },
+      name: "request_user_input",
+    });
     await allStarted.promise;
 
     assert.equal(requestRegistry.interruptThreadWaits("thread-1"), 1);
@@ -511,11 +518,16 @@ test("thread steer interruption silently ends declared long waits but preserves 
     assert.equal(subagentResult.isError, true);
     assert.equal(responseText(subagentResult), "");
     assert.equal(executions.get("thread-title-get")?.signal.aborted, false);
+    assert.equal(executions.get("json")?.signal.aborted, false);
 
     executions.get("thread-title-get")?.resolve(Response.json({ title: "still running" }));
+    executions.get("json")?.resolve(Response.json({ answers: { details: { answers: ["still waiting"] } } }));
     const titleResult = await titleCall;
+    const questionnaireResult = await questionnaireCall;
     assert.equal(titleResult.isError, false);
     assert.match(responseText(titleResult), /still running/u);
+    assert.equal(questionnaireResult.isError, false);
+    assert.match(responseText(questionnaireResult), /still waiting/u);
   } finally {
     requestRegistry.dispose();
     await client.close();
@@ -523,27 +535,27 @@ test("thread steer interruption silently ends declared long waits but preserves 
   }
 });
 
-test("runtime drain aborts declared waits only in the retiring controller generation", { timeout: 5_000 }, async () => {
-  const executions = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
-  const bothStarted = deferred<void>();
+test("declared waits survive runtime drain and finish through the replacement command generation", { timeout: 5_000 }, async () => {
   const oldStarted = deferred<void>();
   const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
-  const createController = () => new WorkbenchAgentMcpController({
-    executeCommand: async (request, signal) => await new Promise<Response>((resolve, reject) => {
-      const callerThreadId = String(request.body?.callerThreadId ?? "");
-      executions.set(callerThreadId, { resolve, signal });
-      if (callerThreadId === "old-thread") oldStarted.resolve();
-      if (executions.size === 2) bothStarted.resolve();
+  const oldExecutor = {};
+  const replacementExecutor = {};
+  let builtRequest: WorkbenchAgentCommandRequest | null = null;
+  requestRegistry.activateCommandExecutor(oldExecutor, async (request, signal) => {
+    builtRequest = request;
+    oldStarted.resolve();
+    return await new Promise<Response>((_resolve, reject) => {
       signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-    }),
+    });
+  });
+  const controller = new WorkbenchAgentMcpController({
+    executeCommand: async (request, signal) => await requestRegistry.executeCommand(request, signal),
     lifecycleLogError: () => undefined,
     orchestratorOrigin: "http://127.0.0.1:4500",
     requestCodex: async (request) => ({ id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } }),
     requestRegistry,
   });
-  const retiringController = createController();
-  let currentController = retiringController;
-  const server = await startController(() => currentController);
+  const server = await startController(controller);
   const oldUrl = new URL(server.url);
   oldUrl.searchParams.set("client", "11111111-1111-4111-8111-111111111111");
   const oldClient = await connectClient(oldUrl);
@@ -555,32 +567,17 @@ test("runtime drain aborts declared waits only in the retiring controller genera
     });
     await oldStarted.promise;
 
-    currentController = createController();
-    const newUrl = new URL(server.url);
-    newUrl.searchParams.set("client", "22222222-2222-4222-8222-222222222222");
-    const newClient = await connectClient(newUrl);
-    try {
-      const newCall = newClient.callTool({
-        _meta: { threadId: "new-thread" },
-        arguments: { names: ["lumi"] },
-        name: "subagent_wait",
-      });
-      await bothStarted.promise;
-
-      assert.equal(retiringController.beginRuntimeDrain(), 1);
-      const oldResult = await oldCall;
-      assert.equal(oldResult.isError, true);
-      assert.match(responseText(oldResult), /runtime generation is reloading/u);
-      assert.equal(executions.get("new-thread")?.signal.aborted, false);
-
-      executions.get("new-thread")?.resolve(new Response("new generation completed"));
-      const newResult = await newCall;
-      assert.equal(newResult.isError, false);
-      assert.match(responseText(newResult), /new generation completed/u);
-    } finally {
-      await newClient.close();
-    }
+    assert.equal(controller.beginRuntimeDrain(), 0);
+    requestRegistry.activateCommandExecutor(replacementExecutor, async (request) => {
+      assert.strictEqual(request, builtRequest);
+      return new Response("replacement generation completed");
+    });
+    const result = await oldCall;
+    assert.equal(result.isError, false);
+    assert.match(responseText(result), /replacement generation completed/u);
   } finally {
+    requestRegistry.releaseCommandExecutor(oldExecutor);
+    requestRegistry.releaseCommandExecutor(replacementExecutor);
     requestRegistry.dispose();
     await oldClient.close();
     await server.close();

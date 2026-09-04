@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - CodexStdioBridgeOptions: inject app-server, browser, instruction, transcript, and reload-generation boundaries. Keywords: codex, bridge, options, reload.
+ * - CodexStdioBridgeOptions: inject app-server, browser, questionnaire, instruction, transcript, and reload-generation boundaries. Keywords: codex, bridge, questionnaire, options, reload.
  * - CodexStdioBridgeReloadState: transferable bridge state preserved across code-only reload. Keywords: codex, reload, state.
- * - default CodexStdioBridge: translate websocket requests and Codex app-server messages around a stable app-server process. Keywords: codex, stdio, websocket, bridge.
+ * - default CodexStdioBridge: translate websocket requests, questionnaires, and Codex app-server messages around a stable app-server process. Keywords: codex, stdio, websocket, questionnaire, bridge.
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -92,6 +92,7 @@ import {
 } from "./codex-transcript-normalizers";
 import type CodexAppServer from "./CodexAppServer";
 import type { WorkbenchCodexInstructionPort } from "./WorkbenchCodexInstructionAdapter";
+import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import CodexThreadPageReadController from "./CodexThreadPageReadController";
 import CodexThreadWindowLoader, { type CodexThreadWindowStore } from "./CodexThreadWindowLoader";
 import CodexTranscriptRecordingController, {
@@ -146,6 +147,7 @@ export type CodexStdioBridgeOptions = {
     message: JsonRpcRequest,
     requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
   ) => Promise<void>;
+  questionnaires?: Pick<WorkbenchQuestionnaireController, "list" | "respond">;
   recordSqliteTranscript?: (
     observations: readonly WorkbenchTranscriptObservation[],
     context: WorkbenchTranscriptRecordingContext,
@@ -169,6 +171,11 @@ const UNCONFIGURED_CODEX_INSTRUCTIONS: WorkbenchCodexInstructionPort = {
     return message;
   },
   createThreadResume: () => { throw new Error("Codex instruction adaptation is not configured."); },
+};
+
+const UNCONFIGURED_WORKBENCH_QUESTIONNAIRES: Pick<WorkbenchQuestionnaireController, "list" | "respond"> = {
+  list: () => ({ data: [] }),
+  respond: async () => null,
 };
 
 type RequestIdAllocator = {
@@ -893,6 +900,7 @@ export default class CodexStdioBridge {
   private readonly onAcceptedTurnSteer: NonNullable<CodexStdioBridgeOptions["onAcceptedTurnSteer"]>;
   private readonly onNotification: CodexStdioBridgeOptions["onNotification"];
   private readonly prepareTurnStart: NonNullable<CodexStdioBridgeOptions["prepareTurnStart"]>;
+  private readonly questionnaires: NonNullable<CodexStdioBridgeOptions["questionnaires"]>;
   private readonly sqliteTranscriptEnabled: boolean;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
   private readonly storageRoot: string;
@@ -930,12 +938,13 @@ export default class CodexStdioBridge {
   private readonly handleWorkbenchRequest: CodexStdioBridgeOptions["handleWorkbenchRequest"];
   private readonly instructions: WorkbenchCodexInstructionPort;
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, readSqliteTranscriptMaterializedTurnIds = async () => [], recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onAcceptedTurnSteer = onAcceptedTurnSteer;
     this.onNotification = onNotification;
     this.prepareTurnStart = prepareTurnStart;
+    this.questionnaires = questionnaires;
     this.sqliteTranscriptEnabled = Boolean(recordSqliteTranscript);
     this.readSqliteTranscriptMaterializedTurnIds = readSqliteTranscriptMaterializedTurnIds;
     this.resolveProjectFromCwd = resolveProjectFromCwd;
@@ -2272,13 +2281,16 @@ export default class CodexStdioBridge {
 
   private listPendingQuestionnaires() {
     return {
-      data: Array.from(this.pendingUserInputRequests.values(), (pendingRequest) => ({
-        itemId: pendingRequest.itemId,
-        request: pendingRequest.request,
-        requestKey: pendingRequest.requestKey,
-        threadId: pendingRequest.threadId,
-        turnId: pendingRequest.turnId,
-      })),
+      data: [
+        ...Array.from(this.pendingUserInputRequests.values(), (pendingRequest) => ({
+          itemId: pendingRequest.itemId,
+          request: pendingRequest.request,
+          requestKey: pendingRequest.requestKey,
+          threadId: pendingRequest.threadId,
+          turnId: pendingRequest.turnId,
+        })),
+        ...this.questionnaires.list().data,
+      ],
     };
   }
 
@@ -2769,6 +2781,25 @@ export default class CodexStdioBridge {
     const resolvedResponse = this.readQuestionnaireResponse(params);
     if (!resolvedResponse) {
       throw new Error("Missing questionnaire/respond params.");
+    }
+
+    const workbenchQuestionnaire = await this.questionnaires.respond({
+      requestKey: resolvedResponse.requestKey,
+      response: resolvedResponse.response,
+      threadId: resolvedResponse.threadId,
+    });
+    if (workbenchQuestionnaire) {
+      return await this.settleQuestionnaireHistoryEntry({
+        insertAfterItemId: resolvedResponse.insertAfterItemId,
+        insertAfterItemIndex: resolvedResponse.insertAfterItemIndex,
+        itemId: workbenchQuestionnaire.itemId,
+        request: workbenchQuestionnaire.request,
+        requestKey: workbenchQuestionnaire.requestKey,
+        resolvedAt: Date.now(),
+        response: workbenchQuestionnaire.response,
+        threadId: workbenchQuestionnaire.threadId,
+        turnId: resolvedResponse.turnId ?? workbenchQuestionnaire.turnId ?? "",
+      });
     }
 
     const pendingRequest = this.pendingUserInputRequests.get(resolvedResponse.requestKey);

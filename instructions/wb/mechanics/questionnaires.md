@@ -7,14 +7,16 @@ Trigger criteria:
 
 Process:
 1. Ensure the context of the impending questionnaire is fully presented to the user BEFORE invoking the tool, in commentary.
-2. Use request_user_input.
+2. Call `tools.mcp__wb__request_user_input` in one Code mode cell. Treat it as a Workbench Long Wait.
 
 Constraints:
 - Must faithfully represent the plan or choice explained in commentary.
-- Options must be mutually exclusive and collectively exhaustive. The user can select multiple.
+<!-- Prevent host-tool rejection and invented choices for open text. -->
+- Use `options: []` for freeform-only text. Otherwise, options must be mutually exclusive and collectively exhaustive. Users can select multiple.
 - Prefer one to three concise questions. Do not overload the user.
 - Keep option labels short; avoid plan or tradeoff explanation in options or summary.
 - Use a single question & option to give the user a button to press for when they have done what you need. 
+- The wait survives user steers and scoped Workbench reloads. Do not restart it.
 
 Response:
 - If custom text response, classify whether it narrows, clarifies, or changes the visible plan. 

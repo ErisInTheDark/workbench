@@ -8,7 +8,7 @@
  * - WorkbenchCodexSandboxNetworkController: server-owned Codex sandbox network settings. Keywords: Codex, sandbox, network, settings.
  * - OrchestratorTranscriptRegistration: SQLite transcript recording and recovery registration. Keywords: transcript, recovery, subscription.
  * - OrchestratorTranscriptShadowLog: bounded transcript diagnostic log registration. Keywords: transcript, diagnostics, log.
- * - OrchestratorRuntimeObjects: centralized live object registry contract populated by reloadable nodes. Keywords: registry, ownership, graph.
+ * - OrchestratorRuntimeObjects: centralized live object registry contract populated by reloadable nodes. Keywords: registry, ownership, graph, questionnaire.
  */
 import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
@@ -56,6 +56,7 @@ import type WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorR
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
+import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import type WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import type WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
@@ -154,6 +155,7 @@ export interface OrchestratorRuntimeObjects {
   orchestratorHttp: WorkbenchOrchestratorHttpRouter;
   projectCatalog: WorkbenchProjectCatalogController;
   projectSnapshot: WorkbenchProjectSnapshotController;
+  questionnaires: WorkbenchQuestionnaireController;
   reloadController: WorkbenchOrchestratorReloadController;
   reloadDirt: WorkbenchReloadDirtController;
   subagents: WorkbenchSubagentFeature;

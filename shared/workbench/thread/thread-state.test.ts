@@ -1,4 +1,4 @@
-/* No production exports. Tests protect strict lifecycle, grouping, cross-project pin summaries, folder mutation, ordering, and draft rules. */
+/* No production exports. Tests protect strict lifecycle, durable questionnaires, grouping, cross-project pin summaries, folder mutation, ordering, and draft rules. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
@@ -368,6 +368,13 @@ test("durable questionnaire state accepts proper questions and rejects approvals
   };
   const pending = { itemId: "item", request, requestKey: "request-key", turnId: "turn" };
   assert.equal(WorkbenchDurableQuestionnaireSchema.safeParse(pending).success, true);
+  assert.equal(WorkbenchDurableQuestionnaireSchema.safeParse({
+    ...pending,
+    request: {
+      ...request,
+      questions: [{ ...request.questions[0], options: [] }],
+    },
+  }).success, true);
   assert.equal(WorkbenchDurableQuestionnaireSchema.safeParse({ ...pending, request: { ...request, approval: {} } }).success, false);
 
   const entry = {

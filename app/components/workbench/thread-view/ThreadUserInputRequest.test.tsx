@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect one-option quick responses plus compact questionnaire preview, live, and hydrated draft modes. Keywords: questionnaire, quick response, quill, compact, preview, live, draft.
+ * No production exports. Tests protect freeform-only and one-option quick responses plus compact questionnaire preview, live, history, and hydrated draft modes. Keywords: questionnaire, freeform, quick response, quill, compact, preview, live, history, draft.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -47,6 +47,72 @@ const quickResponseRequest = {
     options: [request.questions[0].options[0]],
   }],
 } satisfies WorkbenchUserInputRequest;
+
+const freeformRequest = {
+  ...request,
+  id: "freeform-questionnaire",
+  questions: [{
+    ...request.questions[0],
+    options: [],
+    question: "What should change?",
+  }],
+  title: "Choice",
+} satisfies WorkbenchUserInputRequest;
+
+test("freeform-only live questionnaire renders one prompted input and submit action in both layouts", () => {
+  for (const presentation of ["full", "compact"] as const) {
+    const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
+      draft: null,
+      mode: "live",
+      onDraftChange: () => undefined,
+      onDraftClear: () => undefined,
+      onSubmit: async () => undefined,
+      presentation,
+      request: freeformRequest,
+      spellCheck: true,
+    }));
+    assert.equal(html.match(/role="textbox"/gu)?.length, 1);
+    assert.match(html, /data-placeholder="[^"]+"/u);
+    assert.match(html, /data-thread-questionnaire-submit="true"/u);
+    assert.doesNotMatch(html, /aria-pressed/u);
+    if (presentation === "full") {
+      assert.equal(html.match(/>Choice</gu)?.length, 1);
+      assert.match(html, />What should change\?</u);
+    }
+  }
+});
+
+test("a distinct request title keeps its sole question eyebrow", () => {
+  const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
+    draft: null,
+    mode: "live",
+    onDraftChange: () => undefined,
+    onDraftClear: () => undefined,
+    onSubmit: async () => undefined,
+    presentation: "full",
+    request: {
+      ...freeformRequest,
+      title: "Component ownership",
+    },
+    spellCheck: true,
+  }));
+  assert.match(html, />Component ownership</u);
+  assert.match(html, />Choice</u);
+});
+
+test("freeform-only questionnaire history renders its answer without option controls", () => {
+  const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
+    mode: "history",
+    request: freeformRequest,
+    response: {
+      answers: {
+        choice: { answers: ["Keep one real owner."] },
+      },
+    },
+  }));
+  assert.match(html, /Keep one real owner\./u);
+  assert.doesNotMatch(html, /aria-pressed/u);
+});
 
 test("one-option live questionnaire renders immediate option and custom-response actions", () => {
   const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {

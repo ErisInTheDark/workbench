@@ -4,9 +4,11 @@
  * - default WorkbenchAgentCommandLogger: own pending warnings and terminal timing logs for one CLI or MCP command lifecycle. Keywords: CLI, MCP, pending, completion, cancellation.
  */
 
+import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "../lib/workbench/commands/workbench-agent-command-definition";
+
 const DEFAULT_PENDING_THRESHOLD_MS = 2_000;
 const PENDING_WARNING_INTERVAL_MS = 2_000;
-const PENDING_WARNING_OMISSION_LABELS = new Set(["wb git arc wait", "wb shell"]);
+const PENDING_WARNING_OMISSION_LABELS = new Set(["wb git arc wait", "wb request user input", "wb shell"]);
 const ANSI_GREEN = "\u001b[32m";
 const ANSI_RED = "\u001b[31m";
 const ANSI_YELLOW = "\u001b[33m";
@@ -78,14 +80,24 @@ export default class WorkbenchAgentCommandLogger {
     let outcome: WorkbenchAgentCommandLogOutcome = "error";
     try {
       const value = await operation();
-      outcome = signal.aborted ? "cancelled" : succeeded(value) ? "ok" : "error";
+      const reloadInterrupted = isWorkbenchAgentMcpRuntimeReloadInterruption(signal.reason);
+      outcome = signal.aborted && !reloadInterrupted
+        ? "cancelled"
+        : succeeded(value)
+          ? "ok"
+          : "error";
       return value;
     } catch (error) {
       outcome = signal.aborted ? "cancelled" : "error";
       throw error;
     } finally {
       if (timer) this.cancel(timer);
-      this.writeLine(` CLI ${label} ${completionToken(outcome)} in ${formatDuration(this.now() - startedAt)}`);
+      if (
+        !isWorkbenchAgentMcpRuntimeReloadInterruption(signal.reason)
+        || outcome === "ok"
+      ) {
+        this.writeLine(` CLI ${label} ${completionToken(outcome)} in ${formatDuration(this.now() - startedAt)}`);
+      }
     }
   }
 }

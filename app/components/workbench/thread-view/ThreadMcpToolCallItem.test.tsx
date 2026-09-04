@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect generic MCP routing, wb MCP details, shell presentation, and mixed command grouping. Keywords: MCP, shell, command block, thread rendering.
+ * - No production exports; tests protect generic MCP routing, hidden questionnaire calls, wb MCP details, shell presentation, and mixed command grouping. Keywords: MCP, questionnaire, shell, command block, thread rendering.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -67,6 +67,41 @@ test("failed simple wb MCP calls expose their invocation and error", () => {
 
   assert.match(html, /await tools\.mcp__wbex__git_add\(/u);
   assert.match(html, /File selection failed\./u);
+});
+
+test("Workbench questionnaire MCP calls stay out of thread command history", () => {
+  const item = makeItem({
+    arguments: {
+      questions: [{
+        header: "smoke test",
+        id: "smoke_test",
+        options: [],
+        question: "What should lily receive?",
+      }],
+    },
+    durationMs: null,
+    result: null,
+    status: "inProgress",
+    tool: "request_user_input",
+  });
+  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    defaultOpenCompletedWork: true,
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: null,
+      error: null,
+      id: "turn-one",
+      items: [item],
+      itemsView: "full",
+      startedAt: 1,
+      status: "inProgress",
+    },
+  }));
+
+  assert.doesNotMatch(html, /Waiting for user input/u);
+  assert.doesNotMatch(html, /mcp__wb__request_user_input/u);
 });
 
 test("typed ripgrep calls render the shared query and project path presentation", () => {

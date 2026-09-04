@@ -33,13 +33,25 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const codexMcpGeneration = build.get("codexMcpGeneration");
     const threadState = build.get("threadState");
     build.get("reloadController");
-    const stopWaitObservation = getProcessWorkbenchAgentMcpRequestRegistry().subscribeThreadWaits(({ threadId, toolNames }) => {
+    const requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry();
+    const commandExecutorOwner = {};
+    let commandExecutorActive = false;
+    const activateCommandExecutor = () => {
+      if (commandExecutorActive) return;
+      requestRegistry.activateCommandExecutor(
+        commandExecutorOwner,
+        async (request, signal) => await agentCommand.executeStructuredRequest(request, signal),
+      );
+      commandExecutorActive = true;
+    };
+    const stopWaitObservation = requestRegistry.subscribeThreadWaits(({ threadId, toolNames }) => {
       threadState.controller.setThreadWaitState("codex", threadId, toolNames);
     });
     const mcp = new WorkbenchAgentMcpController({
-      executeCommand: async (request, signal) => await agentCommand.executeStructuredRequest(request, signal),
+      executeCommand: async (request, signal) => await requestRegistry.executeCommand(request, signal),
       getReloadScopeCatalog: context.getReloadScopeCatalog,
       orchestratorOrigin: context.localOrchestratorOrigin,
+      requestRegistry,
       requestCodex: async (request) => await harnesses.request("codex", request),
       runLoggedCommand: async (label, signal, operation, succeeded) => (
         await agentCommand.runLoggedCommand(label, signal, operation, succeeded)
@@ -58,10 +70,13 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     });
     return {
       activate: () => {
-        if (build.mode === "replacement") codexMcpGeneration.bump();
+        if (build.mode !== "replacement") return;
+        activateCommandExecutor();
+        codexMcpGeneration.bump();
       },
       beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); },
       dispose: () => {
+        requestRegistry.releaseCommandExecutor(commandExecutorOwner);
         stopWaitObservation();
         mcp.releaseRuntimeOwner();
       },
@@ -72,7 +87,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       })),
       registrations: { mcp, orchestratorHttp },
       start: async () => {
-        if (build.mode === "replacement") await context.refreshWorkbenchPromptFiles();
+        if (build.mode === "initial") activateCommandExecutor();
+        else if (build.mode === "replacement") await context.refreshWorkbenchPromptFiles();
       },
     };
   },

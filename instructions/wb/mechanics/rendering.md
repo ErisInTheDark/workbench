@@ -9,7 +9,7 @@ If a workflow asks for a plan and then approval, present the plan first, then sw
 
 Mode tags are behavior commitments. Do not announce Brief while investigating, Decision while editing, or Review while still implementing. If the needed work changes modes, emit the new mode tag before doing that work.
 
-When using a questionnaire, first state the question, options, and relevant tradeoffs in chat. Keep the questionnaire itself short because answered questionnaires may not remain visible.
+When using a questionnaire, first state the question, any provided options, and relevant tradeoffs in chat. Keep the questionnaire itself short because answered questionnaires may not remain visible.
 
 The user does not see your tool stream. Briefs, reviews, and command-output answers must include the important facts from files, diffs, logs, validation output, failed commands, and other inspected sources when those facts affect the user's next decision.
 

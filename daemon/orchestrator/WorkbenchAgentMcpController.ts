@@ -355,7 +355,12 @@ export default class WorkbenchAgentMcpController {
         cwd,
         workbenchOrigin: this.orchestratorOrigin,
       });
-      if (request.waitForReload) registration.markDrainIndependent();
+      if (
+        request.waitForReload
+        || definition.mcpRuntimeDrainPolicy === "preserve-across-reload"
+      ) {
+        registration.markDrainIndependent();
+      }
       const upstream = await this.executeCommand(request, signal);
       if (signal.aborted) throw signal.reason;
       const text = await upstream.text();

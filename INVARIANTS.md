@@ -12,6 +12,17 @@
 - Shared thread state is consumed through domain hooks, not drilled through display props or presentation context.
 - Streaming transcript text updates only the affected React leaf after item creation; structural and failure changes publish immediately.
 
+## Questionnaire lifecycle
+
+- Workbench `request_user_input` survives user steers. Only an answer, caller/tool cancellation, or dismissal ends its long wait.
+- Workbench `request_user_input` survives turns ending due to process interruption virtually.
+
+## Long-wait lifecycle
+
+- Workbench MCP long waits survive scoped reloads without surfacing reload errors. Retiring success wins; otherwise the same request resumes in the current command generation.
+- Caller/tool cancellation, declared steer or dismissal rules, and full-process shutdown remain terminal.
+- `request_user_input` also survives user steers and turns ending due to process interruption virtually.
+
 ## Git arc proposals
 
 - Git arc commit proposals only become invalid if HEAD movement intersects with the proposal's changed files.

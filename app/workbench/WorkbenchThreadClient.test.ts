@@ -2908,6 +2908,53 @@ test("durable detached questionnaire responses resolve after admission even when
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey, "next-question");
 }));
 
+test("Workbench MCP questionnaires submit natively while their Codex turn is active", async () => withClient(async (client, socket) => {
+  const source = activeThread();
+  client.selectThreadPayload(source);
+  const requestKey = "workbench-mcp:question";
+  installProjectThreadState(client, {
+    entries: [{
+      activityAt: 2,
+      entryKind: "thread",
+      identity: { harness: "codex", threadId: "thread" },
+      lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey, settled: false, turnId: "turn" },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      pendingQuestionnaire: {
+        itemId: null,
+        request: {
+          id: requestKey,
+          questions: [{
+            allowOther: true,
+            header: "smoke test",
+            id: "smoke_test",
+            isSecret: false,
+            options: [],
+            question: "What should lily receive?",
+          }],
+          submitLabel: "Submit",
+          summary: "",
+          title: "smoke test",
+        },
+        requestKey,
+        turnId: "turn",
+      },
+      title: "Thread",
+    }],
+    error: null,
+    freshness: "fresh",
+    projectId: "project",
+    revision: 1,
+  });
+
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "native");
+  await client.submitPendingUserInputRequest("thread", {
+    answers: { smoke_test: { answers: ["hello lily"] } },
+  });
+  assert.equal(socket.requests.some((candidate) => candidate.method === "questionnaire/respond"), true);
+  assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/codex/message/admit"), false);
+  assert.equal(socket.requests.some((candidate) => candidate.method === "turn/start"), false);
+}));
+
 test("failed detached questionnaire transcript recording still resolves durable history", async () => {
   const statusMessages: string[] = [];
   await withClient(async (client, socket) => {

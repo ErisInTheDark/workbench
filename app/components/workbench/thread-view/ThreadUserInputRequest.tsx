@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadUserInputRequest: render full or compact live, preview, historical, and one-option quick-response questionnaires. Keywords: questionnaire, custom input, quick response, thread, compact.
+ * - default ThreadUserInputRequest: render full or compact live, preview, historical, freeform-only, and one-option quick-response questionnaires. Keywords: questionnaire, custom input, freeform, quick response, thread, compact.
  * - Local helpers: question display normalization, answered value derivation, pasted image attachments, and submit handling. Keywords: options, answers, drafts, images, presentation, focus.
  */
 "use client";
@@ -505,6 +505,11 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
             const quickResponseOption = quickResponseQuestion?.id === question.id
               ? quickResponseQuestion.options[0] ?? null
               : null;
+            const isSoleFreeformQuestion = isInteractiveMode
+              && request.questions.length === 1
+              && question.options.length === 0;
+            const showQuestionHeader = request.questions.length !== 1
+              || headerText.trim() !== requestTitle.trim();
 
             return (
               <section
@@ -513,9 +518,11 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
               >
                 {!useCompactSingleQuestionDisplay ? (
                   <div className="space-y-1">
-                    <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] text-muted uppercase">
-                      {headerText}
-                    </p>
+                    {showQuestionHeader ? (
+                      <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] text-muted uppercase">
+                        {headerText}
+                      </p>
+                    ) : null}
                     {questionText ? (
                       <p className="m-0 whitespace-pre-wrap break-words text-[0.92em] leading-[1.65] text-text">
                         {questionText}
@@ -672,8 +679,9 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
                           <PlaintextEditable
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
-                            autoFocus={customInputRequestId === request.id}
+                            autoFocus={isSoleFreeformQuestion || customInputRequestId === request.id}
                             className="thread-plaintext-editable min-h-8 w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none"
+                            placeholder={isSoleFreeformQuestion ? "Write a response" : undefined}
                             spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
                             highlights={customValueHighlights}
                             mentionSources={highlightSources}
@@ -698,16 +706,17 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
                         <PlaintextEditable
                           id={`${request.id}:${question.id}:custom`}
                           ariaLabel={`${headerText} answer`}
-                          autoFocus={customInputRequestId === request.id}
+                          autoFocus={isSoleFreeformQuestion || customInputRequestId === request.id}
                           className={joinClasses(
                             "thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition",
-                            customValue
+                            customValue || isSoleFreeformQuestion
                               ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] py-3 mt-1 mb-3"
                               : `
                               hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:py-3 hover:mb-3
                               focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:py-3 focus-visible:mt-1 focus-visible:mb-3
                             `,
                           )}
+                          placeholder={isSoleFreeformQuestion ? "Write a response" : undefined}
                           spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
                           highlights={customValueHighlights}
                           mentionSources={highlightSources}

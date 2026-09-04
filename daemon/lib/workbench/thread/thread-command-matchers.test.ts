@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover shell command summary matching and argument semantics. Keywords: thread, command, matcher, powershell, ripgrep, toc, test.
+ * - No production exports; Node tests cover shell command summary matching, typed wb inventory, questionnaire waits, and argument semantics. Keywords: thread, command, matcher, questionnaire, powershell, ripgrep, test.
  */
 
 import assert from "node:assert/strict";
@@ -86,6 +86,7 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "toc": return { file: "AGENTS.md" };
     case "rg": return { args: ["-n", "needle", "webapp"] };
     case "tokens": return { text: "count me" };
+    case "request_user_input": return { questions: [{ header: "details", id: "details", options: [], question: "What should change?" }] };
     case "thread_title": return { title: "Render typed wb tools" };
     case "thread_status": return { status: "completed" };
     case "subagent_wait":
@@ -128,8 +129,21 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
   }
   const wait = commands.find((definition) => definition.words.join("_") === "git_arc_wait");
   assert.deepEqual(wait?.effects, {});
-  assert.equal(wait?.mcpRuntimeDrainPolicy, "abort-immediately");
+  assert.equal(wait?.mcpRuntimeDrainPolicy, "preserve-across-reload");
   assert.equal(wait?.mcpSteerInterruptible, true);
+  const subagentWait = commands.find((definition) => definition.words.join("_") === "subagent_wait");
+  assert.equal(subagentWait?.mcpRuntimeDrainPolicy, "preserve-across-reload");
+  assert.equal(subagentWait?.mcpSteerInterruptible, true);
+  const questionnaire = commands.find((definition) => definition.words.join("_") === "request_user_input");
+  assert.deepEqual(questionnaire?.effects, {});
+  assert.equal(questionnaire?.mcpCodeModeEligible, true);
+  assert.equal(questionnaire?.mcpRuntimeDrainPolicy, "preserve-across-reload");
+  assert.equal(questionnaire?.mcpSteerInterruptible, undefined);
+  assert.equal(getWorkbenchMcpCommandDisplay({
+    argumentsValue: representativeMcpArguments("request_user_input"),
+    server: "wb",
+    tool: "request_user_input",
+  })?.omitFromDisplay, true);
 });
 
 test("simple typed wb MCP calls share argument-sensitive CLI presentations", () => {
