@@ -43,14 +43,18 @@ test("large scoped reads preserve exact path ownership without writing Git objec
   ));
   const editedPath = "sources/edited.ts";
   const deletedPath = "sources/deleted.ts";
+  const untrackedBaselinePath = "sources/untracked-baseline.ts";
   await fs.writeFile(path.join(repoRoot, editedPath), "export const edited = false;\n", "utf8");
   await fs.writeFile(path.join(repoRoot, deletedPath), "export const deleted = false;\n", "utf8");
+  await fs.writeFile(path.join(repoRoot, untrackedBaselinePath), "export const untracked = false;\n", "utf8");
   await fs.mkdir(path.join(repoRoot, "nested"), { recursive: true });
   await fs.writeFile(path.join(repoRoot, "nested", "owned.ts"), "export const nested = false;\n", "utf8");
   await fs.writeFile(path.join(repoRoot, "outside.ts"), "export const outside = 1;\n", "utf8");
   await git("add", ".");
   await git("commit", "-m", "initial");
   const baseline = (await git("rev-parse", "HEAD")).stdout.trim();
+  await git("rm", "--cached", untrackedBaselinePath);
+  await git("commit", "-m", "stop tracking baseline source");
 
   const literalPath = "sources/[literal].ts";
   await fs.writeFile(path.join(repoRoot, editedPath), "export const edited = true;\n", "utf8");
@@ -60,7 +64,14 @@ test("large scoped reads preserve exact path ownership without writing Git objec
   await fs.writeFile(path.join(repoRoot, "outside.ts"), "export const outside = 2;\n", "utf8");
 
   const repository = new ReloadDirtSnapshotRepository(repoRoot);
-  const selectedPaths = [...missingSourcePaths, editedPath, deletedPath, literalPath, "nested"];
+  const selectedPaths = [
+    ...missingSourcePaths,
+    editedPath,
+    deletedPath,
+    literalPath,
+    untrackedBaselinePath,
+    "nested",
+  ];
   const objectsBefore = await listObjectPaths(repoRoot);
 
   assert.deepEqual(
@@ -68,5 +79,10 @@ test("large scoped reads preserve exact path ownership without writing Git objec
     [deletedPath, editedPath, literalPath, "nested/owned.ts"].sort((left, right) => left.localeCompare(right)),
   );
   assert.deepEqual(await repository.listWorktreeChangedPaths(baseline, ["outside.ts"]), ["outside.ts"]);
+  await fs.writeFile(path.join(repoRoot, untrackedBaselinePath), "export const untracked = true;\n", "utf8");
+  assert.deepEqual(
+    await repository.listWorktreeChangedPaths(baseline, [untrackedBaselinePath]),
+    [untrackedBaselinePath],
+  );
   assert.deepEqual(await listObjectPaths(repoRoot), objectsBefore);
 });

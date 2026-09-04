@@ -55,15 +55,18 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
   }
 
   async listWorktreeChangedPaths(baseTreeish: string, paths: string[], signal?: AbortSignal) {
-    const selectedPaths = new Set(paths);
-    const env = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
-    const [tracked, untracked] = await Promise.all([
-      this.run(["diff", "--name-only", "-z", "--no-renames", baseTreeish, "--"], env, signal),
-      this.run(["ls-files", "-z", "--others", "--exclude-standard", "--"], env, signal),
-    ]);
-    return [...new Set([...parseNullPaths(tracked), ...parseNullPaths(untracked)])]
-      .filter((candidate) => matchesSelectedPath(candidate, selectedPaths))
-      .sort((left, right) => left.localeCompare(right));
+    return await this.withTemporaryIndex(async (indexPath) => {
+      const selectedPaths = new Set(paths);
+      const env = { ...process.env, GIT_INDEX_FILE: indexPath, GIT_OPTIONAL_LOCKS: "0" };
+      await this.run(["read-tree", baseTreeish], env, signal);
+      const [tracked, untracked] = await Promise.all([
+        this.run(["diff", "--name-only", "-z", "--no-renames", "--"], env, signal),
+        this.run(["ls-files", "-z", "--others", "--exclude-standard", "--"], env, signal),
+      ]);
+      return [...new Set([...parseNullPaths(tracked), ...parseNullPaths(untracked)])]
+        .filter((candidate) => matchesSelectedPath(candidate, selectedPaths))
+        .sort((left, right) => left.localeCompare(right));
+    });
   }
 
   async listWorktreePaths(signal?: AbortSignal) {
