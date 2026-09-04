@@ -334,6 +334,8 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 - Do not use sleeps, real timers, or races. Separate time decisions from timer mechanics.
 - Use a mock only when it preserves the test's regression-detection power.
 
+**Hard rule: when workflow/project/user instruction allows, new tests and assertions must run red for correct reason BEFORE implementing fixes**
+
 ## When Reviewing
 
 - When the user asks for a review, take a code-review stance.
