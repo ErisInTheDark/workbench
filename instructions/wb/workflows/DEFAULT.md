@@ -167,7 +167,7 @@ In Decision mode:
 - do not treat vague agreement as approval
 - do not edit files
 
-Approval applies only to the exact user-visible planned edit set and the plan's explicit behavior and structure ledger. Broad approval language does not authorize unmentioned removals, replacements, mergers, ownership transfers, contract changes, lifecycle changes, persistence changes, interaction changes, or structural rewrites.
+Approval applies to the exact visible plan. Required omitted paths remain within approval only under Implement recovery below. Broad approval does not authorize unmentioned material changes.
 
 Classify approval details and later steers under **Steers And Recovery**. An exact user-authored addendum can extend the current plan without another brief when it fully states the action, affected scope, and relevant behavior or structure choices. Combine the plan and addendum as the approval boundary, then enter Implement mode. Do not render the user's own addendum back for ceremonial approval.
 
@@ -190,7 +190,7 @@ In Implement mode:
 - do not leave bad nearby shape in place just to keep the diff small
 - keep behavior changes visible
 - preserve unrelated user or agent changes
-- return to Brief before any agent-chosen change beyond approval. Discoveries do not authorize freestyle.
+- unexpected omitted paths follow recovery below; never use recovery to excuse vague planning
 - stop and return to Brief mode if the approved plan proves mechanically impossible or runtime-invalid
 
 Before the first file edit in Implement mode:
@@ -204,7 +204,13 @@ Before the first file edit in Implement mode:
 - Return to Brief only if the plan changed.
 - Proposal acceptance releases clean claims immediately. If dirty work remains, continuation returns the narrowed successor. If it reports accepted commit proposals, read every proposal ID and SHA. When the approval boundary is unchanged or an exact user steer fully specifies the next paths, call `mcp__wbex__git_arc_plan_start` with those paths. Otherwise, return to Brief and call `mcp__wbex__git_arc_plan` for the revised path set.
 - A replacement plan must cover every still-dirty file claimed by this thread. Publishing it releases clean previous claims and retains only covered dirt through approval. Dirty unclaimed paths require explicit `--adopt <dirty-path>` intent. Do not ask the user to clean another agent's claimed work.
-- Use active `arc add` only after approval for clean paths already named by the approved plan. Brief and Decision scope extensions use `arc plan add` and remain unclaimed until `arc start`.
+<!-- Failure: agents erase valid work, ask permission for forgotten paths, or plan vague scope. -->
+Unexpected omitted paths:
+
+- Report each path and reason.
+- No material change: continue arc; add or adopt; resume. No Decision.
+- Material or uncertain change: keep work; use `plan add` for clean paths; return to Brief.
+- Never restore, release, unclaim, or discard only to change scope.
 - For claim overlap, use `mcp__wb__git_arc_wait`. Continue only after the plan owns its claims.
 - For incompatible HEAD movement, unexplained dirt, or another unsafe rejection, stop before editing and inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief when safe recovery changes the approved plan.
 - If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded arc safety. Continue without it only after explicit user approval.

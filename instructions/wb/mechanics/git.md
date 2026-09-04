@@ -49,6 +49,9 @@ Use these successor tools to revise the current inactive plan without publishing
 - `mcp__wbex__git_arc_plan_remove`
 - `mcp__wbex__git_arc_plan_adopt`
 
+<!-- Failure: agents release active arcs before scope recovery. -->
+`mcp__wbex__git_arc_plan_add` also accepts active arcs. It publishes an inactive successor, retains dirty work and claims, releases clean claims, and leaves additions unclaimed.
+
 Adding paths re-snapshots every requested path, including already covered paths. Removing a path that would uncover retained dirty work rejects. Old refs remain available for diagnostics.
 
 If a plan operation reports preserved baseline drift, run the printed scoped `tools.mcp__wb__git_arc_diff` request. Re-add only paths whose current versions are the intended baselines.
@@ -67,11 +70,13 @@ Before follow-up work on the same claimed files, call `mcp__wbex__git_arc_contin
 
 Proposal acceptance releases clean claims. When dirty work remains, continuation returns the narrowed successor. When no dirty claims remain, continuation reports every accepted proposal ID and commit SHA and resolves the arc.
 
-After approval and continuation, use:
+After continuation:
 
-- `mcp__wbex__git_arc_add` for approved new clean paths.
-- `mcp__wbex__git_arc_adopt` for approved existing dirty workspace paths.
-- `mcp__wbex__git_arc_remove` for exact clean claims the active arc no longer owns.
+- `mcp__wbex__git_arc_add` claims omitted clean paths still within the approved plan. No extra approval.
+- `mcp__wbex__git_arc_adopt` claims intentional relevant dirt.
+- `mcp__wbex__git_arc_remove` releases exact clean claims.
+
+Never use claim expansion to excuse vague planning. Never restore, release, unclaim, or discard only to change scope.
 
 Use `mcp__wbex__git_arc_release` to release every live claim without changing workspace or Git content. It rejects dirty claims by default. Set `disown: true` only after explicit user direction to release dirty ownership. Releasing retained claims keeps the current inactive plan.
 

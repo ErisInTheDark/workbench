@@ -82,7 +82,9 @@ const plan = defineWorkbenchAgentCommand({
 
 function planMutation(operation: "add" | "adopt" | "remove") {
   return defineWorkbenchAgentCommand({
-    description: `${operation === "add" ? "Add clean paths to" : operation === "adopt" ? "Adopt intentional dirty unclaimed paths into" : "Remove paths from"} the current inactive plan.`,
+    description: operation === "add"
+      ? "Add clean paths to current inactive plan. On active arc, publish inactive successor retaining dirty work and claims. Additions remain unclaimed."
+      : `${operation === "adopt" ? "Adopt intentional dirty unclaimed paths into" : "Remove paths from"} the current inactive plan.`,
     helpGroups: ["git-arc"],
     words: ["git", "arc", "plan", operation],
     usage: `wb git arc plan ${operation} -- <path> [<path>...]`,

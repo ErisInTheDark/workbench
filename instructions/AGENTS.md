@@ -38,7 +38,7 @@ If it is impossible to complete a task without a feature, explain the exact bloc
 
 - Stay within the current permission envelope.
 - Treat explicit user direction as authorization for the exact action it specifies. When an approved plan plus the user's exact addendum fully determines the work, combine them as the current approval boundary and continue. Do not re-brief merely to repackage them.
-- Approval covers the visible plan and exact user-authored changes to it. It does not cover hidden agent-authored scope.
+- Approval covers the visible plan and exact user changes. Name every expected edit path and change. Never use claim expansion to excuse vague scope.
 - Workspace, snapshot, or ref drift alone does not invalidate approval. Inspect the drift. Keep approval when the approved edit set, behavior, structure, ownership, mechanics, and validation do not change.
 - Re-plan only when the agent must choose or discover material behavior, ownership, contracts, lifecycle, persistence, interaction, structure, dependencies, validation, or mechanics beyond the user's direction, or when that direction is ambiguous, conflicting, or impossible.
 - Preserve existing owned behavior and structure unless the visible plan explicitly changes it. This includes user-visible surfaces, public contracts, data shape, persistence semantics, state ownership, lifecycle boundaries, navigation or routing shape, validation behavior, error handling, background processes, and source/generated boundaries.
@@ -138,7 +138,12 @@ If plan/arc instructions are missing, plan creation fails, or the repo has no us
 
 If the exact edit set is still unknown, do not present an implementation plan. Present an inspection or diagnostics plan instead.
 
-If the agent discovers that the approved touch set must change, return to Brief mode. If an exact user steer fully specifies the changed touch set, update the plan or arc mechanically and continue without restating the plan.
+Unexpected omitted paths during Implement:
+
+- No material change: report path and reason; continue arc; add or adopt; continue.
+- Material or uncertain change: keep work; use `mcp__wbex__git_arc_plan_add` for clean paths; return to Brief.
+- Never restore, release, unclaim, or discard only to change scope.
+- Exact user steer updates plan or arc; continue without restating.
 
 After the revised plan names its exact edit set, make the inactive Git plan ref match with `mcp__wbex__git_arc_plan_add`, `mcp__wbex__git_arc_plan_remove`, or `mcp__wbex__git_arc_plan_adopt`. Revising the user-visible plan does not by itself require replacing the Git plan ref. Use the active-arc add tool only after approval in Implement mode.
 
@@ -174,7 +179,7 @@ Before follow-up work on the same claimed files, call `mcp__wbex__git_arc_contin
 
 When approved work moves paths, use `mcp__wbex__git_arc_mv`. It keeps source and destination claimed without changing the ordinary Git index. Its `move` input accepts operands, source/destination mappings, or regex preview and confirmation. Record the returned successor ref.
 
-After approval and continuation, use `mcp__wbex__git_arc_add` for approved new clean paths and `mcp__wbex__git_arc_adopt` for approved existing workspace changes. Never call these active-arc tools during Brief or Decision, and never repeat claimed paths. Each call checks the claimed baseline and returns a successor. Remember the newest ref.
+After continuation, use `mcp__wbex__git_arc_add` for omitted clean paths still within approval and `mcp__wbex__git_arc_adopt` for intentional relevant dirt. Never call these active-arc tools during Brief or Decision, and never repeat claimed paths. Each call checks the claimed baseline and returns a successor. Remember the newest ref.
 
 When approved work no longer owns exact claimed entries, call `mcp__wbex__git_arc_remove`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. Removing the final clean claim creates a zero-claim resolved lifecycle summary that does not block settlement.
 
