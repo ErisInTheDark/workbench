@@ -309,14 +309,16 @@ function inspectionCommand(action: "compare" | "diff") {
 }
 
 const propose = defineWorkbenchAgentCommand({
-  description: "Create a durable editable commit proposal from claimed changes, or change an accepted proposal's title and description by exact id.",
+  description: "Create a durable editable commit proposal from claimed changes, including amend and fresh choices, or change an accepted proposal's message by exact id.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "propose"],
-  usage: "wb git arc propose [--root <root-id>] [--amend [<proposal-id>]] [--replace <proposal-id>] [--title <title>] [--description <description>] [-- <claimed-path>...]",
+  usage: "wb git arc propose [--root <root-id>] [--amend [<proposal-id>] --fresh-title <title> [--fresh-description <description>]] [--replace <proposal-id>] [--title <title>] [--description <description>] [-- <claimed-path>...]",
   inputSchema: z.object({
     amend: z.boolean().default(false),
     amendProposalId: requiredText.optional(),
     description: z.string().default(""),
+    freshDescription: z.string().optional().describe("Description to use if the content amendment is committed fresh."),
+    freshTitle: requiredText.optional().describe("Required title to use if the content amendment is committed fresh."),
     paths: paths.default([]),
     replaceProposalId: requiredText.optional(),
     rootId: requiredText.optional(),
@@ -324,6 +326,10 @@ const propose = defineWorkbenchAgentCommand({
   }).strict().superRefine((input, context) => {
     if (input.amend && input.replaceProposalId) context.addIssue({ code: "custom", message: "amend and replaceProposalId cannot be combined." });
     if (!input.amend && !input.title.trim()) context.addIssue({ code: "custom", message: "title is required unless amend is true." });
+    if (input.amend && !input.freshTitle) context.addIssue({ code: "custom", message: "freshTitle is required when amend is true.", path: ["freshTitle"] });
+    if (!input.amend && (input.freshTitle !== undefined || input.freshDescription !== undefined)) {
+      context.addIssue({ code: "custom", message: "freshTitle and freshDescription require amend.", path: ["freshTitle"] });
+    }
   }),
   parseCliArgs(args) {
     const normalizedArgs = [...args];
@@ -335,17 +341,27 @@ const propose = defineWorkbenchAgentCommand({
     }
     const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(normalizedArgs, {
       boolean: ["--amend"],
-      values: ["--description", "--replace", "--root", "--title"],
+      values: ["--description", "--fresh-description", "--fresh-title", "--replace", "--root", "--title"],
     }), {
       boolean: ["--amend"],
-      leadingDashValues: ["--description", "--title"],
-      values: ["--description", "--replace", "--root", "--title"],
+      leadingDashValues: ["--description", "--fresh-description", "--fresh-title", "--title"],
+      values: ["--description", "--fresh-description", "--fresh-title", "--replace", "--root", "--title"],
       trailing: true,
     });
+    const freshDescription = flags.optional("--fresh-description") ?? undefined;
+    const freshTitle = flags.optional("--fresh-title") ?? undefined;
+    const targetedMessageOnly = Boolean(
+      amendProposalId
+      && !flags.trailing.length
+      && freshDescription === undefined
+      && freshTitle === undefined
+    );
     return {
-      amend: flags.has("--amend"),
+      amend: flags.has("--amend") && !targetedMessageOnly,
       amendProposalId,
       description: flags.optional("--description") ?? "",
+      freshDescription,
+      freshTitle,
       paths: flags.trailing,
       replaceProposalId: flags.optional("--replace") ?? undefined,
       rootId: flags.optional("--root") ?? undefined,
@@ -358,6 +374,8 @@ const propose = defineWorkbenchAgentCommand({
       ...(input.amendProposalId ? { amendProposalId: input.amendProposalId } : {}),
       ...baseBody(callerHarness, callerThreadId, cwd),
       description: input.description,
+      ...(input.freshDescription !== undefined ? { freshDescription: input.freshDescription } : {}),
+      ...(input.freshTitle ? { freshTitle: input.freshTitle } : {}),
       ...(input.paths.length ? { paths: input.paths } : {}),
       ...(input.replaceProposalId ? { replaceProposalId: input.replaceProposalId } : {}),
       ...(input.rootId ? { rootId: input.rootId } : {}),

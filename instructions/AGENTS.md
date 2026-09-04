@@ -198,7 +198,7 @@ Review must cover:
 * failed, skipped, or unavailable validation
 * remaining risks or follow-up decisions
 
-Before Review can finish, call `mcp__wbex__git_arc_propose` with a fresh title. It selects changed claimed files. Use `paths` only for a narrower subset. It opens the proposal UI and does not commit. Do not use the commit-selection tools for an arc proposal. Skip this step when no files changed. A proposal failure keeps Review open.
+Before Review ends, call `mcp__wbex__git_arc_propose` with required messages. It selects changed claims; `paths` narrows them. It opens proposal UI, not a commit. Do not use commit-selection tools. Skip with no changes. Failure keeps Review open.
 
 ## Project Quality
 

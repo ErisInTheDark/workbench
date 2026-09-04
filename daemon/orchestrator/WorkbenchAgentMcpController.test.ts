@@ -129,7 +129,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const proposal = inventory.tools.find(({ name }) => name === "git_arc_propose");
     assert.ok(proposal);
     assert.deepEqual(Object.keys(proposal.inputSchema.properties ?? {}).sort(), [
-      "amend", "amendProposalId", "description", "paths", "replaceProposalId", "rootId", "title",
+      "amend", "amendProposalId", "description", "freshDescription", "freshTitle", "paths", "replaceProposalId", "rootId", "title",
     ]);
     assert.equal(inventory.tools.some(({ name }) => name === "orchestrator_reload" || name === "reload" || name === "dirt"), false);
     const refresh = inventory.tools.find(({ name }) => name === "thread_refresh");

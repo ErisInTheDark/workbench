@@ -863,6 +863,24 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
     title: "Title",
   });
   assert.deepEqual(parseGitCheckpointCommitCommand(
+    'wb git arc propose --amend --title "Amend title" --description "Amend description" --fresh-title "Fresh title" --fresh-description "Fresh description" -- src/client.ts',
+  ), {
+    amend: true,
+    description: "Amend description",
+    freshDescription: "Fresh description",
+    freshTitle: "Fresh title",
+    paths: ["src/client.ts"],
+    title: "Amend title",
+  });
+  assert.deepEqual(parseGitCheckpointCommitCommand(
+    'wb git arc propose --amend proposal-one --title "Legacy amend title"',
+  ), {
+    amend: true,
+    description: "",
+    paths: [],
+    title: "Legacy amend title",
+  });
+  assert.deepEqual(parseGitCheckpointCommitCommand(
     "wb git arc propose -m Title",
   ), {
     amend: false,

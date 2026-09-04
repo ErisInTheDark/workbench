@@ -59,7 +59,7 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "13. Summarize or inspect an arc or proposal: wb git arc compare [--ref <arc-sha|proposal-id>] [-- <path> [<path>...]] / wb git arc diff [--ref <arc-sha|proposal-id>] [--page <page>] [-- <path> [<path>...]]",
   "14. Propose a normal commit: wb git arc propose [--root <root-id>] --title <fresh-title> [--description <optional-description>] [-- <claimed-path> [<claimed-path>...]]",
   "15. Propose title and description changes to an exact accepted commit without an active arc: wb git arc propose --amend <proposal-id> --title <replacement-title> [--description <replacement-description>]",
-  "16. Amend current unpushed HEAD content from the active arc: wb git arc propose --amend [--title <replacement-title>] [--description <replacement-description>] -- <claimed-path> [...]",
+  "16. Amend current unpushed HEAD content from the active arc: wb git arc propose --amend [--title <replacement-title>] [--description <replacement-description>] --fresh-title <fresh-title> [--fresh-description <fresh-description>] -- <claimed-path> [...]",
   "17. Use the same arc continue command after a proposal is committed and before follow-up work.",
   "18. Restore selected paths: wb git arc restore --ref <ref> -- <path> [<path>...]",
   "19. Restore the full arc only after explicit user direction: wb git arc restore --ref <ref> --confirm",

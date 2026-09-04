@@ -565,6 +565,8 @@ export default class WorkbenchGitArcFeature {
       case "proposalCreate": return Response.json(await this.controller.createProposal({
         ...common, amend: input.amend, description: input.description,
         ...(input.amendProposalId ? { amendProposalId: input.amendProposalId } : {}),
+        ...(input.freshDescription !== undefined ? { freshDescription: input.freshDescription } : {}),
+        ...(input.freshTitle ? { freshTitle: input.freshTitle } : {}),
         ...(input.paths ? { paths: input.paths } : {}),
         ...(input.replaceProposalId ? { replaceProposalId: input.replaceProposalId } : {}), title: input.title,
       }));

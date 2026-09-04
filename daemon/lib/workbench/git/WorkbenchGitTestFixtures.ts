@@ -893,7 +893,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(CONTROLLER_ADOPT_READY_FIXTURE, 1),
     demand(CONTROLLER_FAILED_ADOPT_READY_FIXTURE, 1),
     demand(CONTROLLER_PARTIAL_READY_FIXTURE, 3),
-    demand(CONTROLLER_REPLACEMENT_READY_FIXTURE, 2),
+    demand(CONTROLLER_REPLACEMENT_READY_FIXTURE, 3),
     demand(CONTROLLER_PUSHED_AMEND_READY_FIXTURE, 2),
   ], nested: true }],
 ]);

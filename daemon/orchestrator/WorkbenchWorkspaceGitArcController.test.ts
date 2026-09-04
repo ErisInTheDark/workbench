@@ -520,7 +520,8 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
   });
   const contentAmendment = await controller.execute(project, {
     action: "proposalCreate", amend: true, amendProposalId: webProposal.proposalId,
-    description: "Content amendment", title: "Amend web content", ...identity,
+    description: "Content amendment", freshDescription: "Keep web history intact",
+    freshTitle: "Add web content", title: "Amend web content", ...identity,
   }) as { paths: string[]; proposalId: string; receivedPaths?: string[]; rootId: string };
   assert.deepEqual({
     paths: contentAmendment.paths,

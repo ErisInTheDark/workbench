@@ -1026,6 +1026,8 @@ export default class WorkbenchGitCheckpointController {
     amendProposalId,
     cwd,
     description,
+    freshDescription,
+    freshTitle,
     harness: rawHarness,
     paths: rawPaths,
     replaceProposalId,
@@ -1035,6 +1037,8 @@ export default class WorkbenchGitCheckpointController {
     amend?: boolean;
     amendProposalId?: string;
     description: string;
+    freshDescription?: string;
+    freshTitle?: string;
     paths?: string[];
     replaceProposalId?: string;
     title: string;
@@ -1044,6 +1048,8 @@ export default class WorkbenchGitCheckpointController {
       amendProposalId,
       cwd,
       description,
+      freshDescription,
+      freshTitle,
       harness: rawHarness,
       paths: rawPaths,
       replaceProposalId,
@@ -1080,16 +1086,18 @@ export default class WorkbenchGitCheckpointController {
     description,
     harness: rawHarness,
     includeNewer,
+    mode,
     proposalId,
     threadId,
     title,
   }: ControllerInput & {
     description: string;
     includeNewer: boolean;
+    mode?: "amend" | "commit";
     proposalId: string;
     title: string;
   }): Promise<GitCheckpointProposal> {
-    return await this.proposals.commitProposal({ cwd, description, harness: rawHarness, includeNewer, proposalId, threadId, title });
+    return await this.proposals.commitProposal({ cwd, description, harness: rawHarness, includeNewer, mode, proposalId, threadId, title });
   }
 
   async readLegacyDiffArtifact({ artifactId, threadId }: { artifactId: string; threadId: string }) {

@@ -93,7 +93,7 @@ Track all arc outcomes. Reconcile the list with the full selected diff. New prop
 Set `replaceProposalId` to replace exactly one pending proposal. Use `mcp__wbex__git_arc_rescind` to rescind exactly one pending proposal.
 
 <!-- Failure: corrective amends rewrite history; additive amends hide scope. -->
-Compare the amended commit with its `title` and `description`. When changes only make the stated outcome work, omit both fields to inherit them. Update both fields for added functionality, scope, and all distinct or unrelated fixes. Set `amend: true` and, when needed, `amendProposalId`. Targeted amend supports linear unpushed history and atomically remaps proposal metadata and arc refs.
+Compare amend against the target commit. Update `title` and `description` for added functionality, scope, or bundled fixes; omit both only to inherit target message. Set `amend: true` and optional `amendProposalId`. Content amends must provide `freshTitle` and optional `freshDescription` for the same changes as a new commit; allows user to decide amend or fresh. Targeted amend supports linear unpushed history and atomically remaps proposal metadata and arc refs.
 
 Proposal acceptance atomically changes branch history, proposal metadata, the accepted receipt ledger, and live claims. It preserves excluded newer work.
 

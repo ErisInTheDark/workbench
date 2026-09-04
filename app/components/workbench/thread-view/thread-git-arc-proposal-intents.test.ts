@@ -49,15 +49,17 @@ test("visible proposal intents associate title and description with the proposal
       commandItem("ordinary", "pnpm typecheck", null),
       commandItem(
         "proposal",
-        "wb git arc propose --title \"Preview hoisted proposal\" --description \"Show both fields immediately.\" -- src/one.ts",
+        "wb git arc propose --amend --title \"Preview hoisted proposal\" --description \"Show both fields immediately.\" --fresh-title \"Commit correction separately\" --fresh-description \"Keep prior history unchanged.\" -- src/one.ts",
         "Workbench arc proposal: proposal-one\n",
       ),
     ])],
   });
 
   assert.deepEqual(intents.get("proposal-one"), {
-    amend: false,
+    amend: true,
     description: "Show both fields immediately.",
+    freshDescription: "Keep prior history unchanged.",
+    freshTitle: "Commit correction separately",
     paths: ["src/one.ts"],
     title: "Preview hoisted proposal",
   });
@@ -126,4 +128,41 @@ test("only proposal intent with an explicit title owns the editable message", ()
     paths: [],
     title: "New commit title",
   }), true);
+});
+
+test("MCP amend proposal intents preserve both user-selectable messages", () => {
+  const item: Extract<ThreadItem, { type: "mcpToolCall" }> = {
+    appContext: null,
+    arguments: {
+      amend: true,
+      description: "Rewrite the accepted message.",
+      freshDescription: "Keep accepted history intact.",
+      freshTitle: "Add the correction",
+      paths: ["src/one.ts"],
+      title: "Amend the correction",
+    },
+    durationMs: 10,
+    error: null,
+    id: "proposal-mcp",
+    pluginId: null,
+    readOnlyHint: false,
+    result: {
+      _meta: null,
+      content: [{ type: "text", text: "Workbench arc proposal: proposal-mcp\n" }],
+      structuredContent: null,
+    },
+    server: "wb",
+    status: "completed",
+    tool: "git_arc_propose",
+    type: "mcpToolCall",
+  };
+  const intents = getThreadGitArcProposalIntents({ turns: [turn("turn-one", [item])] });
+  assert.deepEqual(intents.get("proposal-mcp"), {
+    amend: true,
+    description: "Rewrite the accepted message.",
+    freshDescription: "Keep accepted history intact.",
+    freshTitle: "Add the correction",
+    paths: ["src/one.ts"],
+    title: "Amend the correction",
+  });
 });

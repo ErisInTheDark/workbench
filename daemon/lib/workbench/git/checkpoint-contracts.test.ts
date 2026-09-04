@@ -232,8 +232,35 @@ test("proposal and plan diagnostics encode explicit lifecycle targets", () => {
   }).success, true);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "proposalCreate",
+    amend: true,
     amendProposalId: "proposal-ancestor",
     description: "",
+    freshDescription: "Keep the accepted commit intact.",
+    freshTitle: "Add ancestor correction",
+    title: "Amend ancestor",
+    ...common,
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "proposalCreate",
+    amend: true,
+    description: "",
+    title: "Missing fresh choice",
+    ...common,
+  }).success, false);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "proposalCommit",
+    description: "",
+    includeNewer: false,
+    mode: "commit",
+    proposalId: "proposal-ancestor",
+    title: "Add ancestor correction",
+    ...common,
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "proposalCommit",
+    description: "",
+    includeNewer: false,
+    proposalId: "proposal-ancestor",
     title: "Amend ancestor",
     ...common,
   }).success, true);
@@ -247,7 +274,7 @@ test("proposal and plan diagnostics encode explicit lifecycle targets", () => {
 });
 
 test("proposal contracts keep paths explicit and terminal metadata complete", () => {
-  assert.equal(GitCheckpointProposalSchema.safeParse({
+  const compatibleProposal = GitCheckpointProposalSchema.safeParse({
     amendTargetSha: null,
     baseCommit: "abcdef1",
     changes: [{
@@ -268,6 +295,21 @@ test("proposal contracts keep paths explicit and terminal metadata complete", ()
     supersededBySha: null,
     title: "Update A",
     unavailableReason: null,
+  });
+  assert.equal(compatibleProposal.success, true);
+  if (!compatibleProposal.success) throw compatibleProposal.error;
+  assert.equal(compatibleProposal.data.amendTargetMessage, null);
+  assert.equal(compatibleProposal.data.freshChanges, null);
+  assert.equal(GitCheckpointProposalSchema.safeParse({
+    ...compatibleProposal.data,
+    amendTargetMessage: { description: "Current description", title: "Current title" },
+    freshChanges: [{
+      additions: 1,
+      deletions: 0,
+      diff: "diff --git a/src/a.ts b/src/a.ts\n",
+      kind: { move_path: null, type: "update" },
+      path: "src/a.ts",
+    }],
   }).success, true);
   assert.equal(GitCheckpointProposalSchema.safeParse({
     amendTargetSha: null,

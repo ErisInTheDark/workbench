@@ -70,11 +70,13 @@ function messageItem(id: string): Extract<ThreadItem, { type: "agentMessage" }> 
 
 function renderUnavailableProposal(unavailableReasonCode?: "committed-outside-proposal") {
   const proposal: GitCheckpointProposal = {
+    amendTargetMessage: null,
     amendTargetSha: null,
     baseCommit: "abcdef1",
     changes: [],
     committedSha: null,
     description: "",
+    freshChanges: null,
     includeNewerAvailable: false,
     mode: "commit",
     paths: ["src/one.ts"],
@@ -87,10 +89,13 @@ function renderUnavailableProposal(unavailableReasonCode?: "committed-outside-pr
     ...(unavailableReasonCode ? { unavailableReasonCode } : {}),
   };
   return renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    commitMode: proposal.mode,
     committing: false,
     description: "",
+    freshCommitAvailable: false,
     includeNewer: false,
     onCommit: () => undefined,
+    onCommitModeChange: () => undefined,
     onDescriptionChange: () => undefined,
     onIncludeNewerChange: () => undefined,
     onRetry: () => undefined,
@@ -136,6 +141,87 @@ test("proposals committed through another path render as resolved rather than fa
     renderUnavailableProposal(),
     /data-thread-checkpoint-committed-outside-proposal/u,
   );
+});
+
+test("content amend proposals expose an amend-default fresh commit choice", () => {
+  const proposal: GitCheckpointProposal = {
+    amendTargetMessage: {
+      description: "Current description",
+      title: "Current title",
+    },
+    amendTargetSha: "abcdef2",
+    baseCommit: "abcdef1",
+    changes: [{
+      additions: 4,
+      deletions: 2,
+      diff: "diff --git a/src/old.ts b/src/old.ts\n",
+      kind: { move_path: null, type: "update" },
+      path: "src/old.ts",
+    }, {
+      additions: 1,
+      deletions: 1,
+      diff: "diff --git a/src/one.ts b/src/one.ts\n",
+      kind: { move_path: null, type: "update" },
+      path: "src/one.ts",
+    }],
+    committedSha: null,
+    description: "Current description",
+    freshChanges: [{
+      additions: 1,
+      deletions: 1,
+      diff: "diff --git a/src/one.ts b/src/one.ts\n",
+      kind: { move_path: null, type: "update" },
+      path: "src/one.ts",
+    }],
+    includeNewerAvailable: false,
+    mode: "amend",
+    paths: ["src/one.ts"],
+    proposalId: "proposal-amend",
+    status: "proposed",
+    supersededByProposalId: null,
+    supersededBySha: null,
+    title: "Proposed title",
+    unavailableReason: null,
+  };
+  const renderCard = (commitMode: "amend" | "commit", title = proposal.title, description = proposal.description) => renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    commitMode,
+    committing: false,
+    description,
+    freshCommitAvailable: true,
+    includeNewer: false,
+    onCommit: () => undefined,
+    onCommitModeChange: () => undefined,
+    onDescriptionChange: () => undefined,
+    onIncludeNewerChange: () => undefined,
+    onRetry: () => undefined,
+    onTitleChange: () => undefined,
+    paths: proposal.paths,
+    sourceItemId: "proposal-item",
+    state: { proposal, status: "loaded" },
+    title,
+  }));
+  const amendHtml = renderCard("amend");
+  assert.match(amendHtml, /aria-label="Commit mode"/u);
+  assert.match(amendHtml, /role="radiogroup"/u);
+  assert.match(amendHtml, /<button(?=[^>]*role="radio")(?=[^>]*aria-checked="true")(?=[^>]*aria-label="Amend")[^>]*>/u);
+  assert.match(amendHtml, /<button(?=[^>]*role="radio")(?=[^>]*aria-checked="false")(?=[^>]*aria-label="Commit fresh")[^>]*>/u);
+  assert.doesNotMatch(amendHtml, /<input/u);
+  assert.match(amendHtml, /2 changed files/u);
+  assert.match(amendHtml, />\+5</u);
+  assert.match(amendHtml, />-3</u);
+  assert.match(amendHtml, /aria-label="Commit title differs from current commit"/u);
+  assert.doesNotMatch(amendHtml, /aria-label="Commit description differs from current commit"/u);
+
+  const descriptionChangedHtml = renderCard("amend", "Current title", "Changed description");
+  assert.doesNotMatch(descriptionChangedHtml, /aria-label="Commit title differs from current commit"/u);
+  assert.match(descriptionChangedHtml, /aria-label="Commit description differs from current commit"/u);
+
+  const freshHtml = renderCard("commit", "Fresh title", "Fresh description");
+  assert.match(freshHtml, /1 changed file/u);
+  assert.match(freshHtml, />\+1</u);
+  assert.match(freshHtml, />-1</u);
+  assert.doesNotMatch(freshHtml, />\+5</u);
+  assert.doesNotMatch(freshHtml, /differs from current commit/u);
 });
 
 test("finished tails hide terminal reasoning and hoisted proposals from shell and MCP routes", () => {

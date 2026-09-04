@@ -1121,24 +1121,48 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
     amendProposalId: commitTarget.proposalId,
     cwd: source,
     description: "",
+    freshDescription: "Preserve the accepted commit.",
+    freshTitle: "add committed target correction",
     harness: "codex",
     threadId: "partial-thread",
     title: "amend committed target",
   });
-  await advanceHead(repository, "advance after content proposal");
+  const laterHead = await advanceHead(repository, "advance after content proposal");
   const proposed = await controller.getProposal({
     cwd: source, harness: "codex", includeNewer: false, proposalId: amendment.proposalId, threadId: "partial-thread",
   });
   assert.equal(proposed.mode, "amend");
   assert.equal(proposed.amendTargetSha, state.committedSha);
   assert.equal(proposed.status, "proposed");
+  assert.deepEqual(proposed.amendTargetMessage, {
+    description: committedTarget.description,
+    title: committedTarget.title,
+  });
   assert.deepEqual(proposed.changes.map(({ path: filePath }) => filePath), ["one.txt", "three.txt", "two.txt"]);
+  assert.deepEqual(proposed.freshChanges?.map(({ path: filePath }) => filePath), ["one.txt", "two.txt"]);
   assert.match(proposed.changes.find(({ path: filePath }) => filePath === "one.txt")?.diff ?? "", /replace one/u);
   assert.match(proposed.changes.find(({ path: filePath }) => filePath === "two.txt")?.diff ?? "", /rescind two/u);
   assert.deepEqual(
     (await new GitArcRegistry(await WorkbenchGitRepository.open(source)).find({ harness: "codex", threadId: "partial-thread" }))?.proposalIds,
     [continuedReplacement.proposalId, amendment.proposalId],
   );
+  const committedFresh = await controller.commitProposal({
+    cwd: source,
+    description: "Preserve the accepted commit.",
+    harness: "codex",
+    includeNewer: false,
+    mode: "commit",
+    proposalId: amendment.proposalId,
+    threadId: "partial-thread",
+    title: "add committed target correction",
+  });
+  assert.equal(committedFresh.mode, "commit");
+  assert.equal(committedFresh.amendTargetSha, null);
+  assert.equal((await git(source, ["rev-parse", `${committedFresh.committedSha}^`])).trim(), laterHead);
+  assert.equal((await git(source, ["show", "-s", "--format=%s", committedFresh.committedSha!])).trim(), "add committed target correction");
+  assert.equal((await controller.getProposal({
+    cwd: source, harness: "codex", includeNewer: false, proposalId: commitTarget.proposalId, threadId: "partial-thread",
+  })).status, "committed");
   await assert.rejects(controller.getProposal({
     cwd: source, harness: "codex", includeNewer: false, proposalId: replaceTarget.proposalId, threadId: "foreign-thread",
   }), /Checkpoint proposal not found/u);
@@ -1275,6 +1299,8 @@ isolatedControllerTest("amend proposal creation rejects HEAD already contained b
     amend: true,
     cwd: source,
     description: "",
+    freshDescription: "",
+    freshTitle: "commit pushed correction separately",
     harness: "codex",
     threadId: "pushed-thread",
     title: "",

@@ -31,6 +31,10 @@ export interface ProposalMetadata {
   baseCommit: string;
   committedSha: string | null;
   description: string;
+  freshCommitMessage?: {
+    description: string;
+    title: string;
+  };
   liveBaseCommit: string;
   livePaths: string[];
   messageOnly?: true;

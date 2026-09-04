@@ -12,7 +12,8 @@ import { createGitArcOperationRejected, type GitArcFailure } from "workbench-sha
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import PrimaryButton from "../PrimaryButton";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
-import { CheckIcon } from "../workbench-icons";
+import { AsteriskIcon, CheckIcon, PlusIcon } from "../workbench-icons";
+import WorkbenchModeRow from "../WorkbenchModeRow";
 import PlaintextEditable from "./PlaintextEditable";
 import GitArcIcon from "./GitArcIcon";
 import ThreadDisclosure from "./ThreadDisclosure";
@@ -28,11 +29,14 @@ export type CheckpointCommitCardState =
   | { status: "pending" };
 
 export default function ThreadCheckpointCommitCard({
+  commitMode,
   committing,
   description,
   embedded = false,
+  freshCommitAvailable,
   includeNewer,
   onCommit,
+  onCommitModeChange,
   onDescriptionChange,
   onIncludeNewerChange,
   onRetry,
@@ -47,11 +51,14 @@ export default function ThreadCheckpointCommitCard({
   title,
   workspaceRoots,
 }: {
+  commitMode: "amend" | "commit";
   committing: boolean;
   description: string;
   embedded?: boolean;
+  freshCommitAvailable: boolean;
   includeNewer: boolean;
   onCommit: () => void;
+  onCommitModeChange: (value: "amend" | "commit") => void;
   onDescriptionChange: (value: string) => void;
   onIncludeNewerChange: (value: boolean) => void;
   onRetry: () => void;
@@ -76,9 +83,19 @@ export default function ThreadCheckpointCommitCard({
   const editable = !compactPreview && (!proposal || proposal.status === "proposed" || committedAmendable);
   const messageChanged = proposal?.status === "committed"
     && (title.trim() !== proposal.title.trim() || description.trim() !== proposal.description.trim());
-  const additions = proposal?.changes.reduce((total, change) => total + change.additions, 0) ?? 0;
-  const deletions = proposal?.changes.reduce((total, change) => total + change.deletions, 0) ?? 0;
-  const fileCount = proposal?.changes.length ?? paths.length;
+  const displayedChanges = proposal?.mode === "amend" && commitMode === "commit" && proposal.freshChanges
+    ? proposal.freshChanges
+    : proposal?.changes ?? [];
+  const additions = displayedChanges.reduce((total, change) => total + change.additions, 0);
+  const deletions = displayedChanges.reduce((total, change) => total + change.deletions, 0);
+  const fileCount = proposal ? displayedChanges.length : paths.length;
+  const amendTargetMessage = proposal?.amendTargetMessage ?? null;
+  const titleWillChange = commitMode === "amend"
+    && amendTargetMessage !== null
+    && title.trim() !== amendTargetMessage.title.trim();
+  const descriptionWillChange = commitMode === "amend"
+    && amendTargetMessage !== null
+    && description.trim() !== amendTargetMessage.description.trim();
   const changeSummary = proposal || paths.length
     ? `${fileCount} changed ${fileCount === 1 ? "file" : "files"}`
     : "Arc changes";
@@ -87,7 +104,7 @@ export default function ThreadCheckpointCommitCard({
     && Boolean(compactCanCommit
       ? proposal?.status === "proposed"
       : !compact && (proposal?.status === "proposed" || (committedAmendable && messageChanged)));
-  const commitLabel = proposal?.mode === "amend" || proposal?.status === "committed" ? "Amend" : "Commit";
+  const commitLabel = proposal?.status === "committed" || commitMode === "amend" ? "Amend" : "Commit";
   const failure = state.status === "error"
     ? state.failure ?? createGitArcOperationRejected("proposalCreate", state.error)
     : null;
@@ -129,25 +146,43 @@ export default function ThreadCheckpointCommitCard({
           <GitArcIcon action="propose" className="size-5" />
         </span>
         <div className="min-w-0 flex-1 space-y-1">
-          <PlaintextEditable
-            ariaLabel="Commit title"
-            className={`${compact ? "min-h-5 text-[0.88em]" : "min-h-6 text-[0.94em]"} w-full bg-transparent px-0 py-0.5 font-medium outline-none data-[empty=true]:before:text-muted data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent`}
-            onChange={onTitleChange}
-            onKeyDown={commitFromEditable}
-            placeholder="Commit title"
-            readOnly={!editable}
-            value={title}
-          />
+          <div className="flex min-w-0 items-start gap-1">
+            {titleWillChange ? (
+              <span aria-label="Commit title differs from current commit" className="mt-1 inline-flex size-4 shrink-0 items-center justify-center text-muted" role="img">
+                <AsteriskIcon className="size-3.5" />
+              </span>
+            ) : null}
+            <div className="min-w-0 flex-1">
+              <PlaintextEditable
+                ariaLabel="Commit title"
+                className={`${compact ? "min-h-5 text-[0.88em]" : "min-h-6 text-[0.94em]"} w-full bg-transparent px-0 py-0.5 font-medium outline-none data-[empty=true]:before:text-muted data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent`}
+                onChange={onTitleChange}
+                onKeyDown={commitFromEditable}
+                placeholder="Commit title"
+                readOnly={!editable}
+                value={title}
+              />
+            </div>
+          </div>
           {editable || description.trim() ? (
-            <PlaintextEditable
-              ariaLabel="Commit description"
-              className={`${compact ? "min-h-5 text-[0.76em] leading-4" : "min-h-7 text-[0.8em] leading-5"} w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-muted outline-none data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_32%,transparent)] data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text`}
-              onChange={onDescriptionChange}
-              onKeyDown={commitFromEditable}
-              placeholder="Optional description"
-              readOnly={!editable}
-              value={description}
-            />
+            <div className="flex min-w-0 items-start gap-1">
+              {descriptionWillChange ? (
+                <span aria-label="Commit description differs from current commit" className="mt-1 inline-flex size-4 shrink-0 items-center justify-center text-muted" role="img">
+                  <AsteriskIcon className="size-3.5" />
+                </span>
+              ) : null}
+              <div className="min-w-0 flex-1">
+                <PlaintextEditable
+                  ariaLabel="Commit description"
+                  className={`${compact ? "min-h-5 text-[0.76em] leading-4" : "min-h-7 text-[0.8em] leading-5"} w-full whitespace-pre-wrap bg-transparent px-0 py-0.5 text-muted outline-none data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_32%,transparent)] data-[empty=true]:before:content-[attr(data-placeholder)] focus:bg-transparent focus:text-text`}
+                  onChange={onDescriptionChange}
+                  onKeyDown={commitFromEditable}
+                  placeholder="Optional description"
+                  readOnly={!editable}
+                  value={description}
+                />
+              </div>
+            </div>
           ) : null}
         </div>
       </div>
@@ -184,6 +219,28 @@ export default function ThreadCheckpointCommitCard({
                     checked={includeNewer}
                     label="Include newer changes"
                     onChange={onIncludeNewerChange}
+                  />
+                ) : null}
+                {(!compact || compactCanCommit) && proposal?.status === "proposed" && freshCommitAvailable ? (
+                  <WorkbenchModeRow
+                    ariaLabel="Commit mode"
+                    disabled={committing}
+                    onChange={onCommitModeChange}
+                    options={[
+                      {
+                        ariaLabel: "Amend",
+                        icon: <AsteriskIcon className="size-3.5" />,
+                        label: "Amend",
+                        value: "amend",
+                      },
+                      {
+                        ariaLabel: "Commit fresh",
+                        icon: <PlusIcon className="size-3.5" />,
+                        label: "Commit fresh",
+                        value: "commit",
+                      },
+                    ]}
+                    value={commitMode}
                   />
                 ) : null}
                 {!compact && proposal?.status === "committed" && canCommit ? (
@@ -228,7 +285,7 @@ export default function ThreadCheckpointCommitCard({
         >
           {proposal ? (
             <ThreadFileChangeList
-              changes={proposal.changes.map((change, index) => ({
+              changes={displayedChanges.map((change, index) => ({
                 change: {
                   diff: change.diff,
                   kind: change.kind.type === "update"

@@ -24,6 +24,7 @@
  * - PreviewIcon: render the thread codeblock preview toggle icon. Keywords: workbench, icon, thread, code, preview.
  * - CopyIcon/MoreVerticalIcon: render thread copy and overflow action icons. Keywords: workbench, icon, thread, copy, menu.
  * - CheckIcon: render the thread codeblock copied confirmation icon. Keywords: workbench, icon, thread, code, copied.
+ * - AsteriskIcon/PlusIcon: render amend and fresh-commit choice icons. Keywords: workbench, icon, amend, commit.
  * - SparkleIcon/ReplyArrowIcon: render shared creation and reply action icons. Keywords: workbench, icon, create, sparkle, reply.
  * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: render thread file-change kind icons. Keywords: workbench, icon, file change, add, delete, update, move.
  */
@@ -457,6 +458,25 @@ export function CheckIcon ({ className = "size-4" }: { className?: string }) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
       <path d="M4.5 10.35L8.15 14L15.5 6.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function AsteriskIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg aria-hidden="true" className={className} fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24">
+      <path d="M12 5v14" />
+      <path d="m18.065 8.496-12.125 7" />
+      <path d="m5.94 8.504 12.125 7" />
+    </svg>
+  );
+}
+
+export function PlusIcon ({ className = "size-4" }: IconProps) {
+  return (
+    <svg aria-hidden="true" className={className} fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24">
+      <path d="M5 12h14" />
+      <path d="M12 5v14" />
     </svg>
   );
 }

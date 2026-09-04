@@ -158,11 +158,20 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     amend: z.boolean().default(false),
     amendProposalId: nonEmptyString.optional(),
     description: z.string(),
+    freshDescription: z.string().optional(),
+    freshTitle: nonEmptyString.optional(),
     paths: checkpointPaths.optional(),
     replaceProposalId: nonEmptyString.optional(),
     rootId: rootId.optional(),
     title: z.string(),
     ...checkpointBaseRequest,
+  }).superRefine((input, context) => {
+    if (input.amend && !input.freshTitle) {
+      context.addIssue({ code: "custom", message: "Content amend proposals require freshTitle.", path: ["freshTitle"] });
+    }
+    if (!input.amend && (input.freshTitle !== undefined || input.freshDescription !== undefined)) {
+      context.addIssue({ code: "custom", message: "Fresh commit metadata requires amend.", path: ["freshTitle"] });
+    }
   }),
   z.object({
     action: z.literal("proposalRescind"),
@@ -179,6 +188,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     action: z.literal("proposalCommit"),
     description: z.string(),
     includeNewer: z.boolean(),
+    mode: z.enum(["amend", "commit"]).optional(),
     proposalId: nonEmptyString,
     title: nonEmptyString,
     ...checkpointBaseRequest,
@@ -255,16 +265,23 @@ export const GitCheckpointCompareResultSchema = z.object({
 });
 export type GitCheckpointCompareResult = z.infer<typeof GitCheckpointCompareResultSchema>;
 
+const GitCheckpointCommitMessageSchema = z.object({
+  description: z.string(),
+  title: nonEmptyString,
+}).strict();
+
 export const GitCheckpointProposalSchema = z.object({
   amendability: z.discriminatedUnion("status", [
     z.object({ status: z.literal("available") }).strict(),
     z.object({ reason: nonEmptyString, status: z.literal("unavailable") }).strict(),
   ]).nullable().optional(),
+  amendTargetMessage: GitCheckpointCommitMessageSchema.nullable().optional().default(null),
   amendTargetSha: checkpointSha.nullable(),
   baseCommit: checkpointSha,
   changes: z.array(GitCheckpointFileChangeSchema),
   committedSha: checkpointSha.nullable(),
   description: z.string(),
+  freshChanges: z.array(GitCheckpointFileChangeSchema).nullable().optional().default(null),
   includeNewerAvailable: z.boolean(),
   mode: z.enum(["amend", "commit"]),
   paths: checkpointPaths,

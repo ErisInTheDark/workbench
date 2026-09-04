@@ -51,6 +51,8 @@ const CHECKPOINT_COMPARE_LINE_PATTERN = /^([ADMU])\t\+(\d+)\t-(\d+)\t(.+)$/u;
 export interface GitCheckpointCommitCommandIntent {
   amend: boolean;
   description: string;
+  freshDescription?: string;
+  freshTitle?: string;
   paths: string[];
   rootId?: string;
   title: string;
@@ -314,6 +316,8 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
 
   let amend = false;
   let description: string | null = null;
+  let freshDescription: string | null = null;
+  let freshTitle: string | null = null;
   let replacementProposalId: string | null = null;
   let rootId: string | null = null;
   let title: string | null = null;
@@ -328,6 +332,7 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
     if (flag === "--amend") {
       if (amend) return null;
       amend = true;
+      if (tokens[cursor + 1] && !tokens[cursor + 1]!.startsWith("-")) cursor += 1;
       continue;
     }
     const value = tokens[cursor + 1];
@@ -355,6 +360,18 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
       cursor += 1;
       continue;
     }
+    if (flag === "--fresh-description") {
+      if (freshDescription !== null || value === undefined) return null;
+      freshDescription = resolveLiteralValue(value);
+      cursor += 1;
+      continue;
+    }
+    if (flag === "--fresh-title") {
+      if (freshTitle !== null || !value) return null;
+      freshTitle = resolveLiteralValue(value);
+      cursor += 1;
+      continue;
+    }
     if (flag !== "-m" || !value || title !== null || description !== null) return null;
     legacyMessages.push(resolveLiteralValue(value));
     cursor += 1;
@@ -367,6 +384,8 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
   return {
     amend,
     description,
+    ...(freshDescription !== null ? { freshDescription } : {}),
+    ...(freshTitle ? { freshTitle } : {}),
     paths,
     ...(rootId ? { rootId } : {}),
     title,

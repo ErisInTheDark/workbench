@@ -61,13 +61,58 @@ function ThreadCheckpointCommitController({
 }: ThreadCheckpointCommitItemProps & { cwd: string; harness: WorkbenchHarness }) {
   const daemon = useWorkbenchDaemonClient();
   const [includeNewer, setIncludeNewer] = useState(false);
-  const [title, setTitle] = useState(intent?.title ?? (presentation && presentation !== "full" ? "Commit proposal" : ""));
-  const [description, setDescription] = useState(intent?.description ?? "");
+  const initialMode = intent?.amend ? "amend" : "commit";
+  const [commitMode, setCommitMode] = useState<"amend" | "commit">(initialMode);
+  const [amendTitle, setAmendTitle] = useState(intent?.title ?? "");
+  const [amendDescription, setAmendDescription] = useState(intent?.description ?? "");
+  const [commitTitle, setCommitTitle] = useState(
+    (intent?.amend ? intent.freshTitle : intent?.title)
+      ?? (presentation && presentation !== "full" ? "Commit proposal" : ""),
+  );
+  const [commitDescription, setCommitDescription] = useState(
+    (intent?.amend ? intent.freshDescription : intent?.description) ?? "",
+  );
   const [committing, setCommitting] = useState(false);
   const [state, setState] = useState<CheckpointCommitCardState>({ status: "pending" });
   const intentOwnsMessage = proposalIntentOwnsMessage(intent);
-  const titleHydrated = useRef(intentOwnsMessage);
-  const descriptionHydrated = useRef(intentOwnsMessage);
+  const amendTitleHydrated = useRef(Boolean(intent?.amend && intentOwnsMessage));
+  const amendDescriptionHydrated = useRef(Boolean(intent?.amend && intentOwnsMessage));
+  const commitTitleHydrated = useRef(Boolean(intent?.amend ? intent.freshTitle?.trim() : intentOwnsMessage));
+  const commitDescriptionHydrated = useRef(Boolean(intent?.amend ? intent.freshTitle?.trim() : intentOwnsMessage));
+  const title = commitMode === "amend" ? amendTitle : commitTitle;
+  const description = commitMode === "amend" ? amendDescription : commitDescription;
+  const freshCommitAvailable = Boolean(intent?.amend && intent.freshTitle?.trim());
+
+  useEffect(() => {
+    if (!intent) return;
+    if (intent.amend) {
+      if (!amendTitleHydrated.current && intent.title.trim()) {
+        amendTitleHydrated.current = true;
+        setAmendTitle(intent.title);
+      }
+      if (!amendDescriptionHydrated.current && intent.title.trim()) {
+        amendDescriptionHydrated.current = true;
+        setAmendDescription(intent.description);
+      }
+      if (!commitTitleHydrated.current && intent.freshTitle?.trim()) {
+        commitTitleHydrated.current = true;
+        setCommitTitle(intent.freshTitle);
+      }
+      if (!commitDescriptionHydrated.current && intent.freshTitle?.trim()) {
+        commitDescriptionHydrated.current = true;
+        setCommitDescription(intent.freshDescription ?? "");
+      }
+      return;
+    }
+    if (!commitTitleHydrated.current && intent.title.trim()) {
+      commitTitleHydrated.current = true;
+      setCommitTitle(intent.title);
+    }
+    if (!commitDescriptionHydrated.current && intent.title.trim()) {
+      commitDescriptionHydrated.current = true;
+      setCommitDescription(intent.description);
+    }
+  }, [intent]);
 
   const loadProposal = useCallback(async (signal?: AbortSignal) => {
     if (!proposalId) return;
@@ -78,10 +123,18 @@ function ThreadCheckpointCommitController({
         { cwd, harness, includeNewer, proposalId, threadId },
       );
       if (signal?.aborted) return;
-      if (!titleHydrated.current || proposal.status !== "proposed") setTitle(proposal.title);
-      if (!descriptionHydrated.current || proposal.status !== "proposed") setDescription(proposal.description);
-      titleHydrated.current = true;
-      descriptionHydrated.current = true;
+      if (proposal.mode === "amend") {
+        if (!amendTitleHydrated.current || proposal.status !== "proposed") setAmendTitle(proposal.title);
+        if (!amendDescriptionHydrated.current || proposal.status !== "proposed") setAmendDescription(proposal.description);
+        amendTitleHydrated.current = true;
+        amendDescriptionHydrated.current = true;
+      } else {
+        if (!commitTitleHydrated.current || proposal.status !== "proposed") setCommitTitle(proposal.title);
+        if (!commitDescriptionHydrated.current || proposal.status !== "proposed") setCommitDescription(proposal.description);
+        commitTitleHydrated.current = true;
+        commitDescriptionHydrated.current = true;
+      }
+      if (proposal.status !== "proposed") setCommitMode(proposal.mode);
       if (!proposal.includeNewerAvailable && includeNewer) setIncludeNewer(false);
       setState({ proposal, status: "loaded" });
     } catch (error) {
@@ -141,13 +194,22 @@ function ThreadCheckpointCommitController({
           description,
           harness,
           includeNewer,
+          ...(state.status === "loaded" && state.proposal.mode === "amend" && commitMode === "commit"
+            ? { mode: "commit" as const }
+            : {}),
           proposalId,
           threadId,
           title,
         },
       );
-      setTitle(proposal.title);
-      setDescription(proposal.description);
+      setCommitMode(proposal.mode);
+      if (proposal.mode === "amend") {
+        setAmendTitle(proposal.title);
+        setAmendDescription(proposal.description);
+      } else {
+        setCommitTitle(proposal.title);
+        setCommitDescription(proposal.description);
+      }
       setState({ proposal, status: "loaded" });
     } catch (error) {
       const failure = error instanceof GitArcFailureException
@@ -165,21 +227,34 @@ function ThreadCheckpointCommitController({
   };
 
   const changeDescription = (value: string) => {
-    descriptionHydrated.current = true;
-    setDescription(value);
+    if (commitMode === "amend") {
+      amendDescriptionHydrated.current = true;
+      setAmendDescription(value);
+    } else {
+      commitDescriptionHydrated.current = true;
+      setCommitDescription(value);
+    }
   };
   const changeTitle = (value: string) => {
-    titleHydrated.current = true;
-    setTitle(value);
+    if (commitMode === "amend") {
+      amendTitleHydrated.current = true;
+      setAmendTitle(value);
+    } else {
+      commitTitleHydrated.current = true;
+      setCommitTitle(value);
+    }
   };
 
   return (
     <ThreadCheckpointCommitCard
+      commitMode={commitMode}
       committing={committing}
       description={description}
       embedded={embedded}
+      freshCommitAvailable={freshCommitAvailable}
       includeNewer={includeNewer}
       onCommit={() => void commit()}
+      onCommitModeChange={setCommitMode}
       onDescriptionChange={changeDescription}
       onIncludeNewerChange={setIncludeNewer}
       onRetry={() => void loadProposal()}
@@ -222,11 +297,14 @@ export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommit
   if (!props.cwd) {
     return (
       <ThreadCheckpointCommitCard
+        commitMode={resolvedIntent?.amend ? "amend" : "commit"}
         committing={false}
         description={resolvedIntent?.description ?? ""}
         embedded={props.embedded}
+        freshCommitAvailable={Boolean(resolvedIntent?.amend && resolvedIntent.freshTitle?.trim())}
         includeNewer={false}
         onCommit={() => undefined}
+        onCommitModeChange={() => undefined}
         onDescriptionChange={() => undefined}
         onIncludeNewerChange={() => undefined}
         onRetry={() => undefined}

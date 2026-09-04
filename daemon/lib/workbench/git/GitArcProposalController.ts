@@ -287,16 +287,19 @@ async function buildProposalFileChanges(
   target: string,
   harness: GitArcHarness,
   threadId: string,
+  options: { baseCommit?: string; paths?: string[] } = {},
 ) {
+  const baseCommit = options.baseCommit ?? metadata.baseCommit;
+  const paths = options.paths ?? metadata.paths;
   const [baseTree, targetTree] = await Promise.all([
-    repository.resolveTree(metadata.baseCommit),
+    repository.resolveTree(baseCommit),
     repository.resolveTree(target),
   ]);
   return await proposalFileChangesCache.readOrBuild({
     baseTree,
-    build: async () => await repository.buildFileChanges(metadata.baseCommit, target, metadata.paths),
+    build: async () => await repository.buildFileChanges(baseCommit, target, paths),
     harness,
-    paths: metadata.paths,
+    paths,
     proposalId: metadata.proposalId,
     rootPath: repository.root,
     targetTree,
@@ -321,13 +324,27 @@ async function buildProposalResult(
   const amendability: GitCheckpointProposal["amendability"] = classifiedAmendability?.status === "available"
     ? { status: "available" }
     : classifiedAmendability;
+  const [changes, freshChanges, amendTargetMessage] = await Promise.all([
+    buildProposalFileChanges(repository, metadata, target, harness, threadId),
+    metadata.mode === "amend" && metadata.status === "proposed" && metadata.freshCommitMessage
+      ? buildProposalFileChanges(repository, metadata, target, harness, threadId, {
+        baseCommit: metadata.liveBaseCommit,
+        paths: metadata.livePaths,
+      })
+      : null,
+    metadata.amendTargetSha
+      ? repository.readCommitMessage(metadata.amendTargetSha).then(parseCommitMessage)
+      : null,
+  ]);
   return {
     ...(amendability ? { amendability } : {}),
+    amendTargetMessage,
     amendTargetSha: metadata.amendTargetSha,
     baseCommit: metadata.baseCommit,
-    changes: await buildProposalFileChanges(repository, metadata, target, harness, threadId),
+    changes,
     committedSha: metadata.committedSha,
     description: metadata.description,
+    freshChanges,
     includeNewerAvailable: options.includeNewerAvailable ?? false,
     mode: metadata.mode,
     paths: metadata.paths,
@@ -629,6 +646,8 @@ export default class GitArcProposalController {
     amendProposalId,
     cwd,
     description,
+    freshDescription,
+    freshTitle,
     harness: rawHarness,
     paths: rawPaths,
     replaceProposalId,
@@ -638,6 +657,8 @@ export default class GitArcProposalController {
     amend?: boolean;
     amendProposalId?: string;
     description: string;
+    freshDescription?: string;
+    freshTitle?: string;
     paths?: string[];
     replaceProposalId?: string;
     title: string;
@@ -713,6 +734,12 @@ export default class GitArcProposalController {
       baseCommit,
       committedSha: null,
       description: proposalDescription,
+      ...(amendTargetSha && freshTitle ? {
+        freshCommitMessage: {
+          description: freshDescription?.trim() ?? "",
+          title: freshTitle.trim(),
+        },
+      } : {}),
       liveBaseCommit,
       livePaths,
       mode: amendTargetSha ? "amend" : "commit",
@@ -927,10 +954,17 @@ export default class GitArcProposalController {
     description,
     harness: rawHarness,
     includeNewer,
+    mode,
     proposalId,
     threadId,
     title,
-  }: ArcIdentityInput & { description: string; includeNewer: boolean; proposalId: string; title: string }): Promise<GitCheckpointProposal> {
+  }: ArcIdentityInput & {
+    description: string;
+    includeNewer: boolean;
+    mode?: "amend" | "commit";
+    proposalId: string;
+    title: string;
+  }): Promise<GitCheckpointProposal> {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
     const resolved = await resolveProposalState(
@@ -948,7 +982,19 @@ export default class GitArcProposalController {
       throw new Error(proposal.metadata.unavailableReason || "Checkpoint proposal is not available to commit.");
     }
     if (proposal.metadata.messageOnly) {
+      if (mode === "commit") throw new Error("Message-only amendment proposals cannot be committed fresh.");
       return await this.commitMessageAmendment({ description, harness, proposal, repository, threadId, title });
+    }
+    const selectedMode = mode ?? proposal.metadata.mode;
+    if (selectedMode === "amend" && proposal.metadata.mode !== "amend") {
+      throw new Error("Only amend proposals can be accepted as amendments.");
+    }
+    if (
+      selectedMode === "commit"
+      && proposal.metadata.mode === "amend"
+      && !proposal.metadata.freshCommitMessage
+    ) {
+      throw new Error("This amend proposal does not include a fresh commit choice.");
     }
     const store = new GitCheckpointStore(repository);
     const proposalSource = await store.readCheckpoint(harness, threadId, proposal.metadata.sourceCheckpoint);
@@ -961,7 +1007,7 @@ export default class GitArcProposalController {
     const activeSource = await store.readCheckpoint(harness, threadId, active.checkpointCommit);
     const activeChain = await readArcChain(store, harness, threadId, activeSource, proposalSource.checkpointCommit);
     const previousAcceptedProposals = await readAcceptedReceipts(store, harness, threadId, activeChain);
-    if (proposal.metadata.mode === "amend") {
+    if (selectedMode === "amend") {
       const message = commitMessage(title, description);
       const targetTree = includeNewer && resolved.includeNewerAvailable ? resolved.currentTree! : proposal.tree;
       const oldOutcomeRef = outcomeRef(harness, threadId, activeSource.checkpointCommit);
@@ -1066,10 +1112,22 @@ export default class GitArcProposalController {
     }
 
     const message = commitMessage(title, description);
-    const targetTree = includeNewer && resolved.includeNewerAvailable ? resolved.currentTree! : proposal.tree;
-    const committedSha = await repository.createCommitFromTree(targetTree, proposal.metadata.baseCommit, message);
+    const committingFresh = proposal.metadata.mode === "amend";
+    const baseCommit = committingFresh ? proposal.metadata.liveBaseCommit : proposal.metadata.baseCommit;
+    const selectedTree = includeNewer && resolved.includeNewerAvailable ? resolved.currentTree! : proposal.tree;
+    const targetTree = committingFresh && !(includeNewer && resolved.includeNewerAvailable)
+      ? await repository.writeTreeWithPathsFromSource(baseCommit, selectedTree, proposal.metadata.livePaths)
+      : selectedTree;
+    const committedSha = await repository.createCommitFromTree(targetTree, baseCommit, message);
+    const { freshCommitMessage: _freshCommitMessage, ...proposalMetadata } = proposal.metadata;
     const committedMetadata: ProposalMetadata = {
-      ...proposal.metadata,
+      ...proposalMetadata,
+      ...(committingFresh ? {
+        amendTargetSha: null,
+        baseCommit,
+        mode: "commit" as const,
+        paths: proposal.metadata.livePaths,
+      } : {}),
       committedSha,
       description: description.trim(),
       status: "committed",

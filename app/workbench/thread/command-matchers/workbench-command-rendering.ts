@@ -83,6 +83,8 @@ export type WorkbenchGitArcOperation = {
   proposalIntent?: {
     amend: boolean;
     description: string;
+    freshDescription?: string;
+    freshTitle?: string;
     paths: string[];
     rootId?: string;
     title: string;
@@ -386,6 +388,8 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
   const paths = [...readStringArray(args.paths), ...readRootPaths(args.roots, "paths")];
   const adoptPaths = [...readStringArray(args.adoptPaths), ...readRootPaths(args.roots, "adoptPaths")];
   const intentName = readString(args.intentName);
+  const freshDescription = readString(args.freshDescription);
+  const freshTitle = readString(args.freshTitle);
   const proposalId = readString(args.proposalId) ?? readString(args.amendProposalId) ?? readString(args.replaceProposalId);
   const operation: WorkbenchGitArcOperation = {
     action,
@@ -400,6 +404,8 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
         proposalIntent: {
           amend: readBoolean(args.amend),
           description: messages[1] ?? readString(args.description) ?? "",
+          ...(freshDescription !== null ? { freshDescription } : {}),
+          ...(freshTitle ? { freshTitle } : {}),
           paths,
           ...(readString(args.rootId) ? { rootId: readString(args.rootId)! } : {}),
           title: messages[0] ?? "",
