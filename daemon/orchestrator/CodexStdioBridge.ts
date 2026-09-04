@@ -3088,9 +3088,17 @@ export default class CodexStdioBridge {
     if (
       !this.sqliteTranscriptEnabled
       || response.error
-      || !["thread/fork", "thread/read", "thread/resume", "thread/start"].includes(request.method ?? "")
       || (request.method === "thread/read" && historicalHydration)
     ) {
+      return [];
+    }
+    if (request.method === "turn/start") {
+      const threadId = asString(asRecord(request.params)?.threadId)?.trim();
+      const turn = asRecord(response.result)?.turn as Turn | undefined;
+      if (!threadId || !turn?.id) return [];
+      return this.createSqliteProviderStartedTurnObservations(threadId, turn);
+    }
+    if (!["thread/fork", "thread/read", "thread/resume", "thread/start"].includes(request.method ?? "")) {
       return [];
     }
     const thread = asRecord(response.result)?.thread as Thread | undefined;
@@ -3140,6 +3148,9 @@ export default class CodexStdioBridge {
     }
     const turn = asRecord(params?.turn) as Turn | null;
     if (!turn?.id) return [];
+    if (notification.method === "turn/started") {
+      return this.createSqliteProviderStartedTurnObservations(threadId, turn);
+    }
     const context = this.transcriptThreadContexts.get(threadId);
     if (!context) {
       throw new Error(`Codex transcript thread ${threadId} has no provider context for live turn ${turn.id}`);
@@ -3155,6 +3166,27 @@ export default class CodexStdioBridge {
         observedAt: Math.round(
           (turn.completedAt ?? turn.startedAt ?? Date.now() / 1_000) * 1_000,
         ),
+        threadId,
+        turnId: turn.id,
+      })),
+    ];
+  }
+
+  private createSqliteProviderStartedTurnObservations(
+    threadId: string,
+    turn: Turn,
+  ): WorkbenchTranscriptObservation[] {
+    const context = this.transcriptThreadContexts.get(threadId);
+    if (!context) {
+      throw new Error(`Codex transcript thread ${threadId} has no provider context for live turn ${turn.id}`);
+    }
+    const observedAt = Math.round((turn.startedAt ?? Date.now() / 1_000) * 1_000);
+    return [
+      createCodexTranscriptProviderTurnObservation({ context, threadId, turn }),
+      ...turn.items.map((item) => createCodexTranscriptProviderItemObservation({
+        item,
+        lifecycle: "streaming",
+        observedAt,
         threadId,
         turnId: turn.id,
       })),

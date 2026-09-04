@@ -32,12 +32,22 @@ export type ThreadTranscriptProjectionState =
   | { status: "absent"; threadId: string }
   | { status: "failed"; threadId: string; message: string };
 
-function sameTurnIds(
+function durableTurnIds(
+  turns: readonly { id: string }[] | null | undefined,
+) {
+  return (turns ?? [])
+    .map(({ id }) => id)
+    .filter((turnId) => !turnId.startsWith("workbench:connecting:"));
+}
+
+function sameDurableTurnIds(
   left: readonly { id: string }[] | null | undefined,
   right: readonly { id: string }[] | null | undefined,
 ) {
-  return (left?.length ?? 0) === (right?.length ?? 0)
-    && (left ?? []).every((turn, index) => turn.id === right?.[index]?.id);
+  const leftIds = durableTurnIds(left);
+  const rightIds = durableTurnIds(right);
+  return leftIds.length === rightIds.length
+    && leftIds.every((turnId, index) => turnId === rightIds[index]);
 }
 
 interface ThreadTranscriptProjectionControllerOptions {
@@ -130,7 +140,7 @@ export default class ThreadTranscriptProjectionController {
     if (this.#disposed) return;
     const previousThreadId = this.#selection?.thread.id ?? null;
     const nextThreadId = selection?.thread.id ?? null;
-    const loadedTurnsChanged = !sameTurnIds(this.#selection?.thread.turns, selection?.thread.turns);
+    const loadedTurnsChanged = !sameDurableTurnIds(this.#selection?.thread.turns, selection?.thread.turns);
     this.#selection = selection;
     if (previousThreadId !== nextThreadId) {
       this.#cancelScheduledComparison();
@@ -319,7 +329,7 @@ export default class ThreadTranscriptProjectionController {
         await this.#transcripts.subscribe({
           subscriptionId,
           threadId: selection.thread.id,
-          turnIds: selection.thread.turns.map(({ id }) => id),
+          turnIds: durableTurnIds(selection.thread.turns),
           turnLimit: this.#turnLimit,
         }, (snapshot) => this.#receiveSnapshot(generation, snapshot));
         if (this.#disposed) {

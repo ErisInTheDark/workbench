@@ -13,6 +13,7 @@ import {
   type WorkbenchTranscriptSubscribeParams,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import ThreadTranscriptProjectionController from "./ThreadTranscriptProjectionController";
+import reconcileTranscriptProjectionWithLiveThread from "./reconcile-transcript-projection-with-live-thread";
 
 function flush() {
   return new Promise<void>((resolve) => setImmediate(resolve));
@@ -467,6 +468,68 @@ test("the subscription follows the exact loaded turns and replaces itself when t
       },
     },
   ]);
+  controller.dispose();
+});
+
+test("a connecting turn stays in the live overlay and never enters durable subscription scope", async () => {
+  const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
+  const subscriptions: WorkbenchTranscriptSubscribeParams[] = [];
+  const readyTurnIds: string[][] = [];
+  const controller = new ThreadTranscriptProjectionController({
+    available: true,
+    onStateChange: (state) => {
+      if ("projection" in state && state.projection) {
+        readyTurnIds.push(state.projection.turns.map(({ id }) => id));
+      }
+    },
+    reconcileProjection: (projection, selection) => reconcileTranscriptProjectionWithLiveThread({
+      mergeLiveTurn: (incomingTurn, liveTurn) => liveTurn ?? incomingTurn,
+      projection,
+      thread: selection.thread,
+    }),
+    transcripts: {
+      reportParity: async () => undefined,
+      subscribe: async (params, listener) => {
+        subscriptions.push(params);
+        listeners.set(params.subscriptionId, listener);
+      },
+      unsubscribe: async ({ subscriptionId }) => { listeners.delete(subscriptionId); },
+    },
+    turnLimit: 4,
+  });
+  const connecting = thread("thread", ["workbench:connecting:test"]);
+  connecting.status = "active";
+  connecting.turns[0] = {
+    ...connecting.turns[0]!,
+    completedAt: null,
+    durationMs: null,
+    status: "inProgress",
+  };
+  connecting.turnHistory[0] = {
+    ...connecting.turnHistory[0]!,
+    completedAt: null,
+    durationMs: null,
+    status: "inProgress",
+  };
+
+  controller.select({ browseResultEntries: [], thread: connecting });
+  await flush();
+  assert.deepEqual(subscriptions[0]?.turnIds, []);
+  listeners.get(subscriptions[0]!.subscriptionId)?.(emptySnapshot("thread"));
+  assert.deepEqual(readyTurnIds.at(-1), ["workbench:connecting:test"]);
+
+  const admitted = thread("thread", ["provider-turn"]);
+  admitted.status = "active";
+  admitted.turns[0] = {
+    ...admitted.turns[0]!,
+    completedAt: null,
+    durationMs: null,
+    status: "inProgress",
+  };
+  controller.select({ browseResultEntries: [], thread: admitted });
+  await flush();
+  await flush();
+  assert.deepEqual(subscriptions.at(-1)?.turnIds, ["provider-turn"]);
   controller.dispose();
 });
 

@@ -616,6 +616,42 @@ test("controller materialises the exact transcript window before subscribing and
   replacement.controller.dispose();
 });
 
+test("controller orders an empty exact transcript window before subscribing", async () => {
+  const clock = new FakeClock();
+  const events: string[] = [];
+  const harnessRequests: JsonRpcRequest[] = [];
+  const client = createClient((_data, callback) => { callback?.(); });
+  const { controller } = createController({
+    clock,
+    onHarnessRequest: (request) => {
+      events.push("materialise");
+      harnessRequests.push(request);
+      return { id: request.id ?? null, result: { materializedTurnIds: [], threadId: "thread" } };
+    },
+    transcript: {
+      read: async () => { throw new Error("Unexpected transcript read."); },
+      subscribe: async () => { events.push("subscribe"); },
+      unsubscribe: () => undefined,
+    },
+  });
+
+  await controller.handleMessage(client, "connection-1", frame("workbench/transcript/subscribe", 1, {
+    params: {
+      subscriptionId: "connecting-thread",
+      threadId: "thread",
+      turnIds: [],
+      turnLimit: 4,
+    },
+  }), false);
+
+  assert.deepEqual(events, ["materialise", "subscribe"]);
+  assert.deepEqual(harnessRequests.map(({ method, params }) => ({ method, params })), [{
+    method: "workbench/transcript/materialize",
+    params: { threadId: "thread", turnIds: [] },
+  }]);
+  controller.dispose();
+});
+
 test("transcript materialisation failure rejects subscription without disturbing the source", async () => {
   const clock = new FakeClock();
   const sent: Array<Record<string, unknown>> = [];

@@ -2944,6 +2944,115 @@ test("transcript materialisation waits for an admitted live turn before consulti
   }
 });
 
+test("turn start responses admit the live turn before materialisation can consult compatibility storage", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-turn-start-materialisation-"));
+  const directTurnRecordingStarted = deferred<void>();
+  const releaseDirectTurnRecording = deferred<void>();
+  const materializedTurnIds = new Set<string>();
+  let compatibilityReads = 0;
+  let materializationReads = 0;
+  let materialisationSettled = false;
+  let turnStartSettled = false;
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      const result = message.method === "thread/start"
+        ? { thread: { ...bridgeThread(), status: { type: "idle" as const }, turns: [] } }
+        : message.method === "turn/start"
+          ? { turn: bridgeThread().turns[0] }
+          : null;
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage(result
+          ? { id: message.id ?? null, result }
+          : { error: { code: -32000, message: `unexpected ${message.method}` }, id: message.id ?? null });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    onNotification() {},
+    readSqliteTranscriptMaterializedTurnIds: async (_threadId, turnIds) => {
+      materializationReads += 1;
+      return turnIds.filter((turnId) => materializedTurnIds.has(turnId));
+    },
+    recordSqliteTranscript: async (observations) => {
+      if (!observations.some((observation) => (
+        observation.kind === "turn" && observation.turnId === "turn"
+      ))) return;
+      directTurnRecordingStarted.resolve();
+      await releaseDirectTurnRecording.promise;
+      materializedTurnIds.add("turn");
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {},
+    storageRoot: root,
+  });
+  const owner = bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore };
+  try {
+    const threadStart = await bridge.handleServerRequest({
+      id: 1,
+      method: "thread/start",
+      params: { cwd: "C:/repo" },
+    });
+    assert.equal((threadStart.result as { thread?: { id?: string } } | undefined)?.thread?.id, "thread");
+    const store = owner.ensureTranscriptStore() as CodexTranscriptStore & {
+      readStoredThreadWindow(threadId: string, turnIds: readonly string[]): Promise<Thread | null>;
+    };
+    store.readStoredThreadWindow = async () => {
+      compatibilityReads += 1;
+      throw new Error("turn/start responses must not reach the compatibility reader");
+    };
+
+    const turnStart = bridge.handleServerRequest({
+      id: 2,
+      method: "turn/start",
+      params: {
+        input: [{ text: "hello", text_elements: [], type: "text" }],
+        threadId: "thread",
+      },
+    }).then((response) => {
+      turnStartSettled = true;
+      return response;
+    });
+    await directTurnRecordingStarted.promise;
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    assert.equal(turnStartSettled, true);
+
+    const materialisation = bridge.handleBridgeRequest({
+      id: 3,
+      method: "workbench/transcript/materialize",
+      params: { threadId: "thread", turnIds: ["turn"] },
+    }).then((response) => {
+      materialisationSettled = true;
+      return response;
+    });
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    assert.equal(materialisationSettled, false);
+    assert.equal(materializationReads, 0);
+    assert.equal(compatibilityReads, 0);
+
+    releaseDirectTurnRecording.resolve();
+    assert.equal(((await turnStart).result as { turn?: { id?: string } } | undefined)?.turn?.id, "turn");
+    assert.deepEqual((await materialisation)?.result, {
+      materializedTurnIds: ["turn"],
+      threadId: "thread",
+    });
+    assert.equal(materializationReads, 1);
+    assert.equal(compatibilityReads, 0);
+  } finally {
+    releaseDirectTurnRecording.resolve();
+    await bridge.dispose();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("bounded context reads bootstrap unseen threads through one full turn page", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-unseen-window-"));
   const upstreamRequests: JsonRpcRequest[] = [];

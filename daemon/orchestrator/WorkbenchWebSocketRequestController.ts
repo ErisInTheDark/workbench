@@ -555,7 +555,7 @@ export default class WorkbenchWebSocketRequestController {
     const key = this.transcriptSubscriptionKey(subscription.connectionId, subscription.subscriptionId);
     this.transcriptSubscriptions.set(key, subscription);
     try {
-      if (subscription.turnIds?.length) {
+      if (subscription.turnIds) {
         const response = await this.harnesses.request("codex", {
           id: `workbench:transcript:materialize:${key}`,
           method: "workbench/transcript/materialize",
