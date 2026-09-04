@@ -1,0 +1,4 @@
+- Give each durable fact, state, and lifecycle one owner.
+- Keep external system details at their adapter boundary.
+- Convert external data into shared Workbench types before core code uses it.
+- Do not replace an existing owner as part of an additive change.

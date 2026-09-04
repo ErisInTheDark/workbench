@@ -1,0 +1,2 @@
+- Workbench `request_user_input` survives user steers. Only an answer, caller/tool cancellation, or dismissal ends its long wait.
+- Workbench `request_user_input` survives turns ending due to process interruption virtually.

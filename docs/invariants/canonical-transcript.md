@@ -1,0 +1,15 @@
+- Give every supported harness the same transcript guarantees.
+- Browser transcript reads use one Workbench first-page and next-page contract.
+- Browser page cursors are opaque. Each harness bridge translates them to native paging.
+- Store every permanent visible thread item as one row in `thread_items`.
+- Use turn indexes to order turns.
+- Use item positions to order items within one turn.
+- Use item ids, not reusable request keys, as transcript item identity.
+- Do not give augmentation tables a second history order.
+- Store supported Workbench item shapes in typed tables.
+- Store unsupported provider items as opaque unknown items.
+- Keep provider-native evidence separate from Workbench items.
+- Provider-native evidence does not render or order history.
+- Treat command presentation as derived and replaceable.
+- Rematching can replace presentation.
+- Rematching cannot replace the source operation or durable subsystem facts.

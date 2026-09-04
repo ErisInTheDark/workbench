@@ -1,0 +1,4 @@
+- Home, project, pinned, and mosaic thread routes use the same project-qualified thread-state hooks.
+- Route shells may pass display state such as layout and navigation. They must not change thread actions, lifecycle, questionnaire, or Git arc behaviour.
+- Shared thread state is consumed through domain hooks, not drilled through display props or presentation context.
+- Streaming transcript text updates only the affected React leaf after item creation; structural and failure changes publish immediately.

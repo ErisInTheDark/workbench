@@ -1,9 +1,9 @@
 ## Task orientation guidance
 
-1. Always search the `GLOSSARY.md` for vague things the user refers to that may be specific to the project. Many common project-specific terms are defined there instead of in this AGENTS.md, to save tokens. 
-2. Before planning or editing project behavior or architecture, search `INVARIANTS.md` for invariants related to the task at hand.
-3. Do not read these files wholly except to make changes. New glossary terms and invariants should be proposed as part of planned work when they are truly durable and useful for future agents. Propose them PROMINENTLY, with the exact proposed added text, and in the case of invariants, the section it will exist within. Do not add HTML comments to these files.
-4. If it takes you more than a single search to find a relevant glossary term, invariant, or piece of code, propose a durable change to instructions or the code to reduce the search cost for future agents.
+1. Search (not read) `docs/GLOSSARY.md` for vague terminology the user gives that could have project meaning.
+2. Before planning or editing project behaviour or architecture, read all files that seem relevant under `docs/invariants/`.
+3. If finding a term, invariant, or code takes more than one search, consider proposing a durable instruction or code improvement.
+4. Propose only succinct, truly durable and useful glossary terms and invariants; you needing them does not mean many agents will need them. Show exact proposed text prominently. Do not add headings or prose.
 
 ## Updating Instructions
 

@@ -1,0 +1,11 @@
+- Build a replacement beside the working system.
+- Keep the working system authoritative while the replacement is unproven.
+- After that boundary, feed both systems from the fact owner: provider observations or Workbench mutations.
+- Do not populate live replacement state by rereading legacy storage.
+- Compare semantic results, not storage or implementation shape.
+- Exercise comparisons during normal use.
+- Move one coherent consumer after it has no unexplained mismatch.
+- Remove replaced code when no remaining live or import owner uses it.
+- Do not use the old system as a runtime fallback after replacement.
+- When one invariant requires an atomic ownership change, prove the full boundary before moving it.
+- Do not turn temporary shadow state into permanent architecture.

@@ -1,0 +1,3 @@
+- Workbench MCP long waits survive scoped reloads without surfacing reload errors. Retiring success wins; otherwise the same request resumes in the current command generation.
+- Caller/tool cancellation, declared steer or dismissal rules, and full-process shutdown remain terminal.
+- `request_user_input` also survives user steers and turns ending due to process interruption virtually.

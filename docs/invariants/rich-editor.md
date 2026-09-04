@@ -1,0 +1,1 @@
+- Each rich-editor inline run has one full mark set and unformatted boundary whitespace; save-guard compares this canonical structure by round-tripping html -> markdown -> html.

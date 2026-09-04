@@ -1,0 +1,9 @@
+- A fresh thread uses `thread/start`, MCP preparation, then its first native `turn/start`. It does not resume before rollout storage exists.
+- An existing inactive thread uses `thread/unsubscribe`, prefix-bearing `thread/resume`, MCP preparation, then native `turn/start`.
+- Only that owner sends `thread/unsubscribe`, `thread/resume`, or native `turn/start`.
+- Static reads never call `thread/resume`.
+- Active-turn input uses `turn/steer`. It keeps the active turn prefix.
+- Message admission reads thread metadata without rollout turns. It reads only the newest item-free turn when active-turn steering needs its id.
+- Recovery and unfinished continuation use the same turn-start owner. They do not rebuild part of its lifecycle.
+- Agent and workflow instructions belong in the `thread/resume` prefix, never native turn input.
+- Thread lifecycle and configuration is owned by the daemon, not the app.

@@ -1,0 +1,11 @@
+- Store each Workbench-owned semantic shape in typed columns and tables.
+- Use JSON only for opaque external values.
+- If Workbench reads stored JSON as a known shape, replace that JSON with typed tables.
+- Keep base tables small.
+- Put type-specific fields in augmentation tables.
+- Use one discriminator for each union.
+- Use `CHECK` constraints and foreign keys to prevent invalid variants.
+- Create each base row and its required augmentation rows in one transaction.
+- Do not build one table with unrelated nullable fields.
+- Validate old or external data at its boundary.
+- Convert accepted data into the current domain type before storage or core use.
