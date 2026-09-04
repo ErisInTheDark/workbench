@@ -65,6 +65,111 @@ test("the database worker opens, proves readiness, reports all tables, and close
   }
 });
 
+test("schema version 4 thread-state rows migrate into the scoped relationship model", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    database.exec(`
+      CREATE TABLE workbench_thread_state_projection_status (
+        id INTEGER PRIMARY KEY,
+        generation INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        source_project_count INTEGER NOT NULL,
+        source_project_updated_at INTEGER NOT NULL,
+        source_subagent_parent_count INTEGER NOT NULL,
+        source_subagent_count INTEGER NOT NULL,
+        source_digest TEXT NOT NULL,
+        projected_thread_count INTEGER NOT NULL,
+        projected_subagent_count INTEGER NOT NULL,
+        mismatch_count INTEGER NOT NULL,
+        completed_at INTEGER,
+        error_text TEXT,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE workbench_thread_state_threads (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        thread_kind TEXT NOT NULL,
+        visibility TEXT NOT NULL DEFAULT 'placeholder',
+        title TEXT NOT NULL,
+        archived INTEGER NOT NULL,
+        pinned INTEGER NOT NULL,
+        snoozed INTEGER NOT NULL,
+        provider_observed INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        activity_at INTEGER NOT NULL,
+        order_at INTEGER,
+        UNIQUE (id, thread_kind)
+      );
+      CREATE TABLE workbench_thread_state_provider_identities (
+        thread_id TEXT PRIMARY KEY REFERENCES workbench_thread_state_threads(id) ON DELETE CASCADE,
+        harness_id TEXT NOT NULL,
+        provider_thread_id TEXT NOT NULL,
+        UNIQUE (harness_id, provider_thread_id)
+      );
+      CREATE TABLE workbench_thread_state_subagents (
+        thread_id TEXT PRIMARY KEY,
+        thread_kind TEXT NOT NULL DEFAULT 'subagent',
+        parent_thread_id TEXT NOT NULL REFERENCES workbench_thread_state_threads(id),
+        cwd TEXT NOT NULL,
+        name TEXT NOT NULL,
+        name_key TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        profile_name TEXT NOT NULL,
+        direct_subagent_index INTEGER NOT NULL,
+        FOREIGN KEY (thread_id, thread_kind)
+          REFERENCES workbench_thread_state_threads(id, thread_kind) ON DELETE CASCADE,
+        UNIQUE (parent_thread_id, direct_subagent_index),
+        UNIQUE (parent_thread_id, name_key)
+      );
+    `);
+    database.prepare(`
+      INSERT INTO workbench_thread_state_projection_status(
+        id, generation, state, source_project_count, source_project_updated_at,
+        source_subagent_parent_count, source_subagent_count, source_digest,
+        projected_thread_count, projected_subagent_count, mismatch_count,
+        completed_at, error_text, updated_at
+      ) VALUES (1, 4, 'failed', 1, 10, 1, 1, ?, 2, 1, 0, NULL, 'Legacy failure', 10)
+    `).run("a".repeat(64));
+    database.exec(`
+      INSERT INTO workbench_thread_state_threads VALUES
+        ('parent', 'project', 'topLevel', 'visible', 'Parent', 0, 0, 0, 1, 1, 2, 2, NULL),
+        ('historical-child', 'project', 'subagent', 'visible', 'Child', 0, 0, 0, 1, 1, 2, 2, NULL);
+      INSERT INTO workbench_thread_state_provider_identities
+        VALUES ('historical-child', 'codex', 'historical-child');
+      INSERT INTO workbench_thread_state_subagents
+        VALUES ('historical-child', 'subagent', 'parent', 'C:/project', 'child', 'child', 'profile', 'Profile', 0);
+      PRAGMA user_version = 4;
+    `);
+
+    installWorkbenchDatabaseSchema(database);
+
+    assert.equal(database.pragma("user_version", { simple: true }), WORKBENCH_DATABASE_SCHEMA_VERSION);
+    assert.deepEqual(database.prepare(`
+      SELECT project_id, provider_thread_id
+      FROM workbench_thread_state_provider_identities
+    `).get(), { project_id: "project", provider_thread_id: "historical-child" });
+    assert.deepEqual(database.prepare(`
+      SELECT error_code, error_text
+      FROM workbench_thread_state_projection_status
+    `).get(), { error_code: "projection-failure", error_text: "Legacy failure" });
+    assert.doesNotThrow(() => database.exec(`
+      INSERT INTO workbench_thread_state_threads VALUES
+        ('replacement-child', 'project', 'subagent', 'visible', 'Replacement', 0, 0, 0, 1, 3, 4, 4, NULL);
+      INSERT INTO workbench_thread_state_subagents
+        VALUES ('replacement-child', 'subagent', 'parent', 'C:/project', 'child', 'child', 'profile', 'Profile', 0);
+    `));
+    assert.equal((database.prepare(`
+      SELECT COUNT(*) count
+      FROM sqlite_master
+      WHERE type = 'table' AND name LIKE 'workbench_thread_state_%_subagent_relationships'
+    `).get() as { count: number }).count, 2);
+  } finally {
+    database.close();
+  }
+});
+
 test("schema constraints reject invalid thread state and mismatched item augmentations", () => {
   const database = new Database(":memory:");
   try {
@@ -248,7 +353,7 @@ test("shadow projection failures stay request-scoped and leave durable health", 
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-shadow-"));
   const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   try {
-    const complete = await controller.rebuildThreadStateShadow({ now: 10, relationships: [] });
+    const complete = await controller.rebuildThreadStateShadow({ now: 10, parents: [] });
     assert.equal(complete.state, "complete");
     assert.match(complete.sourceDigest, /^[0-9a-f]{64}$/u);
 
@@ -259,17 +364,14 @@ test("shadow projection failures stay request-scoped and leave durable health", 
         updated_at: 11,
       }),
     ]);
-    await assert.rejects(
-      controller.rebuildThreadStateShadow({ now: 12, relationships: [] }),
-      (error) => error instanceof WorkbenchDatabaseRequestFailure && /recoverable identity/u.test(error.message),
-    );
+    const failed = await controller.rebuildThreadStateShadow({ now: 12, parents: [] });
     assert.equal(controller.state, "ready");
     assert.doesNotThrow(() => controller.assertReady());
 
-    const failed = await controller.recordThreadStateShadowFailure({ now: 13, relationships: [] });
     assert.equal(failed.state, "failed");
     assert.equal(failed.sourceProjectCount, 1);
-    assert.equal(failed.errorText, "Thread-state shadow rebuild failed: projection or constraint failure.");
+    assert.equal(failed.errorCode, "projection-failure");
+    assert.equal(failed.errorText, "Thread-state projection failed: unexpected projector failure.");
     assert.deepEqual(await controller.readThreadStateShadowStatus(), failed);
   } finally {
     await controller.close();

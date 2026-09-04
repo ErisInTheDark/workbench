@@ -16,6 +16,10 @@ export const THREAD_TABLE = "workbench_thread_state_threads";
 export const IDENTITY_TABLE = "workbench_thread_state_provider_identities";
 export const LIFECYCLE_TABLE = "workbench_thread_state_lifecycles";
 export const SUBAGENT_TABLE = "workbench_thread_state_subagents";
+export const SUBAGENT_PARENT_TABLE = "workbench_thread_state_subagent_parents";
+export const SUBAGENT_RELATIONSHIP_TABLE = "workbench_thread_state_subagent_relationships";
+export const PENDING_SUBAGENT_RELATIONSHIP_TABLE = "workbench_thread_state_pending_subagent_relationships";
+export const ACTIVE_SUBAGENT_RELATIONSHIP_TABLE = "workbench_thread_state_active_subagent_relationships";
 export const RETENTION_TABLE = "workbench_thread_state_retention";
 export const PROFILE_TABLE = "workbench_thread_state_profiles";
 export const PROJECT_PROFILE_TABLE = "workbench_thread_state_project_profiles";
@@ -43,6 +47,10 @@ export const RELATIONAL_TABLES = [
   IDENTITY_TABLE,
   LIFECYCLE_TABLE,
   SUBAGENT_TABLE,
+  SUBAGENT_PARENT_TABLE,
+  SUBAGENT_RELATIONSHIP_TABLE,
+  PENDING_SUBAGENT_RELATIONSHIP_TABLE,
+  ACTIVE_SUBAGENT_RELATIONSHIP_TABLE,
   RETENTION_TABLE,
   PROFILE_TABLE,
   PROJECT_PROFILE_TABLE,
@@ -69,6 +77,10 @@ export const RELATIONAL_TABLES = [
 export type RelationalTableName = typeof RELATIONAL_TABLES[number];
 
 export const DELETE_ORDER: readonly RelationalTableName[] = [
+  ACTIVE_SUBAGENT_RELATIONSHIP_TABLE,
+  PENDING_SUBAGENT_RELATIONSHIP_TABLE,
+  SUBAGENT_RELATIONSHIP_TABLE,
+  SUBAGENT_PARENT_TABLE,
   ANSWER_TABLE,
   OPTION_TABLE,
   QUESTION_TABLE,
@@ -101,6 +113,10 @@ export const RELATIONAL_TABLE_KEYS: Record<RelationalTableName, readonly string[
   [IDENTITY_TABLE]: ["thread_id"],
   [LIFECYCLE_TABLE]: ["thread_id"],
   [SUBAGENT_TABLE]: ["thread_id"],
+  [SUBAGENT_PARENT_TABLE]: ["id"],
+  [SUBAGENT_RELATIONSHIP_TABLE]: ["id"],
+  [PENDING_SUBAGENT_RELATIONSHIP_TABLE]: ["relationship_id"],
+  [ACTIVE_SUBAGENT_RELATIONSHIP_TABLE]: ["relationship_id"],
   [RETENTION_TABLE]: ["thread_id"],
   [PROFILE_TABLE]: ["thread_id"],
   [PROJECT_PROFILE_TABLE]: ["project_id"],
@@ -128,8 +144,16 @@ function encodePart(value: string) {
   return `${value.length}:${value}`;
 }
 
-export function threadKey(harness: string, providerThreadId: string) {
-  return `thread:${encodePart(harness)}${encodePart(providerThreadId)}`;
+export function threadKey(projectId: string, harness: string, providerThreadId: string) {
+  return `thread:${encodePart(projectId)}${encodePart(harness)}${encodePart(providerThreadId)}`;
+}
+
+export function subagentParentKey(projectId: string, harness: string, parentThreadId: string) {
+  return `subagent-parent:${encodePart(projectId)}${encodePart(harness)}${encodePart(parentThreadId)}`;
+}
+
+export function subagentRelationshipKey(parentId: string, directSubagentIndex: number) {
+  return `subagent-relationship:${encodePart(parentId)}${encodePart(String(directSubagentIndex))}`;
 }
 
 export function layoutItemId(layoutId: string, key: string) {

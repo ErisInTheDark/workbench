@@ -15,6 +15,7 @@ import {
   getProcessWorkbenchSubagentStoreState,
   type WorkbenchSubagentStoreState,
 } from "./workbench-subagent-store-state";
+import type { WorkbenchSubagentParentSnapshot } from "./database/thread-state/workbench-thread-state-shadow-types";
 
 interface StoredParentSubagents {
   nextDirectSubagentIndex: number;
@@ -34,7 +35,7 @@ interface SubagentCursor {
 }
 
 interface WorkbenchSubagentShadowNotifier {
-  replaceRelationships(relationships: readonly WorkbenchSubagentRelationship[]): void;
+  replaceSubagentParents(parents: readonly WorkbenchSubagentParentSnapshot[]): void;
 }
 
 const DEFAULT_PAGE_LIMIT = 20;
@@ -156,6 +157,7 @@ export default class WorkbenchSubagentStore {
   private readonly legacyPath: string;
   private readonly state: WorkbenchSubagentStoreState;
   private readonly shadow?: WorkbenchSubagentShadowNotifier;
+  private publicationPromise: Promise<void> | null = null;
 
   constructor(
     storageRoot: string,
@@ -175,7 +177,8 @@ export default class WorkbenchSubagentStore {
 
   initialize() {
     this.state.initializationPromise ??= this.initializeStore();
-    return this.state.initializationPromise;
+    this.publicationPromise ??= this.state.initializationPromise.then(() => this.publishShadowParents());
+    return this.publicationPromise;
   }
 
   async list({
@@ -288,7 +291,6 @@ export default class WorkbenchSubagentStore {
       }
     });
     await this.migrateLegacyStore();
-    this.publishShadowRelationships();
   }
 
   private async migrateLegacyStore() {
@@ -387,17 +389,36 @@ export default class WorkbenchSubagentStore {
       schemaVersion: 4,
       subagents: {},
     }, () => stored);
-    this.publishShadowRelationships();
+    this.publishShadowParents();
   }
 
-  private publishShadowRelationships() {
-    const relationships = Array.from(this.state.parents.values())
-      .flatMap((records) => Array.from(records.values()))
-      .sort((left, right) => (
-        left.projectId.localeCompare(right.projectId)
+  private publishShadowParents() {
+    const parents = new Map<string, WorkbenchSubagentParentSnapshot>();
+    for (const [parentThreadId, records] of this.state.parents) {
+      const nextDirectSubagentIndex = this.state.nextDirectSubagentIndexes.get(parentThreadId) ?? 0;
+      for (const relationship of records.values()) {
+        const key = `${relationship.projectId}\0${relationship.harness}\0${parentThreadId}`;
+        let parent = parents.get(key);
+        if (!parent) {
+          parent = {
+            harness: relationship.harness,
+            nextDirectSubagentIndex,
+            parentThreadId,
+            projectId: relationship.projectId,
+            relationships: [],
+          };
+          parents.set(key, parent);
+        }
+        parent.relationships.push(relationship);
+      }
+    }
+    this.shadow?.replaceSubagentParents([...parents.values()]
+      .map((parent) => ({
+        ...parent,
+        relationships: parent.relationships.slice().sort((left, right) => left.threadId.localeCompare(right.threadId)),
+      }))
+      .sort((left, right) => left.projectId.localeCompare(right.projectId)
         || left.harness.localeCompare(right.harness)
-        || left.threadId.localeCompare(right.threadId)
-      ));
-    this.shadow?.replaceRelationships(relationships);
+        || left.parentThreadId.localeCompare(right.parentThreadId)));
   }
 }

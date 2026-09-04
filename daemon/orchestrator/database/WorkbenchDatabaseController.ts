@@ -138,15 +138,6 @@ export default class WorkbenchDatabaseController {
     return response.status;
   }
 
-  async recordThreadStateShadowFailure(request: WorkbenchThreadStateShadowRefresh) {
-    await this.start();
-    const response = await this.#request({ type: "recordThreadStateShadowFailure", request });
-    if (response.type !== "threadStateShadowStatus" || !response.status) {
-      throw new WorkbenchDatabaseFailure(`Unexpected thread-state shadow failure response: ${response.type}`);
-    }
-    return response.status;
-  }
-
   async settleTranscript(observations: readonly WorkbenchTranscriptObservation[]) {
     await this.start();
     if (observations.length === 0) return { changedThreadIds: [] };

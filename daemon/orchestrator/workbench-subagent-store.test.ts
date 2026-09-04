@@ -11,6 +11,7 @@ import { test } from "node:test";
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import { encodeTranscriptPathSegment } from "./codex-transcript-normalizers";
+import type { WorkbenchSubagentParentSnapshot } from "./database/thread-state/workbench-thread-state-shadow-types";
 import { createWorkbenchSubagentStoreState } from "./workbench-subagent-store-state";
 
 function summary(
@@ -158,13 +159,56 @@ test("fresh wrappers serialize one parent and persist unique direct-child indexe
   assert.deepEqual(diskRecords.map(({ directSubagentIndex }) => directSubagentIndex).sort((left, right) => left - right), [0, 1]);
 });
 
+test("a fresh wrapper publishes relationships already loaded by shared state", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-republish-"));
+  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
+  const state = createWorkbenchSubagentStoreState();
+  const firstSnapshots: WorkbenchSubagentParentSnapshot[][] = [];
+  const secondSnapshots: WorkbenchSubagentParentSnapshot[][] = [];
+  const first = new WorkbenchSubagentStore(root, {
+    shadow: { replaceSubagentParents: (parents) => firstSnapshots.push([...parents]) },
+    state,
+  });
+  await first.reserve(summary("parent", "child"));
+  const second = new WorkbenchSubagentStore(root, {
+    shadow: { replaceSubagentParents: (parents) => secondSnapshots.push([...parents]) },
+    state,
+  });
+  await second.initialize();
+  assert.equal(firstSnapshots.at(-1)?.length, 1);
+  assert.equal(secondSnapshots.length, 1);
+  assert.equal(secondSnapshots[0]?.[0]?.relationships[0]?.threadId, "child");
+});
+
+test("shadow snapshots split mixed parent scopes and preserve the saved allocation watermark", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-scopes-"));
+  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
+  const snapshots: WorkbenchSubagentParentSnapshot[][] = [];
+  const store = new WorkbenchSubagentStore(root, {
+    shadow: { replaceSubagentParents: (parents) => snapshots.push([...parents]) },
+    state: createWorkbenchSubagentStoreState(),
+  });
+  await store.reserve(summary("shared-parent", "child-a", { name: "A", projectId: "project-a" }));
+  await store.reserve(summary("shared-parent", "child-b", { harness: "copilot", name: "B", projectId: "project-b" }));
+
+  assert.deepEqual(snapshots.at(-1)?.map((parent) => ({
+    harness: parent.harness,
+    nextDirectSubagentIndex: parent.nextDirectSubagentIndex,
+    projectId: parent.projectId,
+    threadIds: parent.relationships.map(({ threadId }) => threadId),
+  })), [
+    { harness: "codex", nextDirectSubagentIndex: 2, projectId: "project-a", threadIds: ["child-a"] },
+    { harness: "copilot", nextDirectSubagentIndex: 2, projectId: "project-b", threadIds: ["child-b"] },
+  ]);
+});
+
 test("successful relationship writes publish complete shadow snapshots", async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-shadow-"));
   context.after(async () => await fs.rm(root, { force: true, recursive: true }));
-  const snapshots: WorkbenchSubagentRelationship[][] = [];
+  const snapshots: WorkbenchSubagentParentSnapshot[][] = [];
   const store = new WorkbenchSubagentStore(root, {
     shadow: {
-      replaceRelationships: (relationships) => snapshots.push([...relationships]),
+      replaceSubagentParents: (parents) => snapshots.push([...parents]),
     },
     state: createWorkbenchSubagentStoreState(),
   });
@@ -174,7 +218,7 @@ test("successful relationship writes publish complete shadow snapshots", async (
   await store.replace("parent", "pending:child", { ...reserved, threadId: "child", updatedAt: 2 });
   await store.remove("parent", "child");
 
-  assert.deepEqual(snapshots.map((snapshot) => snapshot.map(({ threadId }) => threadId)), [
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.flatMap(({ relationships }) => relationships.map(({ threadId }) => threadId))), [
     [],
     ["pending:child"],
     ["child"],

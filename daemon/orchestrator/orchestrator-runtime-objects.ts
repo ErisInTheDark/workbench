@@ -102,7 +102,6 @@ export interface OrchestratorDatabaseRegistration {
   query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Promise<Row[]>;
   rebuildThreadStateShadow(request: WorkbenchThreadStateShadowRefresh): Promise<WorkbenchThreadStateShadowStatus>;
   readThreadStateShadowStatus(): Promise<WorkbenchThreadStateShadowStatus | null>;
-  recordThreadStateShadowFailure(request: WorkbenchThreadStateShadowRefresh): Promise<WorkbenchThreadStateShadowStatus>;
   start(): Promise<object>;
   readonly state: "starting" | "ready" | "failed" | "closed";
 }

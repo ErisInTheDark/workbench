@@ -17,7 +17,7 @@ export interface WorkbenchSubagentFeatureContext {
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
   profileStore: WorkbenchComposerProfileStore;
   resolveProjectFromCwd(cwd: string | null | undefined, options?: { endpointName?: string }): Promise<AgentEndpointProjectResolution>;
-  shadow: Pick<WorkbenchThreadStateShadowController, "replaceRelationships">;
+  shadow: Pick<WorkbenchThreadStateShadowController, "replaceSubagentParents">;
   storageRoot: string;
   threadState: {
     getEntry(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadSidebarEntry | null>;

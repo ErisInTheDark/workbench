@@ -11,6 +11,7 @@ import {
   check,
   defineTable,
   enumText,
+  evolveTable,
   foreignKey,
   integer,
   jsonText,
@@ -20,12 +21,14 @@ import {
   text,
   unique,
   type SelectRow,
+  type SqlFragment,
   type TableDefinition,
 } from "workbench-shared/database/schema/schema-definition";
 import {
   createTable,
   defineSubsystemHistory,
   defineTableHistory,
+  rebuildTable,
   tableVersion,
 } from "workbench-shared/database/schema/schema-history";
 
@@ -34,6 +37,10 @@ function initialHistory<Table extends TableDefinition>(table: Table, schemaVersi
     versions: [tableVersion({ schemaVersion, table, migration: createTable(table) })],
     current: table,
   });
+}
+
+function migrationText<Value extends string>(fragment: SqlFragment<string>) {
+  return fragment as SqlFragment<Value>;
 }
 
 const workbenchThreadStateProjectsV1 = defineTable("workbench_thread_state_projects", {
@@ -78,7 +85,39 @@ const workbenchThreadStateProjectionStatusV1 = defineTable("workbench_thread_sta
     `),
   ],
 }));
-const workbenchThreadStateProjectionStatusHistory = initialHistory(workbenchThreadStateProjectionStatusV1);
+const workbenchThreadStateProjectionStatusV2 = evolveTable(workbenchThreadStateProjectionStatusV1, {
+  add: { error_code: enumText("constraint-failure", "invalid-source", "projection-failure") },
+  extras: (table) => ({
+    constraints: [
+      check(sql`${table.id} = ${literal(1)}`),
+      check(sql`length(${table.source_digest}) = ${literal(64)}`),
+      check(sql`
+        (${table.state} = ${literal("complete")} AND ${table.mismatch_count} = ${literal(0)} AND ${table.completed_at} IS NOT NULL AND ${table.error_code} IS NULL AND ${table.error_text} IS NULL)
+        OR (${table.state} = ${literal("stale")} AND ${table.completed_at} IS NULL AND ${table.error_code} IS NULL AND ${table.error_text} IS NULL)
+        OR (${table.state} = ${literal("failed")} AND ${table.completed_at} IS NULL AND ${table.error_code} IS NOT NULL AND ${table.error_text} IS NOT NULL)
+      `),
+    ],
+  }),
+});
+const workbenchThreadStateProjectionStatusHistory = defineTableHistory({
+  versions: [
+    tableVersion({ schemaVersion: 4, table: workbenchThreadStateProjectionStatusV1, migration: createTable(workbenchThreadStateProjectionStatusV1) }),
+    tableVersion({
+      schemaVersion: 5,
+      table: workbenchThreadStateProjectionStatusV2,
+      migration: rebuildTable({
+        from: workbenchThreadStateProjectionStatusV1,
+        to: workbenchThreadStateProjectionStatusV2,
+        map: ({ from, expression }) => ({
+          error_code: migrationText<"constraint-failure" | "invalid-source" | "projection-failure">(
+            expression.text`CASE WHEN ${from.state} = 'failed' THEN 'projection-failure' ELSE NULL END`,
+          ),
+        }),
+      }),
+    }),
+  ],
+  current: workbenchThreadStateProjectionStatusV2,
+});
 export const workbenchThreadStateProjectionStatus = workbenchThreadStateProjectionStatusHistory.current;
 
 const workbenchThreadStateThreadsV1 = defineTable("workbench_thread_state_threads", {
@@ -110,7 +149,31 @@ const workbenchThreadStateThreadsV1 = defineTable("workbench_thread_state_thread
     `),
   ],
 }));
-const workbenchThreadStateThreadsHistory = initialHistory(workbenchThreadStateThreadsV1);
+const workbenchThreadStateThreadsV2 = evolveTable(workbenchThreadStateThreadsV1, {
+  extras: (table) => ({
+    constraints: [
+      unique([table.id, table.project_id]),
+      unique([table.id, table.thread_kind]),
+      check(sql`
+        (${table.thread_kind} = ${literal("topLevel")} AND (
+          ${table.archived} = ${literal(0)}
+          OR (${table.pinned} = ${literal(0)} AND ${table.snoozed} = ${literal(0)})
+        ))
+        OR (${table.thread_kind} = ${literal("subagent")}
+          AND ${table.archived} = ${literal(0)}
+          AND ${table.snoozed} = ${literal(0)}
+          AND ${table.order_at} IS NULL)
+      `),
+    ],
+  }),
+});
+const workbenchThreadStateThreadsHistory = defineTableHistory({
+  versions: [
+    tableVersion({ schemaVersion: 4, table: workbenchThreadStateThreadsV1, migration: createTable(workbenchThreadStateThreadsV1) }),
+    tableVersion({ schemaVersion: 5, table: workbenchThreadStateThreadsV2, migration: rebuildTable({ from: workbenchThreadStateThreadsV1, to: workbenchThreadStateThreadsV2 }) }),
+  ],
+  current: workbenchThreadStateThreadsV2,
+});
 export const workbenchThreadStateThreads = workbenchThreadStateThreadsHistory.current;
 
 const workbenchThreadStateProviderIdentitiesV1 = defineTable("workbench_thread_state_provider_identities", {
@@ -120,7 +183,34 @@ const workbenchThreadStateProviderIdentitiesV1 = defineTable("workbench_thread_s
 }, (table) => ({
   constraints: [unique([table.harness_id, table.provider_thread_id])],
 }));
-const workbenchThreadStateProviderIdentitiesHistory = initialHistory(workbenchThreadStateProviderIdentitiesV1);
+const workbenchThreadStateProviderIdentitiesV2 = evolveTable(workbenchThreadStateProviderIdentitiesV1, {
+  add: { project_id: text().notNull() },
+  extras: (table) => ({
+    constraints: [
+      foreignKey([table.thread_id, table.project_id], {
+        table: "workbench_thread_state_threads", columns: ["id", "project_id"], onDelete: "CASCADE",
+      }),
+      unique([table.project_id, table.harness_id, table.provider_thread_id]),
+    ],
+  }),
+});
+const workbenchThreadStateProviderIdentitiesHistory = defineTableHistory({
+  versions: [
+    tableVersion({ schemaVersion: 4, table: workbenchThreadStateProviderIdentitiesV1, migration: createTable(workbenchThreadStateProviderIdentitiesV1) }),
+    tableVersion({
+      schemaVersion: 5,
+      table: workbenchThreadStateProviderIdentitiesV2,
+      migration: rebuildTable({
+        from: workbenchThreadStateProviderIdentitiesV1,
+        to: workbenchThreadStateProviderIdentitiesV2,
+        map: ({ from, expression }) => ({
+          project_id: expression.text`(SELECT project_id FROM workbench_thread_state_threads WHERE id = ${from.thread_id})`,
+        }),
+      }),
+    }),
+  ],
+  current: workbenchThreadStateProviderIdentitiesV2,
+});
 export const workbenchThreadStateProviderIdentities = workbenchThreadStateProviderIdentitiesHistory.current;
 
 const workbenchThreadStateLifecyclesV1 = defineTable("workbench_thread_state_lifecycles", {
@@ -221,8 +311,91 @@ const workbenchThreadStateSubagentsV1 = defineTable("workbench_thread_state_suba
     check(sql`${table.thread_id} <> ${table.parent_thread_id}`),
   ],
 }));
-const workbenchThreadStateSubagentsHistory = initialHistory(workbenchThreadStateSubagentsV1);
+const workbenchThreadStateSubagentsV2 = evolveTable(workbenchThreadStateSubagentsV1, {
+  extras: (table) => ({
+    constraints: [
+      foreignKey([table.thread_id, table.thread_kind], {
+        table: "workbench_thread_state_threads",
+        columns: ["id", "thread_kind"],
+        onDelete: "CASCADE",
+      }),
+      check(sql`${table.thread_id} <> ${table.parent_thread_id}`),
+    ],
+  }),
+});
+const workbenchThreadStateSubagentsHistory = defineTableHistory({
+  versions: [
+    tableVersion({ schemaVersion: 4, table: workbenchThreadStateSubagentsV1, migration: createTable(workbenchThreadStateSubagentsV1) }),
+    tableVersion({ schemaVersion: 5, table: workbenchThreadStateSubagentsV2, migration: rebuildTable({ from: workbenchThreadStateSubagentsV1, to: workbenchThreadStateSubagentsV2 }) }),
+  ],
+  current: workbenchThreadStateSubagentsV2,
+});
 export const workbenchThreadStateSubagents = workbenchThreadStateSubagentsHistory.current;
+
+const workbenchThreadStateSubagentParentsV1 = defineTable("workbench_thread_state_subagent_parents", {
+  id: text().primaryKey(),
+  project_id: text().notNull(),
+  harness_id: enumText("codex", "copilot", "opencode").notNull(),
+  parent_thread_id: text().notNull(),
+  next_direct_subagent_index: integer().notNull().nonNegative(),
+}, (table) => ({
+  constraints: [
+    foreignKey([table.parent_thread_id, table.project_id], {
+      table: "workbench_thread_state_threads", columns: ["id", "project_id"], onDelete: "CASCADE",
+    }),
+    unique([table.project_id, table.harness_id, table.parent_thread_id]),
+  ],
+}));
+const workbenchThreadStateSubagentParentsHistory = initialHistory(workbenchThreadStateSubagentParentsV1, 5);
+export const workbenchThreadStateSubagentParents = workbenchThreadStateSubagentParentsHistory.current;
+
+const workbenchThreadStateSubagentRelationshipsV1 = defineTable("workbench_thread_state_subagent_relationships", {
+  id: text().primaryKey(),
+  parent_id: text().notNull().references("workbench_thread_state_subagent_parents", "id", { onDelete: "CASCADE" }),
+  relationship_kind: enumText("pending", "active").notNull(),
+  name_key: text().notNull(),
+  direct_subagent_index: integer().notNull().nonNegative(),
+  created_at: integer().notNull().nonNegative(),
+  updated_at: integer().notNull().nonNegative(),
+}, (table) => ({
+  constraints: [
+    unique([table.id, table.relationship_kind]),
+    unique([table.parent_id, table.name_key]),
+    unique([table.parent_id, table.direct_subagent_index]),
+    check(sql`${table.updated_at} >= ${table.created_at}`),
+  ],
+}));
+const workbenchThreadStateSubagentRelationshipsHistory = initialHistory(workbenchThreadStateSubagentRelationshipsV1, 5);
+export const workbenchThreadStateSubagentRelationships = workbenchThreadStateSubagentRelationshipsHistory.current;
+
+const workbenchThreadStatePendingSubagentRelationshipsV1 = defineTable("workbench_thread_state_pending_subagent_relationships", {
+  relationship_id: text().primaryKey(),
+  relationship_kind: enumText("pending").notNull().default("pending"),
+  reservation_thread_id: text().notNull().unique(),
+  cwd: text().notNull(),
+  name: text().notNull(),
+  profile_id: text().notNull(),
+  profile_name: text().notNull(),
+  title: text().notNull(),
+}, (table) => ({
+  constraints: [foreignKey([table.relationship_id, table.relationship_kind], {
+    table: "workbench_thread_state_subagent_relationships", columns: ["id", "relationship_kind"], onDelete: "CASCADE",
+  })],
+}));
+const workbenchThreadStatePendingSubagentRelationshipsHistory = initialHistory(workbenchThreadStatePendingSubagentRelationshipsV1, 5);
+export const workbenchThreadStatePendingSubagentRelationships = workbenchThreadStatePendingSubagentRelationshipsHistory.current;
+
+const workbenchThreadStateActiveSubagentRelationshipsV1 = defineTable("workbench_thread_state_active_subagent_relationships", {
+  relationship_id: text().primaryKey(),
+  relationship_kind: enumText("active").notNull().default("active"),
+  thread_id: text().notNull().unique().references("workbench_thread_state_subagents", "thread_id", { onDelete: "CASCADE" }),
+}, (table) => ({
+  constraints: [foreignKey([table.relationship_id, table.relationship_kind], {
+    table: "workbench_thread_state_subagent_relationships", columns: ["id", "relationship_kind"], onDelete: "CASCADE",
+  })],
+}));
+const workbenchThreadStateActiveSubagentRelationshipsHistory = initialHistory(workbenchThreadStateActiveSubagentRelationshipsV1, 5);
+export const workbenchThreadStateActiveSubagentRelationships = workbenchThreadStateActiveSubagentRelationshipsHistory.current;
 
 const workbenchThreadStateRetentionV1 = defineTable("workbench_thread_state_retention", {
   thread_id: text().primaryKey().references("workbench_thread_state_threads", "id", { onDelete: "CASCADE" }),
@@ -594,6 +767,10 @@ export const threadStateRelationalTables = Object.freeze({
   workbenchThreadStateProviderIdentities,
   workbenchThreadStateLifecycles,
   workbenchThreadStateSubagents,
+  workbenchThreadStateSubagentParents,
+  workbenchThreadStateSubagentRelationships,
+  workbenchThreadStatePendingSubagentRelationships,
+  workbenchThreadStateActiveSubagentRelationships,
   workbenchThreadStateRetention,
   workbenchThreadStateProfiles,
   workbenchThreadStateProjectProfiles,
@@ -635,6 +812,10 @@ export const threadStateSchemaHistory = defineSubsystemHistory([
   workbenchThreadStateProviderIdentitiesHistory,
   workbenchThreadStateLifecyclesHistory,
   workbenchThreadStateSubagentsHistory,
+  workbenchThreadStateSubagentParentsHistory,
+  workbenchThreadStateSubagentRelationshipsHistory,
+  workbenchThreadStatePendingSubagentRelationshipsHistory,
+  workbenchThreadStateActiveSubagentRelationshipsHistory,
   workbenchThreadStateRetentionHistory,
   workbenchThreadStateProfilesHistory,
   workbenchThreadStateProjectProfilesHistory,

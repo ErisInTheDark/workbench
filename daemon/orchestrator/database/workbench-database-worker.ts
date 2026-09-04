@@ -135,15 +135,6 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     });
     return;
   }
-  if (request.type === "recordThreadStateShadowFailure") {
-    if (!threadStateShadowRepository) throw new Error("Workbench thread-state shadow repository is not initialized");
-    post({
-      id: request.id,
-      type: "threadStateShadowStatus",
-      status: threadStateShadowRepository.recordFailure(new Error("projection failed"), request.request),
-    });
-    return;
-  }
   if (request.type === "settleTranscript") {
     if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
     post({

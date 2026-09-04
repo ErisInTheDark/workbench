@@ -3,6 +3,7 @@
  * - default WorkbenchThreadStateRelationalRepository: own relational projection, parity status, and transactional reconciliation. Keywords: thread state, relational, sqlite, repository.
  * Local helpers project thread/draft/subagent facts, validate required augmentations, and reconcile changed rows. Keywords: thread state, parity, constraints.
  */
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type Database from "better-sqlite3";
@@ -24,6 +25,7 @@ import { projectThreadStateLayout } from "./workbench-thread-state-layout-projec
 import { projectThreadStateQuestionnaires } from "./workbench-thread-state-questionnaire-projector.ts";
 import {
   ANSWER_TABLE,
+  ACTIVE_SUBAGENT_RELATIONSHIP_TABLE,
   ATTACHMENT_TABLE,
   DELETE_ORDER,
   DRAFT_TABLE,
@@ -38,6 +40,7 @@ import {
   LAYOUT_THREAD_TABLE,
   LIFECYCLE_TABLE,
   PINNED_IMPORT_TABLE,
+  PENDING_SUBAGENT_RELATIONSHIP_TABLE,
   PROFILE_TABLE,
   PROJECT_DOCUMENT_TABLE,
   PROJECT_LAYOUT_TABLE,
@@ -49,12 +52,16 @@ import {
   RETENTION_TABLE,
   SNOOZE_TABLE,
   SUBAGENT_TABLE,
+  SUBAGENT_PARENT_TABLE,
+  SUBAGENT_RELATIONSHIP_TABLE,
   THREAD_TABLE,
   addRow,
   canonicalRows,
   questionnaireId,
   rowKey,
   rowSignatures,
+  subagentParentKey,
+  subagentRelationshipKey,
   threadKey,
   type RelationalTableName,
   type RowSets,
@@ -62,6 +69,7 @@ import {
   type SqlValue,
 } from "./workbench-thread-state-relational-tables.ts";
 import type {
+  WorkbenchSubagentParentSnapshot,
   WorkbenchThreadStateShadowRefresh,
   WorkbenchThreadStateShadowStatus,
 } from "./workbench-thread-state-shadow-types.ts";
@@ -92,15 +100,36 @@ function lifecycleRow(lifecycle: WorkbenchThreadLifecycle) {
   } satisfies SqlRow;
 }
 
-function sourceSubagentParentCount(relationships: readonly WorkbenchSubagentRelationship[]) {
-  return new Set(relationships.map(({ harness, parentThreadId, projectId }) => (
-    JSON.stringify([projectId, harness, parentThreadId])
-  ))).size;
+function sourceRelationships(parents: readonly WorkbenchSubagentParentSnapshot[]) {
+  return parents.flatMap(({ relationships }) => relationships);
+}
+
+function sourceDigestWithParents(sourceDigest: string, parents: readonly WorkbenchSubagentParentSnapshot[]) {
+  return createHash("sha256").update(sourceDigest).update(JSON.stringify(
+    parents.map(({ harness, nextDirectSubagentIndex, parentThreadId, projectId }) => (
+      [projectId, harness, parentThreadId, nextDirectSubagentIndex]
+    )),
+  )).digest("hex");
+}
+
+function isSqliteConstraintError(error: unknown): error is Error & { code: string } {
+  if (!(error instanceof Error)) return false;
+  const code = (error as Error & { code?: unknown }).code;
+  return typeof code === "string" && code.startsWith("SQLITE_CONSTRAINT");
+}
+
+function sqliteConstraintFailureText(error: Error) {
+  const structuralIdentity = /^(?:NOT NULL|UNIQUE) constraint failed: ((?:workbench_[a-z0-9_]+\.[a-z0-9_]+)(?:, workbench_[a-z0-9_]+\.[a-z0-9_]+)*)$/u
+    .exec(error.message)?.[1];
+  return structuralIdentity
+    ? `Thread-state projection failed: SQLite constraint failure (${structuralIdentity}).`
+    : "Thread-state projection failed: SQLite constraint failure.";
 }
 
 function readStatusRow(row: Record<string, SqlValue>): WorkbenchThreadStateShadowStatus {
   return {
     completedAt: row.completed_at as number | null,
+    errorCode: row.error_code as WorkbenchThreadStateShadowStatus["errorCode"],
     errorText: row.error_text as string | null,
     generation: row.generation as number,
     mismatchCount: row.mismatch_count as number,
@@ -131,6 +160,15 @@ export default class WorkbenchThreadStateRelationalRepository {
   }
 
   rebuild(request: WorkbenchThreadStateShadowRefresh): WorkbenchThreadStateShadowStatus {
+    try {
+      return this.rebuildProjection(request);
+    } catch (error) {
+      return this.recordFailure(error, request);
+    }
+  }
+
+  private rebuildProjection(request: WorkbenchThreadStateShadowRefresh): WorkbenchThreadStateShadowStatus {
+    const relationships = sourceRelationships(request.parents);
     const sourceRows = this.database.prepare(
       `SELECT project_id, document_json, updated_at FROM ${PROJECT_DOCUMENT_TABLE} ORDER BY project_id`,
     ).all() as Array<{ document_json: string; project_id: string; updated_at: number }>;
@@ -146,16 +184,16 @@ export default class WorkbenchThreadStateRelationalRepository {
       id,
       decodeGlobalDocument(document_json, id),
     ]));
-    const rows = this.projectRows(projects, request.relationships, globals);
-    const digest = createSourceDigest(
+    const rows = this.projectRows(projects, request.parents, globals);
+    const digest = sourceDigestWithParents(createSourceDigest(
       sourceRows.map(({ document_json, project_id, updated_at }) => ({
         documentJson: document_json,
         projectId: project_id,
         updatedAt: updated_at,
       })),
       globalRows.map(({ document_json, id }) => ({ documentJson: document_json, id })),
-      request.relationships,
-    );
+      relationships,
+    ), request.parents);
     const previousGeneration = this.readStatus()?.generation ?? 0;
 
     return this.database.transaction(() => {
@@ -181,7 +219,7 @@ export default class WorkbenchThreadStateRelationalRepository {
           else if (!isDeepStrictEqual(canonicalRows(existing), canonicalRows(expected))) this.update(table, expected);
         }
       }
-      let mismatchCount = this.sourceCoverageMismatchCount(rows, projects, request.relationships);
+      let mismatchCount = this.sourceCoverageMismatchCount(rows, projects, request.parents);
       for (const table of RELATIONAL_TABLES) {
         const expected = rowSignatures(rows.get(table) ?? []);
         const actual = rowSignatures(this.database.prepare(`SELECT * FROM ${table}`).all() as SqlRow[]);
@@ -193,13 +231,14 @@ export default class WorkbenchThreadStateRelationalRepository {
         state: mismatchCount ? "stale" : "complete",
         source_project_count: projects.length,
         source_project_updated_at: Math.max(0, ...projects.map(({ updatedAt }) => updatedAt)),
-        source_subagent_parent_count: sourceSubagentParentCount(request.relationships),
-        source_subagent_count: request.relationships.length,
+        source_subagent_parent_count: request.parents.length,
+        source_subagent_count: relationships.length,
         source_digest: digest,
         projected_thread_count: rows.get(THREAD_TABLE)?.length ?? 0,
         projected_subagent_count: rows.get(SUBAGENT_TABLE)?.length ?? 0,
         mismatch_count: mismatchCount,
         completed_at: mismatchCount ? null : request.now,
+        error_code: null,
         error_text: null,
         updated_at: request.now,
       } satisfies SqlRow;
@@ -209,7 +248,8 @@ export default class WorkbenchThreadStateRelationalRepository {
     })();
   }
 
-  recordFailure(error: unknown, request: WorkbenchThreadStateShadowRefresh): WorkbenchThreadStateShadowStatus {
+  private recordFailure(error: unknown, request: WorkbenchThreadStateShadowRefresh): WorkbenchThreadStateShadowStatus {
+    const relationships = sourceRelationships(request.parents);
     const previous = this.readStatus();
     const sourceRows = this.database.prepare(
       `SELECT project_id, document_json, updated_at FROM ${PROJECT_DOCUMENT_TABLE} ORDER BY project_id`,
@@ -217,29 +257,39 @@ export default class WorkbenchThreadStateRelationalRepository {
     const globalRows = this.database.prepare(
       `SELECT id, document_json FROM ${GLOBAL_DOCUMENT_TABLE} ORDER BY id`,
     ).all() as Array<{ document_json: string; id: string }>;
-    const errorKind = error instanceof SyntaxError ? "invalid source JSON" : "projection or constraint failure";
+    const errorCode: WorkbenchThreadStateShadowStatus["errorCode"] = error instanceof SyntaxError
+      ? "invalid-source"
+      : isSqliteConstraintError(error)
+        ? "constraint-failure"
+        : "projection-failure";
+    const errorText = errorCode === "invalid-source"
+      ? "Thread-state projection failed: invalid source JSON."
+      : errorCode === "constraint-failure"
+        ? sqliteConstraintFailureText(error as Error)
+        : "Thread-state projection failed: unexpected projector failure.";
     const row = {
       id: 1,
       generation: (previous?.generation ?? 0) + 1,
       state: "failed",
       source_project_count: sourceRows.length,
       source_project_updated_at: Math.max(0, ...sourceRows.map(({ updated_at }) => updated_at)),
-      source_subagent_parent_count: sourceSubagentParentCount(request.relationships),
-      source_subagent_count: request.relationships.length,
-      source_digest: createSourceDigest(
+      source_subagent_parent_count: request.parents.length,
+      source_subagent_count: relationships.length,
+      source_digest: sourceDigestWithParents(createSourceDigest(
         sourceRows.map(({ document_json, project_id, updated_at }) => ({
           documentJson: document_json,
           projectId: project_id,
           updatedAt: updated_at,
         })),
         globalRows.map(({ document_json, id }) => ({ documentJson: document_json, id })),
-        request.relationships,
-      ),
+        relationships,
+      ), request.parents),
       projected_thread_count: previous?.projectedThreadCount ?? 0,
       projected_subagent_count: previous?.projectedSubagentCount ?? 0,
       mismatch_count: previous?.mismatchCount ?? 0,
       completed_at: null,
-      error_text: `Thread-state shadow rebuild failed: ${errorKind}.`,
+      error_code: errorCode,
+      error_text: errorText,
       updated_at: request.now,
     } satisfies SqlRow;
     this.database.transaction(() => {
@@ -251,14 +301,15 @@ export default class WorkbenchThreadStateRelationalRepository {
 
   private projectRows(
     projects: readonly SourceProject[],
-    relationships: readonly WorkbenchSubagentRelationship[],
+    parents: readonly WorkbenchSubagentParentSnapshot[],
     globals: ReadonlyMap<string, Record<string, unknown>>,
   ) {
+    const relationships = sourceRelationships(parents);
     const rows: RowSets = new Map(RELATIONAL_TABLES.map((table) => [table, []]));
     const threads = new Map<string, SqlRow>();
     const identities = new Map<string, SqlRow>();
     const relationshipsByThread = new Map(relationships.map((relationship) => [
-      threadKey(relationship.harness, relationship.threadId),
+      threadKey(relationship.projectId, relationship.harness, relationship.threadId),
       relationship,
     ]));
     const ensureThread = (
@@ -267,11 +318,8 @@ export default class WorkbenchThreadStateRelationalRepository {
       providerThreadId: string,
       defaults: Partial<SqlRow> = {},
     ) => {
-      const id = threadKey(harness, providerThreadId);
+      const id = threadKey(projectId, harness, providerThreadId);
       const existing = threads.get(id);
-      if (existing && existing.project_id !== projectId) {
-        throw new Error("One provider thread identity appeared in multiple projects.");
-      }
       if (existing && defaults.thread_kind && defaults.thread_kind !== existing.thread_kind) {
         throw new Error("One provider thread identity appeared with multiple thread kinds.");
       }
@@ -291,7 +339,7 @@ export default class WorkbenchThreadStateRelationalRepository {
           activity_at: defaults.activity_at ?? 0,
           order_at: defaults.order_at ?? null,
         });
-        identities.set(id, { thread_id: id, harness_id: harness, provider_thread_id: providerThreadId });
+        identities.set(id, { thread_id: id, project_id: projectId, harness_id: harness, provider_thread_id: providerThreadId });
       } else {
         threads.set(id, { ...existing, ...defaults, id, project_id: projectId });
       }
@@ -300,7 +348,7 @@ export default class WorkbenchThreadStateRelationalRepository {
 
     for (const { document, projectId } of projects) {
       for (const record of document.records) {
-        const relationship = relationshipsByThread.get(threadKey(record.identity.harness, record.identity.threadId));
+        const relationship = relationshipsByThread.get(threadKey(projectId, record.identity.harness, record.identity.threadId));
         const metadata = record.entryKind === "thread"
           ? record.metadata
           : { archived: false as const, pinned: record.pinned, snoozed: false };
@@ -376,18 +424,40 @@ export default class WorkbenchThreadStateRelationalRepository {
       }
     }
 
-    for (const relationship of relationships) {
-      const id = ensureThread(relationship.projectId, relationship.harness, relationship.threadId, {
-        thread_kind: "subagent",
-        visibility: "visible",
-        title: relationship.title,
-        created_at: relationship.createdAt,
-        updated_at: relationship.updatedAt,
-        activity_at: relationship.updatedAt,
-        order_at: null,
+    for (const parent of parents) {
+      const parentThreadId = ensureThread(parent.projectId, parent.harness, parent.parentThreadId);
+      const parentId = subagentParentKey(parent.projectId, parent.harness, parent.parentThreadId);
+      addRow(rows, SUBAGENT_PARENT_TABLE, {
+        id: parentId, project_id: parent.projectId, harness_id: parent.harness,
+        parent_thread_id: parentThreadId, next_direct_subagent_index: parent.nextDirectSubagentIndex,
       });
-      if (!(rows.get(SUBAGENT_TABLE) ?? []).some((row) => row.thread_id === id)) {
-        this.addSubagentRow(rows, relationship, id, ensureThread);
+      for (const relationship of parent.relationships) {
+        const relationshipId = subagentRelationshipKey(parentId, relationship.directSubagentIndex);
+        const pending = relationship.threadId.startsWith("pending:");
+        addRow(rows, SUBAGENT_RELATIONSHIP_TABLE, {
+          id: relationshipId, parent_id: parentId, relationship_kind: pending ? "pending" : "active",
+          name_key: relationship.name.toLocaleLowerCase(), direct_subagent_index: relationship.directSubagentIndex,
+          created_at: relationship.createdAt, updated_at: relationship.updatedAt,
+        });
+        if (pending) {
+          addRow(rows, PENDING_SUBAGENT_RELATIONSHIP_TABLE, {
+            relationship_id: relationshipId, relationship_kind: "pending",
+            reservation_thread_id: relationship.threadId, cwd: relationship.cwd, name: relationship.name,
+            profile_id: relationship.profileId, profile_name: relationship.profileName, title: relationship.title,
+          });
+          continue;
+        }
+        const id = ensureThread(relationship.projectId, relationship.harness, relationship.threadId, {
+          thread_kind: "subagent", visibility: "visible", title: relationship.title,
+          created_at: relationship.createdAt, updated_at: relationship.updatedAt,
+          activity_at: relationship.updatedAt, order_at: null,
+        });
+        if (!(rows.get(SUBAGENT_TABLE) ?? []).some((row) => row.thread_id === id)) {
+          this.addSubagentRow(rows, relationship, id, ensureThread);
+        }
+        addRow(rows, ACTIVE_SUBAGENT_RELATIONSHIP_TABLE, {
+          relationship_id: relationshipId, relationship_kind: "active", thread_id: id,
+        });
       }
     }
 
@@ -396,7 +466,7 @@ export default class WorkbenchThreadStateRelationalRepository {
         if (!record.snoozedUntil || record.entryKind !== "thread") continue;
         const target = record.snoozedUntil;
         addRow(rows, SNOOZE_TABLE, {
-          source_thread_id: threadKey(record.identity.harness, record.identity.threadId),
+          source_thread_id: threadKey(projectId, record.identity.harness, record.identity.threadId),
           source_thread_kind: "topLevel",
           target_thread_id: ensureThread(target.projectId, target.identity.harness, target.identity.threadId),
           target_thread_kind: "topLevel",
@@ -480,19 +550,18 @@ export default class WorkbenchThreadStateRelationalRepository {
   private sourceCoverageMismatchCount(
     rows: RowSets,
     projects: readonly SourceProject[],
-    relationships: readonly WorkbenchSubagentRelationship[],
+    parents: readonly WorkbenchSubagentParentSnapshot[],
   ) {
-    const identities = new Set((rows.get(IDENTITY_TABLE) ?? []).map((row) => (
-      threadKey(row.harness_id as string, row.provider_thread_id as string)
-    )));
+    const relationships = sourceRelationships(parents);
+    const identities = new Set((rows.get(IDENTITY_TABLE) ?? []).map((row) => row.thread_id as string));
     const lifecycles = new Set((rows.get(LIFECYCLE_TABLE) ?? []).map((row) => row.thread_id as string));
     const subagents = new Set((rows.get(SUBAGENT_TABLE) ?? []).map((row) => row.thread_id as string));
     const drafts = new Set((rows.get(DRAFT_TABLE) ?? []).map((row) => row.draft_id as string));
     const questionnaires = new Set((rows.get(QUESTIONNAIRE_TABLE) ?? []).map((row) => row.id as string));
     let mismatches = 0;
-    for (const { document } of projects) {
+    for (const { document, projectId } of projects) {
       for (const record of document.records) {
-        const id = threadKey(record.identity.harness, record.identity.threadId);
+        const id = threadKey(projectId, record.identity.harness, record.identity.threadId);
         if (!identities.has(id)) mismatches += 1;
         if (!lifecycles.has(id)) mismatches += 1;
         if (record.entryKind === "subagent" && !subagents.has(id)) mismatches += 1;
@@ -509,7 +578,8 @@ export default class WorkbenchThreadStateRelationalRepository {
       }
     }
     for (const relationship of relationships) {
-      if (!subagents.has(threadKey(relationship.harness, relationship.threadId))) mismatches += 1;
+      if (!relationship.threadId.startsWith("pending:")
+        && !subagents.has(threadKey(relationship.projectId, relationship.harness, relationship.threadId))) mismatches += 1;
     }
     return mismatches + this.relationalInvariantMismatchCount(rows);
   }
@@ -519,6 +589,8 @@ export default class WorkbenchThreadStateRelationalRepository {
     const identities = rowIds(IDENTITY_TABLE, "thread_id");
     const lifecycles = rowIds(LIFECYCLE_TABLE, "thread_id");
     const subagents = rowIds(SUBAGENT_TABLE, "thread_id");
+    const pendingRelationships = rowIds(PENDING_SUBAGENT_RELATIONSHIP_TABLE, "relationship_id");
+    const activeRelationships = rowIds(ACTIVE_SUBAGENT_RELATIONSHIP_TABLE, "relationship_id");
     const projectLayouts = rowIds(PROJECT_LAYOUT_TABLE, "layout_id");
     const globalLayouts = rowIds(GLOBAL_LAYOUT_TABLE, "layout_id");
     const threadItems = rowIds(LAYOUT_THREAD_TABLE, "item_id");
@@ -530,6 +602,12 @@ export default class WorkbenchThreadStateRelationalRepository {
       if (!identities.has(thread.id)) mismatches += 1;
       if (!lifecycles.has(thread.id)) mismatches += 1;
       if ((thread.thread_kind === "subagent") !== subagents.has(thread.id)) mismatches += 1;
+    }
+    for (const relationship of rows.get(SUBAGENT_RELATIONSHIP_TABLE) ?? []) {
+      const augmentationCount = Number(pendingRelationships.has(relationship.id))
+        + Number(activeRelationships.has(relationship.id));
+      if (augmentationCount !== 1) mismatches += 1;
+      if ((relationship.relationship_kind === "pending") !== pendingRelationships.has(relationship.id)) mismatches += 1;
     }
     for (const layout of rows.get(LAYOUT_TABLE) ?? []) {
       const ownerCount = Number(projectLayouts.has(layout.id)) + Number(globalLayouts.has(layout.id));

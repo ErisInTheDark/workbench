@@ -40,7 +40,6 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "query"; statement: WorkbenchDatabaseQuery }
   | { type: "rebuildThreadStateShadow"; request: WorkbenchThreadStateShadowRefresh }
   | { type: "readThreadStateShadowStatus" }
-  | { type: "recordThreadStateShadowFailure"; request: WorkbenchThreadStateShadowRefresh }
   | { type: "settleTranscript"; observations: readonly WorkbenchTranscriptObservation[] }
   | { type: "readTranscript"; request: WorkbenchTranscriptReadRequest }
   | { type: "readTranscriptMaterializedTurnIds"; threadId: string; turnIds: readonly string[] }

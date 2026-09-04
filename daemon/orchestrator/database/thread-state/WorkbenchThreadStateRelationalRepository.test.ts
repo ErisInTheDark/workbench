@@ -64,7 +64,7 @@ test("a current project document becomes constrained relational shadow rows", ()
       version: 4,
     }));
     const repository = new WorkbenchThreadStateRelationalRepository(database);
-    const status = repository.rebuild({ now: 20, relationships: [] });
+    const status = repository.rebuild({ now: 20, parents: [] });
     assert.equal(status.state, "complete");
     assert.equal(status.mismatchCount, 0);
     assert.equal(status.projectedThreadCount, 1);
@@ -73,7 +73,7 @@ test("a current project document becomes constrained relational shadow rows", ()
     const changesBeforeRepeat = (
       database.prepare("SELECT total_changes() changes").get() as { changes: number }
     ).changes;
-    repository.rebuild({ now: 21, relationships: [] });
+    repository.rebuild({ now: 21, parents: [] });
     const repeatedChanges = (
       database.prepare("SELECT total_changes() changes").get() as { changes: number }
     ).changes - changesBeforeRepeat;
@@ -84,11 +84,42 @@ test("a current project document becomes constrained relational shadow rows", ()
       SET document_json = ?, updated_at = 22
       WHERE project_id = 'project'
     `).run(JSON.stringify({ drafts: [], newThreadProfile: null, records: [], version: 4 }));
-    const emptied = repository.rebuild({ now: 23, relationships: [] });
+    const emptied = repository.rebuild({ now: 23, parents: [] });
     assert.equal(emptied.state, "complete");
     assert.equal(emptied.projectedThreadCount, 0);
     assert.equal((database.prepare("SELECT COUNT(*) count FROM workbench_thread_state_drafts").get() as { count: number }).count, 0);
     assert.equal((database.prepare("SELECT COUNT(*) count FROM workbench_thread_state_draft_attachments").get() as { count: number }).count, 0);
+  } finally {
+    database.close();
+  }
+});
+
+test("provider thread identities are scoped to their project", () => {
+  const database = openDatabase();
+  try {
+    const document = (title: string) => JSON.stringify({
+      drafts: [], newThreadProfile: null, version: 4,
+      records: [{
+        activityAt: 5, entryKind: "thread", gitHistoryCleanedAt: null,
+        identity: { harness: "codex", threadId: "shared-provider-id" },
+        lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+        mcpGeneration: null, metadata: { archived: false, pinned: false, snoozed: false },
+        profile: null, providerObserved: true, settledAt: null, snoozedUntil: null, title,
+      }],
+    });
+    database.prepare(`
+      INSERT INTO workbench_thread_state_projects(project_id, document_json, updated_at)
+      VALUES ('project-a', ?, 10), ('project-b', ?, 10)
+    `).run(document("A"), document("B"));
+    const status = new WorkbenchThreadStateRelationalRepository(database).rebuild({ now: 20, parents: [] });
+    assert.equal(status.state, "complete");
+    assert.equal(status.projectedThreadCount, 2);
+    assert.deepEqual(database.prepare(`
+      SELECT project_id, provider_thread_id FROM workbench_thread_state_provider_identities ORDER BY project_id
+    `).all(), [
+      { project_id: "project-a", provider_thread_id: "shared-provider-id" },
+      { project_id: "project-b", provider_thread_id: "shared-provider-id" },
+    ]);
   } finally {
     database.close();
   }
@@ -158,19 +189,16 @@ test("relationship-only identities create a visible child and hidden lifecycle-c
     const repository = new WorkbenchThreadStateRelationalRepository(database);
     const status = repository.rebuild({
       now: 10,
-      relationships: [{
-        createdAt: 1,
-        cwd: "C:/project",
-        directSubagentIndex: 0,
+      parents: [{
         harness: "codex",
-        name: "child",
+        nextDirectSubagentIndex: 1,
         parentThreadId: "parent",
-        profileId: "profile",
-        profileName: "Profile",
         projectId: "project",
-        threadId: "child",
-        title: "Child",
-        updatedAt: 2,
+        relationships: [{
+          createdAt: 1, cwd: "C:/project", directSubagentIndex: 0, harness: "codex",
+          name: "child", parentThreadId: "parent", profileId: "profile", profileName: "Profile",
+          projectId: "project", threadId: "child", title: "Child", updatedAt: 2,
+        }],
       }],
     });
     assert.equal(status.state, "complete");
@@ -194,25 +222,174 @@ test("relationship-only identities create a visible child and hidden lifecycle-c
   }
 });
 
-test("a failed rebuild rolls back rows and records bounded failed status", () => {
+test("historical subagents do not reserve active sibling names or indexes", () => {
+  const database = openDatabase();
+  try {
+    database.prepare(`
+      INSERT INTO workbench_thread_state_projects(project_id, document_json, updated_at)
+      VALUES ('project', ?, 10)
+    `).run(JSON.stringify({
+      drafts: [],
+      newThreadProfile: null,
+      records: [{
+        activityAt: 2,
+        createdAt: 1,
+        cwd: "C:/project",
+        directSubagentIndex: 0,
+        entryKind: "subagent",
+        identity: { harness: "codex", threadId: "historical-child" },
+        lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+        name: "child",
+        parentThreadId: "parent",
+        pinned: false,
+        profileId: "profile",
+        profileName: "Profile",
+        projectId: "project",
+        title: "Historical child",
+        updatedAt: 2,
+      }],
+      version: 4,
+    }));
+    const repository = new WorkbenchThreadStateRelationalRepository(database);
+    const status = repository.rebuild({
+      now: 10,
+      parents: [{
+        harness: "codex",
+        nextDirectSubagentIndex: 1,
+        parentThreadId: "parent",
+        projectId: "project",
+        relationships: [{
+          createdAt: 3, cwd: "C:/project", directSubagentIndex: 0, harness: "codex",
+          name: "child", parentThreadId: "parent", profileId: "profile", profileName: "Profile",
+          projectId: "project", threadId: "active-child", title: "Active child", updatedAt: 4,
+        }],
+      }],
+    });
+    assert.equal(status.state, "complete");
+    assert.equal(status.projectedSubagentCount, 2);
+    assert.deepEqual(database.prepare(`
+      SELECT provider_thread_id
+      FROM workbench_thread_state_active_subagent_relationships
+      JOIN workbench_thread_state_provider_identities
+        ON workbench_thread_state_active_subagent_relationships.thread_id
+          = workbench_thread_state_provider_identities.thread_id
+    `).all(), [{ provider_thread_id: "active-child" }]);
+  } finally {
+    database.close();
+  }
+});
+
+test("active sibling names stay unique without exposing source values in failure status", () => {
+  const database = openDatabase();
+  try {
+    const relationship = (threadId: string, name: string, directSubagentIndex: number) => ({
+      createdAt: 1,
+      cwd: "C:/private-project",
+      directSubagentIndex,
+      harness: "codex" as const,
+      name,
+      parentThreadId: "parent",
+      profileId: "profile",
+      profileName: "Profile",
+      projectId: "project",
+      threadId,
+      title: `Private ${name}`,
+      updatedAt: 2,
+    });
+    const status = new WorkbenchThreadStateRelationalRepository(database).rebuild({
+      now: 10,
+      parents: [{
+        harness: "codex",
+        nextDirectSubagentIndex: 2,
+        parentThreadId: "parent",
+        projectId: "project",
+        relationships: [
+          relationship("private-child-a", "Secret sibling", 0),
+          relationship("private-child-b", "SECRET SIBLING", 1),
+        ],
+      }],
+    });
+    assert.equal(status.state, "failed");
+    assert.equal(status.errorCode, "constraint-failure");
+    assert.equal(
+      status.errorText,
+      "Thread-state projection failed: SQLite constraint failure (workbench_thread_state_subagent_relationships.parent_id, workbench_thread_state_subagent_relationships.name_key).",
+    );
+    assert.equal(status.errorText.includes("Secret sibling"), false);
+    assert.equal(status.errorText.includes("private-child"), false);
+    assert.equal(status.errorText.includes("C:/private-project"), false);
+  } finally {
+    database.close();
+  }
+});
+
+test("pending relationships do not create fake provider threads", () => {
   const database = openDatabase();
   try {
     const repository = new WorkbenchThreadStateRelationalRepository(database);
-    const complete = repository.rebuild({ now: 10, relationships: [] });
-    assert.equal(complete.state, "complete");
+    const status = repository.rebuild({
+      now: 10,
+      parents: [{
+        harness: "codex",
+        nextDirectSubagentIndex: 4,
+        parentThreadId: "parent",
+        projectId: "project",
+        relationships: [{
+          createdAt: 1, cwd: "C:/project", directSubagentIndex: 3, harness: "codex",
+          name: "child", parentThreadId: "parent", profileId: "profile", profileName: "Profile",
+          projectId: "project", threadId: "pending:reservation", title: "Child", updatedAt: 2,
+        }],
+      }],
+    });
+    assert.equal(status.state, "complete");
+    assert.equal((database.prepare(`
+      SELECT COUNT(*) count FROM workbench_thread_state_provider_identities WHERE provider_thread_id LIKE 'pending:%'
+    `).get() as { count: number }).count, 0);
+    assert.deepEqual(database.prepare(`
+      SELECT relationship_kind, reservation_thread_id
+      FROM workbench_thread_state_pending_subagent_relationships
+    `).get(), { relationship_kind: "pending", reservation_thread_id: "pending:reservation" });
+    assert.equal((database.prepare(`
+      SELECT next_direct_subagent_index FROM workbench_thread_state_subagent_parents
+    `).get() as { next_direct_subagent_index: number }).next_direct_subagent_index, 4);
+  } finally {
+    database.close();
+  }
+});
+
+test("a failed rebuild rolls back rows and records bounded failed status", () => {
+  const database = openDatabase();
+  try {
     database.prepare(`
       INSERT INTO workbench_thread_state_projects(project_id, document_json, updated_at)
-      VALUES ('broken', ?, 20)
+      VALUES ('project', ?, 10)
+    `).run(JSON.stringify({
+      drafts: [],
+      newThreadProfile: null,
+      records: [{
+        activityAt: 5, entryKind: "thread", gitHistoryCleanedAt: null,
+        identity: { harness: "codex", threadId: "preserved-thread" },
+        lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+        mcpGeneration: null, metadata: { archived: false, pinned: false, snoozed: false },
+        profile: null, providerObserved: true, settledAt: null, snoozedUntil: null, title: "Preserved",
+      }],
+      version: 4,
+    }));
+    const repository = new WorkbenchThreadStateRelationalRepository(database);
+    const complete = repository.rebuild({ now: 10, parents: [] });
+    assert.equal(complete.state, "complete");
+    database.prepare(`
+      UPDATE workbench_thread_state_projects
+      SET document_json = ?, updated_at = 20
+      WHERE project_id = 'project'
     `).run(JSON.stringify({ drafts: [], newThreadProfile: null, records: [{}], version: 4 }));
-    assert.throws(() => repository.rebuild({ now: 20, relationships: [] }), /recoverable identity/u);
-    const failed = repository.recordFailure(new Error("private payload: secret"), {
-      now: 21,
-      relationships: [],
-    });
+    const failed = repository.rebuild({ now: 20, parents: [] });
     assert.equal(failed.state, "failed");
-    assert.match(failed.errorText ?? "", /shadow rebuild failed/u);
+    assert.equal(failed.errorCode, "projection-failure");
+    assert.match(failed.errorText ?? "", /projection failed/u);
     assert.equal(failed.errorText?.includes("secret"), false);
-    assert.equal((database.prepare("SELECT COUNT(*) count FROM workbench_thread_state_threads").get() as { count: number }).count, 0);
+    assert.equal(failed.projectedThreadCount, 1);
+    assert.equal((database.prepare("SELECT COUNT(*) count FROM workbench_thread_state_threads").get() as { count: number }).count, 1);
   } finally {
     database.close();
   }

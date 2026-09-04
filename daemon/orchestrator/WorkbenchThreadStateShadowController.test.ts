@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type {
+  WorkbenchSubagentParentSnapshot,
   WorkbenchThreadStateShadowRefresh,
   WorkbenchThreadStateShadowStatus,
 } from "./database/thread-state/workbench-thread-state-shadow-types";
@@ -24,7 +25,8 @@ function deferred<T>() {
 function status(state: WorkbenchThreadStateShadowStatus["state"] = "complete"): WorkbenchThreadStateShadowStatus {
   return {
     completedAt: state === "complete" ? 1 : null,
-    errorText: state === "failed" ? "Thread-state shadow rebuild failed: projection or constraint failure." : null,
+    errorCode: state === "failed" ? "projection-failure" : null,
+    errorText: state === "failed" ? "Thread-state projection failed: unexpected projector failure." : null,
     generation: 1,
     mismatchCount: 0,
     projectedSubagentCount: 0,
@@ -53,6 +55,13 @@ const relationship: WorkbenchSubagentRelationship = {
   title: "Child",
   updatedAt: 1,
 };
+const parent: WorkbenchSubagentParentSnapshot = {
+  harness: "codex",
+  nextDirectSubagentIndex: 1,
+  parentThreadId: "parent",
+  projectId: "project",
+  relationships: [relationship],
+};
 
 test("start projects the complete relationship snapshot", async () => {
   const requests: WorkbenchThreadStateShadowRefresh[] = [];
@@ -62,14 +71,13 @@ test("start projects the complete relationship snapshot", async () => {
         requests.push(request);
         return status();
       },
-      recordThreadStateShadowFailure: async () => status("failed"),
     },
     now: () => 10,
   });
-  controller.replaceRelationships([relationship]);
+  controller.replaceSubagentParents([parent]);
   await controller.start();
   await controller.waitForIdle();
-  assert.deepEqual(requests, [{ now: 10, relationships: [relationship] }]);
+  assert.deepEqual(requests, [{ now: 10, parents: [parent] }]);
 });
 
 test("dirt arriving during a rebuild coalesces into one following generation", async () => {
@@ -81,7 +89,6 @@ test("dirt arriving during a rebuild coalesces into one following generation", a
         requests.push(request);
         return requests.length === 1 ? await first.promise : status();
       },
-      recordThreadStateShadowFailure: async () => status("failed"),
     },
     now: () => requests.length + 1,
   });
@@ -96,25 +103,17 @@ test("dirt arriving during a rebuild coalesces into one following generation", a
 });
 
 test("projection failure becomes durable bounded state without rejecting lifecycle", async () => {
-  const failures: WorkbenchThreadStateShadowRefresh[] = [];
   const logs: string[] = [];
   const controller = new WorkbenchThreadStateShadowController({
     database: {
-      rebuildThreadStateShadow: async () => {
-        throw new Error("private source value");
-      },
-      recordThreadStateShadowFailure: async (request) => {
-        failures.push(request);
-        return status("failed");
-      },
+      rebuildThreadStateShadow: async () => status("failed"),
     },
     log: (message) => logs.push(message),
     now: () => 20,
   });
   await controller.start();
   await controller.waitForIdle();
-  assert.deepEqual(failures, [{ now: 20, relationships: [] }]);
-  assert.deepEqual(logs, ["Thread-state shadow projection failed; serving authority remains unchanged."]);
+  assert.deepEqual(logs, ["Thread-state projection failed: unexpected projector failure. Serving authority remains unchanged."]);
 });
 
 test("dispose drains the active generation and ignores later dirt", async () => {
@@ -126,7 +125,6 @@ test("dispose drains the active generation and ignores later dirt", async () => 
         rebuilds += 1;
         return await first.promise;
       },
-      recordThreadStateShadowFailure: async () => status("failed"),
     },
   });
   void controller.start();
