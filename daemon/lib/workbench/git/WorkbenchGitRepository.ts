@@ -693,10 +693,11 @@ export default class WorkbenchGitRepository {
   }
 
   async listTreePaths(treeish: string, paths?: string[]) {
-    const candidates = parseNullPaths(await this.run([
+    const scopes = paths?.length && !paths.includes(".") ? this.normalizePaths(paths) : [];
+    return parseNullPaths(await this.run([
       "ls-tree", "-r", "--name-only", "-z", treeish,
+      ...(scopes.length ? ["--", ...scopes.map((scope) => this.literalPathspec(scope))] : []),
     ]));
-    return filterPathsByScopes(candidates, paths ?? []);
   }
 
   async resetMixedPaths(commit: string, paths: string[]) {

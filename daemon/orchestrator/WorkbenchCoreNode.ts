@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchCoreNode: own core state, Git, questionnaire, harness, project, and supervisor registrations plus direct child declarations. Keywords: core, graph, registry.
+ * Local helpers: construct reloadable modules, harness capabilities, and the core feature lifecycle. Keywords: reload, harness, lifecycle.
  */
 import * as project from "../lib/project";
 import * as threadBootstrap from "../lib/thread-bootstrap";
@@ -39,6 +40,8 @@ import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogControll
 import WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
 import WorkbenchSearchController from "./WorkbenchSearchController";
+import WorkbenchStatsController from "./stats/WorkbenchStatsController";
+import { WorkbenchStatsHydrationResultSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
@@ -89,6 +92,15 @@ function createHarnessAdapters(context: OrchestratorProcessContext, controller: 
       id: "codex",
       internal: ports.codex,
       recovery: createRecoveryCapability("codex", controller),
+      usageHydration: async ({ threadId }) => {
+        const response = await ports.codex.request({
+          id: `workbench:stats:hydrate:${threadId}`,
+          method: "workbench/stats/usage/hydrate",
+          params: { threadId },
+        });
+        if (response.error) throw new Error(response.error.message);
+        return WorkbenchStatsHydrationResultSchema.parse(response.result);
+      },
       serverMethods: [
         "workbench/codex/message/admit",
         "thread/context/read",
@@ -137,6 +149,7 @@ function createWorkbenchCoreFeature(
   });
   const worktreeGitTransitions = createWorktreeGitTransitions(context.threadTransitions);
   let threadState: WorkbenchThreadStateFeature | null = null;
+  let stats: WorkbenchStatsController | null = null;
   const requireThreadState = () => {
     if (!threadState) throw new Error("Thread state is not ready for subagent lifecycle projection.");
     return threadState;
@@ -174,8 +187,38 @@ function createWorkbenchCoreFeature(
       if (!threadState) throw new Error("Thread state is not ready for Git arc publication.");
       await threadState.controller.refreshGitArcState(projectId, harness, threadId);
     },
+    observeClaimSnapshot: (snapshot) => stats?.observeClaimSnapshot(snapshot),
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
     transitions: worktreeGitTransitions,
+  });
+  stats = new WorkbenchStatsController({
+    claims: {
+      discover: async () => {
+        const catalog = await projectCatalog.readCatalog();
+        const discoveries = await Promise.all(catalog.data.flatMap((project) => project.roots.map(async (root) => (
+          await gitArc.discoverClaimHistory({
+            projectId: project.id,
+            rootId: root.id,
+            workspaceRoot: root.rootPath,
+          })
+        ))));
+        return {
+          candidates: discoveries.flatMap(({ candidates }) => candidates),
+          unsupported: discoveries.reduce((total, discovery) => total + discovery.unsupported, 0),
+        };
+      },
+      hydrate: async (candidate) => await gitArc.hydrateClaimHistory(candidate),
+    },
+    database,
+    harnesses,
+    log: (message) => {
+      transcriptShadowLog.write({
+        event: "stats",
+        fields: { message: message.slice(0, 500) },
+        level: "warning",
+        source: "stats",
+      });
+    },
   });
   const daemonRequests = new WorkbenchDaemonRequestController({
     agents: new WorkbenchAgentSkillCatalogController((projectId) => projectCatalog.resolveProjectById(projectId)),
@@ -191,6 +234,7 @@ function createWorkbenchCoreFeature(
     projects: projectCatalog,
     search,
     settings: new WorkbenchServerSettings(),
+    stats,
   });
   const threadGit = new WorkbenchThreadGitFeature({
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" }),
@@ -303,7 +347,7 @@ function createWorkbenchCoreFeature(
     requestRecovery: (reason) => { if (lease.isCurrent()) context.codexHealthOptions.requestRecovery(reason); },
   });
   const registrations: Pick<OrchestratorRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
-    bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, legacyMigrationSource, modules, projectCatalog, projectSnapshot, questionnaires, subagents, threadGit, threadState,
+    bridgeRequest, browseSessionCleanup, codexHealth, daemonRequests, gitArc, harnesses, legacyMigrationSource, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState,
   };
   return new WorkbenchCoreFeature({
     beginRuntimeDrain: () => { subagents.beginRuntimeDrain(); },
@@ -316,6 +360,8 @@ function createWorkbenchCoreFeature(
       subagents.dispose();
       reportPhase("Git arc disposal");
       gitArc.dispose();
+      reportPhase("stats disposal");
+      await stats.dispose();
       reportPhase("questionnaire disposal");
       await questionnaires.dispose();
       reportPhase("thread-state disposal");
@@ -334,6 +380,7 @@ function createWorkbenchCoreFeature(
         await turnRecovery.completeObservedTurn(harness, notification, null, async () => undefined);
         return;
       }
+      stats.observeProviderNotification(harness, notification);
       let observation;
       try {
         observation = await threadState!.observeProviderNotification(harness, notification);
@@ -367,6 +414,14 @@ function createWorkbenchCoreFeature(
     registrations,
     start: async () => {
       await projectCatalog.ensureLoaded();
+      for (const project of projectCatalog.getCurrentSnapshot().data) {
+        try {
+          await gitArc.reconcileClaimSnapshots(project.rootPath);
+        } catch (error) {
+          stats.reportCaptureFailure(null, `claim reconciliation for project ${project.id}`, error);
+        }
+      }
+      stats.start();
       await subagents.start();
       void threadStateShadow.start();
       browseSessionCleanup.start();
@@ -376,6 +431,7 @@ function createWorkbenchCoreFeature(
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, import("./orchestrator-runtime-objects").OrchestratorProviderNotification>({
   access: "agent",
+  boundarySources: "shared/workbench/stats/**",
   children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode, WorkbenchWebSocketNode],
   create: (context, { get, lease }) => createWorkbenchCoreFeature(
     context,
@@ -403,6 +459,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchProjectCatalogController.ts",
     "daemon/orchestrator/WorkbenchProjectSnapshotController.ts",
     "daemon/orchestrator/WorkbenchSearchController.ts",
+    "daemon/orchestrator/stats/**",
     "daemon/orchestrator/WorkbenchSubagentFeature.ts",
     "daemon/orchestrator/WorkbenchSubagentController.ts",
     "daemon/orchestrator/WorkbenchSubagentStore.ts",
@@ -418,6 +475,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/lib/workbench-library.ts",
     "daemon/lib/workbench/git/**",
     "shared/workbench/git/**",
+    "shared/workbench/stats/workbench-stats-contract.ts",
+    "shared/workbench/stats/**",
     "daemon/lib/workbench/instructions/**",
     "shared/workbench/thread/thread-display-order.ts",
     "shared/workbench/thread/thread-state.ts",

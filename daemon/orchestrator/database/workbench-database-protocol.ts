@@ -6,6 +6,8 @@
  * WorkbenchDatabaseInventory: installed schema inventory returned after readiness. Keywords: database, schema, inventory.
  * WorkbenchDatabaseMutationResult: aggregate result of one atomic mutation batch. Keywords: database, statement, transaction.
  */
+import type { WorkbenchStatsImportProgress, WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
   WorkbenchDatabaseMutation,
   WorkbenchDatabaseQuery,
@@ -25,6 +27,15 @@ import type {
   WorkbenchSearchRequest,
   WorkbenchSearchResponse,
 } from "workbench-shared/workbench/search/workbench-search";
+import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository.ts";
+import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation.ts";
+import type {
+  WorkbenchGitClaimImportCandidate,
+  WorkbenchGitClaimImportDiscovery,
+  WorkbenchGitClaimImportSettlement,
+  WorkbenchStatsUsageImportCandidate,
+  WorkbenchStatsUsageImportSettlement,
+} from "./stats/WorkbenchStatsImportRepository.ts";
 
 export type WorkbenchDatabaseControllerState = "starting" | "ready" | "failed" | "closed";
 
@@ -50,6 +61,17 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "replaceSearchProjects"; projects: readonly { id: string; name: string; rootPath: string }[] }
   | { type: "replaceSearchProjectFiles"; projectId: string; paths: readonly string[] }
   | { type: "search"; request: WorkbenchSearchRequest }
+  | { type: "recordStatsClaimSnapshot"; snapshot: WorkbenchGitClaimSnapshot }
+  | { type: "recordStatsRateLimits"; observation: WorkbenchRateLimitObservation }
+  | { type: "readStats"; request: WorkbenchStatsReadRequest; now?: number }
+  | { type: "beginStatsImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }
+  | { type: "addStatsClaimDiscoveries"; runId: string; discoveries: WorkbenchGitClaimImportDiscovery[]; now: number }
+  | { type: "claimStatsUsageImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }
+  | { type: "claimStatsClaimImport"; runId: string; now: number }
+  | { type: "settleStatsUsageImport"; runId: string; candidate: WorkbenchStatsUsageImportCandidate; settlement: WorkbenchStatsUsageImportSettlement; now: number }
+  | { type: "settleStatsClaimImport"; runId: string; candidate: WorkbenchGitClaimImportCandidate; settlement: WorkbenchGitClaimImportSettlement; now: number }
+  | { type: "repairStatsAttributions"; now: number; threadId: string | null }
+  | { type: "readStatsImportProgress"; state: WorkbenchStatsImportProgress["state"]; revision: number; unsupportedClaimCheckpoints: number }
   | { type: "close" };
 
 export type WorkbenchDatabaseRequest = WorkbenchDatabaseRequestPayload & { id: number };
@@ -64,6 +86,10 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "transcriptSnapshot"; snapshot: WorkbenchTranscriptSnapshot | null }
   | { id: number; type: "transcriptMaterializedTurnIds"; turnIds: string[] }
   | { id: number; type: "searchResult"; result: WorkbenchSearchResponse }
+  | { id: number; type: "statsResult"; result: WorkbenchStatsResponse }
+  | { id: number; type: "statsUsageImportCandidate"; candidate: WorkbenchStatsUsageImportCandidate | null }
+  | { id: number; type: "statsClaimImportCandidate"; candidate: WorkbenchGitClaimImportCandidate | null }
+  | { id: number; type: "statsImportProgress"; progress: WorkbenchStatsImportProgress }
   | { id: number; type: "closed" }
   | { id: number; type: "requestFailure"; message: string }
   | { id: number; type: "fatalFailure"; message: string };

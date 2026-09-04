@@ -7,6 +7,8 @@
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkbenchHarness } from "workbench-shared/types";
+import type { WorkbenchStatsHydrationResult } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchStatsUsageImportCandidate } from "./database/stats/WorkbenchStatsImportRepository";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { WorkbenchTurnRecoveryPort } from "./WorkbenchTurnRecoveryController";
 
@@ -40,6 +42,7 @@ export interface WorkbenchHarnessAdapter {
   internal: Pick<WorkbenchHarnessRuntimePort, "request">;
   recovery: WorkbenchHarnessRecoveryCapability;
   serverMethods: readonly string[];
+  usageHydration?: (candidate: WorkbenchStatsUsageImportCandidate) => Promise<WorkbenchStatsHydrationResult>;
 }
 
 export interface WorkbenchHarnessControllerOptions {
@@ -75,6 +78,16 @@ export default class WorkbenchHarnessController {
 
   listHarnesses() {
     return this.adapters.map(({ id }) => id);
+  }
+
+  listUsageHydrationHarnesses() {
+    return this.adapters.filter(({ usageHydration }) => Boolean(usageHydration)).map(({ id }) => id);
+  }
+
+  async hydrateUsage(candidate: WorkbenchStatsUsageImportCandidate) {
+    const hydrate = this.getAdapter(candidate.harness).usageHydration;
+    if (!hydrate) throw new Error(`Usage hydration is unavailable for ${candidate.harness} threads.`);
+    return await hydrate(candidate);
   }
 
   resolveHarness(value: unknown, options: { defaultToCodex?: boolean } = {}) {

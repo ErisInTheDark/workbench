@@ -856,6 +856,9 @@ function demand<State extends object>(spec: GitTestFixtureSpec<State>, copies: n
 }
 
 const specsByGitTestFile = new Map<string, GitTestFileSpec>([
+  ["GitClaimHistoryReader.test.ts", { fixtures: [
+    demand(THREAD_GIT_BASE_FIXTURE, 1),
+  ], nested: false }],
   ["GitArcPathMover.test.ts", { fixtures: [
     demand(PATH_MOVER_BASE_FIXTURE, 4),
     demand(PATH_MOVER_ARC_READY_FIXTURE, 1),

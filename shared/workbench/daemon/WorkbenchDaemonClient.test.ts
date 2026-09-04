@@ -140,3 +140,22 @@ test("search responses require the complete discriminated result contract", asyn
     /response was invalid/u,
   );
 });
+
+test("stats import progress notifications cross the typed browser boundary", () => {
+  let notify: (notification: { method: string; params: unknown }) => void = () => undefined;
+  const client = new WorkbenchDaemonClient({
+    onNotification: (listener) => { notify = listener; return () => { notify = () => undefined; }; },
+    request: async <TResponse>() => ({}) as TResponse,
+  });
+  const received: number[] = [];
+  const unsubscribe = client.onStatsImportProgress((progress) => received.push(progress.revision));
+  notify({
+    method: "workbench/stats/import/updated",
+    params: {
+      completedThreads: 1, failedThreads: 0, percent: 100, processedThreads: 1,
+      recentFailures: [], revision: 2, state: "complete", totalThreads: 1, unavailableThreads: 0,
+    },
+  });
+  assert.deepEqual(received, [2]);
+  unsubscribe();
+});

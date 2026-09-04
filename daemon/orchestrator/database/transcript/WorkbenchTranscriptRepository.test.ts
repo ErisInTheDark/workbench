@@ -631,6 +631,72 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
   }
 });
 
+test("turn usage settlement keeps context while replacing cumulative token updates", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([
+      threadObservation(),
+      turnObservation("turn", 0),
+      {
+        kind: "turnUsageContext",
+        model: "gpt-5.4",
+        observedAt: 3,
+        serviceTier: "fast",
+        threadId: "thread",
+        turnId: "turn",
+      },
+      {
+        cumulative: {
+          cacheWriteInputTokens: 0,
+          cachedInputTokens: 20,
+          inputTokens: 100,
+          outputTokens: 30,
+          reasoningOutputTokens: 10,
+          totalTokens: 130,
+        },
+        kind: "turnTokenUsage",
+        observedAt: 4,
+        threadId: "thread",
+        turnId: "turn",
+        usageDataVersion: 2,
+      },
+      {
+        cumulative: {
+          cacheWriteInputTokens: 5,
+          cachedInputTokens: 40,
+          inputTokens: 200,
+          outputTokens: 60,
+          reasoningOutputTokens: 20,
+          totalTokens: 260,
+        },
+        kind: "turnTokenUsage",
+        observedAt: 5,
+        threadId: "thread",
+        turnId: "turn",
+        usageDataVersion: 2,
+      },
+    ]);
+    assert.deepEqual(database.prepare(`
+      SELECT model, service_tier, cumulative_input_tokens, cumulative_cached_input_tokens,
+        cumulative_cache_write_input_tokens, cumulative_output_tokens,
+        cumulative_reasoning_output_tokens, cumulative_total_tokens, usage_data_version
+      FROM thread_turn_usage WHERE turn_id = ?
+    `).get("turn"), {
+      cumulative_cache_write_input_tokens: 5,
+      cumulative_cached_input_tokens: 40,
+      cumulative_input_tokens: 200,
+      cumulative_output_tokens: 60,
+      cumulative_reasoning_output_tokens: 20,
+      cumulative_total_tokens: 260,
+      model: "gpt-5.4",
+      service_tier: "fast",
+      usage_data_version: 2,
+    });
+  } finally {
+    database.close();
+  }
+});
+
 test("provider scopes preserve directly recorded items omitted by later snapshots", () => {
   const { database, repository } = createRepository();
   const observedTurn = turnObservation("turn", 0);

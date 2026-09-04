@@ -19,6 +19,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "projectSnapshot",
   "questionnaires",
   "subagents",
+  "stats",
   "threadGit",
   "threadState",
 ] as const satisfies readonly (keyof OrchestratorRuntimeObjects)[];

@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReloadController";
 import WorkbenchWebSocketRequestController, { type WorkbenchWebSocketRequestControllerOptions } from "./WorkbenchWebSocketRequestController";
@@ -59,6 +60,7 @@ function createController(options: {
   onHarnessMessage?: (message: JsonRpcRequest, client: BridgeClient) => Promise<void> | void;
   onHarnessRequest?: (message: JsonRpcRequest) => Promise<JsonRpcResponse> | JsonRpcResponse;
   reload?: WorkbenchWebSocketRequestControllerOptions["reload"];
+  stats?: WorkbenchWebSocketRequestControllerOptions["stats"];
   transcript?: WorkbenchWebSocketRequestControllerOptions["transcript"];
   transcriptShadowLog?: WorkbenchWebSocketRequestControllerOptions["transcriptShadowLog"];
 }) {
@@ -86,6 +88,7 @@ function createController(options: {
       subscribeReloadDirt: () => () => undefined,
     },
     setTimeout: options.clock.setTimeout,
+    stats: options.stats,
     threadState: {
       acceptIntent: async () => ({ accepted: true, revision: 1 }),
       disconnect: async (connectionId) => { options.onDisconnect?.(connectionId); },
@@ -101,6 +104,53 @@ function createController(options: {
   });
   return { controller, lines };
 }
+
+test("stats import observers receive pushed progress and disconnect cleanly", async () => {
+  const sent: Array<{ method?: string }> = [];
+  let publish = (_progress: WorkbenchStatsImportProgress) => undefined;
+  const { controller } = createController({
+    clock: new FakeClock(),
+    daemonRequests: {
+      accepts: (method) => method === "stats/import/start",
+      handle: async (request) => ({ id: request.id ?? null, result: {} }),
+    },
+    stats: {
+      subscribeImportProgress: (listener) => {
+        publish = listener;
+        return () => undefined;
+      },
+    },
+  });
+  const client = createClient((data, callback) => {
+    sent.push(JSON.parse(String(data)) as { method?: string });
+    callback?.();
+  });
+  await controller.handleMessage(client, "stats-connection", frame("stats/import/start", 1), false);
+  publish({
+    claims: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
+    percent: 100, recentFailures: [], revision: 2, state: "complete",
+    unsupportedClaimCheckpoints: 0,
+    usage: { completed: 1, failed: 0, processed: 1, total: 1, unavailable: 0 },
+    version: 2,
+  });
+  await Promise.resolve();
+  assert.equal(sent.some(({ method }) => method === "workbench/stats/import/updated"), true);
+  await controller.disconnect(client, "stats-connection");
+  const notificationCount = sent.filter(({ method }) => method === "workbench/stats/import/updated").length;
+  publish({
+    claims: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
+    percent: 100, recentFailures: [], revision: 3, state: "complete",
+    unsupportedClaimCheckpoints: 0,
+    usage: { completed: 1, failed: 0, processed: 1, total: 1, unavailable: 0 },
+    version: 2,
+  });
+  await Promise.resolve();
+  assert.equal(
+    sent.filter(({ method }) => method === "workbench/stats/import/updated").length,
+    notificationCount,
+  );
+  controller.dispose();
+});
 
 test("labels daemon and compatible Workbench requests with the wb namespace", async () => {
   const clock = new FakeClock();

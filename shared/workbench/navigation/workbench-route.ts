@@ -1,11 +1,11 @@
 /*
  * Exports:
  * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
- * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, home, project, file, thread, settings, mosaic.
- * - createHomeRoute/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder, home, pinned, owner.
+ * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, home, project, file, thread, settings, stats, mosaic.
+ * - createHomeRoute/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createStatsRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder, home, pinned, owner.
  * - getWorkbenchDraftIdFromThreadId/getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive durable draft, parent hydration, materialized mosaic roots, selected tab identity, and sidebar selection. Keywords: thread, draft, subagent, parent, mosaic.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
- * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref: build canonical hrefs. Keywords: links, URL, encode, home, pinned.
+ * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref/createStatsHref: build canonical hrefs. Keywords: links, URL, encode, home, pinned, stats.
  * - isSameWorkbenchRoute/routeHasSelection/isWorkbenchRouteOwnerOfThread: compare, classify, and fence route-owned thread transitions. Keywords: route equality, active selection, draft promotion.
  */
 
@@ -28,7 +28,7 @@ const LEGACY_FILE_SEARCH_PARAM = "file";
 const LEGACY_THREAD_SEARCH_PARAM = "thread";
 const DEFAULT_SETTINGS_SCOPE: WorkbenchSettingsScope = "global";
 
-export type WorkbenchRouteView = "home" | "project" | "file" | "thread" | "settings" | "mosaic" | "invalid";
+export type WorkbenchRouteView = "home" | "project" | "file" | "thread" | "settings" | "stats" | "mosaic" | "invalid";
 export type WorkbenchSettingsScope = "global" | "project";
 
 export interface WorkbenchRoute {
@@ -198,6 +198,10 @@ export function createSettingsRoute(projectId: string, settingsScope: WorkbenchS
     threadTarget: null,
     view: "settings",
   };
+}
+
+export function createStatsRoute(projectId: string | null = null): WorkbenchRoute {
+  return { ...createProjectRoute(projectId ?? ""), view: "stats" };
 }
 
 export function createMosaicRoute(projectId: string, mosaicNode: WorkbenchMosaicNode): WorkbenchRoute {
@@ -394,6 +398,11 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
 
       return createSettingsRoute(projectId, settingsScope);
     }
+    if (mode === "stats") {
+      return valueSegments.value.length
+        ? createInvalidWorkbenchRoute(`Unexpected stats route value: ${value}`, projectId)
+        : createStatsRoute(projectId);
+    }
     return createInvalidWorkbenchRoute(`Unknown workbench route mode: ${mode}`, projectId);
   }
 
@@ -449,6 +458,7 @@ export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike 
 
 export function createWorkbenchHref(route: WorkbenchRoute): string {
   const projectPath = encodeWorkbenchRoutePath(route.projectId);
+  const markedPath = projectPath ? `/${projectPath}/${WORKBENCH_ROUTE_MARKER}` : `/${WORKBENCH_ROUTE_MARKER}`;
   if (route.view === "home") {
     return `/${WORKBENCH_ROUTE_MARKER}/`;
   }
@@ -478,7 +488,10 @@ export function createWorkbenchHref(route: WorkbenchRoute): string {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeRouteSegment(target.threadId)}`;
   }
   if (route.view === "settings") {
-    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/settings/${route.settingsScope}`;
+    return `${markedPath}/settings/${route.settingsScope}`;
+  }
+  if (route.view === "stats") {
+    return `${markedPath}/stats`;
   }
   if (route.view === "mosaic" && route.mosaicNode) {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/mosaic/${serializeWorkbenchMosaicRouteExpression(route.mosaicNode)}`;
@@ -513,6 +526,10 @@ export function createHomeThreadHref(threadOwnerProjectId: string, target: strin
 
 export function createSettingsHref(projectId: string, settingsScope: WorkbenchSettingsScope = DEFAULT_SETTINGS_SCOPE) {
   return createWorkbenchHref(createSettingsRoute(projectId, settingsScope));
+}
+
+export function createStatsHref(projectId: string | null = null) {
+  return createWorkbenchHref(createStatsRoute(projectId));
 }
 
 export function createMosaicHref(projectId: string, mosaicNode: WorkbenchMosaicNode) {

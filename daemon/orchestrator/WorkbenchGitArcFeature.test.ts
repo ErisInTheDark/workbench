@@ -16,6 +16,7 @@ import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
+import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 
 function waitFeature() {
   return new WorkbenchGitArcFeature({
@@ -29,6 +30,52 @@ function waitFeature() {
     transitions: { run: async (_key, operation) => await operation() },
   });
 }
+
+test("startup claim reconciliation seeds current scopes at observation time", async () => {
+  const snapshots: WorkbenchGitClaimSnapshot[] = [];
+  const feature = new WorkbenchGitArcFeature({
+    getThreadCreatedAt: async () => 1,
+    getThreadClaimContext: async () => null,
+    observeClaimSnapshot: (snapshot) => snapshots.push(snapshot),
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/workspace/api",
+      project: {
+        id: "workspace",
+        kind: "workspace",
+        root: "C:/workspace/api",
+        rootPath: "C:/workspace/api",
+        roots: [
+          { id: "api", name: "API", root: "C:/workspace/api", rootPath: "C:/workspace/api" },
+          { id: "web", name: "Web", root: "C:/workspace/web", rootPath: "C:/workspace/web" },
+        ],
+      },
+      root: { id: "api", name: "API", root: "C:/workspace/api", rootPath: "C:/workspace/api" },
+    }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  const internal = feature as unknown as {
+    workspaceController: {
+      listLifecycleStates: () => Promise<Array<{
+        claimedPaths: string[];
+        harness: string;
+        threadId: string;
+      }>>;
+    };
+  };
+  internal.workspaceController.listLifecycleStates = async () => [{
+    claimedPaths: ["api:src", "web:packages/ui"],
+    harness: "codex",
+    threadId: "thread",
+  }];
+  const startedAt = Date.now();
+  await feature.reconcileClaimSnapshots("C:/workspace/api");
+  assert.deepEqual(snapshots[0]?.roots, [
+    { paths: ["src"], rootId: "api" },
+    { paths: ["packages/ui"], rootId: "web" },
+  ]);
+  assert.ok((snapshots[0]?.observedAt ?? 0) >= startedAt);
+});
 
 test("competing Git arc waits return one active owner and keep the loser waiting until release", async () => {
   const transitions = new WorkbenchThreadTransitionCoordinator();

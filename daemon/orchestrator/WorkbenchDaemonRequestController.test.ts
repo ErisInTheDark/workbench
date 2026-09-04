@@ -16,6 +16,8 @@ function createController(options: { gitArcResponse?: Response; rejectProjectId?
   const targetReads: object[] = [];
   const targetWrites: object[] = [];
   const searchRequests: object[] = [];
+  const statsRequests: object[] = [];
+  let statsRefreshes = 0;
   const controller = new WorkbenchDaemonRequestController({
     agents: {
       listAgents: async () => ({ data: [] }),
@@ -87,12 +89,72 @@ function createController(options: { gitArcResponse?: Response; rejectProjectId?
         return { results: [] };
       },
     },
+    stats: {
+      read: async (request) => {
+        statsRequests.push(request);
+        return ({
+          bucketUnit: "day",
+          claimHotspots: [],
+          cost: {
+            basis: {
+              defaultModelTokens: 0,
+              exactModelTokens: 0,
+              projectInferredModelTokens: 0,
+              threadInferredModelTokens: 0,
+            },
+            buckets: [],
+            totalUsd: 0,
+          },
+          failures: [],
+          generatedAt: 1,
+          historyImport: {
+            claims: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
+            percent: 100, recentFailures: [], revision: 0, state: "idle",
+            unsupportedClaimCheckpoints: 0,
+            usage: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
+            version: 2,
+          },
+          models: [],
+          pricingCatalogDate: "2026-09-05",
+          projectId: request.projectId ?? null,
+          rateLimits: [],
+          range: request.range,
+          startedAt: 0,
+          summary: { cacheHitPercent: 0, threadCount: 0, turnCount: 0 },
+          tokens: {
+            buckets: [],
+            totals: { all: 0, cachedInput: 0, cacheWriteInput: 0, input: 0, output: 0, uncachedInput: 0 },
+          },
+          topThreads: [],
+          usageFilters: { models: [], providers: [] },
+          version: 2,
+        });
+      },
+      refreshRateLimits: async () => { statsRefreshes += 1; },
+      startImport: async () => ({
+        claims: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
+        percent: 100, recentFailures: [], revision: 0, state: "complete" as const,
+        unsupportedClaimCheckpoints: 0,
+        usage: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
+        version: 2 as const,
+      }),
+    },
     settings: {
       readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
       updateLocalCapabilities: async (update) => update({ browseRawCommandsEnabled: false }),
     },
   });
-  return { controller, fileWrites, gitArcRequests, networkWrites, searchRequests, targetReads, targetWrites };
+  return {
+    controller,
+    fileWrites,
+    gitArcRequests,
+    networkWrites,
+    searchRequests,
+    statsRequests,
+    statsRefreshes: () => statsRefreshes,
+    targetReads,
+    targetWrites,
+  };
 }
 
 test("dispatch validates semantic parameters without corrupting valid empty file content", async () => {
@@ -163,6 +225,37 @@ test("search query dispatch preserves empty text and validates project ids", asy
   });
   assert.equal(invalid.error?.code, -32602);
   assert.equal(searchRequests.length, 1);
+});
+
+test("stats dispatch validates project scope and keeps rate refresh account-wide", async () => {
+  const { controller, statsRefreshes, statsRequests } = createController({ rejectProjectId: "missing" });
+  const global = await controller.handle({
+    id: 1,
+    method: "stats/read",
+    params: { projectId: null, range: "7d" },
+  });
+  assert.equal((global.result as { projectId: string | null }).projectId, null);
+  const project = await controller.handle({
+    id: 2,
+    method: "stats/read",
+    params: { projectId: "project", range: "30d" },
+  });
+  assert.equal((project.result as { projectId: string | null }).projectId, "project");
+  const rejected = await controller.handle({
+    id: 3,
+    method: "stats/read",
+    params: { projectId: "missing", range: "7d" },
+  });
+  assert.equal(rejected.error?.code, -32602);
+  assert.deepEqual(statsRequests, [
+    { model: null, projectId: null, provider: null, range: "7d" },
+    { model: null, projectId: "project", provider: null, range: "30d" },
+  ]);
+  assert.deepEqual(
+    (await controller.handle({ id: 4, method: "stats/rate-limits/refresh", params: {} })).result,
+    { ok: true },
+  );
+  assert.equal(statsRefreshes(), 1);
 });
 
 test("Codex sandbox network requests validate project ownership and preserve explicit override intent", async () => {

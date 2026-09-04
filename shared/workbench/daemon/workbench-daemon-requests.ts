@@ -41,6 +41,11 @@ import type {
   WorkbenchSearchRequest,
   WorkbenchSearchResponse,
 } from "../search/workbench-search.ts";
+import type {
+  WorkbenchStatsImportProgress,
+  WorkbenchStatsReadRequest,
+  WorkbenchStatsResponse,
+} from "../stats/workbench-stats-contract.ts";
 
 export interface WorkbenchInstructionPack {
   content: string;
@@ -112,6 +117,9 @@ export interface WorkbenchDaemonRequestMap {
   "project/file/reset": { params: { expectedMtimeMs: number; force?: boolean; path: string; projectId: string }; result: WorkbenchFileWriteResult };
   "project/file/save": { params: { content: string; expectedMtimeMs: number; force?: boolean; path: string; projectId: string }; result: WorkbenchFileWriteResult };
   "search/query": { params: WorkbenchSearchRequest; result: WorkbenchSearchResponse };
+  "stats/import/start": { params: object; result: WorkbenchStatsImportProgress };
+  "stats/rate-limits/refresh": { params: object; result: { ok: true } };
+  "stats/read": { params: WorkbenchStatsReadRequest; result: WorkbenchStatsResponse };
   "skills/read": { params: { projectId: string | null }; result: WorkbenchSkillCatalogResponse };
 }
 

@@ -9,6 +9,7 @@
 import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
 import type { CodexAppServerNotification } from "workbench-shared/codex/app-server-notifications";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "workbench-shared/workbench/orchestrator-reload";
+import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { GetAccountRateLimitsResponse } from "workbench-shared/codex/generated/app-server/v2/GetAccountRateLimitsResponse";
 import type { Model as CodexModel } from "workbench-shared/codex/generated/app-server/v2/Model";
 import type { ModelListResponse } from "workbench-shared/codex/generated/app-server/v2/ModelListResponse";
@@ -228,7 +229,7 @@ interface WorkbenchThreadClient {
   openThread: (threadId: string, options?: { entries?: readonly WorkbenchThreadSidebarEntry[]; harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" }) => Promise<ThreadPayloadFetchOutcome>;
   onReconnect: (listener: () => void) => () => void;
   onWorkbenchNotification: (listener: (notification: {
-    method: "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD;
+    method: "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
     params: unknown;
   }) => void) => () => void;
   refreshCurrentThread: () => Promise<ThreadPayload | null>;
@@ -910,7 +911,7 @@ function WorkbenchThreadClient(
   }
 
   function onWorkbenchNotification(listener: (notification: {
-    method: "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD;
+    method: "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
     params: unknown;
   }) => void) {
     return codexClient.onWorkbenchNotification((notification) => {
@@ -918,6 +919,7 @@ function WorkbenchThreadClient(
         notification.method === "workbench/thread-state/reset"
         || notification.method === "workbench/thread-state/updated"
         || notification.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
+        || notification.method === WORKBENCH_STATS_IMPORT_UPDATED_METHOD
       ) {
         listener({ method: notification.method, params: notification.params });
       }

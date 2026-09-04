@@ -35,6 +35,8 @@ import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import type WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReloadController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
+import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import WorkbenchWebSocketStreamController, {
   type WorkbenchWebSocketStreamControllerState,
 } from "./WorkbenchWebSocketStreamController";
@@ -70,6 +72,7 @@ export interface WorkbenchWebSocketRequestControllerState {
   reloadDirtObservers?: WorkbenchWebSocketReloadDirtObserverState[];
   reloadDirtRevision?: number;
   stream?: WorkbenchWebSocketStreamControllerState;
+  statsObservers?: Array<{ client: BridgeClient; connectionId: string }>;
 }
 
 export interface WorkbenchWebSocketReloadDirtObserverState {
@@ -100,6 +103,7 @@ export interface WorkbenchWebSocketRequestControllerOptions {
     WorkbenchOrchestratorReloadController,
     "admitUserReload" | "getReloadDirtSnapshot" | "subscribeReloadDirt"
   >;
+  stats?: Pick<WorkbenchStatsController, "subscribeImportProgress">;
   setTimeout?: (callback: () => void, delayMs: number) => Timer;
   threadState: Pick<WorkbenchThreadStateController, "acceptIntent" | "disconnect" | "handleRequest">;
   transcript: Pick<OrchestratorTranscriptRegistration, "read" | "subscribe" | "unsubscribe">;
@@ -174,6 +178,8 @@ export default class WorkbenchWebSocketRequestController {
   private readonly transcriptShadowLog: WorkbenchWebSocketRequestControllerOptions["transcriptShadowLog"];
   private readonly transcriptSubscriptions = new Map<string, WorkbenchWebSocketTranscriptSubscriptionState>();
   private readonly transcriptCapabilitiesAnnounced = new WeakSet<BridgeClient>();
+  private readonly statsObservers = new Map<string, { client: BridgeClient; connectionId: string }>();
+  private unsubscribeStats: (() => void) | null = null;
   private readonly writeLine: NonNullable<WorkbenchWebSocketRequestControllerOptions["writeLine"]>;
 
   constructor({
@@ -187,6 +193,7 @@ export default class WorkbenchWebSocketRequestController {
     now = Date.now,
     reload,
     setTimeout: schedule = setTimeout,
+    stats,
     threadState,
     transcript,
     transcriptShadowLog,
@@ -214,6 +221,17 @@ export default class WorkbenchWebSocketRequestController {
     this.transcriptShadowLog = transcriptShadowLog;
     this.writeLine = writeLine;
     for (const state of initialState?.pending ?? []) this.restorePending(state);
+    for (const observer of initialState?.statsObservers ?? []) this.statsObservers.set(observer.connectionId, observer);
+    if (stats) this.unsubscribeStats = stats.subscribeImportProgress((progress) => {
+      for (const observer of this.statsObservers.values()) {
+        void this.sendJsonToClient(observer.client, {
+          method: WORKBENCH_STATS_IMPORT_UPDATED_METHOD,
+          params: progress,
+        }).catch((error: unknown) => {
+          this.writeLine(`[stats-import] ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
+    });
   }
 
   async start() {
@@ -280,6 +298,7 @@ export default class WorkbenchWebSocketRequestController {
 
     if (workbenchRequest && isRequest) {
       if (daemonRequest) {
+        if (method === "stats/import/start") this.statsObservers.set(connectionId, { client, connectionId });
         await this.sendJsonToClient(client, await this.daemonRequests.handle(message));
         return;
       }
@@ -434,6 +453,7 @@ export default class WorkbenchWebSocketRequestController {
     for (const request of requests) this.complete(request, "closed", this.now() - request.startedAt, 0, 0, 0);
     this.stream.disconnect(client);
     this.reloadDirtObservers.delete(connectionId);
+    this.statsObservers.delete(connectionId);
     this.unsubscribeTranscriptConnection(connectionId);
     await this.threadState.disconnect(connectionId);
   }
@@ -458,11 +478,14 @@ export default class WorkbenchWebSocketRequestController {
     this.transcriptSubscriptions.clear();
     this.unsubscribeReloadDirt?.();
     this.unsubscribeReloadDirt = null;
+    this.unsubscribeStats?.();
+    this.unsubscribeStats = null;
     return {
       pending,
       reloadDirtObservers: [...this.reloadDirtObservers.values()],
       reloadDirtRevision: this.reloadDirtRevision,
       stream: this.stream.detachForReload(),
+      statsObservers: [...this.statsObservers.values()],
     };
   }
 
@@ -480,6 +503,9 @@ export default class WorkbenchWebSocketRequestController {
     this.unsubscribeReloadDirt?.();
     this.unsubscribeReloadDirt = null;
     this.reloadDirtObservers.clear();
+    this.statsObservers.clear();
+    this.unsubscribeStats?.();
+    this.unsubscribeStats = null;
     this.stream.dispose();
   }
 

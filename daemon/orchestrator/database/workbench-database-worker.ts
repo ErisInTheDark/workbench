@@ -1,5 +1,5 @@
 /*
- * No production exports. This worker owns the one better-sqlite3 connection, schema installation, search/transcript repositories, readiness proof, and close boundary. Keywords: database, worker, sqlite, search, transcript, lifecycle.
+ * No production exports. This worker owns the one better-sqlite3 connection, schema installation, search/stats/transcript repositories, readiness proof, and close boundary. Keywords: database, worker, sqlite, search, stats, transcript, lifecycle.
  */
 import { parentPort } from "node:worker_threads";
 
@@ -14,6 +14,9 @@ import {
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository.ts";
 import WorkbenchThreadStateRelationalRepository from "./thread-state/WorkbenchThreadStateRelationalRepository.ts";
 import WorkbenchSearchRepository from "./search/WorkbenchSearchRepository.ts";
+import WorkbenchStatsRepository from "./stats/WorkbenchStatsRepository.ts";
+import WorkbenchStatsImportRepository from "./stats/WorkbenchStatsImportRepository.ts";
+import WorkbenchStatsAttributionRepository from "./stats/WorkbenchStatsAttributionRepository.ts";
 
 if (!parentPort) throw new Error("Workbench database worker requires a parent port");
 
@@ -21,6 +24,9 @@ let database: Database.Database | null = null;
 let transcriptRepository: WorkbenchTranscriptRepository | null = null;
 let threadStateShadowRepository: WorkbenchThreadStateRelationalRepository | null = null;
 let searchRepository: WorkbenchSearchRepository | null = null;
+let statsRepository: WorkbenchStatsRepository | null = null;
+let statsImportRepository: WorkbenchStatsImportRepository | null = null;
+let statsAttributionRepository: WorkbenchStatsAttributionRepository | null = null;
 
 function boundedError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -57,6 +63,9 @@ function closeDatabase() {
   transcriptRepository = null;
   threadStateShadowRepository = null;
   searchRepository = null;
+  statsRepository = null;
+  statsImportRepository = null;
+  statsAttributionRepository = null;
   const activeDatabase = database;
   database = null;
   if (!activeDatabase) return null;
@@ -182,11 +191,74 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({ id: request.id, type: "searchResult", result: searchRepository.search(request.request) });
     return;
   }
+  if (request.type === "recordStatsClaimSnapshot") {
+    if (!statsRepository) throw new Error("Workbench stats repository is not initialized");
+    statsRepository.recordClaimSnapshot(request.snapshot);
+    post({ id: request.id, type: "mutationResult", result: { changes: 1 } });
+    return;
+  }
+  if (request.type === "recordStatsRateLimits") {
+    if (!statsRepository) throw new Error("Workbench stats repository is not initialized");
+    statsRepository.recordRateLimits(request.observation);
+    post({ id: request.id, type: "mutationResult", result: { changes: 1 } });
+    return;
+  }
+  if (request.type === "readStats") {
+    if (!statsRepository) throw new Error("Workbench stats repository is not initialized");
+    post({ id: request.id, type: "statsResult", result: statsRepository.read(request.request, request.now) });
+    return;
+  }
+  if (request.type === "beginStatsImport") {
+    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
+    statsImportRepository.beginUsage(request.runId, request.harnesses, request.now);
+    post({ id: request.id, type: "statsImportProgress", progress: statsImportRepository.progress("running", 1, 0) });
+    return;
+  }
+  if (request.type === "addStatsClaimDiscoveries") {
+    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
+    statsImportRepository.addClaimDiscoveries(request.runId, request.discoveries, request.now);
+    post({ id: request.id, type: "statsImportProgress", progress: statsImportRepository.progress("running", 1, 0) });
+    return;
+  }
+  if (request.type === "claimStatsUsageImport") {
+    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
+    post({ id: request.id, type: "statsUsageImportCandidate", candidate: statsImportRepository.claimUsage(request.runId, request.harnesses, request.now) });
+    return;
+  }
+  if (request.type === "claimStatsClaimImport") {
+    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
+    post({ id: request.id, type: "statsClaimImportCandidate", candidate: statsImportRepository.claimClaims(request.runId, request.now) });
+    return;
+  }
+  if (request.type === "settleStatsUsageImport") {
+    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
+    statsImportRepository.settleUsage(request.runId, request.candidate, request.settlement, request.now);
+    post({ id: request.id, type: "statsImportProgress", progress: statsImportRepository.progress("running", 1, 0) });
+    return;
+  }
+  if (request.type === "settleStatsClaimImport") {
+    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
+    statsImportRepository.settleClaims(request.runId, request.candidate, request.settlement, request.now);
+    post({ id: request.id, type: "statsImportProgress", progress: statsImportRepository.progress("running", 1, 0) });
+    return;
+  }
+  if (request.type === "repairStatsAttributions") {
+    if (!statsAttributionRepository) throw new Error("Workbench stats attribution repository is not initialized");
+    post({ id: request.id, type: "mutationResult", result: { changes: statsAttributionRepository.repair(request.now, request.threadId) } });
+    return;
+  }
+  if (request.type === "readStatsImportProgress") {
+    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
+    post({ id: request.id, type: "statsImportProgress", progress: statsImportRepository.progress(request.state, request.revision, request.unsupportedClaimCheckpoints) });
+    return;
+  }
   if (!database) throw new Error("Workbench database is not initialized");
   database.close();
   transcriptRepository = null;
   threadStateShadowRepository = null;
   searchRepository = null;
+  statsRepository = null;
+  statsImportRepository = null;
   database = null;
   post({ id: request.id, type: "closed" });
   parentPort!.close();
@@ -204,6 +276,9 @@ parentPort.on("message", (request: WorkbenchDatabaseRequest) => {
       transcriptRepository = new WorkbenchTranscriptRepository(database);
       threadStateShadowRepository = new WorkbenchThreadStateRelationalRepository(database);
       searchRepository = new WorkbenchSearchRepository(database);
+      statsRepository = new WorkbenchStatsRepository(database);
+      statsImportRepository = new WorkbenchStatsImportRepository(database);
+      statsAttributionRepository = new WorkbenchStatsAttributionRepository(database);
       post({ id: request.id, type: "ready", inventory: inventory() });
     } catch (error) {
       postFatalFailure(request, error, "Workbench database initialization failed.");

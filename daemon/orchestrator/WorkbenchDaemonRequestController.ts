@@ -15,6 +15,8 @@ import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchSer
 import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotSchema } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type WorkbenchSearchController from "./WorkbenchSearchController";
+import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
+import { WorkbenchStatsReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import {
   GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
@@ -50,6 +52,7 @@ const METHODS = new Set([
   "project/catalog/read",
   "project/file/read", "project/file/reset", "project/file/save",
   "search/query",
+  "stats/import/start", "stats/rate-limits/refresh", "stats/read",
   "skills/read",
 ]);
 
@@ -129,6 +132,7 @@ export default class WorkbenchDaemonRequestController {
     profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
     projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "resolveProjectById">;
     search: Pick<WorkbenchSearchController, "search">;
+    stats: Pick<WorkbenchStatsController, "read" | "refreshRateLimits" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
   }) {}
 
@@ -208,6 +212,27 @@ export default class WorkbenchDaemonRequestController {
           });
           break;
         }
+        case "stats/read": {
+          const parsed = WorkbenchStatsReadRequestSchema.safeParse(params);
+          if (!parsed.success) throw new InvalidParamsError("Invalid stats request.");
+          if (parsed.data.projectId) {
+            try {
+              await this.owners.projects.resolveProjectById(parsed.data.projectId);
+            } catch (error) {
+              throw new InvalidParamsError(error instanceof Error ? error.message : "Unknown project.");
+            }
+          }
+          result = await this.owners.stats.read(parsed.data);
+          break;
+        }
+        case "stats/import/start":
+          if (Object.keys(params).length) throw new InvalidParamsError("Stats import start does not accept parameters.");
+          result = await this.owners.stats.startImport();
+          break;
+        case "stats/rate-limits/refresh":
+          await this.owners.stats.refreshRateLimits();
+          result = { ok: true };
+          break;
         case "local-capabilities/read": result = { localCapabilities: await this.owners.settings.readLocalCapabilities() }; break;
         case "local-capabilities/update": {
           const local = record(params.localCapabilities);

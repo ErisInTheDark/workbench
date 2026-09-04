@@ -11,7 +11,7 @@
  * - SidebarCollapseIcon/SidebarExpandIcon: render desktop sidebar visibility controls. Keywords: workbench, icon, sidebar.
  * - PanelMinimizeIcon/PanelExpandIcon: render mosaic panel minimize controls. Keywords: workbench, icon, panel.
  * - PanelCloseIcon: render the mosaic panel close control. Keywords: workbench, icon, panel, close.
- * - HomeIcon/GearIcon: render home and settings navigation icons. Keywords: workbench, icon, navigation, settings.
+ * - HomeIcon/StatsIcon/GearIcon: render home, statistics, and settings navigation icons. Keywords: workbench, icon, navigation, stats, settings.
  * - ProjectIcon: render the Projects sidebar section glyph. Keywords: workbench, icon, project, sidebar.
  * - BlocksIcon: render the Lucide-style composer profile control icon. Keywords: workbench, icon, composer, profile, blocks.
  * - BrowserSessionIcon: render the Browse session sidebar icon. Keywords: workbench, icon, browse, session.
@@ -458,6 +458,14 @@ export function CheckIcon ({ className = "size-4" }: { className?: string }) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className={className}>
       <path d="M4.5 10.35L8.15 14L15.5 6.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function StatsIcon () {
+  return (
+    <svg aria-hidden="true" className="size-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 20 20">
+      <path d="M3.25 16.25V10.5M8 16.25V6.75M12.75 16.25V9M17.5 16.25V3.75" />
     </svg>
   );
 }

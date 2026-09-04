@@ -25,6 +25,18 @@ import type {
 } from "./transcript/workbench-transcript-types";
 import type { WorkbenchThreadStateShadowRefresh } from "./thread-state/workbench-thread-state-shadow-types";
 import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
+import type { WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchHarness } from "workbench-shared/types";
+import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository";
+import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
+import type {
+  WorkbenchGitClaimImportCandidate,
+  WorkbenchGitClaimImportDiscovery,
+  WorkbenchGitClaimImportSettlement,
+  WorkbenchStatsUsageImportCandidate,
+  WorkbenchStatsUsageImportSettlement,
+} from "./stats/WorkbenchStatsImportRepository";
 
 export interface WorkbenchDatabaseControllerOptions {
   databasePath: string;
@@ -191,6 +203,90 @@ export default class WorkbenchDatabaseController {
       throw new WorkbenchDatabaseFailure(`Unexpected search response: ${response.type}`);
     }
     return response.result;
+  }
+
+  async recordStatsClaimSnapshot(snapshot: WorkbenchGitClaimSnapshot) {
+    await this.#statsMutation({ type: "recordStatsClaimSnapshot", snapshot });
+  }
+
+  async recordStatsRateLimits(observation: WorkbenchRateLimitObservation) {
+    await this.#statsMutation({ type: "recordStatsRateLimits", observation });
+  }
+
+  async readStats(request: WorkbenchStatsReadRequest, now?: number) {
+    await this.start();
+    const response = await this.#request({ type: "readStats", request, ...(now === undefined ? {} : { now }) });
+    if (response.type !== "statsResult") {
+      throw new WorkbenchDatabaseFailure(`Unexpected stats response: ${response.type}`);
+    }
+    return response.result;
+  }
+
+  async beginStatsImport(runId: string, harnesses: WorkbenchHarness[], now: number) {
+    await this.start();
+    const response = await this.#request({ type: "beginStatsImport", runId, harnesses, now });
+    if (response.type !== "statsImportProgress") throw new WorkbenchDatabaseFailure(`Unexpected stats import response: ${response.type}`);
+    return response.progress;
+  }
+
+  async addStatsClaimDiscoveries(runId: string, discoveries: WorkbenchGitClaimImportDiscovery[], now: number) {
+    await this.start();
+    const response = await this.#request({ type: "addStatsClaimDiscoveries", runId, discoveries, now });
+    if (response.type !== "statsImportProgress") throw new WorkbenchDatabaseFailure(`Unexpected stats discovery response: ${response.type}`);
+    return response.progress;
+  }
+
+  async claimStatsUsageImport(runId: string, harnesses: WorkbenchHarness[], now: number): Promise<WorkbenchStatsUsageImportCandidate | null> {
+    await this.start();
+    const response = await this.#request({ type: "claimStatsUsageImport", runId, harnesses, now });
+    if (response.type !== "statsUsageImportCandidate") throw new WorkbenchDatabaseFailure(`Unexpected stats usage claim response: ${response.type}`);
+    return response.candidate;
+  }
+
+  async claimStatsClaimImport(runId: string, now: number): Promise<WorkbenchGitClaimImportCandidate | null> {
+    await this.start();
+    const response = await this.#request({ type: "claimStatsClaimImport", runId, now });
+    if (response.type !== "statsClaimImportCandidate") throw new WorkbenchDatabaseFailure(`Unexpected stats claim claim response: ${response.type}`);
+    return response.candidate;
+  }
+
+  async settleStatsUsageImport(runId: string, candidate: WorkbenchStatsUsageImportCandidate, settlement: WorkbenchStatsUsageImportSettlement, now: number) {
+    await this.start();
+    const response = await this.#request({ type: "settleStatsUsageImport", runId, candidate, settlement, now });
+    if (response.type !== "statsImportProgress") throw new WorkbenchDatabaseFailure(`Unexpected stats import settlement response: ${response.type}`);
+    return response.progress;
+  }
+
+  async settleStatsClaimImport(runId: string, candidate: WorkbenchGitClaimImportCandidate, settlement: WorkbenchGitClaimImportSettlement, now: number) {
+    await this.start();
+    const response = await this.#request({ type: "settleStatsClaimImport", runId, candidate, settlement, now });
+    if (response.type !== "statsImportProgress") throw new WorkbenchDatabaseFailure(`Unexpected stats claim settlement response: ${response.type}`);
+    return response.progress;
+  }
+
+  async repairStatsAttributions(now: number, threadId: string | null = null) {
+    await this.start();
+    const response = await this.#request({ type: "repairStatsAttributions", now, threadId });
+    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected stats attribution response: ${response.type}`);
+    return response.result;
+  }
+
+  async readStatsImportProgress(state: WorkbenchStatsImportProgress["state"], revision: number, unsupportedClaimCheckpoints = 0) {
+    await this.start();
+    const response = await this.#request({ type: "readStatsImportProgress", state, revision, unsupportedClaimCheckpoints });
+    if (response.type !== "statsImportProgress") throw new WorkbenchDatabaseFailure(`Unexpected stats import progress response: ${response.type}`);
+    return response.progress;
+  }
+
+  async #statsMutation(request:
+    | Extract<WorkbenchDatabaseRequestPayload, { type: "recordStatsClaimSnapshot" }>
+    | Extract<WorkbenchDatabaseRequestPayload, { type: "recordStatsRateLimits" }>
+  ) {
+    await this.start();
+    const response = await this.#request(request);
+    if (response.type !== "mutationResult") {
+      throw new WorkbenchDatabaseFailure(`Unexpected stats mutation response: ${response.type}`);
+    }
   }
 
   async close() {

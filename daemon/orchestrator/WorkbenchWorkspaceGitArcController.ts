@@ -5,6 +5,7 @@
  * - WorkspaceGitArcLifecycleState: active logical workspace projection. Keywords: git, arc, lifecycle, projection.
  * - WorkspaceGitArcPlanMemberState: planned repo-local member plus root identity. Keywords: git, arc, plan, member.
  * - WorkspaceGitArcPlanState: inactive logical workspace projection. Keywords: git, arc, plan, projection.
+ * Local mechanics: emit WorkbenchGitClaimSnapshot after mutations while the owning Git transition remains held. Keywords: git, claims, stats.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -23,8 +24,10 @@ import WorkbenchGitCheckpointController, {
   type GitArcPlanState,
   type GitArcRetentionResult,
 } from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import GitClaimHistoryReader from "../lib/workbench/git/GitClaimHistoryReader";
 import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
+import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 
 interface GitTransitions {
   readMany<TValue>(worktreePaths: readonly string[], operation: () => Promise<TValue>): Promise<TValue>;
@@ -115,6 +118,8 @@ export default class WorkbenchWorkspaceGitArcController {
     private readonly local = new WorkbenchGitCheckpointController(),
     private readonly transitions: GitTransitions,
     private readonly resolveGitRepoRoot: ResolveGitRepoRoot = async (rootPath) => (await WorkbenchGitRepository.tryOpen(rootPath))?.root ?? null,
+    private readonly observeClaimSnapshot: ((snapshot: WorkbenchGitClaimSnapshot) => void) | null = null,
+    private readonly claimHistory: Pick<GitClaimHistoryReader, "expandScopes"> = new GitClaimHistoryReader(),
   ) {}
 
   async listLifecycleStates(project: AgentEndpointProjectResolution): Promise<WorkspaceGitArcLifecycleState[]> {
@@ -300,7 +305,13 @@ export default class WorkbenchWorkspaceGitArcController {
     const lifecycle = await this.findLifecycleState(project, harness, threadId);
     const selected = members.filter((member) => lifecycle?.members.some(({ repoRoot }) => repoRoot === member.repoRoot));
     if (!selected.length) return;
-    await this.runMembers(selected, async (member) => await this.local.releaseActiveClaim({ cwd: member.repoRoot, harness, threadId }));
+    await this.runMembers(
+      selected,
+      async (member) => await this.local.releaseActiveClaim({ cwd: member.repoRoot, harness, threadId }),
+      undefined,
+      "write",
+      { harness, project, threadId },
+    );
   }
 
   async pruneThreadHistories(
@@ -462,36 +473,80 @@ export default class WorkbenchWorkspaceGitArcController {
     operation: (member: RepoMember) => Promise<T>,
     preflight?: (member: RepoMember) => Promise<void>,
     mode: "read" | "write" = "write",
+    observation?: { harness: WorkbenchHarness; project: AgentEndpointProjectResolution; threadId: string },
   ) {
     if (!selected.length) throw new Error("This workspace Git arc has no matching repository members.");
     const run = mode === "read" ? this.transitions.readMany.bind(this.transitions) : this.transitions.runMany.bind(this.transitions);
     return await run(selected.map(({ repoRoot }) => repoRoot), async () => {
-      if (preflight) {
+      try {
+        if (preflight) {
+          for (const member of selected) {
+            try {
+              await preflight(member);
+            } catch (error) {
+              throw new Error(
+                `Workspace Git arc member ${member.roots.map(({ id }) => id).join(", ")} failed before any member changed: ${error instanceof Error ? error.message : String(error)}`,
+                { cause: error },
+              );
+            }
+          }
+        }
+        const results: Array<{ member: RepoMember; result: T }> = [];
         for (const member of selected) {
           try {
-            await preflight(member);
+            results.push({ member, result: await operation(member) });
           } catch (error) {
+            const completed = results.flatMap(({ member: value }) => value.roots.map(({ id }) => id));
             throw new Error(
-              `Workspace Git arc member ${member.roots.map(({ id }) => id).join(", ")} failed before any member changed: ${error instanceof Error ? error.message : String(error)}`,
+              `Workspace Git arc member ${member.roots.map(({ id }) => id).join(", ")} failed${completed.length ? ` after completing ${completed.join(", ")}` : ""}: ${error instanceof Error ? error.message : String(error)}`,
               { cause: error },
             );
           }
         }
+        return results;
+      } finally {
+        if (observation && mode === "write") await this.observeMemberClaims(selected, observation);
       }
-      const results: Array<{ member: RepoMember; result: T }> = [];
-      for (const member of selected) {
-        try {
-          results.push({ member, result: await operation(member) });
-        } catch (error) {
-          const completed = results.flatMap(({ member: value }) => value.roots.map(({ id }) => id));
-          throw new Error(
-            `Workspace Git arc member ${member.roots.map(({ id }) => id).join(", ")} failed${completed.length ? ` after completing ${completed.join(", ")}` : ""}: ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error },
-          );
-        }
-      }
-      return results;
     });
+  }
+
+  private async observeMemberClaims(
+    members: readonly RepoMember[],
+    observation: { harness: WorkbenchHarness; project: AgentEndpointProjectResolution; threadId: string },
+  ) {
+    if (!this.observeClaimSnapshot) return;
+    for (const member of members) {
+      try {
+        const state = await this.local.findLifecycleState({
+          cwd: member.repoRoot,
+          harness: observation.harness,
+          threadId: observation.threadId,
+        });
+        const roots = member.roots.map(({ id }) => ({ paths: [] as string[], rootId: id }));
+        const expandedPaths = state?.claimedPaths.length
+          ? await this.claimHistory.expandScopes({
+            checkpointCommit: state.checkpointCommit,
+            repositoryRoot: member.repoRoot,
+            scopePaths: state.claimedPaths,
+          })
+          : [];
+        for (const claimedPath of expandedPaths) {
+          const root = this.rootForRepoPath(member, claimedPath);
+          const target = roots.find(({ rootId }) => rootId === root.id)!;
+          target.paths.push(path.relative(root.root, path.resolve(member.repoRoot, claimedPath)).replace(/\\/gu, "/") || ".");
+        }
+        const updatedAt = state ? Date.parse(state.updatedAt) : Number.NaN;
+        this.observeClaimSnapshot({
+          harness: observation.harness,
+          observedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+          projectId: observation.project.project.id,
+          roots,
+          threadId: observation.threadId,
+        });
+      } catch (error) {
+        console.error(`Git claim observation failed after a workspace mutation: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 
   private decorateResult(project: AgentEndpointProjectResolution, member: RepoMember, raw: object) {
@@ -565,7 +620,7 @@ export default class WorkbenchWorkspaceGitArcController {
       return request.action === "plan"
         ? await this.local.createPlan(input)
         : await this.local.createAndStartPlan(input);
-    });
+    }, undefined, "write", { harness: request.harness, project, threadId: request.threadId });
     return this.aggregateResults(project, values);
   }
 
@@ -586,7 +641,7 @@ export default class WorkbenchWorkspaceGitArcController {
         case "arcAdopt": return await this.local.adoptIntoArc(input);
         case "arcRemove": return await this.local.removeFromArc(input);
       }
-    });
+    }, undefined, "write", { harness: request.harness, project, threadId: request.threadId });
     return this.aggregateResults(project, values);
   }
 
@@ -608,6 +663,8 @@ export default class WorkbenchWorkspaceGitArcController {
       request.disown ? undefined : async (member) => await this.local.assertArcReleasable({
         cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
       }),
+      "write",
+      { harness: request.harness, project, threadId: request.threadId },
     );
     return this.aggregateResults(project, values);
   }
@@ -660,6 +717,8 @@ export default class WorkbenchWorkspaceGitArcController {
         });
         if (result.collisions.length) throw new WorkspaceGitArcWaitBlockedError();
       } : undefined,
+      "write",
+      { harness: request.harness, project, threadId: request.threadId },
     );
     return this.aggregateResults(project, values);
   }
@@ -757,7 +816,11 @@ export default class WorkbenchWorkspaceGitArcController {
     const member = this.memberForRoot(members, root);
     const values = await this.runMembers([member], async () => await this.local.moveInArc({
       cwd: member.repoRoot, harness: request.harness, move: this.translateMove(root, request.move), threadId: request.threadId,
-    }), undefined, request.move.kind === "regex" && !request.move.confirm ? "read" : "write");
+    }), undefined, request.move.kind === "regex" && !request.move.confirm ? "read" : "write", {
+      harness: request.harness,
+      project,
+      threadId: request.threadId,
+    });
     return this.aggregateResults(project, values);
   }
 
@@ -788,7 +851,7 @@ export default class WorkbenchWorkspaceGitArcController {
     if (!messageOnlyAmend && project.project.roots.length > 1 && !request.amend && !selectedPaths?.length) {
       throw new Error(`Workspace root ${root.id} has no claimed paths to propose.`);
     }
-    const proposal = await this.transitions.runMany([member.repoRoot], async () => await this.local.createProposal({
+    const values = await this.runMembers([member], async () => await this.local.createProposal({
       amend: request.amend,
       ...(request.amendProposalId ? { amendProposalId: request.amendProposalId } : {}),
       cwd: member.repoRoot, description: request.description, harness: request.harness,
@@ -797,7 +860,8 @@ export default class WorkbenchWorkspaceGitArcController {
       ...(selectedPaths?.length ? { paths: selectedPaths } : {}),
       ...(request.replaceProposalId ? { replaceProposalId: request.replaceProposalId } : {}),
       threadId: request.threadId, title: request.title,
-    }));
+    }), undefined, "write", { harness: request.harness, project, threadId: request.threadId });
+    const proposal = values[0]!.result;
     return { ...proposal, rootId: root.id };
   }
 
@@ -820,14 +884,16 @@ export default class WorkbenchWorkspaceGitArcController {
     request: Extract<GitCheckpointRequest, { action: "proposalCommit" | "proposalRescind" | "proposalState" }>,
   ) {
     const member = await this.findProposalMember(members, request);
-    const run = request.action === "proposalState"
-      ? this.transitions.readMany.bind(this.transitions)
-      : this.transitions.runMany.bind(this.transitions);
-    const result = await run([member.repoRoot], async () => {
+    const values = await this.runMembers([member], async () => {
       if (request.action === "proposalState") return await this.local.getProposal({ ...request, cwd: member.repoRoot });
       if (request.action === "proposalRescind") return await this.local.rescindProposal({ ...request, cwd: member.repoRoot });
       return await this.local.commitProposal({ ...request, cwd: member.repoRoot });
+    }, undefined, request.action === "proposalState" ? "read" : "write", request.action === "proposalState" ? undefined : {
+      harness: request.harness,
+      project,
+      threadId: request.threadId,
     });
+    const result = values[0]!.result;
     const proposalPaths = "paths" in result && Array.isArray(result.paths) ? result.paths : [];
     const roots = unique(proposalPaths.map((candidate) => this.rootForRepoPath(member, candidate).id));
     return { ...result, rootId: roots[0] ?? member.roots[0]!.id };
@@ -855,7 +921,7 @@ export default class WorkbenchWorkspaceGitArcController {
         checkpointCommit, confirmRestore: request.confirmRestore, cwd: member.repoRoot, harness: request.harness,
         ...(group?.paths.length ? { paths: group.paths } : {}), threadId: request.threadId,
       });
-    });
+    }, undefined, "write", { harness: request.harness, project, threadId: request.threadId });
     return this.aggregateResults(project, values);
   }
 

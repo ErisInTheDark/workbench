@@ -12,6 +12,7 @@ import type WorkbenchGitCheckpointController from "../lib/workbench/git/Workbenc
 import { WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcController";
+import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 
 const execFileAsync = promisify(execFile);
 
@@ -676,4 +677,89 @@ test("workspace roots in one repository share one member while keeping qualified
     action: "proposalCreate", amend: false, cwd: repoRoot, description: "", harness: "codex", rootId: "docs",
     threadId: "shared-repository-thread", title: "empty-root proposal",
   }), /has no claimed paths to propose/u);
+});
+
+test("workspace mutations expand directory claims to their contained files", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/workspace/api", "C:/workspace/web");
+  const snapshots: WorkbenchGitClaimSnapshot[] = [];
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async (rootPath) => rootPath,
+    (snapshot) => snapshots.push(snapshot),
+    {
+      expandScopes: async ({ scopePaths }) => scopePaths.flatMap((scope) => (
+        scope === "src" ? ["src/one.ts", "src/two.ts"] : ["packages/ui/Button.tsx"]
+      )),
+    },
+  );
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "claim-thread" };
+  const plan = await controller.execute(project, {
+    action: "plan",
+    adoptPaths: [],
+    intentDescription: "",
+    intentName: "observe claims",
+    paths: [],
+    roots: [
+      { adoptPaths: [], paths: ["src"], rootId: "api" },
+      { adoptPaths: [], paths: ["packages/ui"], rootId: "web" },
+    ],
+    ...identity,
+  }) as { members: Array<{ checkpointCommit: string; rootId: string }> };
+  await controller.execute(project, {
+    action: "arcStart",
+    refs: plan.members.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })),
+    ...identity,
+  });
+  assert.deepEqual(snapshots.slice(-2).map(({ roots }) => roots), [
+    [{ paths: ["src/one.ts", "src/two.ts"], rootId: "api" }],
+    [{ paths: ["packages/ui/Button.tsx"], rootId: "web" }],
+  ]);
+  await controller.execute(project, { action: "arcRelease", disown: true, ...identity });
+  assert.deepEqual(snapshots.slice(-2).map(({ roots }) => roots), [
+    [{ paths: [], rootId: "api" }],
+    [{ paths: [], rootId: "web" }],
+  ]);
+});
+
+test("workspace partial mutation failure still observes every member's post-failure claim truth", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/workspace/api", "C:/workspace/web");
+  const snapshots: WorkbenchGitClaimSnapshot[] = [];
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async (rootPath) => rootPath,
+    (snapshot) => snapshots.push(snapshot),
+    { expandScopes: async ({ scopePaths }) => scopePaths },
+  );
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "partial-thread" };
+  const plan = await controller.execute(project, {
+    action: "plan",
+    adoptPaths: [],
+    intentDescription: "",
+    intentName: "partial claims",
+    paths: [],
+    roots: [
+      { adoptPaths: [], paths: ["src/api.ts"], rootId: "api" },
+      { adoptPaths: [], paths: ["src/web.ts"], rootId: "web" },
+    ],
+    ...identity,
+  }) as { members: Array<{ checkpointCommit: string; rootId: string }> };
+  const start = local.startArc.bind(local);
+  local.startArc = async (input: { cwd: string }) => {
+    if (input.cwd === "C:/workspace/web") throw new Error("web start failed");
+    return await start(input);
+  };
+  snapshots.length = 0;
+  await assert.rejects(controller.execute(project, {
+    action: "arcStart",
+    refs: plan.members.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })),
+    ...identity,
+  }), /after completing api/u);
+  assert.deepEqual(snapshots.map(({ roots }) => roots), [
+    [{ paths: ["src/api.ts"], rootId: "api" }],
+    [{ paths: [], rootId: "web" }],
+  ]);
 });

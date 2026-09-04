@@ -65,6 +65,27 @@ test("the database worker opens, proves readiness, reports all tables, and close
   }
 });
 
+test("database worker records claim snapshots and returns bounded stats", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-stats-database-"));
+  const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
+  try {
+    const now = Date.UTC(2026, 8, 4, 12);
+    await controller.recordStatsClaimSnapshot({
+      harness: "codex",
+      observedAt: now - 60_000,
+      projectId: "project",
+      roots: [{ paths: ["src"], rootId: "root" }],
+      threadId: "thread",
+    });
+    const result = await controller.readStats({ projectId: "project", range: "7d" }, now);
+    assert.equal(result.claimHotspots[0]?.path, "src");
+    assert.equal(result.claimHotspots[0]?.threadCount, 1);
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("schema version 4 thread-state rows migrate into the scoped relationship model", () => {
   const database = new Database(":memory:");
   try {

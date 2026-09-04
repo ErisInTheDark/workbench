@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - CodexTranscriptStore: persist, de-bloat, and hydrate Codex extended transcript data under .workbench/transcripts. Keywords: codex, transcript, questionnaire, pruning, image assets.
+ * - CodexTranscriptStore: persist, de-bloat, hydrate, and expose retained turn usage from Codex compatibility transcripts. Keywords: codex, transcript, questionnaire, pruning, usage, image assets.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -1104,6 +1104,24 @@ export default class CodexTranscriptStore {
       repair: false,
       threadFile,
     });
+  }
+
+  async readStoredTurnUsageEvents(threadId: string) {
+    await this.ready();
+    const threadFile = await this.json.read<CodexTranscriptThreadFile | null>(this.threadFilePath(threadId), null);
+    if (!threadFile?.thread) return null;
+    const events: CodexTranscriptRawEvent[] = [];
+    for (const { turnId } of threadFile.turnIndex) {
+      const journal = await this.json.readJsonLines<CodexTranscriptRawEvent>(this.turnJournalPath(threadId, turnId));
+      let event: CodexTranscriptRawEvent | undefined;
+      for (let index = journal.length - 1; index >= 0; index -= 1) {
+        if (journal[index]?.method !== "thread/tokenUsage/updated") continue;
+        event = journal[index];
+        break;
+      }
+      if (event) events.push(event);
+    }
+    return events;
   }
 
   async readProviderPreviousCursor(threadId: string, beforeTurnId: string) {

@@ -8,18 +8,21 @@
  * - createCodexTranscriptProviderTurnScopeObservation: project one complete provider turn into a replacement boundary. Keywords: codex, transcript, provider, replacement.
  * - createCodexTranscriptProviderThreadObservations: project one complete provider thread response into ordered atomic facts. Keywords: codex, transcript, provider, snapshot.
  * - createCodexTranscriptProviderThreadScopeObservation: project complete turns from one provider thread response into a replacement boundary. Keywords: codex, transcript, provider, replacement.
+ * - createCodexTurnUsageContextObservation/createCodexTurnTokenUsageObservation/createCodexTurnTokenUsageObservationFromNotification: project provider pricing context and cumulative token snapshots. Keywords: codex, stats, tokens.
  */
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { TokenUsageBreakdown } from "workbench-shared/codex/generated/app-server/v2/TokenUsageBreakdown";
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptItemLifecycle,
   WorkbenchTranscriptProviderTurnScopeObservation,
 } from "./database/transcript/workbench-transcript-types.ts";
 import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
-import type { JsonRpcRequest } from "./bridge-types.ts";
+import type { JsonRpcNotification, JsonRpcRequest } from "./bridge-types.ts";
+import { WORKBENCH_STATS_USAGE_DATA_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
 import { createFirstTurnItemOwners } from "./codex-transcript-item-ownership.ts";
 import { mergeThreadItem } from "./codex-transcript-item-merge.ts";
 import { asRecord, asString } from "./codex-transcript-normalizers.ts";
@@ -33,6 +36,67 @@ export interface CodexTranscriptProviderContext {
   projectRoot: string;
   title: string;
   updatedAt: number;
+}
+
+export function createCodexTurnUsageContextObservation(input: {
+  model: string | null;
+  observedAt: number;
+  serviceTier: string | null;
+  threadId: string;
+  turnId: string;
+}): Extract<WorkbenchTranscriptAtomicObservation, { kind: "turnUsageContext" }> {
+  return { kind: "turnUsageContext", ...input };
+}
+
+export function createCodexTurnTokenUsageObservation(input: {
+  observedAt: number;
+  threadId: string;
+  turnId: string;
+  usage: TokenUsageBreakdown;
+}): Extract<WorkbenchTranscriptAtomicObservation, { kind: "turnTokenUsage" }> {
+  return {
+    cumulative: {
+      cacheWriteInputTokens: input.usage.cacheWriteInputTokens,
+      cachedInputTokens: input.usage.cachedInputTokens,
+      inputTokens: input.usage.inputTokens,
+      outputTokens: input.usage.outputTokens,
+      reasoningOutputTokens: input.usage.reasoningOutputTokens,
+      totalTokens: input.usage.totalTokens,
+    },
+    kind: "turnTokenUsage",
+    observedAt: input.observedAt,
+    threadId: input.threadId,
+    turnId: input.turnId,
+    usageDataVersion: WORKBENCH_STATS_USAGE_DATA_VERSION,
+  };
+}
+
+export function createCodexTurnTokenUsageObservationFromNotification(
+  notification: JsonRpcNotification,
+  observedAt: number,
+) {
+  if (notification.method !== "thread/tokenUsage/updated") return null;
+  const params = asRecord(notification.params);
+  const threadId = asString(params?.threadId)?.trim();
+  const turnId = asString(params?.turnId)?.trim();
+  const total = asRecord(asRecord(params?.tokenUsage)?.total);
+  if (!threadId || !turnId || !total) return null;
+  const number = (name: string) => typeof total[name] === "number" && Number.isFinite(total[name])
+    ? Math.max(0, total[name])
+    : 0;
+  return createCodexTurnTokenUsageObservation({
+    observedAt,
+    threadId,
+    turnId,
+    usage: {
+      cacheWriteInputTokens: number("cacheWriteInputTokens"),
+      cachedInputTokens: number("cachedInputTokens"),
+      inputTokens: number("inputTokens"),
+      outputTokens: number("outputTokens"),
+      reasoningOutputTokens: number("reasoningOutputTokens"),
+      totalTokens: number("totalTokens"),
+    },
+  });
 }
 
 function secondsToMilliseconds(value: number | null) {

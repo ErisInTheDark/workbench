@@ -26,6 +26,18 @@ import type {
 } from "./database/transcript/workbench-transcript-types";
 import type { WorkbenchDatabaseMutationResult } from "./database/workbench-database-protocol";
 import type { WorkbenchSearchRequest, WorkbenchSearchResponse } from "workbench-shared/workbench/search/workbench-search";
+import type { WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchRateLimitObservation } from "./database/stats/WorkbenchStatsRepository";
+import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
+import type {
+  WorkbenchGitClaimImportCandidate,
+  WorkbenchGitClaimImportDiscovery,
+  WorkbenchGitClaimImportSettlement,
+  WorkbenchStatsUsageImportCandidate,
+  WorkbenchStatsUsageImportSettlement,
+} from "./database/stats/WorkbenchStatsImportRepository";
+import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
   WorkbenchThreadStateShadowRefresh,
   WorkbenchThreadStateShadowStatus,
@@ -63,6 +75,7 @@ import type WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
+import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import type WorkbenchTranscriptShadowLog from "./database/transcript/WorkbenchTranscriptShadowLog";
 import type { HarnessKind, JsonRpcNotification } from "./bridge-types";
 
@@ -102,10 +115,21 @@ export interface OrchestratorDatabaseRegistration {
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult>;
   readonly failure: Error | null;
   query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Promise<Row[]>;
+  readStats(request: WorkbenchStatsReadRequest): Promise<WorkbenchStatsResponse>;
+  beginStatsImport(runId: string, harnesses: WorkbenchHarness[], now: number): Promise<WorkbenchStatsImportProgress>;
+  addStatsClaimDiscoveries(runId: string, discoveries: WorkbenchGitClaimImportDiscovery[], now: number): Promise<WorkbenchStatsImportProgress>;
+  claimStatsUsageImport(runId: string, harnesses: WorkbenchHarness[], now: number): Promise<WorkbenchStatsUsageImportCandidate | null>;
+  claimStatsClaimImport(runId: string, now: number): Promise<WorkbenchGitClaimImportCandidate | null>;
+  settleStatsUsageImport(runId: string, candidate: WorkbenchStatsUsageImportCandidate, settlement: WorkbenchStatsUsageImportSettlement, now: number): Promise<WorkbenchStatsImportProgress>;
+  settleStatsClaimImport(runId: string, candidate: WorkbenchGitClaimImportCandidate, settlement: WorkbenchGitClaimImportSettlement, now: number): Promise<WorkbenchStatsImportProgress>;
+  repairStatsAttributions(now: number, threadId?: string | null): Promise<WorkbenchDatabaseMutationResult>;
+  readStatsImportProgress(state: WorkbenchStatsImportProgress["state"], revision: number, unsupportedClaimCheckpoints?: number): Promise<WorkbenchStatsImportProgress>;
   rebuildThreadStateShadow(request: WorkbenchThreadStateShadowRefresh): Promise<WorkbenchThreadStateShadowStatus>;
   readThreadStateShadowStatus(): Promise<WorkbenchThreadStateShadowStatus | null>;
   replaceSearchProjectFiles(projectId: string, paths: readonly string[]): Promise<void>;
   replaceSearchProjects(projects: readonly { id: string; name: string; rootPath: string }[]): Promise<void>;
+  recordStatsClaimSnapshot(snapshot: WorkbenchGitClaimSnapshot): Promise<void>;
+  recordStatsRateLimits(observation: WorkbenchRateLimitObservation): Promise<void>;
   search(request: WorkbenchSearchRequest): Promise<WorkbenchSearchResponse>;
   start(): Promise<object>;
   readonly state: "starting" | "ready" | "failed" | "closed";
@@ -163,6 +187,7 @@ export interface OrchestratorRuntimeObjects {
   reloadController: WorkbenchOrchestratorReloadController;
   reloadDirt: WorkbenchReloadDirtController;
   subagents: WorkbenchSubagentFeature;
+  stats: WorkbenchStatsController;
   threadGit: WorkbenchThreadGitFeature;
   threadState: WorkbenchThreadStateFeature;
   transcript: OrchestratorTranscriptRegistration;

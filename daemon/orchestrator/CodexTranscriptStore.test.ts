@@ -95,6 +95,27 @@ function turnFilePath(root: string, turnId: string) {
   );
 }
 
+test("retained turn usage events are exposed without provider history access", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-usage-events-"));
+  const store = new CodexTranscriptStore(root);
+  await store.recordHydratedThreadSnapshot({ id: 1, result: { thread: snapshot([transcriptTurn("turn-a", [])]) } });
+  await store.recordUpstreamNotification({
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread",
+      turnId: "turn-a",
+      tokenUsage: {
+        last: { cacheWriteInputTokens: 1, cachedInputTokens: 2, inputTokens: 3, outputTokens: 4, reasoningOutputTokens: 5, totalTokens: 7 },
+      },
+    },
+  });
+  const events = await store.readStoredTurnUsageEvents("thread");
+  assert.equal(events?.length, 1);
+  assert.equal(events?.[0]?.method, "thread/tokenUsage/updated");
+  await store.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
 async function readThreadFile(root: string) {
   return JSON.parse(await fs.readFile(threadFilePath(root), "utf8")) as CodexTranscriptThreadFile;
 }

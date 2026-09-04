@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchTranscriptItemLifecycle: durable lifecycle values shared by item transforms. Keywords: transcript, item, lifecycle.
- * - WorkbenchTranscriptAtomicObservation: one source-owned semantic transcript fact. Keywords: transcript, observation, atomic.
+ * - WorkbenchTranscriptAtomicObservation: one source-owned semantic transcript or turn-usage fact. Keywords: transcript, observation, atomic, stats.
  * - WorkbenchTranscriptCaptureGapObservation: one closed failed-capture interval. Keywords: transcript, capture gap, recovery.
  * - WorkbenchTranscriptProviderTurnScopeObservation: one complete provider-owned turn replacement boundary. Keywords: transcript, provider, replacement.
  * - WorkbenchTranscriptObservation: harness-neutral durable transcript input accepted in queue order. Keywords: transcript, observation, recorder.
@@ -19,6 +19,7 @@ import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbenc
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import type { CoreSchemaRows } from "workbench-shared/workbench/database/schema/core-schema";
 import type { EvidenceSchemaRows } from "workbench-shared/workbench/database/schema/evidence-schema";
+import type { WorkbenchCumulativeTokenUsage } from "workbench-shared/workbench/stats/workbench-stats-usage";
 export type {
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptSnapshot,
@@ -52,6 +53,22 @@ export type WorkbenchTranscriptAtomicObservation =
     endedAt: number | null;
     durationMs: number | null;
     turnIndex?: number;
+  }
+  | {
+    kind: "turnUsageContext";
+    model: string | null;
+    observedAt: number;
+    serviceTier: string | null;
+    threadId: string;
+    turnId: string;
+  }
+  | {
+    kind: "turnTokenUsage";
+    cumulative: WorkbenchCumulativeTokenUsage;
+    observedAt: number;
+    threadId: string;
+    turnId: string;
+    usageDataVersion: number;
   }
   | {
     kind: "item";

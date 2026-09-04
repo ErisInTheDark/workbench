@@ -2,7 +2,8 @@
 
 /*
  * Exports:
- * - default Workbench: domain-hook client shell for project browsing, editing, search, project-aware pinned navigation, and thread interaction. Keywords: workbench, project, search, action, pinned, editor, thread controller, global home.
+ * - default Workbench: domain-hook client shell for projects, editing, search, stats, pinned navigation, and threads. Keywords: workbench, project, search, stats, pinned, editor, thread controller, global home.
+ * Local helpers: route, title, drag, editor, file, thread, and capability UI transformations. Keywords: navigation, interaction, rendering.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -62,6 +63,8 @@ import {
     createProjectRoute,
     createSettingsHref,
     createSettingsRoute,
+    createStatsHref,
+    createStatsRoute,
     createThreadHref,
     createThreadRoute,
     getWorkbenchMosaicThreadRootIds,
@@ -115,6 +118,7 @@ import PrimaryButton from "./workbench/PrimaryButton";
 import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
+import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
 import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadLoadingSkeleton from "./workbench/thread-view/ThreadLoadingSkeleton";
@@ -159,6 +163,7 @@ import {
     SidebarCollapseIcon,
     SidebarExpandIcon,
     SparkleIcon,
+    StatsIcon,
     StopIcon,
     ZoomInIcon,
     ZoomOutIcon
@@ -736,6 +741,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     if (route.view === "settings") {
       return createSettingsRoute(route.projectId, route.settingsScope);
     }
+    if (route.view === "stats") {
+      return route.projectId ? createProjectRoute(route.projectId) : createHomeRoute();
+    }
     if (route.view === "project") {
       return createProjectRoute(route.projectId);
     }
@@ -1092,6 +1100,40 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const openSettingsFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
     openSettingsScopeFromLink(event, "global");
   }, [openSettingsScopeFromLink]);
+
+  const openStatsScopeFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string | null) => {
+    if (
+      event.button !== 0
+      || event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    navigateToRoute(createStatsRoute(projectId));
+  }, [navigateToRoute]);
+
+  const openStatsThreadFromLink = useCallback((
+    event: MouseEvent<HTMLAnchorElement>,
+    projectId: string,
+    threadId: string,
+  ) => {
+    if (
+      event.button !== 0
+      || event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    navigateToRoute(createThreadRoute(projectId, threadId));
+  }, [navigateToRoute]);
 
   const selectProjectFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string) => {
     if (
@@ -1673,6 +1715,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showThreadView = route.view === "thread" || mobileMosaicFallbackTarget?.kind === "thread";
   const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
   const showSettingsView = route.view === "settings";
+  const showStatsView = route.view === "stats";
   const sidebarCreateProjectId = activeProjectId || firstSidebarProjectGroup[0]?.id || "";
   const showFullBleedMainView = showMosaicView;
   const createThreadFromSidebar = useCallback((ownerProjectId: string, folderId?: string) => {
@@ -1700,8 +1743,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const effectiveThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetRootId(effectiveThreadTarget) : route.threadId;
   const effectiveSelectedThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetSelectedId(effectiveThreadTarget) : effectiveThreadId;
   const effectiveFilePath = mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.filePath : route.filePath;
-  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showMosaicView;
-  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showMosaicView;
+  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView;
+  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView;
   if (currentThread) {
     retainedThreadRef.current = currentThread;
   }
@@ -1908,6 +1951,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       ? `file:${activeFilePath}`
       : showSettingsView
         ? "settings"
+        : showStatsView
+          ? `stats:${route.projectId ?? "global"}`
         : "";
   const shouldRunRelativeTimeClock = showThreadView && Boolean(threadShellSource);
   useEffect(() => {
@@ -2677,7 +2722,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden py-3 pr-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:pr-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
                 <DropTargetBoundary className="explorer-scrollbar flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto pr-2">
-                <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto] items-center gap-1 pb-5">
+                <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto_auto] items-center gap-1 pb-5">
                   <span className="min-w-0 truncate pl-5 text-xl font-semibold leading-tight text-text">workbench</span>
                   <a
                     aria-label="Open home"
@@ -2692,6 +2737,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   >
                     <HomeIcon />
                     <span className="sr-only">Open home</span>
+                  </a>
+                  <a
+                    aria-label="Open statistics"
+                    className={`${workbenchIconButtonClassName} shrink-0 text-muted`}
+                    href={createStatsHref(activeProjectId)}
+                    onClick={(event) => openStatsScopeFromLink(event, activeProjectId)}
+                    title="Open statistics"
+                  >
+                    <StatsIcon />
+                    <span className="sr-only">Open statistics</span>
                   </a>
                   <a
                     aria-label="Open settings"
@@ -3139,6 +3194,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       </div>
                     </section>
                   </div>
+                ) : null}
+                {showStatsView && !shouldRenderMainLayout ? (
+                  <WorkbenchStatsView
+                    availableProjectId={activeProjectId || null}
+                    onNavigate={openStatsScopeFromLink}
+                    onNavigateThread={openStatsThreadFromLink}
+                    projectId={route.projectId || null}
+                    projectLabel={projectTabLabel}
+                    projects={explorer.projects}
+                  />
                 ) : null}
                 {showRouteError && !shouldRenderMainLayout ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">

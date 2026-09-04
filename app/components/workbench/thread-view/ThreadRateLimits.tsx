@@ -9,56 +9,11 @@ import type { ReactNode } from "react";
 import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { RateLimitWindow } from "workbench-shared/codex/generated/app-server/v2/RateLimitWindow";
 import type { WorkbenchHarness } from "workbench-shared/types";
+import { formatRateLimitResetTime, formatRateLimitWindowLabel } from "../../../workbench/rate-limit-display";
 import ThreadHarnessControl from "./ThreadHarnessControl";
-
-function formatWindowLabel (window: RateLimitWindow, fallback: string) {
-  const minutes = window.windowDurationMins;
-  if (minutes === null) {
-    return fallback;
-  }
-
-  if (minutes === 60 * 24 * 7) {
-    return "Weekly";
-  }
-
-  if (minutes % (60 * 24) === 0) {
-    return `${minutes / (60 * 24)}d`;
-  }
-
-  if (minutes % 60 === 0) {
-    return `${minutes / 60}h`;
-  }
-
-  return `${minutes}m`;
-}
 
 function formatUsedPercent (value: number) {
   return `${Math.round(value)}%`;
-}
-
-function formatResetTimestamp (timestampSeconds: number | null) {
-  if (timestampSeconds === null) {
-    return "No reset";
-  }
-
-  const resetDate = new Date(timestampSeconds * 1000);
-  const now = new Date();
-  if (
-    resetDate.getFullYear() === now.getFullYear()
-    && resetDate.getMonth() === now.getMonth()
-    && resetDate.getDate() === now.getDate()
-  ) {
-    return resetDate.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-  }
-
-  return resetDate.toLocaleDateString([], {
-    day: "numeric",
-    month: "short",
-  });
 }
 
 function RateLimitWindowText ({
@@ -70,9 +25,9 @@ function RateLimitWindowText ({
 }) {
   return (
     <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
-      <span className="font-semibold text-text">{formatWindowLabel(window, fallback)}</span>
+      <span className="font-semibold text-text">{formatRateLimitWindowLabel(window.windowDurationMins, fallback)}</span>
       <span>{formatUsedPercent(100 - window.usedPercent)}</span>
-      <span>{formatResetTimestamp(window.resetsAt)}</span>
+      <span>{formatRateLimitResetTime(window.resetsAt === null ? null : window.resetsAt * 1_000)}</span>
     </span>
   );
 }
@@ -132,7 +87,7 @@ export default function ThreadRateLimits ({
                 <span className="font-semibold text-text">{rateLimits.limitName}</span>
                 <span>{formatUsedPercent(100 - rateLimits.primary.usedPercent)} ({rateLimits.secondary?.usedPercent ?? "-"})</span>
                 {rateLimits.primary.resetsAt && rateLimits.primary.resetsAt * 1000 > Date.now() ? (
-                  <span>{formatResetTimestamp(rateLimits.primary.resetsAt)}</span>
+                  <span>{formatRateLimitResetTime(rateLimits.primary.resetsAt * 1_000)}</span>
                 ) : null}
               </span>
             ) : (

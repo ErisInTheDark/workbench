@@ -8,6 +8,7 @@
 import type http from "node:http";
 
 import WorkbenchGitCheckpointController, { type GitArcActiveClaim } from "../lib/workbench/git/WorkbenchGitCheckpointController";
+import GitClaimHistoryReader from "../lib/workbench/git/GitClaimHistoryReader";
 import { GitArcAcceptedProposalsError } from "../lib/workbench/git/GitArcProposalController";
 import {
   createGitArcOperationRejected,
@@ -26,6 +27,7 @@ import { GitCheckpointRequestSchema, type GitCheckpointRequest } from "workbench
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchThreadClaimContext } from "./WorkbenchThreadStateController";
+import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 import WorkbenchWorkspaceGitArcController, { type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
@@ -36,6 +38,7 @@ export interface WorkbenchGitArcFeatureOptions {
   getThreadClaimContext(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadClaimContext | null>;
   refreshThreadGitArcState(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
   onReloadEligibilityChanged?: () => void;
+  observeClaimSnapshot?(snapshot: WorkbenchGitClaimSnapshot): void;
   reloadScopeProjectRoot?: string;
   resolveProjectFromCwd(cwd: string): Promise<AgentEndpointProjectResolution | { cwd: string; project: { id: string } }>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
@@ -115,6 +118,7 @@ async function sendResponse(response: http.ServerResponse, upstream: Response) {
 }
 
 export default class WorkbenchGitArcFeature {
+  private readonly claimHistory = new GitClaimHistoryReader();
   private readonly controller = new WorkbenchGitCheckpointController();
   private readonly disposal = new AbortController();
   private readonly workspaceController: WorkbenchWorkspaceGitArcController;
@@ -131,7 +135,7 @@ export default class WorkbenchGitArcFeature {
       runMany: async (paths, operation) => options.transitions.runMany
         ? await options.transitions.runMany(paths, operation)
         : await options.transitions.run(paths[0] ?? "git-arc", operation),
-    });
+    }, undefined, (snapshot) => this.options.observeClaimSnapshot?.(snapshot), this.claimHistory);
   }
 
   private async resolveProject(cwd: string): Promise<AgentEndpointProjectResolution> {
@@ -174,6 +178,14 @@ export default class WorkbenchGitArcFeature {
     return state;
   }
 
+  async discoverClaimHistory(input: { projectId: string; rootId: string; workspaceRoot: string }) {
+    return await this.claimHistory.discover(input);
+  }
+
+  async hydrateClaimHistory(candidate: import("./database/stats/WorkbenchStatsImportRepository").WorkbenchGitClaimImportCandidate) {
+    return await this.claimHistory.hydrate(candidate);
+  }
+
   async hasLiveClaims(cwd: string, harness: WorkbenchHarness, threadId: string) {
     const project = await this.resolveProject(cwd);
     return await this.workspaceController.hasLiveClaims(project, harness, threadId);
@@ -182,6 +194,15 @@ export default class WorkbenchGitArcFeature {
   async listLifecycleStates(cwd: string): Promise<WorkbenchGitArcLifecycleState[]> {
     const project = await this.resolveProject(cwd);
     return await this.workspaceController.listLifecycleStates(project);
+  }
+
+  async reconcileClaimSnapshots(cwd: string) {
+    if (!this.options.observeClaimSnapshot) return;
+    const project = await this.resolveProject(cwd);
+    const observedAt = Date.now();
+    for (const state of await this.workspaceController.listLifecycleStates(project)) {
+      this.emitClaimSnapshot(project, state.harness as WorkbenchHarness, state.threadId, state, observedAt);
+    }
   }
 
   async findPlanState(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchGitArcPlanState | null> {
@@ -236,7 +257,13 @@ export default class WorkbenchGitArcFeature {
               : usesWorkspaceController(project, request)
                 ? Response.json(await this.workspaceController.execute(project, request, { modifiedSince: modifiedSince ?? undefined }))
                 : mutatesGitArcState(request)
-                  ? await this.options.transitions.run(project.cwd, async () => await this.dispatch(request))
+                  ? await this.options.transitions.run(project.cwd, async () => {
+                    try {
+                      return await this.dispatch(request);
+                    } finally {
+                      await this.observeLocalClaimSnapshot(project, request.harness, request.threadId);
+                    }
+                  })
                   : await (this.options.transitions.read ?? this.options.transitions.run)
                     .call(this.options.transitions, project.cwd, async () => await this.dispatch(request, modifiedSince ?? undefined));
           } catch (error) {
@@ -319,7 +346,7 @@ export default class WorkbenchGitArcFeature {
           signal.throwIfAborted();
           beforeStart();
           try {
-            return {
+            const result = {
               kind: "started" as const,
               result: await this.controller.startArc({
                 checkpointCommit: request.checkpointCommit,
@@ -328,6 +355,8 @@ export default class WorkbenchGitArcFeature {
                 threadId: request.threadId,
               }),
             };
+            await this.observeLocalClaimSnapshot(project, request.harness, request.threadId);
+            return result;
           } catch (error) {
             if (error instanceof GitArcCollisionError) {
               mutationStarted = false;
@@ -511,6 +540,46 @@ export default class WorkbenchGitArcFeature {
     } catch (error) {
       console.error(`Git arc state refresh failed after a mutation attempt: ${sanitizeError(error)}`);
     }
+  }
+
+  private async observeLocalClaimSnapshot(
+    project: AgentEndpointProjectResolution,
+    harness: WorkbenchHarness,
+    threadId: string,
+  ) {
+    if (!this.options.observeClaimSnapshot) return;
+    try {
+      const state = await this.workspaceController.findLifecycleState(project, harness, threadId);
+      const updatedAt = state ? Date.parse(state.updatedAt) : Number.NaN;
+      this.emitClaimSnapshot(project, harness, threadId, state, Number.isFinite(updatedAt) ? updatedAt : Date.now());
+    } catch (error) {
+      console.error(`Git claim observation failed after a mutation: ${sanitizeError(error)}`);
+    }
+  }
+
+  private emitClaimSnapshot(
+    project: AgentEndpointProjectResolution,
+    harness: WorkbenchHarness,
+    threadId: string,
+    state: WorkspaceGitArcLifecycleState | null,
+    observedAt: number,
+  ) {
+    const paths = state?.claimedPaths ?? [];
+    this.options.observeClaimSnapshot?.({
+      harness,
+      observedAt,
+      projectId: project.project.id,
+      roots: project.project.roots.map((root) => ({
+        paths: project.project.roots.length === 1
+          ? paths
+          : paths.flatMap((candidate) => {
+            const prefix = `${root.id}:`;
+            return candidate.startsWith(prefix) ? [candidate.slice(prefix.length) || "."] : [];
+          }),
+        rootId: root.id,
+      })),
+      threadId,
+    });
   }
 
   private async dispatch(input: GitCheckpointRequest, modifiedSince?: number) {

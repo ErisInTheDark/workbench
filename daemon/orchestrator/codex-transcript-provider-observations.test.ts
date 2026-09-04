@@ -6,6 +6,9 @@ import test from "node:test";
 
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import {
+  createCodexTurnTokenUsageObservation,
+  createCodexTurnTokenUsageObservationFromNotification,
+  createCodexTurnUsageContextObservation,
   createCodexTranscriptProviderDynamicToolObservation,
   createCodexTranscriptProviderItemObservation,
   createCodexTranscriptProviderThreadScopeObservation,
@@ -80,6 +83,93 @@ test("routine provider metadata projects without importing turns", () => {
     threadId: "thread",
     title: "Thread",
     updatedAt: 6_000,
+  });
+});
+
+test("turn usage helpers preserve explicit turn identity and final token categories", () => {
+  assert.deepEqual(createCodexTurnUsageContextObservation({
+    model: "gpt-5.4",
+    observedAt: 10,
+    serviceTier: "fast",
+    threadId: "thread",
+    turnId: "turn",
+  }), {
+    kind: "turnUsageContext",
+    model: "gpt-5.4",
+    observedAt: 10,
+    serviceTier: "fast",
+    threadId: "thread",
+    turnId: "turn",
+  });
+  assert.deepEqual(createCodexTurnTokenUsageObservation({
+    observedAt: 20,
+    threadId: "thread",
+    turnId: "turn",
+    usage: {
+      cacheWriteInputTokens: 5,
+      cachedInputTokens: 20,
+      inputTokens: 100,
+      outputTokens: 40,
+      reasoningOutputTokens: 10,
+      totalTokens: 140,
+    },
+  }), {
+    cumulative: {
+      cacheWriteInputTokens: 5,
+      cachedInputTokens: 20,
+      inputTokens: 100,
+      outputTokens: 40,
+      reasoningOutputTokens: 10,
+      totalTokens: 140,
+    },
+    kind: "turnTokenUsage",
+    observedAt: 20,
+    threadId: "thread",
+    turnId: "turn",
+    usageDataVersion: 2,
+  });
+});
+
+test("Codex accounting observations use cumulative totals instead of the active context snapshot", () => {
+  assert.deepEqual(createCodexTurnTokenUsageObservationFromNotification({
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread",
+      tokenUsage: {
+        last: {
+          cacheWriteInputTokens: 5,
+          cachedInputTokens: 20,
+          inputTokens: 100,
+          outputTokens: 40,
+          reasoningOutputTokens: 10,
+          totalTokens: 140,
+        },
+        modelContextWindow: 200_000,
+        total: {
+          cacheWriteInputTokens: 50,
+          cachedInputTokens: 2_000,
+          inputTokens: 10_000,
+          outputTokens: 4_000,
+          reasoningOutputTokens: 1_000,
+          totalTokens: 14_000,
+        },
+      },
+      turnId: "turn",
+    },
+  }, 20), {
+    cumulative: {
+      cacheWriteInputTokens: 50,
+      cachedInputTokens: 2_000,
+      inputTokens: 10_000,
+      outputTokens: 4_000,
+      reasoningOutputTokens: 1_000,
+      totalTokens: 14_000,
+    },
+    kind: "turnTokenUsage",
+    observedAt: 20,
+    threadId: "thread",
+    turnId: "turn",
+    usageDataVersion: 2,
   });
 });
 

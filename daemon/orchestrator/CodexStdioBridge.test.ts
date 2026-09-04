@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover app-server handoff, Workbench/provider questionnaires, transcript routing, reload recovery, approvals, turn-start preflight, context reads, and MCP config. Keywords: codex, bridge, questionnaire, reload, transcript, recovery, approval, MCP, test.
+ * - No production exports; Node tests cover app-server handoff, Workbench/provider questionnaires, transcript routing, usage hydration, reload recovery, approvals, turn-start preflight, context reads, and MCP config. Keywords: codex, bridge, questionnaire, reload, transcript, stats, recovery, approval, MCP, test.
  */
 
 import assert from "node:assert/strict";
@@ -112,6 +112,88 @@ function bridgeThread(items: ThreadItem[] = []) {
     updatedAt: 1,
   };
 }
+
+test("stats usage hydration reads Workbench journals without requesting provider history", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-stats-hydration-"));
+  const TranscriptStore = (await import("./CodexTranscriptStore.js")).default as unknown as typeof CodexTranscriptStore;
+  const transcriptStore = new TranscriptStore(root);
+  await transcriptStore.recordHydratedThreadSnapshot({
+    id: 1,
+    result: { thread: bridgeThread() },
+  });
+  await transcriptStore.recordUpstreamNotification({
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread",
+      tokenUsage: {
+        last: {
+          cacheWriteInputTokens: 5,
+          cachedInputTokens: 20,
+          inputTokens: 100,
+          outputTokens: 40,
+          reasoningOutputTokens: 10,
+          totalTokens: 140,
+        },
+        total: {
+          cacheWriteInputTokens: 5,
+          cachedInputTokens: 20,
+          inputTokens: 100,
+          outputTokens: 40,
+          reasoningOutputTokens: 10,
+          totalTokens: 140,
+        },
+      },
+      turnId: "turn",
+    },
+  });
+  await transcriptStore.dispose();
+  const observations: WorkbenchTranscriptObservation[] = [];
+  const bridge = new CodexStdioBridge({
+    appServer: {
+      send() { throw new Error("Stats hydration must not request provider history."); },
+    } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    recordSqliteTranscript: async (batch) => { observations.push(...batch); },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    assert.deepEqual(await bridge.handleBridgeRequest({
+      id: 1,
+      method: "workbench/stats/usage/hydrate",
+      params: { threadId: "thread" },
+    }), { id: 1, result: { state: "completed" } });
+    const usage = observations.find(({ kind }) => kind === "turnTokenUsage");
+    assert.equal(usage?.kind, "turnTokenUsage");
+    if (usage?.kind !== "turnTokenUsage") throw new Error("Expected a hydrated token-usage observation.");
+    assert.equal(typeof usage.observedAt, "number");
+    assert.deepEqual({ ...usage, observedAt: 0 }, {
+      cumulative: {
+        cacheWriteInputTokens: 5,
+        cachedInputTokens: 20,
+        inputTokens: 100,
+        outputTokens: 40,
+        reasoningOutputTokens: 10,
+        totalTokens: 140,
+      },
+      kind: "turnTokenUsage",
+      observedAt: 0,
+      threadId: "thread",
+      turnId: "turn",
+      usageDataVersion: 2,
+    });
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
 
 test("generic failed-patch retries are declined without hiding real file-change approvals", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-file-approval-"));
@@ -3047,6 +3129,7 @@ test("turn start responses admit the live turn before materialisation can consul
   let materializationReads = 0;
   let materialisationSettled = false;
   let turnStartSettled = false;
+  const recordedObservations: WorkbenchTranscriptObservation[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
     send(message: JsonRpcRequest) {
@@ -3073,6 +3156,7 @@ test("turn start responses admit the live turn before materialisation can consul
       return turnIds.filter((turnId) => materializedTurnIds.has(turnId));
     },
     recordSqliteTranscript: async (observations) => {
+      recordedObservations.push(...observations);
       if (!observations.some((observation) => (
         observation.kind === "turn" && observation.turnId === "turn"
       ))) return;
@@ -3140,6 +3224,57 @@ test("turn start responses admit the live turn before materialisation can consul
     });
     assert.equal(materializationReads, 1);
     assert.equal(compatibilityReads, 0);
+    const contextObservation = recordedObservations.find((observation) => observation.kind === "turnUsageContext");
+    assert.equal(contextObservation?.kind, "turnUsageContext");
+    if (contextObservation?.kind === "turnUsageContext") {
+      assert.equal(contextObservation.model, null);
+      assert.equal(contextObservation.serviceTier, null);
+      assert.equal(contextObservation.threadId, "thread");
+      assert.equal(contextObservation.turnId, "turn");
+      assert.equal(typeof contextObservation.observedAt, "number");
+    }
+    await bridge.handleUpstreamMessage({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread",
+        tokenUsage: {
+          last: {
+            cacheWriteInputTokens: 5,
+            cachedInputTokens: 20,
+            inputTokens: 100,
+            outputTokens: 40,
+            reasoningOutputTokens: 10,
+            totalTokens: 140,
+          },
+          total: {
+            cacheWriteInputTokens: 5,
+            cachedInputTokens: 20,
+            inputTokens: 100,
+            outputTokens: 40,
+            reasoningOutputTokens: 10,
+            totalTokens: 140,
+          },
+        },
+        turnId: "turn",
+      },
+    });
+    await bridge.waitForIdle();
+    const tokenObservation = recordedObservations.find((observation) => observation.kind === "turnTokenUsage");
+    assert.deepEqual(tokenObservation && { ...tokenObservation, observedAt: 0 }, {
+      cumulative: {
+        cacheWriteInputTokens: 5,
+        cachedInputTokens: 20,
+        inputTokens: 100,
+        outputTokens: 40,
+        reasoningOutputTokens: 10,
+        totalTokens: 140,
+      },
+      kind: "turnTokenUsage",
+      observedAt: 0,
+      threadId: "thread",
+      turnId: "turn",
+      usageDataVersion: 2,
+    });
   } finally {
     releaseDirectTurnRecording.resolve();
     await bridge.dispose();

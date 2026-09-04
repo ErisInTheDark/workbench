@@ -26,9 +26,17 @@ import reportClientSchemaError from "../report-client-schema-error.ts";
 import { WorkbenchProjectsPayloadSchema } from "../project/project-state.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../thread/thread-state.ts";
 import { WorkbenchSearchResponseSchema } from "../search/workbench-search.ts";
+import {
+  WORKBENCH_STATS_IMPORT_UPDATED_METHOD,
+  WorkbenchStatsImportProgressSchema,
+  WorkbenchStatsResponseSchema,
+  type WorkbenchStatsImportProgress,
+} from "../stats/workbench-stats-contract.ts";
 
 export interface WorkbenchDaemonTransport {
   request<TResponse>(method: string, params: object): Promise<TResponse>;
+  onNotification?(listener: (notification: { method: string; params: unknown }) => void): () => void;
+  onReconnect?(listener: () => void): () => void;
 }
 
 export class WorkbenchDaemonRequestError extends Error {
@@ -62,6 +70,9 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "project/file/reset":
     case "project/file/save": return fileWriteSchema;
     case "search/query": return WorkbenchSearchResponseSchema;
+    case "stats/read": return WorkbenchStatsResponseSchema;
+    case "stats/import/start": return WorkbenchStatsImportProgressSchema;
+    case "stats/rate-limits/refresh": return z.object({ ok: z.literal(true) }).strict();
     case "local-capabilities/read":
     case "local-capabilities/update": return z.object({
       localCapabilities: z.object({ browseRawCommandsEnabled: z.boolean() }).strict(),
@@ -94,6 +105,22 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
 
 export class WorkbenchDaemonClient {
   constructor(private readonly transport: WorkbenchDaemonTransport) {}
+
+  onReconnect(listener: () => void) {
+    return this.transport.onReconnect?.(listener) ?? (() => undefined);
+  }
+
+  onStatsImportProgress(listener: (progress: WorkbenchStatsImportProgress) => void) {
+    return this.transport.onNotification?.((notification) => {
+      if (notification.method !== WORKBENCH_STATS_IMPORT_UPDATED_METHOD) return;
+      const parsed = WorkbenchStatsImportProgressSchema.safeParse(notification.params);
+      if (!parsed.success) {
+        reportClientSchemaError("Rejected Workbench stats import progress", parsed.error);
+        return;
+      }
+      listener(parsed.data);
+    }) ?? (() => undefined);
+  }
 
   async request<TMethod extends WorkbenchDaemonMethod>(
     method: TMethod,

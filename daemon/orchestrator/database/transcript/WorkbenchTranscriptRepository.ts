@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic settlement, provider reconciliation, and bounded reads. Keywords: transcript, repository, provider, reconciliation, transaction.
+ * - default WorkbenchTranscriptRepository: own atomic settlement, cumulative usage facts, provider reconciliation, and bounded reads. Keywords: transcript, repository, usage, provider, transaction.
  * Local helpers: classify timestamps, provider projection items, enrichment, and one transaction-local canonical item index. Keywords: transcript, item, timeline, projection, index.
  */
 import type Database from "better-sqlite3";
+import { usageTables } from "workbench-shared/workbench/database/schema/usage-schema";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import {
@@ -689,6 +690,52 @@ export default class WorkbenchTranscriptRepository {
       if (!insideCanonicalWindow) this.#materializeTurn(observation.threadId, observation.turnId);
       return observation.threadId;
     }
+    if (observation.kind === "turnUsageContext") {
+      this.#requiredTurn(observation.threadId, observation.turnId);
+      this.#run(upsertRow(usageTables.threadTurnUsage, {
+        turn_id: observation.turnId,
+        model: observation.model,
+        service_tier: observation.serviceTier,
+        cumulative_input_tokens: null,
+        cumulative_cached_input_tokens: null,
+        cumulative_cache_write_input_tokens: null,
+        cumulative_output_tokens: null,
+        cumulative_reasoning_output_tokens: null,
+        cumulative_total_tokens: null,
+        usage_data_version: null,
+        context_observed_at: observation.observedAt,
+        usage_observed_at: null,
+      }, {
+        conflictColumns: ["turn_id"],
+        updateColumns: ["model", "service_tier", "context_observed_at"],
+      }));
+      return observation.threadId;
+    }
+    if (observation.kind === "turnTokenUsage") {
+      this.#requiredTurn(observation.threadId, observation.turnId);
+      this.#run(upsertRow(usageTables.threadTurnUsage, {
+        turn_id: observation.turnId,
+        model: null,
+        service_tier: null,
+        cumulative_input_tokens: observation.cumulative.inputTokens,
+        cumulative_cached_input_tokens: observation.cumulative.cachedInputTokens,
+        cumulative_cache_write_input_tokens: observation.cumulative.cacheWriteInputTokens,
+        cumulative_output_tokens: observation.cumulative.outputTokens,
+        cumulative_reasoning_output_tokens: observation.cumulative.reasoningOutputTokens,
+        cumulative_total_tokens: observation.cumulative.totalTokens,
+        usage_data_version: observation.usageDataVersion,
+        context_observed_at: null,
+        usage_observed_at: observation.observedAt,
+      }, {
+        conflictColumns: ["turn_id"],
+        updateColumns: [
+          "cumulative_input_tokens", "cumulative_cached_input_tokens", "cumulative_cache_write_input_tokens",
+          "cumulative_output_tokens", "cumulative_reasoning_output_tokens", "cumulative_total_tokens",
+          "usage_data_version", "usage_observed_at",
+        ],
+      }));
+      return observation.threadId;
+    }
     if (observation.kind === "item") {
       this.#writeItem({
         createTransform: (itemId, sourceRevision) => transformWorkbenchTranscriptItem({
@@ -1190,9 +1237,10 @@ export default class WorkbenchTranscriptRepository {
     return thread;
   }
 
-  #requiredTurn(turnId: string) {
+  #requiredTurn(threadId: string, turnId: string) {
     const turn = this.#one(selectRows(coreTables.threadTurns, { where: { id: turnId } }));
     if (!turn) throw new Error(`Unknown Workbench transcript turn: ${turnId}`);
+    if (turn.thread_id !== threadId) throw new Error(`Transcript turn ${turnId} belongs to another Workbench thread`);
     return turn;
   }
 

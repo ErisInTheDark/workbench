@@ -40,6 +40,12 @@ function createAdapter(id: WorkbenchHarness, calls: string[] = []): WorkbenchHar
       }),
     } as WorkbenchHarnessAdapter["recovery"],
     serverMethods: id === "codex" ? ["thread/read", "codex/only"] : ["thread/read"],
+    ...(id === "codex" ? {
+      usageHydration: async ({ threadId }) => {
+        calls.push(`usage:${id}:${threadId}`);
+        return { state: "completed" as const };
+      },
+    } : {}),
   };
 }
 
@@ -116,4 +122,17 @@ test("database admission gates only newly started turns", async () => {
     "database:admit",
     "database:admit",
   ]);
+});
+
+test("usage hydration dispatches only to adapters that own it", async () => {
+  const calls: string[] = [];
+  const controller = createController(calls);
+  assert.deepEqual(controller.listUsageHydrationHarnesses(), ["codex"]);
+  assert.deepEqual(await controller.hydrateUsage({
+    harness: "codex", kind: "usage", projectId: "project", threadId: "thread",
+  }), { state: "completed" });
+  await assert.rejects(controller.hydrateUsage({
+    harness: "copilot", kind: "usage", projectId: "project", threadId: "thread",
+  }), /unavailable for copilot/u);
+  assert.deepEqual(calls, ["usage:codex:thread"]);
 });

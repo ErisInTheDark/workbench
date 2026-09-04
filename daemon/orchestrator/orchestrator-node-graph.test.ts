@@ -70,6 +70,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
   assert.deepEqual([...parents.get("server:opencode")!].sort(), ["harness:opencode", "server:core", "server:turns"]);
   assert.deepEqual([...parents.get("server:browse")!], ["server:core"]);
   assert.deepEqual([...parents.get("server:websocket")!].sort(), ["server:core", "server:database", "server:turns"]);
+  assert.equal(nodes.get("server:websocket")!.requires.includes("stats"), true);
   assert.equal(parents.has("harness:codex"), false);
   assert.equal(parents.has("harness:opencode"), false);
   assert.deepEqual({
@@ -125,12 +126,15 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
 
   assert.deepEqual(owners("daemon/orchestrator/WorkbenchCoreNode.ts"), ["server:core", "server:topology"]);
   assert.equal(descriptors.get("server:core")!.paths.includes("daemon/orchestrator/WorkbenchGitArcFeature.ts"), true);
+  assert.equal(descriptors.get("server:core")!.paths.includes("daemon/orchestrator/stats/WorkbenchStatsController.ts"), true);
   assert.equal(descriptors.get("server:commands")!.paths.includes("daemon/orchestrator/WorkbenchAgentCommandController.ts"), true);
   assert.deepEqual(owners("daemon/orchestrator/WorkbenchCodexInstructionAdapter.ts"), ["server:codex/instructions"]);
   assert.deepEqual(
     owners("daemon/orchestrator/database/transcript/WorkbenchTranscriptRepository.ts"),
     ["server:database"],
   );
+  assert.deepEqual(owners("daemon/orchestrator/database/stats/WorkbenchStatsRepository.ts"), ["server:database"]);
+  assert.deepEqual(owners("shared/workbench/stats/workbench-stats-contract.ts"), ["server:core"]);
   assert.deepEqual(
     owners("daemon/lib/workbench/database/schema/codex-sandbox-network-schema.ts"),
     ["server:database"],

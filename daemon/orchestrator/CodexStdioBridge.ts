@@ -72,6 +72,8 @@ import {
   createCodexTranscriptProviderThreadObservations,
   createCodexTranscriptProviderTurnScopeObservation,
   createCodexTranscriptProviderTurnObservation,
+  createCodexTurnTokenUsageObservationFromNotification,
+  createCodexTurnUsageContextObservation,
   type CodexTranscriptProviderContext,
 } from "./codex-transcript-provider-observations.ts";
 import {
@@ -1203,6 +1205,9 @@ export default class CodexStdioBridge {
     if (message.method === "workbench/transcript/materialize") {
       return await this.handleTranscriptMaterializeRequest(message);
     }
+    if (message.method === "workbench/stats/usage/hydrate") {
+      return await this.handleStatsUsageHydrateRequest(message);
+    }
     if (message.method === "thread/context/read") {
       return await this.handleThreadContextReadRequest(message);
     }
@@ -1404,6 +1409,40 @@ export default class CodexStdioBridge {
           code: -32000,
           message: error instanceof Error ? error.message : "Workbench transcript materialisation failed.",
         },
+      };
+    }
+  }
+
+  private async handleStatsUsageHydrateRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const requestId = message.id ?? null;
+    try {
+      this.assertAcceptingWork();
+      const threadId = asString(asRecord(message.params)?.threadId)?.trim() ?? "";
+      if (!threadId) throw new Error("Stats usage hydration requires a thread id.");
+      await this.transcriptQueue;
+      const transcriptStore = this.ensureTranscriptStore();
+      const thread = await transcriptStore.readStoredThreadSnapshot(threadId);
+      if (!thread) return { id: requestId, result: { state: "unavailable" } };
+      await this.importSqliteCompatibilityWindow(thread, transcriptStore);
+      const events = await transcriptStore.readStoredTurnUsageEvents(threadId);
+      if (events === null) return { id: requestId, result: { state: "unavailable" } };
+      const observations = events.flatMap((event) => {
+        const observation = createCodexTurnTokenUsageObservationFromNotification(
+          event.payload as JsonRpcNotification,
+          event.receivedAt,
+        );
+        if (!observation) return [];
+        if (observation.threadId !== threadId) {
+          throw new Error(`Stats usage hydration changed thread owner from ${threadId} to ${observation.threadId}.`);
+        }
+        return [observation];
+      });
+      await this.transcriptRecording.importCompatibilityWindow(async () => observations);
+      return { id: requestId, result: { state: "completed" } };
+    } catch (error) {
+      return {
+        id: requestId,
+        error: { code: -32000, message: error instanceof Error ? error.message : "Stats usage hydration failed." },
       };
     }
   }
@@ -3124,10 +3163,20 @@ export default class CodexStdioBridge {
       return [];
     }
     if (request.method === "turn/start") {
-      const threadId = asString(asRecord(request.params)?.threadId)?.trim();
+      const params = asRecord(request.params);
+      const threadId = asString(params?.threadId)?.trim();
       const turn = asRecord(response.result)?.turn as Turn | undefined;
       if (!threadId || !turn?.id) return [];
-      return this.createSqliteProviderStartedTurnObservations(threadId, turn);
+      return [
+        ...await this.createSqliteProviderStartedTurnObservations(threadId, turn),
+        createCodexTurnUsageContextObservation({
+          model: asString(params?.model)?.trim() || null,
+          observedAt: Date.now(),
+          serviceTier: asString(params?.serviceTier)?.trim() || null,
+          threadId,
+          turnId: turn.id,
+        }),
+      ];
     }
     if (!["thread/fork", "thread/read", "thread/resume", "thread/start"].includes(request.method ?? "")) {
       return [];
@@ -3152,6 +3201,10 @@ export default class CodexStdioBridge {
       if (!thread?.id) return [];
       const context = await this.resolveTranscriptThreadContext(thread);
       return createCodexTranscriptProviderThreadObservations(thread, context);
+    }
+    if (notification.method === "thread/tokenUsage/updated") {
+      const observation = createCodexTurnTokenUsageObservationFromNotification(notification, Date.now());
+      return observation ? [observation] : [];
     }
     if (!["turn/started", "turn/completed", "item/started", "item/completed"].includes(notification.method ?? "")) {
       return [];

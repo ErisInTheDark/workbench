@@ -4,6 +4,7 @@
  */
 import type { WorkbenchHarness } from "../types.ts";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/orchestrator-reload.ts";
+import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "../workbench/stats/workbench-stats-contract.ts";
 import { workbenchTranscriptNotifications } from "../workbench/database/transcript/workbench-transcript-contract.ts";
 import {
   WORKBENCH_EVENT_STREAM_ACK_METHOD,
@@ -39,7 +40,8 @@ type WorkbenchNotification = {
     | "workbench/thread-state/updated"
     | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
     | typeof workbenchTranscriptNotifications.capabilities.method
-    | typeof workbenchTranscriptNotifications.updated.method;
+    | typeof workbenchTranscriptNotifications.updated.method
+    | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
   params: unknown;
 };
 type Timer = ReturnType<typeof setTimeout>;
@@ -289,7 +291,8 @@ export class CodexAppServerClient {
       || workbenchMessage.method === "workbench/thread-state/reset"
       || workbenchMessage.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
       || workbenchMessage.method === workbenchTranscriptNotifications.capabilities.method
-      || workbenchMessage.method === workbenchTranscriptNotifications.updated.method) {
+      || workbenchMessage.method === workbenchTranscriptNotifications.updated.method
+      || workbenchMessage.method === WORKBENCH_STATS_IMPORT_UPDATED_METHOD) {
       for (const listener of this.workbenchNotificationListeners) listener(parsed as unknown as WorkbenchNotification);
       return;
     }

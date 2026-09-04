@@ -6,6 +6,8 @@ import {
   createHomeThreadHref,
   createPinnedThreadHref,
   createProjectHref,
+  createStatsHref,
+  createStatsRoute,
   createThreadHref,
   getWorkbenchDraftIdFromThreadId,
   getWorkbenchMosaicThreadRootIds,
@@ -14,6 +16,14 @@ import {
   parseWorkbenchRouteFromPath,
 } from "./workbench-route.ts";
 import { createWorkbenchMosaicSplit, createWorkbenchMosaicTarget, parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route.ts";
+
+test("stats routes round-trip globally and per project", () => {
+  assert.equal(createStatsHref(""), "/@/stats");
+  assert.equal(createStatsHref("project/path"), "/project/path/@/stats");
+  assert.deepEqual(parseWorkbenchRouteFromPath("/@/stats"), createStatsRoute(""));
+  assert.deepEqual(parseWorkbenchRouteFromPath("/project/path/@/stats"), createStatsRoute("project/path"));
+  assert.equal(parseWorkbenchRouteFromPath("/@/stats/nope").view, "invalid");
+});
 
 test("/@/ is the canonical projectless home route and root remains an alias", () => {
   assert.equal(createHomeHref(), "/@/");

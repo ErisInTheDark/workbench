@@ -319,6 +319,8 @@ export async function WorkbenchClient(
     publishAcceptedIntent: (event) => coordinateAcceptedIntent(event),
   });
   const daemon = new WorkbenchDaemonClient({
+    onNotification: (listener) => threadClient.onWorkbenchNotification(listener),
+    onReconnect: (listener) => threadClient.onReconnect(listener),
     request: async (method, params) => await threadClient.requestWorkbench(method, params),
   });
   const orchestratorRuntime = new WorkbenchOrchestratorRuntimeClient({
