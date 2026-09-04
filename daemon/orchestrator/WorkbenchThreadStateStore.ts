@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchThreadStateGlobalDocumentId/WorkbenchThreadStatePersistence/WorkbenchThreadStateStoreDatabase: typed thread-state document and database ports. Keywords: thread state, sqlite, storage, boundary.
+ * - WorkbenchThreadStateGlobalDocumentId/WorkbenchThreadStatePersistence/WorkbenchThreadStateStoreDatabase/WorkbenchThreadStateShadowNotifier: typed thread-state document, database, and shadow ports. Keywords: thread state, sqlite, storage, boundary.
  * - default WorkbenchThreadStateStore: persist project and Workbench-wide thread-state documents through the shared database worker. Keywords: thread state, sqlite, store, aggregate.
  */
 import { selectRows, upsertRow, type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
@@ -20,6 +20,11 @@ export interface WorkbenchThreadStatePersistence {
 export interface WorkbenchThreadStateStoreDatabase {
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult>;
   query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Promise<Row[]>;
+}
+
+export interface WorkbenchThreadStateShadowNotifier {
+  markGlobal(id: WorkbenchThreadStateGlobalDocumentId): void;
+  markProject(projectId: string): void;
 }
 
 function sanitizeIdentity(identity: string) {
@@ -44,6 +49,7 @@ export default class WorkbenchThreadStateStore implements WorkbenchThreadStatePe
   constructor(
     private readonly database: WorkbenchThreadStateStoreDatabase,
     private readonly now: () => number = Date.now,
+    private readonly shadow?: WorkbenchThreadStateShadowNotifier,
   ) {}
 
   async readProject(projectId: string): Promise<unknown | null> {
@@ -64,6 +70,7 @@ export default class WorkbenchThreadStateStore implements WorkbenchThreadStatePe
         updateColumns: ["document_json", "updated_at"],
       }),
     ]);
+    this.shadow?.markProject(projectId);
   }
 
   async readGlobal(id: WorkbenchThreadStateGlobalDocumentId): Promise<unknown | null> {
@@ -84,5 +91,6 @@ export default class WorkbenchThreadStateStore implements WorkbenchThreadStatePe
         updateColumns: ["document_json", "updated_at"],
       }),
     ]);
+    this.shadow?.markGlobal(id);
   }
 }

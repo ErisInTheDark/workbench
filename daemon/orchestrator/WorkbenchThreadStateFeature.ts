@@ -16,7 +16,10 @@ import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse 
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchThreadGitArcSnapshot, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
-import WorkbenchThreadStateStore, { type WorkbenchThreadStateStoreDatabase } from "./WorkbenchThreadStateStore";
+import WorkbenchThreadStateStore, {
+  type WorkbenchThreadStateShadowNotifier,
+  type WorkbenchThreadStateStoreDatabase,
+} from "./WorkbenchThreadStateStore";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { WorkbenchGitArcLifecycleState as GitArcLifecycleState, WorkbenchGitArcPlanState as GitArcPlanState } from "./WorkbenchGitArcFeature";
 
@@ -71,6 +74,7 @@ export interface WorkbenchThreadStateFeatureContext {
   publish(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
   resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
+  shadow?: WorkbenchThreadStateShadowNotifier;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
     & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read">>;
 }
@@ -256,7 +260,7 @@ export default class WorkbenchThreadStateFeature {
         const read = context.transitions.read ?? context.transitions.run;
         return await read.call(context.transitions, project.rootPath, operation);
       },
-      threadStateStore: new WorkbenchThreadStateStore(context.database),
+      threadStateStore: new WorkbenchThreadStateStore(context.database, Date.now, context.shadow),
     });
   }
 

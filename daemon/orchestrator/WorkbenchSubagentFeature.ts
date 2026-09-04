@@ -10,12 +10,14 @@ import type { JsonRpcRequest } from "./bridge-types";
 import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
+import type WorkbenchThreadStateShadowController from "./WorkbenchThreadStateShadowController";
 
 export interface WorkbenchSubagentFeatureContext {
   bridgeUrl: string;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
   profileStore: WorkbenchComposerProfileStore;
   resolveProjectFromCwd(cwd: string | null | undefined, options?: { endpointName?: string }): Promise<AgentEndpointProjectResolution>;
+  shadow: Pick<WorkbenchThreadStateShadowController, "replaceRelationships">;
   storageRoot: string;
   threadState: {
     getEntry(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadSidebarEntry | null>;
@@ -29,7 +31,7 @@ export default class WorkbenchSubagentFeature {
   private readonly store: WorkbenchSubagentStore;
 
   constructor(context: WorkbenchSubagentFeatureContext) {
-    this.store = new WorkbenchSubagentStore(context.storageRoot);
+    this.store = new WorkbenchSubagentStore(context.storageRoot, { shadow: context.shadow });
     this.controller = new WorkbenchSubagentController({
       bridgeUrl: context.bridgeUrl,
       onRelationshipCommitted: context.onRelationshipCommitted,

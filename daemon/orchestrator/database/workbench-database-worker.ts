@@ -12,11 +12,13 @@ import {
   type WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository.ts";
+import WorkbenchThreadStateRelationalRepository from "./thread-state/WorkbenchThreadStateRelationalRepository.ts";
 
 if (!parentPort) throw new Error("Workbench database worker requires a parent port");
 
 let database: Database.Database | null = null;
 let transcriptRepository: WorkbenchTranscriptRepository | null = null;
+let threadStateShadowRepository: WorkbenchThreadStateRelationalRepository | null = null;
 
 function boundedError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -51,6 +53,7 @@ function post(response: WorkbenchDatabaseResponse) {
 
 function closeDatabase() {
   transcriptRepository = null;
+  threadStateShadowRepository = null;
   const activeDatabase = database;
   database = null;
   if (!activeDatabase) return null;
@@ -114,6 +117,33 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({ id: request.id, type: "queryResult", rows });
     return;
   }
+  if (request.type === "rebuildThreadStateShadow") {
+    if (!threadStateShadowRepository) throw new Error("Workbench thread-state shadow repository is not initialized");
+    post({
+      id: request.id,
+      type: "threadStateShadowStatus",
+      status: threadStateShadowRepository.rebuild(request.request),
+    });
+    return;
+  }
+  if (request.type === "readThreadStateShadowStatus") {
+    if (!threadStateShadowRepository) throw new Error("Workbench thread-state shadow repository is not initialized");
+    post({
+      id: request.id,
+      type: "threadStateShadowStatus",
+      status: threadStateShadowRepository.readStatus(),
+    });
+    return;
+  }
+  if (request.type === "recordThreadStateShadowFailure") {
+    if (!threadStateShadowRepository) throw new Error("Workbench thread-state shadow repository is not initialized");
+    post({
+      id: request.id,
+      type: "threadStateShadowStatus",
+      status: threadStateShadowRepository.recordFailure(new Error("projection failed"), request.request),
+    });
+    return;
+  }
   if (request.type === "settleTranscript") {
     if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
     post({
@@ -144,6 +174,7 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   if (!database) throw new Error("Workbench database is not initialized");
   database.close();
   transcriptRepository = null;
+  threadStateShadowRepository = null;
   database = null;
   post({ id: request.id, type: "closed" });
   parentPort!.close();
@@ -159,6 +190,7 @@ parentPort.on("message", (request: WorkbenchDatabaseRequest) => {
       installWorkbenchDatabaseSchema(database);
       proveReadWrite();
       transcriptRepository = new WorkbenchTranscriptRepository(database);
+      threadStateShadowRepository = new WorkbenchThreadStateRelationalRepository(database);
       post({ id: request.id, type: "ready", inventory: inventory() });
     } catch (error) {
       postFatalFailure(request, error, "Workbench database initialization failed.");

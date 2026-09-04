@@ -157,3 +157,27 @@ test("fresh wrappers serialize one parent and persist unique direct-child indexe
   assert.deepEqual(new Set(diskRecords.map(({ threadId }) => threadId)), new Set(["child-a", "child-b"]));
   assert.deepEqual(diskRecords.map(({ directSubagentIndex }) => directSubagentIndex).sort((left, right) => left - right), [0, 1]);
 });
+
+test("successful relationship writes publish complete shadow snapshots", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-subagent-store-shadow-"));
+  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
+  const snapshots: WorkbenchSubagentRelationship[][] = [];
+  const store = new WorkbenchSubagentStore(root, {
+    shadow: {
+      replaceRelationships: (relationships) => snapshots.push([...relationships]),
+    },
+    state: createWorkbenchSubagentStoreState(),
+  });
+
+  await store.initialize();
+  const reserved = await store.reserve(summary("parent", "pending:child"));
+  await store.replace("parent", "pending:child", { ...reserved, threadId: "child", updatedAt: 2 });
+  await store.remove("parent", "child");
+
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.map(({ threadId }) => threadId)), [
+    [],
+    ["pending:child"],
+    ["child"],
+    [],
+  ]);
+});

@@ -23,6 +23,7 @@ import type {
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,
 } from "./transcript/workbench-transcript-types";
+import type { WorkbenchThreadStateShadowRefresh } from "./thread-state/workbench-thread-state-shadow-types";
 
 export interface WorkbenchDatabaseControllerOptions {
   databasePath: string;
@@ -54,7 +55,10 @@ export default class WorkbenchDatabaseController {
   constructor({ databasePath, workerUrl = new URL("./workbench-database-worker.ts", import.meta.url) }: WorkbenchDatabaseControllerOptions) {
     this.#databasePath = databasePath;
     const moduleWarning = "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON";
-    const execArgv = process.execArgv.includes(moduleWarning) ? process.execArgv : [...process.execArgv, moduleWarning];
+    const transformTypes = "--experimental-transform-types";
+    const execArgv = [...process.execArgv];
+    if (!execArgv.includes(moduleWarning)) execArgv.push(moduleWarning);
+    if (!execArgv.includes(transformTypes)) execArgv.push(transformTypes);
     this.#worker = new Worker(workerUrl, { execArgv });
     this.#worker.on("message", (response: WorkbenchDatabaseResponse) => this.#settle(response));
     this.#worker.on("error", (error) => this.#fail(error));
@@ -114,6 +118,33 @@ export default class WorkbenchDatabaseController {
       throw new WorkbenchDatabaseFailure(`Unexpected database query response: ${response.type}`);
     }
     return response.rows as Row[];
+  }
+
+  async rebuildThreadStateShadow(request: WorkbenchThreadStateShadowRefresh) {
+    await this.start();
+    const response = await this.#request({ type: "rebuildThreadStateShadow", request });
+    if (response.type !== "threadStateShadowStatus" || !response.status) {
+      throw new WorkbenchDatabaseFailure(`Unexpected thread-state shadow rebuild response: ${response.type}`);
+    }
+    return response.status;
+  }
+
+  async readThreadStateShadowStatus() {
+    await this.start();
+    const response = await this.#request({ type: "readThreadStateShadowStatus" });
+    if (response.type !== "threadStateShadowStatus") {
+      throw new WorkbenchDatabaseFailure(`Unexpected thread-state shadow status response: ${response.type}`);
+    }
+    return response.status;
+  }
+
+  async recordThreadStateShadowFailure(request: WorkbenchThreadStateShadowRefresh) {
+    await this.start();
+    const response = await this.#request({ type: "recordThreadStateShadowFailure", request });
+    if (response.type !== "threadStateShadowStatus" || !response.status) {
+      throw new WorkbenchDatabaseFailure(`Unexpected thread-state shadow failure response: ${response.type}`);
+    }
+    return response.status;
   }
 
   async settleTranscript(observations: readonly WorkbenchTranscriptObservation[]) {

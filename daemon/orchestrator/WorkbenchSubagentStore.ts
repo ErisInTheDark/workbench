@@ -33,6 +33,10 @@ interface SubagentCursor {
   version: 2;
 }
 
+interface WorkbenchSubagentShadowNotifier {
+  replaceRelationships(relationships: readonly WorkbenchSubagentRelationship[]): void;
+}
+
 const DEFAULT_PAGE_LIMIT = 20;
 const MAX_PAGE_LIMIT = 20;
 const LOAD_CONCURRENCY = 8;
@@ -151,15 +155,21 @@ export default class WorkbenchSubagentStore {
   private readonly jsonStore: AtomicJsonStore;
   private readonly legacyPath: string;
   private readonly state: WorkbenchSubagentStoreState;
+  private readonly shadow?: WorkbenchSubagentShadowNotifier;
 
   constructor(
     storageRoot: string,
-    options: { jsonStore?: AtomicJsonStore; state?: WorkbenchSubagentStoreState } = {},
+    options: {
+      jsonStore?: AtomicJsonStore;
+      shadow?: WorkbenchSubagentShadowNotifier;
+      state?: WorkbenchSubagentStoreState;
+    } = {},
   ) {
     const runtimePath = path.join(storageRoot, ".workbench", "runtime");
     this.directoryPath = path.join(runtimePath, "subagents");
     this.legacyPath = path.join(runtimePath, "subagents.json");
     this.jsonStore = options.jsonStore ?? new AtomicJsonStore();
+    this.shadow = options.shadow;
     this.state = options.state ?? getProcessWorkbenchSubagentStoreState(storageRoot);
   }
 
@@ -278,7 +288,7 @@ export default class WorkbenchSubagentStore {
       }
     });
     await this.migrateLegacyStore();
-
+    this.publishShadowRelationships();
   }
 
   private async migrateLegacyStore() {
@@ -377,5 +387,17 @@ export default class WorkbenchSubagentStore {
       schemaVersion: 4,
       subagents: {},
     }, () => stored);
+    this.publishShadowRelationships();
+  }
+
+  private publishShadowRelationships() {
+    const relationships = Array.from(this.state.parents.values())
+      .flatMap((records) => Array.from(records.values()))
+      .sort((left, right) => (
+        left.projectId.localeCompare(right.projectId)
+        || left.harness.localeCompare(right.harness)
+        || left.threadId.localeCompare(right.threadId)
+      ));
+    this.shadow?.replaceRelationships(relationships);
   }
 }

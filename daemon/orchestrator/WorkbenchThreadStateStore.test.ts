@@ -79,3 +79,27 @@ test("thread-state tables reject malformed JSON and unknown global document ids"
     await rm(directory, { force: true, recursive: true });
   }
 });
+
+test("authoritative document commits precede shadow dirt notifications", async () => {
+  const events: string[] = [];
+  const database = {
+    executeTransaction: async () => {
+      events.push("authority");
+      return { changes: 1 };
+    },
+    query: async () => [],
+  };
+  const store = new WorkbenchThreadStateStore(database, () => 10, {
+    markGlobal: (id) => events.push(`shadow:global:${id}`),
+    markProject: (projectId) => events.push(`shadow:project:${projectId}`),
+  });
+
+  await store.writeProject("project", {});
+  await store.writeGlobal("pinnedLayout", {});
+  assert.deepEqual(events, [
+    "authority",
+    "shadow:project:project",
+    "authority",
+    "shadow:global:pinnedLayout",
+  ]);
+});

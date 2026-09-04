@@ -131,6 +131,7 @@ test("provider lifecycle notification mapping is exact and bounded", () => {
 test("provider notification observation returns the persisted lifecycle result", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-observation-result-"));
   const database = createThreadStateDatabase();
+  const shadowProjects: string[] = [];
   const feature = new WorkbenchThreadStateFeature({
     database,
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
@@ -145,6 +146,10 @@ test("provider notification observation returns the persisted lifecycle result",
     publish: () => undefined,
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
+    shadow: {
+      markGlobal: () => undefined,
+      markProject: (projectId) => shadowProjects.push(projectId),
+    },
     transitions: { run: async (_key, operation) => await operation() },
   });
   await feature.controller.ensureProviderEntry("project", {
@@ -164,7 +169,9 @@ test("provider notification observation returns the persisted lifecycle result",
     lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
     threadId: "thread",
   });
-  assert.equal(database.operations.includes("upsert:workbench_thread_state_projects"), true);
+  const projectWrites = database.operations.filter((operation) => operation === "upsert:workbench_thread_state_projects");
+  assert.equal(projectWrites.length > 0, true);
+  assert.deepEqual(shadowProjects, projectWrites.map(() => "project"));
 
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });

@@ -25,6 +25,10 @@ import type {
   WorkbenchTranscriptRecordingContext,
 } from "./database/transcript/workbench-transcript-types";
 import type { WorkbenchDatabaseMutationResult } from "./database/workbench-database-protocol";
+import type {
+  WorkbenchThreadStateShadowRefresh,
+  WorkbenchThreadStateShadowStatus,
+} from "./database/thread-state/workbench-thread-state-shadow-types";
 import type BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import type CodexAppServer from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
@@ -96,6 +100,9 @@ export interface OrchestratorDatabaseRegistration {
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult>;
   readonly failure: Error | null;
   query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Promise<Row[]>;
+  rebuildThreadStateShadow(request: WorkbenchThreadStateShadowRefresh): Promise<WorkbenchThreadStateShadowStatus>;
+  readThreadStateShadowStatus(): Promise<WorkbenchThreadStateShadowStatus | null>;
+  recordThreadStateShadowFailure(request: WorkbenchThreadStateShadowRefresh): Promise<WorkbenchThreadStateShadowStatus>;
   start(): Promise<object>;
   readonly state: "starting" | "ready" | "failed" | "closed";
 }

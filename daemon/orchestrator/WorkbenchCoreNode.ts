@@ -43,6 +43,7 @@ import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSe
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
+import WorkbenchThreadStateShadowController from "./WorkbenchThreadStateShadowController";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
@@ -137,6 +138,18 @@ function createWorkbenchCoreFeature(
     admitTurnStart: () => database.assertReady(),
   });
   const profileStore = new WorkbenchComposerProfileStore(context.legacyMigrationProjectRoot);
+  const logThreadStateWarning = (message: string) => {
+    transcriptShadowLog.write({
+      event: "thread-state",
+      fields: { message: message.slice(0, 500) },
+      level: "warning",
+      source: "thread-state-ws",
+    });
+  };
+  const threadStateShadow = new WorkbenchThreadStateShadowController({
+    database,
+    log: logThreadStateWarning,
+  });
   const gitArc = new WorkbenchGitArcFeature({
     getThreadCreatedAt: async (projectId, _harness, threadId) => {
       const snapshot = await transcript.read({ threadId, turnLimit: 1 });
@@ -180,6 +193,7 @@ function createWorkbenchCoreFeature(
     onRelationshipCommitted: context.installSubagentRelationship,
     resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     profileStore,
+    shadow: threadStateShadow,
     storageRoot: context.legacyMigrationProjectRoot,
     threadState: {
       getEntry: async (projectId, harness, threadId) => {
@@ -199,19 +213,13 @@ function createWorkbenchCoreFeature(
     gitArcs: gitArc,
     harnesses,
     listSubagents: (projectId) => subagents.listRelationships(projectId),
-    log: (message) => {
-      transcriptShadowLog.write({
-        event: "thread-state",
-        fields: { message: message.slice(0, 500) },
-        level: "warning",
-        source: "thread-state-ws",
-      });
-    },
+    log: logThreadStateWarning,
     projectState: projectSnapshot,
     reloadDirt,
     publish: (connectionId, snapshot) => { if (lease.isCurrent()) context.publishThreadState(connectionId, snapshot); },
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
+    shadow: threadStateShadow,
     transitions: worktreeGitTransitions,
   });
   const { allowedProjectIds, capability } = readLegacyMigrationSourceConfig(context.legacyMigrationProjectRoot);
@@ -254,6 +262,8 @@ function createWorkbenchCoreFeature(
       gitArc.dispose();
       reportPhase("thread-state disposal");
       await threadState.dispose();
+      reportPhase("thread-state shadow disposal");
+      await threadStateShadow.dispose();
       reportPhase("project snapshot disposal");
       projectSnapshot.dispose();
       reportPhase("project catalog disposal");
@@ -298,6 +308,7 @@ function createWorkbenchCoreFeature(
     start: async () => {
       await projectCatalog.ensureLoaded();
       await subagents.start();
+      void threadStateShadow.start();
       browseSessionCleanup.start();
     },
   });
@@ -337,6 +348,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchThreadStateFeature.ts",
     "daemon/orchestrator/WorkbenchThreadStateController.ts",
     "daemon/orchestrator/WorkbenchThreadStateStore.ts",
+    "daemon/orchestrator/WorkbenchThreadStateShadowController.ts",
     "daemon/orchestrator/BrowseSessionCleanupSupervisor.ts",
     "daemon/orchestrator/CodexHealthMonitor.ts",
     "daemon/lib/project.ts",

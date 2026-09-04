@@ -13,6 +13,7 @@ import WorkbenchDatabaseController, { WorkbenchDatabaseRequestFailure } from "./
 import {
   coreTables,
   installWorkbenchDatabaseSchema,
+  threadStateTables,
   WORKBENCH_DATABASE_SCHEMA_VERSION,
   WORKBENCH_DATABASE_TABLE_NAMES,
 } from "./workbench-database-schema";
@@ -237,6 +238,39 @@ test("typed statement transactions preserve stable rows and roll back incomplete
       [],
     );
     assert.deepEqual((await controller.getInventory()).tableNames, [...WORKBENCH_DATABASE_TABLE_NAMES].sort());
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("shadow projection failures stay request-scoped and leave durable health", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-database-shadow-"));
+  const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
+  try {
+    const complete = await controller.rebuildThreadStateShadow({ now: 10, relationships: [] });
+    assert.equal(complete.state, "complete");
+    assert.match(complete.sourceDigest, /^[0-9a-f]{64}$/u);
+
+    await controller.executeTransaction([
+      insertRow(threadStateTables.workbenchThreadStateProjects, {
+        project_id: "project",
+        document_json: JSON.stringify({ drafts: [], newThreadProfile: null, records: [{}], version: 4 }),
+        updated_at: 11,
+      }),
+    ]);
+    await assert.rejects(
+      controller.rebuildThreadStateShadow({ now: 12, relationships: [] }),
+      (error) => error instanceof WorkbenchDatabaseRequestFailure && /recoverable identity/u.test(error.message),
+    );
+    assert.equal(controller.state, "ready");
+    assert.doesNotThrow(() => controller.assertReady());
+
+    const failed = await controller.recordThreadStateShadowFailure({ now: 13, relationships: [] });
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.sourceProjectCount, 1);
+    assert.equal(failed.errorText, "Thread-state shadow rebuild failed: projection or constraint failure.");
+    assert.deepEqual(await controller.readThreadStateShadowStatus(), failed);
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });
