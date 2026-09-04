@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic settlement, provider replacement, and bounded reads. Keywords: transcript, repository, provider, replacement, transaction.
- * Local helpers: classify timestamps, provider projection items, and one transaction-local canonical item index. Keywords: transcript, item, timeline, projection, index.
+ * - default WorkbenchTranscriptRepository: own atomic settlement, provider reconciliation, and bounded reads. Keywords: transcript, repository, provider, reconciliation, transaction.
+ * Local helpers: classify timestamps, provider projection items, enrichment, and one transaction-local canonical item index. Keywords: transcript, item, timeline, projection, index.
  */
 import type Database from "better-sqlite3";
 
@@ -246,7 +246,7 @@ export default class WorkbenchTranscriptRepository {
     index.timelineAliasesByItemId.delete(item.id);
   }
 
-  #providerReplacementProtectedItemIds(existingItems: readonly TranscriptItemRow[]) {
+  #providerReplacementEnrichedItemIds(existingItems: readonly TranscriptItemRow[]) {
     const itemIds = existingItems.map(({ id }) => id);
     const sourceIdByItemId = new Map(existingItems.map(({ id, source_id }) => [id, source_id]));
     const protectedItemIds = new Set(existingItems
@@ -365,7 +365,7 @@ export default class WorkbenchTranscriptRepository {
       }
       const existingItems = [...(index.itemsByTurnId.get(turnId)?.values() ?? [])]
         .sort((left, right) => left.item_position - right.item_position);
-      const protectedItemIds = this.#providerReplacementProtectedItemIds(existingItems);
+      const enrichedItemIds = this.#providerReplacementEnrichedItemIds(existingItems);
       const rows = this.#readRows(scope.threadId, existingItems.map(({ id }) => id));
       rows.threadItems = existingItems;
       const projection = projectWorkbenchTranscriptItems(rows);
@@ -392,7 +392,7 @@ export default class WorkbenchTranscriptRepository {
         { mergeDuplicateItems: mergeThreadItem },
       ).map((entry) => {
         const existingRoot = index.itemsBySourceId.get(entry.item.id);
-        if (!existingRoot || !protectedItemIds.has(existingRoot.id)) return entry;
+        if (!existingRoot || !enrichedItemIds.has(existingRoot.id)) return entry;
         const existingItem = projectedBySourceId.get(existingRoot.source_id);
         if (
           existingItem?.type === "userMessage"
@@ -433,7 +433,7 @@ export default class WorkbenchTranscriptRepository {
           survivingSourceIdByEvidenceId.set(alias, entry.item.id);
         }
       }
-      const protectedAfterSourceId = new Map<string | null, TranscriptItemRow[]>();
+      const preservedAfterSourceId = new Map<string | null, TranscriptItemRow[]>();
       let precedingProviderSourceId: string | null = null;
       for (const existingItem of existingItems) {
         const survivingSourceId = survivingSourceIdByEvidenceId.get(existingItem.source_id);
@@ -441,14 +441,16 @@ export default class WorkbenchTranscriptRepository {
           precedingProviderSourceId = survivingSourceId;
           continue;
         }
-        if (!protectedItemIds.has(existingItem.id) || desiredSourceIdSet.has(existingItem.source_id)) continue;
-        const protectedItems = protectedAfterSourceId.get(precedingProviderSourceId) ?? [];
-        protectedItems.push(existingItem);
-        protectedAfterSourceId.set(precedingProviderSourceId, protectedItems);
+        const preservedItems = preservedAfterSourceId.get(precedingProviderSourceId) ?? [];
+        preservedItems.push(existingItem);
+        preservedAfterSourceId.set(precedingProviderSourceId, preservedItems);
       }
 
       for (const existingItem of existingItems) {
-        if (!desiredSourceIdSet.has(existingItem.source_id) && !protectedItemIds.has(existingItem.id)) {
+        if (
+          !desiredSourceIdSet.has(existingItem.source_id)
+          && survivingSourceIdByEvidenceId.has(existingItem.source_id)
+        ) {
           this.#deleteCanonicalItem(index, existingItem);
         }
       }
@@ -458,10 +460,10 @@ export default class WorkbenchTranscriptRepository {
           kind: "provider";
           observation: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }>;
         }
-        | { item: TranscriptItemRow; kind: "protected" }
+        | { item: TranscriptItemRow; kind: "preserved" }
       > = [];
-      for (const item of protectedAfterSourceId.get(null) ?? []) {
-        finalEntries.push({ item, kind: "protected" });
+      for (const item of preservedAfterSourceId.get(null) ?? []) {
+        finalEntries.push({ item, kind: "preserved" });
       }
       for (const entry of reconciledItems) {
         const observation = incomingObservationById.get(entry.incomingItemId);
@@ -469,12 +471,13 @@ export default class WorkbenchTranscriptRepository {
           throw new Error(`Complete provider turn ${turnId} lost incoming item ${entry.incomingItemId}`);
         }
         finalEntries.push({ entry, kind: "provider", observation });
-        for (const item of protectedAfterSourceId.get(entry.item.id) ?? []) {
-          finalEntries.push({ item, kind: "protected" });
+        for (const item of preservedAfterSourceId.get(entry.item.id) ?? []) {
+          finalEntries.push({ item, kind: "preserved" });
         }
       }
       const retainedExistingItems = existingItems.filter((item) => (
-        desiredSourceIdSet.has(item.source_id) || protectedItemIds.has(item.id)
+        desiredSourceIdSet.has(item.source_id)
+        || !survivingSourceIdByEvidenceId.has(item.source_id)
       ));
       const temporaryPositionBase = Math.max(
         finalEntries.length,

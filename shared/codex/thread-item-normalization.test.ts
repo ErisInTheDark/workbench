@@ -61,7 +61,7 @@ test("optimistic and generic aliases converge only with their concrete delivery"
   );
 });
 
-test("complete provider reconciliation retains canonical narrative identities and prunes stale current items", () => {
+test("complete provider reconciliation reports positive narrative identity matches", () => {
   const current: ThreadItem[] = [
     user("msg-user", "client", "hello"),
     { id: "msg-agent", memoryCitation: null, phase: "commentary", text: "working", type: "agentMessage" },
@@ -88,6 +88,22 @@ test("complete provider reconciliation retains canonical narrative identities an
       { aliases: ["item-3"], incomingItemId: "item-3", itemId: "plan-canonical" },
       { aliases: [], incomingItemId: "new", itemId: "new" },
     ],
+  );
+});
+
+test("complete provider reconciliation reports the displaced current identity when the incoming identity wins", () => {
+  const reconciled = reconcileCompleteThreadItems(
+    [{ id: "item-1", memoryCitation: null, phase: "commentary", text: "working", type: "agentMessage" }],
+    [{ id: "msg-agent", memoryCitation: null, phase: "commentary", text: "working", type: "agentMessage" }],
+  );
+
+  assert.deepEqual(
+    reconciled.map(({ aliases, incomingItemId, item }) => ({
+      aliases,
+      incomingItemId,
+      itemId: item.id,
+    })),
+    [{ aliases: ["item-1"], incomingItemId: "msg-agent", itemId: "msg-agent" }],
   );
 });
 

@@ -403,7 +403,7 @@ export function reconcileCompleteThreadItems(
       if (currentItem && !usedCurrentItemIds.has(currentItem.id)) {
         usedCurrentItemIds.add(currentItem.id);
         const item = preferCanonicalEquivalentItem(currentItem, incomingItem);
-        emit(item, incomingItem.id, item.id === currentItem.id ? [incomingItem.id] : []);
+        emit(item, incomingItem.id, [item.id === currentItem.id ? incomingItem.id : currentItem.id]);
         continue;
       }
     }
@@ -412,7 +412,9 @@ export function reconcileCompleteThreadItems(
     if (equivalentCurrentItem) {
       usedCurrentItemIds.add(equivalentCurrentItem.id);
       const item = preferCanonicalEquivalentItem(equivalentCurrentItem, incomingItem);
-      emit(item, incomingItem.id, item.id === equivalentCurrentItem.id ? [incomingItem.id] : []);
+      emit(item, incomingItem.id, [
+        item.id === equivalentCurrentItem.id ? incomingItem.id : equivalentCurrentItem.id,
+      ]);
       continue;
     }
 

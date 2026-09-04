@@ -631,7 +631,61 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
   }
 });
 
-test("complete provider scopes prune provisional aliases while preserving Workbench-owned facts and placement", () => {
+test("provider scopes preserve directly recorded items omitted by later snapshots", () => {
+  const { database, repository } = createRepository();
+  const observedTurn = turnObservation("turn", 0);
+  const message = (
+    id: string,
+    text: string,
+    observedAt: number,
+  ): WorkbenchTranscriptAtomicObservation => ({
+    kind: "item",
+    threadId: "thread",
+    turnId: "turn",
+    lifecycle: "completed",
+    observedAt,
+    item: { id, memoryCitation: null, phase: "commentary", text, type: "agentMessage" },
+  });
+  const command = {
+    kind: "item",
+    threadId: "thread",
+    turnId: "turn",
+    lifecycle: "completed",
+    observedAt: 4,
+    item: {
+      aggregatedOutput: "done",
+      command: "echo done",
+      commandActions: [],
+      cwd: "C:/project",
+      durationMs: 1,
+      exitCode: 0,
+      id: "command",
+      pluginId: null,
+      processId: null,
+      scriptPath: null,
+      source: "agent",
+      status: "completed",
+      type: "commandExecution",
+    },
+  } satisfies WorkbenchTranscriptAtomicObservation;
+  const before = message("item-1", "before", 3);
+  const canonicalBefore = message("before", "before", 6);
+  const after = message("after", "after", 5);
+  try {
+    repository.settle([threadObservation(), observedTurn, before, command, after]);
+    repository.settle([providerTurnScope([observedTurn, canonicalBefore, after], ["turn"])]);
+
+    assert.deepEqual(
+      repository.read({ threadId: "thread", turnLimit: 1 })?.rows.threadItems
+        .map(({ source_id, item_position }) => [source_id, item_position]),
+      [["before", 0], ["command", 1], ["after", 2]],
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("complete provider scopes collapse proven aliases while preserving admitted facts and placement", () => {
   const { database, repository } = createRepository();
   const failedSteer: WorkbenchSteerHistoryEntry = {
     attemptedAt: 8,
@@ -872,7 +926,8 @@ test("complete provider scopes prune provisional aliases while preserving Workbe
         ["questionnaire", 4],
         [createSyntheticSteerHistoryItemId(failedSteer), 5],
         ["workbench-file-failure", 6],
-        ["answer", 7],
+        ["stale", 7],
+        ["answer", 8],
       ],
     );
     assert.equal(snapshot.rows.threadBrowseEntries.length, 1);
