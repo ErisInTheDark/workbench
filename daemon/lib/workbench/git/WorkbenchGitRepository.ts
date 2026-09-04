@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchGitRepository: own raw Git process, stdin pathspec transport, snapshot, path, tree, ref, worktree timestamps, index-normalized publication, and ancestry mechanics for one repository. Keywords: git, repository, pathspec, stdin, argv, large path set, snapshot, ref, mtime, index, transaction.
+ * - default WorkbenchGitRepository: own raw Git process, stdin pathspec transport, ignored-path classification and tracked traversal, snapshot, path, tree, ref, worktree timestamps, index-normalized publication, and ancestry mechanics for one repository. Keywords: git, repository, pathspec, ignore, staged deletion, tracked path, stdin, argv, large path set, snapshot, ref, mtime, index, transaction.
  * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitWorktreeSnapshot: typed Git history, ancestry, object-read, worktree-snapshot, and atomic ref-update inputs. Keywords: git, commit, paths, head, object, snapshot, ref, transaction.
  */
 import { execFile, spawn } from "node:child_process";
@@ -267,7 +267,14 @@ export default class WorkbenchGitRepository {
       process.env,
       [0, 1],
     );
-    return result.exitCode === 1 ? [] : parseNullPaths(result.stdout);
+    if (result.exitCode === 1) return [];
+    const ignoredPaths = parseNullPaths(result.stdout);
+    const stagedDeletedPaths = parseNullPaths(await this.run([
+      "diff", "--cached", "--name-only", "-z", "--diff-filter=D", "--no-renames", "--",
+    ]));
+    return ignoredPaths.filter((ignoredPath) => !stagedDeletedPaths.some((deletedPath) => (
+      deletedPath === ignoredPath || deletedPath.startsWith(`${ignoredPath}/`)
+    )));
   }
 
   literalPathspec(relativePath: string) {
@@ -509,7 +516,7 @@ export default class WorkbenchGitRepository {
       const matchedPaths = await this.listWorktreePaths(paths, env, signal);
       if (matchedPaths.length) {
         await this.runWithInput([
-          "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
+          "add", "-A", "-f", "--pathspec-from-file=-", "--pathspec-file-nul",
         ], pathspecInput(matchedPaths), env, signal);
       }
       return (await this.run(["write-tree"], env, signal)).trim();

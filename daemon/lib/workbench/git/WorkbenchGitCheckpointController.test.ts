@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; serial shared-state tests and bounded concurrent copied-repository cases cover arc ownership, recent unclaimed dirt, proposals, and publish state. Keywords: git, arc, registry, mtime, proposal, concurrency, test.
+ * - No production exports; serial shared-state tests and bounded concurrent copied-repository cases cover arc ownership, recent unclaimed dirt, proposals, staged ignored deletion acceptance, and publish state. Keywords: git, arc, registry, mtime, proposal, ignored deletion, concurrency, test.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -568,14 +568,14 @@ isolatedControllerTest("arc start reports only causal commits, sibling claims, a
   }), assertSiblingCollision);
 });
 
-isolatedControllerTest("arc adopt claims dirty workspace paths from HEAD without changing worktree or index state", async (context) => {
+isolatedControllerTest("arc adopt keeps staged ignored deletions claimable and preserves worktree and index state", async (context) => {
   const { repository, source } = await copyRepository(context, CONTROLLER_ADOPT_READY_FIXTURE);
   const controller = new WorkbenchGitCheckpointController();
   await fs.writeFile(path.join(source, "two.txt"), "modified two\n");
   await fs.rm(path.join(source, "deleted.txt"));
   await fs.writeFile(path.join(source, "untracked.txt"), "new work\n");
   await fs.writeFile(path.join(source, "staged.txt"), "staged work\n");
-  await fs.writeFile(path.join(source, ".gitignore"), "ignored/\n", "utf8");
+  await fs.writeFile(path.join(source, ".gitignore"), "ignored/\nignored-delete/\n", "utf8");
   await git(source, ["add", "staged.txt"]);
   const stagedBefore = await git(source, ["diff", "--cached", "--binary"]);
 
@@ -628,6 +628,48 @@ isolatedControllerTest("arc adopt claims dirty workspace paths from HEAD without
     paths: ["clean-missing.txt"],
     threadId: "adopt-thread",
   }), /Arc adopt paths must contain working-tree changes: clean-missing\.txt/u);
+
+  const ignoredDeletionProposal = await controller.createProposal({
+    cwd: source,
+    description: "",
+    harness: "codex",
+    threadId: "ignored-deletion-thread",
+    title: "ignore and delete tracked file",
+  });
+  const pendingIgnoredDeletion = await controller.getProposal({
+    cwd: source,
+    harness: "codex",
+    includeNewer: false,
+    proposalId: ignoredDeletionProposal.proposalId,
+    threadId: "ignored-deletion-thread",
+  });
+  assert.deepEqual(pendingIgnoredDeletion.changes.map(({ kind, path: filePath }) => ({
+    path: filePath,
+    type: kind.type,
+  })), [
+    { path: ".gitignore", type: "add" },
+    { path: "ignored-delete/environment.toml", type: "delete" },
+  ]);
+  const committedIgnoredDeletion = await controller.commitProposal({
+    cwd: source,
+    description: "",
+    harness: "codex",
+    includeNewer: false,
+    proposalId: ignoredDeletionProposal.proposalId,
+    threadId: "ignored-deletion-thread",
+    title: "ignore and delete tracked file",
+  });
+  assert.equal(committedIgnoredDeletion.status, "committed");
+  assert.deepEqual(await repository.listTreePaths("HEAD", [".gitignore", "ignored-delete"]), [".gitignore"]);
+  assert.equal(await git(source, ["status", "--short", "--", ".gitignore", "ignored-delete/environment.toml"]), "");
+  const resolvedIgnoredDeletion = await new GitArcRegistry(repository).find({
+    harness: "codex",
+    threadId: "ignored-deletion-thread",
+  });
+  assert.equal(resolvedIgnoredDeletion?.phase, "resolved");
+  assert.deepEqual(resolvedIgnoredDeletion?.claimedPaths, []);
+  assert.equal(resolvedIgnoredDeletion?.proposalId, ignoredDeletionProposal.proposalId);
+  assert.deepEqual(resolvedIgnoredDeletion?.proposalIds, [ignoredDeletionProposal.proposalId]);
 });
 
 sharedControllerTest("workspace dirt reports only recent files outside every live claim", async (context) => {

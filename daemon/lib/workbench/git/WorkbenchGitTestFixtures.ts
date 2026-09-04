@@ -643,8 +643,9 @@ export const CONTROLLER_ADOPT_READY_FIXTURE = {
   name: "controller-adopt-ready",
   prepare: async ({ repositoryRoot, runGit }) => {
     await write(repositoryRoot, "deleted.txt", "delete me\n");
+    await write(repositoryRoot, "ignored-delete/environment.toml", "ignore and delete me\n");
     await write(repositoryRoot, "staged.txt", "staged base\n");
-    await runGit(["add", "deleted.txt", "staged.txt"]);
+    await runGit(["add", "deleted.txt", "ignored-delete/environment.toml", "staged.txt"]);
     await runGit(["commit", "--quiet", "-m", "add adoption fixtures"]);
     const controller = new WorkbenchGitCheckpointController();
     const plan = await controller.createPlan({
@@ -660,9 +661,27 @@ export const CONTROLLER_ADOPT_READY_FIXTURE = {
       harness: "codex",
       threadId: "adopt-thread",
     });
+    await fs.rm(path.join(repositoryRoot, "ignored-delete", "environment.toml"));
+    await runGit(["add", "-u", "--", "ignored-delete/environment.toml"]);
+    await write(repositoryRoot, ".gitignore", "ignored/\nignored-delete/\n");
+    await runGit(["add", "--", ".gitignore"]);
+    const ignoredDeletionPlan = await controller.createPlan({
+      adoptPaths: [".gitignore", "ignored-delete/environment.toml"],
+      cwd: repositoryRoot,
+      harness: "codex",
+      intentName: "ignore and delete tracked file",
+      paths: [".gitignore", "ignored-delete/environment.toml"],
+      threadId: "ignored-deletion-thread",
+    });
+    await controller.startArc({
+      checkpointCommit: ignoredDeletionPlan.checkpointCommit,
+      cwd: repositoryRoot,
+      harness: "codex",
+      threadId: "ignored-deletion-thread",
+    });
     return { planCheckpoint: plan.checkpointCommit };
   },
-  revision: 1,
+  revision: 3,
 } satisfies GitTestFixtureSpec<{ planCheckpoint: string }>;
 
 export const CONTROLLER_FAILED_ADOPT_READY_FIXTURE = {
