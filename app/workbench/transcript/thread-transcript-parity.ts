@@ -450,7 +450,6 @@ function turnEntriesFromJson(thread: ThreadPayload): ComparedEntry[] {
     payload: {
       completedAt: turn.completedAt,
       durationMs: turn.durationMs,
-      itemsView: turn.itemsView,
       startedAt: turn.startedAt,
       status: turn.status,
     },
@@ -467,7 +466,6 @@ function turnEntriesFromProjection(projection: WorkbenchTranscriptProjection): C
     payload: {
       completedAt: turn.completedAt,
       durationMs: turn.durationMs,
-      itemsView: turn.itemsView,
       startedAt: turn.startedAt,
       status: turn.status,
     },

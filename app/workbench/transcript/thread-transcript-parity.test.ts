@@ -141,6 +141,26 @@ test("parity compares renderer semantics rather than unsupported provider detail
   }), { equal: true });
 });
 
+test("turn parity ignores window loading state without hiding item mismatches", () => {
+  const jsonItem: ThreadItem = { id: "plan", text: "planned", type: "plan" };
+  const jsonThread = thread([jsonItem]);
+  jsonThread.turns[0]!.itemsView = "notLoaded";
+
+  assert.deepEqual(compareWorkbenchTranscriptParity({
+    jsonBrowseResultEntries: [],
+    jsonThread,
+    sqliteProjection: projection([jsonItem]),
+  }), { equal: true });
+
+  const mismatch = compareWorkbenchTranscriptParity({
+    jsonBrowseResultEntries: [],
+    jsonThread,
+    sqliteProjection: projection([{ ...jsonItem, text: "different" }]),
+  });
+  assert.equal(mismatch.equal, false);
+  if (!mismatch.equal) assert.equal(mismatch.diagnostic.scope, "item");
+});
+
 test("timeline parity ignores recorder clocks when renderer-effective lifecycle matches", () => {
   const item: ThreadItem = { id: "plan", text: "planned", type: "plan" };
   const jsonThread = thread([item]);
