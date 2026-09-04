@@ -404,6 +404,7 @@ export const HISTORY_ARC_READY_FIXTURE = {
     });
     const oldHead = firstCommit.committedSha!;
     const originalParent = await repository.resolveParent(oldHead);
+    await write(repositoryRoot, "selected.txt", "first proposal\nincidental sibling snapshot\n");
     const siblingPlan = await controller.createPlan({
       cwd: repositoryRoot,
       harness: "codex",
@@ -411,6 +412,7 @@ export const HISTORY_ARC_READY_FIXTURE = {
       paths: ["later.txt"],
       threadId: "sibling-thread",
     });
+    await write(repositoryRoot, "selected.txt", "first proposal\n");
     await controller.startArc({
       checkpointCommit: siblingPlan.checkpointCommit,
       cwd: repositoryRoot,

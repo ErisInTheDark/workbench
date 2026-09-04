@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; bounded concurrent regression wards cover linear plumbing amendments, conflict rollback, and checkpoint SHA remapping. Keywords: git, amend, history, arc, concurrency, test.
+ * - No production exports; bounded concurrent regression wards cover linear plumbing amendments, conflict rollback, scoped checkpoint snapshots, and SHA remapping. Keywords: git, amend, history, arc, scope, snapshot, concurrency, test.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -222,6 +222,11 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
     .find(({ threadId }) => threadId === "sibling-thread");
   assert.ok(siblingAfterFirst);
   assert.notEqual(siblingAfterFirst.checkpointCommit, siblingPlanCheckpoint);
+  assert.deepEqual(siblingAfterFirst.claimedPaths, ["later.txt"]);
+  assert.equal(
+    await git(root, ["show", `${siblingAfterFirst.checkpointCommit}:selected.txt`]),
+    "first proposal\nfirst amendment\n",
+  );
 
   const secondAfterFirst = await controller.getProposal({
     cwd: root,

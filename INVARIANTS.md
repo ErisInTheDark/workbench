@@ -16,6 +16,7 @@
 
 - Git arc commit proposals only become invalid if HEAD movement intersects with the proposal's changed files.
 - Git arc read endpoints do not fetch remotes or update refs. They derive presentation state from local repository state. Mutations revalidate before changing refs or history.
+- Git history rewrites preserve checkpoint state only within declared scope.
 - One Git arc inspection request owns one worktree snapshot per repository. Compare, diff, and unclaimed-dirt projection reuse it.
 - Thread settlement checks only live claimed paths under the worktree Git transition. It does not hydrate proposal details.
 

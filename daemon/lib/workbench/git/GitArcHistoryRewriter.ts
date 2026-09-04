@@ -115,9 +115,14 @@ export default class GitArcHistoryRewriter {
       );
       if (!newParent && !metadataChanged) continue;
       const parent = newParent ?? oldCommit.parents[0]!;
-      const tree = newParent
-        ? await this.repository.mergeTree(oldCommit.parents[0]!, newParent, entry.value)
-        : oldCommit.tree;
+      let tree = oldCommit.tree;
+      if (newParent && !metadata) {
+        tree = await this.repository.mergeTree(oldCommit.parents[0]!, newParent, entry.value);
+      } else if (newParent && metadata?.scopePaths.length) {
+        tree = await this.repository.writeTreeWithPathsFromSource(newParent, entry.value, metadata.scopePaths);
+      } else if (newParent) {
+        tree = await this.repository.resolveTree(newParent);
+      }
       const next = await this.repository.createCommitFromTree(
         tree,
         parent,
