@@ -20,10 +20,15 @@ const entry = {
 };
 
 test("internal MCP freshness and Git retention timing never leak into the sidebar projection", () => {
-  const record = parseWorkbenchThreadStateEntry({ ...entry, gitHistoryCleanedAt: 456, mcpGeneration: "epoch:2", providerObserved: true, settledAt: 123 });
+  const snoozedUntil = {
+    identity: { harness: "opencode" as const, threadId: "target" },
+    projectId: "other-project",
+  };
+  const record = parseWorkbenchThreadStateEntry({ ...entry, gitHistoryCleanedAt: 456, mcpGeneration: "epoch:2", providerObserved: true, settledAt: 123, snoozedUntil });
   assert.equal(record.entryKind === "thread" ? record.gitHistoryCleanedAt : null, 456);
   assert.equal(record.entryKind === "thread" ? record.mcpGeneration : null, "epoch:2");
   assert.equal(record.entryKind === "thread" ? record.settledAt : null, 123);
+  assert.deepEqual(record.entryKind === "thread" ? record.snoozedUntil : null, snoozedUntil);
   assert.deepEqual(projectWorkbenchThreadStateEntry(record), entry);
 });
 
@@ -70,4 +75,19 @@ test("stored-record conformance repairs malformed lifecycle to a non-terminal st
 test("stored-record conformance rejects a record whose identity cannot be recovered", () => {
   const conformed = conformStoredWorkbenchThreadStateRecord({ ...entry, identity: { harness: "codex" } }, "project");
   assert.equal(conformed.success, false);
+});
+
+test("stored dependent snooze defaults safely and repairs malformed targets", () => {
+  const plain = conformStoredWorkbenchThreadStateRecord(entry, "project");
+  assert.equal(plain.success, true);
+  if (!plain.success) return;
+  assert.equal(plain.data.snoozedUntil, null);
+
+  const malformed = conformStoredWorkbenchThreadStateRecord({
+    ...entry,
+    snoozedUntil: { identity: { harness: "future", threadId: "" }, projectId: "" },
+  }, "project");
+  assert.equal(malformed.success, true);
+  if (!malformed.success) return;
+  assert.equal(malformed.data.snoozedUntil, null);
 });

@@ -8,12 +8,20 @@
 import { useMemo } from "react";
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
-import { WORKBENCH_THREAD_ORDER_DROP_TARGET_ID } from "../../workbench/layout/workbench-drag";
+import {
+  canMoveWorkbenchThreadRowToSection,
+  isWorkbenchThreadRowDragPayload,
+  WORKBENCH_THREAD_ORDER_DROP_TARGET_ID,
+  WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID,
+  WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
+  type WorkbenchDragPayload,
+} from "../../workbench/layout/workbench-drag";
 import { createPinnedThreadHref, createThreadHref, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkbenchSelectedProjectPinPlacement } from "../../workbench/state/workbench-settings";
 import {
   getProjectQualifiedThreadDisplayKey,
   getThreadDisplayFolderKey,
+  findThreadDisplayFolder,
   projectThreadDisplayLayoutSection,
   type ThreadDisplayLayoutItem,
 } from "workbench-shared/workbench/thread/thread-display-layout";
@@ -28,7 +36,9 @@ import DropTargetBoundary from "./drag/DropTargetBoundary";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
+import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
+import WorkbenchThreadPriorityDropZone from "./WorkbenchThreadPriorityDropZone";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButton";
@@ -42,8 +52,11 @@ type PinnedThreadListActions = Pick<ReturnType<typeof WorkbenchThreadSidebarActi
   | "nowMs"
   | "onAction"
   | "onAutoFocusFolderComplete"
+  | "onPinnedFolderDrop"
   | "onPinnedMove"
   | "onRenamePinnedFolder"
+  | "onSetPriority"
+  | "onSnoozeUntil"
   | "pinnedDisplayOrder"
   | "projectThreadSummaries"
 >;
@@ -61,6 +74,7 @@ function displayKeyForEntry(entry: WorkbenchPinnedThreadSummaryEntry) {
 }
 
 export default function WorkbenchPinnedThreadList({
+  activeDragPayload,
   actions,
   currentTarget,
   onOpenThread,
@@ -69,6 +83,7 @@ export default function WorkbenchPinnedThreadList({
   selectedProjectPinPlacement,
   selectedOwnerProjectId,
 }: {
+  activeDragPayload: WorkbenchDragPayload | null;
   actions: PinnedThreadListActions;
   currentTarget: WorkbenchThreadTarget | null;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
@@ -100,28 +115,66 @@ export default function WorkbenchPinnedThreadList({
     () => WorkbenchThreadStatusCounts.countPinnedStatuses(entries.map(({ entry }) => entry)),
     [entries],
   );
-  if (!items.length) return null;
+  const priorityDropVisible = Boolean(
+    isWorkbenchThreadRowDragPayload(activeDragPayload)
+    && activeDragPayload.section !== "pinned"
+    && activeDragPayload.section !== "settled",
+  );
+  if (!items.length && !priorityDropVisible) return null;
 
   const threadHref = (target: WorkbenchThreadTarget, ownerProjectId: string) => ownerProjectId === projectId
     ? createThreadHref(projectId, target)
     : createPinnedThreadHref(projectId, ownerProjectId, target);
   const renderEntry = ({ entry, project }: GlobalPinnedEntry) => {
     const target = targetForEntry(entry);
-    const key = getProjectQualifiedThreadDisplayKey(project.id, displayKeyForEntry(entry));
+    const projectSourceKey = displayKeyForEntry(entry);
+    const key = getProjectQualifiedThreadDisplayKey(project.id, projectSourceKey);
+    const folder = findThreadDisplayFolder(actions.pinnedDisplayOrder, key);
+    const targetIdentity = entry.entryKind === "thread" ? entry.identity : null;
+    const targetReady = entry.entryKind === "thread"
+      && entry.lifecycle.kind === "completed"
+      && !(entry.gitArc?.claimedPaths.length);
+    const dragTargets = (
+      <WorkbenchThreadDragTargets
+        activePayload={activeDragPayload}
+        folderLabel={folder ? `add to ${folder.title}` : "create folder"}
+        onFolderDrop={targetIdentity
+          ? (payload) => actions.onPinnedFolderDrop(payload, project.id, projectSourceKey, folder?.folderId ?? null)
+          : undefined}
+        onSnoozeUntilDrop={targetIdentity && !targetReady
+          ? (payload) => actions.onSnoozeUntil(payload, project.id, targetIdentity)
+          : undefined}
+        targetIdentity={targetIdentity}
+        targetProjectId={project.id}
+        targetTitle={entry.title}
+      />
+    );
     return (
       <Draggable
-        dropTargetIds={[WORKBENCH_THREAD_ORDER_DROP_TARGET_ID]}
+        dropTargetIds={[
+          WORKBENCH_THREAD_ORDER_DROP_TARGET_ID,
+          WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID,
+          WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
+        ]}
         key={key}
         label={entry.title}
-        payload={{ section: "pinned", sourceKey: key, target: { kind: "thread", target }, type: "thread-row" }}
+        payload={{
+          ownerProjectId: project.id,
+          projectSourceKey,
+          section: "pinned",
+          sourceKey: key,
+          target: { kind: "thread", target },
+          type: "thread-row",
+        }}
       >
         {({ draggable, onDragStart, onPointerDown }) => (
           <WorkbenchThreadListItem
-            contextMenu={actions.getThreadContextMenu(entry, project.id)}
+            contextMenu={actions.getThreadContextMenu(entry, project.id, "pinned")}
             draggable={draggable}
+            dragTargets={dragTargets}
             entry={entry}
             href={threadHref(target, project.id)}
-            isDragActive={false}
+            isDragActive={Boolean(activeDragPayload)}
             isShiftPressed={isShiftPressed}
             nowMs={actions.nowMs}
             onAction={(action) => actions.onAction(entry, action, project.id)}
@@ -144,27 +197,47 @@ export default function WorkbenchPinnedThreadList({
       dropTargetId={WORKBENCH_THREAD_ORDER_DROP_TARGET_ID}
       key={`before:${destinationFolderId ?? "root"}:${key}`}
       range={THREAD_ORDER_DROP_RANGE}
-      enabled={(payload) => (payload.type === "thread-row" || payload.type === "thread-folder")
-        && payload.section === "pinned"
-        && (destinationFolderId === null || payload.type === "thread-row")}
+      enabled={(payload) => isWorkbenchThreadRowDragPayload(payload)
+        ? canMoveWorkbenchThreadRowToSection(payload, "pinned")
+        : payload.type === "thread-folder"
+          && payload.section === "pinned"
+          && destinationFolderId === null}
       onDrop={(payload) => {
-        if (payload.type === "thread-row" || payload.type === "thread-folder") actions.onPinnedMove(payload.sourceKey, destinationFolderId, key || null);
+        if (isWorkbenchThreadRowDragPayload(payload)) {
+          actions.onPinnedMove(
+            getProjectQualifiedThreadDisplayKey(payload.ownerProjectId, payload.projectSourceKey),
+            destinationFolderId,
+            key || null,
+          );
+        } else if (payload.type === "thread-folder") actions.onPinnedMove(payload.sourceKey, destinationFolderId, key || null);
       }}
+      preview={(payload) => isWorkbenchThreadRowDragPayload(payload)
+        ? { action: "pinned", label: "move to pinned" }
+        : null}
     >
-      {({ selected }) => <div aria-hidden="true" className={`pointer-events-none relative z-30 h-px rounded-full transition-colors${selected ? " bg-accent" : " bg-transparent"}`} />}
+      {({ selected }) => <div aria-hidden="true" className={`pointer-events-none relative z-30 h-px rounded-full transition-colors${selected ? " bg-accent" : " bg-transparent"}`} data-thread-insertion-target="pinned" />}
     </DropTarget>
   );
   const renderFolder = (item: Extract<ThreadDisplayLayoutItem<GlobalPinnedEntry>, { itemKind: "folder" }>) => (
     <li className="m-0 list-none" key={getThreadDisplayFolderKey(item.folder.folderId)}>
       <WorkbenchThreadFolder
+        activeDragPayload={activeDragPayload}
         autoFocusName={actions.autoFocusFolderId === item.folder.folderId}
+        canPrependThread={(payload) => {
+          const sourceKey = getProjectQualifiedThreadDisplayKey(payload.ownerProjectId, payload.projectSourceKey);
+          return canMoveWorkbenchThreadRowToSection(payload, "pinned") && !item.folder.threadKeys.includes(sourceKey);
+        }}
         entries={item.entries.map(({ entry }) => entry)}
         folder={item.folder}
-        isDragActive={false}
+        isDragActive={Boolean(activeDragPayload)}
         nowMs={actions.nowMs}
         onAutoFocusComplete={actions.onAutoFocusFolderComplete}
-        onMoveThread={(sourceKey, destinationFolderId, beforeKey) => actions.onPinnedMove(sourceKey, destinationFolderId, beforeKey)}
         onOpenChange={(open) => setFolderOpen("pinned", item.folder.folderId, open)}
+        onPrependThread={(payload) => actions.onPinnedMove(
+          getProjectQualifiedThreadDisplayKey(payload.ownerProjectId, payload.projectSourceKey),
+          item.folder.folderId,
+          item.folder.threadKeys[0] ?? null,
+        )}
         onRename={(title) => actions.onRenamePinnedFolder(item.folder.folderId, title)}
         open={preferences.pinnedFolderIds.includes(item.folder.folderId)}
         tooltip={(
@@ -208,15 +281,23 @@ export default function WorkbenchPinnedThreadList({
         preferenceKey="pinnedThreadsOpen"
         title="Pinned threads"
       >
-        <ul className="m-0 flex flex-col gap-0.5 p-0">
-          {items.flatMap((item) => {
-            const key = item.itemKind === "folder"
-              ? getThreadDisplayFolderKey(item.folder.folderId)
-              : getProjectQualifiedThreadDisplayKey(item.entry.project.id, displayKeyForEntry(item.entry.entry));
-            return [renderDropMarker(key, null), item.itemKind === "folder" ? renderFolder(item) : renderEntry(item.entry)];
-          })}
-          {renderDropMarker("", null)}
-        </ul>
+        {items.length ? (
+          <ul className="m-0 flex flex-col gap-0.5 p-0">
+            {items.flatMap((item) => {
+              const key = item.itemKind === "folder"
+                ? getThreadDisplayFolderKey(item.folder.folderId)
+                : getProjectQualifiedThreadDisplayKey(item.entry.project.id, displayKeyForEntry(item.entry.entry));
+              return [renderDropMarker(key, null), item.itemKind === "folder" ? renderFolder(item) : renderEntry(item.entry)];
+            })}
+            {renderDropMarker("", null)}
+          </ul>
+        ) : (
+          <WorkbenchThreadPriorityDropZone
+            activePayload={activeDragPayload}
+            onDrop={(payload) => actions.onSetPriority(payload, "pinned")}
+            priority="pinned"
+          />
+        )}
       </WorkbenchSidebarSectionDisclosure>
     </DropTargetBoundary>
   );

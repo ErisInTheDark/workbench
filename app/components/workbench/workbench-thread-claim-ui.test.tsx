@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; rendered regression checks protect active claim counts, composer-draft indication, proposed-commit presentation, settlement suppression, home pinned priority ordering, and settled pin visibility. Keywords: sidebar, thread, pinned, project, claim, composer, draft, proposal, commit, settlement.
+ * - No production exports; rendered regression checks protect claim and draft status, settlement, priority ordering, and compatible sidebar drag targets. Keywords: sidebar, thread, claim, composer, draft, settlement, priority, drag, folder, snooze.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -76,7 +76,12 @@ function createThreadEntry({
   };
 }
 
-function renderThreads(entries: ThreadEntry[], showPinnedThreadsInMain = false) {
+function renderThreads(
+  entries: ThreadEntry[],
+  showPinnedThreadsInMain = false,
+  activeDragPayload: ComponentProps<typeof WorkbenchThreadList>["activeDragPayload"] = null,
+  displayOrder: ComponentProps<typeof WorkbenchThreadList>["displayOrder"] = {},
+) {
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
@@ -84,12 +89,17 @@ function renderThreads(entries: ThreadEntry[], showPinnedThreadsInMain = false) 
         WorkbenchContextMenuContext.Provider,
         { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
         createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
+            activeDragPayload,
             currentTarget: null,
+            displayOrder,
             entries,
             getThreadHref: () => "/agent/thread/thread-one",
             nowMs: 1_723_456_790_000,
             onCreateThread: () => undefined,
             onOpenThread: () => undefined,
+            onProjectFolderDrop: () => undefined,
+            onSetPriority: () => undefined,
+            onSnoozeUntil: () => undefined,
             projectId: "project",
             showPinnedThreadsInMain,
           })),
@@ -103,6 +113,7 @@ function renderPinnedThreads(
   projects: WorkbenchProjectOption[],
   projectThreadSummaries: WorkbenchProjectThreadSummaries,
   selectedProjectPinPlacement: ComponentProps<typeof WorkbenchPinnedThreadList>["selectedProjectPinPlacement"] = "pinned-section",
+  activeDragPayload: ComponentProps<typeof WorkbenchPinnedThreadList>["activeDragPayload"] = null,
 ) {
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
@@ -111,14 +122,18 @@ function renderPinnedThreads(
         WorkbenchContextMenuContext.Provider,
         { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined } },
         createElement(WorkbenchDragProvider, null, createElement(WorkbenchPinnedThreadList, {
+          activeDragPayload,
           actions: {
             autoFocusFolderId: null,
             getThreadContextMenu: () => ({ id: "test-thread-menu", items: [], label: "Thread actions" }),
             nowMs: 1_723_456_790_000,
             onAction: () => undefined,
             onAutoFocusFolderComplete: () => undefined,
+            onPinnedFolderDrop: () => undefined,
             onPinnedMove: () => undefined,
             onRenamePinnedFolder: async (_folderId, title) => title,
+            onSetPriority: () => undefined,
+            onSnoozeUntil: () => undefined,
             pinnedDisplayOrder: {},
             projectThreadSummaries,
           },
@@ -160,9 +175,13 @@ function renderHomeThreads({
     onAutoFocusFolderComplete: () => undefined,
     onHomeMove: () => undefined,
     onMove: () => undefined,
+    onPinnedFolderDrop: () => undefined,
     onPinnedMove: () => undefined,
+    onProjectFolderDrop: () => undefined,
     onRenameFolder: async (_folderId, title) => title,
     onRenamePinnedFolder: async (_folderId, title) => title,
+    onSetPriority: () => undefined,
+    onSnoozeUntil: () => undefined,
     pinnedDisplayOrder: {},
     projectThreadSidebars,
     projectThreadSummaries: { projects: [] },
@@ -520,6 +539,68 @@ test("global pinned disclosure starts open, omits thread creation, and identifie
   const relocatedMainHtml = renderThreads([localPinned], true);
   assert.match(relocatedMainHtml, /Local pin/u);
   assert.match(relocatedMainHtml, /data-role="thread-priority-icon" data-thread-priority="pinned"/u);
+
+  const dragHtml = renderPinnedThreads(projects, projectThreadSummaries, "pinned-section", {
+    ownerProjectId: "source-project",
+    projectSourceKey: "codex:source",
+    section: "main",
+    sourceKey: "codex:source",
+    target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "source" } },
+    type: "thread-row",
+  });
+  assert.doesNotMatch(dragHtml, /data-thread-priority-drop-target="pinned"/u);
+  assert.match(dragHtml, /data-thread-insertion-target="pinned"/u);
+  assert.equal((dragHtml.match(/data-thread-drag-target="folder"/gu) ?? []).length, 2);
+  assert.equal((dragHtml.match(/data-thread-drag-target-scope="row"/gu) ?? []).length, 4);
+  assert.equal((dragHtml.match(/data-thread-drag-target="dependent-snooze"/gu) ?? []).length, 2);
+});
+
+test("project thread drag exposes group outcomes and folder targets only in folder-capable priorities", () => {
+  const needsAttention = { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const };
+  const pinned = {
+    ...createThreadEntry({ threadId: "pinned-target", title: "Pinned target" }),
+    lifecycle: needsAttention,
+    metadata: { archived: false as const, pinned: true, snoozed: false },
+  };
+  const ungroupedPinned = {
+    ...createThreadEntry({ threadId: "ungrouped-pinned-target", title: "Ungrouped pinned target" }),
+    lifecycle: needsAttention,
+    metadata: { archived: false as const, pinned: true, snoozed: false },
+  };
+  const main = {
+    ...createThreadEntry({ threadId: "main-target", title: "Main target" }),
+    lifecycle: needsAttention,
+  };
+  const snoozed = {
+    ...createThreadEntry({ threadId: "snoozed-target", title: "Snoozed target" }),
+    lifecycle: needsAttention,
+    metadata: { archived: false as const, pinned: false, snoozed: true },
+  };
+  const html = renderThreads([pinned, ungroupedPinned, main, snoozed], true, {
+    ownerProjectId: "project",
+    projectSourceKey: "codex:source",
+    section: "main",
+    sourceKey: "codex:source",
+    target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "source" } },
+    type: "thread-row",
+  }, {
+    folders: [{
+      folderId: "00000000-0000-4000-8000-000000000202",
+      section: "pinned",
+      threadKeys: ["codex:pinned-target"],
+      title: "Pinned folder",
+    }],
+  });
+
+  assert.match(html, /Pinned folder/u);
+  assert.match(html, /data-thread-insertion-target="pinned"/u);
+  assert.match(html, /data-thread-insertion-target="snoozed"/u);
+  assert.doesNotMatch(html, /data-thread-priority-drop-target="main"/u);
+  assert.doesNotMatch(html, /data-thread-priority-drop-target="pinned"/u);
+  assert.doesNotMatch(html, /data-thread-priority-drop-target="snoozed"/u);
+  assert.equal((html.match(/data-thread-drag-target="folder"/gu) ?? []).length, 3);
+  assert.equal((html.match(/data-thread-drag-target="folder"[^>]*data-thread-drag-target-scope="folder"/gu) ?? []).length, 1);
+  assert.equal((html.match(/data-thread-drag-target="dependent-snooze"/gu) ?? []).length, 3);
 });
 
 test("only home thread rows show pin while snooze keeps priority", () => {
@@ -562,13 +643,20 @@ test("home renders one combined priority list with project-owned folders and for
     rootPath: "C:/git/web/beta", roots: [{ id: "beta", isPrimary: true, name: "beta", relativePath: "web/beta", rootPath: "C:/git/web/beta" }],
   }];
   const alphaPinned = { ...createThreadEntry({ threadId: "alpha-pinned", title: "Alpha pinned" }), metadata: { archived: false as const, pinned: true, snoozed: false } };
-  const alphaMain = createThreadEntry({ threadId: "alpha-main", title: "Alpha main" });
+  const alphaMain = {
+    ...createThreadEntry({ threadId: "alpha-main", title: "Alpha main" }),
+    lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
+  };
   const alphaSettled = {
     ...createThreadEntry({ threadId: "alpha-settled", title: "Alpha settled" }),
     lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: true as const },
   };
   const betaPinned = { ...createThreadEntry({ threadId: "beta-pinned", title: "Beta pinned" }), metadata: { archived: false as const, pinned: true, snoozed: false } };
-  const betaSnoozed = { ...createThreadEntry({ threadId: "beta-snoozed", title: "Beta snoozed" }), metadata: { archived: false as const, pinned: false, snoozed: true } };
+  const betaSnoozed = {
+    ...createThreadEntry({ threadId: "beta-snoozed", title: "Beta snoozed" }),
+    lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
+    metadata: { archived: false as const, pinned: false, snoozed: true },
+  };
   const folderId = "00000000-0000-4000-8000-000000000303";
   const projectThreadSidebars: WorkbenchProjectThreadSidebars = {
     projects: [{
@@ -590,6 +678,7 @@ test("home renders one combined priority list with project-owned folders and for
   const html = renderHomeThreads({
     activeDragPayload: {
       ownerProjectId: "beta",
+      projectSourceKey: "codex:beta-pinned",
       section: "pinned",
       sourceKey: "beta/codex%3Abeta-pinned",
       target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "beta-pinned" } },
@@ -615,10 +704,21 @@ test("home renders one combined priority list with project-owned folders and for
   assert.match(html, /Alpha[\s\S]*?web\/alpha[\s\S]*?Alpha folder/u);
   assert.match(html, /href="\/@\/thread\/beta\/@\/beta-pinned"/u);
   assert.match(html, /group\/thread-folder relative pointer-events-none/u);
+  assert.match(html, /data-thread-priority-drop-target="main"/u);
+  assert.match(html, /data-thread-insertion-target="pinned"/u);
+  assert.match(html, /data-thread-insertion-target="snoozed"/u);
+  assert.doesNotMatch(html, /data-thread-priority-drop-target="pinned"/u);
+  assert.doesNotMatch(html, /data-thread-priority-drop-target="snoozed"/u);
+  assert.equal((html.match(/data-thread-drag-target="folder"/gu) ?? []).length, 1);
+  assert.doesNotMatch(html, /data-thread-drag-target="folder"[^>]*data-thread-drag-target-scope="folder"/u);
+  assert.equal((html.match(/data-thread-drag-target="dependent-snooze"/gu) ?? []).length, 2);
+  assert.match(html, /data-thread-drag-target="dependent-snooze" data-thread-drag-target-project="alpha"/u);
+  assert.match(html, /data-thread-drag-target="dependent-snooze" data-thread-drag-target-project="beta"/u);
 
   const sameProjectHtml = renderHomeThreads({
     activeDragPayload: {
       ownerProjectId: "alpha",
+      projectSourceKey: "codex:alpha-pinned",
       section: "pinned",
       sourceKey: "alpha/codex%3Aalpha-pinned",
       target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "alpha-pinned" } },

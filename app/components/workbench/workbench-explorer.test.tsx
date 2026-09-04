@@ -31,7 +31,6 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(draggableSource, /onDragStart[\s\S]*?event\.preventDefault\(\)/u);
   assert.match(listSource, /draggable=\{draggable\}/u);
   assert.match(itemSource, /<a[\s\S]*?draggable=\{draggable\}/u);
-  assert.match(workbenchSource, /isDragActive=\{Boolean\(activeWorkbenchDrag\)\}/u);
   assert.match(sidebarSource, /<WorkbenchHomeThreadList/u);
   assert.doesNotMatch(sidebarSource, /<WorkbenchThreadList/u);
   assert.match(homeListSource, /projectWorkbenchHomeThreadList/u);

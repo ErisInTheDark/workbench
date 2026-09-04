@@ -4,7 +4,7 @@
  * - WorkbenchDragActivitySnapshot/WorkbenchDragSnapshot: stable lifecycle and live-coordinate snapshots. Keywords: drag, activity, pointer, snapshot.
  * - default WorkbenchDragController: own pointer threshold, cached target resolution, scoped notifications, body state, click suppression, and cleanup. Keywords: controller, lifecycle, boundary.
  */
-import type { WorkbenchDragPayload } from "./workbench-drag";
+import type { WorkbenchDragPayload, WorkbenchThreadDragPreview } from "./workbench-drag";
 
 export interface WorkbenchDropTargetRegistration {
   boundary: HTMLElement | null;
@@ -12,7 +12,9 @@ export interface WorkbenchDropTargetRegistration {
   element: HTMLElement;
   enabled?: (payload: WorkbenchDragPayload) => boolean;
   onDrop: (payload: WorkbenchDragPayload, point: { x: number; y: number }) => void;
+  preview?: (payload: WorkbenchDragPayload) => WorkbenchThreadDragPreview | null;
   range?: { x?: number; y?: number };
+  selectionPriority?: number;
 }
 
 export interface WorkbenchDropTargetSnapshot {
@@ -39,6 +41,7 @@ export interface WorkbenchDragSnapshot {
   label: string;
   payload: WorkbenchDragPayload | null;
   selectedRegistrationId: number | null;
+  targetPreview: WorkbenchThreadDragPreview | null;
   x: number;
   y: number;
 }
@@ -55,7 +58,7 @@ interface TargetGeometry {
 }
 
 const IDLE_ACTIVITY_SNAPSHOT: WorkbenchDragActivitySnapshot = { active: false, label: "", payload: null };
-const IDLE_SNAPSHOT: WorkbenchDragSnapshot = { active: false, label: "", payload: null, selectedRegistrationId: null, x: 0, y: 0 };
+const IDLE_SNAPSHOT: WorkbenchDragSnapshot = { active: false, label: "", payload: null, selectedRegistrationId: null, targetPreview: null, x: 0, y: 0 };
 const IDLE_TARGET_SNAPSHOT: WorkbenchDropTargetSnapshot = { selected: false, x: 0, y: 0 };
 
 export default class WorkbenchDragController {
@@ -140,6 +143,7 @@ export default class WorkbenchDragController {
       label: this.pending.label,
       payload: this.pending.payload,
       selectedRegistrationId: selected?.registrationId ?? null,
+      targetPreview: selected?.preview?.(this.pending.payload) ?? null,
       x: event.clientX,
       y: event.clientY,
     });
@@ -165,6 +169,7 @@ export default class WorkbenchDragController {
     const hit = document.elementFromPoint(x, y);
     const closestBoundary = hit?.closest<HTMLElement>("[data-workbench-drop-target-boundary]") ?? null;
     let bestDistance = Number.POSITIVE_INFINITY;
+    let bestPriority = Number.NEGATIVE_INFINITY;
     let selected: RegisteredTarget | null = null;
     for (const { rect, target } of geometry) {
       if (!this.pending || target.enabled?.(this.pending.payload) === false) continue;
@@ -178,7 +183,13 @@ export default class WorkbenchDragController {
       const dx = Math.max(rect.left - x, 0, x - rect.right);
       const dy = Math.max(rect.top - y, 0, y - rect.bottom);
       const distance = Math.hypot(dx, dy);
-      if (distance < bestDistance || (distance === bestDistance && target.registrationId < (selected?.registrationId ?? Number.POSITIVE_INFINITY))) {
+      const priority = target.selectionPriority ?? 0;
+      if (
+        priority > bestPriority
+        || (priority === bestPriority && distance < bestDistance)
+        || (priority === bestPriority && distance === bestDistance && target.registrationId < (selected?.registrationId ?? Number.POSITIVE_INFINITY))
+      ) {
+        bestPriority = priority;
         bestDistance = distance;
         selected = target;
       }

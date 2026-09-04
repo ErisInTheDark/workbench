@@ -7,20 +7,22 @@
 import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 
 import type { WorkbenchDropTargetHandle, WorkbenchDropTargetSnapshot } from "../../../workbench/layout/WorkbenchDragController";
-import type { WorkbenchDragPayload } from "../../../workbench/layout/workbench-drag";
+import type { WorkbenchDragPayload, WorkbenchThreadDragPreview } from "../../../workbench/layout/workbench-drag";
 import { DropTargetBoundaryContext, useWorkbenchDragController } from "./workbench-drag-context";
 
 const IDLE_TARGET_SNAPSHOT: WorkbenchDropTargetSnapshot = { selected: false, x: 0, y: 0 };
 const EMPTY_UNSUBSCRIBE = () => undefined;
 
-export default function DropTarget({ as = "div", children, className, dropTargetId, enabled, onDrop, range, style }: {
+export default function DropTarget({ as = "div", children, className, dropTargetId, enabled, onDrop, preview, range, selectionPriority, style }: {
   as?: "div" | "li";
   children: ReactNode | ((state: { selected: boolean; x: number; y: number }) => ReactNode);
   className?: string;
   dropTargetId: string;
   enabled?: (payload: WorkbenchDragPayload) => boolean;
   onDrop: (payload: WorkbenchDragPayload, point: { x: number; y: number }) => void;
+  preview?: (payload: WorkbenchDragPayload) => WorkbenchThreadDragPreview | null;
   range?: { x?: number; y?: number };
+  selectionPriority?: number;
   style?: CSSProperties;
 }) {
   const controller = useWorkbenchDragController();
@@ -29,8 +31,10 @@ export default function DropTarget({ as = "div", children, className, dropTarget
   const [registration, setRegistration] = useState<WorkbenchDropTargetHandle | null>(null);
   const enabledRef = useRef(enabled);
   const onDropRef = useRef(onDrop);
+  const previewRef = useRef(preview);
   enabledRef.current = enabled;
   onDropRef.current = onDrop;
+  previewRef.current = preview;
   const rangeX = range?.x;
   const rangeY = range?.y;
   useEffect(() => {
@@ -41,11 +45,13 @@ export default function DropTarget({ as = "div", children, className, dropTarget
       element,
       enabled: (payload) => enabledRef.current?.(payload) ?? true,
       onDrop: (payload, point) => onDropRef.current(payload, point),
+      preview: (payload) => previewRef.current?.(payload) ?? null,
       range: { x: rangeX, y: rangeY },
+      selectionPriority,
     });
     setRegistration(registration);
     return () => { registration.unregister(); };
-  }, [boundary, controller, dropTargetId, element, rangeX, rangeY]);
+  }, [boundary, controller, dropTargetId, element, rangeX, rangeY, selectionPriority]);
   const subscribe = useCallback((listener: () => void) => registration?.subscribe(listener) ?? EMPTY_UNSUBSCRIBE, [registration]);
   const getSnapshot = useCallback(() => registration?.getSnapshot() ?? IDLE_TARGET_SNAPSHOT, [registration]);
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);

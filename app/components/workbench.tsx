@@ -2657,6 +2657,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 >
                   {activeProjectId ? (
                     <WorkbenchPinnedThreadSidebar
+                      activeDragPayload={activeWorkbenchDrag?.payload ?? null}
                       currentTarget={route.view === "thread" ? route.threadTarget : null}
                       onOpenThread={openThreadFromExplorer}
                       projectId={activeProjectId}
@@ -2680,10 +2681,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     >
                       {activeProjectId ? (
                         <WorkbenchThreadSidebar
+                          activeDragPayload={activeWorkbenchDrag?.payload ?? null}
                           attentionLabelsByThreadId={threadAttentionLabelsById}
                           currentTarget={route.view === "thread" ? route.threadTarget : null}
                           harness={harness}
-                          isDragActive={Boolean(activeWorkbenchDrag)}
                           onBeginPointerDrag={beginWorkbenchPointerDrag}
                           onCreateThread={(folderId) => createThreadFromSidebar(activeProjectId, folderId)}
                           onOpenThread={openThreadFromExplorer}

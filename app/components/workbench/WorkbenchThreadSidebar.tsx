@@ -16,10 +16,10 @@ import WorkbenchThreadList from "./WorkbenchThreadList";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 
 interface WorkbenchThreadSidebarProps {
+  activeDragPayload: WorkbenchDragPayload | null;
   attentionLabelsByThreadId: Record<string, string | undefined>;
   currentTarget: WorkbenchThreadTarget | null;
   harness: WorkbenchHarness;
-  isDragActive: boolean;
   onBeginPointerDrag: (event: PointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => void;
   onCreateThread: (folderId?: string) => void;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
@@ -30,10 +30,10 @@ interface WorkbenchThreadSidebarProps {
 }
 
 export default memo(function WorkbenchThreadSidebar({
+  activeDragPayload,
   attentionLabelsByThreadId,
   currentTarget,
   harness,
-  isDragActive,
   onBeginPointerDrag,
   onCreateThread,
   onOpenThread,
@@ -52,12 +52,12 @@ export default memo(function WorkbenchThreadSidebar({
           allowMainPanelDrop={showMosaicView}
           attentionLabelsByThreadId={attentionLabelsByThreadId}
           autoFocusFolderId={actions.autoFocusFolderId}
+          activeDragPayload={activeDragPayload}
           currentTarget={currentTarget}
           displayOrder={actions.displayOrder}
           entries={actions.entries}
           getThreadHref={(target) => createThreadHref(projectId, target)}
           getThreadContextMenu={actions.getThreadContextMenu}
-          isDragActive={isDragActive}
           nowMs={actions.nowMs}
           onAction={actions.onAction}
           onAutoFocusFolderComplete={actions.onAutoFocusFolderComplete}
@@ -67,7 +67,12 @@ export default memo(function WorkbenchThreadSidebar({
           } : undefined}
           onMove={actions.onMove}
           onOpenThread={onOpenThread}
+          onProjectFolderDrop={(payload, targetKey, section, destinationFolderId) => {
+            actions.onProjectFolderDrop(payload, projectId, targetKey, section, destinationFolderId);
+          }}
           onRenameFolder={actions.onRenameFolder}
+          onSetPriority={actions.onSetPriority}
+          onSnoozeUntil={(payload, targetIdentity) => actions.onSnoozeUntil(payload, projectId, targetIdentity)}
           projectId={projectId}
           renderThreadTooltipDetails={renderThreadTooltipDetails}
           showPinnedThreadsInMain={selectedProjectPinPlacement === "threads-section"}

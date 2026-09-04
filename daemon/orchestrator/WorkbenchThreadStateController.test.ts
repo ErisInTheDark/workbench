@@ -7,8 +7,9 @@ import test from "node:test";
 import WorkbenchThreadStateControllerOwner, { type WorkbenchThreadStateControllerOptions } from "./WorkbenchThreadStateController";
 import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import type { WorkbenchComposerProfileTargetSelection, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
-import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
+import { getProjectQualifiedThreadDisplayKey, getThreadDisplayFolderKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import { getWorkbenchHomeFolderKey } from "workbench-shared/workbench/thread/home-thread-display-order";
+import { projectWorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
 import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchThreadStateStore, { type WorkbenchThreadStateGlobalDocumentId, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
@@ -225,7 +226,10 @@ test("global pinned folders import project layout, accept mixed-project members,
   });
   await seedProjectState(root, "project-b", {
     drafts: [],
-    records: [pinnedRecord("b", "B")],
+    records: [{
+      ...pinnedRecord("b", "B"),
+      metadata: { archived: false, pinned: false, snoozed: true },
+    }],
     version: 3,
   });
   const published: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
@@ -245,15 +249,28 @@ test("global pinned folders import project layout, accept mixed-project members,
   assert.equal(opened.pinnedThreadLayout.displayOrder.folders?.[0]?.title, "Everywhere");
   const keyA = getProjectQualifiedThreadDisplayKey("project-a", "codex:a");
   const keyB = getProjectQualifiedThreadDisplayKey("project-b", "codex:b");
-  const moved = await controller.handleRequest("observer-a", {
-    beforeKey: null,
-    destinationFolderId: folderId,
+  const movedAcrossPriority = await controller.handleRequest("observer-a", {
+    beforeKey: getThreadDisplayFolderKey(folderId),
+    destinationFolderId: null,
     method: "workbench/thread-state/pinned-display-order/move",
     sourceKey: keyB,
   });
+  assert.equal("result" in movedAcrossPriority ? WorkbenchThreadStateMutationResultSchema.parse(movedAcrossPriority.result).accepted : false, true);
+  const movedProject = await controller.getSnapshot("project-b");
+  const movedEntry = movedProject.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "b");
+  assert.deepEqual(movedEntry?.entryKind === "thread" ? movedEntry.metadata : null, { archived: false, pinned: true, snoozed: false });
+  const movedLayout = await readGlobalState<{ displayOrder: { pinned?: Record<string, { below: string[] }> } }>(root, "pinnedLayout");
+  assert.equal(movedLayout.displayOrder.pinned?.[keyB]?.below.includes(getThreadDisplayFolderKey(folderId)), true);
+  const moved = await controller.handleRequest("observer-a", {
+    destinationFolderId: folderId,
+    folderId: null,
+    method: "workbench/thread-state/pinned-display-order/folder/drop",
+    sourceKey: keyB,
+    targetKey: keyA,
+  });
   assert.equal("result" in moved ? WorkbenchThreadStateMutationResultSchema.parse(moved.result).accepted : false, true);
   const stored = await readGlobalState<{ displayOrder: { folders?: Array<{ threadKeys: string[] }> } }>(root, "pinnedLayout");
-  assert.deepEqual(stored.displayOrder.folders?.[0]?.threadKeys, [keyA, keyB]);
+  assert.deepEqual(stored.displayOrder.folders?.[0]?.threadKeys, [keyB, keyA]);
   const layoutObservers = new Set(published.filter(({ snapshot }) => "updateKind" in snapshot && snapshot.updateKind === "pinnedThreadLayout").map(({ connectionId }) => connectionId));
   assert.deepEqual(layoutObservers, new Set(["observer-a", "observer-b"]));
   await controller.handleRequest("observer-a", {
@@ -264,6 +281,46 @@ test("global pinned folders import project layout, accept mixed-project members,
   });
   const afterSnooze = await readGlobalState<{ displayOrder: { folders?: Array<{ threadKeys: string[] }> } }>(root, "pinnedLayout");
   assert.deepEqual(afterSnooze.displayOrder.folders?.[0]?.threadKeys, [keyA]);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("a failed cross-priority pinned move restores the loaded project state", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-pinned-move-rollback-"));
+  const persistence = testPersistence(root);
+  await persistence.writeProject("project", {
+    drafts: [],
+    records: [{
+      ...pinnedRecord("thread", "Thread"),
+      metadata: { archived: false, pinned: false, snoozed: true },
+    }],
+    version: 3,
+  });
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({ data: [projectOption("project", root)], rootPath: root }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    storageRoot: root,
+  });
+  await controller.open("observer", "project", 3);
+  const writeProject = persistence.writeProject.bind(persistence);
+  persistence.writeProject = async () => {
+    persistence.writeProject = writeProject;
+    throw new Error("Project persistence unavailable.");
+  };
+
+  await assert.rejects(
+    controller.handleRequest("observer", {
+      beforeKey: null,
+      destinationFolderId: null,
+      method: "workbench/thread-state/pinned-display-order/move",
+      sourceKey: getProjectQualifiedThreadDisplayKey("project", "codex:thread"),
+    }),
+    /Project persistence unavailable/u,
+  );
+  const entry = (await controller.getSnapshot("project")).entries.find((candidate) => candidate.entryKind === "thread");
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.metadata : null, { archived: false, pinned: false, snoozed: true });
   await controller.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });
@@ -1154,7 +1211,10 @@ test("home order persists folder blocks and rejects foreign-project folder membe
   });
   const entriesByProject = new Map<string, WorkbenchThreadSidebarEntry[]>([
     ["alpha", [pinned("a", 20), pinned("b", 10)]],
-    ["beta", [pinned("c", 30)]],
+    ["beta", [{
+      ...pinned("c", 30),
+      metadata: { archived: false, pinned: false, snoozed: true },
+    }]],
   ]);
   const publications: WorkbenchThreadStateSnapshot[] = [];
   const createController = () => new WorkbenchThreadStateController({
@@ -1190,6 +1250,19 @@ test("home order persists folder blocks and rejects foreign-project folder membe
   const alphaB = getProjectQualifiedThreadDisplayKey("alpha", "codex:b");
   const betaC = getProjectQualifiedThreadDisplayKey("beta", "codex:c");
   const alphaFolder = getWorkbenchHomeFolderKey("alpha", folderId);
+  const movedAcrossPriority = await controller.handleRequest("global", {
+    beforeKey: alphaA,
+    destinationFolderKey: null,
+    method: "workbench/thread-state/home-display-order/move",
+    section: "pinned",
+    sourceKey: betaC,
+  });
+  assert.equal("result" in movedAcrossPriority && (movedAcrossPriority.result as { accepted?: boolean }).accepted, true);
+  const movedProject = await controller.getSnapshot("beta");
+  const movedEntry = movedProject.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "c");
+  assert.deepEqual(movedEntry?.entryKind === "thread" ? movedEntry.metadata : null, { archived: false, pinned: true, snoozed: false });
+  const movedHomeOrder = await readGlobalState<{ displayOrder: { pinned?: Record<string, { below: string[] }> } }>(root, "homeDisplayOrder");
+  assert.equal(movedHomeOrder.displayOrder.pinned?.[betaC]?.below.includes(alphaA), true);
   rejectNextHomeWrite = true;
   await assert.rejects(controller.handleRequest("global", {
     beforeKey: null,
@@ -2382,6 +2455,383 @@ test("thread folders persist across restart and reconcile members that leave the
   await reopened.handleRequest("reopened", { identity: { harness: "codex", threadId: "materialized" }, method: "workbench/thread-state/pin/set", pinned: false, projectId: "project" });
   assert.deepEqual((await reopened.getSnapshot("project")).displayOrder, {});
   await reopened.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("drag priority and folder drops update one project-owned state atomically", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-drag-priority-"));
+  const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 2,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "source" },
+    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Source",
+  };
+  const target: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    ...source,
+    activityAt: 1,
+    identity: { harness: "codex", threadId: "target" },
+    metadata: { archived: false, pinned: false, snoozed: true },
+    title: "Target",
+  };
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", [source, target], { complete: true });
+      return [];
+    },
+    storageRoot: root,
+  });
+  await controller.open("observer", "project");
+  await waitFor(async () => (await controller.getSnapshot("project")).freshness === "fresh", "Project did not reconcile.");
+
+  const crossPriorityMove = await controller.handleRequest("observer", {
+    beforeKey: "codex:target",
+    destinationFolderId: null,
+    method: "workbench/thread-state/display-order/move",
+    projectId: "project",
+    section: "snoozed",
+    sourceKey: "codex:source",
+  });
+  assert.equal("result" in crossPriorityMove && (crossPriorityMove.result as { accepted?: boolean }).accepted, true);
+  let snapshot = await controller.getSnapshot("project");
+  let moved = snapshot.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "source");
+  assert.deepEqual(moved?.entryKind === "thread" ? moved.metadata : null, { archived: false, pinned: false, snoozed: true });
+  assert.deepEqual(projectWorkbenchThreadDisplaySection(snapshot.entries, snapshot.displayOrder, "snoozed").flatMap((item) => (
+    item.itemKind === "thread"
+      ? [item.entry.entryKind === "draft" ? item.entry.draft.draftId : item.entry.identity.threadId]
+      : item.entries.map((entry) => entry.entryKind === "draft" ? entry.draft.draftId : entry.identity.threadId)
+  )), ["source", "target"]);
+
+  await controller.handleRequest("observer", {
+    method: "workbench/thread-state/priority/set",
+    priority: "pinned",
+    projectId: "project",
+    sourceKey: "codex:source",
+  });
+  moved = (await controller.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "source");
+  assert.deepEqual(moved?.entryKind === "thread" ? moved.metadata : null, { archived: false, pinned: true, snoozed: false });
+
+  const folderId = "00000000-0000-4000-8000-000000000077";
+  const folderDrop = await controller.handleRequest("observer", {
+    destinationFolderId: null,
+    folderId,
+    method: "workbench/thread-state/display-order/folder/drop",
+    projectId: "project",
+    section: "snoozed",
+    sourceKey: "codex:source",
+    targetKey: "codex:target",
+  });
+  assert.equal("result" in folderDrop && (folderDrop.result as { accepted?: boolean }).accepted, true);
+  snapshot = await controller.getSnapshot("project");
+  moved = snapshot.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "source");
+  assert.deepEqual(moved?.entryKind === "thread" ? moved.metadata : null, { archived: false, pinned: true, snoozed: true });
+  assert.deepEqual(snapshot.displayOrder.folders?.[0]?.threadKeys, ["codex:source", "codex:target"]);
+
+  await controller.handleRequest("observer", {
+    method: "workbench/thread-state/priority/set",
+    priority: "main",
+    projectId: "project",
+    sourceKey: "codex:source",
+  });
+  moved = (await controller.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "source");
+  assert.deepEqual(moved?.entryKind === "thread" ? moved.metadata : null, { archived: false, pinned: false, snoozed: false });
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("cross-project dependent snooze waits for completion and the final live claim", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dependent-snooze-"));
+  const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 2,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "source" },
+    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Source",
+  };
+  const claimedArc = {
+    checkpointCommit: "a".repeat(40),
+    claimedPaths: ["owned.ts"],
+    intentDescription: "",
+    intentName: "target work",
+    phase: "active" as const,
+    proposals: [],
+    updatedAt: "2026-09-04T00:00:00.000Z",
+  };
+  const target: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    ...source,
+    activityAt: 1,
+    gitArc: claimedArc,
+    identity: { harness: "codex", threadId: "target" },
+    title: "Target",
+  };
+  let targetArc: typeof claimedArc | null = claimedArc;
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [projectOption("alpha", "C:/projects/alpha"), projectOption("beta", "C:/projects/beta")],
+      rootPath: "C:/projects",
+    }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
+      acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
+      await acceptGitArcSnapshot({
+        arcs: projectId === "beta" && targetArc ? [{ harness: "codex", state: targetArc, threadId: "target" }] : [],
+        plans: [],
+      });
+      return [];
+    },
+    resolveGitArc: async (_projectId, _harness, threadId) => threadId === "target" ? targetArc : null,
+    storageRoot: root,
+  });
+  await controller.openGlobal("observer", 6);
+  await waitFor(async () => (
+    (await controller.getSnapshot("alpha")).freshness === "fresh"
+    && (await controller.getSnapshot("beta")).freshness === "fresh"
+  ), "Projects did not reconcile.");
+  await controller.handleRequest("observer", {
+    identity: source.identity,
+    method: "workbench/thread-state/snooze/until",
+    projectId: "alpha",
+    target: { identity: target.identity, projectId: "beta" },
+  });
+  await controller.observeLifecycle("codex", "target", { kind: "userCompleted" });
+  let sourceEntry = (await controller.getSnapshot("alpha")).entries.find((entry) => entry.entryKind === "thread");
+  assert.equal(sourceEntry?.entryKind === "thread" ? sourceEntry.metadata.snoozed : null, true);
+  const stored = await readProjectState<{ records: Array<{ snoozedUntil?: unknown }> }>(root, "alpha");
+  assert.deepEqual(stored.records[0]?.snoozedUntil, { identity: target.identity, projectId: "beta" });
+
+  targetArc = null;
+  await controller.refreshGitArcState("beta", "codex", "target");
+  sourceEntry = (await controller.getSnapshot("alpha")).entries.find((entry) => entry.entryKind === "thread");
+  assert.equal(sourceEntry?.entryKind === "thread" ? sourceEntry.metadata.snoozed : null, false);
+  const storedAfterWake = await readProjectState<{ records: Array<{ snoozedUntil?: unknown }> }>(root, "alpha");
+  assert.equal(storedAfterWake.records[0]?.snoozedUntil, null);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("dependent snooze also wakes when claims leave before manual completion", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dependent-snooze-claims-first-"));
+  const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 2,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "source" },
+    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Source",
+  };
+  const claimedArc = {
+    checkpointCommit: "a".repeat(40),
+    claimedPaths: ["owned.ts"],
+    intentDescription: "",
+    intentName: "target work",
+    phase: "active" as const,
+    proposals: [],
+    updatedAt: "2026-09-04T00:00:00.000Z",
+  };
+  const target: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    ...source,
+    activityAt: 1,
+    gitArc: claimedArc,
+    identity: { harness: "codex", threadId: "target" },
+    title: "Target",
+  };
+  let targetArc: typeof claimedArc | null = claimedArc;
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [projectOption("alpha", "C:/projects/alpha"), projectOption("beta", "C:/projects/beta")],
+      rootPath: "C:/projects",
+    }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
+      acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
+      await acceptGitArcSnapshot({
+        arcs: projectId === "beta" && targetArc ? [{ harness: "codex", state: targetArc, threadId: "target" }] : [],
+        plans: [],
+      });
+      return [];
+    },
+    resolveGitArc: async (_projectId, _harness, threadId) => threadId === "target" ? targetArc : null,
+    storageRoot: root,
+  });
+  await controller.openGlobal("observer", 6);
+  await waitFor(async () => (
+    (await controller.getSnapshot("alpha")).freshness === "fresh"
+    && (await controller.getSnapshot("beta")).freshness === "fresh"
+  ), "Projects did not reconcile.");
+  await controller.handleRequest("observer", {
+    identity: source.identity,
+    method: "workbench/thread-state/snooze/until",
+    projectId: "alpha",
+    target: { identity: target.identity, projectId: "beta" },
+  });
+
+  targetArc = null;
+  await controller.refreshGitArcState("beta", "codex", "target");
+  let sourceEntry = (await controller.getSnapshot("alpha")).entries.find((entry) => entry.entryKind === "thread");
+  assert.equal(sourceEntry?.entryKind === "thread" ? sourceEntry.metadata.snoozed : null, true);
+
+  await controller.handleRequest("observer", {
+    identity: target.identity,
+    method: "workbench/thread-state/status/set",
+    projectId: "beta",
+    status: "completed",
+  });
+  sourceEntry = (await controller.getSnapshot("alpha")).entries.find((entry) => entry.entryKind === "thread");
+  assert.equal(sourceEntry?.entryKind === "thread" ? sourceEntry.metadata.snoozed : null, false);
+  const stored = await readProjectState<{ records: Array<{ snoozedUntil?: unknown }> }>(root, "alpha");
+  assert.equal(stored.records[0]?.snoozedUntil, null);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("dependent snooze replacement survives a missing target, skips ordinary auto-wake, and clears manually", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dependent-snooze-clearing-"));
+  const thread = (
+    threadId: string,
+    metadata: { archived: false; pinned: false; snoozed: boolean },
+    lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>["lifecycle"],
+    activityAt: number,
+  ): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
+    activityAt,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId },
+    lifecycle,
+    metadata,
+    title: threadId,
+  });
+  const source = thread("source", { archived: false, pinned: false, snoozed: false }, { kind: "completed", reason: "providerInactive", settled: false }, 4);
+  const ordinary = thread("ordinary", { archived: false, pinned: false, snoozed: true }, { kind: "completed", reason: "providerInactive", settled: false }, 3);
+  const active = thread("active", { archived: false, pinned: false, snoozed: false }, {
+    agent: { agentStatus: "working", turnId: "active-turn" },
+    kind: "working",
+    reason: "acceptedIntent",
+    settled: false,
+  }, 5);
+  const targetA = thread("target-a", { archived: false, pinned: false, snoozed: false }, { kind: "needsAttention", reason: "noActiveTurn", settled: false }, 2);
+  const targetB = thread("target-b", { archived: false, pinned: false, snoozed: false }, { kind: "needsAttention", reason: "noActiveTurn", settled: false }, 1);
+  let betaEntries = [targetA, targetB];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [projectOption("alpha", "C:/projects/alpha"), projectOption("beta", "C:/projects/beta")],
+      rootPath: "C:/projects",
+    }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", projectId === "alpha" ? [source, ordinary, active] : betaEntries, { complete: true });
+      return [];
+    },
+    storageRoot: root,
+  });
+  await controller.openGlobal("observer", 6);
+  await waitFor(async () => (
+    (await controller.getSnapshot("alpha")).freshness === "fresh"
+    && (await controller.getSnapshot("beta")).freshness === "fresh"
+  ), "Projects did not reconcile.");
+
+  for (const target of [targetA, targetB]) {
+    await controller.handleRequest("observer", {
+      identity: source.identity,
+      method: "workbench/thread-state/snooze/until",
+      projectId: "alpha",
+      target: { identity: target.identity, projectId: "beta" },
+    });
+  }
+  let stored = await readProjectState<{ records: Array<{ identity: { threadId: string }; snoozedUntil?: unknown }> }>(root, "alpha");
+  assert.deepEqual(
+    stored.records.find(({ identity }) => identity.threadId === "source")?.snoozedUntil,
+    { identity: targetB.identity, projectId: "beta" },
+  );
+
+  betaEntries = [];
+  await controller.refresh("beta");
+  await waitFor(async () => (await controller.getSnapshot("beta")).freshness === "fresh", "Target removal did not reconcile.");
+  await controller.observeLifecycle("codex", "active", { kind: "userCompleted" });
+  const snoozeState = new Map((await controller.getSnapshot("alpha")).entries.flatMap((entry) => (
+    entry.entryKind === "thread" ? [[entry.identity.threadId, entry.metadata.snoozed] as const] : []
+  )));
+  assert.equal(snoozeState.get("source"), true);
+  assert.equal(snoozeState.get("ordinary"), false);
+
+  await controller.handleRequest("observer", {
+    identity: source.identity,
+    method: "workbench/thread-state/snooze/set",
+    projectId: "alpha",
+    snoozed: false,
+  });
+  stored = await readProjectState<{ records: Array<{ identity: { threadId: string }; snoozedUntil?: unknown }> }>(root, "alpha");
+  assert.equal(stored.records.find(({ identity }) => identity.threadId === "source")?.snoozedUntil, null);
+  await controller.dispose();
+  await fs.rm(root, { force: true, recursive: true });
+});
+
+test("restart reevaluates a persisted dependency when its ready target loaded first", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dependent-snooze-restart-"));
+  const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 2,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "source" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: true },
+    title: "Source",
+  };
+  const target: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    ...source,
+    activityAt: 1,
+    identity: { harness: "codex", threadId: "target" },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Target",
+  };
+  const persistence = testPersistence(root);
+  await persistence.writeProject("alpha", {
+    drafts: [],
+    records: [{ ...source, snoozedUntil: { identity: target.identity, projectId: "beta" } }],
+    version: 4,
+  });
+  await persistence.writeProject("beta", { drafts: [], records: [target], version: 4 });
+  let releaseSourceRead = () => undefined;
+  const sourceReadGate = new Promise<void>((resolve) => { releaseSourceRead = resolve; });
+  const gatedPersistence: WorkbenchThreadStatePersistence = {
+    readGlobal: async (id) => await persistence.readGlobal(id),
+    readProject: async (projectId) => {
+      if (projectId === "alpha") await sourceReadGate;
+      return await persistence.readProject(projectId);
+    },
+    writeGlobal: async (id, document) => await persistence.writeGlobal(id, document),
+    writeProject: async (projectId, document) => await persistence.writeProject(projectId, document),
+  };
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [projectOption("beta", "C:/projects/beta"), projectOption("alpha", "C:/projects/alpha")],
+      rootPath: "C:/projects",
+    }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
+      acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
+      return [];
+    },
+    storageRoot: root,
+    threadStateStore: gatedPersistence,
+  });
+  const opening = controller.openGlobal("observer", 6);
+  await waitFor(async () => (await controller.getSnapshot("beta")).freshness === "fresh", "Target did not reconcile first.");
+  releaseSourceRead();
+  await opening;
+  await waitFor(async () => {
+    const entry = (await controller.getSnapshot("alpha")).entries.find((candidate) => candidate.entryKind === "thread");
+    return entry?.entryKind === "thread" && !entry.metadata.snoozed;
+  }, "Persisted dependency did not wake after its source project loaded.");
+  const stored = await persistence.readProject("alpha") as { records: Array<{ snoozedUntil?: unknown }> };
+  assert.equal(stored.records[0]?.snoozedUntil, null);
+  await controller.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });
 

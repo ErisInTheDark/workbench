@@ -6,11 +6,13 @@
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkbenchSelectedProjectPinPlacement } from "../../workbench/state/workbench-settings";
+import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag";
 import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchPinnedThreadList from "./WorkbenchPinnedThreadList";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 
 export default function WorkbenchPinnedThreadSidebar({
+  activeDragPayload,
   currentTarget,
   onOpenThread,
   projectId,
@@ -18,6 +20,7 @@ export default function WorkbenchPinnedThreadSidebar({
   selectedProjectPinPlacement,
   selectedOwnerProjectId,
 }: {
+  activeDragPayload: WorkbenchDragPayload | null;
   currentTarget: WorkbenchThreadTarget | null;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projectId: string;
@@ -29,6 +32,7 @@ export default function WorkbenchPinnedThreadSidebar({
   return (
     <nav aria-label="Pinned threads">
       <WorkbenchPinnedThreadList
+        activeDragPayload={activeDragPayload}
         actions={actions}
         currentTarget={currentTarget}
         onOpenThread={onOpenThread}

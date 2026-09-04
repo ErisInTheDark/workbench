@@ -37,7 +37,7 @@ test("the controller resolves extended targets inside the closest boundary and d
     const controller = new WorkbenchDragController();
     const drops: string[] = [];
     let rectangleReads = 0;
-    const target = (top: number, key: string) => ({
+    const target = (top: number, key: string, selectionPriority = 0) => ({
       boundary,
       dropTargetId: WORKBENCH_THREAD_ORDER_DROP_TARGET_ID,
       element: { getBoundingClientRect: () => {
@@ -45,10 +45,13 @@ test("the controller resolves extended targets inside the closest boundary and d
         return { bottom: top + 1, left: 10, right: 90, top };
       } } as unknown as HTMLElement,
       onDrop: () => { drops.push(key); },
+      preview: () => ({ action: "pinned" as const, label: `drop ${key}` }),
       range: { x: 24, y: 100_000 },
+      selectionPriority,
     });
     const first = controller.registerTarget(target(10, "first"));
     const second = controller.registerTarget(target(990, "second"));
+    const preferred = controller.registerTarget(target(990, "preferred", 10));
     const firstSnapshots: Array<ReturnType<typeof first.getSnapshot>> = [];
     const secondSnapshots: Array<ReturnType<typeof second.getSnapshot>> = [];
     first.subscribe(() => { firstSnapshots.push(first.getSnapshot()); });
@@ -57,7 +60,7 @@ test("the controller resolves extended targets inside the closest boundary and d
     controller.begin({ button: 0, clientX: 0, clientY: 0 }, {
       dropTargetIds: [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID],
       label: "thread",
-      payload: { section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { kind: "provider", threadId: "thread" } }, type: "thread-row" },
+      payload: { ownerProjectId: "project", projectSourceKey: "codex:thread", section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "thread" } }, type: "thread-row" },
     });
     dispatch("pointermove", 3, 3);
     assert.equal(controller.getSnapshot().active, false);
@@ -70,23 +73,24 @@ test("the controller resolves extended targets inside the closest boundary and d
       touchAction: "pan-y",
       userSelect: "none",
     });
-    assert.equal(controller.getSnapshot().selectedRegistrationId, first.registrationId);
-    assert.deepEqual(firstSnapshots, [{ selected: true, x: 50, y: 400 }]);
+    assert.equal(controller.getSnapshot().selectedRegistrationId, preferred.registrationId);
+    assert.deepEqual(controller.getSnapshot().targetPreview, { action: "pinned", label: "drop preferred" });
+    assert.deepEqual(firstSnapshots, []);
     assert.deepEqual(secondSnapshots, []);
-    assert.equal(rectangleReads, 2);
+    assert.equal(rectangleReads, 3);
     dispatch("pointermove", 50, 600);
-    assert.equal(controller.getSnapshot().selectedRegistrationId, second.registrationId);
-    assert.deepEqual(firstSnapshots, [{ selected: true, x: 50, y: 400 }, { selected: false, x: 0, y: 0 }]);
-    assert.deepEqual(secondSnapshots, [{ selected: true, x: 50, y: 600 }]);
+    assert.equal(controller.getSnapshot().selectedRegistrationId, preferred.registrationId);
+    assert.deepEqual(firstSnapshots, []);
+    assert.deepEqual(secondSnapshots, []);
     assert.equal(controller.getActivitySnapshot(), activeActivity);
-    assert.equal(rectangleReads, 2);
+    assert.equal(rectangleReads, 3);
     dispatch("scroll", 0, 0);
     dispatch("pointermove", 50, 600);
-    assert.equal(rectangleReads, 4);
-    assert.deepEqual(secondSnapshots.at(-1), { selected: true, x: 50, y: 600 });
-    dispatch("pointerup", 50, 300);
-    assert.deepEqual(drops, ["first"]);
     assert.equal(rectangleReads, 6);
+    assert.deepEqual(controller.getSnapshot().targetPreview, { action: "pinned", label: "drop preferred" });
+    dispatch("pointerup", 50, 300);
+    assert.deepEqual(drops, ["preferred"]);
+    assert.equal(rectangleReads, 9);
     assert.equal(controller.getSnapshot().active, false);
     assert.equal(controller.getActivitySnapshot(), idleActivity);
     assert.deepEqual(style, {
@@ -100,12 +104,12 @@ test("the controller resolves extended targets inside the closest boundary and d
     controller.begin({ button: 0, clientX: 0, clientY: 0 }, {
       dropTargetIds: [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID],
       label: "thread",
-      payload: { section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { kind: "provider", threadId: "thread" } }, type: "thread-row" },
+      payload: { ownerProjectId: "project", projectSourceKey: "codex:thread", section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "thread" } }, type: "thread-row" },
     });
     dispatch("pointermove", 50, 600);
     assert.equal(controller.getSnapshot().selectedRegistrationId, null);
     controller.cancel();
-    first.unregister(); second.unregister(); controller.dispose();
+    first.unregister(); second.unregister(); preferred.unregister(); controller.dispose();
   } finally {
     if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow); else Reflect.deleteProperty(globalThis, "window");
     if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument); else Reflect.deleteProperty(globalThis, "document");
@@ -125,7 +129,7 @@ test("touch pointers cannot arm drag listeners or suppress their click", () => {
     const started = controller.begin({ button: 0, clientX: 12, clientY: 18, pointerType: "touch" }, {
       dropTargetIds: [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID],
       label: "thread",
-      payload: { section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { kind: "provider", threadId: "thread" } }, type: "thread-row" },
+      payload: { ownerProjectId: "project", projectSourceKey: "codex:thread", section: "pinned", sourceKey: "codex:thread", target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: "thread" } }, type: "thread-row" },
     });
 
     assert.equal(started, false);

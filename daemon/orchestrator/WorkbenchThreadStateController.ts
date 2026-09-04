@@ -34,6 +34,7 @@ import {
   resolveWorkbenchThreadDisplayOrder,
   sortThreadSidebarEntries,
   type WorkbenchThreadDisplayOrder,
+  type WorkbenchThreadDisplaySection,
 } from "workbench-shared/workbench/thread/thread-display-order";
 import {
   areAllUnsnoozedThreadEntriesSettlementReady,
@@ -66,6 +67,7 @@ import {
   type WorkbenchGlobalThreadStateOpenResult,
   type WorkbenchThreadStateOpenResultV2,
   type WorkbenchThreadStateOpenResult,
+  type WorkbenchThreadPriority,
   type WorkbenchThreadStateRequest,
   type WorkbenchThreadStateSnapshot,
 } from "workbench-shared/workbench/thread/thread-state";
@@ -79,6 +81,7 @@ import {
   safeParseWorkbenchThreadStateEntry,
   type WorkbenchThreadStateEntry,
   type WorkbenchThreadStateRecord,
+  type WorkbenchThreadSnoozeTarget,
 } from "./workbench-thread-state-record";
 
 interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot" | "opencode"; lifecycle: WorkbenchThreadLifecycle; mcpGeneration?: string | null; orderAt?: number; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null; pinned: boolean; questionnaireHistory?: WorkbenchQuestionnaireHistoryEntryState[]; snoozed: boolean; threadId: string; titleFallback?: string }
@@ -126,6 +129,33 @@ function reconcileProviderLifecycle(
     return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
   }
   return providerEntry.lifecycle;
+}
+
+function sameThreadTarget(
+  leftProjectId: string,
+  left: { harness: WorkbenchHarnessId; threadId: string },
+  rightProjectId: string,
+  right: { harness: WorkbenchHarnessId; threadId: string },
+) {
+  return leftProjectId === rightProjectId && left.harness === right.harness && left.threadId === right.threadId;
+}
+
+function setEntryPriority(entry: WorkbenchThreadStateEntry, priority: WorkbenchThreadPriority): WorkbenchThreadStateEntry | null {
+  if (entry.entryKind !== "draft" && (entry.entryKind === "subagent" || entry.lifecycle.settled)) return null;
+  if (entry.metadata.archived) return null;
+  const metadata = priority === "pinned"
+    ? { archived: false as const, pinned: true, snoozed: false }
+    : priority === "main"
+      ? { archived: false as const, pinned: false, snoozed: false }
+      : { archived: false as const, pinned: entry.metadata.pinned, snoozed: true };
+  return entry.entryKind === "draft"
+    ? { ...entry, metadata }
+    : { ...entry, metadata, snoozedUntil: null };
+}
+
+function setEntryDisplaySection(entry: WorkbenchThreadStateEntry, section: WorkbenchThreadDisplaySection) {
+  if (section === "settled") return getWorkbenchThreadDisplaySection(entry) === "settled" ? entry : null;
+  return setEntryPriority(entry, section);
 }
 
 export interface WorkbenchThreadStateControllerOptions {
@@ -396,11 +426,15 @@ export default class WorkbenchThreadStateController {
       case "workbench/thread-state/draft/delete": return { result: await this.deleteDraft(request.projectId, request.draftId, request.clientUpdatedAt) };
       case "workbench/thread-state/draft/pin/set":
       case "workbench/thread-state/draft/snooze/set": return { result: await this.mutateDraft(request) };
+      case "workbench/thread-state/priority/set": return { result: await this.mutatePriority(request) };
+      case "workbench/thread-state/snooze/until": return { result: await this.mutateDependentSnooze(request) };
       case "workbench/thread-state/display-order/folder/create":
+      case "workbench/thread-state/display-order/folder/drop":
       case "workbench/thread-state/display-order/folder/title/set":
       case "workbench/thread-state/display-order/move": return { result: await this.mutateDisplayOrder(request) };
       case "workbench/thread-state/home-display-order/move": return { result: await this.mutateHomeDisplayOrder(connectionId, request) };
       case "workbench/thread-state/pinned-display-order/folder/create":
+      case "workbench/thread-state/pinned-display-order/folder/drop":
       case "workbench/thread-state/pinned-display-order/folder/title/set":
       case "workbench/thread-state/pinned-display-order/move": return { result: await this.mutatePinnedDisplayOrder(request) };
       default: return { result: await this.mutateThread(request) };
@@ -666,7 +700,7 @@ export default class WorkbenchThreadStateController {
   ) {
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
-    return await this.enqueue(`${projectId}:thread:${key}`, async () => {
+    const result = await this.enqueue(`${projectId}:thread:${key}`, async () => {
       const wakeReadyBefore = areAllUnsnoozedThreadEntriesSettlementReady(this.naturallyOrderedEntries(state));
       if (!state.entries.has(key) && providerEntry?.entryKind === "thread" && entryKey(providerEntry) === key) {
         state.entries.set(key, parseWorkbenchThreadStateEntry({ ...providerEntry, mcpGeneration: null, providerObserved: true }));
@@ -705,6 +739,7 @@ export default class WorkbenchThreadStateController {
             ? { archived: true as const, pinned: false as const, snoozed: false as const }
             : { ...existing.metadata, snoozed: shouldUnsnooze ? false : existing.metadata.snoozed },
           ...(event.kind === "acceptedIntent" ? { orderAt: providerEntry?.entryKind === "thread" ? providerEntry.orderAt ?? activityAt : activityAt } : {}),
+          snoozedUntil: shouldUnsnooze ? null : existing.snoozedUntil,
           ...(event.kind === "acceptedIntent" && providerEntry?.entryKind === "thread" ? {
             title: resolveWorkbenchThreadTitle({ id: threadId, name: existing.title, preview: providerEntry.title }),
           } : {}),
@@ -722,6 +757,10 @@ export default class WorkbenchThreadStateController {
         const highestSnoozed = snapshot.entries.find((candidate) => (
           getThreadSidebarGroup(candidate) === "snoozed"
           && !findWorkbenchThreadFolder(snapshot.displayOrder, getWorkbenchThreadDisplayKey(candidate))
+          && (() => {
+            const record = state.entries.get(getWorkbenchThreadDisplayKey(candidate));
+            return record?.entryKind === "thread" && !record.snoozedUntil;
+          })()
         ));
         if (highestSnoozed) {
           const candidateKey = getWorkbenchThreadDisplayKey(highestSnoozed);
@@ -735,6 +774,8 @@ export default class WorkbenchThreadStateController {
       this.publish(projectId, state, parsedNext);
       return parsedNext;
     });
+    await this.reevaluateDependentSnoozes(projectId, key);
+    return result;
   }
 
   async observeLifecycle(harness: "codex" | "copilot" | "opencode", threadId: string, event: WorkbenchObservedLifecycleEvent) {
@@ -889,7 +930,7 @@ export default class WorkbenchThreadStateController {
   async refreshGitArcState(projectId: string, harness: WorkbenchHarnessId, threadId: string) {
     const state = await this.getProject(projectId);
     const key = `${harness}:${threadId}`;
-    return await this.enqueue(`${projectId}:thread:${key}`, async () => {
+    const result = await this.enqueue(`${projectId}:thread:${key}`, async () => {
       const entry = state.entries.get(key);
       if (!entry || entry.entryKind === "draft") return null;
       const [resolvedGitArc, gitArcPlan] = await Promise.all([
@@ -905,6 +946,8 @@ export default class WorkbenchThreadStateController {
       this.publish(projectId, state, next);
       return next;
     });
+    await this.reevaluateDependentSnoozes(projectId, key);
+    return result;
   }
 
   async dispose() {
@@ -1325,6 +1368,9 @@ export default class WorkbenchThreadStateController {
           ? failureMessages.join("; ").slice(0, 500)
           : null;
         state.freshness = failureMessages.length ? "partial" : "fresh";
+        if (state.freshness === "fresh") {
+          await this.reevaluateAllDependentSnoozes();
+        }
         this.publish(projectId, state);
       } catch (error) {
         if (generation !== state.generation || abort.signal.aborted) return;
@@ -1384,6 +1430,7 @@ export default class WorkbenchThreadStateController {
           pinned: existing.entryKind === "subagent" ? existing.pinned : existing.metadata.pinned,
           providerObserved: true,
           settledAt: existing.settledAt,
+          snoozedUntil: existing.snoozedUntil,
           ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
         } : { ...providerEntry, mcpGeneration: null, providerObserved: true }));
         continue;
@@ -1405,6 +1452,7 @@ export default class WorkbenchThreadStateController {
         ...(existing.pendingQuestionnaire ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
         providerObserved: true,
         settledAt: existing.settledAt,
+        snoozedUntil: existing.snoozedUntil,
         ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
         title: providerEntry.title === "New thread" ? existing.title : providerEntry.title,
       } : { ...providerEntry, mcpGeneration: null, providerObserved: true }));
@@ -1463,10 +1511,17 @@ export default class WorkbenchThreadStateController {
     request: Extract<WorkbenchThreadStateRequest, {
       method:
         | "workbench/thread-state/pinned-display-order/folder/create"
+        | "workbench/thread-state/pinned-display-order/folder/drop"
         | "workbench/thread-state/pinned-display-order/folder/title/set"
         | "workbench/thread-state/pinned-display-order/move";
     }>,
   ) {
+    if (request.method === "workbench/thread-state/pinned-display-order/folder/drop") {
+      return await this.mutatePinnedFolderDrop(request);
+    }
+    if (request.method === "workbench/thread-state/pinned-display-order/move" && !request.sourceKey.startsWith("folder:")) {
+      return await this.mutatePinnedThreadMove(request);
+    }
     if ("sourceKey" in request && !request.sourceKey.startsWith("folder:")) {
       const identity = parseProjectQualifiedThreadDisplayKey(request.sourceKey);
       if (!identity) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
@@ -1478,6 +1533,135 @@ export default class WorkbenchThreadStateController {
     const result = await this.pinnedLayout.mutate([...this.pinnedEntries.values()], request);
     if (result.snapshot) this.publishPinnedLayout(result.snapshot);
     return { accepted: result.accepted, revision: result.snapshot?.revision ?? (await this.pinnedLayout.getSnapshot()).revision };
+  }
+
+  private async mutatePinnedThreadMove(
+    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/pinned-display-order/move" }>,
+  ) {
+    const sourceIdentity = parseProjectQualifiedThreadDisplayKey(request.sourceKey);
+    const currentSnapshot = await this.pinnedLayout.getSnapshot();
+    if (!sourceIdentity || sourceIdentity.threadKey.startsWith("folder:")) {
+      return { accepted: false, revision: currentSnapshot.revision };
+    }
+    const sourceState = await this.getProject(sourceIdentity.projectId);
+    return await this.enqueue("pinned-display-order", async () => await this.enqueue(
+      `${sourceIdentity.projectId}:thread:${sourceIdentity.threadKey}`,
+      async () => {
+        const source = sourceState.entries.get(sourceIdentity.threadKey);
+        if (!source) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
+        const nextSource = setEntryPriority(source, "pinned");
+        if (!nextSource) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
+        const priorDisplayOrder = sourceState.displayOrder;
+        const sourceChanged = !areDeeplyEqual(source, nextSource);
+        if (sourceChanged) {
+          sourceState.entries.set(sourceIdentity.threadKey, nextSource);
+          sourceState.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(sourceState), sourceState.displayOrder);
+          try {
+            await this.persist(sourceIdentity.projectId, sourceState);
+          } catch (error) {
+            sourceState.entries.set(sourceIdentity.threadKey, source);
+            sourceState.displayOrder = priorDisplayOrder;
+            throw error;
+          }
+        }
+        this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
+        try {
+          const result = await this.pinnedLayout.mutate([...this.pinnedEntries.values()], request);
+          if (!result.accepted) {
+            if (sourceChanged) {
+              sourceState.entries.set(sourceIdentity.threadKey, source);
+              sourceState.displayOrder = priorDisplayOrder;
+              await this.persist(sourceIdentity.projectId, sourceState);
+              this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
+            }
+            return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
+          }
+          if (sourceChanged) this.publish(sourceIdentity.projectId, sourceState, nextSource);
+          if (result.snapshot) this.publishPinnedLayout(result.snapshot);
+          return { accepted: true, revision: result.snapshot?.revision ?? (await this.pinnedLayout.getSnapshot()).revision };
+        } catch (error) {
+          if (sourceChanged) {
+            sourceState.entries.set(sourceIdentity.threadKey, source);
+            sourceState.displayOrder = priorDisplayOrder;
+            try {
+              await this.persist(sourceIdentity.projectId, sourceState);
+              this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
+            } catch {
+              throw new Error(`Pinned thread move failed and source priority rollback could not be persisted: ${sanitizeError(error)}`);
+            }
+          }
+          throw error;
+        }
+      },
+    ));
+  }
+
+  private async mutatePinnedFolderDrop(
+    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/pinned-display-order/folder/drop" }>,
+  ) {
+    const sourceIdentity = parseProjectQualifiedThreadDisplayKey(request.sourceKey);
+    const targetIdentity = parseProjectQualifiedThreadDisplayKey(request.targetKey);
+    const currentSnapshot = await this.pinnedLayout.getSnapshot();
+    if (!sourceIdentity || !targetIdentity || sourceIdentity.threadKey.startsWith("folder:") || targetIdentity.threadKey.startsWith("folder:")) {
+      return { accepted: false, revision: currentSnapshot.revision };
+    }
+    const sourceState = await this.getProject(sourceIdentity.projectId);
+    const targetState = await this.getProject(targetIdentity.projectId);
+    return await this.enqueue("pinned-display-order", async () => await this.enqueue(
+      `${sourceIdentity.projectId}:thread:${sourceIdentity.threadKey}`,
+      async () => {
+        const source = sourceState.entries.get(sourceIdentity.threadKey);
+        const target = targetState.entries.get(targetIdentity.threadKey);
+        if (!source || !target || target.entryKind !== "thread" || target.metadata.archived || target.lifecycle.settled) {
+          return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
+        }
+        const nextSource = setEntryPriority(source, "pinned");
+        if (!nextSource) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
+        const priorSource = source;
+        const priorDisplayOrder = sourceState.displayOrder;
+        const sourceChanged = !areDeeplyEqual(source, nextSource);
+        if (sourceChanged) {
+          sourceState.entries.set(sourceIdentity.threadKey, nextSource);
+          sourceState.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(sourceState), sourceState.displayOrder);
+          try {
+            await this.persist(sourceIdentity.projectId, sourceState);
+          } catch (error) {
+            sourceState.entries.set(sourceIdentity.threadKey, priorSource);
+            sourceState.displayOrder = priorDisplayOrder;
+            throw error;
+          }
+        }
+        this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
+        this.updatePinnedLayoutEntries(targetIdentity.projectId, this.naturallyOrderedEntries(targetState));
+        try {
+          const result = await this.pinnedLayout.dropThread([...this.pinnedEntries.values()], request);
+          if (!result.accepted) {
+            if (sourceChanged) {
+              sourceState.entries.set(sourceIdentity.threadKey, priorSource);
+              sourceState.displayOrder = priorDisplayOrder;
+              await this.persist(sourceIdentity.projectId, sourceState);
+              this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
+            }
+            return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
+          }
+          if (sourceChanged) this.publish(sourceIdentity.projectId, sourceState, nextSource);
+          if (result.snapshot) this.publishPinnedLayout(result.snapshot);
+          return { accepted: true, revision: result.snapshot?.revision ?? (await this.pinnedLayout.getSnapshot()).revision };
+        } catch (error) {
+          if (sourceChanged) {
+            sourceState.entries.set(sourceIdentity.threadKey, priorSource);
+            sourceState.displayOrder = priorDisplayOrder;
+            try {
+              await this.persist(sourceIdentity.projectId, sourceState);
+              this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
+            } catch {
+              throw new Error(`Pinned folder drop failed and source priority rollback could not be persisted: ${sanitizeError(error)}`);
+            }
+          }
+          throw error;
+        }
+      },
+    ));
   }
 
   private async mutateHomeDisplayOrder(
@@ -1512,11 +1696,11 @@ export default class WorkbenchThreadStateController {
           ? sourceState.displayOrder.folders?.find((folder) => folder.folderId === sourceFolderId) ?? null
           : null;
         const sourceEntry = sourceFolder ? null : sourceState.entries.get(sourceIdentity.threadKey) ?? null;
-        if (
-          (sourceFolder && sourceFolder.section !== request.section)
-          || (sourceEntry && getWorkbenchThreadDisplaySection(sourceEntry) !== request.section)
-          || (!sourceFolder && !sourceEntry)
-        ) return { accepted: false, revision: queuedSnapshot.revision };
+        if ((sourceFolder && sourceFolder.section !== request.section) || (!sourceFolder && !sourceEntry)) {
+          return { accepted: false, revision: queuedSnapshot.revision };
+        }
+        const nextSource = sourceEntry ? setEntryDisplaySection(sourceEntry, request.section) : null;
+        if (sourceEntry && !nextSource) return { accepted: false, revision: queuedSnapshot.revision };
 
         const destinationFolderId = destinationIdentity?.threadKey.startsWith("folder:")
           ? destinationIdentity.threadKey.slice("folder:".length)
@@ -1531,6 +1715,11 @@ export default class WorkbenchThreadStateController {
           || (destinationFolder && beforeIdentity && beforeIdentity.projectId !== sourceIdentity.projectId)
         ) return { accepted: false, revision: queuedSnapshot.revision };
 
+        const priorSource = sourceEntry;
+        const sourceChanged = Boolean(sourceEntry && nextSource && !areDeeplyEqual(sourceEntry, nextSource));
+        if (sourceEntry && nextSource && sourceChanged) {
+          sourceState.entries.set(sourceIdentity.threadKey, nextSource);
+        }
         const sourceKeys = sourceFolder
           ? sourceFolder.threadKeys.map((threadKey) => getProjectQualifiedThreadDisplayKey(sourceIdentity.projectId, threadKey))
           : [request.sourceKey];
@@ -1560,14 +1749,17 @@ export default class WorkbenchThreadStateController {
           && destinationFolder
           && currentFolder.folderId === destinationFolder.folderId,
         );
-        let nextProjectDisplayOrder = sourceState.displayOrder;
+        let nextProjectDisplayOrder = sourceChanged
+          ? reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(sourceState), sourceState.displayOrder)
+          : sourceState.displayOrder;
         if (sourceEntry && destinationFolder) {
           if (beforeLocalKey && !destinationFolder.threadKeys.includes(beforeLocalKey)) {
+            if (priorSource) sourceState.entries.set(sourceIdentity.threadKey, priorSource);
             return { accepted: false, revision: queuedSnapshot.revision };
           }
           nextProjectDisplayOrder = moveWorkbenchThreadDisplayItem(
             this.naturallyOrderedEntries(sourceState),
-            sourceState.displayOrder,
+            nextProjectDisplayOrder,
             request.section,
             sourceIdentity.threadKey,
             destinationFolder.folderId,
@@ -1581,12 +1773,13 @@ export default class WorkbenchThreadStateController {
         }
 
         const priorProjectDisplayOrder = sourceState.displayOrder;
-        const projectChanged = !areDeeplyEqual(nextProjectDisplayOrder, priorProjectDisplayOrder);
+        const projectChanged = sourceChanged || !areDeeplyEqual(nextProjectDisplayOrder, priorProjectDisplayOrder);
         if (projectChanged) {
           sourceState.displayOrder = nextProjectDisplayOrder;
           try {
             await this.persist(sourceIdentity.projectId, sourceState);
           } catch (error) {
+            if (priorSource) sourceState.entries.set(sourceIdentity.threadKey, priorSource);
             sourceState.displayOrder = priorProjectDisplayOrder;
             throw error;
           }
@@ -1606,12 +1799,13 @@ export default class WorkbenchThreadStateController {
           );
           if (!result.accepted) {
             if (projectChanged) {
+              if (priorSource) sourceState.entries.set(sourceIdentity.threadKey, priorSource);
               sourceState.displayOrder = priorProjectDisplayOrder;
               await this.persist(sourceIdentity.projectId, sourceState);
             }
             return { accepted: false, revision: queuedSnapshot.revision };
           }
-          if (projectChanged) this.publish(sourceIdentity.projectId, sourceState);
+          if (projectChanged) this.publish(sourceIdentity.projectId, sourceState, sourceChanged && nextSource ? nextSource : undefined);
           if (result.snapshot) this.publishHomeDisplayOrder(result.snapshot);
           return {
             accepted: true,
@@ -1619,6 +1813,7 @@ export default class WorkbenchThreadStateController {
           };
         } catch (error) {
           if (projectChanged) {
+            if (priorSource) sourceState.entries.set(sourceIdentity.threadKey, priorSource);
             sourceState.displayOrder = priorProjectDisplayOrder;
             try {
               await this.persist(sourceIdentity.projectId, sourceState);
@@ -1782,6 +1977,144 @@ export default class WorkbenchThreadStateController {
     return { accepted: true, revision: state.revision };
   }
 
+  private async mutatePriority(
+    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/priority/set" }>,
+  ) {
+    const state = await this.getProject(request.projectId);
+    return await this.enqueue(`${request.projectId}:thread:${request.sourceKey}`, async () => {
+      const entry = state.entries.get(request.sourceKey);
+      if (!entry) return { accepted: false, revision: state.revision };
+      const next = setEntryPriority(entry, request.priority);
+      if (!next) return { accepted: false, revision: state.revision };
+      if (areDeeplyEqual(entry, next)) return { accepted: true, revision: state.revision };
+      state.entries.set(request.sourceKey, next);
+      state.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), state.displayOrder);
+      if (getThreadSidebarGroup(entry) === "pinned" && getThreadSidebarGroup(next) !== "pinned") {
+        const pinnedLayoutUpdate = await this.pinnedLayout.remove(request.projectId, request.sourceKey);
+        if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
+      }
+      await this.persist(request.projectId, state);
+      this.publish(request.projectId, state, next);
+      return { accepted: true, revision: state.revision };
+    });
+  }
+
+  private async mutateDependentSnooze(
+    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/snooze/until" }>,
+  ) {
+    if (sameThreadTarget(request.projectId, request.identity, request.target.projectId, request.target.identity)) {
+      const state = await this.getProject(request.projectId);
+      return { accepted: false, revision: state.revision };
+    }
+    const [sourceState, targetState] = await Promise.all([
+      this.getProject(request.projectId),
+      this.getProject(request.target.projectId),
+    ]);
+    const sourceKey = `${request.identity.harness}:${request.identity.threadId}`;
+    const targetKey = `${request.target.identity.harness}:${request.target.identity.threadId}`;
+    return await this.enqueue(`${request.projectId}:thread:${sourceKey}`, async () => {
+      const source = sourceState.entries.get(sourceKey);
+      const target = targetState.entries.get(targetKey);
+      if (
+        !source
+        || source.entryKind !== "thread"
+        || source.metadata.archived
+        || source.lifecycle.settled
+        || !target
+        || target.entryKind !== "thread"
+        || target.metadata.archived
+      ) return { accepted: false, revision: sourceState.revision };
+      const snoozedUntil: WorkbenchThreadSnoozeTarget = request.target;
+      const ready = this.isDependentSnoozeTargetReady(request.target.projectId, targetKey);
+      const next = parseWorkbenchThreadStateEntry({
+        ...source,
+        metadata: { ...source.metadata, snoozed: !ready },
+        snoozedUntil: ready ? null : snoozedUntil,
+      });
+      if (next.entryKind !== "thread") return { accepted: false, revision: sourceState.revision };
+      if (areDeeplyEqual(source, next)) return { accepted: true, revision: sourceState.revision };
+      sourceState.entries.set(sourceKey, next);
+      sourceState.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(sourceState), sourceState.displayOrder);
+      await this.persist(request.projectId, sourceState);
+      this.publish(request.projectId, sourceState, next);
+      return { accepted: true, revision: sourceState.revision };
+    });
+  }
+
+  private isDependentSnoozeTargetReady(projectId: string, targetKey: string) {
+    const state = this.projects.get(projectId);
+    const target = state?.entries.get(targetKey);
+    return Boolean(
+      state?.freshness === "fresh"
+      && target?.entryKind === "thread"
+      && target.lifecycle.kind === "completed"
+      && !(target.gitArc?.claimedPaths.length),
+    );
+  }
+
+  private async reevaluateDependentSnoozes(projectId: string, targetKey: string) {
+    if (!this.isDependentSnoozeTargetReady(projectId, targetKey)) return;
+    const [harness, ...threadIdParts] = targetKey.split(":");
+    const threadId = threadIdParts.join(":");
+    if (!WorkbenchHarnessSchema.safeParse(harness).success || !threadId) return;
+    const candidates = [...this.projects.entries()].flatMap(([sourceProjectId, state]) => (
+      [...state.entries.entries()].flatMap(([sourceKey, entry]) => (
+        entry.entryKind === "thread"
+        && entry.snoozedUntil
+        && sameThreadTarget(
+          entry.snoozedUntil.projectId,
+          entry.snoozedUntil.identity,
+          projectId,
+          { harness: harness as WorkbenchHarnessId, threadId },
+        )
+          ? [{ sourceKey, sourceProjectId, state }]
+          : []
+      ))
+    ));
+    await Promise.all(candidates.map(async ({ sourceKey, sourceProjectId, state }) => await this.enqueue(
+      `${sourceProjectId}:thread:${sourceKey}`,
+      async () => {
+        const current = state.entries.get(sourceKey);
+        if (
+          current?.entryKind !== "thread"
+          || !current.snoozedUntil
+          || !sameThreadTarget(
+            current.snoozedUntil.projectId,
+            current.snoozedUntil.identity,
+            projectId,
+            { harness: harness as WorkbenchHarnessId, threadId },
+          )
+          || !this.isDependentSnoozeTargetReady(projectId, targetKey)
+        ) return;
+        const next = parseWorkbenchThreadStateEntry({
+          ...current,
+          metadata: { ...current.metadata, snoozed: false },
+          snoozedUntil: null,
+        });
+        if (next.entryKind !== "thread") return;
+        state.entries.set(sourceKey, next);
+        state.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), state.displayOrder);
+        await this.persist(sourceProjectId, state);
+        this.publish(sourceProjectId, state, next);
+      },
+    )));
+  }
+
+  private async reevaluateAllDependentSnoozes() {
+    const targets = new Map<string, { projectId: string; targetKey: string }>();
+    for (const state of this.projects.values()) {
+      for (const entry of state.entries.values()) {
+        if (entry.entryKind !== "thread" || !entry.snoozedUntil) continue;
+        const target = entry.snoozedUntil;
+        const targetKey = `${target.identity.harness}:${target.identity.threadId}`;
+        targets.set(`${target.projectId}\0${targetKey}`, { projectId: target.projectId, targetKey });
+      }
+    }
+    await Promise.all([...targets.values()].map(({ projectId, targetKey }) => (
+      this.reevaluateDependentSnoozes(projectId, targetKey)
+    )));
+  }
+
   private async mutateDraft(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" }>) {
     const state = await this.getProject(request.projectId);
     return await this.enqueue(`${request.projectId}:draft:${request.draftId}`, async () => {
@@ -1807,15 +2140,19 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  private async mutateDisplayOrder(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" }>) {
+  private async mutateDisplayOrder(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/drop" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" }>) {
     const state = await this.getProject(request.projectId);
     return await this.enqueue(`${request.projectId}:display-order`, async () => {
+      if (request.method === "workbench/thread-state/display-order/folder/drop") {
+        return await this.mutateProjectFolderDrop(state, request);
+      }
+      if (request.method === "workbench/thread-state/display-order/move") {
+        return await this.mutateProjectDisplayMove(state, request);
+      }
       const entries = this.naturallyOrderedEntries(state);
       const next = request.method === "workbench/thread-state/display-order/folder/create"
         ? createWorkbenchThreadFolder(entries, state.displayOrder, request.folderId, request.sourceKey, request.title)
-        : request.method === "workbench/thread-state/display-order/folder/title/set"
-          ? renameWorkbenchThreadFolder(entries, state.displayOrder, request.folderId, request.title)
-          : moveWorkbenchThreadDisplayItem(entries, state.displayOrder, request.section, request.sourceKey, request.destinationFolderId, request.beforeKey);
+        : renameWorkbenchThreadFolder(entries, state.displayOrder, request.folderId, request.title);
       if (!next) return { accepted: false, revision: state.revision };
       if (areDeeplyEqual(next, state.displayOrder)) return { accepted: true, revision: state.revision };
       state.displayOrder = next;
@@ -1825,7 +2162,112 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/global/open" | "workbench/thread-state/global/close" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/pin/open" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/move" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" | "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" | "workbench/thread-state/home-display-order/move" | "workbench/thread-state/pinned-display-order/folder/create" | "workbench/thread-state/pinned-display-order/folder/title/set" | "workbench/thread-state/pinned-display-order/move" }>) {
+  private async mutateProjectDisplayMove(
+    state: ProjectState,
+    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/display-order/move" }>,
+  ) {
+    const source = state.entries.get(request.sourceKey);
+    const nextSource = source ? setEntryDisplaySection(source, request.section) : null;
+    if (source && !nextSource) return { accepted: false, revision: state.revision };
+    const priorDisplayOrder = state.displayOrder;
+    const sourceChanged = Boolean(source && nextSource && !areDeeplyEqual(source, nextSource));
+    if (source && nextSource && sourceChanged) state.entries.set(request.sourceKey, nextSource);
+    const nextDisplayOrder = moveWorkbenchThreadDisplayItem(
+      this.naturallyOrderedEntries(state),
+      sourceChanged
+        ? reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), priorDisplayOrder)
+        : priorDisplayOrder,
+      request.section,
+      request.sourceKey,
+      request.destinationFolderId,
+      request.beforeKey,
+    );
+    if (!nextDisplayOrder) {
+      if (source) state.entries.set(request.sourceKey, source);
+      return { accepted: false, revision: state.revision };
+    }
+    const displayOrderChanged = !areDeeplyEqual(nextDisplayOrder, priorDisplayOrder);
+    if (!sourceChanged && !displayOrderChanged) return { accepted: true, revision: state.revision };
+    state.displayOrder = nextDisplayOrder;
+    try {
+      await this.persist(request.projectId, state);
+    } catch (error) {
+      if (source) state.entries.set(request.sourceKey, source);
+      state.displayOrder = priorDisplayOrder;
+      throw error;
+    }
+    if (source && nextSource && getThreadSidebarGroup(source) === "pinned" && getThreadSidebarGroup(nextSource) !== "pinned") {
+      const pinnedLayoutUpdate = await this.pinnedLayout.remove(request.projectId, request.sourceKey);
+      if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
+    }
+    this.publish(request.projectId, state, sourceChanged && nextSource ? nextSource : undefined);
+    return { accepted: true, revision: state.revision };
+  }
+
+  private async mutateProjectFolderDrop(
+    state: ProjectState,
+    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/display-order/folder/drop" }>,
+  ) {
+    if (request.sourceKey === request.targetKey) return { accepted: false, revision: state.revision };
+    const source = state.entries.get(request.sourceKey);
+    const target = state.entries.get(request.targetKey);
+    if (!source || !target || target.entryKind !== "thread" || getWorkbenchThreadDisplaySection(target) !== request.section) {
+      return { accepted: false, revision: state.revision };
+    }
+    const nextSource = setEntryDisplaySection(source, request.section);
+    if (!nextSource) return { accepted: false, revision: state.revision };
+    const priorDisplayOrder = state.displayOrder;
+    state.entries.set(request.sourceKey, nextSource);
+    const entries = this.naturallyOrderedEntries(state);
+    let nextDisplayOrder: WorkbenchThreadDisplayOrder | null = null;
+    if (request.destinationFolderId) {
+      const folder = findWorkbenchThreadFolder(state.displayOrder, request.targetKey);
+      if (!folder || folder.folderId !== request.destinationFolderId || folder.section !== request.section) {
+        state.entries.set(request.sourceKey, source);
+        return { accepted: false, revision: state.revision };
+      }
+      nextDisplayOrder = moveWorkbenchThreadDisplayItem(
+        entries,
+        state.displayOrder,
+        request.section,
+        request.sourceKey,
+        folder.folderId,
+        folder.threadKeys[0] ?? null,
+      );
+    } else if (request.folderId) {
+      nextDisplayOrder = createWorkbenchThreadFolder(entries, state.displayOrder, request.folderId, request.targetKey, "New folder");
+      if (nextDisplayOrder) {
+        nextDisplayOrder = moveWorkbenchThreadDisplayItem(
+          entries,
+          nextDisplayOrder,
+          request.section,
+          request.sourceKey,
+          request.folderId,
+          request.targetKey,
+        );
+      }
+    }
+    if (!nextDisplayOrder) {
+      state.entries.set(request.sourceKey, source);
+      return { accepted: false, revision: state.revision };
+    }
+    state.displayOrder = nextDisplayOrder;
+    try {
+      await this.persist(request.projectId, state);
+    } catch (error) {
+      state.entries.set(request.sourceKey, source);
+      state.displayOrder = priorDisplayOrder;
+      throw error;
+    }
+    if (getThreadSidebarGroup(source) === "pinned" && getThreadSidebarGroup(nextSource) !== "pinned") {
+      const pinnedLayoutUpdate = await this.pinnedLayout.remove(request.projectId, request.sourceKey);
+      if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
+    }
+    this.publish(request.projectId, state, nextSource);
+    return { accepted: true, revision: state.revision };
+  }
+
+  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/global/open" | "workbench/thread-state/global/close" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/pin/open" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/move" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" | "workbench/thread-state/priority/set" | "workbench/thread-state/snooze/until" | "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/drop" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" | "workbench/thread-state/home-display-order/move" | "workbench/thread-state/pinned-display-order/folder/create" | "workbench/thread-state/pinned-display-order/folder/drop" | "workbench/thread-state/pinned-display-order/folder/title/set" | "workbench/thread-state/pinned-display-order/move" }>) {
     const state = await this.getProject(request.projectId);
     const key = `${request.identity.harness}:${request.identity.threadId}`;
     const mutate = async () => await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
@@ -1856,12 +2298,12 @@ export default class WorkbenchThreadStateController {
         : entry.metadata.archived
           ? entry
           : { ...entry, metadata: { archived: false as const, pinned: request.pinned, snoozed: entry.metadata.snoozed } };
-      if (entry.entryKind === "thread" && !entry.metadata.archived && request.method === "workbench/thread-state/snooze/set" && !(entry.lifecycle.settled && request.snoozed)) next = { ...entry, metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: request.snoozed } };
+      if (entry.entryKind === "thread" && !entry.metadata.archived && request.method === "workbench/thread-state/snooze/set" && !(entry.lifecycle.settled && request.snoozed)) next = { ...entry, metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: request.snoozed }, snoozedUntil: null };
       if (request.method === "workbench/thread-state/settle") {
         const lifecycle = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "settle" });
         next = entry.entryKind === "subagent"
           ? { ...entry, lifecycle, pinned: false }
-          : { ...entry, lifecycle, metadata: entry.metadata.archived ? entry.metadata : { ...entry.metadata, snoozed: false } };
+          : { ...entry, lifecycle, metadata: entry.metadata.archived ? entry.metadata : { ...entry.metadata, snoozed: false }, snoozedUntil: null };
       }
       if (request.method === "workbench/thread-state/restore" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "restore" }) };
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/status/set" && entry.lifecycle.kind !== request.status) {
@@ -1873,9 +2315,9 @@ export default class WorkbenchThreadStateController {
               ? { kind: "userStopped" }
               : { kind: "userCompleted" },
         );
-        next = { ...entry, lifecycle, metadata: { ...entry.metadata, snoozed: false } };
+        next = { ...entry, lifecycle, metadata: { ...entry.metadata, snoozed: false }, snoozedUntil: null };
       }
-      if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: request.archived ? { archived: true, pinned: false, snoozed: false } : { archived: false, pinned: false, snoozed: false } };
+      if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: request.archived ? { archived: true, pinned: false, snoozed: false } : { archived: false, pinned: false, snoozed: false }, snoozedUntil: null };
       if (request.method === "workbench/thread-state/questionnaire/dismiss") {
         if (entry.pendingQuestionnaire?.requestKey === request.requestKey) {
           next = { ...entry, pendingQuestionnaire: null };
@@ -1908,9 +2350,11 @@ export default class WorkbenchThreadStateController {
       await this.persist(request.projectId, state); this.publish(request.projectId, state, parsed.data);
       return { accepted: true, revision: state.revision };
     });
-    return request.method === "workbench/thread-state/settle"
+    const result = request.method === "workbench/thread-state/settle"
       ? await this.options.runGitArcReadTransition(request.projectId, mutate)
       : await mutate();
+    await this.reevaluateDependentSnoozes(request.projectId, key);
+    return result;
   }
 
   private persist(projectId: string, state: ProjectState) {

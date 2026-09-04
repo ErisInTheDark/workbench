@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchPinnedThreadLayoutStore: own Workbench-wide pinned folders, sparse ordering, compatibility import, and authoritative SQLite persistence. Keywords: pinned, global, layout, folder, storage, sqlite.
+ * - default WorkbenchPinnedThreadLayoutStore: own Workbench-wide pinned folders, atomic row drops, sparse ordering, compatibility import, and authoritative SQLite persistence. Keywords: pinned, global, layout, folder, storage, sqlite.
  */
 
 import { z } from "zod";
@@ -54,6 +54,9 @@ type PinnedLayoutMutation = Extract<WorkbenchThreadStateRequest, {
     | "workbench/thread-state/pinned-display-order/folder/create"
     | "workbench/thread-state/pinned-display-order/folder/title/set"
     | "workbench/thread-state/pinned-display-order/move";
+}>;
+type PinnedFolderDrop = Extract<WorkbenchThreadStateRequest, {
+  method: "workbench/thread-state/pinned-display-order/folder/drop";
 }>;
 
 function projectLayoutEntries(projectId: string, entries: readonly WorkbenchThreadSidebarEntry[]) {
@@ -168,6 +171,30 @@ export default class WorkbenchPinnedThreadLayoutStore {
 
   async waitForIdle() {
     await this.operationQueue;
+  }
+
+  async dropThread(entries: readonly ThreadDisplayLayoutEntry[], request: PinnedFolderDrop) {
+    return await this.enqueue(async () => {
+      const state = await this.load();
+      if (request.sourceKey === request.targetKey) return { accepted: false, snapshot: null };
+      let next: ThreadDisplayLayout | null = state.displayOrder;
+      if (request.destinationFolderId) {
+        const folder = state.displayOrder.folders?.find(({ folderId }) => folderId === request.destinationFolderId);
+        if (!folder || folder.section !== "pinned" || !folder.threadKeys.includes(request.targetKey)) {
+          return { accepted: false, snapshot: null };
+        }
+        next = moveThreadDisplayLayoutItem(entries, state.displayOrder, "pinned", request.sourceKey, folder.folderId, folder.threadKeys[0] ?? null, { preserveMissing: true });
+      } else if (request.folderId) {
+        next = createThreadDisplayFolder(entries, state.displayOrder, request.folderId, request.targetKey, "New folder", { preserveMissing: true });
+        if (next) {
+          next = moveThreadDisplayLayoutItem(entries, next, "pinned", request.sourceKey, request.folderId, request.targetKey, { preserveMissing: true });
+        }
+      }
+      if (!next) return { accepted: false, snapshot: null };
+      if (areDeeplyEqual(next, state.displayOrder)) return { accepted: true, snapshot: null };
+      const snapshot = await this.commit({ ...state, displayOrder: next, revision: state.revision + 1 });
+      return { accepted: true, snapshot };
+    });
   }
 
   private async load() {

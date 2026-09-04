@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, draft presence, direct navigation, tooltip detail, and explicit context-menu access. Keywords: thread, project, sidebar, navigation, tooltip, context menu, claim, composer, draft, priority, pin, snooze, compact.
+ * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, draft presence, direct navigation, tooltip detail, drag targets, and explicit context-menu access. Keywords: thread, project, sidebar, navigation, tooltip, context menu, claim, composer, draft, priority, pin, snooze, compact, drag.
  * - Local helpers: derive full or compact pinned-draft row targets and render bounded thread tooltip details. Keywords: thread, draft, target, tooltip, status.
  */
 "use client";
@@ -122,6 +122,7 @@ export default function WorkbenchThreadListItem({
   contextMenu = null,
   dimmedOverride,
   draggable,
+  dragTargets,
   entry,
   href,
   isDragActive = false,
@@ -149,6 +150,7 @@ export default function WorkbenchThreadListItem({
   contextMenu?: WorkbenchContextMenuDefinition | null;
   dimmedOverride?: boolean;
   draggable?: boolean;
+  dragTargets?: ReactNode;
   entry: ThreadListEntry;
   href: string;
   isDragActive?: boolean;
@@ -282,6 +284,7 @@ export default function WorkbenchThreadListItem({
           />
         </WorkbenchTooltip>
       </ContextMenuCapability>
+      {dragTargets}
       {contextMenuButton}
       {compact ? (
         <div

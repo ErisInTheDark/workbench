@@ -312,6 +312,52 @@ test("folder mutations require canonical ids, durable thread keys, and non-empty
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draft: folderDraft, folderId: "folder", method: "workbench/thread-state/draft/upsert", projectId: "project" }).success, false);
 });
 
+test("drag mutations strictly identify priority, folder, and dependent-snooze intent", () => {
+  const folderId = "00000000-0000-4000-8000-000000000022";
+  const identity = { harness: "codex", threadId: "source" };
+  const target = { identity: { harness: "opencode", threadId: "target" }, projectId: "beta" };
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    method: "workbench/thread-state/priority/set",
+    priority: "main",
+    projectId: "alpha",
+    sourceKey: "codex:source",
+  }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    destinationFolderId: null,
+    folderId,
+    method: "workbench/thread-state/display-order/folder/drop",
+    projectId: "alpha",
+    section: "snoozed",
+    sourceKey: "codex:source",
+    targetKey: "codex:target",
+  }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    destinationFolderId: folderId,
+    folderId: null,
+    method: "workbench/thread-state/pinned-display-order/folder/drop",
+    sourceKey: "alpha/codex%3Asource",
+    targetKey: "beta/codex%3Atarget",
+  }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    identity,
+    method: "workbench/thread-state/snooze/until",
+    projectId: "alpha",
+    target,
+  }).success, true);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    method: "workbench/thread-state/priority/set",
+    priority: "settled",
+    projectId: "alpha",
+    sourceKey: "codex:source",
+  }).success, false);
+  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
+    identity,
+    method: "workbench/thread-state/snooze/until",
+    projectId: "alpha",
+    target: { ...target, extra: true },
+  }).success, false);
+});
+
 test("durable questionnaire state accepts proper questions and rejects approvals", () => {
   const request = {
     id: "request",

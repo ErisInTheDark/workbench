@@ -7,6 +7,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { ThreadSummary, WorkbenchControls } from "workbench-shared/types";
+import type { WorkbenchThreadRowDragPayload } from "../../workbench/layout/workbench-drag";
 import { writeTextToClipboard } from "../../workbench/dom/clipboard";
 import { findWorkbenchThreadFolder, getWorkbenchThreadDisplayKey, type WorkbenchThreadDisplayOrder, type WorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
@@ -18,6 +19,7 @@ import {
   type WorkbenchProjectThreadSidebars,
   type WorkbenchProjectThreadSummaries,
   type WorkbenchThreadSidebarEntry,
+  type WorkbenchThreadPriority,
   type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import { getNeedsAttentionThreadStatusTone } from "./workbench-thread-status-colors";
@@ -67,7 +69,7 @@ interface WorkbenchThreadSidebarActionsValue {
   displayOrder: WorkbenchThreadDisplayOrder;
   entries: WorkbenchThreadSidebarEntry[];
   error: string;
-  getThreadContextMenu: (entry: ThreadListEntry, ownerProjectId: string) => WorkbenchContextMenuDefinition;
+  getThreadContextMenu: (entry: ThreadListEntry, ownerProjectId: string, folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition;
   isLoading: boolean;
   homeDisplayOrder: WorkbenchThreadDisplayOrder;
   homeDisplayOrderSupported: boolean;
@@ -75,6 +77,10 @@ interface WorkbenchThreadSidebarActionsValue {
   onAction: (entry: ThreadListEntry, action: "complete" | "discard" | "restore" | "settle" | "wake", ownerProjectId: string) => void;
   onAutoFocusFolderComplete: () => void;
   onMove: (sourceKey: string, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null, beforeKey: string | null, ownerProjectId?: string) => void;
+  onProjectFolderDrop: (payload: WorkbenchThreadRowDragPayload, targetProjectId: string, targetKey: string, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null) => void;
+  onPinnedFolderDrop: (payload: WorkbenchThreadRowDragPayload, targetProjectId: string, targetKey: string, destinationFolderId: string | null) => void;
+  onSetPriority: (payload: WorkbenchThreadRowDragPayload, priority: WorkbenchThreadPriority) => void;
+  onSnoozeUntil: (payload: WorkbenchThreadRowDragPayload, targetProjectId: string, targetIdentity: { harness: "codex" | "copilot" | "opencode"; threadId: string }) => void;
   onHomeMove: (sourceKey: string, section: WorkbenchThreadDisplaySection, destinationFolderKey: string | null, beforeKey: string | null) => void;
   onPinnedMove: (sourceKey: string, destinationFolderId: string | null, beforeKey: string | null) => void;
   onRenamePinnedFolder: (folderId: string, title: string) => Promise<string>;
@@ -157,7 +163,17 @@ function WorkbenchThreadSidebarActionsProvider({
     }
   }, [controls, onThreadSettled]);
 
-  const getThreadContextMenu = useCallback((entry: ThreadListEntry, ownerProjectId: string): WorkbenchContextMenuDefinition => {
+  const runDragMutation = useCallback((request: Parameters<NonNullable<typeof controls>["updateThreadStateWithAcceptance"]>[0], failureLabel: string, folderId?: string) => {
+    if (!controls) return;
+    void controls.updateThreadStateWithAcceptance(request).then((accepted) => {
+      if (!accepted && folderId) setAutoFocusFolderId((current) => current === folderId ? null : current);
+    }).catch((error: unknown) => {
+      if (folderId) setAutoFocusFolderId((current) => current === folderId ? null : current);
+      console.error(failureLabel, boundedFolderMutationError(error));
+    });
+  }, [controls]);
+
+  const getThreadContextMenu = useCallback((entry: ThreadListEntry, ownerProjectId: string, folderScope?: "pinned" | "project"): WorkbenchContextMenuDefinition => {
     const thread = entry.entryKind === "thread" && ownerProjectId === projectId ? threadSummariesById.get(entry.identity.threadId) ?? null : null;
     const identifier = entry.entryKind === "draft" ? isPinnedDraftSummaryEntry(entry) ? entry.draftId : entry.draft.draftId : entry.identity.threadId;
     const pinned = isPinnedDraftSummaryEntry(entry) ? true : entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
@@ -192,7 +208,8 @@ function WorkbenchThreadSidebarActionsProvider({
     });
 
     const localDisplayKey = isPinnedDraftSummaryEntry(entry) ? `draft:${entry.draftId}` : getWorkbenchThreadDisplayKey(entry);
-    const useProjectFolder = !projectId || group !== "pinned";
+    const useProjectFolder = folderScope === "project"
+      || (folderScope !== "pinned" && (!projectId || group !== "pinned"));
     const displayKey = useProjectFolder ? localDisplayKey : getProjectQualifiedThreadDisplayKey(ownerProjectId, localDisplayKey);
     const ownerSidebar = projectThreadSidebars.projects.find((candidate) => candidate.projectId === ownerProjectId) ?? null;
     const folder = useProjectFolder
@@ -327,6 +344,49 @@ function WorkbenchThreadSidebarActionsProvider({
         sourceKey,
       });
     },
+    onProjectFolderDrop: (payload, targetProjectId, targetKey, section, destinationFolderId) => {
+      if (payload.ownerProjectId !== targetProjectId) return;
+      const folderId = destinationFolderId ? null : crypto.randomUUID();
+      if (folderId) setAutoFocusFolderId(folderId);
+      runDragMutation({
+        destinationFolderId,
+        folderId,
+        method: "workbench/thread-state/display-order/folder/drop",
+        projectId: targetProjectId,
+        section,
+        sourceKey: payload.projectSourceKey,
+        targetKey,
+      }, "Unable to group the dragged thread.", folderId ?? undefined);
+    },
+    onPinnedFolderDrop: (payload, targetProjectId, targetKey, destinationFolderId) => {
+      const folderId = destinationFolderId ? null : crypto.randomUUID();
+      if (folderId) setAutoFocusFolderId(folderId);
+      runDragMutation({
+        destinationFolderId,
+        folderId,
+        method: "workbench/thread-state/pinned-display-order/folder/drop",
+        sourceKey: getProjectQualifiedThreadDisplayKey(payload.ownerProjectId, payload.projectSourceKey),
+        targetKey: getProjectQualifiedThreadDisplayKey(targetProjectId, targetKey),
+      }, "Unable to group the dragged pinned thread.", folderId ?? undefined);
+    },
+    onSetPriority: (payload, priority) => {
+      runDragMutation({
+        method: "workbench/thread-state/priority/set",
+        priority,
+        projectId: payload.ownerProjectId,
+        sourceKey: payload.projectSourceKey,
+      }, "Unable to change the dragged thread priority.");
+    },
+    onSnoozeUntil: (payload, targetProjectId, targetIdentity) => {
+      const source = payload.target.kind === "thread" ? payload.target.target : null;
+      if (source?.kind !== "provider" || !source.harness) return;
+      runDragMutation({
+        identity: { harness: source.harness, threadId: source.threadId },
+        method: "workbench/thread-state/snooze/until",
+        projectId: payload.ownerProjectId,
+        target: { identity: targetIdentity, projectId: targetProjectId },
+      }, "Unable to snooze the dragged thread until its target completes.");
+    },
     onHomeMove: (sourceKey, section, destinationFolderKey, beforeKey) => {
       void controls?.updateThreadStateWithAcceptance({
         beforeKey,
@@ -366,7 +426,7 @@ function WorkbenchThreadSidebarActionsProvider({
     pinnedDisplayOrder: pinnedThreadLayout.displayOrder,
     projectThreadSidebars,
     projectThreadSummaries,
-  }), [autoFocusFolderId, controls, currentSidebar, entries, getThreadContextMenu, homeDisplayOrderSupported, homeThreadDisplayOrder.displayOrder, mutateEntry, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars, projectThreadSummaries, relativeTimeNowMs]);
+  }), [autoFocusFolderId, controls, currentSidebar, entries, getThreadContextMenu, homeDisplayOrderSupported, homeThreadDisplayOrder.displayOrder, mutateEntry, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars, projectThreadSummaries, relativeTimeNowMs, runDragMutation]);
 
   return (
     <WorkbenchComposerDraftPresenceProvider>

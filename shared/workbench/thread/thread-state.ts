@@ -7,6 +7,7 @@
  * - WorkbenchHomeThreadDisplayOrderSnapshotSchema: revisioned home-owned cross-project priority order. Keywords: home, order, global, websocket.
  * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity with direct-child lifecycle projection. Keywords: project, status, summary, pinned, subagent, activity.
  * - WorkbenchThreadStateOpenResultV2Schema/WorkbenchThreadStateOpenResultSchema/WorkbenchGlobalThreadStateOpenResultSchema/WorkbenchPinnedThreadContextResultSchema: atomic project and global observation bootstraps plus bounded admitted-pin context. Keywords: open, bootstrap, snapshot, compatibility, pinned, global.
+ * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent. Keywords: priority, drag, sidebar.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, project-summary, mutation, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
  * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness. Keywords: git, arc, settlement, proposal, wake.
  * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition already-ordered entries into hidden, pinned, main, snoozed, and settled render sections. Keywords: grouping, pin, sidebar.
@@ -33,6 +34,8 @@ import {
 
 export const WorkbenchHarnessSchema = z.enum(["codex", "copilot", "opencode"]);
 export type WorkbenchHarnessId = z.infer<typeof WorkbenchHarnessSchema>;
+export const WorkbenchThreadPrioritySchema = z.enum(["pinned", "main", "snoozed"]);
+export type WorkbenchThreadPriority = z.infer<typeof WorkbenchThreadPrioritySchema>;
 
 export const WorkbenchComposerProfileSlotSchema = z.discriminatedUnion("kind", [
   z.object({ draftId: z.string().min(1), harness: WorkbenchHarnessSchema, kind: z.literal("draft"), projectId: z.string().trim().min(1) }).strict(),
@@ -523,6 +526,19 @@ export const WorkbenchThreadTitleMutationResultSchema = z.object({
 export type WorkbenchThreadTitleMutationResult = z.infer<typeof WorkbenchThreadTitleMutationResultSchema>;
 
 const ProjectRequestBase = z.object({ projectId: z.string().trim().min(1) }).strict();
+const FolderDropFields = {
+  destinationFolderId: CanonicalUuidSchema.nullable(),
+  folderId: CanonicalUuidSchema.nullable(),
+  section: z.enum(["pinned", "snoozed", "settled"]),
+  sourceKey: z.string().min(1),
+  targetKey: z.string().min(1),
+} as const;
+const { section: _pinnedFolderSection, ...PinnedFolderDropFields } = FolderDropFields;
+const requireOneFolderDestination = (value: { destinationFolderId?: string | null; folderId?: string | null }, context: z.RefinementCtx) => {
+  if (Boolean(value.destinationFolderId) === Boolean(value.folderId)) {
+    context.addIssue({ code: "custom", message: "Folder drops require exactly one existing or new folder id.", path: ["folderId"] });
+  }
+};
 export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", [
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.union([z.literal(2), z.literal(3), z.literal(4)]).optional() }),
   z.object({ method: z.literal("workbench/thread-state/global/open"), version: z.union([z.literal(4), z.literal(5), z.literal(6)]) }).strict(),
@@ -546,8 +562,14 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
   ProjectRequestBase.extend({ clientUpdatedAt: z.number().int().nonnegative(), draftId: CanonicalUuidSchema, method: z.literal("workbench/thread-state/draft/delete") }),
   ProjectRequestBase.extend({ draftId: CanonicalUuidSchema, method: z.literal("workbench/thread-state/draft/pin/set"), pinned: z.boolean() }),
   ProjectRequestBase.extend({ draftId: CanonicalUuidSchema, method: z.literal("workbench/thread-state/draft/snooze/set"), snoozed: z.boolean() }),
+  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/priority/set"), priority: WorkbenchThreadPrioritySchema, sourceKey: z.string().min(1) }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/pin/set"), pinned: z.boolean() }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/snooze/set"), snoozed: z.boolean() }),
+  ProjectRequestBase.extend({
+    identity: ThreadIdentitySchema,
+    method: z.literal("workbench/thread-state/snooze/until"),
+    target: z.object({ identity: ThreadIdentitySchema, projectId: z.string().trim().min(1) }).strict(),
+  }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/settle") }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/restore") }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/status/set"), status: z.enum(["needsAttention", "completed", "stopped"]) }),
@@ -565,6 +587,10 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
     method: z.literal("workbench/thread-state/display-order/folder/title/set"),
     title: z.string().trim().min(1).max(80),
   }),
+  ProjectRequestBase.extend({
+    ...FolderDropFields,
+    method: z.literal("workbench/thread-state/display-order/folder/drop"),
+  }).superRefine(requireOneFolderDestination),
   ProjectRequestBase.extend({
     beforeKey: z.string().min(1).nullable(),
     destinationFolderId: CanonicalUuidSchema.nullable(),
@@ -590,6 +616,10 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
     method: z.literal("workbench/thread-state/pinned-display-order/folder/title/set"),
     title: z.string().trim().min(1).max(80),
   }).strict(),
+  z.object({
+    ...PinnedFolderDropFields,
+    method: z.literal("workbench/thread-state/pinned-display-order/folder/drop"),
+  }).strict().superRefine(requireOneFolderDestination),
   z.object({
     beforeKey: z.string().min(1).nullable(),
     destinationFolderId: CanonicalUuidSchema.nullable(),

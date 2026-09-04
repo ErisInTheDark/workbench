@@ -8,8 +8,12 @@
 import { useCallback, useEffect, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
-import { WORKBENCH_THREAD_ORDER_DROP_TARGET_ID, type WorkbenchDragPayload } from "../../workbench/layout/workbench-drag";
-import { parseProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
+import {
+  isWorkbenchThreadRowDragPayload,
+  WORKBENCH_THREAD_ORDER_DROP_TARGET_ID,
+  type WorkbenchDragPayload,
+  type WorkbenchThreadRowDragPayload,
+} from "../../workbench/layout/workbench-drag";
 import {
   getWorkbenchThreadFolderKey,
   type WorkbenchThreadFolder,
@@ -26,8 +30,8 @@ import {
 import { CompletedThreadIcon, DraftThreadIcon, FolderClosedIcon, FolderOpenIcon, NeedsAttentionThreadIcon, ProposedCommitThreadIcon, StoppedThreadIcon, WorkingThreadIcon } from "./workbench-icons";
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import Draggable from "./drag/Draggable";
-import DropTarget from "./drag/DropTarget";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
+import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
 
 const THREAD_FOLDER_HOVER_OPEN_DELAY_MS = 1_000;
@@ -68,11 +72,7 @@ function getFolderStatus(entries: readonly FolderEntry[], attentionLabelsByThrea
   };
 }
 
-function FolderHoverOpenTarget({ onOpen, onSelectedChange, open, selected }: { onOpen: () => void; onSelectedChange: (selected: boolean) => void; open: boolean; selected: boolean }) {
-  useEffect(() => {
-    onSelectedChange(selected);
-    return () => onSelectedChange(false);
-  }, [onSelectedChange, selected]);
+function FolderHoverOpenTarget({ onOpen, open, selected }: { onOpen: () => void; open: boolean; selected: boolean }) {
   useEffect(() => {
     if (open || !selected) return;
     const timeoutId = window.setTimeout(onOpen, THREAD_FOLDER_HOVER_OPEN_DELAY_MS);
@@ -85,6 +85,7 @@ export default function WorkbenchThreadFolder({
   activeDragPayload = null,
   autoFocusName = false,
   attentionLabelsByThreadId = {},
+  canPrependThread,
   children,
   entries,
   folder,
@@ -92,8 +93,8 @@ export default function WorkbenchThreadFolder({
   isDragActive,
   nowMs = Date.now(),
   onAutoFocusComplete,
-  onMoveThread,
   onOpenChange,
+  onPrependThread,
   onRename,
   open,
   project,
@@ -102,6 +103,7 @@ export default function WorkbenchThreadFolder({
   activeDragPayload?: WorkbenchDragPayload | null;
   autoFocusName?: boolean;
   attentionLabelsByThreadId?: Record<string, string | undefined>;
+  canPrependThread?: (payload: WorkbenchThreadRowDragPayload) => boolean;
   children: ReactNode;
   entries: FolderEntry[];
   folder: WorkbenchThreadFolder;
@@ -109,8 +111,8 @@ export default function WorkbenchThreadFolder({
   isDragActive: boolean;
   nowMs?: number;
   onAutoFocusComplete?: () => void;
-  onMoveThread: (sourceKey: string, destinationFolderId: string, beforeKey: string | null) => void;
   onOpenChange: (open: boolean) => void;
+  onPrependThread?: (payload: WorkbenchThreadRowDragPayload) => void;
   onRename: (title: string) => Promise<string>;
   open: boolean;
   project?: WorkbenchProjectOption;
@@ -193,6 +195,10 @@ export default function WorkbenchThreadFolder({
     && activeDragPayload?.type === "home-thread-row"
     && activeDragPayload.ownerProjectId !== project.id,
   );
+  const canPrependActiveThread = Boolean(
+    isWorkbenchThreadRowDragPayload(activeDragPayload)
+    && canPrependThread?.(activeDragPayload),
+  );
   const StatusIcon = status.Icon;
   const titleInput = (
     <input
@@ -263,37 +269,24 @@ export default function WorkbenchThreadFolder({
     >
       {({ draggable, onDragStart, onPointerDown }) => (
         <div className={`group/thread-folder relative${foreignHomeThreadDrag ? " pointer-events-none" : ""}`} draggable={draggable} onDragStart={onDragStart} onPointerDown={onPointerDown}>
+          <FolderHoverOpenTarget onOpen={openFromHover} open={open} selected={isDropTargetSelected} />
           <div aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 rounded-[0.8rem] bg-accent-soft transition-opacity duration-75 ease-out ${isDropTargetSelected ? "opacity-100" : "opacity-0"}`} />
           <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-20 size-full opacity-0 transition-opacity duration-75 ease-out group-hover/thread-folder:opacity-100 ${status.statusClassName}`}>
             <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="12.8" fill="none" stroke="currentColor" strokeWidth="1" strokeOpacity={status.strokeOpacity} strokeDasharray={status.dashed ? "6 4" : undefined} vectorEffect="non-scaling-stroke" />
           </svg>
-          <DropTarget
-            className={open
+          <WorkbenchThreadDragTargets
+            activePayload={activeDragPayload}
+            folderLabel={`add to ${folder.title}`}
+            folderTargetClassName={open
               ? "pointer-events-none absolute inset-x-0 top-0 z-30 h-11 md:h-8"
               : "pointer-events-none absolute inset-x-0 top-0 z-30 h-11"}
-            dropTargetId={WORKBENCH_THREAD_ORDER_DROP_TARGET_ID}
-            enabled={(payload) => {
-              if (homeFolderKey && project) {
-                const identity = payload.type === "home-thread-row"
-                  ? parseProjectQualifiedThreadDisplayKey(payload.sourceKey)
-                  : null;
-                return payload.type === "home-thread-row"
-                  && payload.ownerProjectId === project.id
-                  && payload.section === folder.section
-                  && identity !== null
-                  && !folder.threadKeys.includes(identity.threadKey);
-              }
-              return payload.type === "thread-row"
-                && payload.section === folder.section
-                && !folder.threadKeys.includes(payload.sourceKey);
-            }}
-            onDrop={(payload) => {
-              if (homeFolderKey && payload.type === "home-thread-row") onMoveThread(payload.sourceKey, homeFolderKey, null);
-              else if (payload.type === "thread-row") onMoveThread(payload.sourceKey, folder.folderId, null);
-            }}
-          >
-            {({ selected }) => <FolderHoverOpenTarget onOpen={openFromHover} onSelectedChange={setIsDropTargetSelected} open={open} selected={selected} />}
-          </DropTarget>
+            hoverScope="folder"
+            onFolderDrop={canPrependActiveThread && onPrependThread ? onPrependThread : undefined}
+            onFolderSelectedChange={setIsDropTargetSelected}
+            targetIdentity={null}
+            targetProjectId={project?.id}
+            targetTitle={folder.title}
+          />
           <ThreadDisclosure
             chevronClassName="hidden"
             className={`relative z-10 rounded-[0.8rem] transition-[background-color,opacity] open:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]${folder.section === "snoozed" ? " opacity-50 hover:opacity-100 open:opacity-100" : ""}`}
