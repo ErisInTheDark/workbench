@@ -97,9 +97,17 @@ Compare amend against the target commit. Update `title` and `description` for ad
 
 Proposal acceptance atomically changes branch history, proposal metadata, the accepted receipt ledger, and live claims. It preserves excluded newer work.
 
-### restore after explicit user approval
+### restore selected paths
 
-Preview the affected paths first. Call `mcp__wbex__git_arc_restore` with `paths` to discard only selected outstanding work. Full restore requires `confirmRestore: true` and preserves accepted commits.
+- Use `mcp__wbex__git_arc_restore` with exact ref and path list to restore to pre-patch state
+- Do not restore more than required
+- After restore, unclaim unneeded paths with `mcp__wbex__git_arc_remove`
 
-Restore-and-unclaim marks pending proposals unavailable and leaves a zero-claim resolved lifecycle entry.
+### restore full arc
+
+1. Use `mcp__wbex__git_arc_restore` to preview all affected paths
+2. Get explicit user approval if missing
+3. Reuse with `confirmRestore: true`
+
+Note: Tool cannot restore pre-commit state
 </available:thread-git>

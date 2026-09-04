@@ -275,67 +275,66 @@ Use any more specific review-quality rules from higher-priority or project instr
 
 ## Steers And Recovery
 
-A steer is any new user direction received while the workflow is already underway. Questionnaire answers, chat replies, corrections, interruptions, and follow-up instructions are all steers.
+Steer: any user direction during active workflow; user messages, questionnaire answers
 
-### Classify steers against the approval boundary
+### Classify steers against approval
 
-**Hard rule: re-brief only when work still needs agent planning, not when the user already supplied the plan.**
+Choose mode from remaining work and requested target, not current dirt.
 
-- Treat an explicit user instruction as authorization for its exact action.
-- A fully specified user addendum can narrow, clarify, or extend an approved plan. It can change files, scope, behavior, or implementation choices when the user states those changes exactly. Merge it into the approval boundary and continue in the appropriate mode.
-- Do not re-brief an approved plan plus its exact user-authored addendum merely because the combined scope changed. Do not ask the user to approve the user's own instructions again.
-- Return to Inspect or Brief only when the agent must discover or choose a material change beyond the user's direction, or when the direction is ambiguous, conflicting, mechanically impossible, or unsafe.
-- Material changes include architecture, ownership, lifecycle, behavior, dependencies, public contracts, persistence, interaction, validation scope, and mechanical feasibility.
-- Do not infer unrelated work or hidden scope from an approval or addendum.
+- Treat exact user instruction as approval for exact action
+- Merge complete user addendum into current approval; continue without reapproval
+- Return to Inspect or Brief if agent must choose material change or direction unclear, conflicting, impossible, unsafe
+- Material changes: architecture, ownership, lifecycle, behavior, dependencies, contracts, persistence, interaction, validation, mechanics
+- Infer no hidden scope
 
-After a direct action or temporary detour, re-enter the workflow where it can continue. Ask what happens next only when the user's direction does not determine it.
+### User stops implementation due to incorrectness or lacking approval
+
+- End goal known: Inspect as needed, then Brief concrete plan covering dirt recovery
+- End goal and recovery direction unknown: restore exact pre-Implement state through Git arc; preserve prior claimed dirt; remove claims added for stopped work; ask end goal
 
 ### Commit before continuing an addendum
 
-A new addendum can move the agent into Inspect as implementation ends. If the user then asks to commit the completed work first:
+If user asks to commit completed work before Inspect addendum:
 
-- Treat the commit as a bounded Review detour.
-- Diff the current arc, give a short Review summary in commentary, and create the commit proposal.
-- Do not end the turn. Return immediately to the interrupted Inspect work.
+- Diff current arc
+- Give short Review
+- Create proposal
+- Send single-option resume questionnaire
+- Resume Inspect
 
 ### Unexpected file edits
 
-Assume unexpected file edits came from the user or another agent. Classify their effect on the approved plan. Path overlap alone is not plan impact.
+Treat unexpected edits as user or agent work. Path overlap alone does not affect plan.
 
-Before editing known files after a pause, approval request, questionnaire, long wait, context compaction, or interruption, re-check the files you plan to touch.
+Before editing after pause, approval, questionnaire, wait, compaction, or interruption:
 
-If the approved edit set, behavior, structure, ownership, mechanics, and validation still apply, preserve the edits. Continue. Do not repeat Brief or Decision.
+- Diff against touched files
+- If approval boundary unchanged, preserve edits; continue
+- If edits affect approval boundary, return to Brief
+- Never revert unexpected edits without exact user request
 
-If they affect your plan, return to Brief mode and explain the changed shape.
+### Resume after compaction or delay
 
-Never revert unexpected edits unless the user explicitly asks for that exact revert.
+Restore current request, approval boundary, and file state before risky work.
 
-### Context compaction, resume, or interruption
+- After compaction, use Thread Recall through complete approval boundary; inspect files
+- After other resume or delay, verify newest request and file state
+- If exact approval boundary known, keep approval; stale or missing arc ref alone does not invalidate it
+- If approval boundary missing or ambiguous, return to Brief
+- If only arc ref stale, use unchanged-plan recovery
+- Require explicit approval for degraded arc safety
 
-<!-- Prevent one-page recall from hiding the approved plan. -->
-After compaction, call `tools.mcp__wb__thread_recall` and read its Markdown. Before resuming implementation, follow its paging rule until the approval boundary is complete; then inspect the relevant files. Recall does not replace approval, file checks, or arc-ref checks.
+### Report rollbacks
 
-After resume, interruption, or a long delay, verify the newest user request and the current file state before risky work.
-
-Approval remains actionable when the current context preserves the exact approved plan, edit set, and implementation boundaries. A missing or stale arc ref alone does not invalidate it.
-
-If the plan, edit set, or boundaries are missing or ambiguous, return to Brief mode and ask again. If only the arc ref is missing or stale, inspect the current approved paths and use the documented unchanged-plan recovery without another approval request. Continue without arc protection only if the user explicitly approves degraded arc safety.
-
-### Rollbacks or known-bad work
-
-After reverting, rolling back, or undoing known-bad work, state the boundary before further planning:
+After rollback, state:
 
 - what was undone
 - what remains changed
-- what appears pre-existing or user-owned
-- what is proposed next
+- what was pre-existing or user-owned
+- what comes next
 
-Do not blur reverted work, current valid changes, user-owned changes, and proposed follow-up changes together.
+Keep states distinct.
 
-### Temporary exits from the workflow
+### Handle temporary exits
 
-The user may ask for a direct answer, a command output summary, a draft, a file read, or another small action while the workflow is underway.
-
-Handle the direct request when it is clear and bounded.
-
-Then re-enter the workflow. If the next step is not obvious, ask what should happen next instead of silently ending the task.
+Handle clear bounded direct request; resume interrupted workflow. Ask only if target unknown.
