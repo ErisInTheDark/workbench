@@ -1,4 +1,5 @@
 /*
+ * Keywords: thread, provider state, notifications, questionnaires, reconciliation.
  * Exports:
  * - WorkbenchThreadState: owned thread, rate-limit, and model cache state for the workbench. Keywords: workbench, thread, state, codex.
  * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator. Keywords: workbench, thread, sidebar, intent.
@@ -75,9 +76,6 @@ import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/W
 import WorkbenchTranscriptClient from "./database/transcript/WorkbenchTranscriptClient";
 import { workbenchTranscriptOperations } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import {
-    getThreadStateChangeTagText as getNormalizedThreadStateChangeTagText,
-} from "./markdown/markdown-parse";
 import LifecycleScope from "./state/LifecycleScope";
 import WorkbenchClientStateController from "./state/WorkbenchClientStateController";
 import ThreadDocumentStore from "./state/ThreadDocumentStore";
@@ -739,37 +737,6 @@ function mergeStreamingTextArray(incomingValues: string[], liveValues: string[])
     nextValues[index] = mergeLongerStreamingText(nextValues[index] ?? "", liveValue);
   }
   return nextValues;
-}
-
-function areStreamingTextsCompatible(left: string, right: string) {
-  const normalizedLeft = normalizeStreamingText(left);
-  const normalizedRight = normalizeStreamingText(right);
-  return normalizedLeft === normalizedRight
-    || normalizedLeft.startsWith(normalizedRight)
-    || normalizedRight.startsWith(normalizedLeft);
-}
-
-function areStreamingTextArraysCompatible(left: string[], right: string[]) {
-  const length = Math.max(left.length, right.length);
-  for (let index = 0; index < length; index += 1) {
-    const leftValue = left[index] ?? "";
-    const rightValue = right[index] ?? "";
-    if (leftValue || rightValue) {
-      if (!areStreamingTextsCompatible(leftValue, rightValue)) {
-        return false;
-      }
-    }
-  }
-
-  return true;
-}
-
-function joinStreamingText(values: string[]) {
-  return values.join("\n").trim();
-}
-
-function normalizeStreamingText(value: string) {
-  return value.replace(/\s+/g, " ").trim();
 }
 
 function isEmptyRolloutError(error: unknown) {
@@ -2194,174 +2161,6 @@ function WorkbenchThreadClient(
     return incomingItem;
   }
 
-  function getThreadStateChangeTagText(item: ThreadItem) {
-    if (item.type !== "agentMessage") {
-      return null;
-    }
-
-    return getNormalizedThreadStateChangeTagText(normalizeStreamingText(item.text));
-  }
-
-  function isThreadStateChangeLikeAgentMessage(item: ThreadItem) {
-    return item.type === "agentMessage"
-      && normalizeStreamingText(item.text).startsWith("<set-state");
-  }
-
-  function areThreadStateChangeItemsCompatible(left: ThreadItem, right: ThreadItem) {
-    const leftTag = getThreadStateChangeTagText(left);
-    const rightTag = getThreadStateChangeTagText(right);
-    return leftTag !== null && rightTag !== null && leftTag === rightTag;
-  }
-
-  function isStructurallyMatchingStreamingItem(incomingItem: ThreadItem, liveItem: ThreadItem) {
-    if (incomingItem.type === "agentMessage" && liveItem.type === "agentMessage") {
-      if (isThreadStateChangeLikeAgentMessage(incomingItem) || isThreadStateChangeLikeAgentMessage(liveItem)) {
-        return areThreadStateChangeItemsCompatible(incomingItem, liveItem);
-      }
-
-      return areStreamingTextsCompatible(incomingItem.text, liveItem.text);
-    }
-
-    if (incomingItem.type === "reasoning" && liveItem.type === "reasoning") {
-      const incomingText = joinStreamingText([...incomingItem.content, ...incomingItem.summary]);
-      const liveText = joinStreamingText([...liveItem.content, ...liveItem.summary]);
-      if (incomingText || liveText) {
-        return areStreamingTextsCompatible(incomingText, liveText);
-      }
-
-      return areStreamingTextArraysCompatible(incomingItem.content, liveItem.content)
-        && areStreamingTextArraysCompatible(incomingItem.summary, liveItem.summary);
-    }
-
-    if (incomingItem.type === "plan" && liveItem.type === "plan") {
-      return areStreamingTextsCompatible(incomingItem.text, liveItem.text);
-    }
-
-    return false;
-  }
-
-  function getStreamingItemText(item: ThreadItem) {
-    switch (item.type) {
-      case "agentMessage":
-        return normalizeStreamingText(item.text);
-      case "reasoning":
-        return normalizeStreamingText(joinStreamingText([...item.content, ...item.summary]));
-      case "plan":
-        return normalizeStreamingText(item.text);
-      default:
-        return "";
-    }
-  }
-
-  function getStreamingItemDedupeKind(item: ThreadItem) {
-    switch (item.type) {
-      case "agentMessage":
-      case "reasoning":
-      case "plan":
-        return item.type;
-      default:
-        return null;
-    }
-  }
-
-  function forgetReplacedStreamingItem(
-    turnId: string,
-    clientItemId: string,
-    canonicalItemId: string,
-    options: { settleStreamingKeys?: boolean } = {},
-  ) {
-    if (options.settleStreamingKeys === false) return;
-    const clientKey = getThreadItemKey(turnId, clientItemId);
-    const canonicalKey = getThreadItemKey(turnId, canonicalItemId);
-    if (clientKey === canonicalKey) {
-      streamingReconciler.forgetStreamingItemKey(clientKey);
-      return;
-    }
-
-    streamingReconciler.forgetStreamingItemKey(clientKey);
-  }
-
-  function forgetStreamingItemKey(
-    turnId: string,
-    itemId: string,
-    options: { settleStreamingKeys?: boolean } = {},
-  ) {
-    if (options.settleStreamingKeys === false) return;
-    const itemKey = getThreadItemKey(turnId, itemId);
-    streamingReconciler.forgetStreamingItemKey(itemKey);
-  }
-
-  function shouldPreferIncomingStreamingItem(turnId: string, incomingItem: ThreadItem, existingItem: ThreadItem) {
-    const incomingKey = getThreadItemKey(turnId, incomingItem.id);
-    const existingKey = getThreadItemKey(turnId, existingItem.id);
-    const incomingIsClientCreated = streamingReconciler.hasClientCreatedItemKey(incomingKey);
-    const existingIsClientCreated = streamingReconciler.hasClientCreatedItemKey(existingKey);
-    if (incomingIsClientCreated !== existingIsClientCreated) {
-      return existingIsClientCreated;
-    }
-
-    return getStreamingItemText(incomingItem).length >= getStreamingItemText(existingItem).length;
-  }
-
-  function canPruneDuplicateStreamingItems(turnId: string, item: ThreadItem, candidate: ThreadItem) {
-    if (item.type === "reasoning" && candidate.type === "reasoning" && item.id !== candidate.id) {
-      const itemKey = getThreadItemKey(turnId, item.id);
-      const candidateKey = getThreadItemKey(turnId, candidate.id);
-      return (
-        streamingReconciler.hasClientCreatedItemKey(itemKey)
-        || streamingReconciler.hasClientCreatedItemKey(candidateKey)
-      ) && isStructurallyMatchingStreamingItem(item, candidate);
-    }
-
-    if (isThreadStateChangeLikeAgentMessage(item) || isThreadStateChangeLikeAgentMessage(candidate)) {
-      const itemKey = getThreadItemKey(turnId, item.id);
-      const candidateKey = getThreadItemKey(turnId, candidate.id);
-      return streamingReconciler.hasClientCreatedItemKey(itemKey) !== streamingReconciler.hasClientCreatedItemKey(candidateKey)
-        && isStructurallyMatchingStreamingItem(item, candidate);
-    }
-
-    return isStructurallyMatchingStreamingItem(item, candidate);
-  }
-
-  function pruneDuplicateStreamingItems(
-    turnId: string,
-    items: ThreadItem[],
-    options: { settleStreamingKeys?: boolean } = {},
-  ) {
-    const nextItems: ThreadItem[] = [];
-    let changed = false;
-
-    for (const item of items) {
-      const kind = getStreamingItemDedupeKind(item);
-      const text = getStreamingItemText(item);
-      if (!kind || !text) {
-        nextItems.push(item);
-        continue;
-      }
-
-      const existingIndex = nextItems.findIndex((candidate) => (
-        getStreamingItemDedupeKind(candidate) === kind
-        && canPruneDuplicateStreamingItems(turnId, item, candidate)
-      ));
-
-      if (existingIndex === -1) {
-        nextItems.push(item);
-        continue;
-      }
-
-      changed = true;
-      const existingItem = nextItems[existingIndex];
-      if (shouldPreferIncomingStreamingItem(turnId, item, existingItem)) {
-        forgetReplacedStreamingItem(turnId, existingItem.id, item.id, options);
-        nextItems[existingIndex] = mergeLiveStreamingItem(item, existingItem);
-      } else {
-        forgetReplacedStreamingItem(turnId, item.id, existingItem.id, options);
-      }
-    }
-
-    return changed ? nextItems : items;
-  }
-
   function getOptimisticHandleFromItemId(itemId: string) {
     return itemId.split(":").at(-1) ?? "";
   }
@@ -2531,11 +2330,11 @@ function WorkbenchThreadClient(
         for (const [liveItemId, candidateLiveItem] of liveItemsById) {
           if (
             streamingReconciler.hasClientCreatedItemKey(getThreadItemKey(incomingTurn.id, liveItemId))
-            && isStructurallyMatchingStreamingItem(item, candidateLiveItem)
+            && streamingReconciler.isStructurallyMatchingItem(item, candidateLiveItem)
           ) {
             matchedLiveItem = candidateLiveItem;
             liveItemsById.delete(liveItemId);
-            forgetReplacedStreamingItem(incomingTurn.id, liveItemId, item.id, options);
+            streamingReconciler.forgetStreamingItemKey(getThreadItemKey(incomingTurn.id, liveItemId), options);
             break;
           }
         }
@@ -2543,7 +2342,7 @@ function WorkbenchThreadClient(
       }
 
       liveItemsById.delete(item.id);
-      forgetStreamingItemKey(incomingTurn.id, item.id, options);
+      streamingReconciler.forgetStreamingItemKey(getThreadItemKey(incomingTurn.id, item.id), options);
       return mergeLiveStreamingItem(item, liveItem);
     });
 
@@ -2558,7 +2357,7 @@ function WorkbenchThreadClient(
       itemsView: incomingTurn.itemsView === "full" || liveTurn.itemsView === "notLoaded"
         ? incomingTurn.itemsView
         : liveTurn.itemsView,
-      items: pruneDuplicateStreamingItems(incomingTurn.id, nextItems, options),
+      items: streamingReconciler.pruneDuplicateItems(incomingTurn.id, nextItems, mergeLiveStreamingItem, options),
     };
   }
 
@@ -3739,7 +3538,7 @@ function WorkbenchThreadClient(
         }
 
         const prunedItems = pruneStreamingDuplicates
-          ? pruneDuplicateStreamingItems(turn.id, nextItems)
+          ? streamingReconciler.pruneDuplicateItems(turn.id, nextItems, mergeLiveStreamingItem)
           : nextItems;
         updated = true;
         return {
@@ -3775,18 +3574,18 @@ function WorkbenchThreadClient(
         let matchedClientItem: ThreadItem | null = null;
         const nextItems = items.filter((item) => {
           const itemKey = getThreadItemKey(turnId, item.id);
-          if (!streamingReconciler.hasClientCreatedItemKey(itemKey) || !isStructurallyMatchingStreamingItem(compactedIncomingItem, item)) {
+          if (!streamingReconciler.hasClientCreatedItemKey(itemKey) || !streamingReconciler.isStructurallyMatchingItem(compactedIncomingItem, item)) {
             return true;
           }
 
           matchedClientItem = item;
-          forgetReplacedStreamingItem(turnId, item.id, compactedIncomingItem.id);
+          streamingReconciler.forgetStreamingItemKey(getThreadItemKey(turnId, item.id));
           return false;
         });
         return [...nextItems, matchedClientItem ? mergeLiveStreamingItem(compactedIncomingItem, matchedClientItem) : compactedIncomingItem];
       }
 
-      forgetStreamingItemKey(turnId, compactedIncomingItem.id);
+      streamingReconciler.forgetStreamingItemKey(getThreadItemKey(turnId, compactedIncomingItem.id));
       return items.map((item, index) => (
         index === itemIndex ? mergeLiveStreamingItem(compactedIncomingItem, item) : item
       ));
@@ -3995,7 +3794,7 @@ function WorkbenchThreadClient(
 
       const abandonedItemIdSet = new Set(abandonedItemIds);
       for (const itemId of abandonedItemIds) {
-        forgetStreamingItemKey(turnId, itemId);
+        streamingReconciler.forgetStreamingItemKey(getThreadItemKey(turnId, itemId));
       }
       return items.filter((item) => !abandonedItemIdSet.has(item.id));
     }, { pruneStreamingDuplicates: false });

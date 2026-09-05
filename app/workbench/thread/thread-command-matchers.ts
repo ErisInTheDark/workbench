@@ -15,7 +15,7 @@
  * - parseGitArcCommand/parseGitArcReceipt/parseGitCheckpointCommitCommand/parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse arc commands, receipts, comparison, and proposal output. Keywords: git, arc, checkpoint, compare, proposal.
  * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id. Keywords: checkpoint, diff, artifact.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries. Keywords: checkpoint, diff, file change.
- * - getThreadCommandDisplay: unwrap shell launchers and describe common command patterns with staged shell matchers. Keywords: thread, command, matcher, shell.
+ * - getThreadCommandDisplay: reuse immutable command contexts, unwrap shell launchers, and describe common command patterns. Keywords: thread, command, matcher, cache, shell.
  * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label. Keywords: thread, command, summary, aggregate.
  * - getThreadCommandExecutionOutcome/getThreadCommandOutcomeDisplay: classify command lifecycle results and select completed or ongoing structured grammar. Keywords: command, timeout, failure, tense.
  * - getWorkbenchMcpCommandDisplay/getWorkbenchMcpCommandRoute/getWorkbenchCommandRouteSummaryDisplay: map recorded wb MCP calls and resolved routes into summary or dedicated renderer operations. Keywords: workbench, MCP, command, rendering.
@@ -101,6 +101,48 @@ import {
 } from "./command-matchers/workbench-mcp";
 
 type KnownCommandSummaryStatKey = Exclude<keyof ThreadCommandSummaryStats, "otherCommands">;
+
+const MAX_CACHED_COMMAND_DISPLAY_CONTEXTS = 8;
+const commandDisplayCache = new WeakMap<CommandAction[], Map<string, ThreadCommandDisplay>>();
+const commandDisplayContextIdentity = new WeakMap<object, number>();
+let nextCommandDisplayContextIdentity = 1;
+
+function getCommandDisplayContextIdentity(value: object | undefined) {
+  if (!value) {
+    return 0;
+  }
+
+  const cachedIdentity = commandDisplayContextIdentity.get(value);
+  if (cachedIdentity) {
+    return cachedIdentity;
+  }
+
+  const identity = nextCommandDisplayContextIdentity;
+  nextCommandDisplayContextIdentity += 1;
+  commandDisplayContextIdentity.set(value, identity);
+  return identity;
+}
+
+function getCommandDisplayCacheKey({
+  command,
+  cwd,
+  knownSkills,
+  projectRootPath,
+  shell,
+  workspaceRoots,
+}: CommandDisplayContext) {
+  return [
+    command.length,
+    command,
+    cwd.length,
+    cwd,
+    projectRootPath?.length ?? 0,
+    projectRootPath ?? "",
+    shell ?? "",
+    getCommandDisplayContextIdentity(knownSkills),
+    getCommandDisplayContextIdentity(workspaceRoots),
+  ].join("\0");
+}
 
 const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
   format: (count: number) => string;
@@ -288,7 +330,7 @@ function prefixWorkbenchCommandDisplay(
   };
 }
 
-export function getThreadCommandDisplay({
+function computeThreadCommandDisplay({
   command,
   commandActions,
   cwd,
@@ -373,6 +415,32 @@ export function getThreadCommandDisplay({
     summaryText: rawSummaryText,
     unwrappedCommand: context.unwrappedCommand,
   };
+}
+
+export function getThreadCommandDisplay(context: CommandDisplayContext): ThreadCommandDisplay {
+  let contextCache = commandDisplayCache.get(context.commandActions);
+  if (!contextCache) {
+    contextCache = new Map();
+    commandDisplayCache.set(context.commandActions, contextCache);
+  }
+
+  const cacheKey = getCommandDisplayCacheKey(context);
+  const cachedDisplay = contextCache.get(cacheKey);
+  if (cachedDisplay) {
+    contextCache.delete(cacheKey);
+    contextCache.set(cacheKey, cachedDisplay);
+    return cachedDisplay;
+  }
+
+  const display = computeThreadCommandDisplay(context);
+  if (contextCache.size >= MAX_CACHED_COMMAND_DISPLAY_CONTEXTS) {
+    const oldestCacheKey = contextCache.keys().next().value;
+    if (oldestCacheKey !== undefined) {
+      contextCache.delete(oldestCacheKey);
+    }
+  }
+  contextCache.set(cacheKey, display);
+  return display;
 }
 
 export function getThreadCommandBlockDisplay({
