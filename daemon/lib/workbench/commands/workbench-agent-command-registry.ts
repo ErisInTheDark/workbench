@@ -14,6 +14,7 @@ import { WORKBENCH_SUBAGENT_COMMANDS } from "./subagent-command-definitions";
 import { WORKBENCH_THREAD_COMMANDS } from "./thread-command-definitions";
 import { WORKBENCH_TOKEN_COMMANDS } from "./token-command-definition";
 import { WORKBENCH_TOC_COMMANDS } from "./toc-command-definition";
+import { WORKBENCH_STATS_COMMANDS } from "./stats-command-definitions";
 import {
   getWorkbenchAgentCommandToolName,
   type WorkbenchAgentCommandDefinition,
@@ -21,6 +22,7 @@ import {
 
 const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Object.freeze([
   ...WORKBENCH_TOC_COMMANDS,
+  ...WORKBENCH_STATS_COMMANDS,
   ...WORKBENCH_RIPGREP_COMMANDS,
   ...WORKBENCH_QUESTIONNAIRE_COMMANDS,
   ...WORKBENCH_SUBAGENT_COMMANDS,

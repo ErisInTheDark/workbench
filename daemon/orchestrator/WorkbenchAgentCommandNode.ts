@@ -11,6 +11,7 @@ import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchTokenCountController from "./WorkbenchTokenCountController";
+import WorkbenchClaimStatsController from "./WorkbenchClaimStatsController";
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
   access: "agent",
@@ -19,6 +20,11 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const gitArc = build.get("gitArc");
     const harnesses = build.get("harnesses");
     const projectCatalog = build.get("projectCatalog");
+    const database = build.get("database");
+    const claimStats = new WorkbenchClaimStatsController({
+      resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Claim statistics" }),
+      read: async (request) => await database.readClaimStats(request),
+    });
     const questionnaires = build.get("questionnaires");
     const subagents = build.get("subagents");
     const threadState = build.get("threadState");
@@ -72,6 +78,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         }, signal);
       },
       executeTokenCount: async (body, signal) => await tokens.execute(body, signal),
+      executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
       executeSessionRequest: context.executeBrowseSessionRequest,
       getReloadScopeCatalog: () => reloadDirt.getCatalog(),
       readReloadDirtSnapshot: () => reloadDirt.getSnapshot(),
@@ -92,7 +99,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["gitArc", "harnesses", "projectCatalog", "questionnaires", "reloadDirt", "subagents", "threadGit", "threadState", "transcript"],
+  requires: ["database", "gitArc", "harnesses", "projectCatalog", "questionnaires", "reloadDirt", "subagents", "threadGit", "threadState", "transcript"],
   safeAll: true,
   scope: "server:commands",
   sources: [
@@ -102,6 +109,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/CodexCommandExecController*.ts",
     "daemon/orchestrator/WorkbenchRipgrepController*.ts",
     "daemon/orchestrator/WorkbenchTokenCountController*.ts",
+    "daemon/orchestrator/WorkbenchClaimStatsController*.ts",
     "daemon/lib/workbench/commands/**",
     "daemon/lib/workbench/cli/**",
     "daemon/lib/workbench/thread/WorkbenchThreadRecallController.ts",

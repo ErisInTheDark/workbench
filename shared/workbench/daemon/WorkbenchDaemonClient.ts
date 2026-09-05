@@ -26,6 +26,7 @@ import reportClientSchemaError from "../report-client-schema-error.ts";
 import { WorkbenchProjectsPayloadSchema } from "../project/project-state.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../thread/thread-state.ts";
 import { WorkbenchSearchResponseSchema } from "../search/workbench-search.ts";
+import { WorkbenchStatsDetailedResponseSchema } from "../stats/workbench-stats-detail-contract.ts";
 import {
   WORKBENCH_STATS_IMPORT_UPDATED_METHOD,
   WorkbenchStatsImportProgressSchema,
@@ -71,6 +72,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "project/file/save": return fileWriteSchema;
     case "search/query": return WorkbenchSearchResponseSchema;
     case "stats/read": return WorkbenchStatsResponseSchema;
+    case "stats/read/detailed": return WorkbenchStatsDetailedResponseSchema;
     case "stats/import/start": return WorkbenchStatsImportProgressSchema;
     case "stats/rate-limits/refresh": return z.object({ ok: z.literal(true) }).strict();
     case "local-capabilities/read":

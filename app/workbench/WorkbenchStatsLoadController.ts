@@ -4,25 +4,33 @@
  * - default WorkbenchStatsLoadController: own latest-request fencing and single-flight background reads. Keywords: stats, lifecycle, refresh.
  */
 import type {
-  WorkbenchStatsReadRequest,
   WorkbenchStatsResponse,
 } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { STATS_TOKEN_TYPES, type WorkbenchStatsDetailedReadRequest } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 
 export interface WorkbenchStatsLoadState {
   error: string;
   loading: boolean;
   stats: WorkbenchStatsResponse | null;
+  displayedRequest: WorkbenchStatsDetailedReadRequest | null;
+}
+
+function sameRequest(left: WorkbenchStatsDetailedReadRequest | null, right: WorkbenchStatsDetailedReadRequest) {
+  return left !== null && left.projectId === right.projectId && left.range === right.range
+    && (left.provider ?? null) === (right.provider ?? null) && (left.model ?? null) === (right.model ?? null)
+    && STATS_TOKEN_TYPES.every((type) => (left.tokenTypes ?? STATS_TOKEN_TYPES).includes(type) === (right.tokenTypes ?? STATS_TOKEN_TYPES).includes(type));
 }
 
 export default class WorkbenchStatsLoadController {
   private active = true;
-  private background: Promise<void> | null = null;
-  private queuedRequest: WorkbenchStatsReadRequest | null = null;
+  private flight: Promise<void> | null = null;
+  private desiredRequest: WorkbenchStatsDetailedReadRequest | null = null;
+  private pending = false;
   private readonly listeners = new Set<() => void>();
   private requestId = 0;
-  private snapshot: WorkbenchStatsLoadState = { error: "", loading: true, stats: null };
+  private snapshot: WorkbenchStatsLoadState = { error: "", loading: true, stats: null, displayedRequest: null };
 
-  constructor(private readonly read: (request: WorkbenchStatsReadRequest) => Promise<WorkbenchStatsResponse>) {}
+  constructor(private readonly read: (request: WorkbenchStatsDetailedReadRequest) => Promise<WorkbenchStatsResponse>) {}
 
   getSnapshot = () => this.snapshot;
 
@@ -31,43 +39,55 @@ export default class WorkbenchStatsLoadController {
     return () => this.listeners.delete(listener);
   };
 
-  async load(request: WorkbenchStatsReadRequest, foreground = true) {
-    const currentRequestId = ++this.requestId;
-    if (foreground) this.install({ error: "", loading: true, stats: null });
-    try {
-      const stats = await this.read(request);
-      if (this.active && currentRequestId === this.requestId) this.install({ error: "", loading: false, stats });
-    } catch (error) {
-      if (this.active && currentRequestId === this.requestId) {
-        this.install({
-          error: error instanceof Error ? error.message : "Unable to load usage statistics.",
-          loading: false,
-          stats: foreground ? null : this.snapshot.stats,
-        });
-      }
-    }
+  load(request: WorkbenchStatsDetailedReadRequest) {
+    if (!this.active) return Promise.resolve();
+    if (!sameRequest(this.desiredRequest, request)) this.requestId += 1;
+    this.desiredRequest = request;
+    return this.enqueue();
   }
 
-  refresh(request: WorkbenchStatsReadRequest) {
-    this.queuedRequest = request;
-    if (this.background) return this.background;
-    this.background = this.runBackground().finally(() => { this.background = null; });
-    return this.background;
+  refresh(request?: WorkbenchStatsDetailedReadRequest) {
+    if (!this.active) return Promise.resolve();
+    if (!this.desiredRequest && request) return this.load(request);
+    return this.desiredRequest ? this.enqueue() : Promise.resolve();
   }
 
   dispose() {
     this.active = false;
     this.requestId += 1;
-    this.queuedRequest = null;
+    this.pending = false;
     this.listeners.clear();
   }
 
-  private async runBackground() {
-    while (this.active && this.queuedRequest) {
-      const request = this.queuedRequest;
-      this.queuedRequest = null;
-      await this.load(request, false);
+  private enqueue() {
+    this.pending = true;
+    this.flight ??= Promise.resolve().then(() => this.drain());
+    this.install({ ...this.snapshot, loading: true });
+    return this.flight;
+  }
+
+  private async drain() {
+    while (this.active && this.pending && this.desiredRequest) {
+      const request = this.desiredRequest;
+      const id = this.requestId;
+      this.pending = false;
+      try {
+        const stats = await this.read(request);
+        if (this.active && id === this.requestId) {
+          this.install({ error: "", loading: this.pending, stats, displayedRequest: request });
+        }
+      } catch (error) {
+        if (this.active && id === this.requestId) {
+          this.install({
+            ...this.snapshot,
+            error: error instanceof Error ? error.message : "Unable to load usage statistics.",
+            loading: this.pending,
+          });
+        }
+      }
     }
+    // Release before a result listener's queued microtask can request another read.
+    this.flight = null;
   }
 
   private install(snapshot: WorkbenchStatsLoadState) {

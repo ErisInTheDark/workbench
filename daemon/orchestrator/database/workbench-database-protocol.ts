@@ -7,6 +7,8 @@
  * WorkbenchDatabaseMutationResult: aggregate result of one atomic mutation batch. Keywords: database, statement, transaction.
  */
 import type { WorkbenchStatsImportProgress, WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchStatsDetailedReadRequest, WorkbenchStatsDetailedResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+import type { WorkbenchClaimStatsRequest, WorkbenchClaimStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
   WorkbenchDatabaseMutation,
@@ -64,6 +66,8 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "recordStatsClaimSnapshot"; snapshot: WorkbenchGitClaimSnapshot }
   | { type: "recordStatsRateLimits"; observation: WorkbenchRateLimitObservation }
   | { type: "readStats"; request: WorkbenchStatsReadRequest; now?: number }
+  | { type: "readStatsDetailed"; request: WorkbenchStatsDetailedReadRequest; now?: number }
+  | { type: "readClaimStats"; request: WorkbenchClaimStatsRequest; now?: number }
   | { type: "beginStatsImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }
   | { type: "addStatsClaimDiscoveries"; runId: string; discoveries: WorkbenchGitClaimImportDiscovery[]; now: number }
   | { type: "claimStatsUsageImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }
@@ -87,6 +91,8 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "transcriptMaterializedTurnIds"; turnIds: string[] }
   | { id: number; type: "searchResult"; result: WorkbenchSearchResponse }
   | { id: number; type: "statsResult"; result: WorkbenchStatsResponse }
+  | { id: number; type: "statsDetailedResult"; result: WorkbenchStatsDetailedResponse }
+  | { id: number; type: "claimStatsResult"; result: WorkbenchClaimStatsResponse }
   | { id: number; type: "statsUsageImportCandidate"; candidate: WorkbenchStatsUsageImportCandidate | null }
   | { id: number; type: "statsClaimImportCandidate"; candidate: WorkbenchGitClaimImportCandidate | null }
   | { id: number; type: "statsImportProgress"; progress: WorkbenchStatsImportProgress }

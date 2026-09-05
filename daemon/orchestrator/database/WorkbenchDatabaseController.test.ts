@@ -18,6 +18,7 @@ import {
   WORKBENCH_DATABASE_TABLE_NAMES,
 } from "./workbench-database-schema";
 import { insertRow, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
+import { WorkbenchStatsDetailedResponseSchema, legacyStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 
 test("the database worker opens, proves readiness, reports all tables, and closes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-"));
@@ -80,6 +81,15 @@ test("database worker records claim snapshots and returns bounded stats", async 
     const result = await controller.readStats({ projectId: "project", range: "7d" }, now);
     assert.equal(result.claimHotspots[0]?.path, "src");
     assert.equal(result.claimHotspots[0]?.threadCount, 1);
+    const detailed = WorkbenchStatsDetailedResponseSchema.parse(await controller.readStatsDetailed({
+      projectId: "project", range: "7d", tokenTypes: [],
+    }, now));
+    assert.deepEqual(legacyStatsResponse(detailed), result);
+    const claims = await controller.readClaimStats({
+      projectId: "project", range: "7d", file: { rootId: "root", path: "src" }, page: 1,
+    }, now);
+    assert.equal(claims.kind, "threads");
+    if (claims.kind === "threads") assert.deepEqual(claims.rows.map(({ threadId }) => threadId), ["thread"]);
   } finally {
     await controller.close();
     await rm(directory, { recursive: true, force: true });

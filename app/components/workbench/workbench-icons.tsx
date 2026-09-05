@@ -27,12 +27,37 @@
  * - AsteriskIcon/PlusIcon: render amend and fresh-commit choice icons. Keywords: workbench, icon, amend, commit.
  * - SparkleIcon/ReplyArrowIcon: render shared creation and reply action icons. Keywords: workbench, icon, create, sparkle, reply.
  * - FileAddIcon/FileDeleteIcon/FileUpdateIcon/FileMoveIcon: render thread file-change kind icons. Keywords: workbench, icon, file change, add, delete, update, move.
+ * - SquareArrowRightEnterIcon/SquareEqualIcon/SquareArrowRightExitIcon: render input, cache, and output glyphs. Keywords: workbench, icon, tokens, stats.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 
 type IconProps = {
   className?: string;
 };
+
+export function SquareArrowRightEnterIcon({ className = "size-4" }: IconProps) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m10 16 4-4-4-4" /><path d="M3 12h11" /><path d="M3 8V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3" />
+    </svg>
+  );
+}
+
+export function SquareEqualIcon({ className = "size-4" }: IconProps) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 10h10" /><path d="M7 14h10" />
+    </svg>
+  );
+}
+
+export function SquareArrowRightExitIcon({ className = "size-4" }: IconProps) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10 12h11" /><path d="m17 16 4-4-4-4" /><path d="M21 6.344V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-1.344" />
+    </svg>
+  );
+}
 
 export function CodexIcon ({ className = "size-4" }: { className?: string }) {
   return (

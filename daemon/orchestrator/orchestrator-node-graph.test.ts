@@ -134,6 +134,9 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
     ["server:database"],
   );
   assert.deepEqual(owners("daemon/orchestrator/database/stats/WorkbenchStatsRepository.ts"), ["server:database"]);
+  assert.deepEqual(owners("daemon/orchestrator/database/stats/WorkbenchUsageStatsRepository.ts"), ["server:database"]);
+  assert.deepEqual(owners("daemon/orchestrator/database/stats/WorkbenchClaimStatsRepository.ts"), ["server:database"]);
+  assert.deepEqual(owners("daemon/orchestrator/WorkbenchClaimStatsController.ts"), ["server:commands"]);
   assert.deepEqual(owners("shared/workbench/stats/workbench-stats-contract.ts"), ["server:core"]);
   assert.deepEqual(
     owners("daemon/lib/workbench/database/schema/codex-sandbox-network-schema.ts"),

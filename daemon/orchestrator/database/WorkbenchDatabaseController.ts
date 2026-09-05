@@ -26,6 +26,8 @@ import type {
 import type { WorkbenchThreadStateShadowRefresh } from "./thread-state/workbench-thread-state-shadow-types";
 import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
 import type { WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchStatsDetailedReadRequest } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository";
@@ -227,6 +229,20 @@ export default class WorkbenchDatabaseController {
     const response = await this.#request({ type: "beginStatsImport", runId, harnesses, now });
     if (response.type !== "statsImportProgress") throw new WorkbenchDatabaseFailure(`Unexpected stats import response: ${response.type}`);
     return response.progress;
+  }
+
+  async readStatsDetailed(request: WorkbenchStatsDetailedReadRequest, now?: number) {
+    await this.start();
+    const response = await this.#request({ type: "readStatsDetailed", request, ...(now === undefined ? {} : { now }) });
+    if (response.type !== "statsDetailedResult") throw new WorkbenchDatabaseFailure(`Unexpected detailed stats response: ${response.type}`);
+    return response.result;
+  }
+
+  async readClaimStats(request: WorkbenchClaimStatsRequest, now?: number) {
+    await this.start();
+    const response = await this.#request({ type: "readClaimStats", request, ...(now === undefined ? {} : { now }) });
+    if (response.type !== "claimStatsResult") throw new WorkbenchDatabaseFailure(`Unexpected claim stats response: ${response.type}`);
+    return response.result;
   }
 
   async addStatsClaimDiscoveries(runId: string, discoveries: WorkbenchGitClaimImportDiscovery[], now: number) {

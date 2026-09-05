@@ -91,6 +91,7 @@ export function listWorkbenchAgentCliCommandDescriptors(catalog: readonly Orches
 const ROOT_HELP_COMMAND_ORDER = [
   "toc", "rg",
   "tokens", "tokens instructions", "tokens project",
+  "stats claims",
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop", "subagent message",
   "thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand",
   "git add", "git unstage", "git commit", "git arc plan", "git arc start", "git arc wait", "git arc continue", "git arc add",
@@ -99,6 +100,17 @@ const ROOT_HELP_COMMAND_ORDER = [
 ] as const;
 
 const HELP_GROUPS: readonly HelpGroupDefinition[] = [
+  {
+    commandOrder: ["stats claims"],
+    key: "stats", usage: "wb stats claims [options]", words: ["stats"],
+    footer: [
+      "Default range: 7d. Pages contain at most 50 rows; increment --page to continue.",
+      "Ownership comes from cwd. Unqualified files use its owning root; root:path selects a workspace root.",
+      "Counts mean distinct claiming threads, not claim duration or checkpoint count.",
+      "Reads imported SQLite history only; unsupported or unavailable history cannot contribute.",
+      "Use wb thread recall --thread <id> to inspect a returned managed thread.",
+    ].join("\n"),
+  },
   {
     commandOrder: ["toc"],
     key: "toc", usage: "wb toc <file>", words: ["toc"],

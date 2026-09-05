@@ -2,67 +2,37 @@
 
 /*
  * Exports:
- * - default WorkbenchTokenUsage: own token-series visibility and render truthful token categories. Keywords: stats, tokens, checkbox, chart.
+ * - default WorkbenchTokenUsage: render shared selected categories on independent scales. Keywords: stats, tokens, chart.
  */
-import { useState } from "react";
-
 import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { STATS_TOKEN_TYPES, type StatsTokenType } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import WorkbenchStatsChart from "./WorkbenchStatsChart";
 import { compactNumber } from "./stats-formatters";
+import { STATS_TOKEN_SERIES } from "./stats-token-series";
 
-type TokenSeries = "all" | "cachedInput" | "cacheWriteInput" | "output" | "uncachedInput";
-
-const SERIES: ReadonlyArray<{
-  colour: string;
-  key: TokenSeries;
-  label: string;
-}> = [
-  { colour: "var(--accent)", key: "uncachedInput", label: "new input" },
-  { colour: "var(--muted)", key: "cachedInput", label: "cached input" },
-  { colour: "color-mix(in srgb, var(--accent) 55%, var(--text))", key: "cacheWriteInput", label: "cache write" },
-  { colour: "var(--text)", key: "output", label: "output" },
-  { colour: "color-mix(in srgb, var(--accent) 35%, var(--text))", key: "all", label: "all" },
-];
-
-export default function WorkbenchTokenUsage({ stats }: { stats: WorkbenchStatsResponse }) {
-  const [visible, setVisible] = useState<Record<TokenSeries, boolean>>({
-    all: false,
-    cachedInput: true,
-    cacheWriteInput: true,
-    output: true,
-    uncachedInput: true,
-  });
-  const available = SERIES.filter(({ key }) => key !== "cacheWriteInput" || stats.tokens.totals.cacheWriteInput > 0);
-  const shown = available.filter(({ key }) => visible[key]);
+export default function WorkbenchTokenUsage({ stats, selected = STATS_TOKEN_TYPES }: {
+  stats: WorkbenchStatsResponse | null;
+  selected?: readonly StatsTokenType[];
+}) {
+  const shown = STATS_TOKEN_SERIES.filter(({ key }) => selected.includes(key));
   return (
     <section aria-labelledby="tokens-heading" className="min-w-0 space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="h-16">
         <div>
           <h2 className="m-0 text-[1rem] font-semibold text-text" id="tokens-heading">Tokens</h2>
-          <p className="m-0 mt-1 text-[0.72rem] text-muted">Input separates new, cached, and cache-write tokens.</p>
-        </div>
-        <div aria-label="Visible token series" className="flex flex-wrap gap-x-3 gap-y-1" role="group">
-          {available.map(({ key, label }) => (
-            <label className="inline-flex cursor-pointer items-center gap-1.5 text-[0.72rem] text-muted" key={key}>
-              <input
-                checked={visible[key]}
-                className="accent-accent"
-                onChange={(event) => setVisible((current) => ({ ...current, [key]: event.target.checked }))}
-                type="checkbox"
-              />
-              {label}
-            </label>
-          ))}
+          <p className="m-0 mt-1 text-[0.72rem] text-muted">Independent scales. Cache includes reads and writes.</p>
         </div>
       </div>
       <WorkbenchStatsChart
-        buckets={stats.tokens.buckets.map(({ startedAt }) => startedAt)}
+        buckets={stats?.tokens.buckets.map(({ startedAt }) => startedAt) ?? []}
         formatValue={compactNumber}
-        series={shown.map(({ colour, key, label }) => ({
+        scale="independent"
+        series={shown.map(({ colour, label, count, Icon }) => ({
           colour,
           label,
-          summary: compactNumber(stats.tokens.totals[key]),
-          values: stats.tokens.buckets.map((bucket) => bucket[key]),
+          icon: <Icon className="size-3.5" />,
+          summary: stats ? compactNumber(count(stats.tokens.totals)) : "",
+          values: stats?.tokens.buckets.map(count) ?? [],
         }))}
         title="Token usage"
       />

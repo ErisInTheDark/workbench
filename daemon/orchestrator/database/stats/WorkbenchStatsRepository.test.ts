@@ -69,6 +69,104 @@ test("token reads separate input categories and expose filters, drivers, and exa
   }
 });
 
+test("selected output applies to totals, pricing basis, and usage drivers", () => {
+  const database = createDatabase();
+  try {
+    const now = Date.UTC(2026, 8, 4, 12);
+    seedTurn(database, now - 60_000);
+    const request = { projectId: "project", range: "7d" as const, tokenTypes: ["output" as const] };
+    const result = new WorkbenchStatsRepository(database).read(request, now);
+    assert.equal(result.tokens.totals.all, 300);
+    assert.equal(result.tokens.totals.input, 0);
+    assert.equal(result.cost.totalUsd, 0.0045);
+    assert.equal(result.cost.basis.exactModelTokens, 300);
+    assert.equal(result.models[0]?.tokens, 300);
+    assert.equal(result.topThreads[0]?.tokens, 300);
+  } finally {
+    database.close();
+  }
+});
+
+test("category selection reconciles costs, includes cache writes, and excludes non-contributing usage", () => {
+  const database = createDatabase();
+  try {
+    const now = Date.UTC(2026, 8, 4, 12);
+    seedTurn(database, now - 60_000);
+    const repository = new WorkbenchStatsRepository(database);
+    const base = { projectId: "project", range: "7d" as const };
+    repository.recordClaimSnapshot({
+      projectId: "project", threadId: "thread", harness: "codex", observedAt: now,
+      roots: [{ rootId: "root", paths: ["src/file.ts"] }],
+    });
+    const full = repository.readDetailed({ ...base, tokenTypes: ["input", "cache", "output"] }, now);
+    for (const category of ["input", "cache", "output"] as const) {
+      const result = repository.readDetailed({ ...base, tokenTypes: [category] }, now);
+      assert.equal(result.cost.totalUsd, full.cost.byTokenType[category]);
+      assert.equal(result.cost.buckets.reduce((sum, bucket) => sum + bucket.totalUsd, 0), result.cost.totalUsd);
+      assert.equal(result.summary.threadCount, 1);
+      assert.equal(result.summary.turnCount, 1);
+    }
+    const cache = repository.readDetailed({ ...base, tokenTypes: ["cache"] }, now);
+    assert.equal(cache.tokens.totals.all, 300);
+    assert.equal(cache.tokens.totals.cacheWriteInput, 100);
+    assert.equal(cache.summary.cacheHitPercent, 200 / 300 * 100);
+    const empty = repository.readDetailed({ ...base, tokenTypes: [] }, now);
+    assert.equal(empty.tokens.totals.all, 0);
+    assert.equal(empty.cost.totalUsd, 0);
+    assert.deepEqual(empty.summary, { cacheHitPercent: 0, threadCount: 0, turnCount: 0 });
+    assert.deepEqual(empty.topThreads, []);
+    assert.deepEqual(empty.models, []);
+    assert.deepEqual(empty.usageFilters, full.usageFilters);
+    assert.deepEqual(empty.claimHotspots, full.claimHotspots);
+    new WorkbenchTranscriptRepository(database).settle([{
+      kind: "turnUsageContext", model: "gpt-5.6-sol", observedAt: now, serviceTier: "fast",
+      threadId: "thread", turnId: "turn",
+    }, {
+      cumulative: { inputTokens: 300_000, cachedInputTokens: 20_000, cacheWriteInputTokens: 10_000,
+        outputTokens: 10_000, reasoningOutputTokens: 0, totalTokens: 310_000 },
+      kind: "turnTokenUsage", observedAt: now, threadId: "thread", turnId: "turn", usageDataVersion: 2,
+    }]);
+    const longContext = repository.readDetailed({ ...base, tokenTypes: ["input", "cache", "output"] }, now);
+    for (const category of ["input", "cache", "output"] as const) {
+      assert.equal(repository.readDetailed({ ...base, tokenTypes: [category] }, now).cost.totalUsd, longContext.cost.byTokenType[category]);
+    }
+  } finally { database.close(); }
+});
+
+test("selection reranks all threads before limiting results and computes shares from selected totals", () => {
+  const database = createDatabase();
+  try {
+    const now = Date.UTC(2026, 8, 4, 12);
+    const transcript = new WorkbenchTranscriptRepository(database);
+    for (let index = 0; index < 14; index += 1) {
+      const id = `thread-${index}`;
+      const input = index === 13 ? 0 : 10_000;
+      const output = index === 13 ? 500 : 1;
+      transcript.settle([{
+        activityAt: now, createdAt: now, kind: "thread", projectId: "project", projectRoot: "C:/project",
+        threadId: id, title: id, updatedAt: now,
+      }, {
+        createdAt: now, durationMs: 1, endedAt: now + 1, harnessId: "codex", kind: "turn",
+        nativeLocation: "C:/project", nativeThreadId: id, nativeTurnId: id, startedAt: now,
+        state: "completed", threadId: id, turnId: id, turnIndex: 0,
+      }, {
+        cumulative: { inputTokens: input, outputTokens: output, cachedInputTokens: 0,
+          cacheWriteInputTokens: 0, reasoningOutputTokens: 0, totalTokens: input + output },
+        kind: "turnTokenUsage", observedAt: now, threadId: id, turnId: id, usageDataVersion: 2,
+      }]);
+    }
+    const repository = new WorkbenchStatsRepository(database);
+    const base = { projectId: "project", range: "7d" as const };
+    assert.equal(repository.read(base, now).topThreads.some((row) => row.threadId === "thread-13"), false);
+    const selected = repository.readDetailed({ ...base, tokenTypes: ["output"] }, now);
+    assert.equal(selected.topThreads[0]?.threadId, "thread-13");
+    assert.equal(selected.topThreads[0]?.sharePercent, 500 / 513 * 100);
+    assert.equal(selected.topThreads.length, 12);
+    assert.equal(selected.summary.threadCount, 14);
+    assert.equal(selected.tokens.totals.all, 513);
+  } finally { database.close(); }
+});
+
 test("token reads derive turn usage from cumulative thread snapshots", () => {
   const database = createDatabase();
   try {

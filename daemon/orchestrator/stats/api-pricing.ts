@@ -95,13 +95,15 @@ export function estimateApiTokenCost(input: TokenCostInput) {
     ? rates(selectedRates.input * 2, selectedRates.cachedInput * 2, selectedRates.output * 1.5)
     : selectedRates;
   const uncachedInput = Math.max(0, counts.input - counts.cached - counts.cacheWrite);
-  const totalUsd = (
-    uncachedInput * effectiveRates.input
-    + counts.cached * effectiveRates.cachedInput
-    + counts.cacheWrite * effectiveRates.input * (price.cacheWriteInputMultiplier ?? 1)
-    + counts.output * effectiveRates.output
-  ) / 1_000_000;
+  const byTokenType = {
+    input: Number((uncachedInput * effectiveRates.input / 1_000_000).toFixed(8)),
+    cache: Number(((counts.cached * effectiveRates.cachedInput
+      + counts.cacheWrite * effectiveRates.input * (price.cacheWriteInputMultiplier ?? 1)) / 1_000_000).toFixed(8)),
+    output: Number((counts.output * effectiveRates.output / 1_000_000).toFixed(8)),
+  };
+  const totalUsd = byTokenType.input + byTokenType.cache + byTokenType.output;
   return {
+    byTokenType,
     model: price.id,
     pricedTokens: totalTokens,
     source,

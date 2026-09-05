@@ -9,6 +9,7 @@ import {
   WorkbenchStatsReadRequestSchema,
   WorkbenchStatsResponseSchema,
 } from "./workbench-stats-contract.ts";
+import { legacyStatsResponse, WorkbenchStatsDetailedReadRequestSchema, WorkbenchStatsDetailedResponseSchema } from "./workbench-stats-detail-contract.ts";
 
 test("stats requests accept every supported range and install usage filter defaults", () => {
   for (const range of ["7d", "14d", "30d", "90d", "365d"] as const) {
@@ -20,6 +21,9 @@ test("stats requests accept every supported range and install usage filter defau
     });
   }
   assert.equal(WorkbenchStatsReadRequestSchema.safeParse({ projectId: null, range: "forever" }).success, false);
+  assert.deepEqual(WorkbenchStatsDetailedReadRequestSchema.parse({ projectId: null, range: "7d" }).tokenTypes, ["input", "cache", "output"]);
+  assert.deepEqual(WorkbenchStatsDetailedReadRequestSchema.parse({ projectId: null, range: "7d", tokenTypes: [] }).tokenTypes, []);
+  assert.equal(WorkbenchStatsDetailedReadRequestSchema.safeParse({ projectId: null, range: "7d", tokenTypes: ["all"] }).success, false);
 });
 
 test("v2 responses admit all ninety daily buckets with non-overlapping token categories", () => {
@@ -70,6 +74,18 @@ test("v2 responses admit all ninety daily buckets with non-overlapping token cat
     version: 2,
   };
   assert.equal(WorkbenchStatsResponseSchema.safeParse(response).success, true);
+  const detailed = WorkbenchStatsDetailedResponseSchema.parse({
+    ...response,
+    cost: {
+      ...response.cost, byTokenType: { input: 0, cache: 0, output: 0 },
+      buckets: response.cost.buckets.map((bucket) => ({ ...bucket, byTokenType: { input: 0, cache: 0, output: 0 } })),
+    },
+  });
+  assert.deepEqual(WorkbenchStatsResponseSchema.parse(legacyStatsResponse(detailed)), WorkbenchStatsResponseSchema.parse(response));
+  assert.equal(WorkbenchStatsDetailedResponseSchema.safeParse(response).success, false);
+  assert.equal(WorkbenchStatsDetailedResponseSchema.safeParse({
+    ...detailed, cost: { ...detailed.cost, byTokenType: { input: 0, cache: -1, output: 0 } },
+  }).success, false);
 });
 
 test("legacy stats responses normalise without losing bucket timestamps", () => {

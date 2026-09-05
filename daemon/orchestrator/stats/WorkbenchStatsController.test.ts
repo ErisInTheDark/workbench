@@ -9,6 +9,7 @@ import type {
   WorkbenchStatsResponse,
 } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import WorkbenchStatsController from "./WorkbenchStatsController.ts";
+import type { WorkbenchStatsDetailedResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 
 const importProgress: WorkbenchStatsImportProgress = {
   claims: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
@@ -84,6 +85,7 @@ test("controller startup begins the resumable import in the background", async (
         return importProgress;
       },
       readStats: async () => emptyStats(),
+      readStatsDetailed: async () => { throw new Error("Detailed read not used by this test"); },
       recordStatsClaimSnapshot: async () => undefined,
       recordStatsRateLimits: async () => undefined,
     },
@@ -99,6 +101,35 @@ test("controller startup begins the resumable import in the background", async (
   await controller.dispose();
 });
 
+test("detailed reads preserve category costs and include durable import status", async () => {
+  const base = emptyStats();
+  const detailed: WorkbenchStatsDetailedResponse = {
+    ...base, cost: { ...base.cost, buckets: [], byTokenType: { input: 0, cache: 0, output: 0 } },
+  };
+  const progress = { ...importProgress, revision: 42 };
+  const controller = new WorkbenchStatsController({
+    claims,
+    database: {
+      ...importPorts(), readStatsImportProgress: async () => progress,
+      readStats: async () => base,
+      readStatsDetailed: async (request) => {
+        assert.deepEqual(request.tokenTypes, ["cache"]);
+        return detailed;
+      },
+      recordStatsClaimSnapshot: async () => undefined, recordStatsRateLimits: async () => undefined,
+    },
+    harnesses: {
+      hydrateUsage: async () => ({ state: "unavailable" }), listHarnesses: () => [],
+      listUsageHydrationHarnesses: () => [], request: async () => ({ id: "unused", result: null }),
+    },
+  });
+  try {
+    const result = await controller.readDetailed({ projectId: null, range: "7d", tokenTypes: ["cache"] });
+    assert.deepEqual(result.cost, detailed.cost);
+    assert.equal(result.historyImport.revision, 42);
+  } finally { await controller.dispose(); }
+});
+
 test("claim writes stay ordered and disposal flushes the queue", async () => {
   const writes: string[] = [];
   let releaseFirst!: () => void;
@@ -108,6 +139,7 @@ test("claim writes stay ordered and disposal flushes the queue", async () => {
     database: {
       ...importPorts(),
       readStats: async () => emptyStats(),
+      readStatsDetailed: async () => { throw new Error("Detailed read not used by this test"); },
       recordStatsClaimSnapshot: async (snapshot) => {
         if (snapshot.roots[0]?.paths[0] === "one") await firstPending;
         writes.push(snapshot.roots[0]?.paths[0] ?? "empty");
@@ -144,6 +176,7 @@ test("rate refresh records actual windows and preserves partial harness failures
     database: {
       ...importPorts(),
       readStats: async () => emptyStats(),
+      readStatsDetailed: async () => { throw new Error("Detailed read not used by this test"); },
       recordStatsClaimSnapshot: async () => undefined,
       recordStatsRateLimits: async (observation) => {
         observations.push({

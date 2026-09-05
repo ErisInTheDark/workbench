@@ -19,7 +19,7 @@ function currentWindow(limit: Limit, kind: WindowKind) {
 }
 
 export default function WorkbenchRateLimitUsage({ stats }: {
-  stats: Pick<WorkbenchStatsResponse, "rateLimits">;
+  stats: Pick<WorkbenchStatsResponse, "rateLimits"> | null;
 }) {
   return (
     <section aria-labelledby="rate-limit-heading" className="space-y-5">
@@ -27,7 +27,8 @@ export default function WorkbenchRateLimitUsage({ stats }: {
         <h2 className="m-0 text-[1rem] font-semibold text-text" id="rate-limit-heading">Rate limits</h2>
         <span className="text-[0.72rem] text-muted">account-wide</span>
       </div>
-      {stats.rateLimits.length ? (
+      <div className="h-[28rem] overflow-y-auto">
+      {stats?.rateLimits.length ? (
         <div className="grid gap-8 lg:grid-cols-2">
           {stats.rateLimits.map((limit) => {
             const primary = currentWindow(limit, "primary");
@@ -69,7 +70,8 @@ export default function WorkbenchRateLimitUsage({ stats }: {
             );
           })}
         </div>
-      ) : <p className="m-0 text-[0.8rem] text-muted">No rate-limit history is available yet.</p>}
+      ) : <p className="m-0 text-[0.8rem] text-muted">{stats ? "No rate-limit history is available yet." : "-"}</p>}
+      </div>
     </section>
   );
 }

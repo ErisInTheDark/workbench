@@ -149,6 +149,23 @@ test("direct Git arc dispatch receives the caller cancellation signal", async ()
   assert.equal(receivedSignal, cancellation.signal);
 });
 
+test("claim stats CLI dispatch preserves cwd and cancellation without an HTTP fallback", async () => {
+  const signal = new AbortController().signal;
+  const controller = new WorkbenchAgentCommandController("http://127.0.0.1:1", {
+    ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+    executeClaimStats: async (body, receivedSignal) => {
+      assert.equal(receivedSignal, signal);
+      assert.deepEqual(body, { cwd: "C:/repo", range: "all", page: 2, file: "root:src/file.ts" });
+      return new Response("managed-id  title");
+    },
+  });
+  const response = await controller.executeStructuredRequest({
+    body: { cwd: "C:/repo", range: "all", page: 2, file: "root:src/file.ts" },
+    method: "POST", path: "/internal/stats/claims", responseKind: "native",
+  }, signal);
+  assert.equal(await response.text(), "managed-id  title");
+});
+
 test("direct questionnaire dispatch receives the caller cancellation signal", async () => {
   let receivedSignal: AbortSignal | null = null;
   const controller = new WorkbenchAgentCommandController(

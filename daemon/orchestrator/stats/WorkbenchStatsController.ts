@@ -20,6 +20,7 @@ export interface WorkbenchStatsControllerOptions {
     claimStatsUsageImport: WorkbenchStatsImportControllerOptions["database"]["claimStatsUsageImport"];
     readStatsImportProgress: import("./WorkbenchStatsImportController").WorkbenchStatsImportControllerOptions["database"]["readStatsImportProgress"];
     readStats(request: WorkbenchStatsReadRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-contract").WorkbenchStatsResponse>;
+    readStatsDetailed(request: import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedReadRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedResponse>;
     recordStatsClaimSnapshot(snapshot: WorkbenchGitClaimSnapshot): Promise<void>;
     recordStatsRateLimits(observation: WorkbenchRateLimitObservation): Promise<void>;
     repairStatsAttributions: WorkbenchStatsImportControllerOptions["database"]["repairStatsAttributions"];
@@ -145,6 +146,15 @@ export default class WorkbenchStatsController {
   async read(request: WorkbenchStatsReadRequest) {
     await this.queue;
     const result = await this.options.database.readStats(request);
+    return await this.withStatus(result);
+  }
+
+  async readDetailed(request: import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedReadRequest) {
+    await this.queue;
+    return await this.withStatus(await this.options.database.readStatsDetailed(request));
+  }
+
+  private async withStatus<T extends import("workbench-shared/workbench/stats/workbench-stats-contract").WorkbenchStatsResponse>(result: T) {
     const currentProgress = this.importer.getProgress();
     const historyImport = await this.options.database.readStatsImportProgress(
       currentProgress.state,

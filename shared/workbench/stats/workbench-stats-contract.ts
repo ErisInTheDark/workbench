@@ -6,6 +6,8 @@
  * - WorkbenchStatsHydrationResultSchema/WorkbenchStatsHydrationResult: one harness hydration result. Keywords: stats, import, harness.
  * - WORKBENCH_STATS_IMPORT_UPDATED_METHOD: pushed import progress notification method. Keywords: stats, websocket, progress.
  * - WorkbenchStatsResponseSchema/WorkbenchStatsResponse: normalized token, cost, driver, limit, and claim aggregates. Keywords: stats, usage, claims.
+ * - StatsResponseV2Schema: legacy wire shape shared with detailed stats.
+ * - statsRangeShape: shared UTC day/week window boundaries.
  */
 import { z } from "zod";
 
@@ -139,7 +141,7 @@ const RateWindowSchema = z.object({
   usedPercent: finiteNonNegative.max(100),
 }).strict();
 
-const StatsResponseV2Schema = z.object({
+export const StatsResponseV2Schema = z.object({
   bucketUnit: z.enum(["day", "week"]),
   claimHotspots: z.array(z.object({
     path: z.string().min(1).max(2_000),
@@ -297,3 +299,14 @@ export const WorkbenchStatsResponseSchema = z.union([
   })),
 ]);
 export type WorkbenchStatsResponse = z.infer<typeof StatsResponseV2Schema>;
+
+export function statsRangeShape(range: WorkbenchStatsRange, now: number) {
+  const day = 86_400_000;
+  const currentDay = Math.floor(now / day) * day;
+  if (range !== "365d") {
+    const count = { "7d": 7, "14d": 14, "30d": 30, "90d": 90 }[range];
+    return { bucketMs: day, bucketUnit: "day" as const, count, startedAt: currentDay - (count - 1) * day };
+  }
+  const monday = currentDay - ((new Date(currentDay).getUTCDay() + 6) % 7) * day;
+  return { bucketMs: 7 * day, bucketUnit: "week" as const, count: 53, startedAt: monday - 52 * 7 * day };
+}

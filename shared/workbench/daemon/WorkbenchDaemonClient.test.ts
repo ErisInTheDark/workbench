@@ -7,6 +7,7 @@ import { test } from "node:test";
 
 import { GitArcFailureException } from "../git/git-arc-failures.ts";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./WorkbenchDaemonClient.ts";
+import { WorkbenchStatsResponseSchema } from "../stats/workbench-stats-contract.ts";
 
 test("transport failures never fall back to app HTTP", async () => {
   const originalFetch = globalThis.fetch;
@@ -113,6 +114,26 @@ test("Git arc requests return exact domain results and preserve structured failu
     (error) => error instanceof GitArcFailureException
       && assert.deepEqual(error.failure, failure) === undefined,
   );
+});
+
+test("detailed stats retain category costs and reject malformed remote values with sanitised diagnostics", async (context) => {
+  const legacy = WorkbenchStatsResponseSchema.parse({
+    bucketUnit: "day", claimHotspots: [], cost: { buckets: [], pricedTokens: 0, totalUsd: 0, unpricedTokens: 0 },
+    failures: [], generatedAt: 1, pricingCatalogDate: "2026-09-05", projectId: null, rateLimits: [],
+    range: "7d", recordingStartedAt: null, startedAt: 0,
+    tokens: { buckets: [], totals: { all: 0, cachedInput: 0, input: 0, output: 0 } },
+  });
+  const detailed = { ...legacy, cost: { ...legacy.cost, buckets: [], byTokenType: { input: 0, cache: 0, output: 0 } } };
+  const valid = new WorkbenchDaemonClient({ request: async <TResponse>() => detailed as TResponse });
+  assert.deepEqual(await valid.request("stats/read/detailed", { projectId: null, range: "7d", tokenTypes: [] }), detailed);
+  const logged: string[] = [];
+  context.mock.method(console, "error", (message: string) => { logged.push(message); });
+  const malformed = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
+    ...detailed, cost: { ...detailed.cost, byTokenType: { input: "private-payload-marker", cache: 0, output: 0 } },
+  }) as TResponse });
+  await assert.rejects(malformed.request("stats/read/detailed", { projectId: null, range: "7d" }), /response was invalid/);
+  assert.ok(logged.length > 0);
+  assert.ok(logged.every((message) => message.length < 1_200 && !message.includes("private-payload-marker")));
 });
 
 test("search responses require the complete discriminated result contract", async () => {

@@ -16,6 +16,7 @@ test("API pricing separates cached input and output", () => {
     serviceTier: null,
   });
   assert.deepEqual(estimate, {
+    byTokenType: { input: 0.25, cache: 0.025, output: 1.5 },
     model: "gpt-5.4",
     pricedTokens: 300_000,
     source: "exact",
@@ -34,6 +35,20 @@ test("API pricing applies long-context and fast multipliers", () => {
     serviceTier: "fast",
   });
   assert.equal(estimate.totalUsd, 2.403476);
+});
+
+test("pricing exposes independently billable categories using the same full-context rates", () => {
+  const estimate = estimateApiTokenCost({
+    cacheWriteInputTokens: 10_000,
+    cachedInputTokens: 20_000,
+    inputTokens: 300_000,
+    model: "gpt-5.6-sol",
+    outputTokens: 10_000,
+    serviceTier: "fast",
+  });
+  assert.ok("byTokenType" in estimate);
+  assert.deepEqual(estimate.byTokenType, { input: 4.32, cache: 0.232, output: 0.6 });
+  assert.equal(estimate.totalUsd, 5.152);
 });
 
 test("API pricing uses current Sol fast rates and bills cache writes", () => {

@@ -120,6 +120,10 @@ export interface WorkbenchDaemonRequestMap {
   "stats/import/start": { params: object; result: WorkbenchStatsImportProgress };
   "stats/rate-limits/refresh": { params: object; result: { ok: true } };
   "stats/read": { params: WorkbenchStatsReadRequest; result: WorkbenchStatsResponse };
+  "stats/read/detailed": {
+    params: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedReadRequest;
+    result: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedResponse;
+  };
   "skills/read": { params: { projectId: string | null }; result: WorkbenchSkillCatalogResponse };
 }
 

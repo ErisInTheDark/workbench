@@ -15,7 +15,7 @@ const RANGES: ReadonlyArray<{ label: string; value: WorkbenchStatsRange }> = [
 ];
 
 function nextValue<T>(current: T | null, values: readonly T[]) {
-  const choices: Array<T | null> = [null, ...values];
+  const choices: Array<T | null> = [null, ...values, ...(current !== null && !values.includes(current) ? [current] : [])];
   return choices[(choices.indexOf(current) + 1) % choices.length] ?? null;
 }
 
@@ -57,7 +57,7 @@ export default function WorkbenchStatsFilters({
         <span className="text-[0.7rem] font-medium tracking-[0.08em] text-muted uppercase">Usage filters</span>
         <button
           aria-label="Rotate provider filter"
-          className="rounded-md px-2 py-1 text-[0.78rem] font-medium text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+          className="w-32 truncate rounded-md px-2 py-1 text-[0.78rem] font-medium text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
           onClick={() => onProviderChange(nextValue(provider, providers))}
           title="Show the next provider"
           type="button"
@@ -66,8 +66,8 @@ export default function WorkbenchStatsFilters({
         </button>
         <button
           aria-label="Rotate model filter"
-          className="max-w-[14rem] truncate rounded-md px-2 py-1 text-[0.78rem] font-medium text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-50"
-          disabled={!models.length}
+          className="w-44 max-w-full truncate rounded-md px-2 py-1 text-[0.78rem] font-medium text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-50"
+          disabled={!models.length && !model}
           onClick={() => onModelChange(nextValue(model, models))}
           title="Show the next model"
           type="button"

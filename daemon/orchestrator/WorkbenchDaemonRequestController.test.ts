@@ -90,6 +90,10 @@ function createController(options: { gitArcResponse?: Response; rejectProjectId?
       },
     },
     stats: {
+      readDetailed: async (request) => {
+        statsRequests.push(request);
+        throw new Error("Detailed database read failed");
+      },
       read: async (request) => {
         statsRequests.push(request);
         return ({
@@ -256,6 +260,24 @@ test("stats dispatch validates project scope and keeps rate refresh account-wide
     { ok: true },
   );
   assert.equal(statsRefreshes(), 1);
+});
+
+test("detailed stats validate selection and project before invoking the owner, preserving read failures", async () => {
+  const { controller, statsRequests } = createController({ rejectProjectId: "missing" });
+  for (const params of [
+    { projectId: "missing", range: "7d", tokenTypes: ["output"] },
+    { projectId: "project", range: "7d", tokenTypes: ["all"] },
+  ]) {
+    const response = await controller.handle({ id: 1, method: "stats/read/detailed", params });
+    assert.equal(response.error?.code, -32602);
+  }
+  assert.deepEqual(statsRequests, []);
+  const response = await controller.handle({
+    id: 2, method: "stats/read/detailed",
+    params: { projectId: "project", range: "90d", tokenTypes: [] },
+  });
+  assert.ok(response.error);
+  assert.deepEqual(statsRequests, [{ projectId: "project", range: "90d", tokenTypes: [], model: null, provider: null }]);
 });
 
 test("Codex sandbox network requests validate project ownership and preserve explicit override intent", async () => {

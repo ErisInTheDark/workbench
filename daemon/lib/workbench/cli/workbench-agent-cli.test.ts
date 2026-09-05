@@ -251,6 +251,19 @@ test("questionnaire CLI reports field validation separately from malformed JSON"
   assert.match(malformed.error, /JSON/u);
 });
 
+test("claim analysis parses as a read-only cli command without MCP exposure", async () => {
+  const result = await parseWorkbenchAgentCliCommand([
+    "stats", "claims", "--file", "workbench:src/view.ts", "--range", "90d", "--page", "2",
+  ], { cwd: "C:/workspace", callerThreadId: "thread/1" });
+  assert.equal(result.kind, "request");
+  assert.deepEqual(result.request.body, {
+    cwd: "C:/workspace", file: "workbench:src/view.ts", range: "90d", page: 2,
+  });
+  const command = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "stats claims");
+  assert.equal(command?.hideFromMcp, true);
+  assert.equal(command?.effects.readOnly, true);
+});
+
 test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", async () => {
   const questions = [{
     header: "details",

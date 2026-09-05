@@ -17,6 +17,7 @@ import type WorkbenchThreadStateController from "./WorkbenchThreadStateControlle
 import type WorkbenchSearchController from "./WorkbenchSearchController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import { WorkbenchStatsReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { WorkbenchStatsDetailedReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import {
   GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
@@ -52,7 +53,7 @@ const METHODS = new Set([
   "project/catalog/read",
   "project/file/read", "project/file/reset", "project/file/save",
   "search/query",
-  "stats/import/start", "stats/rate-limits/refresh", "stats/read",
+  "stats/import/start", "stats/rate-limits/refresh", "stats/read", "stats/read/detailed",
   "skills/read",
 ]);
 
@@ -132,7 +133,7 @@ export default class WorkbenchDaemonRequestController {
     profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
     projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "resolveProjectById">;
     search: Pick<WorkbenchSearchController, "search">;
-    stats: Pick<WorkbenchStatsController, "read" | "refreshRateLimits" | "startImport">;
+    stats: Pick<WorkbenchStatsController, "read" | "readDetailed" | "refreshRateLimits" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
   }) {}
 
@@ -212,8 +213,9 @@ export default class WorkbenchDaemonRequestController {
           });
           break;
         }
-        case "stats/read": {
-          const parsed = WorkbenchStatsReadRequestSchema.safeParse(params);
+        case "stats/read":
+        case "stats/read/detailed": {
+          const parsed = (request.method === "stats/read/detailed" ? WorkbenchStatsDetailedReadRequestSchema : WorkbenchStatsReadRequestSchema).safeParse(params);
           if (!parsed.success) throw new InvalidParamsError("Invalid stats request.");
           if (parsed.data.projectId) {
             try {
@@ -222,7 +224,9 @@ export default class WorkbenchDaemonRequestController {
               throw new InvalidParamsError(error instanceof Error ? error.message : "Unknown project.");
             }
           }
-          result = await this.owners.stats.read(parsed.data);
+          result = request.method === "stats/read/detailed"
+            ? await this.owners.stats.readDetailed(parsed.data)
+            : await this.owners.stats.read(parsed.data);
           break;
         }
         case "stats/import/start":
