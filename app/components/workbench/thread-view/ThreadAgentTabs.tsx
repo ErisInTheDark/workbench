@@ -1,6 +1,7 @@
 /*
+ * Keywords: thread, subagent, tabs, lock, lifecycle, hue.
  * Exports:
- * - default ThreadAgentTabs: render lifecycle-ordered agent tabs, shared Lock controls, status icons, and settled-history disclosure. Keywords: thread, subagent, tabs, lock, lifecycle.
+ * - default ThreadAgentTabs: render lifecycle-ordered agent tabs, Lock controls, status icons, and settled-history disclosure.
  */
 import type { MouseEvent } from "react";
 
@@ -8,7 +9,8 @@ import type { ThreadPayload, WorkbenchSubagentSummary } from "workbench-shared/t
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import ContextMenuCapability from "../ContextMenuCapability";
 import { CompletedThreadIcon, LockIcon, NeedsAttentionThreadIcon, RestoreThreadIcon, SettleThreadIcon, StoppedThreadIcon, UnlockIcon, WorkingThreadIcon } from "../workbench-icons";
-import { getThreadAgentAccentColor } from "../../../workbench/thread/thread-subagents";
+import { getThreadAgentAccentHue } from "../../../workbench/thread/thread-subagents";
+import type { IdentityAccentStyle } from "../../../workbench/identity-accent-color";
 import { useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
 import ThreadAgentName from "./ThreadAgentName";
 
@@ -34,16 +36,23 @@ function handleThreadLinkClick(event: MouseEvent<HTMLAnchorElement>, onSelect: (
 const tabClassName = "relative inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1.5 py-1.5 text-[0.95rem] font-medium leading-none transition-[color,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft";
 const selectedTabClassName = "text-text";
 const unselectedTabClassName = "text-muted opacity-60 hover:opacity-80 hover:text-text";
-function SelectedTabUnderline({ color }: { color: string }) {
-  return <span aria-hidden="true" className="pointer-events-none absolute inset-x-1 bottom-0 border-t border-dotted" style={{ borderColor: color }} />;
+function SelectedTabUnderline({ className, style }: { className: string; style?: IdentityAccentStyle }) {
+  return <span aria-hidden="true" className={`pointer-events-none absolute inset-x-1 bottom-0 border-t border-dotted ${className}`} style={style} />;
 }
 
 function ThreadLifecycleStatusIcon({ accentChromaPercent, lifecycle, subagent }: { accentChromaPercent?: number; lifecycle: WorkbenchThreadLifecycle | null; subagent?: WorkbenchSubagentSummary | null }) {
   const Icon = lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : CompletedThreadIcon;
+  const accentStyle: IdentityAccentStyle | undefined = subagent && lifecycle?.kind !== "stopped" ? {
+    "--identity-hue": getThreadAgentAccentHue(subagent),
+    "--hue-chroma": `${accentChromaPercent ?? 90}%`,
+  } : undefined;
   return (
     <span
-      className={joinClasses("inline-flex shrink-0", lifecycle?.kind === "stopped" && "text-red-600 dark:text-red-300")}
-      style={subagent && lifecycle?.kind !== "stopped" ? { color: getThreadAgentAccentColor(subagent, accentChromaPercent) } : undefined}
+      className={joinClasses(
+        "inline-flex shrink-0",
+        lifecycle?.kind === "stopped" ? "text-red-600 dark:text-red-300" : subagent && "text-hue-(--identity-hue)",
+      )}
+      style={accentStyle}
     >
       <Icon className="size-4" />
     </span>
@@ -124,7 +133,12 @@ export default function ThreadAgentTabs ({
         {tab.isPinned ? <LockIcon className="size-4 shrink-0" /> : null}
         <ThreadAgentName accentChromaPercent={activeThreadId === tab.id ? 90 : 55} subagent={tab.subagent} thread={tab.thread} />
         {tab.suffix ? <span className="text-muted">{tab.suffix}</span> : null}
-        {activeThreadId === tab.id && tab.subagent ? <SelectedTabUnderline color={`color-mix(in srgb, ${getThreadAgentAccentColor(tab.subagent)} 35%, transparent)`} /> : null}
+        {activeThreadId === tab.id && tab.subagent ? (
+          <SelectedTabUnderline
+            className="border-hue-(--identity-hue)/35"
+            style={{ "--identity-hue": getThreadAgentAccentHue(tab.subagent) }}
+          />
+        ) : null}
       </a>
     </ContextMenuCapability>
     );
@@ -143,7 +157,7 @@ export default function ThreadAgentTabs ({
       >
         <ThreadLifecycleStatusIcon lifecycle={mainThreadLifecycle} />
         <span>Main agent</span>
-        {activeThreadId === mainThreadId ? <SelectedTabUnderline color="color-mix(in srgb, var(--text) 35%, transparent)" /> : null}
+        {activeThreadId === mainThreadId ? <SelectedTabUnderline className="border-[color-mix(in_srgb,var(--text)_35%,transparent)]" /> : null}
       </a>
       {unsettledTabs.map(renderTab)}
       {hasSettledSubagents ? (

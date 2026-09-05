@@ -1,14 +1,15 @@
 /*
+ * Keywords: project, icon, favicon, fallback, colour.
  * Exports:
- * - default WorkbenchProjectIcon: render one discovered project asset or a stable theme-aware initial fallback. Keywords: project, icon, favicon, fallback, color.
+ * - default WorkbenchProjectIcon: render a discovered project asset or stable theme-aware initial fallback.
  */
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState } from "react";
 
 import { getWorkbenchProjectIconUrl } from "workbench-shared/codex/config";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
-import { getIdentityAccentColor } from "../../workbench/identity-accent-color";
+import { getIdentityAccentHue, type IdentityAccentStyle } from "../../workbench/identity-accent-color";
 
 const VARIANT_CLASS_NAMES = {
   card: {
@@ -57,15 +58,18 @@ export default function WorkbenchProjectIcon ({
     );
   }
 
-  const accentColor = getIdentityAccentColor(project.id, 72);
+  const accentStyle: IdentityAccentStyle = {
+    "--identity-hue": getIdentityAccentHue(project.id),
+    "--hue-chroma": "72%",
+  };
   return (
     <span
       aria-hidden="true"
-      className={`${className} ${VARIANT_CLASS_NAMES[variant].size} ${VARIANT_CLASS_NAMES[variant].text}`}
-      style={{
-        backgroundColor: `color-mix(in srgb, ${accentColor} 22%, transparent)`,
-        color: accentColor,
-      } satisfies CSSProperties}
+      className={`
+        ${className} ${VARIANT_CLASS_NAMES[variant].size} ${VARIANT_CLASS_NAMES[variant].text}
+        text-hue-(--identity-hue) bg-hue-(--identity-hue)/22
+      `}
+      style={accentStyle}
     >
       {projectInitial(project)}
     </span>

@@ -1,13 +1,27 @@
 /*
+ * Keywords: thread, subagent, identity, harness, command, tabs, lifecycle, hydration, hue.
  * Exports:
- * - mergeWorkbenchSubagentSummaries/reconcileWorkbenchSubagentPage/getSubagentThreadIds/getSubagentSummary/getSubagentHarness/filterSubagentsByParentThreadId/filterSubagentThreadSummaries: merge, reconcile, derive, and filter direct-child identity from pushed summaries. Keywords: workbench, thread, subagent, metadata, harness, sidebar.
- * - WorkbenchSubagentCommandDisplayTarget/getWorkbenchSubagentCommandTargetKey/resolveWorkbenchSubagentCommandTargets: resolve parsed id/name selectors into safe durable display identity without guessing reused names. Keywords: command, target, name, identity, fallback.
- * - sortWorkbenchSubagents/getSubagentTabLayout/getNextSubagentHydrationBatch: derive lifecycle/Lock order, settled folding, and bounded body hydration. Keywords: subagent, tabs, lock, lifecycle, hydration.
- * - getThreadAgentAccentColor/getThreadAgentLabelParts/getThreadAgentTabLabel: parent-derived child colors and metadata-first labels. Keywords: subagent, color, hue, label, tabs.
+ * - ThreadAgentLabelParts: nickname, role, and combined display label.
+ * - WorkbenchSubagentCommandDisplayTarget: durable identity for a command selector.
+ * - sortWorkbenchSubagents: order children by lifecycle, Lock, and activity.
+ * - getSubagentTabLayout: partition visible and collapsed child tabs.
+ * - getNextSubagentHydrationBatch: select bounded child-body hydration work.
+ * - getSubagentThreadIds: derive direct-child thread IDs.
+ * - mergeWorkbenchSubagentSummaries: merge pushed child metadata.
+ * - reconcileWorkbenchSubagentPage: reconcile paged children with retained summaries.
+ * - getSubagentSummary: find a child by thread ID.
+ * - getWorkbenchSubagentCommandTargetKey: key an ID/name selector.
+ * - resolveWorkbenchSubagentCommandTargets: resolve selectors without guessing reused names.
+ * - getSubagentHarness: resolve a child's harness with a fallback.
+ * - filterSubagentsByParentThreadId: select a parent's children.
+ * - filterSubagentThreadSummaries: exclude child IDs from thread summaries.
+ * - getThreadAgentLabelParts: resolve metadata-first labels.
+ * - getThreadAgentAccentHue: derive a child's hue from parent identity and sibling index.
+ * - getThreadAgentTabLabel: resolve combined tab label text.
  */
 import type { ThreadPayload, ThreadSummary, WorkbenchSubagentSummary } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { getIdentityAccentColor } from "../identity-accent-color";
+import { getIdentityAccentHue } from "../identity-accent-color";
 import type { WorkbenchSubagentCommandTarget } from "./command-matchers/workbench-cli";
 
 export interface ThreadAgentLabelParts {
@@ -188,13 +202,11 @@ export function getThreadAgentLabelParts(
   };
 }
 
-export function getThreadAgentAccentColor(
+export function getThreadAgentAccentHue(
   subagent: Pick<WorkbenchSubagentSummary, "directSubagentIndex" | "parentThreadId">,
-  chromaPercent = 90,
 ) {
-  return getIdentityAccentColor(
+  return getIdentityAccentHue(
     subagent.parentThreadId,
-    chromaPercent,
     SUBAGENT_HUE_ROTATION_DEGREES * subagent.directSubagentIndex,
   );
 }

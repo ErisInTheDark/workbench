@@ -1,7 +1,16 @@
 /*
+ * Keywords: identity, colour, hue, hash, theme.
  * Exports:
- * - getIdentityAccentColor: derive one stable theme-aware OKLCH accent from an identity and optional hue offset. Keywords: identity, color, hue, hash, theme.
+ * - IdentityAccentStyle: typed CSS variables for identity-coloured elements.
+ * - getIdentityAccentHue: derive stable hue degrees from an identity and optional offset.
  */
+
+import type { CSSProperties } from "react";
+
+export type IdentityAccentStyle = CSSProperties & {
+  "--identity-hue": number;
+  "--hue-chroma"?: string;
+};
 
 function hashIdentity(value: string) {
   let hash = 2_166_136_261;
@@ -12,7 +21,6 @@ function hashIdentity(value: string) {
   return hash >>> 0;
 }
 
-export function getIdentityAccentColor(identity: string, chromaPercent = 90, hueOffsetDegrees = 0) {
-  const hue = (hashIdentity(identity) % 360 + hueOffsetDegrees) % 360;
-  return `oklch(var(--oklch-text-lightness) ${chromaPercent}% ${hue}deg)`;
+export function getIdentityAccentHue(identity: string, hueOffsetDegrees = 0) {
+  return (hashIdentity(identity) % 360 + hueOffsetDegrees) % 360;
 }

@@ -1,9 +1,15 @@
+/*
+ * Keywords: thread, subagent, nickname, role, hue.
+ * Exports:
+ * - default ThreadAgentName: render identity-coloured nicknames with distinct role labels.
+ */
 "use client";
 
 import type { ReactNode } from "react";
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 
-import { getThreadAgentAccentColor, getThreadAgentLabelParts } from "../../../workbench/thread/thread-subagents";
+import { getThreadAgentAccentHue, getThreadAgentLabelParts } from "../../../workbench/thread/thread-subagents";
+import type { IdentityAccentStyle } from "../../../workbench/identity-accent-color";
 
 export default function ThreadAgentName ({
   accentChromaPercent,
@@ -33,10 +39,17 @@ export default function ThreadAgentName ({
     label.role
     && label.nickname.localeCompare(label.role, undefined, { sensitivity: "accent" }) !== 0,
   );
+  const accentStyle: IdentityAccentStyle | undefined = subagent ? {
+    "--identity-hue": getThreadAgentAccentHue(subagent),
+    "--hue-chroma": `${accentChromaPercent ?? 90}%`,
+  } : undefined;
 
   return (
     <span className={className}>
-      <span className="font-medium" style={subagent ? { color: getThreadAgentAccentColor(subagent, accentChromaPercent) } : undefined}>{label.nickname}</span>
+      <span
+        className={`font-medium ${subagent ? "text-hue-(--identity-hue)" : ""}`}
+        style={accentStyle}
+      >{label.nickname}</span>
       {hasDistinctRole ? <span className={roleClassName}> ({label.role})</span> : null}
     </span>
   );

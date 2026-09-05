@@ -1,6 +1,6 @@
 /*
- * Exports:
- * - No production exports; Node tests cover durable parent/child identity, metadata-first labels, and stable colors. Keywords: thread, subagent, metadata, label, test.
+ * Keywords: thread, subagent, metadata, label, hue, test.
+ * Exports: none. Node tests cover durable identity, labels, and stable hues.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -17,7 +17,7 @@ import {
   mergeWorkbenchSubagentSummaries,
   reconcileWorkbenchSubagentPage,
   resolveWorkbenchSubagentCommandTargets,
-  getThreadAgentAccentColor,
+  getThreadAgentAccentHue,
   getThreadAgentLabelParts,
   getThreadAgentTabLabel,
   getSubagentTabLayout,
@@ -176,8 +176,8 @@ test("prefers the durable subagent name while preserving the agent role", () => 
   });
   assert.equal(getThreadAgentTabLabel(thread, subagent), "Mimi (reviewer)");
   assert.equal(
-    getThreadAgentAccentColor(subagent),
-    getThreadAgentAccentColor({ directSubagentIndex: 0, parentThreadId: "parent" }),
+    getThreadAgentAccentHue(subagent),
+    getThreadAgentAccentHue({ directSubagentIndex: 0, parentThreadId: "parent" }),
   );
 });
 

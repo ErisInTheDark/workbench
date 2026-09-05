@@ -148,6 +148,25 @@
   }
 }
 
+/* Hue degrees: text-hue-210, border-hue-300/35, bg-hue-(--identity-hue)/22.
+ * Set --hue-chroma to a percentage to override 90%; lightness follows the theme.
+ * Keep each colour local so text, border, and background can use different hues.
+ */
+@utility text-hue-* {
+  color: oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*]));
+  color: color-mix(in srgb, oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*])) calc(--modifier(number, [*]) * 1%), transparent);
+}
+
+@utility border-hue-* {
+  border-color: oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*]));
+  border-color: color-mix(in srgb, oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*])) calc(--modifier(number, [*]) * 1%), transparent);
+}
+
+@utility bg-hue-* {
+  background-color: oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*]));
+  background-color: color-mix(in srgb, oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*])) calc(--modifier(number, [*]) * 1%), transparent);
+}
+
 @theme inline {
   --color-bg: var(--bg);
   --color-bg-soft: var(--bg-soft);
