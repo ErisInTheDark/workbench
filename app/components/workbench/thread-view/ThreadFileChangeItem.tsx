@@ -436,9 +436,6 @@ export default function ThreadFileChangeItem ({
             projectRootPath={projectRootPath}
             workspaceRoots={workspaceRoots}
           />
-          {item.workbenchPolicy === "automaticEscalation" ? (
-            <p className="m-0 pl-6 text-[0.78em] leading-[1.6] text-muted">Workbench blocked the escalated retry, not the user.</p>
-          ) : null}
           {item.workbenchRecovery?.state === "failed" ? (
             <p className="m-0 pl-6 text-[0.78em] leading-[1.6] text-danger">Recovery context could not be queued{item.workbenchRecovery.detail ? `. ${item.workbenchRecovery.detail}` : "."}</p>
           ) : null}
