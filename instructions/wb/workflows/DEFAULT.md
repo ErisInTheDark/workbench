@@ -23,7 +23,7 @@ When entering a workflow mode, write the Workbench state tag on its own line:
 Use the exact mode name you are entering: Inspect, Brief, Decision, Implement, or Review.
 
 <available:thread-status>
-Before using the final channel, confirm that the requested work is truly complete and call `mcp__wbex__thread_status` with `status: "completed"`. Do not use the final channel while work remains.
+Before completed status or final, apply Workbench Thread Status to the current request and unresolved steers. Call `mcp__wbex__thread_status` with `status: "completed"` only when that outcome is delivered. Do not end while work remains.
 
 If user input or an external change blocks progress, call `mcp__wbex__thread_status` with `status: "blocked"` and continue through commentary or a questionnaire.
 </available:thread-status>
@@ -223,7 +223,7 @@ Use validation that matches the risk. Prefer non-emitting checks unless project 
 
 Before Review:
 
-- Confirm that all approved work and required validation are complete.
+- Confirm all approved work and required validation are complete, and no unresolved user request or steer remains.
 - Missing approved work is not a risk or exclusion. It forbids the completion path.
 - Run `tools.mcp__wb__git_arc_diff` against the current active arc. Do not substitute raw Git or an unrelated or superseded ref.
 - If the diff exposes an issue, continue in the correct mode without setting completed status or entering Review.
