@@ -3,7 +3,7 @@
  * - WorkbenchThreadState: owned thread, rate-limit, and model cache state for the workbench. Keywords: workbench, thread, state, codex.
  * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator. Keywords: workbench, thread, sidebar, intent.
  * - WorkbenchThreadClientOptions: creation options for the thread client manager hooks. Keywords: workbench, thread, status, callbacks.
- * - default WorkbenchThreadClient: own provider thread state, durable global-home questionnaires, and notifications. Keywords: workbench, thread, codex, copilot, opencode, questionnaire, global home, default export.
+ * - default WorkbenchThreadClient: own provider thread state, live questionnaire reconciliation, durable answer recovery, and notifications. Keywords: workbench, thread, codex, copilot, opencode, questionnaire, restart, global home.
  */
 
 import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
@@ -1038,7 +1038,7 @@ function WorkbenchThreadClient(
   const rateLimitRefreshStartedAtByHarness = new Map<WorkbenchHarness, number>();
   const refreshRateLimitsPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
   const pendingUserInputRequestGenerationsByHarness = new Map<WorkbenchHarness, number>();
-  const questionnaireListSyncPromisesByHarness = new Map<WorkbenchHarness, Promise<void>>();
+  const questionnaireListSyncPromisesByHarness = new Map<WorkbenchHarness, Promise<boolean>>();
   const questionnaireListSyncedHarnesses = new Set<WorkbenchHarness>();
   let installedDurableQuestionnaireEntries: readonly WorkbenchThreadSidebarEntry[] = [];
   const resolvedDurableQuestionnaireKeysByThreadId = new Map<string, string>();
@@ -2875,9 +2875,7 @@ function WorkbenchThreadClient(
           itemId: entry.pendingQuestionnaire.itemId ?? null,
           request: entry.pendingQuestionnaire.request,
           requestKey: entry.pendingQuestionnaire.requestKey,
-          responseMode: isWorkbenchMcpQuestionnaireRequestKey(entry.pendingQuestionnaire.requestKey)
-            ? "native"
-            : "newTurn",
+          responseMode: "newTurn",
           threadId: entry.identity.threadId,
           turnId: entry.pendingQuestionnaire.turnId ?? null,
         });
@@ -2934,10 +2932,12 @@ function WorkbenchThreadClient(
         requests = response.data.map((request) => ({ ...request, harness, responseMode: "native" }));
       } catch (error) {
         emitStatusMessage(`Workbench could not reconcile ${harness} questionnaires: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
       }
-      if (disposed || generation !== projectContextGeneration) return;
+      if (disposed || generation !== projectContextGeneration) return false;
       questionnaireListSyncedHarnesses.add(harness);
       if (replacePendingUserInputRequests(harness, requests)) emit();
+      return true;
     })().finally(() => questionnaireListSyncPromisesByHarness.delete(harness));
     questionnaireListSyncPromisesByHarness.set(harness, promise);
     return await promise;
@@ -5666,11 +5666,28 @@ function WorkbenchThreadClient(
     options: WorkbenchSubmitUserInputRequestOptions = {},
   ) {
     messageAdmissionIntentRevision += 1;
-    const pendingRequest = state.pendingUserInputRequestsByThreadId.get(threadId);
+    let pendingRequest = state.pendingUserInputRequestsByThreadId.get(threadId);
     if (!pendingRequest) {
       throw new Error("There is no pending question for this thread.");
     }
     const submissionProjectGeneration = projectContextGeneration;
+    if (isWorkbenchMcpQuestionnaireRequestKey(pendingRequest.requestKey)) {
+      const reconciled = await refreshPendingUserInputRequests(pendingRequest.harness);
+      const current = state.pendingUserInputRequestsByThreadId.get(threadId);
+      if (
+        disposed
+        || submissionProjectGeneration !== projectContextGeneration
+        || !current
+        || current.harness !== pendingRequest.harness
+        || current.requestKey !== pendingRequest.requestKey
+      ) {
+        throw new Error("The pending question changed before its response could be submitted.");
+      }
+      if (!reconciled) {
+        throw new Error("Could not reconcile the questionnaire before submitting its response. Please try again.");
+      }
+      pendingRequest = current;
+    }
     const submissionPendingGeneration = getPendingUserInputRequestGeneration(pendingRequest.harness);
     const isPendingSubmissionCurrent = () => (
       !disposed

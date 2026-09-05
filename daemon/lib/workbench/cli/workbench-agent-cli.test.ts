@@ -218,6 +218,39 @@ after(async () => {
   await rm(temporaryDirectoryPath, { recursive: true, force: true });
 });
 
+test("questionnaire CLI accepts descriptive headers without a fixed character cap", async () => {
+  const question = {
+    header: "implementation approval",
+    id: "approval",
+    options: [],
+    question: "Should the approved implementation proceed?",
+  };
+  const accepted = await parseWorkbenchAgentCliCommand([
+    "request", "user", "input", "--questions-json", JSON.stringify([question]),
+  ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
+  assert.equal(accepted.kind, "request");
+  assert.deepEqual(accepted.request.body?.questions, [question]);
+});
+
+test("questionnaire CLI reports field validation separately from malformed JSON", async () => {
+  const parse = (source: string) => parseWorkbenchAgentCliCommand([
+    "request", "user", "input", "--questions-json", source,
+  ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
+  const emptyHeader = await parse(JSON.stringify([{
+    header: " ",
+    id: "approval",
+    options: [],
+    question: "Should the approved implementation proceed?",
+  }]));
+  assert.equal(emptyHeader.kind, "error");
+  assert.match(emptyHeader.error, /header/u);
+  assert.doesNotMatch(emptyHeader.error, /requires --questions-json to contain/u);
+
+  const malformed = await parse("[");
+  assert.equal(malformed.kind, "error");
+  assert.match(malformed.error, /JSON/u);
+});
+
 test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", async () => {
   const questions = [{
     header: "details",

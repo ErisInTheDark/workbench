@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 
 import type { WorkbenchDurableQuestionnaire } from "workbench-shared/workbench/thread/thread-state";
 import { WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import type { WorkbenchPendingUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import {
   isWorkbenchAgentMcpRuntimeReloadInterruption,
@@ -126,7 +127,7 @@ export default class WorkbenchQuestionnaireController {
         })),
         submitLabel: "Submit",
         summary: "",
-        title: input.questions.length === 1 ? input.questions[0]!.header : "Questionnaire",
+        title: getQuestionnaireTitle({ title: "Questionnaire", questions: input.questions }),
       },
       requestKey,
       turnId,

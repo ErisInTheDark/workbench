@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchRequestUserInputSchema: validate public wb questionnaire arguments. Keywords: questionnaire, command, schema, freeform.
+ * - WorkbenchRequestUserInputSchema: validate and describe public questionnaire fields without a fixed header-length cap. Keywords: questionnaire, command, schema, header, freeform.
  * - WorkbenchRequestUserInputCommandSchema/WorkbenchRequestUserInputCommandInput: validate one trusted questionnaire command request with stable replay identity. Keywords: questionnaire, caller, cwd, reload.
  * - WORKBENCH_QUESTIONNAIRE_COMMANDS: expose the steer-safe, reload-preserved request_user_input Code Mode long wait. Keywords: questionnaire, MCP, wait, Code Mode.
  */
@@ -21,10 +21,10 @@ const optionSchema = z.object({
   label: requiredText,
 }).strict();
 const questionSchema = z.object({
-  header: requiredText.max(12),
+  header: requiredText.describe("Short topic label; hidden for a single question."),
   id: requiredText,
   options: z.array(optionSchema).max(3),
-  question: requiredText,
+  question: requiredText.describe("Full question text; used as the title for a single question."),
 }).strict();
 
 export const WorkbenchRequestUserInputSchema = z.object({
@@ -55,13 +55,13 @@ const requestUserInput = defineWorkbenchAgentCommand({
   parseCliArgs(args) {
     const flags = new WorkbenchAgentCommandFlags(args, { values: ["--questions-json"] });
     const source = flags.required("--questions-json");
-    let questions: z.input<typeof questionSchema>[];
+    let questions: unknown;
     try {
-      questions = WorkbenchRequestUserInputSchema.shape.questions.parse(JSON.parse(source));
+      questions = JSON.parse(source);
     } catch {
       throw new Error("wb request user input requires --questions-json to contain a JSON array.");
     }
-    return { questions };
+    return WorkbenchRequestUserInputSchema.parse({ questions });
   },
   usage: "wb request user input --questions-json <json-array>",
   words: ["request", "user", "input"],

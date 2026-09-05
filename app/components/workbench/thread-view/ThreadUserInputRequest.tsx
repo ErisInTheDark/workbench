@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadUserInputRequest: render full or compact live, preview, historical, freeform-only, and one-option quick-response questionnaires. Keywords: questionnaire, custom input, freeform, quick response, thread, compact.
+ * - default ThreadUserInputRequest: render questionnaire-owned titles, single-question framing, and full or compact live, preview, historical, freeform, and quick-response inputs. Keywords: questionnaire, title, header, custom input, freeform, quick response, compact.
  * - Local helpers: question display normalization, answered value derivation, pasted image attachments, and submit handling. Keywords: options, answers, drafts, images, presentation, focus.
  */
 "use client";
@@ -35,6 +35,7 @@ import PlaintextEditable from "./PlaintextEditable";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import { formatQuestionDisplay, shouldUseCompactSingleQuestionDisplay } from "./thread-user-input-request-preview";
+import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -180,8 +181,7 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
   const isReadOnlyMode = isHistoryMode || isPreviewMode;
   const compact = props.presentation === "compact";
   const useCompactSingleQuestionDisplay = shouldUseCompactSingleQuestionDisplay(request);
-  const compactQuestion = useCompactSingleQuestionDisplay ? request.questions[0] : null;
-  const requestTitle = compactQuestion?.question.trim() || request.title;
+  const requestTitle = getQuestionnaireTitle(request);
   const requestSummary = useCompactSingleQuestionDisplay ? "" : request.summary.trim();
   const historyProps = mode === "history" ? props : null;
   const previewProps = mode === "preview" ? props : null;
@@ -508,22 +508,23 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
             const isSoleFreeformQuestion = isInteractiveMode
               && request.questions.length === 1
               && question.options.length === 0;
-            const showQuestionHeader = request.questions.length !== 1
-              || headerText.trim() !== requestTitle.trim();
+            const showQuestionHeader = request.questions.length !== 1;
+            const showQuestionText = Boolean(questionText)
+              && (showQuestionHeader || questionText !== requestTitle.trim());
 
             return (
               <section
                 key={question.id}
                 className="mb-0"
               >
-                {!useCompactSingleQuestionDisplay ? (
+                {showQuestionHeader || showQuestionText ? (
                   <div className="space-y-1">
                     {showQuestionHeader ? (
                       <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] text-muted uppercase">
                         {headerText}
                       </p>
                     ) : null}
-                    {questionText ? (
+                    {showQuestionText ? (
                       <p className="m-0 whitespace-pre-wrap break-words text-[0.92em] leading-[1.65] text-text">
                         {questionText}
                       </p>

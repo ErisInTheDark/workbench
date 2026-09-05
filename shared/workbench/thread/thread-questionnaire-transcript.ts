@@ -1,5 +1,8 @@
 /*
  * Exports:
+ * - getQuestionnaireTitle: derive the full title from a sole question, including saved requests with stale titles. Keywords: questionnaire, title, single, recovery.
+ * - normalizeQuestionnaireSummaryLabel: collapse whitespace for compact labels. Keywords: questionnaire, label, whitespace.
+ * - truncateQuestionnaireSummaryLabel: bound compact labels without truncating the full title. Keywords: questionnaire, label, truncation.
  * - getSingleQuestionnaireSummaryLabel/getQuestionnaireTopicLabel: derive compact readable labels for questionnaire requests. Keywords: questionnaire, summary, label.
  * - getQuestionnairePromptText/getQuestionnaireAnswerMarkdown: convert questionnaire prompts and answers into readable Markdown text. Keywords: questionnaire, answer, markdown.
  * - buildQuestionnaireTranscriptPairs: create prompt/answer transcript pairs for client rendering and context reorientation. Keywords: questionnaire, transcript, projection.
@@ -11,8 +14,14 @@ import type {
   WorkbenchUserInputResponse,
 } from "../../types.ts";
 
-const GENERIC_CODEX_QUESTIONNAIRE_TITLE = "Follow-up questions";
-const GENERIC_CODEX_QUESTIONNAIRE_SUMMARY = "Codex needs your input before it can continue.";
+export function getQuestionnaireTitle(request: {
+  title: string;
+  questions: readonly Pick<WorkbenchUserInputQuestion, "question">[];
+}) {
+  const questionText = request.questions[0]?.question.trim() ?? "";
+  return (request.questions.length === 1 ? questionText : "")
+    || request.title.trim();
+}
 
 export function normalizeQuestionnaireSummaryLabel(value: string) {
   return value.replace(/\s+/g, " ").trim();
@@ -23,20 +32,10 @@ export function truncateQuestionnaireSummaryLabel(value: string) {
   return normalizedValue.length > 80 ? `${normalizedValue.slice(0, 77).trimEnd()}...` : normalizedValue;
 }
 
-function isGenericCodexQuestionnaireRequest(request: WorkbenchUserInputRequest) {
-  return request.title.trim() === GENERIC_CODEX_QUESTIONNAIRE_TITLE
-    && request.summary.trim() === GENERIC_CODEX_QUESTIONNAIRE_SUMMARY;
-}
-
 export function getSingleQuestionnaireSummaryLabel(request: WorkbenchUserInputRequest) {
-  const questionText = request.questions[0]?.question.trim() ?? "";
-  const title = request.title.trim();
-
-  if (questionText && (isGenericCodexQuestionnaireRequest(request) || !title || title === GENERIC_CODEX_QUESTIONNAIRE_TITLE)) {
-    return truncateQuestionnaireSummaryLabel(questionText);
-  }
-
-  return truncateQuestionnaireSummaryLabel(title || questionText || "User input request");
+  return truncateQuestionnaireSummaryLabel(
+    getQuestionnaireTitle(request) || request.questions[0]?.question.trim() || "User input request",
+  );
 }
 
 export function getQuestionnaireTopicLabel(question: WorkbenchUserInputQuestion, index: number) {

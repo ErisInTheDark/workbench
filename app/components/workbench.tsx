@@ -2,7 +2,7 @@
 
 /*
  * Exports:
- * - default Workbench: domain-hook client shell for projects, editing, search, stats, pinned navigation, and threads. Keywords: workbench, project, search, stats, pinned, editor, thread controller, global home.
+ * - default Workbench: domain-hook client shell for projects, editing, search, stats, pinned navigation, and shared questionnaire attention labels. Keywords: workbench, project, search, stats, pinned, editor, thread, questionnaire, global home.
  * Local helpers: route, title, drag, editor, file, thread, and capability UI transformations. Keywords: navigation, interaction, rendering.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
@@ -25,6 +25,7 @@ import type {
 } from "workbench-shared/types";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
 import { writeTextToClipboard } from "../workbench/dom/clipboard";
 import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../workbench/layout/workbench-drag";
@@ -1811,7 +1812,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const visibleUserInputRequestsByThreadId = harnessUserInputRequestsByThreadId;
   const threadAttentionLabelsById = useMemo(() => Object.fromEntries(
     Object.entries(visibleUserInputRequestsByThreadId).flatMap(([threadId, pending]) => {
-      const title = pending.request.title.trim();
+      const title = getQuestionnaireTitle(pending.request);
       return title ? [[threadId, title]] : [];
     }),
   ), [visibleUserInputRequestsByThreadId]);

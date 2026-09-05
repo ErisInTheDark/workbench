@@ -82,7 +82,8 @@ test("freeform request publishes one durable question and returns its correlated
   const waiting = harness.controller.request(freeformInput, new AbortController().signal);
   const questionnaire = await harness.published;
   assert.equal(questionnaire.request.questions[0]?.options.length, 0);
-  assert.equal(questionnaire.request.title, "details");
+  assert.equal(questionnaire.request.title, freeformInput.questions[0].question);
+  assert.equal(questionnaire.request.questions[0]?.header, freeformInput.questions[0].header);
   assert.deepEqual(harness.controller.list().data, [{
     itemId: null,
     request: questionnaire.request,

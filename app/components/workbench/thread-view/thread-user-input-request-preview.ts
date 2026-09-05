@@ -1,14 +1,13 @@
 /*
  * Exports:
- * - formatQuestionDisplay: normalize questionnaire headers and question text for rendering. Keywords: questionnaire, header, question, display.
- * - shouldUseCompactSingleQuestionDisplay: detect generic single-question requests that can omit repeated framing. Keywords: questionnaire, compact, single.
- * - getThreadUserInputRequestPreviewText: derive compact questionnaire text for composer previews. Keywords: questionnaire, preview, sticky composer.
+ * - formatQuestionDisplay: normalize questionnaire headers without discarding longer topic labels. Keywords: questionnaire, header, question, display.
+ * - shouldUseCompactSingleQuestionDisplay: detect single-question requests that can omit repeated framing. Keywords: questionnaire, compact, single.
+ * - getThreadUserInputRequestPreviewText: use the shared full title in composer previews. Keywords: questionnaire, title, preview, sticky composer.
  */
 
 import type { WorkbenchUserInputQuestion, WorkbenchUserInputRequest } from "workbench-shared/types";
+import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 
-const MAX_HEADER_LENGTH = 36;
-const MAX_HEADER_WORDS = 5;
 const GENERIC_CODEX_QUESTIONNAIRE_TITLE = "Follow-up questions";
 const GENERIC_CODEX_QUESTIONNAIRE_SUMMARY = "Codex needs your input before it can continue.";
 
@@ -25,8 +24,6 @@ export function formatQuestionDisplay (
   const normalizedHeader = normalizeHeaderText(question.header);
   const questionText = question.question.trim();
   const headerLooksLikeQuestion = !normalizedHeader
-    || normalizedHeader.length > MAX_HEADER_LENGTH
-    || normalizedHeader.split(/\s+/).filter(Boolean).length > MAX_HEADER_WORDS
     || /[?.!]$/u.test(rawHeader);
 
   if (headerLooksLikeQuestion) {
@@ -58,26 +55,16 @@ export function shouldUseCompactSingleQuestionDisplay (request: WorkbenchUserInp
   }
 
   return isGenericCodexQuestionnaireRequest(request)
-    || (!request.summary.trim() && request.title.trim() === questionText);
+    || (!request.summary.trim() && getQuestionnaireTitle(request) === questionText);
 }
 
 export function getThreadUserInputRequestPreviewText (request: WorkbenchUserInputRequest) {
-  const compactQuestion = shouldUseCompactSingleQuestionDisplay(request)
-    ? request.questions[0] ?? null
-    : null;
-  const requestTitle = compactQuestion?.question.trim() || request.title.trim();
-  const requestSummary = compactQuestion ? "" : request.summary.trim();
-  const titleAndSummary = [requestTitle, requestSummary].filter(Boolean).join(" ");
-
-  if (titleAndSummary) {
-    return titleAndSummary;
-  }
+  const requestSummary = shouldUseCompactSingleQuestionDisplay(request) ? "" : request.summary.trim();
+  const titleAndSummary = [getQuestionnaireTitle(request), requestSummary].filter(Boolean).join(" ");
+  if (titleAndSummary) return titleAndSummary;
 
   const firstQuestion = request.questions[0] ?? null;
-  if (!firstQuestion) {
-    return "Questionnaire";
-  }
-
+  if (!firstQuestion) return "Questionnaire";
   const { questionText, headerText } = formatQuestionDisplay(firstQuestion, 0);
-  return questionText.trim() || headerText.trim() || "Questionnaire";
+  return questionText || headerText || "Questionnaire";
 }

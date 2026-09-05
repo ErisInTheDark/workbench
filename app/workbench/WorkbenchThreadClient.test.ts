@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover thread reads, lifecycle fencing, canonical placement, known-thread live streaming, message admission, and durable global-home questionnaires. Keywords: workbench, thread, lifecycle, read, streaming, message, questionnaire, global home, test.
+ * - No production exports; Node tests cover thread reads, lifecycle fencing, canonical placement, live streaming, message admission, and live versus restart-recovered questionnaires. Keywords: workbench, thread, lifecycle, streaming, message, questionnaire, restart, global home, test.
  */
 
 import assert from "node:assert/strict";
@@ -2912,6 +2912,12 @@ test("Workbench MCP questionnaires submit natively while their Codex turn is act
   const source = activeThread();
   client.selectThreadPayload(source);
   const requestKey = "workbench-mcp:question";
+  FakeWebSocket.intercept = (target, candidate) => {
+    if (candidate.method !== "questionnaire/list" || candidate.workbenchHarness !== "codex") return false;
+    const pending = client.getSnapshot().pendingUserInputRequestsByThreadId.thread;
+    queueMicrotask(() => target.respond(candidate.id, { data: pending ? [pending] : [] }));
+    return true;
+  };
   installProjectThreadState(client, {
     entries: [{
       activityAt: 2,
@@ -2946,13 +2952,172 @@ test("Workbench MCP questionnaires submit natively while their Codex turn is act
     revision: 1,
   });
 
-  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "native");
   await client.submitPendingUserInputRequest("thread", {
     answers: { smoke_test: { answers: ["hello lily"] } },
   });
   assert.equal(socket.requests.some((candidate) => candidate.method === "questionnaire/respond"), true);
   assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/codex/message/admit"), false);
   assert.equal(socket.requests.some((candidate) => candidate.method === "turn/start"), false);
+}));
+
+function installRecoveredWorkbenchQuestionnaire(
+  client: ReturnType<typeof WorkbenchThreadClient>,
+  requestKey = "workbench-mcp:recovered",
+) {
+  const request = {
+    id: requestKey,
+    questions: [{
+      allowOther: true,
+      header: "details",
+      id: "details",
+      isSecret: false,
+      options: [],
+      question: "What should change?",
+    }],
+    submitLabel: "Submit",
+    summary: "",
+    title: "details",
+  };
+  const pending = { itemId: null, request, requestKey, threadId: "thread", turnId: "turn" };
+  installProjectThreadState(client, {
+    entries: [{
+      activityAt: 2,
+      entryKind: "thread",
+      identity: { harness: "codex", threadId: "thread" },
+      lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      pendingQuestionnaire: pending,
+      title: "Thread",
+    }],
+    error: null,
+    freshness: "fresh",
+    projectId: "project",
+    revision: 1,
+  });
+  return pending;
+}
+
+test("saved Workbench questionnaires recover through admission and durable history without a live waiter", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread("codex", "thread", "interrupted"));
+  const pending = installRecoveredWorkbenchQuestionnaire(client);
+  const response = { answers: { details: { answers: ["Keep one owner."] } } };
+  await client.submitPendingUserInputRequest("thread", response);
+
+  assert.equal(socket.requests.some((candidate) => candidate.method === "questionnaire/respond"), false);
+  assert.equal(socket.requests.filter((candidate) => candidate.method === "workbench/codex/message/admit").length, 1);
+  const history = socket.requests.find((candidate) => candidate.method === "questionnaire/history/record");
+  assert.equal(history?.params?.requestKey, pending.requestKey);
+  assert.deepEqual(history?.params?.response, response);
+  assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/thread-state/questionnaire/resolve"), true);
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
+}));
+
+test("a Workbench waiter lost after live observation is reconciled before answering", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread("codex", "thread", "interrupted"));
+  let live = true;
+  FakeWebSocket.intercept = (target, candidate) => {
+    if (candidate.method === "questionnaire/list" && candidate.workbenchHarness === "codex") {
+      queueMicrotask(() => target.respond(candidate.id, { data: live ? [pending] : [] }));
+      return true;
+    }
+    if (candidate.method === "questionnaire/respond") {
+      queueMicrotask(() => target.fail(candidate.id, "provider restarted"));
+      return true;
+    }
+    return false;
+  };
+  const pending = installRecoveredWorkbenchQuestionnaire(client);
+  const response = { answers: { details: { answers: ["Continue"] } } };
+  await assert.rejects(client.submitPendingUserInputRequest("thread", response), /provider restarted/u);
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "native");
+  assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/codex/message/admit"), false);
+  const nativeAttempts = socket.requests.filter((candidate) => candidate.method === "questionnaire/respond").length;
+  live = false;
+
+  await client.submitPendingUserInputRequest("thread", response);
+
+  assert.equal(socket.requests.filter((candidate) => candidate.method === "questionnaire/respond").length, nativeAttempts);
+  assert.equal(socket.requests.filter((candidate) => candidate.method === "workbench/codex/message/admit").length, 1);
+}));
+
+test("failed Workbench live ownership lookup preserves the question and sends no answer", async () => {
+  const messages: string[] = [];
+  await withClient(async (client, socket) => {
+    client.selectThreadPayload(activeThread("codex", "thread", "interrupted"));
+    FakeWebSocket.intercept = (target, candidate) => {
+      if (candidate.method !== "questionnaire/list" || candidate.workbenchHarness !== "codex") return false;
+      queueMicrotask(() => target.fail(candidate.id, "owner lookup unavailable"));
+      return true;
+    };
+    const pending = installRecoveredWorkbenchQuestionnaire(client);
+    socket.notify("questionnaire/requested", pending);
+    await assert.rejects(
+      client.submitPendingUserInputRequest("thread", { answers: { details: { answers: ["Continue"] } } }),
+      /questionnaire.*reconcil|reconcil.*questionnaire/iu,
+    );
+    assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey, pending.requestKey);
+    assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "native");
+    assert.equal(socket.requests.some((candidate) => candidate.method === "questionnaire/respond"), false);
+    assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/codex/message/admit"), false);
+  }, { onStatusMessage: (message) => messages.push(message) });
+  assert.ok(messages.some((message) => message.includes("owner lookup unavailable")));
+});
+
+test("Workbench answers are fenced when the question changes during ownership lookup", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread("codex", "thread", "interrupted"));
+  let nextPending: ReturnType<typeof installRecoveredWorkbenchQuestionnaire> | null = null;
+  FakeWebSocket.intercept = (target, candidate) => {
+    if (candidate.method !== "questionnaire/list" || candidate.workbenchHarness !== "codex") return false;
+    queueMicrotask(() => {
+      nextPending = installRecoveredWorkbenchQuestionnaire(client, "workbench-mcp:replacement");
+      target.respond(candidate.id, { data: [] });
+    });
+    return true;
+  };
+  installRecoveredWorkbenchQuestionnaire(client);
+  await assert.rejects(
+    client.submitPendingUserInputRequest("thread", { answers: { details: { answers: ["Old answer"] } } }),
+    /pending question changed/iu,
+  );
+  assert.ok(nextPending);
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey, "workbench-mcp:replacement");
+  assert.equal(socket.requests.some((candidate) => candidate.method === "questionnaire/respond"), false);
+  assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/codex/message/admit"), false);
+}));
+
+test("Workbench answers do not cross projects when ownership lookup completes late", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread("codex", "thread", "interrupted"));
+  FakeWebSocket.intercept = (target, candidate) => {
+    if (candidate.method !== "questionnaire/list" || candidate.workbenchHarness !== "codex") return false;
+    queueMicrotask(() => {
+      client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+      target.respond(candidate.id, { data: [] });
+    });
+    return true;
+  };
+  installRecoveredWorkbenchQuestionnaire(client);
+  await assert.rejects(
+    client.submitPendingUserInputRequest("thread", { answers: { details: { answers: ["Old project answer"] } } }),
+    /pending question changed/iu,
+  );
+  assert.equal(socket.requests.some((candidate) => candidate.method === "questionnaire/respond"), false);
+  assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/codex/message/admit"), false);
+}));
+
+test("failed Workbench recovery admission keeps the saved answer request retryable", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread("codex", "thread", "interrupted"));
+  FakeWebSocket.intercept = (target, candidate) => {
+    if (candidate.method !== "workbench/codex/message/admit") return false;
+    queueMicrotask(() => target.fail(candidate.id, "admission failed"));
+    return true;
+  };
+  const pending = installRecoveredWorkbenchQuestionnaire(client);
+  await assert.rejects(
+    client.submitPendingUserInputRequest("thread", { answers: { details: { answers: ["Continue"] } } }),
+    /admission failed/u,
+  );
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey, pending.requestKey);
+  assert.equal(socket.requests.some((candidate) => candidate.method === "workbench/thread-state/questionnaire/resolve"), false);
 }));
 
 test("failed detached questionnaire transcript recording still resolves durable history", async () => {

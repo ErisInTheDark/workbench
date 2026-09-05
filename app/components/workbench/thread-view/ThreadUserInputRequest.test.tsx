@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect freeform-only and one-option quick responses plus compact questionnaire preview, live, history, and hydrated draft modes. Keywords: questionnaire, freeform, quick response, quill, compact, preview, live, history, draft.
+ * No production exports. Tests protect single-question framing, freeform and quick responses, and compact questionnaire preview, live, history, and hydrated drafts. Keywords: questionnaire, title, prompt, freeform, quick response, compact, preview, live, history, draft.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -75,14 +75,10 @@ test("freeform-only live questionnaire renders one prompted input and submit act
     assert.match(html, /data-placeholder="[^"]+"/u);
     assert.match(html, /data-thread-questionnaire-submit="true"/u);
     assert.doesNotMatch(html, /aria-pressed/u);
-    if (presentation === "full") {
-      assert.equal(html.match(/>Choice</gu)?.length, 1);
-      assert.match(html, />What should change\?</u);
-    }
   }
 });
 
-test("a distinct request title keeps its sole question eyebrow", () => {
+test("a saved sole question uses its full prompt instead of its old header-derived title", () => {
   const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
     draft: null,
     mode: "live",
@@ -96,8 +92,28 @@ test("a distinct request title keeps its sole question eyebrow", () => {
     },
     spellCheck: true,
   }));
-  assert.match(html, />Component ownership</u);
-  assert.match(html, />Choice</u);
+  assert.doesNotMatch(html, />Component ownership</u);
+  assert.doesNotMatch(html, />Choice</u);
+  assert.equal(html.match(/<h3[^>]*>([^<]*)<\/h3>/u)?.[1], freeformRequest.questions[0].question);
+  assert.equal(html.split(freeformRequest.questions[0].question).length - 1, 1);
+});
+
+test("generic single-question framing presents the full prompt once in both layouts", () => {
+  const genericRequest = {
+    ...freeformRequest,
+    title: "Follow-up questions",
+    summary: "Codex needs your input before it can continue.",
+  };
+  for (const presentation of ["full", "compact"] as const) {
+    const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
+      draft: null,
+      mode: "preview",
+      presentation,
+      request: genericRequest,
+    }));
+    assert.equal(html.match(/<h3[^>]*>([^<]*)<\/h3>/u)?.[1], genericRequest.questions[0].question);
+    assert.equal(html.split(genericRequest.questions[0].question).length - 1, 1);
+  }
 });
 
 test("freeform-only questionnaire history renders its answer without option controls", () => {
