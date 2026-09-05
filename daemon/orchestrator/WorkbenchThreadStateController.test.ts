@@ -12,7 +12,7 @@ import { getWorkbenchHomeFolderKey } from "workbench-shared/workbench/thread/hom
 import { projectWorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
 import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
-import WorkbenchThreadStateStore, { type WorkbenchThreadStateGlobalDocumentId, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
+import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory, type WorkbenchThreadStateGlobalDocumentId, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 
 type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">
   & Partial<Pick<WorkbenchThreadStateControllerOptions, "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">>
@@ -23,6 +23,11 @@ type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "hasLiv
 class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
   readonly globals = new Map<WorkbenchThreadStateGlobalDocumentId, object>();
   readonly projects = new Map<string, object>();
+  readonly titleHistories = new Map<string, WorkbenchStoredThreadTitleHistory[]>();
+
+  async readTitleHistories(projectId: string) {
+    return structuredClone(this.titleHistories.get(projectId) ?? []);
+  }
 
   async readGlobal(id: WorkbenchThreadStateGlobalDocumentId) {
     return structuredClone(this.globals.get(id) ?? null);
@@ -36,12 +41,117 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
     this.globals.set(id, structuredClone(document));
   }
 
-  async writeProject(projectId: string, document: object) {
+  async writeProject(projectId: string, document: object, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {
     this.projects.set(projectId, structuredClone(document));
+    if (titleHistories) this.titleHistories.set(projectId, structuredClone([...titleHistories]));
   }
 }
 
 const testPersistenceByRoot = new Map<string, MemoryThreadStatePersistence>();
+
+test("first title observation is durable before a rename and keeps its timestamp after restart", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  const identity = { harness: "codex" as const, threadId: "existing-thread" };
+  await persistence.writeProject("project", {
+    drafts: [],
+    records: [{
+      activityAt: 1,
+      entryKind: "thread",
+      identity,
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      title: "existing title",
+    }],
+    version: 4,
+  });
+  const options: TestControllerOptions = {
+    storageRoot: "initial-title-history",
+    threadStateStore: persistence,
+    now: () => 10,
+    getProjectCatalog: () => ({ data: [], rootPath: "" }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+  };
+  const first = new WorkbenchThreadStateController(options);
+  try {
+    await first.getSnapshot("project");
+    assert.deepEqual(await persistence.readTitleHistories("project"), [{
+      identity, titles: [{ title: "existing title", usedAt: 10 }],
+    }]);
+  } finally {
+    await first.dispose();
+  }
+  const restarted = new WorkbenchThreadStateController({ ...options, now: () => 20 });
+  try {
+    await restarted.setTitle("project", "codex", identity.threadId, "next title");
+    const entry = (await restarted.getSnapshot("project")).entries[0]!;
+    assert.deepEqual("previousTitles" in entry ? entry.previousTitles : undefined, [{ title: "existing title", usedAt: 10 }]);
+  } finally {
+    await restarted.dispose();
+  }
+});
+
+test("title history records user renames, ignores repeated observations, and survives reconciliation", async () => {
+  let now = 10;
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "title-history-owner",
+    now: () => now,
+    getProjectCatalog: () => ({ data: [], rootPath: "" }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    renameThread: async (_project, _harness, _thread, title) => {
+      if (title === "rejected") throw new Error("Provider rejected rename.");
+      return title;
+    },
+  });
+  const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "history-thread" },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "original",
+  };
+  try {
+    await controller.open("viewer", "project");
+    await controller.ensureProviderEntry("project", provider);
+    now = 20;
+    const renamed = await controller.handleRequest("viewer", {
+      method: "workbench/thread-state/title/set", projectId: "project", identity: provider.identity, title: "renamed",
+    });
+    assert.equal(renamed.error, undefined);
+    const snapshot = () => controller.getSnapshot("project");
+    const renamedEntry = (await snapshot()).entries[0]!;
+    assert.deepEqual("previousTitles" in renamedEntry ? renamedEntry.previousTitles : undefined, [{ title: "original", usedAt: 10 }]);
+    now = 30;
+    await controller.observeTitle("codex", "history-thread", "renamed");
+    await controller.ensureProviderEntry("project", { ...provider, title: "renamed" });
+    assert.deepEqual((await snapshot()).entries[0], renamedEntry);
+    const rejected = await controller.handleRequest("viewer", {
+      method: "workbench/thread-state/title/set", projectId: "project", identity: provider.identity, title: "rejected",
+    });
+    assert.equal(rejected.error?.code, "threadTitleMutationFailed");
+    assert.deepEqual((await snapshot()).entries[0], renamedEntry);
+    const dismissRequest = {
+      method: "workbench/thread-state/title/dismiss" as const, projectId: "project", identity: provider.identity, title: "original",
+    };
+    const denied = await controller.handleRequest("stranger", dismissRequest);
+    assert.ok(denied.error);
+    const dismissed = await controller.handleRequest("viewer", dismissRequest);
+    assert.equal(dismissed.error, undefined);
+    await controller.ensureProviderEntry("project", { ...provider, title: "renamed" });
+    const afterDismissal = (await snapshot()).entries[0]!;
+    assert.deepEqual("previousTitles" in afterDismissal ? afterDismissal.previousTitles : undefined, []);
+    now = 40;
+    await controller.setTitle("project", "codex", "history-thread", "original");
+    const reapplied = (await snapshot()).entries[0]!;
+    assert.deepEqual("previousTitles" in reapplied ? reapplied.previousTitles : undefined, [{ title: "renamed", usedAt: 20 }]);
+  } finally {
+    await controller.dispose();
+  }
+});
 
 function testPersistence(storageRoot: string) {
   const existing = testPersistenceByRoot.get(storageRoot);
@@ -2895,12 +3005,13 @@ test("restart reevaluates a persisted dependency when its ready target loaded fi
   const sourceReadGate = new Promise<void>((resolve) => { releaseSourceRead = resolve; });
   const gatedPersistence: WorkbenchThreadStatePersistence = {
     readGlobal: async (id) => await persistence.readGlobal(id),
+    readTitleHistories: async (projectId) => await persistence.readTitleHistories(projectId),
     readProject: async (projectId) => {
       if (projectId === "alpha") await sourceReadGate;
       return await persistence.readProject(projectId);
     },
     writeGlobal: async (id, document) => await persistence.writeGlobal(id, document),
-    writeProject: async (projectId, document) => await persistence.writeProject(projectId, document),
+    writeProject: async (projectId, document, titleHistories) => await persistence.writeProject(projectId, document, titleHistories),
   };
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({

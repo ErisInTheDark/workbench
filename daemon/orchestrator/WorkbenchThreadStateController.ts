@@ -1,4 +1,5 @@
 /*
+ * Keywords: thread, state, title history, reconciliation, persistence, lifecycle.
  * Exports:
  * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadGitArcSnapshot/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state and title ports, Git projection, claim context, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification, title, git.
  * - default WorkbenchThreadStateController: own UI-independent thread records, settlement retention timing, authoritative SQLite state, durable display order, provider observation, and local/cross-project sidebar projection. Keywords: drafts, pinned, project, lifecycle, retention, headless, sqlite.
@@ -9,6 +10,7 @@ import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import { dismissThreadTitle, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
   getWorkbenchHomeThreadKey,
@@ -409,7 +411,8 @@ export default class WorkbenchThreadStateController {
         title: request.title,
         turnId: request.turnId,
       }) };
-      case "workbench/thread-state/title/set": {
+      case "workbench/thread-state/title/set":
+      case "workbench/thread-state/title/dismiss": {
         if (
           !this.isObservedProjectAuthorized(connectionId, request.projectId)
           && !this.isPinnedThreadAuthorized(connectionId, request.projectId, request.identity.harness, request.identity.threadId)
@@ -417,7 +420,9 @@ export default class WorkbenchThreadStateController {
           return { error: { code: "invalidProjectObservation", message: "The title request does not belong to this connection's observed project." } };
         }
         try {
-          return { result: await this.renameThread(request) };
+          return { result: request.method === "workbench/thread-state/title/set"
+            ? await this.renameThread(request)
+            : await this.dismissTitle(request) };
         } catch (error) {
           return { error: { code: "threadTitleMutationFailed", message: sanitizeError(error) } };
         }
@@ -728,7 +733,7 @@ export default class WorkbenchThreadStateController {
       // Stage only profile mutations: other queued writes must never observe an unacknowledged selection.
       const staged = { ...state, drafts: new Map(state.drafts), entries: new Map(state.entries) };
       if (!this.installComposerProfileTarget(staged, slot, selection)) return false;
-      await this.options.threadStateStore.writeProject(slot.projectId, this.storedProject(staged));
+      await this.writeProjectState(slot.projectId, staged);
       this.installComposerProfileTarget(state, slot, selection);
       this.publish(slot.projectId, state);
       return true;
@@ -795,7 +800,10 @@ export default class WorkbenchThreadStateController {
         : shouldClearQuestionnaire
           ? { ...lifecycleEntry, pendingQuestionnaire: null }
           : lifecycleEntry;
-      const parsedNext = parseWorkbenchThreadStateEntry(next);
+      const parsedNext = parseWorkbenchThreadStateEntry({
+        ...next,
+        titleHistory: recordThreadTitle(existing.titleHistory ?? [], existing.title, next.title, this.now()),
+      });
       if (parsedNext.entryKind === "draft") throw new Error("Lifecycle transitions cannot produce draft entries.");
       state.entries.set(key, parsedNext);
       if (!wakeReadyBefore && areAllUnsnoozedThreadEntriesSettlementReady(this.naturallyOrderedEntries(state))) {
@@ -945,13 +953,32 @@ export default class WorkbenchThreadStateController {
   private async setTitleOwned(projectId: string, state: ProjectState, key: string, title: string) {
     const entry = state.entries.get(key);
     if (!entry || entry.entryKind === "draft") return null;
-    const next = parseWorkbenchThreadStateEntry({ ...entry, title });
+    const next = parseWorkbenchThreadStateEntry({
+      ...entry, title, titleHistory: recordThreadTitle(entry.titleHistory ?? [], entry.title, title, this.now()),
+    });
     if (next.entryKind === "draft") return null;
     if (areDeeplyEqual(entry, next)) return next;
     state.entries.set(key, next);
     await this.persist(projectId, state);
-    this.publish(projectId, state, next);
+    this.publish(projectId, state, state.entries.get(key));
     return next;
+  }
+
+  private async dismissTitle(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/title/dismiss" }>) {
+    const state = await this.getProject(request.projectId);
+    const key = `${request.identity.harness}:${request.identity.threadId}`;
+    return await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
+      const entry = state.entries.get(key);
+      if (!entry || entry.entryKind === "draft") throw new Error("The thread is not available in the observed project.");
+      if (request.title === entry.title) return { accepted: false };
+      const titleHistory = dismissThreadTitle(entry.titleHistory ?? [], entry.title, request.title);
+      if (!areDeeplyEqual(titleHistory, entry.titleHistory ?? [])) {
+        state.entries.set(key, { ...entry, titleHistory });
+        await this.persist(request.projectId, state);
+        this.publish(request.projectId, state, state.entries.get(key));
+      }
+      return { accepted: true };
+    });
   }
 
   async getSnapshot(projectId: string) {
@@ -1065,10 +1092,21 @@ export default class WorkbenchThreadStateController {
         (stored ?? { drafts: [], newThreadProfile: null, records: [], version: 4 }) as Partial<StoredProjectState | StoredProjectStateV3 | StoredProjectStateV2 | StoredProjectStateV1>,
         projectId,
       );
-      if (stored === null || !areDeeplyEqual(stored, decoded)) {
-        await this.options.threadStateStore.writeProject(projectId, decoded);
+      const histories = new Map((await this.options.threadStateStore.readTitleHistories(projectId))
+        .map((history) => [`${history.identity.harness}:${history.identity.threadId}`, history.titles]));
+      const records = decoded.records.map((record) => ({
+        ...record,
+        titleHistory: recordThreadTitle(histories.get(entryKey(record)) ?? [], record.title, record.title, this.now()),
+      }));
+      const needsInitialTitles = records.some((record) => (
+        record.title && !histories.get(entryKey(record))?.some((entry) => entry.title === record.title)
+      ));
+      if (stored === null || !areDeeplyEqual(stored, decoded) || needsInitialTitles) {
+        await this.options.threadStateStore.writeProject(projectId, decoded, records.map((record) => ({
+          identity: record.identity, titles: record.titleHistory,
+        })));
       }
-      return decoded;
+      return { ...decoded, records };
     });
   }
 
@@ -1444,6 +1482,18 @@ export default class WorkbenchThreadStateController {
   ) {
     let changed = false;
     const install = (key: string, entry: WorkbenchThreadStateEntry) => {
+      const existing = state.entries.get(key);
+      if (entry.entryKind !== "draft") {
+        entry = {
+          ...entry,
+          titleHistory: recordThreadTitle(
+            existing && existing.entryKind !== "draft" ? existing.titleHistory ?? [] : [],
+            existing?.title ?? "",
+            entry.title,
+            this.now(),
+          ),
+        };
+      }
       if (areDeeplyEqual(state.entries.get(key), entry)) return;
       state.entries.set(key, entry);
       changed = true;
@@ -2407,8 +2457,18 @@ export default class WorkbenchThreadStateController {
     this.synchronizeSettlementTimestamps(state);
     state.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), state.displayOrder);
     return this.enqueue(`${projectId}:storage:write`, async () => {
-      await this.options.threadStateStore.writeProject(projectId, this.storedProject(state));
+      await this.writeProjectState(projectId, state);
     });
+  }
+
+  private async writeProjectState(projectId: string, state: ProjectState) {
+    const histories = [...state.entries.values()].flatMap((entry) => {
+      if (entry.entryKind === "draft") return [];
+      const titles = entry.titleHistory ?? recordThreadTitle([], entry.title, entry.title, this.now());
+      if (!entry.titleHistory) state.entries.set(entryKey(entry), { ...entry, titleHistory: titles });
+      return [{ identity: entry.identity, titles }];
+    });
+    await this.options.threadStateStore.writeProject(projectId, this.storedProject(state), histories);
   }
 
   private storedProject(state: ProjectState): StoredProjectState {
@@ -2420,7 +2480,9 @@ export default class WorkbenchThreadStateController {
         snoozed: entry?.entryKind === "draft" ? entry.metadata.snoozed : false,
       };
     });
-    const records = [...state.entries.values()].filter((entry): entry is WorkbenchThreadStateRecord => entry.entryKind !== "draft");
+    const records = [...state.entries.values()]
+      .filter((entry): entry is WorkbenchThreadStateRecord => entry.entryKind !== "draft")
+      .map(({ titleHistory: _titleHistory, ...record }) => record);
     return {
       ...(!isWorkbenchThreadDisplayOrderEmpty(state.displayOrder) ? { displayOrder: state.displayOrder } : {}),
       drafts,

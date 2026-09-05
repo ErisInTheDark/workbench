@@ -10,7 +10,7 @@ import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import type { WorkbenchClientController } from "./workbench-client-context";
-import { useWorkbenchThreadSidebarEntry } from "./use-workbench-client";
+import { useWorkbenchThreadSidebarEntry, useWorkbenchThreadTitleHistory } from "./use-workbench-client";
 
 const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
   activityAt: 10,
@@ -93,4 +93,33 @@ test("thread state hooks do not leak another project's entry", () => {
     },
   ));
   assert.match(html, />missing</u);
+});
+
+test("title history actions target their project and preserve rejection", async () => {
+  const calls: object[] = [];
+  const controls = {
+    setThreadTitle: async (request: object) => { calls.push(request); return "old"; },
+    updateThreadStateWithAcceptance: async (request: object) => { calls.push(request); return false; },
+  } as WorkbenchClientController["controls"];
+  let history!: ReturnType<typeof useWorkbenchThreadTitleHistory>;
+  function Probe() {
+    history = useWorkbenchThreadTitleHistory("project", "codex", "thread");
+    return null;
+  }
+  renderToStaticMarkup(createElement(WorkbenchClientProvider, {
+    client: { ...client, controls },
+    children: createElement(Probe),
+  }));
+  await history.reapply("old");
+  assert.deepEqual(calls, [{ projectId: "project", harness: "codex", threadId: "thread", title: "old" }]);
+  await assert.rejects(history.dismiss("old"));
+  assert.deepEqual(calls[1], {
+    method: "workbench/thread-state/title/dismiss",
+    projectId: "project",
+    identity: { harness: "codex", threadId: "thread" },
+    title: "old",
+  });
+  renderToStaticMarkup(createElement(WorkbenchClientProvider, { client, children: createElement(Probe) }));
+  await assert.rejects(history.reapply("old"));
+  await assert.rejects(history.dismiss("old"));
 });

@@ -1,4 +1,5 @@
 /*
+ * Keywords: thread, internal record, title history, bounded projection, conformance.
  * Exports:
  * - WorkbenchThreadSnoozeTarget/WorkbenchThreadStateRecord/WorkbenchThreadStateEntry: internal UI-independent thread and dependent-snooze shapes. Keywords: thread, state, record, headless, snooze.
  * - parseWorkbenchThreadStateEntry/safeParseWorkbenchThreadStateEntry: validate persisted and mutated internal entries. Keywords: validation, persistence, migration.
@@ -8,6 +9,7 @@
 import { z } from "zod";
 
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
+import { previousThreadTitles, WorkbenchThreadTitleHistoryEntrySchema, type WorkbenchThreadTitleHistoryEntry } from "workbench-shared/workbench/thread/thread-title-history";
 import {
   WorkbenchComposerProfileSelectionSchema,
   WorkbenchHarnessSchema,
@@ -18,10 +20,11 @@ import {
 } from "workbench-shared/workbench/thread/thread-state";
 
 type WorkbenchProviderSidebarEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
-type WithoutWaiting<TValue> = TValue extends unknown ? Omit<TValue, "waitingFor"> : never;
-type WorkbenchProviderThreadEntry = WithoutWaiting<WorkbenchProviderSidebarEntry>;
+type WithoutProjections<TValue> = TValue extends unknown ? Omit<TValue, "waitingFor" | "previousTitles"> : never;
+type WorkbenchProviderThreadEntry = WithoutProjections<WorkbenchProviderSidebarEntry>;
 
 export type WorkbenchThreadStateRecord = WorkbenchProviderThreadEntry & {
+  titleHistory?: WorkbenchThreadTitleHistoryEntry[];
   gitHistoryCleanedAt: number | null;
   mcpGeneration: string | null;
   profile: WorkbenchComposerProfileSelectionState | null;
@@ -139,7 +142,9 @@ function internalFields(value: unknown) {
   const record = value as Record<string, unknown>;
   const profile = WorkbenchComposerProfileSelectionSchema.safeParse(record.profile);
   const snoozedUntil = WorkbenchThreadSnoozeTargetSchema.safeParse(record.snoozedUntil);
+  const titleHistory = z.array(WorkbenchThreadTitleHistoryEntrySchema).safeParse(record.titleHistory);
   return {
+    ...(titleHistory.success ? { titleHistory: titleHistory.data } : {}),
     gitHistoryCleanedAt: typeof record.gitHistoryCleanedAt === "number" && Number.isFinite(record.gitHistoryCleanedAt) && record.gitHistoryCleanedAt >= 0
       ? Math.trunc(record.gitHistoryCleanedAt)
       : null,
@@ -159,12 +164,12 @@ export function safeParseWorkbenchThreadStateEntry(value: unknown):
   | { data: WorkbenchThreadStateEntry; success: true }
   | { error: unknown; success: false } {
   const publicCandidate = value && typeof value === "object" && !Array.isArray(value)
-    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
+    ? (({ titleHistory: _titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
     : value;
   const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(publicCandidate);
   if (!parsed.success) return { error: parsed.error, success: false };
   if (parsed.data.entryKind === "draft") return { data: parsed.data, success: true };
-  const { waitingFor: _waitingFor, ...persistent } = parsed.data;
+  const { previousTitles: _previousTitles, waitingFor: _waitingFor, ...persistent } = parsed.data;
   return { data: { ...persistent, ...internalFields(value) }, success: true };
 }
 
@@ -179,7 +184,7 @@ export function conformStoredWorkbenchThreadStateRecord(
   projectId: string,
 ): StoredWorkbenchThreadStateRecordConformance {
   const publicCandidate = value && typeof value === "object" && !Array.isArray(value)
-    ? (({ gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
+    ? (({ titleHistory: _titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
     : value;
   const locator = StoredRecordLocatorSchema.safeParse(publicCandidate);
   if (!locator.success) return { error: locator.error, success: false };
@@ -192,7 +197,7 @@ export function conformStoredWorkbenchThreadStateRecord(
   if (conformed.data.entryKind === "draft") {
     return { error: new z.ZodError([{ code: "custom", message: "A stored provider record cannot be a draft.", path: ["entryKind"] }]), success: false };
   }
-  const { waitingFor: _waitingFor, ...persistent } = conformed.data;
+  const { previousTitles: _previousTitles, waitingFor: _waitingFor, ...persistent } = conformed.data;
   return {
     data: { ...persistent, ...internalFields(value) },
     repairedPaths: conformed.repairedPaths,
@@ -203,6 +208,6 @@ export function conformStoredWorkbenchThreadStateRecord(
 export function projectWorkbenchThreadStateEntry(entry: WorkbenchThreadStateEntry): WorkbenchThreadSidebarEntry | null {
   if (entry.entryKind === "draft") return entry;
   if (!entry.providerObserved) return null;
-  const { gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, ...projected } = entry;
-  return WorkbenchThreadSidebarEntrySchema.parse(projected);
+  const { titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, ...projected } = entry;
+  return WorkbenchThreadSidebarEntrySchema.parse({ ...projected, previousTitles: previousThreadTitles(titleHistory ?? [], entry.title) });
 }

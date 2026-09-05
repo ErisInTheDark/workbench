@@ -48,8 +48,12 @@ function createThreadStateDatabase() {
     executeTransaction: async (statements: readonly WorkbenchDatabaseMutation[]) => {
       for (const statement of statements) {
         operations.push(`${statement.kind}:${statement.tableName}`);
-        if (statement.kind !== "upsert") throw new Error(`Unexpected test database mutation: ${statement.kind}`);
         const rows = rowsByTable.get(statement.tableName) ?? [];
+        if (statement.kind === "delete") {
+          rowsByTable.set(statement.tableName, rows.filter((row) => !statement.where.every(([column, value]) => row[column] === value)));
+          continue;
+        }
+        if (statement.kind !== "upsert") throw new Error(`Unexpected test database mutation: ${statement.kind}`);
         const incoming = Object.fromEntries(statement.values);
         const existing = rows.find((row) => statement.conflictColumns.every((column) => row[column] === incoming[column]));
         if (existing) {
@@ -654,6 +658,16 @@ test("managed title commands use the validated provider title as the mutation pr
     result: { harness: "codex", threadId: "thread-one", title: "New overarching task" },
   });
   assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, 1);
+
+  const titleEntry = (await feature.controller.getSnapshot("project")).entries.find((entry) => (
+    entry.entryKind !== "draft" && entry.identity.threadId === "thread-one"
+  ));
+  assert.deepEqual(
+    titleEntry && "previousTitles" in titleEntry
+      ? (titleEntry.previousTitles as Array<{ title: string }>).map((entry) => entry.title)
+      : [],
+    ["Current task"],
+  );
 
   providerName = "New thread";
   providerPreview = "Initial request";

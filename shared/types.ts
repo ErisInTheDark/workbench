@@ -1,4 +1,5 @@
 /*
+ * Keywords: shared contracts, workbench, project-qualified title mutations.
  * Exports:
  * - WorkbenchHarness: supported agent harness identity.
  * - OrchestratorReloadScope: reloadable orchestrator subsystem identity.
@@ -866,6 +867,7 @@ export interface ThreadPayload extends ThreadSummary {
 
 export interface WorkbenchThreadTitleRequest {
   harness: WorkbenchHarness;
+  projectId?: string;
   threadId: string;
   title: string;
 }

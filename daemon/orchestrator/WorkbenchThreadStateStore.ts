@@ -1,20 +1,31 @@
 /*
  * Exports:
- * - WorkbenchThreadStateGlobalDocumentId/WorkbenchThreadStatePersistence/WorkbenchThreadStateStoreDatabase/WorkbenchThreadStateShadowNotifier: typed thread-state document, database, and shadow ports. Keywords: thread state, sqlite, storage, boundary.
- * - default WorkbenchThreadStateStore: persist project and Workbench-wide thread-state documents through the shared database worker. Keywords: thread state, sqlite, store, aggregate.
+ * Keywords: thread state, sqlite, history, transaction, persistence.
+ * - WorkbenchThreadStateGlobalDocumentId/WorkbenchThreadStatePersistence/WorkbenchThreadStateStoreDatabase/WorkbenchThreadStateShadowNotifier: document, database, and shadow ports.
+ * - WorkbenchStoredThreadTitleHistory: full distinct title history for one provider identity.
+ * - default WorkbenchThreadStateStore: atomically persist project documents and relational title history through the shared worker.
  */
-import { selectRows, upsertRow, type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
+import { deleteRows, selectRows, upsertRow, type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
 
 import type { WorkbenchDatabaseMutationResult } from "./database/workbench-database-protocol";
 import { threadStateTables } from "../lib/workbench/database/schema/thread-state-schema";
+import { threadTitleHistoryTables } from "../lib/workbench/database/schema/thread-title-history-schema";
+import type { WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadTitleHistoryEntry } from "workbench-shared/workbench/thread/thread-title-history";
 
 export type WorkbenchThreadStateGlobalDocumentId = "homeDisplayOrder" | "pinnedLayout";
+
+export interface WorkbenchStoredThreadTitleHistory {
+  identity: { harness: WorkbenchHarnessId; threadId: string };
+  titles: WorkbenchThreadTitleHistoryEntry[];
+}
 
 export interface WorkbenchThreadStatePersistence {
   readGlobal(id: WorkbenchThreadStateGlobalDocumentId): Promise<unknown | null>;
   readProject(projectId: string): Promise<unknown | null>;
+  readTitleHistories(projectId: string): Promise<WorkbenchStoredThreadTitleHistory[]>;
   writeGlobal(id: WorkbenchThreadStateGlobalDocumentId, document: object): Promise<void>;
-  writeProject(projectId: string, document: object): Promise<void>;
+  writeProject(projectId: string, document: object, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]): Promise<void>;
 }
 
 export interface WorkbenchThreadStateStoreDatabase {
@@ -59,8 +70,26 @@ export default class WorkbenchThreadStateStore implements WorkbenchThreadStatePe
     return row ? decodeDocument(row.document_json, `project:${projectId}`) : null;
   }
 
-  async writeProject(projectId: string, document: object) {
-    await this.database.executeTransaction([
+  async readTitleHistories(projectId: string): Promise<WorkbenchStoredThreadTitleHistory[]> {
+    const rows = await this.database.query(selectRows(threadTitleHistoryTables.titles, {
+      where: { project_id: projectId },
+      orderBy: [{ column: "used_at", direction: "DESC" }, { column: "title" }],
+    }));
+    const histories = new Map<string, WorkbenchStoredThreadTitleHistory>();
+    for (const row of rows) {
+      const key = `${row.harness_id}:${row.thread_id}`;
+      let history = histories.get(key);
+      if (!history) {
+        history = { identity: { harness: row.harness_id, threadId: row.thread_id }, titles: [] };
+        histories.set(key, history);
+      }
+      history.titles.push({ title: row.title, usedAt: row.used_at });
+    }
+    return [...histories.values()];
+  }
+
+  async writeProject(projectId: string, document: object, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {
+    const statements: WorkbenchDatabaseMutation[] = [
       upsertRow(threadStateTables.workbenchThreadStateProjects, {
         project_id: projectId,
         document_json: encodeDocument(document, `project:${projectId}`),
@@ -69,7 +98,40 @@ export default class WorkbenchThreadStateStore implements WorkbenchThreadStatePe
         conflictColumns: ["project_id"],
         updateColumns: ["document_json", "updated_at"],
       }),
-    ]);
+    ];
+    if (titleHistories) {
+      const existing = await this.readTitleHistories(projectId);
+      const remaining = new Map(existing.map((history) => [
+        `${history.identity.harness}:${history.identity.threadId}`,
+        { identity: history.identity, titles: new Map(history.titles.map((entry) => [entry.title, entry.usedAt])) },
+      ]));
+      for (const history of titleHistories) {
+        const previous = remaining.get(`${history.identity.harness}:${history.identity.threadId}`);
+        for (const entry of history.titles) {
+          if (previous?.titles.get(entry.title) !== entry.usedAt) {
+            statements.push(upsertRow(threadTitleHistoryTables.titles, {
+              project_id: projectId,
+              harness_id: history.identity.harness,
+              thread_id: history.identity.threadId,
+              title: entry.title,
+              used_at: entry.usedAt,
+            }, {
+              conflictColumns: ["project_id", "harness_id", "thread_id", "title"],
+              updateColumns: ["used_at"],
+            }));
+          }
+          previous?.titles.delete(entry.title);
+        }
+      }
+      for (const history of remaining.values()) {
+        for (const title of history.titles.keys()) {
+          statements.push(deleteRows(threadTitleHistoryTables.titles, {
+            project_id: projectId, harness_id: history.identity.harness, thread_id: history.identity.threadId, title,
+          }));
+        }
+      }
+    }
+    await this.database.executeTransaction(statements);
     this.shadow?.markProject(projectId);
   }
 

@@ -1,4 +1,5 @@
 /*
+ * Keywords: client, routes, thread state, title mutations, pinned admission.
  * Exports:
  * - areExplorerSnapshotsEquivalent: compare root-visible explorer semantics while excluding sidebar-only activity ordering. Keywords: explorer, equality, render boundary.
  * - openWorkbenchThreadStateObservation/openWorkbenchGlobalThreadStateObservation/describeGlobalThreadStateOpenFailure: negotiate sidebar bootstrap versions and expose bounded global-open transport failures. Keywords: thread state, protocol, compatibility, conformance, home.
@@ -766,6 +767,33 @@ export async function WorkbenchClient(
       && getWorkbenchThreadTargetSelectedId(requested) === getWorkbenchThreadTargetSelectedId(admitted);
   }
 
+  async function readPinnedThreadContext(projectId: string, target: NonNullable<WorkbenchRoute["threadTarget"]>) {
+    const parsed = WorkbenchPinnedThreadContextResultSchema.safeParse(
+      await threadClient.requestWorkbench("workbench/thread-state/pin/open", { projectId, target }),
+    );
+    if (!parsed.success) {
+      reportClientSchemaError("Rejected Workbench pinned thread context response", parsed.error);
+      return { ok: false as const, error: "The pinned thread context response was invalid." };
+    }
+    const context = parsed.data.context;
+    if (!context || context.projectId !== projectId || !isPinnedContextTargetMatch(target, context.target)) {
+      return { ok: false as const, error: "This pinned thread is missing, snoozed, or no longer pinned." };
+    }
+    return { ok: true as const, context };
+  }
+
+  async function admitPinnedTitleAction(projectId: string, identity: { harness: WorkbenchHarness; threadId: string }) {
+    const observed = threadSidebarClient.getSnapshot();
+    if (!observed || observed.projectId === projectId) return;
+    const isForeignPin = threadSidebarClient.getProjectThreadSummaries().projects
+      .find((project) => project.projectId === projectId)?.pinnedThreads.some((entry) => (
+        entry.entryKind === "thread" && entry.identity.harness === identity.harness && entry.identity.threadId === identity.threadId
+      ));
+    if (!isForeignPin) return;
+    const result = await readPinnedThreadContext(projectId, { kind: "provider", ...identity });
+    if (!result.ok) throw new Error(result.error);
+  }
+
   async function openThread(
     threadId: string,
     {
@@ -1022,28 +1050,13 @@ export async function WorkbenchClient(
         return { error: `Thread project not found: ${ownerProjectId}`, ok: false };
       }
       if (isForeignPin) {
-        const parsedContext = WorkbenchPinnedThreadContextResultSchema.safeParse(
-          await threadClient.requestWorkbench("workbench/thread-state/pin/open", {
-            projectId: ownerProjectId,
-            target,
-          }),
-        );
-        if (!parsedContext.success) {
-          reportClientSchemaError("Rejected Workbench pinned thread context response", parsedContext.error);
+        const result = await readPinnedThreadContext(ownerProjectId, target);
+        if (!result.ok) {
           threadClient.clearThreadSelection();
           applyCurrentThreadSelection(null);
-          return { error: "The pinned thread context response was invalid.", ok: false };
+          return { error: result.error, ok: false };
         }
-        if (
-          !parsedContext.data.context
-          || parsedContext.data.context.projectId !== ownerProjectId
-          || !isPinnedContextTargetMatch(target, parsedContext.data.context.target)
-        ) {
-          threadClient.clearThreadSelection();
-          applyCurrentThreadSelection(null);
-          return { error: "This pinned thread is missing, snoozed, or no longer pinned.", ok: false };
-        }
-        ownerEntries = parsedContext.data.context.entries;
+        ownerEntries = result.context.entries;
       }
       if (target.kind === "new") {
         if (isForeignPin) {
@@ -1092,6 +1105,9 @@ export async function WorkbenchClient(
   }
 
   async function updateThreadStateWithAcceptance(request: Parameters<WorkbenchControls["updateThreadState"]>[0]) {
+    if (request.method === "workbench/thread-state/title/dismiss") {
+      await admitPinnedTitleAction(request.projectId, request.identity);
+    }
     const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(await threadClient.requestWorkbench(request.method, request));
     if (!parsed.success) {
       reportClientSchemaError("Rejected Workbench thread state mutation response", parsed.error);
@@ -1197,10 +1213,11 @@ export async function WorkbenchClient(
     refreshRateLimits,
     sendThreadMessage,
     setThreadTitle: async (request) => {
-      const projectId = activeRoute.view === "thread"
+      const projectId = request.projectId ?? (activeRoute.view === "thread"
         ? activeRoute.threadOwnerProjectId || activeRoute.projectId
-        : projectClient.getSnapshot().currentProjectId;
+        : projectClient.getSnapshot().currentProjectId);
       if (!projectId) throw new Error("A project must be selected before renaming a thread.");
+      await admitPinnedTitleAction(projectId, { harness: request.harness, threadId: request.threadId });
       const parsed = WorkbenchThreadTitleMutationResultSchema.safeParse(await threadClient.requestWorkbench("workbench/thread-state/title/set", {
         identity: { harness: request.harness, threadId: request.threadId },
         projectId,

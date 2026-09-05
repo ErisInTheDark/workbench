@@ -1,4 +1,5 @@
 /*
+ * Keywords: thread row, tooltip, title history, navigation, actions.
  * Exports:
  * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, draft presence, direct navigation, tooltip detail, drag targets, and explicit context-menu access. Keywords: thread, project, sidebar, navigation, tooltip, context menu, claim, composer, draft, priority, pin, snooze, compact, drag.
  * - Local helpers: derive full or compact pinned-draft row targets and render bounded thread tooltip details. Compact rows accept secondary content. Keywords: thread, draft, target, tooltip, status, secondary row.
@@ -48,6 +49,7 @@ import { useWorkbenchComposerDraftPresence } from "./WorkbenchComposerDraftPrese
 import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
+import WorkbenchThreadTitleHistory from "./WorkbenchThreadTitleHistory";
 
 type ThreadAction = "complete" | "discard" | "restore" | "settle" | "wake";
 type ThreadStatusIcon = ComponentType<{ className?: string }>;
@@ -76,6 +78,7 @@ function ThreadTooltipContent({
   status,
   statusClassName,
   title,
+  identity,
 }: {
   claimedPaths: readonly string[];
   dateTime: string;
@@ -88,10 +91,12 @@ function ThreadTooltipContent({
   status: string;
   statusClassName: string;
   title: string;
+  identity?: { harness: "codex" | "copilot" | "opencode"; threadId: string };
 }) {
   return (
     <div data-thread-project-file-link-boundary="true" className="flex max-h-full min-w-0 max-w-[min(28rem,calc(100vw-2rem))] flex-col gap-2">
       <p className="m-0 break-words text-[0.9rem] font-medium leading-[1.45] text-text">{title}</p>
+      {identity ? <WorkbenchThreadTitleHistory key={`${projectId}:${identity.harness}:${identity.threadId}`} projectId={projectId} harness={identity.harness} threadId={identity.threadId} /> : null}
       <div className="flex min-w-0 items-center gap-1.5 text-[0.76rem] text-muted">
         <Icon className={`size-3.5 shrink-0 ${statusClassName}`} />
         <span className={`min-w-0 truncate ${statusClassName}`}>{status}</span>
@@ -259,7 +264,7 @@ export default function WorkbenchThreadListItem({
       </svg>
       <ContextMenuCapability menu={contextMenu}>
         <WorkbenchTooltip
-          content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} extraDetails={tooltipDetails} Icon={Icon} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} title={entry.title} />}
+          content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} extraDetails={tooltipDetails} Icon={Icon} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} title={entry.title} identity={entry.entryKind === "draft" ? undefined : entry.identity} />}
           enabled={showTooltip && !isDragActive}
           interactive
         >

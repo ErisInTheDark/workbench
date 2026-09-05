@@ -29,7 +29,7 @@ test("internal MCP freshness and Git retention timing never leak into the sideba
   assert.equal(record.entryKind === "thread" ? record.mcpGeneration : null, "epoch:2");
   assert.equal(record.entryKind === "thread" ? record.settledAt : null, 123);
   assert.deepEqual(record.entryKind === "thread" ? record.snoozedUntil : null, snoozedUntil);
-  assert.deepEqual(projectWorkbenchThreadStateEntry(record), entry);
+  assert.deepEqual(projectWorkbenchThreadStateEntry(record), { ...entry, previousTitles: [] });
 });
 
 test("unobserved durable records remain internal until provider facts arrive", () => {
@@ -55,7 +55,7 @@ test("stored-record conformance preserves lifecycle truth when an optional proje
 
   assert.equal(conformed.success, true);
   if (!conformed.success) return;
-  assert.deepEqual(projectWorkbenchThreadStateEntry(conformed.data), entry);
+  assert.deepEqual(projectWorkbenchThreadStateEntry(conformed.data), { ...entry, previousTitles: [] });
   assert.deepEqual(conformed.repairedPaths, [["gitArc"]]);
 });
 

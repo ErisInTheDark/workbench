@@ -1,4 +1,5 @@
 /*
+ * Keywords: database, schema inventory, history, typed tables.
  * WORKBENCH_DATABASE_TABLE_NAMES: exact current Workbench database table inventory. Keywords: database, schema, tables.
  * WORKBENCH_DATABASE_SCHEMA_VERSION: current global SQLite schema version. Keywords: database, schema, version.
  * installWorkbenchDatabaseSchema: install latest or an explicit historical target transactionally, never downgrade. Keywords: database, schema, install.
@@ -32,6 +33,7 @@ import { operationSourceSchemaHistory } from "workbench-shared/workbench/databas
 import { searchSchemaHistory } from "workbench-shared/workbench/database/schema/search-schema";
 import { usageSchemaHistory } from "workbench-shared/workbench/database/schema/usage-schema";
 import { threadStateSchemaHistory } from "../../lib/workbench/database/schema/thread-state-schema.ts";
+import { threadTitleHistorySchemaHistory, threadTitleHistoryTables } from "../../lib/workbench/database/schema/thread-title-history-schema.ts";
 import type { CurrentTableDefinition } from "workbench-shared/database/schema/schema-definition";
 import { applyWorkbenchDatabaseSchema, defineWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
 import { codexSandboxNetworkTables } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
@@ -73,6 +75,7 @@ const workbenchDatabaseSchema = defineWorkbenchDatabaseSchema({
     interactionSchemaHistory,
     evidenceSchemaHistory,
     threadStateSchemaHistory,
+    threadTitleHistorySchemaHistory,
     searchSchemaHistory,
     usageSchemaHistory,
   ],
@@ -87,6 +90,7 @@ const currentTables = {
   ...interactionTables,
   ...evidenceTables,
   ...threadStateTables,
+  ...threadTitleHistoryTables,
   ...searchTables,
   ...usageTables,
 };

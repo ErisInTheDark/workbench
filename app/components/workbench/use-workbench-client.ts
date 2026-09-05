@@ -1,10 +1,12 @@
 /*
+ * Keywords: domain hooks, client, project identity, thread state, title history.
  * Exports:
  * - useWorkbenchClientMount: own async Workbench client mount and disposal around root-owned DOM surfaces. Keywords: lifecycle, bootstrap, client.
  * - useWorkbenchThreads: read and act on the route-owned thread collection through one visible namespace. Keywords: threads, runtime, controller.
  * - useWorkbenchThread: bind thread reads and intent methods to one thread identity. Keywords: thread, identity, questionnaire.
  * - useWorkbenchProjectThreadSidebar: read one project-owned sidebar in every observation mode. Keywords: project, sidebar, snapshot.
  * - useWorkbenchThreadSidebarEntry: read one project-owned thread sidebar entry by identity. Keywords: thread, sidebar, lifecycle.
+ * - useWorkbenchThreadTitleHistory: read previous titles and apply project-qualified rename/dismiss intent. Keywords: title, history, project.
  * - useWorkbenchProjectThreadSidebars: read the aggregate project sidebar projection. Keywords: home, projects, sidebar.
  * - useWorkbenchProjectThreadSummaries: read the aggregate project summary projection. Keywords: project, summary, status.
  * - useWorkbenchHomeThreadDisplayOrder: read global home thread ordering. Keywords: home, order, sidebar.
@@ -245,6 +247,31 @@ export function useWorkbenchProjectThreadSidebars(explicitClient?: WorkbenchClie
     store?.getProjectThreadSidebars ?? (() => EMPTY_PROJECT_THREAD_SIDEBARS),
     () => EMPTY_PROJECT_THREAD_SIDEBARS,
   );
+}
+
+export function useWorkbenchThreadTitleHistory(projectId: string, harness: WorkbenchHarness, threadId: string) {
+  const client = useWorkbenchClientController();
+  const entry = useWorkbenchThreadSidebarEntry(projectId, harness, threadId);
+  const summaries = useWorkbenchProjectThreadSummaries();
+  const pinned = summaries.projects.find((project) => project.projectId === projectId)?.pinnedThreads.find((candidate) => (
+    candidate.entryKind === "thread" && candidate.identity.harness === harness && candidate.identity.threadId === threadId
+  ));
+  const reapply = useCallback(async (title: string) => {
+    if (!client.controls) throw new Error("Workbench controls are not ready.");
+    await client.controls.setThreadTitle({ projectId, harness, threadId, title });
+  }, [client.controls, harness, projectId, threadId]);
+  const dismiss = useCallback(async (title: string) => {
+    if (!client.controls) throw new Error("Workbench controls are not ready.");
+    const accepted = await client.controls.updateThreadStateWithAcceptance({
+      method: "workbench/thread-state/title/dismiss", projectId, identity: { harness, threadId }, title,
+    });
+    if (!accepted) throw new Error("The current title cannot be dismissed.");
+  }, [client.controls, harness, projectId, threadId]);
+  return {
+    previousTitles: entry?.previousTitles ?? (pinned?.entryKind === "thread" ? pinned.previousTitles : null) ?? [],
+    reapply,
+    dismiss,
+  };
 }
 
 export function useWorkbenchProjectThreadSummaries(explicitClient?: WorkbenchClientController) {

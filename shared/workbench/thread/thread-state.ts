@@ -1,4 +1,5 @@
 /*
+ * Keywords: thread, sidebar, protocol, lifecycle, previous titles, pinned summaries.
  * Exports:
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity. Keywords: route, draft, provider, subagent.
  * - WorkbenchComposerProfileSlotSchema/WorkbenchComposerSettingsSchema/WorkbenchComposerProfileSelectionSchema: strict daemon target-profile contracts. Keywords: composer, profile, settings, daemon.
@@ -25,6 +26,7 @@ import { areDeeplyEqual } from "../deep-equality.ts";
 import { gitArcPathsOverlap } from "../git/git-arc-paths.ts";
 import { WorkbenchProjectsPayloadSchema, WorkbenchProjectStateUpdateSchema } from "../project/project-state.ts";
 import { ThreadDisplayLayoutSchema } from "./thread-display-layout.ts";
+import { WorkbenchThreadTitleHistoryEntrySchema } from "./thread-title-history.ts";
 import {
   projectWorkbenchThreadDisplaySection,
   resolveWorkbenchThreadDisplayOrder,
@@ -288,6 +290,7 @@ const DraftEntrySchema = SidebarCommonSchema.extend({
   metadata: VisibleMetadataSchema,
 }).strict();
 const TopLevelEntrySchema = SidebarCommonSchema.extend({
+  previousTitles: z.array(WorkbenchThreadTitleHistoryEntrySchema).max(4).default([]).optional(),
   entryKind: z.literal("thread"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
   gitArcPlan: WorkbenchGitArcPlanStateSchema.nullable().optional(),
@@ -300,6 +303,7 @@ const TopLevelEntrySchema = SidebarCommonSchema.extend({
   waitingFor: z.enum(["subagents", "other"]).optional(),
 }).strict();
 const SubagentEntrySchema = SidebarCommonSchema.extend({
+  previousTitles: z.array(WorkbenchThreadTitleHistoryEntrySchema).max(4).default([]).optional(),
   createdAt: z.number().int().nonnegative(),
   cwd: z.string().min(1),
   directSubagentIndex: z.number().int().nonnegative(),
@@ -386,6 +390,7 @@ const PinnedDraftSummaryEntrySchema = SidebarCommonSchema.extend({
   status: z.literal("draft"),
 }).strict();
 const PinnedTopLevelSummaryEntrySchema = SidebarCommonSchema.extend({
+  previousTitles: z.array(WorkbenchThreadTitleHistoryEntrySchema).max(4).default([]).optional(),
   entryKind: z.literal("thread"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
   identity: ThreadIdentitySchema,
@@ -548,6 +553,7 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/pin/open"), target: WorkbenchThreadTargetSchema }),
   ProjectRequestBase.extend({ draftId: CanonicalUuidSchema.optional(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/intent/accept"), title: z.string().trim().min(1), turnId: z.string().trim().min(1) }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/set"), title: z.string().trim().min(1) }),
+  ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/dismiss"), title: z.string().trim().min(1) }),
   ProjectRequestBase.extend({ draft: WorkbenchThreadDraftSchema, folderId: CanonicalUuidSchema.optional(), method: z.literal("workbench/thread-state/draft/upsert") }),
   z.object({
     destinationProjectId: z.string().trim().min(1),
@@ -935,6 +941,7 @@ export function createWorkbenchProjectThreadSummary(
         metadata: { archived: false, pinned: true, snoozed: false },
         status: statusByThreadKey.get(`${entry.identity.harness}:${entry.identity.threadId}`) ?? "completed",
         title: entry.title,
+        previousTitles: entry.previousTitles ?? [],
         ...(entry.waitingFor ? { waitingFor: entry.waitingFor } : {}),
       }];
     });
