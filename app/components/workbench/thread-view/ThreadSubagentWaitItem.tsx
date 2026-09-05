@@ -1,10 +1,11 @@
 /*
+ * Keywords: thread, subagent, cumulative duration, live clock.
  * Exports:
  * - default ThreadSubagentWaitItem: render named subagent wait outcomes with cumulative live timing, tabs, completed Markdown, or failure details. Keywords: workbench, thread, subagent, wait, duration, tabs, preview, timeout.
  */
 "use client";
 
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 
 import type { ThreadPayload, WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
@@ -14,6 +15,7 @@ import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure"
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadSummaryText from "./ThreadSummaryText";
+import { useThreadLiveDuration } from "./use-thread-live-duration";
 
 interface ThreadSubagentWaitEntry {
   content?: ReactNode;
@@ -43,25 +45,7 @@ export default function ThreadSubagentWaitItem ({
   const selectedEntry = entries.find((entry) => entry.targetKey === selectedTargetKey) ?? entries[0] ?? null;
   const multiplexed = entries.length > 1;
   const active = outcome === "inProgress";
-  const [nowMs, setNowMs] = useState<number | null>(null);
-  useEffect(() => {
-    if (!active || activeStartedAtMs === null || activeStartedAtMs === undefined) {
-      return;
-    }
-
-    const updateNow = () => setNowMs(Date.now());
-    updateNow();
-    const intervalId = window.setInterval(updateNow, 1_000);
-    return () => window.clearInterval(intervalId);
-  }, [active, activeStartedAtMs]);
-  const visibleDurationMs = active
-    && activeStartedAtMs !== null
-    && activeStartedAtMs !== undefined
-    && durationMs !== null
-    && durationMs !== undefined
-    && nowMs !== null
-      ? durationMs + Math.max(0, nowMs - activeStartedAtMs)
-      : durationMs;
+  const visibleDurationMs = useThreadLiveDuration(durationMs, active ? activeStartedAtMs : null);
   const showFailureExit = outcome === "failed" && exitCode !== null && exitCode !== undefined && exitCode !== 0;
   const showDuration = visibleDurationMs !== null && visibleDurationMs !== undefined;
   if (!selectedEntry) return null;

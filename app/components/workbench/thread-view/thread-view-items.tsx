@@ -2701,7 +2701,14 @@ function ThreadRenderableBlockViewComponent ({
     case "contextCompaction": {
       const timelineEntry = findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline);
       const isActive = turnStatus === "inProgress" && (!timelineEntry || timelineEntry.completedAt === null);
-      return <ThreadContextCompactionItem isActive={isActive} item={block.item} />;
+      return (
+        <ThreadContextCompactionItem
+          completedAt={timelineEntry?.completedAt}
+          isActive={isActive}
+          item={block.item}
+          startedAt={timelineEntry?.startedAt ?? timelineEntry?.firstSeenAt}
+        />
+      );
     }
     case "mcpToolCall": {
       const route = getWorkbenchMcpCommandRoute({
