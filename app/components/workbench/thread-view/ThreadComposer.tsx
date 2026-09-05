@@ -299,7 +299,9 @@ export default function ThreadComposer ({
   const pickerHarness = profilePickerTarget?.harness ?? thread.harness;
   const pickerSelectedModelId = profilePickerTarget?.model ?? selectedModel;
   const pickerSelectedAgentPath = profilePickerTarget?.agentPath ?? thread.agentPath;
-  const profileButtonLabel = selectedProfile ? getComposerProfileDisplayLabel(selectedProfile, agentButtonLabel, modelButtonLabel) : "Custom";
+  const profileButtonLabel = selectedProfile
+    ? getComposerProfileDisplayLabel(selectedProfile, agentButtonLabel, modelButtonLabel)
+    : hasEffectiveProfile ? "Custom" : "Choose a profile";
   const currentComposerSettings: WorkbenchComposerSettings = {
     agentPath: thread.agentPath,
     agentSource: selectedAgent?.source ?? null,
@@ -877,7 +879,7 @@ export default function ThreadComposer ({
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     {showsThreadControls ? (
-                    !hasEffectiveProfile && !composerProfileSnapshot.error ? (
+                    !hasEffectiveProfile && profileSlot && !composerProfileController.hasSelection(profileSlot) && !composerProfileSnapshot.error ? (
                       <div
                         role="status"
                         aria-label="Loading composer profile"
@@ -891,7 +893,7 @@ export default function ThreadComposer ({
                       isProfilePanelOpen={isProfilePickerOpen}
                       modelLabel={modelButtonLabel}
                       profileLabel={profileButtonLabel}
-                      selectedProfileLabel={selectedProfile ? profileButtonLabel : null}
+                      selectedProfileLabel={!hasEffectiveProfile || selectedProfile ? profileButtonLabel : null}
                       showsFastModeControl={showsFastModeControl}
                       showsReasoningEffortControl={showsReasoningEffortControl}
                       onAgentOpen={() => {

@@ -106,6 +106,7 @@ export default class WorkbenchComposerProfileController {
 
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   getSnapshot = () => this.snapshot;
+  hasSelection(slot: WorkbenchComposerProfileSlot) { return Object.hasOwn(this.selections, getSlotKey(slot)); }
   getSelection(slot: WorkbenchComposerProfileSlot) { return this.selections[getSlotKey(slot)] ?? EMPTY_CUSTOM_SELECTION; }
   getProfile(profileId: string) { return this.profiles.find((profile) => profile.id === profileId) ?? null; }
   getSelectedProfile(slot: WorkbenchComposerProfileSlot) { const selection = this.getSelection(slot); return selection.kind === "profile" ? this.getProfile(selection.profileId) : null; }
@@ -202,8 +203,7 @@ export default class WorkbenchComposerProfileController {
       }
       else {
         this.stableSelections.delete(key);
-        const { [key]: _removed, ...rest } = this.selections;
-        this.selections = rest;
+        this.installSelection(slot, EMPTY_CUSTOM_SELECTION, false);
       }
       this.error = "";
       this.publish();

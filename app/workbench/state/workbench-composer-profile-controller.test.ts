@@ -96,6 +96,27 @@ test("missing daemon selection never resolves settings from a raw thread", async
   controller.dispose();
 });
 
+test("empty target reads finish loading and allow a profile to be selected", async () => {
+  const { controller } = await createController([profile()]);
+  const slots: WorkbenchComposerProfileSlot[] = [
+    { kind: "new-thread", projectId: "project-a" },
+    { kind: "draft", projectId: "project-a", harness: "codex", draftId: "draft-a" },
+  ];
+  try {
+    for (const slot of slots) {
+      assert.equal(controller.hasSelection(slot), false);
+      await controller.loadSelection(slot);
+      assert.equal(controller.hasSelection(slot), true);
+      assert.equal(controller.resolveSettings(slot), null);
+      assert.equal(controller.selectProfile(slot, "profile-a"), true);
+      await controller.loadSelection(slot);
+      assert.deepEqual(controller.resolveSettings(slot), CODEX_SETTINGS);
+    }
+  } finally {
+    controller.dispose();
+  }
+});
+
 test("targets requested before connection load when persistence arrives", async () => {
   const controller = new WorkbenchComposerProfileController();
   const slot = { kind: "thread" as const, harness: "codex" as const, projectId: "project-a", threadId: "thread" };
