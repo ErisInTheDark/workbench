@@ -6,6 +6,8 @@ import test from "node:test";
 
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import {
+  createCodexUsageImport,
+  readCodexUsageContext,
   createCodexTurnTokenUsageObservation,
   createCodexTurnTokenUsageObservationFromNotification,
   createCodexTurnUsageContextObservation,
@@ -16,6 +18,7 @@ import {
   createCodexTranscriptProviderThreadObservations,
   createCodexTranscriptProviderTurnScopeObservation,
 } from "./codex-transcript-provider-observations.ts";
+import type { CodexTranscriptRawEvent } from "./codex-transcript-types.ts";
 
 const context = {
   activityAt: 6_000,
@@ -77,6 +80,42 @@ function providerThread(): Thread {
     updatedAt: 6,
   };
 }
+
+test("usage evidence follows observed settings and reroutes without borrowing current thread defaults", () => {
+  const thread = providerThread();
+  thread.model = "current-not-historical";
+  const event = (method: string, receivedAt: number, params: CodexTranscriptRawEvent["payload"]): CodexTranscriptRawEvent => ({
+    id: String(receivedAt), method, receivedAt, requestId: null, source: "upstream-notification",
+    payload: { method, params },
+  });
+  const input = {
+    context, thread,
+    turnIndex: [{ turnId: "turn", startedAt: 1, completedAt: 6, status: "completed" as const, itemCount: 1, updatedAt: 6 }],
+    events: [event("turn/started", 1_000, { threadId: "thread", turn: { id: "turn" } })],
+  };
+  assert.deepEqual(createCodexUsageImport(input).observations, []);
+  const settings = (model: string) => ({ threadId: "thread", threadSettings: { model, serviceTier: "fast" } });
+  const imported = createCodexUsageImport({
+    ...input,
+    events: [
+      event("thread/settings/updated", 900, settings("first")),
+      ...input.events,
+      event("thread/settings/updated", 2_000, settings("second")),
+      event("model/rerouted", 3_000, { threadId: "thread", turnId: "turn", fromModel: "second", toModel: "third" }),
+      event("turn/completed", 6_000, { threadId: "thread", turn: { id: "turn" } }),
+      event("thread/settings/updated", 7_000, settings("future")),
+    ],
+  });
+  assert.deepEqual(imported.observations.map((observation) => (
+    observation.kind === "turnUsageContext" ? [observation.model, observation.modelChanged === true] : null
+  )), [["first", false], ["second", true], ["third", true]]);
+  assert.deepEqual(readCodexUsageContext({
+    model: "plain", collaborationMode: { settings: { model: "collaboration" } }, serviceTier: "fast",
+  }), { model: "collaboration", serviceTier: "fast" });
+  assert.throws(() => createCodexUsageImport({
+    ...input, events: [event("model/rerouted", 2_000, { threadId: "other", turnId: "turn", fromModel: "a", toModel: "b" })],
+  }), /crossed thread ownership/);
+});
 
 test("routine provider metadata projects without importing turns", () => {
   assert.deepEqual(createCodexTranscriptProviderThreadObservation("thread", context), {

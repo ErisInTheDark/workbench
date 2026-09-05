@@ -1,11 +1,23 @@
 /*
+ * Keywords: database, schema, stats, usage.
  * Exports:
- * - usage fact tables: durable token, attribution, rate-limit, claim, and import relations. Keywords: database, stats, usage.
- * - usageTables/UsageSchemaRows/usageSchemaHistory: current usage registry, row types, and schema history. Keywords: database, schema, stats.
+ * - threadTurnUsage: observed model context and cumulative turn counters.
+ * - threadUsageModelAttributions: inferred model attribution.
+ * - accountRateLimitSamples: dated account quota samples.
+ * - accountRateLimitWindows: quota windows belonging to samples.
+ * - gitClaimSessions: claim lifetimes.
+ * - gitClaimThreadFileDays: daily claim activity.
+ * - gitClaimImports: claim import checkpoints.
+ * - threadUsageImports: usage import checkpoints.
+ * - usageTables: current usage table registry.
+ * - UsageSchemaRows: usage row types.
+ * - usageSchemaHistory: additive and conversion steps.
  */
 import {
+  booleanInteger,
   check,
   defineTable,
+  evolveTable,
   enumText,
   index,
   integer,
@@ -76,8 +88,11 @@ const threadTurnUsageV2 = defineTable("thread_turn_usage", {
       AND ${table.cumulative_total_tokens} IS NOT NULL AND ${table.usage_observed_at} IS NOT NULL)`),
   ],
 }));
+const threadTurnUsageV3 = evolveTable(threadTurnUsageV2, {
+  add: { model_is_mixed: booleanInteger().notNull().default(0) },
+});
 const threadTurnUsageHistory = defineTableHistory({
-  current: threadTurnUsageV2,
+  current: threadTurnUsageV3,
   versions: [
     tableVersion({ migration: createTable(threadTurnUsageV1), schemaVersion: 7, table: threadTurnUsageV1 }),
     tableVersion({
@@ -88,6 +103,11 @@ const threadTurnUsageHistory = defineTableHistory({
       }),
       schemaVersion: 10,
       table: threadTurnUsageV2,
+    }),
+    tableVersion({
+      migration: addColumns({ from: threadTurnUsageV2, to: threadTurnUsageV3, columns: ["model_is_mixed"] }),
+      schemaVersion: 15,
+      table: threadTurnUsageV3,
     }),
   ],
 });

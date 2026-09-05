@@ -6,6 +6,7 @@ import test from "node:test";
 import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchStatsImportRepository from "./WorkbenchStatsImportRepository.ts";
+import { WORKBENCH_STATS_USAGE_IMPORT_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
 
 test("usage and claim imports resume safely and isolate failed work", () => {
   const database = new Database(":memory:");
@@ -148,7 +149,7 @@ test("usage import version changes discard stale token facts and requeue complet
     assert.equal((database.prepare(`
       SELECT completed_data_version FROM thread_usage_imports
       WHERE provider_thread_id = 'provider-thread'
-    `).get() as { completed_data_version: number }).completed_data_version, 2);
+    `).get() as { completed_data_version: number }).completed_data_version, WORKBENCH_STATS_USAGE_IMPORT_VERSION);
 
     database.prepare(`
       UPDATE thread_usage_imports
@@ -160,7 +161,7 @@ test("usage import version changes discard stale token facts and requeue complet
     assert.deepEqual(database.prepare(`
       SELECT state, completed_data_version FROM thread_usage_imports
       WHERE provider_thread_id = 'provider-thread'
-    `).get(), { completed_data_version: 2, state: "unavailable" });
+    `).get(), { completed_data_version: WORKBENCH_STATS_USAGE_IMPORT_VERSION, state: "unavailable" });
 
     database.exec(`
       UPDATE thread_turn_usage SET
@@ -179,6 +180,12 @@ test("usage import version changes discard stale token facts and requeue complet
     assert.deepEqual(database.prepare(`
       SELECT cumulative_total_tokens, usage_data_version
       FROM thread_turn_usage WHERE turn_id = 'turn'
+    `).get(), { cumulative_total_tokens: 120, usage_data_version: 2 });
+    database.prepare("UPDATE thread_usage_imports SET completed_data_version = 2").run();
+    repository.beginUsage("context-backfill", ["codex"], 30);
+    assert.ok(repository.claimUsage("context-backfill", ["codex"], 31));
+    assert.deepEqual(database.prepare(`
+      SELECT cumulative_total_tokens, usage_data_version FROM thread_turn_usage WHERE turn_id = 'turn'
     `).get(), { cumulative_total_tokens: 120, usage_data_version: 2 });
   } finally {
     database.close();

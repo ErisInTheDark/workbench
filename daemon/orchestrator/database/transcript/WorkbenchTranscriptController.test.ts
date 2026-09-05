@@ -114,9 +114,8 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
     });
     blockProjection = true;
     const recording = controller.record([{
-      kind: "canonicalWindow",
-      contentVersion: 3,
-      materializedTurnIds: ["turn"],
+      kind: "providerTurnScope",
+      completeTurnIds: ["turn"],
       threadId: "thread",
       observations: [{
         kind: "thread",
@@ -157,7 +156,7 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
           questions: null,
         },
       }],
-    }], { source: "compatibility" });
+    }], { source: "provider" });
     await projectionStarted.promise;
     let recordingSettled = false;
     void recording.then(() => {
@@ -394,6 +393,21 @@ test("capture gaps block only per-thread compatibility and cutover while direct 
     assert.deepEqual(failed.pendingRecoveryThreadIds, ["provider-thread"]);
 
     rejectSettlements = false;
+    await failed.record([{
+      kind: "usageWindow", threadId: "provider-thread",
+      catalog: observationsFor("provider-thread").filter(
+        (observation): observation is Extract<WorkbenchTranscriptAtomicObservation, { kind: "thread" | "turn" }> => (
+          observation.kind === "thread" || observation.kind === "turn"
+        ),
+      ),
+      observations: [{
+        kind: "turnUsageContext", threadId: "provider-thread", turnId: "turn-provider-thread",
+        model: "observed-model", serviceTier: null, observedAt: 5,
+      }],
+    }], { source: "compatibility" });
+    assert.equal(await failed.read({ threadId: "provider-thread", turnLimit: 1 }), null);
+    assert.deepEqual(failed.pendingRecoveryThreadIds, ["provider-thread"]);
+    assert.throws(() => failed.assertCutoverReady(), /capture gaps for 2 thread/u);
     await failed.record(observationsFor("provider-thread"), { source: "provider" });
     await failed.record(observationsFor("workbench-thread"), { source: "workbench" });
     assert.equal(

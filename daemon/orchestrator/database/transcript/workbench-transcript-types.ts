@@ -1,13 +1,16 @@
 /*
+ * Keywords: transcript, observation, catalog, usage, recording, recovery.
  * Exports:
  * - WorkbenchTranscriptItemLifecycle: durable lifecycle values shared by item transforms. Keywords: transcript, item, lifecycle.
  * - WorkbenchTranscriptAtomicObservation: one source-owned semantic transcript or turn-usage fact. Keywords: transcript, observation, atomic, stats.
  * - WorkbenchTranscriptCaptureGapObservation: one closed failed-capture interval. Keywords: transcript, capture gap, recovery.
  * - WorkbenchTranscriptProviderTurnScopeObservation: one complete provider-owned turn replacement boundary. Keywords: transcript, provider, replacement.
- * - WorkbenchTranscriptObservation: harness-neutral durable transcript input accepted in queue order. Keywords: transcript, observation, recorder.
+ * - WorkbenchTranscriptObservation: ordered transcript input, including restricted usage-only catalog windows.
  * - WorkbenchTranscriptRecordingContext: fact ownership and provider-recovery boundary for one settlement. Keywords: transcript, recording, recovery.
  * - WorkbenchTranscriptSettlement: semantic commit result used to refresh subscriptions. Keywords: transcript, settlement, subscription.
- * - WorkbenchTranscriptReadRequest/WorkbenchTranscriptSnapshot/WorkbenchTranscriptSnapshotRows: shared hydration-bounded relational read contract re-exports. Keywords: transcript, snapshot, hydration.
+ * - WorkbenchTranscriptReadRequest: bounded relational read request.
+ * - WorkbenchTranscriptSnapshot: hydrated transcript result.
+ * - WorkbenchTranscriptSnapshotRows: typed canonical rows.
  */
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type {
@@ -56,6 +59,7 @@ export type WorkbenchTranscriptAtomicObservation =
   }
   | {
     kind: "turnUsageContext";
+    modelChanged?: boolean;
     model: string | null;
     observedAt: number;
     serviceTier: string | null;
@@ -143,6 +147,12 @@ export type WorkbenchTranscriptObservation =
   | WorkbenchTranscriptAtomicObservation
   | WorkbenchTranscriptCaptureGapObservation
   | WorkbenchTranscriptProviderTurnScopeObservation
+  | {
+    kind: "usageWindow";
+    threadId: string;
+    catalog: readonly Extract<WorkbenchTranscriptAtomicObservation, { kind: "thread" | "turn" }>[];
+    observations: readonly Extract<WorkbenchTranscriptAtomicObservation, { kind: "turnUsageContext" | "turnTokenUsage" }>[];
+  }
   | {
     kind: "canonicalWindow";
     contentVersion: number;

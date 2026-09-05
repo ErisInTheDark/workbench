@@ -25,6 +25,7 @@ interface TokenRow {
   cumulative_total_tokens: number;
   harness_id: WorkbenchHarness;
   model: string | null;
+  model_is_mixed: number;
   occurred_at: number;
   project_id: string;
   service_tier: string | null;
@@ -126,7 +127,8 @@ export default class WorkbenchUsageStatsRepository {
       const estimate = estimateApiTokenCost({
         cacheWriteInputTokens: written, cachedInputTokens: cached, inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens, model, provider: row.harness_id, serviceTier: row.service_tier,
-        modelSource: row.model ? "exact" : row.attribution_source === "thread" || row.attribution_source === "project" ? "inferred" : "default",
+        modelSource: row.model ? row.model_is_mixed ? "inferred" : "exact"
+          : row.attribution_source === "thread" || row.attribution_source === "project" ? "inferred" : "default",
       });
       let costUsd = 0;
       for (const key of STATS_TOKEN_TYPES) {
@@ -138,7 +140,7 @@ export default class WorkbenchUsageStatsRepository {
       costBuckets[position]!.totalUsd += costUsd;
       const basisKey = estimate.source === "exact" ? "exactModelTokens"
         : estimate.source === "default" ? "defaultModelTokens"
-          : row.attribution_source === "project" ? "projectInferredModelTokens" : "threadInferredModelTokens";
+          : !row.model && row.attribution_source === "project" ? "projectInferredModelTokens" : "threadInferredModelTokens";
       basis[basisKey] += values.all;
       threads.add(row.thread_id);
       turnCount += 1;

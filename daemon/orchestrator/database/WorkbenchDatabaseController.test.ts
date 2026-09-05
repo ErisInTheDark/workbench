@@ -97,6 +97,37 @@ test("database worker records claim snapshots and returns bounded stats", async 
   }
 });
 
+test("mixed-model schema addition preserves usage counters, attribution and unrelated thread history", () => {
+  const database = new Database(":memory:");
+  try {
+    installWorkbenchDatabaseSchema(database, { targetVersion: 14 });
+    database.pragma("foreign_keys = ON");
+    const repository = new WorkbenchTranscriptRepository(database);
+    repository.settle([
+      { kind: "thread", threadId: "thread", projectId: "project", projectRoot: "C:/project", title: "thread", createdAt: 1, updatedAt: 1, activityAt: 1 },
+      { kind: "turn", threadId: "thread", turnId: "turn", turnIndex: 0, harnessId: "codex", nativeLocation: "C:/project", nativeThreadId: "thread", nativeTurnId: "turn", state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1_000 },
+      { kind: "turnTokenUsage", threadId: "thread", turnId: "turn", observedAt: 2, usageDataVersion: 2,
+        cumulative: { inputTokens: 100, cachedInputTokens: 20, cacheWriteInputTokens: 0, outputTokens: 50, reasoningOutputTokens: 10, totalTokens: 150 } },
+    ]);
+    database.prepare("INSERT INTO thread_usage_model_attributions (turn_id, model, source, policy_version, updated_at) VALUES ('turn', 'model', 'thread', 1, 2)").run();
+    const beforeUsage = database.prepare("SELECT * FROM thread_turn_usage").get() as Record<string, string | number | null>;
+    const beforeAttribution = database.prepare("SELECT * FROM thread_usage_model_attributions").all();
+    const beforeTranscript = repository.read({ threadId: "thread", turnLimit: 1 });
+    installWorkbenchDatabaseSchema(database);
+    installWorkbenchDatabaseSchema(database);
+    assert.deepEqual(database.prepare("SELECT * FROM thread_turn_usage").get(), { ...beforeUsage, model_is_mixed: 0 });
+    assert.deepEqual(database.prepare("SELECT * FROM thread_usage_model_attributions").all(), beforeAttribution);
+    assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 1 }), beforeTranscript);
+    repository.settle([{ kind: "turnUsageContext", threadId: "thread", turnId: "turn", observedAt: 3, model: "rerouted", serviceTier: null, modelChanged: true }]);
+    assert.deepEqual(database.prepare("SELECT model, model_is_mixed, cumulative_total_tokens FROM thread_turn_usage").get(), {
+      model: "rerouted", model_is_mixed: 1, cumulative_total_tokens: 150,
+    });
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally {
+    database.close();
+  }
+});
+
 test("tool schema upgrade preserves collaboration children and callable sources", () => {
   const database = new Database(":memory:");
   try {

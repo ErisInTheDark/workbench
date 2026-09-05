@@ -1,13 +1,17 @@
 /*
+ * Keywords: stats, import, usage, claims, SQLite, checkpoints.
  * Exports:
- * - WorkbenchStatsUsageImportCandidate/WorkbenchGitClaimImportCandidate: typed resumable queue work. Keywords: stats, import, usage, claims.
- * - WorkbenchGitClaimImportDiscovery/WorkbenchGitClaimImportSettlement/WorkbenchStatsUsageImportSettlement: typed import boundaries. Keywords: stats, Git, settlement.
+ * - WorkbenchStatsUsageImportCandidate: queued usage import.
+ * - WorkbenchGitClaimImportCandidate: queued claim import.
+ * - WorkbenchGitClaimImportDiscovery: discovered claim source.
+ * - WorkbenchGitClaimImportSettlement: settled claim import.
+ * - WorkbenchStatsUsageImportSettlement: settled usage import.
  * - default WorkbenchStatsImportRepository: own versioned SQLite usage/claim queues, settlements, facts, and progress. Keywords: stats, import, SQLite, version.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import { WORKBENCH_STATS_USAGE_DATA_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
+import { WORKBENCH_STATS_USAGE_DATA_VERSION, WORKBENCH_STATS_USAGE_IMPORT_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
 
 export interface WorkbenchStatsUsageImportCandidate {
   harness: WorkbenchHarness;
@@ -83,7 +87,7 @@ export default class WorkbenchStatsImportRepository {
           updated_at = ?, error_text = NULL, completed_data_version = NULL
         WHERE harness_id IN (${placeholders})
           AND (completed_data_version IS NULL OR completed_data_version != ?)
-      `).run(now, ...harnesses, WORKBENCH_STATS_USAGE_DATA_VERSION);
+      `).run(now, ...harnesses, WORKBENCH_STATS_USAGE_IMPORT_VERSION);
       this.database.prepare(`
         UPDATE thread_usage_imports
         SET state = 'pending', run_id = NULL, started_at = NULL, settled_at = NULL,
@@ -208,7 +212,7 @@ export default class WorkbenchStatsImportRepository {
         AND state = 'processing' AND run_id = ?
     `).run(
       settlement.state, now, now, boundedError(settlement.error),
-      settlement.state, WORKBENCH_STATS_USAGE_DATA_VERSION,
+      settlement.state, WORKBENCH_STATS_USAGE_IMPORT_VERSION,
       candidate.projectId, candidate.harness, candidate.threadId, runId,
     );
   }

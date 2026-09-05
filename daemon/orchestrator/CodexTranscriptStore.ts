@@ -1126,22 +1126,23 @@ export default class CodexTranscriptStore {
     });
   }
 
-  async readStoredTurnUsageEvents(threadId: string) {
+  async readStoredUsageEvidence(threadId: string) {
     await this.ready();
     const threadFile = await this.json.read<CodexTranscriptThreadFile | null>(this.threadFilePath(threadId), null);
     if (!threadFile?.thread) return null;
-    const events: CodexTranscriptRawEvent[] = [];
+    const events = (await this.json.readJsonLines<CodexTranscriptRawEvent>(this.orphanEventsJournalPath(threadId)))
+      .filter(({ method }) => method === "thread/settings/updated");
     for (const { turnId } of threadFile.turnIndex) {
       const journal = await this.json.readJsonLines<CodexTranscriptRawEvent>(this.turnJournalPath(threadId, turnId));
-      let event: CodexTranscriptRawEvent | undefined;
-      for (let index = journal.length - 1; index >= 0; index -= 1) {
-        if (journal[index]?.method !== "thread/tokenUsage/updated") continue;
-        event = journal[index];
-        break;
+      let usage: CodexTranscriptRawEvent | undefined;
+      for (const event of journal) {
+        if (event.method === "thread/tokenUsage/updated") usage = event;
+        else if (event.method === "thread/settings/updated" || event.method === "model/rerouted"
+          || event.method === "turn/started" || event.method === "turn/completed") events.push(event);
       }
-      if (event) events.push(event);
+      if (usage) events.push(usage);
     }
-    return events;
+    return { thread: threadFile.thread, turnIndex: threadFile.turnIndex, events };
   }
 
   async readProviderPreviousCursor(threadId: string, beforeTurnId: string) {

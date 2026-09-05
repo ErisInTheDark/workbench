@@ -22,6 +22,7 @@
 | daemon/orchestrator | The workbench harness, applied on top of existing harnesses. |
 | orchestrator runner | The standalone supervisor process under `runner/`. It starts and stops the daemon, owns launcher logs and silence recovery, and may expose runner-only control HTTP. It imports shared contracts but never daemon implementation code. |
 | codex app-server | Codex's harness. |
+| provider | A harness integrated by Workbench, such as Codex, OpenCode or Copilot. Provider and harness are interchangeable here; Workbench is the enclosing harness. |
 | app | Sometimes "app server". NOT "codex app-server", which is codex's harness. May be referring to the backend or frontend of a workbench *app*. The backend has thin responsibilities related to serving the SPA, providing the tray features, and storing settings. The frontend is thinner, solely responsible for rendering and interaction. |
 | Git transition | A worktree-keyed shared-read/exclusive-write lease that coordinates Git arc and thread-state decisions across reload generations |
 | workspace search | Full-screen command/search dialog backed by SQLite rows and projections for projects, current-project settings/files, threads, and registered actions. |

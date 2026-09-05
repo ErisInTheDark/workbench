@@ -79,6 +79,9 @@ import {
   createCodexTranscriptProviderTurnObservation,
   createCodexTurnTokenUsageObservationFromNotification,
   createCodexTurnUsageContextObservation,
+  createCodexUsageImport,
+  createCodexModelRerouteObservation,
+  readCodexUsageContext,
   type CodexTranscriptProviderContext,
 } from "./codex-transcript-provider-observations.ts";
 import {
@@ -215,7 +218,9 @@ export type CodexStdioBridgeReloadState = {
   upstreamInitialized: boolean;
 };
 
-type CodexTranscriptThreadContext = CodexTranscriptProviderContext;
+type CodexTranscriptThreadContext = CodexTranscriptProviderContext & {
+  usageContext?: ReturnType<typeof readCodexUsageContext>;
+};
 
 type CodexSqliteTranscriptObservation = WorkbenchTranscriptObservation;
 
@@ -984,6 +989,9 @@ export default class CodexStdioBridge {
     this.requestIdAllocator = initialState?.requestIdAllocator ?? { next: 1 };
     this.transcriptActiveTurns = initialState?.transcriptActiveTurns ?? new Map();
     this.transcriptThreadContexts = initialState?.transcriptThreadContexts ?? new Map();
+    if (restartingAppServer) {
+      for (const context of this.transcriptThreadContexts.values()) delete context.usageContext;
+    }
     this.transcriptSteers = initialState?.transcriptSteers ?? new Map();
     this.unmaterializedThreadIds = initialState?.unmaterializedThreadIds ?? new Set();
     this.transcriptRecording = new CodexTranscriptRecordingController({
@@ -1453,25 +1461,20 @@ export default class CodexStdioBridge {
       this.assertAcceptingWork();
       const threadId = asString(asRecord(message.params)?.threadId)?.trim() ?? "";
       if (!threadId) throw new Error("Stats usage hydration requires a thread id.");
-      await this.transcriptQueue;
       const transcriptStore = this.ensureTranscriptStore();
-      const thread = await transcriptStore.readStoredThreadSnapshot(threadId);
-      if (!thread) return { id: requestId, result: { state: "unavailable" } };
-      await this.importSqliteCompatibilityWindow(thread, transcriptStore);
-      const events = await transcriptStore.readStoredTurnUsageEvents(threadId);
-      if (events === null) return { id: requestId, result: { state: "unavailable" } };
-      const observations = events.flatMap((event) => {
-        const observation = createCodexTurnTokenUsageObservationFromNotification(
-          event.payload as JsonRpcNotification,
-          event.receivedAt,
-        );
-        if (!observation) return [];
-        if (observation.threadId !== threadId) {
-          throw new Error(`Stats usage hydration changed thread owner from ${threadId} to ${observation.threadId}.`);
+      const evidence = await transcriptStore.readStoredUsageEvidence(threadId);
+      if (!evidence) return { id: requestId, result: { state: "unavailable" } };
+      if (evidence.thread.id !== threadId) throw new Error("Stats usage evidence changed thread owner");
+      const context = await this.resolveTranscriptThreadContext(evidence.thread, false);
+      const window = createCodexUsageImport({ ...evidence, context });
+      await this.captureTranscript("usage-compatibility-import", async () => {
+        try {
+          await this.transcriptRecording.importCompatibilityWindow(async () => [window]);
+        } catch (error) {
+          // Usage import has its own durable failed-work state, not live shadow failure semantics.
+          throw new Error(error instanceof Error ? error.message : "Usage import settlement failed", { cause: error });
         }
-        return [observation];
-      });
-      await this.transcriptRecording.importCompatibilityWindow(async () => observations);
+      }, { propagateFailure: true });
       return { id: requestId, result: { state: "completed" } };
     } catch (error) {
       return {
@@ -2113,6 +2116,12 @@ export default class CodexStdioBridge {
         return;
       }
 
+      const settingsThreadId = message.method === "thread/settings/updated"
+        ? asString(asRecord(message.params)?.threadId) : null;
+      // Completion may clear the live map before this event reaches the recording queue.
+      const settingsTurnId = settingsThreadId
+        ? [...this.transcriptActiveTurns].find(([, threadId]) => threadId === settingsThreadId)?.[0]
+        : undefined;
       void this.captureTranscript(`upstream-notification:${message.method}`, async () => {
         const transcriptStore = this.ensureTranscriptStore();
         const threadId = asString(asRecord(message.params)?.threadId)
@@ -2120,7 +2129,7 @@ export default class CodexStdioBridge {
         const normalisedMessage = threadId
           ? (await transcriptStore.externalizeInlineImages(threadId, message)).value
           : message;
-        const providerObservations = await this.createSqliteProviderNotificationObservations(normalisedMessage);
+        const providerObservations = await this.createSqliteProviderNotificationObservations(normalisedMessage, settingsTurnId);
         if (syntheticFileChangeNotification) {
           providerObservations.push(
             ...await this.createSqliteProviderNotificationObservations(syntheticFileChangeNotification),
@@ -3315,12 +3324,19 @@ export default class CodexStdioBridge {
       const threadId = asString(params?.threadId)?.trim();
       const turn = asRecord(response.result)?.turn as Turn | undefined;
       if (!threadId || !turn?.id) return [];
+      const context = this.transcriptThreadContexts.get(threadId);
+      const override = readCodexUsageContext(params);
+      const usageContext = {
+        model: override.model ?? context?.usageContext?.model ?? null,
+        serviceTier: params?.serviceTier === null ? null : override.serviceTier ?? context?.usageContext?.serviceTier ?? null,
+      };
+      if (context) context.usageContext = usageContext;
       return [
         ...await this.createSqliteProviderStartedTurnObservations(threadId, turn),
         createCodexTurnUsageContextObservation({
-          model: asString(params?.model)?.trim() || null,
-          observedAt: Date.now(),
-          serviceTier: asString(params?.serviceTier)?.trim() || null,
+          model: usageContext.model,
+          observedAt: Math.round((turn.startedAt ?? Date.now() / 1_000) * 1_000),
+          serviceTier: usageContext.serviceTier,
           threadId,
           turnId: turn.id,
         }),
@@ -3332,6 +3348,9 @@ export default class CodexStdioBridge {
     const thread = asRecord(response.result)?.thread as Thread | undefined;
     if (!thread?.id || !Array.isArray(thread.turns)) return [];
     const context = await this.resolveTranscriptThreadContext(thread);
+    if (request.method === "thread/start" || request.method === "thread/resume" || request.method === "thread/fork") {
+      context.usageContext = readCodexUsageContext(response.result);
+    }
     if (request.method === "thread/resume") {
       return [createCodexTranscriptProviderThreadObservation(thread.id, context)];
     }
@@ -3342,8 +3361,27 @@ export default class CodexStdioBridge {
 
   private async createSqliteProviderNotificationObservations(
     notification: JsonRpcNotification,
+    settingsTurnId?: string,
   ): Promise<WorkbenchTranscriptObservation[]> {
     if (!this.sqliteTranscriptEnabled) return [];
+    if (notification.method === "thread/settings/updated") {
+      const params = asRecord(notification.params);
+      const threadId = asString(params?.threadId);
+      const context = threadId ? this.transcriptThreadContexts.get(threadId) : undefined;
+      if (!threadId || !context) return [];
+      const usageContext = readCodexUsageContext(params?.threadSettings);
+      const previous = context.usageContext;
+      context.usageContext = usageContext;
+      return settingsTurnId && (usageContext.model !== previous?.model || usageContext.serviceTier !== previous?.serviceTier)
+        ? [createCodexTurnUsageContextObservation({
+          ...usageContext,
+          modelChanged: Boolean(previous?.model && usageContext.model && previous.model !== usageContext.model),
+          observedAt: Date.now(), threadId, turnId: settingsTurnId,
+        })]
+        : [];
+    }
+    const reroute = createCodexModelRerouteObservation(notification, Date.now());
+    if (reroute) return [reroute];
     if (notification.method === "thread/started") {
       const thread = asRecord(notification.params)?.thread as Thread | undefined;
       if (!thread?.id) return [];
@@ -3464,9 +3502,12 @@ export default class CodexStdioBridge {
 
   private async resolveTranscriptThreadContext(
     thread: Thread,
+    remember = true,
   ): Promise<CodexTranscriptThreadContext> {
     const resolution = await this.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex transcript" });
     const context: CodexTranscriptThreadContext = {
+      ...(this.transcriptThreadContexts.get(thread.id)?.usageContext
+        ? { usageContext: this.transcriptThreadContexts.get(thread.id)!.usageContext } : {}),
       activityAt: Math.round((thread.recencyAt ?? thread.updatedAt) * 1_000),
       createdAt: Math.round(thread.createdAt * 1_000),
       nativeLocation: thread.cwd,
@@ -3475,7 +3516,7 @@ export default class CodexStdioBridge {
       title: thread.name?.trim() || thread.preview.trim() || "Untitled thread",
       updatedAt: Math.round(thread.updatedAt * 1_000),
     };
-    this.transcriptThreadContexts.set(thread.id, context);
+    if (remember) this.transcriptThreadContexts.set(thread.id, context);
     return context;
   }
 

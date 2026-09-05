@@ -39,6 +39,32 @@ function seedTurn(database: Database.Database, now: number) {
   new WorkbenchTranscriptRepository(database).settle(observations);
 }
 
+test("older usage imports cannot rewind live context or counters and rerouted models remain inferred", () => {
+  const database = createDatabase();
+  try {
+    const now = Date.UTC(2026, 8, 4, 12);
+    seedTurn(database, now - 100);
+    const transcript = new WorkbenchTranscriptRepository(database);
+    transcript.settle([{
+      kind: "turnUsageContext", model: "gpt-5.6-sol", serviceTier: null,
+      modelChanged: true, observedAt: now - 50, threadId: "thread", turnId: "turn",
+    }, {
+      kind: "turnUsageContext", model: null, serviceTier: null,
+      observedAt: now - 200, threadId: "thread", turnId: "turn",
+    }, {
+      kind: "turnTokenUsage", observedAt: now - 200, threadId: "thread", turnId: "turn", usageDataVersion: 2,
+      cumulative: { inputTokens: 1, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1 },
+    }]);
+    const result = new WorkbenchStatsRepository(database).read({ projectId: "project", range: "7d" }, now);
+    assert.equal(result.tokens.totals.all, 1_300);
+    assert.equal(result.cost.basis.exactModelTokens, 0);
+    assert.equal(result.cost.basis.threadInferredModelTokens, 1_300);
+    assert.deepEqual(result.usageFilters.models, ["gpt-5.6-sol"]);
+  } finally {
+    database.close();
+  }
+});
+
 test("token reads separate input categories and expose filters, drivers, and exact pricing basis", () => {
   const database = createDatabase();
   try {

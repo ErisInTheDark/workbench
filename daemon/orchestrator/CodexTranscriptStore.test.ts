@@ -111,9 +111,20 @@ test("retained turn usage events are exposed without provider history access", a
       },
     },
   });
-  const events = await store.readStoredTurnUsageEvents("thread");
+  const events = (await store.readStoredUsageEvidence("thread"))?.events;
   assert.equal(events?.length, 1);
   assert.equal(events?.[0]?.method, "thread/tokenUsage/updated");
+  for (const notification of [
+    { method: "thread/settings/updated", params: { threadId: "thread", threadSettings: { model: "first" } } },
+    { method: "turn/started", params: { threadId: "thread", turn: { ...transcriptTurn("turn-a", []), status: "inProgress" } } },
+    { method: "model/rerouted", params: { threadId: "thread", turnId: "turn-a", fromModel: "first", toModel: "second" } },
+    { method: "turn/completed", params: { threadId: "thread", turn: transcriptTurn("turn-a", []) } },
+  ]) await store.recordUpstreamNotification(notification);
+  store.readStoredThreadWindow = async () => { throw new Error("Usage must not hydrate bodies."); };
+  store.readThreadContextEntries = async () => { throw new Error("Usage must not hydrate interactions or assets."); };
+  assert.deepEqual((await store.readStoredUsageEvidence("thread"))?.events.map(({ method }) => method).sort(), [
+    "model/rerouted", "thread/settings/updated", "thread/tokenUsage/updated", "turn/completed", "turn/started",
+  ]);
   await store.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });
