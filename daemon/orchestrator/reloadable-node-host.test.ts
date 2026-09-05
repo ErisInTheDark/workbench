@@ -196,7 +196,7 @@ test("topology reload adds and reparents nodes from the fresh parent declaration
   await host.reload(["server:topology"]);
 
   assert.equal(host.get("child"), "new parent:child");
-  assert.deepEqual(events, ["dispose old child", "dispose old parent", "start new parent", "start new child"]);
+  assert.deepEqual(events, ["start new parent", "start new child", "dispose old child", "dispose old parent"]);
 });
 
 test("server topology migration preserves independent harness roots", async () => {
@@ -410,19 +410,18 @@ test("handoff replacement bounds retired disposal while keeping the candidate gr
 
   const reload = host.reload(["server:a"]);
   await liveDisposalStarted;
-  assert.equal(deadlines.length, 2);
   expireRetirement();
 
   await assert.rejects(
     reload,
-    /New feature nodes are active, but runtime drain exceeded 30000ms.*server:a: thread-state disposal/u,
+    /Reload transition exceeded 30000ms.*server:a: dispose.*server:a: thread-state disposal/u,
   );
   assert.equal(host.get("a"), "candidate");
   assert.equal(host.get("child"), "candidate child");
 
   finishLiveDisposal();
   await Promise.resolve();
-  await host.dispose();
+  await assert.rejects(host.dispose(), /Reload transition exceeded/u);
 });
 
 test("failed topology startup preserves handoff state and releases waiters after restoration starts", async () => {
@@ -542,4 +541,181 @@ test("path projection includes node-owned sources and the stable process kernel"
   const host = new ReloadableNodeHost(null, loader(graph, graph));
   assert.deepEqual(host.getReloadScopesForPaths(["server:a.ts"]), ["server:a"]);
   assert.deepEqual(host.getReloadScopesForPaths(["daemon/orchestrator/index.ts"]), ["server:process"]);
+});
+
+test("topology replacement activates the successor before retiring live atomic owners", async () => {
+  let executor = "live";
+  const events: string[] = [];
+  const live = node({
+    create: () => ({
+      dispose: () => { events.push("retire"); assert.equal(executor, "candidate"); },
+      registrations: { a: "live" },
+      start: () => undefined,
+    }),
+    provides: ["a"],
+    scope: "server:a",
+  });
+  const candidate = node({
+    create: () => ({
+      activate: () => { executor = "candidate"; events.push("activate"); },
+      dispose: () => undefined,
+      registrations: { a: "candidate", b: "extra" },
+      start: () => { assert.equal(executor, "live"); },
+    }),
+    provides: ["a", "b"],
+    scope: "server:a",
+  });
+  const host = new ReloadableNodeHost(null, loader(
+    defineReloadableNodeGraph([live]), defineReloadableNodeGraph([candidate]),
+  ));
+  await host.start();
+  await host.reload(["server:topology"]);
+  assert.deepEqual(events, ["activate", "retire"]);
+  await host.dispose();
+});
+
+for (const mode of ["atomic", "handoff", "topology"] as const) {
+  test(`${mode} startup expiry rejects gate waiters and fences late activation`, async () => {
+    let reportEntered!: () => void;
+    let finishStart!: () => void;
+    let expire!: () => void;
+    const entered = new Promise<void>((resolve) => { reportEntered = resolve; });
+    const finish = new Promise<void>((resolve) => { finishStart = resolve; });
+    const deadline = new Promise<void>((resolve) => { expire = resolve; });
+    let activated = false;
+    const live = node({
+      create: () => ({
+        detachForReload: () => ({}),
+        dispose: () => undefined,
+        registrations: { a: "live" },
+        start: () => undefined,
+      }),
+      lifecycle: mode === "handoff" ? "handoff" : "atomic",
+      provides: ["a"],
+      scope: "server:a",
+    });
+    const candidate = node({
+      create: () => ({
+        activate: () => { activated = true; },
+        detachForReload: () => ({}),
+        dispose: () => undefined,
+        registrations: mode === "topology" ? { a: "candidate", b: "extra" } : { a: "candidate" },
+        start: async () => { reportEntered(); await finish; },
+      }),
+      lifecycle: mode === "handoff" ? "handoff" : "atomic",
+      provides: mode === "topology" ? ["a", "b"] : ["a"],
+      scope: "server:a",
+    });
+    const host = new ReloadableNodeHost(null, loader(
+      defineReloadableNodeGraph([live]), defineReloadableNodeGraph([candidate]),
+    ), {
+      createRuntimeDrainDeadline: () => ({ cancel: () => undefined, expired: deadline }),
+    });
+    await host.start();
+    const reload = host.reload([mode === "topology" ? "server:topology" : "server:a"]);
+    const rejected = assert.rejects(reload, /server:a.*start|start.*server:a/u);
+    await entered;
+    expire();
+    // Expiry is delivered before the controlled hook finishes; no wall-clock race.
+    await Promise.resolve();
+    finishStart();
+    await rejected;
+    assert.equal(activated, false);
+    await assert.rejects(host.reload(["server:a"]), /reload|transition/u);
+    if (mode !== "atomic") await assert.rejects(host.run("a", (value) => value), /reload|transition/u);
+  });
+}
+
+test("expiry before detach reopens the untouched live graph without starting a conflicting reload", async () => {
+  let finishWork!: () => void;
+  let expire!: () => void;
+  let reportWork!: () => void;
+  let reportDeadline!: () => void;
+  const workFinished = new Promise<void>((resolve) => { finishWork = resolve; });
+  const workStarted = new Promise<void>((resolve) => { reportWork = resolve; });
+  const deadlineCreated = new Promise<void>((resolve) => { reportDeadline = resolve; });
+  const expired = new Promise<void>((resolve) => { expire = resolve; });
+  const parent = node({
+    create: () => ({
+      detachForReload: () => ({}), dispose: () => undefined,
+      registrations: { a: "live" }, start: () => undefined,
+    }),
+    lifecycle: "handoff", provides: ["a"], scope: "server:a",
+  });
+  const graph = defineReloadableNodeGraph([parent]);
+  const host = new ReloadableNodeHost(null, loader(graph, graph), {
+    createRuntimeDrainDeadline: () => {
+      reportDeadline();
+      return { cancel: () => undefined, expired };
+    },
+  });
+  await host.start();
+  const work = host.run("a", async () => { reportWork(); await workFinished; });
+  await workStarted;
+  const reload = host.reload(["server:a"]);
+  const rejected = assert.rejects(reload, /exceeded/u);
+  await deadlineCreated;
+  // Allow the synchronously loaded graph to enter its lease drain.
+  await Promise.resolve();
+  await Promise.resolve();
+  expire();
+  await rejected;
+  finishWork();
+  await work;
+  assert.equal(await host.run("a", (value) => value), "live");
+  await assert.rejects(host.reload(["server:a"]), /previous reload/u);
+});
+
+test("failed retirement keeps the activated graph usable but blocks conflicting replacement", async () => {
+  const failure = new Error("retired resource did not close");
+  const live = node({
+    create: () => ({
+      dispose: () => { throw failure; }, registrations: { a: "old" }, start: () => undefined,
+    }),
+    provides: ["a"], scope: "server:a",
+  });
+  const replacement = node({
+    create: () => ({
+      dispose: () => undefined, registrations: { a: "new" }, start: () => undefined,
+    }),
+    provides: ["a"], scope: "server:a",
+  });
+  const host = new ReloadableNodeHost(null, loader(
+    defineReloadableNodeGraph([live]), defineReloadableNodeGraph([replacement]),
+  ));
+  await host.start();
+  await assert.rejects(host.reload(["server:a"]), (error) => error === failure);
+  assert.equal(await host.run("a", (value) => value), "new");
+  await assert.rejects(host.reload(["server:a"]), /previous reload/u);
+});
+
+test("a gated request follows its registration when topology changes its owner", async () => {
+  let reportDetach!: () => void;
+  let finishDetach!: () => void;
+  const detaching = new Promise<void>((resolve) => { reportDetach = resolve; });
+  const detached = new Promise<void>((resolve) => { finishDetach = resolve; });
+  const live = node({
+    create: () => ({
+      detachForReload: async () => { reportDetach(); await detached; return {}; },
+      dispose: () => undefined, registrations: { a: "old" }, start: () => undefined,
+    }),
+    lifecycle: "handoff", provides: ["a"], scope: "server:a",
+  });
+  const replacement = node({
+    create: () => ({
+      dispose: () => undefined, registrations: { a: "new" }, start: () => undefined,
+    }),
+    provides: ["a"], scope: "server:b",
+  });
+  const host = new ReloadableNodeHost(null, loader(
+    defineReloadableNodeGraph([live]), defineReloadableNodeGraph([replacement]),
+  ));
+  await host.start();
+  const reload = host.reload(["server:topology"]);
+  await detaching;
+  const request = host.run("a", (value) => value);
+  finishDetach();
+  await reload;
+  assert.equal(await request, "new");
+  await host.dispose();
 });

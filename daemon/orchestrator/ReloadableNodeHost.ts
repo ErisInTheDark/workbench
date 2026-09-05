@@ -1,6 +1,9 @@
 /*
+ * Keywords: reload, graph, process, orchestrator.
  * Exports:
- * - ReloadableNodeHostOptions/default ReloadableNodeHost: orchestrator policy adapter over the shared graph host.
+ * - ReloadableNodeModuleLoader: shared graph definition loader contract.
+ * - ReloadableNodeHostOptions: orchestrator host configuration ports.
+ * - default ReloadableNodeHost: orchestrator source and scope policy for the shared graph host.
  */
 import SharedReloadableNodeHost, {
   type ReloadableNodeHostOptions as SharedReloadableNodeHostOptions,
@@ -19,6 +22,9 @@ const PROCESS_SOURCES = [
   "daemon/orchestrator/ReloadableNodeHost.ts",
   "daemon/orchestrator/reloadable-node-loader.ts",
   "daemon/orchestrator/orchestrator-process-context.ts",
+  "daemon/orchestrator/WorkbenchOrchestratorControlIngress.ts",
+  "shared/workbench/orchestrator-health.ts",
+  "shared/workbench/orchestrator-reload.ts",
   "shared/reload/**",
   "shared/source-pattern-matcher.ts",
 ].join("\n");

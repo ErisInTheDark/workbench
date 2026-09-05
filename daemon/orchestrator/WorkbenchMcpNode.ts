@@ -70,9 +70,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     });
     return {
       activate: () => {
-        if (build.mode !== "replacement") return;
+        if (build.mode === "initial") return;
         activateCommandExecutor();
-        codexMcpGeneration.bump();
+        if (build.mode === "replacement") codexMcpGeneration.bump();
       },
       beginRuntimeDrain: () => { mcp.beginRuntimeDrain(); },
       dispose: () => {

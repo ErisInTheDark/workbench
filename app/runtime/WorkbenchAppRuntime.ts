@@ -1,6 +1,8 @@
 /*
+ * Keywords: app, process, reload, HTTP.
  * Exports:
- * - WorkbenchAppRuntimeOptions/default WorkbenchAppRuntime: own the stable graph host and reload ingress while leasing feature requests. Keywords: app, process, reload, HTTP.
+ * - WorkbenchAppRuntimeOptions: process-owned compiler, database, logging, and port configuration.
+ * - default WorkbenchAppRuntime: own the stable graph host and reload ingress while leasing requests.
  */
 import { createRequire } from "node:module";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -152,6 +154,7 @@ export default class WorkbenchAppRuntime {
           "shared/reload/reloadable-node-loader.ts",
           "shared/reload/ReloadableNode.ts",
           "shared/reload/ReloadableNodeHost.ts",
+          "shared/reload/ReloadableNodeTransition.ts",
           "shared/reload/workbench-reload.ts",
           "shared/source-pattern-matcher.ts",
           "tray/**",

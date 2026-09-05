@@ -1,12 +1,7 @@
 /*
- * Exports:
- * - startOrchestrator side effect: starts the Workbench bridge server, Browse cleanup supervisor, and bridge integrations. Keywords: orchestrator, codex, copilot, opencode.
- *
- * Helpers:
- * - HTTP reload helpers: parse, queue, and report orchestrator reload scopes. Keywords: reload, bridge.
- * - Reloadable feature handoff: label leased operations, enforce runtime-drain deadlines, and keep stable reload, health, and Browse ingress process-owned. Keywords: orchestrator, http, router, reload, feature, drain.
- * - Bridge helpers: route websocket JSON-RPC messages across Codex, Copilot, and OpenCode harnesses. Keywords: websocket, harness, rpc.
- * - Codex recovery helpers: replace and reinitialize a failed Codex bridge while a supervisor owns retry timing. Keywords: codex, recovery, retry, lifecycle.
+ * Keywords: orchestrator, process, reload, health, websocket, Browse, codex, copilot, opencode.
+ * No exports. Starts the bridge server and graph host, wires stable recovery ingress,
+ * and provides process-owned harness, reload, and supervisor ports to reloadable nodes.
  */
 import http from "node:http";
 import path from "node:path";
@@ -38,6 +33,7 @@ import { createReloadableNodeModuleLoader } from "./reloadable-node-loader";
 import ReloadableNodeHost from "./ReloadableNodeHost";
 import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
 import type { WorkbenchHardReloadNotification } from "./WorkbenchOrchestratorReloadController";
+import WorkbenchOrchestratorControlIngress from "./WorkbenchOrchestratorControlIngress";
 import type { WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 
@@ -667,13 +663,16 @@ async function handleReloadHttpRequest(request: http.IncomingMessage, response: 
   queueReload(requestedScopes);
 }
 
-async function handleClientMessage(client: BridgeClient, connectionId: string, data: Buffer) {
-  await featureHost.run(
+const controlIngress = new WorkbenchOrchestratorControlIngress({
+  getReloadController: () => featureHost.get("reloadController"),
+  log: (message) => log("orchestrator", message),
+  logError: (message) => logError("orchestrator-control", message),
+  dispatch: async (client, connectionId, data) => await featureHost.run(
     "webSocketRequests",
     (controller) => controller.handleMessage(client, connectionId, data, featureHost.get("reloadController").isHardReloadPending()),
     "browser WebSocket message",
-  );
-}
+  ),
+});
 
 function startBridgeServer() {
   const { host, port } = featureHost.get("codexBridge").getListenDescriptor();
@@ -740,7 +739,7 @@ function startBridgeServer() {
     log("codex-bridge", `client connected (${bridgeConnections.size} active)`);
 
     bridgeClient.on("message", (payload) => {
-      void handleClientMessage(bridgeClient, connectionId, payload).catch((error) => {
+      void controlIngress.handle(bridgeClient, connectionId, payload).catch((error) => {
         logError("codex-bridge", error instanceof Error ? error.message : String(error));
       });
     });

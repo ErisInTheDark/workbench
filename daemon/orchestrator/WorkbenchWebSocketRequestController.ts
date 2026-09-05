@@ -1,19 +1,16 @@
 /*
+ * Keywords: websocket, request, reload, stream, handoff, timer, diagnostics.
  * Exports:
- * - WorkbenchWebSocketPendingRequestState/WorkbenchWebSocketReloadDirtObserverState/WorkbenchWebSocketRequestControllerState: handoff state for browser requests, reload dirt observers, and aggregate event-stream health. Keywords: websocket, request, reload, stream, handoff, timer.
- * - WorkbenchWebSocketRequestControllerOptions: injected routing, clock, scheduler, and log ports. Keywords: websocket, dependency injection, diagnostics.
- * - default WorkbenchWebSocketRequestController: route browser WebSocket messages and compose request timing with aggregate event-stream health. Keywords: websocket, json-rpc, latency, stream, lifecycle.
+ * - WorkbenchWebSocketPendingRequestState: transferable browser request timing.
+ * - WorkbenchWebSocketReloadDirtObserverState: reload-dirt subscriber identity.
+ * - WorkbenchWebSocketRequestControllerState: request, observer, and stream handoff.
+ * - WorkbenchWebSocketRequestControllerOptions: routing, clock, scheduler, and logging ports.
+ * - default WorkbenchWebSocketRequestController: route feature requests and own event-stream health.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import {
-  WORKBENCH_ORCHESTRATOR_HEALTH_METHOD,
-  WorkbenchOrchestratorHealthParamsSchema,
-} from "workbench-shared/workbench/orchestrator-health";
-import {
-  OrchestratorReloadRequestSchema,
   WORKBENCH_RELOAD_DIRT_READ_METHOD,
   WORKBENCH_RELOAD_DIRT_UPDATED_METHOD,
-  WORKBENCH_RELOAD_METHOD,
 } from "workbench-shared/workbench/orchestrator-reload";
 import {
   decodeWorkbenchTranscriptRequest,
@@ -103,7 +100,7 @@ export interface WorkbenchWebSocketRequestControllerOptions {
   now?: () => number;
   reload: Pick<
     WorkbenchOrchestratorReloadController,
-    "admitUserReload" | "getReloadDirtSnapshot" | "subscribeReloadDirt"
+    "getReloadDirtSnapshot" | "subscribeReloadDirt"
   >;
   stats?: Pick<WorkbenchStatsController, "subscribeImportProgress">;
   setTimeout?: (callback: () => void, delayMs: number) => Timer;
@@ -266,8 +263,6 @@ export default class WorkbenchWebSocketRequestController {
     const transcriptRequest = decodeWorkbenchTranscriptRequest(method, message.params);
     const daemonRequest = this.daemonRequests.accepts(method);
     const workbenchRequest = daemonRequest || method.startsWith("workbench/thread-state/")
-      || method === WORKBENCH_ORCHESTRATOR_HEALTH_METHOD
-      || method === WORKBENCH_RELOAD_METHOD
       || method === WORKBENCH_RELOAD_DIRT_READ_METHOD
       || transcriptRequest !== null;
     let harness: WorkbenchHarness | "unknown" | "workbench" = workbenchRequest ? "workbench" : "unknown";
@@ -302,34 +297,6 @@ export default class WorkbenchWebSocketRequestController {
       if (daemonRequest) {
         if (method === "stats/import/start") this.statsObservers.set(connectionId, { client, connectionId });
         await this.sendJsonToClient(client, await this.daemonRequests.handle(message));
-        return;
-      }
-      if (method === WORKBENCH_ORCHESTRATOR_HEALTH_METHOD) {
-        const parsed = WorkbenchOrchestratorHealthParamsSchema.safeParse(message.params ?? {});
-        await this.sendJsonToClient(client, parsed.success
-          ? { id: requestId, result: { ok: true } }
-          : { id: requestId, error: { code: -32000, message: "Invalid Workbench orchestrator health request." } });
-        return;
-      }
-      if (method === WORKBENCH_RELOAD_METHOD) {
-        const parsed = OrchestratorReloadRequestSchema.safeParse(message.params);
-        if (!parsed.success) {
-          await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: "Invalid Workbench reload request." } });
-          return;
-        }
-        let admission;
-        try {
-          admission = this.reload.admitUserReload(parsed.data);
-          await this.sendJsonToClient(client, { id: requestId, result: admission.response });
-        } catch (error) {
-          admission?.cancel();
-          if (admission) throw error;
-          await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: error instanceof Error ? error.message : "Reload admission failed." } });
-          return;
-        }
-        void admission.start().catch((error: unknown) => {
-          this.writeLine(`[orchestrator-reload] ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
-        });
         return;
       }
       if (method === WORKBENCH_RELOAD_DIRT_READ_METHOD) {
