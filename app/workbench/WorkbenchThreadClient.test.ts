@@ -37,6 +37,7 @@ function wireThread(
   return {
     agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "test", createdAt: 1, cwd: "C:/repo", ephemeral: false,
     extra: null, forkedFromId: null, gitInfo: null, historyMode: "legacy", id, modelProvider: "openai", name: null, parentThreadId: null, path: null,
+    model: null, projectId: null, reasoningEffort: null,
     preview: "", recencyAt: null, section: null, sectionEnteredAt: null, sessionId: `${id}-session`, source: "appServer",
     status: turnStatus === "inProgress" ? { activeFlags: [], type: "active" } : { type: "idle" },
     threadSource: null, turns: [{
@@ -701,6 +702,8 @@ test("bounded selected Codex captures one lifecycle resume intent and preserves 
   const loadedItem: ThreadItem = {
     id: "loaded-item",
     memoryCitation: null,
+    delivery: null,
+    questions: null,
     phase: "commentary",
     text: "already loaded",
     type: "agentMessage",
@@ -1273,6 +1276,8 @@ test("newest pages commit complete history while live transcript owners advance"
   completeThread.turns[0]!.items = [{
     id: "complete-plan",
     memoryCitation: null,
+    delivery: null,
+    questions: null,
     phase: "commentary",
     text: "complete plan",
     type: "agentMessage",
@@ -1654,7 +1659,7 @@ test("live compaction notifications preserve distinct markers and complete one o
     ...source.turns[0]!,
     items: [
       { id: "compaction-one", type: "contextCompaction" },
-      { id: "between", memoryCitation: null, phase: "commentary", text: "between", type: "agentMessage" },
+      { id: "between", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "between", type: "agentMessage" },
     ],
   };
   client.selectThreadPayload(source);
@@ -1779,6 +1784,8 @@ test("known hidden threads retain complete live text before later selected delta
     item: {
       id: "background-commentary",
       memoryCitation: null,
+      delivery: null,
+      questions: null,
       phase: "commentary",
       text: "",
       type: "agentMessage",
@@ -1845,6 +1852,8 @@ test("selected text deltas keep canonical snapshots current without publishing t
   source.turns[0]!.items = [{
     id: "commentary",
     memoryCitation: null,
+    delivery: null,
+    questions: null,
     phase: "commentary",
     text: "",
     type: "agentMessage",
@@ -1934,6 +1943,8 @@ test("missing text shells and item completion still publish structural state", a
       memoryCitation: null,
       phase: "commentary",
       text: "first without a mounted leaf",
+      delivery: null,
+      questions: null,
       type: "agentMessage",
     },
     threadId: "thread",
@@ -2435,6 +2446,8 @@ test("questionnaire history keeps last-known answers through refresh failures an
     source.turns[0]!.items = [{
       id: "anchor-turn",
       memoryCitation: null,
+      delivery: null,
+      questions: null,
       phase: "commentary",
       text: "choose",
       type: "agentMessage",
@@ -2502,6 +2515,8 @@ test("sidebar history preserves questionnaires with reused request keys", async 
     items: [{
       id: `anchor-${turnId}`,
       memoryCitation: null,
+      delivery: null,
+      questions: null,
       phase: "commentary",
       text: turnId,
       type: "agentMessage",
@@ -2544,6 +2559,8 @@ test("local questionnaire history preserves a later item with a reused request k
   source.turns[0]!.items = [{
     id: "anchor",
     memoryCitation: null,
+    delivery: null,
+    questions: null,
     phase: "commentary",
     text: "Ask",
     type: "agentMessage",
@@ -2790,7 +2807,7 @@ test("stop interrupts an active questionnaire turn before dismissing its durable
 
 test("durable detached questionnaire responses resolve after admission even when immediate reconciliation fails", async () => withClient(async (client, socket) => {
   const source = activeThread("codex", "thread", "interrupted");
-  const questionnairePrompt = { id: "prompt", memoryCitation: null, phase: "commentary" as const, text: "Choose a route.", type: "agentMessage" as const };
+  const questionnairePrompt = { id: "prompt", memoryCitation: null, delivery: null, questions: null, phase: "commentary" as const, text: "Choose a route.", type: "agentMessage" as const };
   source.turns[0]!.items = [questionnairePrompt];
   client.selectThreadPayload(source);
   const request = {

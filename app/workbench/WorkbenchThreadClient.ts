@@ -3877,6 +3877,8 @@ function WorkbenchThreadClient(
       text: "",
       phase: "commentary",
       memoryCitation: null,
+      delivery: null,
+      questions: null,
     };
   }
 
@@ -4455,6 +4457,17 @@ function WorkbenchThreadClient(
           turnId: notification.params.turnId,
         });
       case "thread/archived":
+      case "thread/reverted":
+      case "thread/queue/changed":
+      case "project/changed":
+      case "thread/project/updated":
+      case "autoApprovalReview/strictReviewRequired":
+      case "mcpServer/event/stream/notification":
+      case "modelProvider/authRecoveryStarted":
+      case "modelProvider/authRecoveryCompleted":
+      case "thread/realtime/item/started":
+      case "thread/realtime/item/transcript/delta":
+      case "thread/realtime/item/completed":
       case "thread/deleted":
       case "thread/unarchived":
       case "thread/closed":

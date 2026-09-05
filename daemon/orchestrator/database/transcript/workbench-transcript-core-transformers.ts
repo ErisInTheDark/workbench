@@ -206,6 +206,7 @@ export function transformCoreTranscriptItem(
   }
 
   const coreUnsupported = new Set<ThreadItem["type"]>([
+    "functionCallOutput",
     "hookPrompt",
     "subAgentActivity",
     "imageView",

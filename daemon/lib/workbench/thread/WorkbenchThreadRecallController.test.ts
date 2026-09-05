@@ -58,6 +58,8 @@ function item(
       ? {
         id: itemId,
         memoryCitation: null,
+        delivery: null,
+        questions: null,
         phase: "commentary",
         text: value,
         type: "agentMessage",

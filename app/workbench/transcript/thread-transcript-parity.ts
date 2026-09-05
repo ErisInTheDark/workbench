@@ -1,5 +1,6 @@
 /*
- * WorkbenchTranscriptComparisonItem/WorkbenchTranscriptComparisonRow: renderer-ready JSON and SQLite item alignment values. Keywords: transcript, comparison, item, identity.
+ * WorkbenchTranscriptComparisonItem: renderer-ready item and canonical identity. Keywords: transcript, comparison, item.
+ * WorkbenchTranscriptComparisonRow: aligned JSON and SQLite item pair. Keywords: transcript, comparison, identity.
  * WorkbenchTranscriptParityResult: exact semantic equality result or one bounded diagnostic safe for orchestrator logs. Keywords: transcript, parity, diagnostic.
  * compareWorkbenchTranscriptParity: compare the JSON renderer oracle with the relational projection at turn, display, item, timeline, and Browse boundaries. Keywords: transcript, SQLite, equality, browser.
  * createWorkbenchTranscriptProjectionFailureDiagnostic: describe a fail-closed relational projection without exposing row values. Keywords: transcript, projection, failure.
@@ -198,6 +199,7 @@ function normalizeSupportedItem(item: ThreadItem | WorkbenchFileChangeItem): Sem
       };
     case "contextCompaction":
       return { id: item.id, payload: {}, type: item.type };
+    case "functionCallOutput":
     case "hookPrompt":
     case "subAgentActivity":
     case "imageView":

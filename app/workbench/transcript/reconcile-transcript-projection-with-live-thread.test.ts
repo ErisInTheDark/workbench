@@ -15,7 +15,7 @@ import type {
 import reconcileTranscriptProjectionWithLiveThread from "./reconcile-transcript-projection-with-live-thread";
 
 function message(id: string, text: string): ThreadItem {
-  return { id, memoryCitation: null, phase: "commentary", text, type: "agentMessage" };
+  return { id, memoryCitation: null, delivery: null, questions: null, phase: "commentary", text, type: "agentMessage" };
 }
 
 function turn(id: string, status: Turn["status"], items: ThreadItem[]): Turn {

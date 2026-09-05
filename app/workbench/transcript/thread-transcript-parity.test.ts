@@ -141,6 +141,21 @@ test("parity compares renderer semantics rather than unsupported provider detail
   }), { equal: true });
 });
 
+test("opaque function output parity preserves payload differences", () => {
+  const item: ThreadItem = {
+    type: "functionCallOutput", id: "output", name: "lookup", namespace: null, output: "result",
+  };
+  const compare = (output: string) => compareWorkbenchTranscriptParity({
+    jsonBrowseResultEntries: [],
+    jsonThread: thread([item]),
+    sqliteProjection: projection([{
+      id: item.id, type: "unknown", nativeType: item.type, safeValue: { ...item, output },
+    }]),
+  });
+  assert.equal(compare("result").equal, true);
+  assert.equal(compare("different result").equal, false);
+});
+
 test("turn parity ignores window loading state without hiding item mismatches", () => {
   const jsonItem: ThreadItem = { id: "plan", text: "planned", type: "plan" };
   const jsonThread = thread([jsonItem]);

@@ -141,14 +141,14 @@ function renderComparison(
 test("comparison renders both sources and explicit gaps without losing later aligned items", () => {
   const html = renderComparison(
     [
-      { id: "shared", memoryCitation: null, phase: "commentary", text: "shared JSON", type: "agentMessage" },
-      { id: "json-only", memoryCitation: null, phase: "commentary", text: "JSON only", type: "agentMessage" },
-      { id: "tail", memoryCitation: null, phase: "final_answer", text: "tail JSON", type: "agentMessage" },
+      { id: "shared", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "shared JSON", type: "agentMessage" },
+      { id: "json-only", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "JSON only", type: "agentMessage" },
+      { id: "tail", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: "tail JSON", type: "agentMessage" },
     ],
     [
-      { id: "shared", memoryCitation: null, phase: "commentary", text: "shared SQLite", type: "agentMessage" },
-      { id: "sqlite-only", memoryCitation: null, phase: "commentary", text: "SQLite only", type: "agentMessage" },
-      { id: "tail", memoryCitation: null, phase: "final_answer", text: "tail SQLite", type: "agentMessage" },
+      { id: "shared", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "shared SQLite", type: "agentMessage" },
+      { id: "sqlite-only", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "SQLite only", type: "agentMessage" },
+      { id: "tail", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: "tail SQLite", type: "agentMessage" },
     ],
   );
 
@@ -204,6 +204,8 @@ test("comparison includes SQLite-only turns outside the JSON visible turn set", 
   const sqliteOnlyItem: ThreadItem = {
     id: "sqlite-extra",
     memoryCitation: null,
+    delivery: null,
+    questions: null,
     phase: "commentary",
     text: "SQLite extra turn",
     type: "agentMessage",

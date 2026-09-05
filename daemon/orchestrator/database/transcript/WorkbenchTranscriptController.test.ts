@@ -153,6 +153,8 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
           text: "hello",
           phase: "final_answer",
           memoryCitation: null,
+          delivery: null,
+          questions: null,
         },
       }],
     }], { source: "compatibility" });
@@ -245,6 +247,8 @@ test("durable item facts refresh subscriptions only at complete projection bound
       item: {
         id: "message",
         memoryCitation: null,
+        delivery: null,
+        questions: null,
         phase: "commentary",
         text: "hello",
         type: "agentMessage",

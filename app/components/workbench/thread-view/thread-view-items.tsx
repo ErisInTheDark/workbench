@@ -1781,6 +1781,8 @@ function ThreadRecallRecordItem({
           item={{
             id,
             memoryCitation: null,
+            delivery: null,
+            questions: null,
             phase: record.kind === "commentary"
               ? "commentary"
               : record.kind === "final-answer" ? "final_answer" : null,

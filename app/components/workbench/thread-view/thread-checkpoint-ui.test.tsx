@@ -1,4 +1,7 @@
-/* No production exports. Tests protect proposal resolution, destructive claim-release choice, and terminal thread-tail cleanup semantics. */
+/*
+ * Keywords: checkpoint, proposal, claim release, terminal output.
+ * No production exports. Tests protect proposal resolution, claim-release choice, and terminal thread-tail cleanup.
+ */
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -62,6 +65,8 @@ function messageItem(id: string): Extract<ThreadItem, { type: "agentMessage" }> 
   return {
     id,
     memoryCitation: null,
+    delivery: null,
+    questions: null,
     phase: "commentary",
     text: "Visible message.",
     type: "agentMessage",

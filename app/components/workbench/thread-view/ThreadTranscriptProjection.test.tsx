@@ -106,6 +106,8 @@ test("SQLite projection renders canonical segments and turn-owned Browse details
   const first: ThreadItem = {
     id: "first",
     memoryCitation: null,
+    delivery: null,
+    questions: null,
     phase: "commentary",
     text: "First SQLite item",
     type: "agentMessage",
@@ -129,6 +131,8 @@ test("SQLite projection renders canonical segments and turn-owned Browse details
     id: "last",
     memoryCitation: null,
     phase: "final_answer",
+    delivery: null,
+    questions: null,
     text: "Last SQLite item",
     type: "agentMessage",
   };

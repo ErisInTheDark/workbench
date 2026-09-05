@@ -68,6 +68,8 @@ function thread(): ThreadPayload {
   const turns = ["older", "newer"].map((turnId) => turn(turnId, {
     id: `anchor-${turnId}`,
     memoryCitation: null,
+    delivery: null,
+    questions: null,
     phase: "commentary",
     text: turnId,
     type: "agentMessage",

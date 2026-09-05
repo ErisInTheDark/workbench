@@ -1,5 +1,7 @@
 /*
  * Exports:
+ * - OpenCodeBridgeOptions: bridge dependencies and notification callbacks. Keywords: opencode, configuration.
+ * - OpenCodeBridgeState: reload handoff state. Keywords: opencode, reload, lifecycle.
  * - createOpenCodeReasoningConfig: map Workbench reasoning effort into SDK variant input. Keywords: opencode, reasoning, adapter.
  * - readOpenCodeSessionReasoningEffort: read admitted SDK reasoning variant. Keywords: opencode, reasoning, session.
  * - OpenCodeRecoveryDisposition: completed, busy, or prompt recovery result. Keywords: opencode, recovery, state.
@@ -999,6 +1001,8 @@ export class OpenCodeBridge {
       rateLimits,
       rateLimitsByLimitId: null,
       rateLimitResetCredits: null,
+      accountId: null,
+      rateLimitUpsell: null,
     };
   }
 

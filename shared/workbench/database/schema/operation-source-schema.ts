@@ -19,6 +19,7 @@ import {
   check,
   defineTable,
   enumText,
+  evolveTable,
   foreignKey,
   integer,
   jsonText,
@@ -30,7 +31,7 @@ import {
   type SelectRow,
   type TableDefinition,
 } from "../../../database/schema/schema-definition.ts";
-import { createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "../../../database/schema/schema-history.ts";
+import { createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion } from "../../../database/schema/schema-history.ts";
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
@@ -124,7 +125,21 @@ const threadOperationToolSourcesV1 = defineTable("thread_operation_tool_sources"
     }),
   ],
 }));
-const threadOperationToolSourcesHistory = initialHistory(threadOperationToolSourcesV1);
+const threadOperationToolSourcesV2 = evolveTable(threadOperationToolSourcesV1, {
+  drop: ["state"],
+  add: { state: enumText("inProgress", "completed", "failed", "interrupted").notNull() },
+});
+const threadOperationToolSourcesHistory = defineTableHistory({
+  current: threadOperationToolSourcesV2,
+  versions: [
+    tableVersion({ schemaVersion: 1, table: threadOperationToolSourcesV1, migration: createTable(threadOperationToolSourcesV1) }),
+    tableVersion({
+      schemaVersion: 12,
+      table: threadOperationToolSourcesV2,
+      migration: rebuildTable({ from: threadOperationToolSourcesV1, to: threadOperationToolSourcesV2 }),
+    }),
+  ],
+});
 export const threadOperationToolSources = threadOperationToolSourcesHistory.current;
 
 const threadOperationCallableToolSourcesV1 = defineTable("thread_operation_callable_tool_sources", {
@@ -251,7 +266,24 @@ const threadOperationCollaborationToolSourcesV1 = defineTable("thread_operation_
     onDelete: "CASCADE",
   })],
 }));
-const threadOperationCollaborationToolSourcesHistory = initialHistory(threadOperationCollaborationToolSourcesV1);
+const threadOperationCollaborationToolSourcesV2 = evolveTable(threadOperationCollaborationToolSourcesV1, {
+  drop: ["state", "tool_name"],
+  add: {
+    state: enumText("inProgress", "completed", "failed", "interrupted").notNull(),
+    tool_name: enumText("spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent", "sendMessage", "followupTask", "interruptAgent", "listAgents").notNull(),
+  },
+});
+const threadOperationCollaborationToolSourcesHistory = defineTableHistory({
+  current: threadOperationCollaborationToolSourcesV2,
+  versions: [
+    tableVersion({ schemaVersion: 1, table: threadOperationCollaborationToolSourcesV1, migration: createTable(threadOperationCollaborationToolSourcesV1) }),
+    tableVersion({
+      schemaVersion: 12,
+      table: threadOperationCollaborationToolSourcesV2,
+      migration: rebuildTable({ from: threadOperationCollaborationToolSourcesV1, to: threadOperationCollaborationToolSourcesV2 }),
+    }),
+  ],
+});
 export const threadOperationCollaborationToolSources = threadOperationCollaborationToolSourcesHistory.current;
 
 const threadCollaborationReceiversV1 = defineTable("thread_collaboration_receivers", {

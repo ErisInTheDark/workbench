@@ -412,6 +412,8 @@ test("projection reads an augmentation collection linearly as item count grows",
         {
           id: `message-${index}`,
           memoryCitation: null,
+          delivery: null,
+          questions: null,
           phase: null,
           text: `message ${index}`,
           type: "agentMessage",

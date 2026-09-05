@@ -176,6 +176,8 @@ function createAgentMessageItem(record: JsonObject, index: number): AgentMessage
     text: readString(record, "text") ?? "",
     phase: null,
     memoryCitation: null,
+    delivery: null,
+    questions: null,
   };
 }
 

@@ -1,9 +1,17 @@
 /*
+ * Keywords: opencode, codex adapter, thread, models, permission, question.
  * Exports:
- * - OPENCODE_INITIALIZE_RESULT/EMPTY_OPENCODE_RATE_LIMITS: bridge constants for OpenCode harness responses. Keywords: opencode, initialize, rate limits.
- * - OpenCodeMessageEntry/OpenCodeThreadSnapshotInput: typed OpenCode session/message bundle for thread conversion. Keywords: opencode, session, message, parts.
- * - cloneThread/formatPromptFromInput: helpers shared by the OpenCode bridge for thread snapshots and prompt payloads. Keywords: opencode, clone, prompt.
- * - opencodeSessionToThread/mapOpenCodeModelsToWorkbenchOptions/createOpenCodePermissionRequest/createOpenCodeLegacyPermissionRequest/createOpenCodeQuestionRequest: convert typed OpenCode SDK data into Workbench/Codex-shaped state. Keywords: opencode, adapter, thread, models, permission, question.
+ * - OPENCODE_INITIALIZE_RESULT: OpenCode bridge handshake response.
+ * - EMPTY_OPENCODE_RATE_LIMITS: unavailable OpenCode usage snapshot.
+ * - OpenCodeMessageEntry: message metadata and parts.
+ * - OpenCodeThreadSnapshotInput: session snapshot for thread conversion.
+ * - cloneThread: copy a thread snapshot.
+ * - formatPromptFromInput: convert user input into prompt text.
+ * - opencodeSessionToThread: translate a session into a Codex-shaped thread.
+ * - mapOpenCodeModelsToWorkbenchOptions: translate SDK model capabilities.
+ * - createOpenCodePermissionRequest: translate v2 permission requests.
+ * - createOpenCodeLegacyPermissionRequest: translate legacy permission requests.
+ * - createOpenCodeQuestionRequest: translate SDK questionnaires.
  */
 import type {
   Message,
@@ -99,6 +107,8 @@ function createAgentItem(message: Message, textId: string, text: string): Extrac
   return {
     id: `opencode:agent:${message.id}:${textId}`,
     memoryCitation: null,
+    delivery: null,
+    questions: null,
     phase: message.role === "assistant" && message.time.completed ? "final_answer" : "commentary",
     text,
     type: "agentMessage",
@@ -312,6 +322,7 @@ function createTurnFromEntries(
       ? {
         additionalDetails: null,
         codexErrorInfo: null,
+        misalignment: null,
         message: "data" in assistantEntry.info.error && typeof assistantEntry.info.error.data.message === "string"
           ? assistantEntry.info.error.data.message
           : assistantEntry.info.error.name,
@@ -417,10 +428,7 @@ export function opencodeSessionToThread({ messages, session, status }: OpenCodeT
     session.model ? `${session.model.providerID}/${session.model.id}` : null
   );
   const turns = createTurns(session, messages, status);
-  const thread: Thread & {
-    model?: string | null;
-    modelProvider?: string | null;
-  } = {
+  const thread: Thread = {
     agentNickname: session.agent ?? null,
     agentRole: null,
     canAcceptDirectInput: null,
@@ -433,6 +441,9 @@ export function opencodeSessionToThread({ messages, session, status }: OpenCodeT
     gitInfo: null,
     id: session.id,
     modelProvider: model?.split("/")[0] ?? "opencode",
+    model,
+    projectId: null,
+    reasoningEffort: null,
     name: session.title || null,
     path: null,
     parentThreadId: null,
@@ -449,7 +460,6 @@ export function opencodeSessionToThread({ messages, session, status }: OpenCodeT
     updatedAt: toUnixSeconds(session.time.updated),
   };
 
-  thread.model = model;
   return thread;
 }
 

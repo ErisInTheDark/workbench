@@ -24,13 +24,13 @@ test("normalization preserves distinct identical deliveries", () => {
 });
 
 test("a later canonical alias replaces a generic at the later timeline position", () => {
-  const divider: ThreadItem = { id: "agent", memoryCitation: null, phase: null, text: "between", type: "agentMessage" };
+  const divider: ThreadItem = { id: "agent", memoryCitation: null, delivery: null, questions: null, phase: null, text: "between", type: "agentMessage" };
   const normalized = normalizeThreadItems([user("item-1", null), divider, user("canonical", "client")]);
   assert.deepEqual(normalized.map((item) => item.id), ["agent", "canonical"]);
 });
 
 test("same identity lifecycle copies dedupe", () => {
-  const divider: ThreadItem = { id: "agent", memoryCitation: null, phase: null, text: "between", type: "agentMessage" };
+  const divider: ThreadItem = { id: "agent", memoryCitation: null, delivery: null, questions: null, phase: null, text: "between", type: "agentMessage" };
   const completed = user("canonical", "client", "completed");
   assert.deepEqual(
     normalizeThreadItems([user("canonical", "client", "started"), divider, completed]),
@@ -50,7 +50,7 @@ test("conflicting identities and distinct canonical ids never content-dedupe", (
 });
 
 test("optimistic and generic aliases converge only with their concrete delivery", () => {
-  const divider: ThreadItem = { id: "agent", memoryCitation: null, phase: null, text: "between", type: "agentMessage" };
+  const divider: ThreadItem = { id: "agent", memoryCitation: null, delivery: null, questions: null, phase: null, text: "between", type: "agentMessage" };
   assert.deepEqual(
     normalizeThreadItems([user("optimistic-user-message:steer:pending:one", "client"), divider, user("canonical", "client")]).map((item) => item.id),
     ["agent", "canonical"],
@@ -64,15 +64,15 @@ test("optimistic and generic aliases converge only with their concrete delivery"
 test("complete provider reconciliation reports positive narrative identity matches", () => {
   const current: ThreadItem[] = [
     user("msg-user", "client", "hello"),
-    { id: "msg-agent", memoryCitation: null, phase: "commentary", text: "working", type: "agentMessage" },
+    { id: "msg-agent", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "working", type: "agentMessage" },
     { id: "plan-canonical", text: "one plan", type: "plan" },
-    { id: "stale", memoryCitation: null, phase: null, text: "stale", type: "agentMessage" },
+    { id: "stale", memoryCitation: null, delivery: null, questions: null, phase: null, text: "stale", type: "agentMessage" },
   ];
   const incoming: ThreadItem[] = [
     user("item-1", "client", "hello"),
-    { id: "item-2", memoryCitation: null, phase: "commentary", text: "working", type: "agentMessage" },
+    { id: "item-2", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "working", type: "agentMessage" },
     { id: "item-3", text: "one plan", type: "plan" },
-    { id: "new", memoryCitation: null, phase: "final_answer", text: "done", type: "agentMessage" },
+    { id: "new", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: "done", type: "agentMessage" },
   ];
 
   const reconciled = reconcileCompleteThreadItems(current, incoming);
@@ -93,8 +93,8 @@ test("complete provider reconciliation reports positive narrative identity match
 
 test("complete provider reconciliation reports the displaced current identity when the incoming identity wins", () => {
   const reconciled = reconcileCompleteThreadItems(
-    [{ id: "item-1", memoryCitation: null, phase: "commentary", text: "working", type: "agentMessage" }],
-    [{ id: "msg-agent", memoryCitation: null, phase: "commentary", text: "working", type: "agentMessage" }],
+    [{ id: "item-1", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "working", type: "agentMessage" }],
+    [{ id: "msg-agent", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "working", type: "agentMessage" }],
   );
 
   assert.deepEqual(

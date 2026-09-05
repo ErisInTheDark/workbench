@@ -615,6 +615,8 @@ export class CopilotBridge {
         rateLimits,
         rateLimitsByLimitId: null,
         rateLimitResetCredits: null,
+        accountId: null,
+        rateLimitUpsell: null,
       };
     } catch (error) {
       logError("copilot-bridge", error instanceof Error ? error.message : String(error));
@@ -626,6 +628,8 @@ export class CopilotBridge {
           rateLimits,
           rateLimitsByLimitId: null,
           rateLimitResetCredits: null,
+          accountId: null,
+          rateLimitUpsell: null,
         };
       }
 
@@ -633,6 +637,8 @@ export class CopilotBridge {
         rateLimits: null,
         rateLimitsByLimitId: null,
         rateLimitResetCredits: null,
+        accountId: null,
+        rateLimitUpsell: null,
       };
     }
   }

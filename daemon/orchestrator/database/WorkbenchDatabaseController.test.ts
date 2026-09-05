@@ -9,6 +9,7 @@ import { test } from "node:test";
 
 import Database from "better-sqlite3";
 
+import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository";
 import WorkbenchDatabaseController, { WorkbenchDatabaseRequestFailure } from "./WorkbenchDatabaseController";
 import {
   coreTables,
@@ -96,10 +97,89 @@ test("database worker records claim snapshots and returns bounded stats", async 
   }
 });
 
+function createLegacyToolSources(database: Database.Database) {
+  database.exec(`
+    CREATE TABLE thread_operation_tool_sources (
+      item_id INTEGER PRIMARY KEY,
+      item_type TEXT NOT NULL DEFAULT 'operation' CHECK (item_type = 'operation'),
+      source_kind TEXT NOT NULL DEFAULT 'tool' CHECK (source_kind = 'tool'),
+      source_revision INTEGER NOT NULL,
+      tool_kind TEXT NOT NULL CHECK (tool_kind IN ('callable', 'collaboration')),
+      state TEXT NOT NULL CHECK (state IN ('inProgress', 'completed', 'failed')),
+      tool_name TEXT NOT NULL,
+      duration_ms INTEGER CHECK (duration_ms >= 0),
+      UNIQUE (item_id, tool_kind, source_revision, state, tool_name),
+      FOREIGN KEY (item_id, item_type, source_kind, source_revision)
+        REFERENCES thread_item_operations(item_id, item_type, source_kind, source_revision) ON DELETE CASCADE
+    ) STRICT;
+    CREATE TABLE thread_operation_collaboration_tool_sources (
+      item_id INTEGER PRIMARY KEY,
+      tool_kind TEXT NOT NULL DEFAULT 'collaboration' CHECK (tool_kind = 'collaboration'),
+      source_revision INTEGER NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('inProgress', 'completed', 'failed')),
+      tool_name TEXT NOT NULL CHECK (tool_name IN ('spawnAgent', 'sendInput', 'resumeAgent', 'wait', 'closeAgent')),
+      sender_thread_id TEXT NOT NULL,
+      prompt TEXT,
+      model TEXT,
+      reasoning_effort TEXT,
+      FOREIGN KEY (item_id, tool_kind, source_revision, state, tool_name)
+        REFERENCES thread_operation_tool_sources(item_id, tool_kind, source_revision, state, tool_name) ON DELETE CASCADE
+    ) STRICT;
+  `);
+}
+
+test("tool schema upgrade preserves collaboration children and callable sources", () => {
+  const database = new Database(":memory:");
+  try {
+    installWorkbenchDatabaseSchema(database);
+    database.pragma("foreign_keys = OFF");
+    database.exec("DROP TABLE thread_operation_collaboration_tool_sources; DROP TABLE thread_operation_tool_sources;");
+    createLegacyToolSources(database);
+    database.pragma("user_version = 11");
+    database.pragma("foreign_keys = ON");
+    const repository = new WorkbenchTranscriptRepository(database);
+    repository.settle([
+      { kind: "thread", threadId: "thread", projectId: "project", projectRoot: "C:/project", title: "thread", createdAt: 1, updatedAt: 1, activityAt: 1 },
+      { kind: "turn", threadId: "thread", turnId: "turn", turnIndex: 0, harnessId: "codex", nativeLocation: "C:/project", nativeThreadId: "thread", nativeTurnId: "turn", state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1_000 },
+      {
+        kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 2,
+        item: {
+          type: "collabAgentToolCall", id: "collab", tool: "spawnAgent", status: "completed",
+          senderThreadId: "thread", receiverThreadIds: ["child"], prompt: "task", model: null, reasoningEffort: null,
+          agentsStates: { child: { status: "running", message: null } },
+        },
+      },
+      {
+        kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 2,
+        item: {
+          type: "dynamicToolCall", id: "callable", tool: "lookup", namespace: null, arguments: {},
+          status: "completed", contentItems: [{ type: "inputText", text: "result" }], success: true, durationMs: 1,
+        },
+      },
+    ]);
+    const before = repository.read({ threadId: "thread", turnLimit: 10 });
+    installWorkbenchDatabaseSchema(database);
+    assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 10 }), before);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    assert.equal(database.pragma("foreign_keys", { simple: true }), 1);
+    repository.settle([{
+      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 3,
+      item: {
+        type: "collabAgentToolCall", id: "interrupted", tool: "sendMessage", status: "interrupted",
+        senderThreadId: "thread", receiverThreadIds: ["child"], prompt: null, model: null, reasoningEffort: null, agentsStates: {},
+      },
+    }]);
+    assert.equal(repository.read({ threadId: "thread", turnLimit: 10 })?.rows.threadItems.length, 3);
+  } finally {
+    database.close();
+  }
+});
+
 test("schema version 4 thread-state rows migrate into the scoped relationship model", () => {
   const database = new Database(":memory:");
   try {
     database.pragma("foreign_keys = ON");
+    createLegacyToolSources(database);
     database.exec(`
       CREATE TABLE workbench_thread_state_projection_status (
         id INTEGER PRIMARY KEY,
@@ -431,6 +511,8 @@ test("workspace search ranks relational sources and keeps settled transcript bod
         observedAt: 3,
         item: {
           id: "active-commentary",
+          delivery: null,
+          questions: null,
           memoryCitation: null,
           phase: "commentary" as const,
           text: "lowvalue comet",
@@ -445,6 +527,8 @@ test("workspace search ranks relational sources and keeps settled transcript bod
         observedAt: 4,
         item: {
           id: "active-final",
+          delivery: null,
+          questions: null,
           memoryCitation: null,
           phase: "final_answer" as const,
           text: "finalsecret",
@@ -497,6 +581,8 @@ test("workspace search ranks relational sources and keeps settled transcript bod
         observedAt: 3,
         item: {
           id: "settled-commentary",
+          delivery: null,
+          questions: null,
           memoryCitation: null,
           phase: "commentary" as const,
           text: "sleepyhidden otter",

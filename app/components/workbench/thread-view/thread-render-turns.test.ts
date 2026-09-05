@@ -92,7 +92,7 @@ function browseEntry(turnId: string, entryKey: string): WorkbenchBrowseResultEnt
 test("unfinished continuation keeps prior output in one active logical turn", () => {
   const first = turn("first", "completed", 1, 2, [
     { clientId: null, content: [textInput("start")], id: "user", type: "userMessage" },
-    { id: "final", memoryCitation: null, phase: "final_answer", text: "not actually done", type: "agentMessage" },
+    { id: "final", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: "not actually done", type: "agentMessage" },
   ]);
   const second = turn("second", "inProgress", 2, null, [
     { clientId: null, content: createWorkbenchUnfinishedTurnInput(), id: "hidden", type: "userMessage" },
@@ -123,14 +123,14 @@ test("unfinished continuation keeps prior output in one active logical turn", ()
 });
 
 test("repeated unfinished continuations stay one completed logical turn", () => {
-  const first = turn("first", "completed", 1, 2, [{ id: "first-answer", memoryCitation: null, phase: "final_answer", text: "one", type: "agentMessage" }]);
+  const first = turn("first", "completed", 1, 2, [{ id: "first-answer", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: "one", type: "agentMessage" }]);
   const second = turn("second", "completed", 2, 3, [
     { clientId: null, content: createWorkbenchUnfinishedTurnInput(), id: "hidden-two", type: "userMessage" },
-    { id: "second-answer", memoryCitation: null, phase: "final_answer", text: "two", type: "agentMessage" },
+    { id: "second-answer", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: "two", type: "agentMessage" },
   ]);
   const third = turn("third", "completed", 3, 4, [
     { clientId: null, content: createWorkbenchUnfinishedTurnInput(), id: "hidden-three", type: "userMessage" },
-    { id: "third-answer", memoryCitation: null, phase: "final_answer", text: "three", type: "agentMessage" },
+    { id: "third-answer", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: "three", type: "agentMessage" },
   ]);
   const projection = projectThreadRenderTurns(thread([first, second, third]));
 

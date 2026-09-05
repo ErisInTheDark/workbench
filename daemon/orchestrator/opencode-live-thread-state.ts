@@ -1,6 +1,9 @@
 /*
+ * Keywords: opencode, v2, live events, streaming.
  * Exports:
- * - OpenCodeLiveThreadState/createOpenCodeLiveThreadState/applyOpenCodeLiveEvent: maintain v2 OpenCode in-turn streaming state and emit Codex-shaped notifications. Keywords: opencode, v2, live events, streaming.
+ * - OpenCodeLiveThreadState: session-owned live item and turn state.
+ * - createOpenCodeLiveThreadState: initialise live session storage.
+ * - applyOpenCodeLiveEvent: translate SDK events into Codex-shaped notifications.
  */
 import type {
   Part,
@@ -320,6 +323,8 @@ export function applyOpenCodeLiveEvent(
           const item: Extract<ThreadItem, { type: "agentMessage" }> = {
             id: itemId,
             memoryCitation: null,
+            delivery: null,
+            questions: null,
             phase: "commentary",
             text: "",
             type: "agentMessage",
@@ -383,6 +388,8 @@ export function applyOpenCodeLiveEvent(
       ensureItemStarted(live, event.data.sessionID, turnId, {
         id: agentItemId(event.data.assistantMessageID, event.data.textID),
         memoryCitation: null,
+        delivery: null,
+        questions: null,
         phase: "commentary",
         text: "",
         type: "agentMessage",
@@ -399,6 +406,8 @@ export function applyOpenCodeLiveEvent(
       ensureItemStarted(live, event.data.sessionID, turnId, {
         id: itemId,
         memoryCitation: null,
+        delivery: null,
+        questions: null,
         phase: "commentary",
         text: "",
         type: "agentMessage",
@@ -456,6 +465,8 @@ export function applyOpenCodeLiveEvent(
       ensureItemStarted(live, event.data.sessionID, turnId, {
         id: itemId,
         memoryCitation: null,
+        delivery: null,
+        questions: null,
         phase: "commentary",
         text: "",
         type: "agentMessage",

@@ -38,10 +38,10 @@ function thread(items: Thread["turns"][number]["items"]): Thread {
 
 test("renders only trailing commentary before a questionnaire", () => {
   const output = renderSubagentQuestionnaireOutput(thread([
-    { id: "old", memoryCitation: null, phase: "commentary", text: "Old commentary", type: "agentMessage" },
+    { id: "old", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "Old commentary", type: "agentMessage" },
     { clientId: null, content: [], id: "user", type: "userMessage" },
-    { id: "new-1", memoryCitation: null, phase: "commentary", text: "First trailing note", type: "agentMessage" },
-    { id: "new-2", memoryCitation: null, phase: "commentary", text: "Second trailing note", type: "agentMessage" },
+    { id: "new-1", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "First trailing note", type: "agentMessage" },
+    { id: "new-2", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "Second trailing note", type: "agentMessage" },
   ]), questionnaire);
 
   assert.doesNotMatch(output, /Old commentary/u);
@@ -51,8 +51,8 @@ test("renders only trailing commentary before a questionnaire", () => {
 
 test("renders final output and creates an explicitly empty response", () => {
   assert.equal(renderSubagentTurnOutput(thread([
-    { id: "commentary", memoryCitation: null, phase: "commentary", text: "Working", type: "agentMessage" },
-    { id: "final", memoryCitation: null, phase: "final_answer", text: "Finished", type: "agentMessage" },
+    { id: "commentary", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "Working", type: "agentMessage" },
+    { id: "final", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: "Finished", type: "agentMessage" },
   ])), "Finished");
   assert.deepEqual(createEmptySubagentQuestionnaireResponse(questionnaire), {
     answers: { direction: { answers: [] } },

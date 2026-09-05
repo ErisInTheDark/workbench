@@ -88,6 +88,9 @@ function bridgeThread(items: ThreadItem[] = []) {
     historyMode: "legacy" as const,
     id: "thread",
     modelProvider: "openai",
+    model: null,
+    projectId: null,
+    reasoningEffort: null,
     name: null,
     parentThreadId: null,
     path: null,
@@ -488,6 +491,8 @@ test("background thread pages repair inactive provider turns directly into both 
     memoryCitation: null,
     phase: "commentary",
     text: "recovered tail",
+    delivery: null,
+    questions: null,
     type: "agentMessage",
   };
   const staleTurn = {
@@ -610,6 +615,8 @@ test("provider catalog identities and the materialized page record as one dual-r
     memoryCitation: null,
     phase: "commentary",
     text: "latest",
+    delivery: null,
+    questions: null,
     type: "agentMessage",
   };
   const latest = bridgeThread([pageItem]).turns[0]!;
@@ -695,6 +702,8 @@ test("non-empty terminal provider turns record as complete replacement scopes", 
     memoryCitation: null,
     phase: "final_answer",
     text: "done",
+    delivery: null,
+    questions: null,
     type: "agentMessage",
   };
   const bridge = new CodexStdioBridge({
@@ -794,6 +803,8 @@ test("live provider observations and active baselines stay ordered across a brid
     text: "hello",
     phase: "commentary",
     memoryCitation: null,
+    delivery: null,
+    questions: null,
   };
   try {
     bridge = createBridge();
@@ -940,6 +951,8 @@ test("provider-live transcript bursts bypass durable recording until item settle
     memoryCitation: null,
     phase: "commentary",
     text: "",
+    delivery: null,
+    questions: null,
     type: "agentMessage",
   };
   const owner = bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore };
@@ -1337,6 +1350,8 @@ test("repeated provider misses report one SQLite capture failure", async () => {
     memoryCitation: null,
     phase: "commentary" as const,
     text: "hello",
+    delivery: null,
+    questions: null,
     type: "agentMessage" as const,
   };
   try {
@@ -1546,6 +1561,8 @@ test("live transcript recording survives throwing compatibility readers across r
     memoryCitation: null,
     phase: "commentary",
     text: "live",
+    delivery: null,
+    questions: null,
     type: "agentMessage",
   };
   const liveTurn = bridgeThread().turns[0]!;
@@ -1803,8 +1820,8 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
   const anchorlessItemId = "exec-11111111-1111-4111-8111-111111111111";
   const anchoredItemId = "exec-22222222-2222-4222-8222-222222222222";
   const ordinaryItemId = "exec-33333333-3333-4333-8333-333333333333";
-  const precedingItem: ThreadItem = { id: "before", memoryCitation: null, phase: "commentary", text: "before", type: "agentMessage" };
-  const followingItem: ThreadItem = { id: "after", memoryCitation: null, phase: "commentary", text: "after", type: "agentMessage" };
+  const precedingItem: ThreadItem = { id: "before", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "before", type: "agentMessage" };
+  const followingItem: ThreadItem = { id: "after", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "after", type: "agentMessage" };
   const futureProviderItem: Extract<ThreadItem, { type: "fileChange" }> = {
     changes: [{ diff: "@@ -1 +1 @@\n-old\n+new", kind: { move_path: null, type: "update" }, path: "src/a.ts" }],
     id: anchorlessItemId,
@@ -2049,6 +2066,8 @@ test("direct thread resume is rejected without forwarding or transcript hydratio
       thread: bridgeThread([{
         id: "stored-item",
         memoryCitation: null,
+        delivery: null,
+        questions: null,
         phase: "commentary",
         text: "stored",
         type: "agentMessage",

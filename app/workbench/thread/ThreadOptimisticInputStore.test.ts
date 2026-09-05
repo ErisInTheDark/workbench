@@ -46,14 +46,14 @@ test("two identical steers retain independent handles and canonical placement", 
 
   const canonical = user("canonical-a", first.handle, "same");
   assert.equal(store.confirmCanonicalUserMessage("codex:thread", "turn", canonical), first.handle);
-  const projected = store.apply(thread([{ id: "agent", memoryCitation: null, phase: null, text: "work", type: "agentMessage" }, canonical]), []);
+  const projected = store.apply(thread([{ id: "agent", memoryCitation: null, delivery: null, questions: null, phase: null, text: "work", type: "agentMessage" }, canonical]), []);
   assert.deepEqual(projected.turns[0]?.items.map((item) => item.id), ["agent", "canonical-a", second.item.id]);
   assert.equal(store.movePending(first.handle, "other-turn"), false);
 });
 
 test("canonical initial input retains its leading user-message position", () => {
   const store = ThreadOptimisticInputStore();
-  const agent: ThreadItem = { id: "agent", memoryCitation: null, phase: null, text: "work", type: "agentMessage" };
+  const agent: ThreadItem = { id: "agent", memoryCitation: null, delivery: null, questions: null, phase: null, text: "work", type: "agentMessage" };
   store.enqueueInitial(thread([agent]), "turn", input("initial"), { status: "sent" });
   const projected = store.apply(thread([agent, user("canonical", null, "initial")]), []);
   assert.deepEqual(projected.turns[0]?.items.map((item) => item.id), ["canonical", "agent"]);

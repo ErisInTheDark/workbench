@@ -42,6 +42,9 @@ function providerThread(): Thread {
     historyMode: "legacy",
     id: "thread",
     modelProvider: "openai",
+    model: null,
+    projectId: null,
+    reasoningEffort: null,
     name: "Thread",
     parentThreadId: null,
     path: null,
@@ -61,6 +64,8 @@ function providerThread(): Thread {
       items: [{
         id: "answer",
         memoryCitation: null,
+        delivery: null,
+        questions: null,
         phase: "final_answer",
         text: "done",
         type: "agentMessage",
@@ -204,7 +209,7 @@ test("complete provider snapshots keep carried items with their first turn", () 
     id: "later",
     items: [
       carried,
-      { id: "later-answer", memoryCitation: null, phase: "final_answer", text: "later", type: "agentMessage" },
+      { id: "later-answer", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: "later", type: "agentMessage" },
     ],
     itemsView: "full",
     startedAt: 7,
@@ -260,6 +265,8 @@ test("one provider item lifecycle becomes one atomic observation", () => {
     memoryCitation: null,
     phase: "commentary" as const,
     text: "streaming",
+    delivery: null,
+    questions: null,
     type: "agentMessage" as const,
   };
   assert.deepEqual(createCodexTranscriptProviderItemObservation({
@@ -284,6 +291,8 @@ test("provider item lifecycle timestamps remain direct durable facts", () => {
     memoryCitation: null,
     phase: "commentary" as const,
     text: "done",
+    delivery: null,
+    questions: null,
     type: "agentMessage" as const,
   };
   const observation = createCodexTranscriptProviderItemObservation({

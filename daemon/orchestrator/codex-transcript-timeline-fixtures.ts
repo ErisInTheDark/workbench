@@ -10,6 +10,8 @@ import type { CodexTranscriptTurnTimelineEntry } from "./codex-transcript-types"
 
 const agentMessage = {
   id: "agent-1",
+  delivery: null,
+  questions: null,
   memoryCitation: null,
   phase: "commentary",
   text: "Working",
@@ -219,6 +221,8 @@ const extraSnapshotContextCompaction = {
 
 const postCompactionAgentMessage = {
   id: "agent-after-compaction",
+  delivery: null,
+  questions: null,
   memoryCitation: null,
   phase: "commentary",
   text: "After compaction",

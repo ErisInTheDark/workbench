@@ -15,7 +15,7 @@ function turn(id: string, message: string | null): Turn {
     completedAt: 2,
     durationMs: 1,
     error: message
-      ? { additionalDetails: null, codexErrorInfo: null, message }
+      ? { additionalDetails: null, codexErrorInfo: null, misalignment: null, message }
       : null,
     id,
     items: [],

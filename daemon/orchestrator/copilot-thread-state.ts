@@ -1,9 +1,14 @@
 /*
+ * Keywords: copilot, codex adapter, thread state, events, prompt.
  * Exports:
- * - CopilotThreadState: in-memory Codex-shaped thread cache for a Copilot session. Keywords: copilot, thread state, session cache.
- * - INITIALIZE_RESULT/EMPTY_RATE_LIMITS: small bridge constants for Copilot responses. Keywords: initialize, rate limits.
- * - formatPromptFromInput/cloneThread: bridge helpers for sending prompts and returning thread snapshots. Keywords: prompt, clone, codex shape.
- * - createThreadState/metadataToThread/applyCopilotEvent: synthesize and incrementally update Codex-shaped threads from Copilot SDK events. Keywords: event translation, codex adapter, thread reconstruction.
+ * - CopilotThreadState: cached thread and active Copilot session state.
+ * - INITIALIZE_RESULT: Copilot bridge handshake response.
+ * - EMPTY_RATE_LIMITS: unavailable Copilot usage snapshot.
+ * - formatPromptFromInput: convert user input into prompt text.
+ * - cloneThread: copy a thread snapshot.
+ * - createThreadState: initialise a session's thread state.
+ * - metadataToThread: reconcile session metadata with a thread.
+ * - applyCopilotEvent: translate SDK events into thread updates.
  */
 import { randomUUID } from "node:crypto";
 
@@ -174,6 +179,8 @@ function makeAgentMessageItem(itemId: string): Extract<ThreadItem, { type: "agen
   return {
     id: itemId,
     memoryCitation: null,
+    delivery: null,
+    questions: null,
     phase: "commentary",
     text: "",
     type: "agentMessage",
@@ -323,6 +330,9 @@ function createEmptyThread(sessionId: string, projectRoot: string, metadata: Ses
     gitInfo: null,
     id: sessionId,
     modelProvider: "copilot",
+    model: null,
+    projectId: null,
+    reasoningEffort: null,
     name: metadata?.summary ?? null,
     path: null,
     parentThreadId: null,

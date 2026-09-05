@@ -6,6 +6,8 @@ import { test } from "node:test";
 
 import Database from "better-sqlite3";
 
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import { projectWorkbenchTranscriptItems } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import { createSyntheticSteerHistoryItemId } from "workbench-shared/workbench/thread/thread-steer-history";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
@@ -80,6 +82,8 @@ function canonicalWindowSelectCount(itemCount: number) {
         item: {
           id: `message-${index}`,
           memoryCitation: null,
+          delivery: null,
+          questions: null,
           phase: "commentary",
           text: `message ${index}`,
           type: "agentMessage",
@@ -145,6 +149,8 @@ test("standalone provider turns establish a readable live materialization", () =
         memoryCitation: null,
         phase: "commentary",
         text: "recorded directly",
+        delivery: null,
+        questions: null,
         type: "agentMessage",
       },
     }]);
@@ -178,6 +184,8 @@ test("source ids stay thread-scoped while repeated same-thread items keep their 
     item: {
       id: "carried",
       memoryCitation: null,
+      delivery: null,
+      questions: null,
       phase: "commentary",
       text,
       type: "agentMessage",
@@ -226,6 +234,8 @@ test("atomic lifecycle facts merge without erasing richer item or turn timing", 
     item: {
       id: sourceId,
       memoryCitation: null,
+      delivery: null,
+      questions: null,
       phase: "commentary",
       text: sourceId,
       type: "agentMessage",
@@ -368,6 +378,8 @@ test("top-level mutations reject a metadata-only compatibility turn", () => {
         memoryCitation: null,
         phase: "commentary",
         text: "not initialized",
+        delivery: null,
+        questions: null,
         type: "agentMessage",
       },
     }, {
@@ -710,7 +722,7 @@ test("provider scopes preserve directly recorded items omitted by later snapshot
     turnId: "turn",
     lifecycle: "completed",
     observedAt,
-    item: { id, memoryCitation: null, phase: "commentary", text, type: "agentMessage" },
+    item: { id, memoryCitation: null, delivery: null, questions: null, phase: "commentary", text, type: "agentMessage" },
   });
   const command = {
     kind: "item",
@@ -883,6 +895,8 @@ test("complete provider scopes collapse proven aliases while preserving admitted
     item: {
       id: "answer",
       memoryCitation: null,
+      delivery: null,
+      questions: null,
       phase: "final_answer",
       text: "done",
       type: "agentMessage",
@@ -943,6 +957,8 @@ test("complete provider scopes collapse proven aliases while preserving admitted
         item: {
           id: "stale",
           memoryCitation: null,
+          delivery: null,
+          questions: null,
           phase: "commentary",
           text: "stale",
           type: "agentMessage",
@@ -1051,6 +1067,8 @@ test("complete provider scopes keep metadata-only turns unmaterialized", () => {
         item: {
           id: "answer",
           memoryCitation: null,
+          delivery: null,
+          questions: null,
           phase: "final_answer",
           text: "done",
           type: "agentMessage",
@@ -1157,6 +1175,8 @@ test("hydration pages keep full turn metadata and load only the requested immuta
             text: `message ${turnIndex}`,
             phase: turnIndex === 2 ? "final_answer" : "commentary",
             memoryCitation: null,
+            delivery: null,
+            questions: null,
           },
         },
       ]),
@@ -1196,7 +1216,7 @@ test("JIT windows materialize independent turns and replace one turn's local pos
     turnId: "turn-8",
     lifecycle: "completed",
     observedAt: 20,
-    item: { id, memoryCitation: null, phase: "commentary", text, type: "agentMessage" },
+    item: { id, memoryCitation: null, delivery: null, questions: null, phase: "commentary", text, type: "agentMessage" },
   });
   try {
     repository.settle([canonicalWindow([
@@ -1277,7 +1297,7 @@ test("JIT windows materialize independent turns and replace one turn's local pos
         turnId: "turn-0",
         lifecycle: "completed",
         observedAt: 22,
-        item: { id: "ancestor", memoryCitation: null, phase: "commentary", text: "ancestor", type: "agentMessage" },
+        item: { id: "ancestor", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "ancestor", type: "agentMessage" },
       },
     ], ["turn-0"])]);
     const afterAncestor = repository.read({ threadId: "thread", turnIds: ["turn-8"], turnLimit: 1 });
@@ -1304,7 +1324,7 @@ test("complete version-one shadow import replaces only that thread atomically an
           turnId: "partial",
           lifecycle: "completed",
           observedAt: 3,
-          item: { id: "partial-item", memoryCitation: null, phase: "commentary", text: "partial", type: "agentMessage" },
+          item: { id: "partial-item", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "partial", type: "agentMessage" },
         },
       ], ["partial"]),
       canonicalWindow([
@@ -1337,7 +1357,7 @@ test("complete version-one shadow import replaces only that thread atomically an
             lastSeenAt: 20,
             startedAt: 11,
           },
-          item: { id: "message", memoryCitation: null, phase: "commentary", text: "complete", type: "agentMessage" },
+          item: { id: "message", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "complete", type: "agentMessage" },
         },
       ],
     }]);
@@ -1371,7 +1391,7 @@ test("complete version-one shadow import replaces only that thread atomically an
           turnId: "missing",
           lifecycle: "completed",
           observedAt: 30,
-          item: { id: "invalid", memoryCitation: null, phase: "commentary", text: "invalid", type: "agentMessage" },
+          item: { id: "invalid", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "invalid", type: "agentMessage" },
         },
       ],
     }]), /materializes unknown turn/);
@@ -1379,6 +1399,59 @@ test("complete version-one shadow import replaces only that thread atomically an
     assert.ok(other);
     assert.equal(other.thread.transcript_content_version, 1);
     assert.deepEqual(other.turns.map(({ id }) => id), ["other-turn"]);
+  } finally {
+    database.close();
+  }
+});
+
+test("collaboration tools preserve native status and relationships through SQLite", () => {
+  const { database, repository } = createRepository();
+  try {
+    const tools = ["spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent", "sendMessage", "followupTask", "interruptAgent", "listAgents"] as const;
+    const statuses = ["inProgress", "completed", "failed", "interrupted"] as const;
+    const items: ThreadItem[] = tools.flatMap((tool) => statuses.map((status) => ({
+      type: "collabAgentToolCall",
+      id: `${tool}-${status}`,
+      tool,
+      status,
+      senderThreadId: "thread",
+      receiverThreadIds: ["child"],
+      prompt: "follow up",
+      model: null,
+      reasoningEffort: null,
+      agentsStates: { child: { status: "running", message: null } },
+    })));
+    repository.settle([
+      threadObservation(),
+      turnObservation("turn", 0),
+      ...items.map((item): WorkbenchTranscriptAtomicObservation => ({
+        kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 3, item,
+      })),
+    ]);
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 10 });
+    assert.ok(snapshot);
+    const projection = projectWorkbenchTranscriptItems(snapshot.rows);
+    assert.ok(projection.success);
+    assert.deepEqual(projection.data.map(({ item }) => item), items);
+  } finally {
+    database.close();
+  }
+});
+
+test("function output survives opaque storage without losing its payload", () => {
+  const { database, repository } = createRepository();
+  try {
+    const item: ThreadItem = {
+      type: "functionCallOutput", id: "output", name: "lookup", namespace: "tools", output: "lookup result",
+    };
+    repository.settle([
+      threadObservation(),
+      turnObservation("turn", 0),
+      { kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 3, item },
+    ]);
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 10 });
+    assert.ok(snapshot);
+    assert.deepEqual(snapshot.rows.threadItemUnknown.map(({ safe_json }) => JSON.parse(safe_json)), [item]);
   } finally {
     database.close();
   }
@@ -1412,6 +1485,8 @@ test("unsupported items remain opaque and a later invalid observation rolls back
           text: "no owner",
           phase: null,
           memoryCitation: null,
+          delivery: null,
+          questions: null,
         },
       },
     ]), /unknown turn owner/);

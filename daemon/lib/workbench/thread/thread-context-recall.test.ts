@@ -221,7 +221,7 @@ function createBundle(): WorkbenchThreadContextBundle {
       turns: [
         turn("turn-old", [
           { clientId: null, content: [{ text: "old user", text_elements: [], type: "text" }], id: "user-old", type: "userMessage" },
-          { id: "plan-old", memoryCitation: null, phase: "final_answer", text: oldPlan, type: "agentMessage" },
+          { id: "plan-old", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: oldPlan, type: "agentMessage" },
           { content: ["reasoning leak canary"], id: "reasoning-old", summary: [], type: "reasoning" },
           {
             aggregatedOutput: "command leak canary",
@@ -240,8 +240,8 @@ function createBundle(): WorkbenchThreadContextBundle {
           },
         ]),
         turn("turn-new", [
-          { id: "commentary-new", memoryCitation: null, phase: "commentary", text: "Normal commentary remembers the safe route.", type: "agentMessage" },
-          { id: "plan-new", memoryCitation: null, phase: "final_answer", text: newestPlan, type: "agentMessage" },
+          { id: "commentary-new", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "Normal commentary remembers the safe route.", type: "agentMessage" },
+          { id: "plan-new", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: newestPlan, type: "agentMessage" },
           { clientId: createWorkbenchThreadRecoveryId("recall-hidden"), content: createWorkbenchThreadRecoveryInput(), id: "user-recovery", type: "userMessage" },
           { clientId: createWorkbenchThreadRecoveryId("recall-unfinished"), content: createWorkbenchUnfinishedTurnInput(), id: "user-unfinished", type: "userMessage" },
           { clientId: null, content: [{ text: "newest user constraint", text_elements: [], type: "text" }], id: "user-new", type: "userMessage" },
@@ -311,7 +311,7 @@ test("keeps identical native steers correlated to their independent canonical ti
   const duplicateInput: UserInput[] = [{ text: "identical steer", text_elements: [], type: "text" }];
   bundle.thread.turns = [turn("turn-native", [
     { clientId: "client-first", content: [...duplicateInput], id: "canonical-first", type: "userMessage" },
-    { id: "agent-between", memoryCitation: null, phase: "commentary", text: "Between deliveries", type: "agentMessage" },
+    { id: "agent-between", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "Between deliveries", type: "agentMessage" },
     { clientId: "client-second", content: [...duplicateInput], id: "canonical-second", type: "userMessage" },
   ])];
   bundle.questionnaireEntries = [];
@@ -512,6 +512,8 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
         id: "agent",
         memoryCitation: null,
         phase: "commentary",
+        delivery: null,
+        questions: null,
         text: "commentary\n\n<plan>\nkeep this plan\n</plan>",
         type: "agentMessage",
       },
@@ -575,6 +577,8 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
         id: "agent-final",
         memoryCitation: null,
         phase: "final_answer",
+        delivery: null,
+        questions: null,
         text: "final response",
         type: "agentMessage",
       },

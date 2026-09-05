@@ -70,6 +70,8 @@ const userItem = {
 const finalItem = {
   id: "final",
   memoryCitation: null,
+  delivery: null,
+  questions: null,
   phase: "final_answer",
   text: "done",
   type: "agentMessage",

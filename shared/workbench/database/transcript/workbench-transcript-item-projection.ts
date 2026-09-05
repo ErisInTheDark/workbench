@@ -1,7 +1,13 @@
 /*
- * WorkbenchProjectedInteractionItem/WorkbenchProjectedUnknownItem/WorkbenchProjectedTranscriptItem: canonical item values reconstructed from relational rows. Keywords: transcript, projection, item.
- * WorkbenchTranscriptItemProjectionRow/WorkbenchTranscriptItemProjectionResult: ordered relational item reconstruction or one bounded integrity failure. Keywords: transcript, projection, database, validation.
- * projectWorkbenchTranscriptItems: reconstruct canonical item payloads from one ordered relational row scope. Keywords: transcript, projection, item, database.
+ * Keywords: transcript, projection, item, database, validation.
+ * Exports:
+ * - WorkbenchProjectedInteractionItem: reconstructed questionnaire or approval.
+ * - WorkbenchProjectedUnknownItem: preserved opaque provider item.
+ * - WorkbenchProjectedTranscriptItem: canonical projected item union.
+ * - WorkbenchTranscriptItemProjectionRow: projected item with its durable root.
+ * - WorkbenchTranscriptProjectionIssue: bounded relational integrity failure.
+ * - WorkbenchTranscriptItemProjectionResult: ordered items or integrity failures.
+ * - projectWorkbenchTranscriptItems: reconstruct items from one relational scope.
  */
 import type { JsonValue } from "../../../codex/generated/app-server/serde_json/JsonValue.ts";
 import type { ThreadItem } from "../../../codex/generated/app-server/v2/ThreadItem.ts";
@@ -239,7 +245,7 @@ function callableOperation(
       durationMs: tool.duration_ms,
       id: itemId,
       namespace: source.namespace,
-      status: tool.state,
+      status: source.state,
       success: source.success === null ? null : source.success === 1,
       tool: tool.tool_name,
       type: "dynamicToolCall",
@@ -288,7 +294,7 @@ function callableOperation(
     readOnlyHint: source.read_only_hint === null ? null : source.read_only_hint === 1,
     result,
     server: source.server_name,
-    status: tool.state,
+    status: source.state,
     tool: tool.tool_name,
     type: "mcpToolCall",
   };
@@ -412,6 +418,8 @@ function projectItem(
       return {
         id: itemId,
         memoryCitation: null,
+        delivery: null,
+        questions: null,
         phase: item.phase === "finalAnswer" ? "final_answer" : item.phase === "commentary" ? "commentary" : null,
         text: item.text,
         type: "agentMessage",

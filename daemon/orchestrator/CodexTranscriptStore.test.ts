@@ -55,6 +55,7 @@ function snapshot(turns: Thread["turns"]): Thread {
   return {
     agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "test", createdAt: 1, cwd: "C:/repo", ephemeral: false,
     extra: null, forkedFromId: null, gitInfo: null, historyMode: "legacy", id: "thread", modelProvider: "openai", name: null, parentThreadId: null,
+    model: null, projectId: null, reasoningEffort: null,
     path: null, preview: "", recencyAt: null, section: null, sectionEnteredAt: null, sessionId: "session", source: "appServer", status: { activeFlags: [], type: "active" },
     threadSource: null, turns, updatedAt: 2,
   };

@@ -13,6 +13,7 @@ function thread(): Thread {
   return {
     agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "test", createdAt: 1, cwd: "C:/repo", ephemeral: false,
     extra: null, forkedFromId: null, gitInfo: null, historyMode: "legacy", id: "thread", modelProvider: "opencode", name: null,
+    model: null, projectId: null, reasoningEffort: null,
     parentThreadId: null, path: null, preview: "", recencyAt: null, section: null, sectionEnteredAt: null, sessionId: "session",
     source: "appServer", status: { type: "idle" }, threadSource: null, turns: [], updatedAt: 1,
   };
