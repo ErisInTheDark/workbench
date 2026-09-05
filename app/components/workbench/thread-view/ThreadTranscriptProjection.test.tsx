@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect canonical SQLite order, shared grouping, reasoning display, turn ownership, and Browse attachment. Keywords: transcript, SQLite, projection, grouping, reasoning, Browse.
+ * No production exports. Tests protect canonical SQLite order, shared grouping, hidden skill transport, reasoning display, turn ownership, and Browse attachment. Keywords: transcript, SQLite, projection, grouping, skills, reasoning, Browse.
  */
 import assert from "node:assert/strict";
 import { createRef } from "react";
@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import { mergeThreadItem, normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
 import { createWorkbenchAgentMessageOutput } from "workbench-shared/workbench/thread/thread-agent-message";
+import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
@@ -104,6 +105,37 @@ function renderItems(
     />,
   );
 }
+
+test("standalone skill transport adds no display while visible and missing user content survive", () => {
+  const activated = createWorkbenchActivatedSkillsInput('<skill filename="example">Follow the workflow.</skill>');
+  const message = (id: string, content: Extract<ThreadItem, { type: "userMessage" }>["content"]): ThreadItem => ({
+    clientId: null, content, id, type: "userMessage",
+  });
+  const visibleParts: Extract<ThreadItem, { type: "userMessage" }>["content"][] = [
+    [{ type: "text", text: "approved, keep going", text_elements: [] }],
+    [{ type: "image", url: "/attachment.png" }],
+    [{ type: "text", text: `${activated.text} is quoted user content`, text_elements: [] }],
+  ];
+  for (const durable of [false, true]) {
+    const render = (items: ThreadItem[]) => renderItems(items, null, durable ? items.length : 0);
+    for (const parts of visibleParts) {
+      const visible = message("visible", parts);
+      assert.equal(
+        render([visible, message("skills", [activated, activated])]),
+        render([visible]),
+        "standalone hidden transport must not add a bubble",
+      );
+      assert.equal(
+        render([message("visible", [...parts, activated])]),
+        render([visible]),
+        "mixed input must preserve visible content",
+      );
+    }
+    const empty = message("empty", []);
+    const visible = message("visible", visibleParts[0]);
+    assert.notEqual(render([visible, empty]), render([visible]), "missing content is not hidden transport");
+  }
+});
 
 test("native incoming messages and screenshots render once per identity after provider echo reconciliation", () => {
   const message = { message: "check cancellation cleanup", senderName: "iris", senderThreadId: "child" };

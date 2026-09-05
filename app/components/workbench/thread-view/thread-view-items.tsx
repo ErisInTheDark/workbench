@@ -1,5 +1,5 @@
 /*
- * Keywords: transcript rendering, grouping, incoming agent, native output.
+ * Keywords: transcript rendering, grouping, incoming agent, native output, hidden skill transport.
  * Exports:
  * - ThreadTranscriptItemDetails: render one provider or relational transcript item with the established item UI. Keywords: workbench, transcript, comparison, item.
  * - ThreadTranscriptItemsDetails: render adjacent provider or relational items through shared command and reasoning grouping. Keywords: workbench, transcript, grouping, items.
@@ -45,6 +45,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
+import { isWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
@@ -443,7 +444,10 @@ function buildRenderableBlocks (
     if (hiddenItemIds.itemIds?.has(item.id)) {
       continue;
     }
-    if (item.type === "userMessage" && isWorkbenchHiddenSystemSteerInput(item.content)) {
+    if (item.type === "userMessage" && (
+      isWorkbenchHiddenSystemSteerInput(item.content)
+      || (item.content.length > 0 && item.content.every(isWorkbenchActivatedSkillsInput))
+    )) {
       continue;
     }
     const narrativeSnapshotDedupeKey = getNarrativeSnapshotDedupeKey(item);
