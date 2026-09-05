@@ -56,7 +56,7 @@ function renderDetails(
       cwd,
       harness: "codex",
       materialized,
-      onDraftChange: () => undefined,
+      onDraftChange: (update) => update({ attachments: [], customValues: {}, selectedValues: {}, updatedAt: 0 }),
       onDraftClear: () => undefined,
       onOpenThread: () => undefined,
       onReadThread: canRead ? async () => null : null,

@@ -49,7 +49,8 @@ import PlaintextEditable from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
-import ThreadComposerDraftSyncController from "./ThreadComposerDraftSyncController";
+import type { DraftUpdate } from "./DraftSessionController";
+import { useDraftSession } from "./use-draft-session";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadModelPicker from "./ThreadModelPicker";
 import ThreadProfilePicker from "./ThreadProfilePicker";
@@ -82,26 +83,6 @@ async function waitForMinimumDuration (work: Promise<void>, durationMs: number):
   if (thrownError) {
     throw thrownError;
   }
-}
-
-interface ComposerImageAttachment {
-  id: string;
-  url: string;
-}
-
-function createAttachmentId () {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-
-  return `attachment:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-}
-
-function cloneComposerImageAttachments(attachments: readonly ComposerImageAttachment[]) {
-  return attachments.map((attachment) => ({
-    id: attachment.id,
-    url: attachment.url,
-  }));
 }
 
 export default function ThreadComposer ({
@@ -157,10 +138,10 @@ export default function ThreadComposer ({
     options?: { activatedSkillPaths?: string[] },
   ) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
-  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft, reason?: "autosave" | "submission") => Promise<void> | void;
-  onThreadComposerDraftClear: (threadId: string) => Promise<void> | void;
-  onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
-  onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
+  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission", reservedDraftId?: string, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
+  onThreadComposerDraftClear: (projectId: string, threadId: string, reservedDraftId?: string) => Promise<void> | void;
+  onThreadQuestionnaireDraftChange: (projectId: string, threadId: string, requestKey: string, update: DraftUpdate<WorkbenchQuestionnaireDraft>) => Promise<WorkbenchQuestionnaireDraft> | WorkbenchQuestionnaireDraft;
+  onThreadQuestionnaireDraftClear: (projectId: string, threadId: string, requestKey: string) => Promise<void> | void;
   onSubmitUserInputRequest: (
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -195,8 +176,12 @@ export default function ThreadComposer ({
     isWithinBottomDistance,
     reportComposerArmed,
   } = useThreadScrollViewportContext();
-  const [value, setValue] = useState(threadComposerDraft?.text ?? "");
-  const [attachments, setAttachments] = useState<ComposerImageAttachment[]>(threadComposerDraft?.attachments ?? []);
+  const [reservedDraftId] = useState(() => thread.id === "new" ? crypto.randomUUID() : undefined);
+  const emptyDraft = useMemo<WorkbenchComposerInputDraft>(() => ({ attachments: [], text: "", updatedAt: 0 }), []);
+  const editing = useDraftSession(threadComposerDraft ?? emptyDraft, {
+    empty: () => emptyDraft,
+    save: (update, options) => onThreadComposerDraftChange(projectId, thread.id, update, options.reason, reservedDraftId, options.detached),
+  });
   const [availableModels, setAvailableModels] = useState<WorkbenchModelOption[]>([]);
   const [availableAgents, setAvailableAgents] = useState<WorkbenchAgentOption[]>([]);
   const [deprioritizedModelIdsByHarness, setDeprioritizedModelIdsByHarness] = useState<Record<ThreadPayload["harness"], string[]>>({
@@ -206,7 +191,8 @@ export default function ThreadComposer ({
   });
   const [activePicker, setActivePicker] = useState<"agent" | "model" | "profile" | null>(null);
   const [profilePickerTargetId, setProfilePickerTargetId] = useState<string | null>(null);
-  const [error, setError] = useState("");
+  const [localError, setError] = useState("");
+  const error = localError || editing.error;
   const [isComposing, setIsComposing] = useState(false);
   const [isLoadingAgents, setIsLoadingAgents] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -217,31 +203,20 @@ export default function ThreadComposer ({
   const [agentsError, setAgentsError] = useState("");
   const [modelsError, setModelsError] = useState("");
   const [isQuestionnaireVisible, setIsQuestionnaireVisible] = useState(Boolean(pendingUserInputRequest));
-  const [pendingAttachmentReads, setPendingAttachmentReads] = useState(0);
-  const [isSending, setIsSending] = useState(false);
+  const isSending = editing.isSubmitting;
+  const value = isSending ? "" : editing.draft.text;
+  const attachments = isSending ? [] : editing.draft.attachments;
   const [isRecoveringInterruptedTurn, setIsRecoveringInterruptedTurn] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
-  const draftSyncControllerRef = useRef<ThreadComposerDraftSyncController | null>(null);
-  draftSyncControllerRef.current ??= new ThreadComposerDraftSyncController(
-    thread.id,
-    `${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`,
-  );
-  const hasDurableComposerDraftRef = useRef(Boolean(threadComposerDraft));
-  hasDurableComposerDraftRef.current = Boolean(threadComposerDraft);
   const agentLoadGenerationRef = useRef(0);
   const modelLoadGenerationRef = useRef(0);
   const agentRefreshCooldownTimeoutRef = useRef<number | null>(null);
   const modelRefreshCooldownTimeoutRef = useRef<number | null>(null);
   const isComposerMountedRef = useRef(true);
-  const onThreadComposerDraftChangeRef = useRef(onThreadComposerDraftChange);
-  const onThreadComposerDraftClearRef = useRef(onThreadComposerDraftClear);
-
-  onThreadComposerDraftChangeRef.current = onThreadComposerDraftChange;
-  onThreadComposerDraftClearRef.current = onThreadComposerDraftClear;
   const isCommentMode = controlsMode === "comment";
   const trimmedValue = value.trim();
-  const isAttaching = pendingAttachmentReads > 0;
+  const isAttaching = editing.isAttaching;
   const hasPendingUserInputRequest = pendingUserInputRequest !== null;
   const visiblePendingUserInputRequest = pendingUserInputRequest;
   const hasVisiblePendingUserInputRequest = visiblePendingUserInputRequest !== null;
@@ -489,12 +464,12 @@ export default function ThreadComposer ({
       }, PICKER_REFRESH_COOLDOWN_MS);
     });
   }, [isLoadingModels, isModelRefreshCoolingDown, isModelRefreshPending, loadAvailableModels, pickerHarness]);
-  const handleQuestionnaireDraftChange = useCallback((draft: WorkbenchQuestionnaireDraft) => {
-    onThreadQuestionnaireDraftChange(thread.id, questionnaireRequestKey, draft);
-  }, [onThreadQuestionnaireDraftChange, questionnaireRequestKey, thread.id]);
+  const handleQuestionnaireDraftChange = useCallback((update: DraftUpdate<WorkbenchQuestionnaireDraft>) => {
+    return onThreadQuestionnaireDraftChange(projectId, thread.id, questionnaireRequestKey, update);
+  }, [onThreadQuestionnaireDraftChange, projectId, questionnaireRequestKey, thread.id]);
   const handleQuestionnaireDraftClear = useCallback(() => {
-    onThreadQuestionnaireDraftClear(thread.id, questionnaireRequestKey);
-  }, [onThreadQuestionnaireDraftClear, questionnaireRequestKey, thread.id]);
+    return onThreadQuestionnaireDraftClear(projectId, thread.id, questionnaireRequestKey);
+  }, [onThreadQuestionnaireDraftClear, projectId, questionnaireRequestKey, thread.id]);
   const composerHighlights = useMemo(() => (
     buildInlineMentionHighlights(value, highlightSources)
   ), [highlightSources, value]);
@@ -512,56 +487,6 @@ export default function ThreadComposer ({
       }
     };
   }, []);
-
-  useEffect(() => {
-    const draftKey = `${thread.id}:${threadComposerDraft?.updatedAt ?? 0}`;
-    if (isSending || !draftSyncControllerRef.current?.acceptHydration(thread.id, draftKey)) return;
-    const nextText = threadComposerDraft?.text ?? "";
-    const nextAttachments = cloneComposerImageAttachments(threadComposerDraft?.attachments ?? []);
-    setValue(nextText);
-    setAttachments(nextAttachments);
-  }, [isSending, thread.id, threadComposerDraft]);
-
-  useEffect(() => {
-    if (hasPendingUserInputRequest || isSending) {
-      return;
-    }
-
-    const save = draftSyncControllerRef.current?.beginSave();
-    if (!save) return;
-    const timeoutId = window.setTimeout(() => {
-      void (async () => {
-        try {
-          if (!value.trim() && attachments.length === 0) {
-            if (hasDurableComposerDraftRef.current && !thread.isDraft) {
-              await onThreadComposerDraftClearRef.current(thread.id);
-            } else if (hasDurableComposerDraftRef.current) {
-              await onThreadComposerDraftChangeRef.current(thread.id, {
-                attachments: [],
-                text: "",
-                updatedAt: Date.now(),
-              });
-            }
-            draftSyncControllerRef.current?.completeSave(save);
-            return;
-          }
-
-          await onThreadComposerDraftChangeRef.current(thread.id, {
-            attachments,
-            text: value,
-            updatedAt: Date.now(),
-          });
-          draftSyncControllerRef.current?.completeSave(save);
-        } catch (draftError) {
-          console.error("Workbench composer draft persistence failed.", draftError);
-        }
-      })();
-    }, 260);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [attachments, hasPendingUserInputRequest, isSending, thread.id, thread.isDraft, value]);
 
   useEffect(() => {
     setActivePicker(null);
@@ -625,34 +550,20 @@ export default function ThreadComposer ({
       });
     }
 
-    const submittedValue = value;
-    const submittedAttachments = attachments;
     const activatedSkillPaths = getActivatedWorkbenchSkillPaths(composerHighlights);
-    setIsSending(true);
     setError("");
-    setValue("");
-    setAttachments([]);
-    try {
-      const sent = await runThreadComposerSubmission({
-        clearDurableDraft: () => onThreadComposerDraftClearRef.current(thread.id),
-        preserveDurableDraft: () => onThreadComposerDraftChangeRef.current(thread.id, {
-          attachments: submittedAttachments,
-          text: submittedValue,
-          updatedAt: Date.now(),
-        }, "submission"),
-        restoreLocalInput: () => {
-          setValue(submittedValue);
-          setAttachments(submittedAttachments);
+    await editing.session.submit(async (submitted, options) => {
+      return await runThreadComposerSubmission({
+        clearDurableDraft: () => onThreadComposerDraftClear(projectId, thread.id, reservedDraftId),
+        preserveDurableDraft: async () => {
+          await onThreadComposerDraftChange(projectId, thread.id, () => submitted, "submission", reservedDraftId, options.detached);
         },
         send: () => onSendMessage(thread.id, input, {
           ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}),
         }),
         showError: setError,
       });
-      if (sent) draftSyncControllerRef.current?.completeSubmission(thread.id);
-    } finally {
-      setIsSending(false);
-    }
+    });
   };
 
   const stop = async () => {
@@ -713,21 +624,7 @@ export default function ThreadComposer ({
 
     event.preventDefault();
     setError("");
-    setPendingAttachmentReads((count) => count + 1);
-    void (async () => {
-      try {
-        const nextAttachments = (await readClipboardImageDataUrls(event.clipboardData.items)).map((image) => ({
-          id: createAttachmentId(),
-          url: image.url,
-        }));
-        if (nextAttachments.length) draftSyncControllerRef.current?.noteEdit();
-        setAttachments((current) => [...current, ...nextAttachments]);
-      } catch (pasteError) {
-        setError(pasteError instanceof Error ? pasteError.message : "Unable to attach the pasted image.");
-      } finally {
-        setPendingAttachmentReads((count) => Math.max(0, count - 1));
-      }
-    })();
+    void editing.session.attachImages(() => readClipboardImageDataUrls(event.clipboardData.items));
   };
 
   const applyDirectSettingsChange = (
@@ -862,6 +759,7 @@ export default function ThreadComposer ({
                 inert={!isQuestionnairePanelActive}
               >
                 <ThreadUserInputRequest
+                  key={`${projectId}:${thread.id}:${questionnaireRequestKey}`}
                   actions={stopButton}
                   draft={threadQuestionnaireDraft}
                   highlightSources={highlightSources}
@@ -910,8 +808,7 @@ export default function ThreadComposer ({
                 spellCheck={composerSpellCheck}
                 value={value}
                 onChange={(nextValue) => {
-                  draftSyncControllerRef.current?.noteEdit();
-                  setValue(nextValue);
+                  editing.session.edit((draft) => ({ ...draft, text: nextValue }));
                   if (error) {
                     setError("");
                   }
@@ -943,8 +840,10 @@ export default function ThreadComposer ({
                             title="Remove attached image"
                             className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                             onClick={() => {
-                              draftSyncControllerRef.current?.noteEdit();
-                              setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
+                              editing.session.edit((draft) => ({
+                                ...draft,
+                                attachments: draft.attachments.filter((currentAttachment) => currentAttachment.id !== attachment.id),
+                              }));
                             }}
                           >
                             <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">

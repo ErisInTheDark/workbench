@@ -64,7 +64,7 @@ test("freeform-only live questionnaire renders one prompted input and submit act
     const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
       draft: null,
       mode: "live",
-      onDraftChange: () => undefined,
+      onDraftChange: (update) => update(draft),
       onDraftClear: () => undefined,
       onSubmit: async () => undefined,
       presentation,
@@ -82,7 +82,7 @@ test("a saved sole question uses its full prompt instead of its old header-deriv
   const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
     draft: null,
     mode: "live",
-    onDraftChange: () => undefined,
+    onDraftChange: (update) => update(draft),
     onDraftClear: () => undefined,
     onSubmit: async () => undefined,
     presentation: "full",
@@ -134,7 +134,7 @@ test("one-option live questionnaire renders immediate option and custom-response
   const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
     draft: null,
     mode: "live",
-    onDraftChange: () => undefined,
+    onDraftChange: (update) => update(draft),
     onDraftClear: () => undefined,
     onSubmit: async () => undefined,
     presentation: "compact",
@@ -156,7 +156,7 @@ test("one-option questionnaire with hydrated custom text starts in normal mode w
       selectedValues: {},
     },
     mode: "live",
-    onDraftChange: () => undefined,
+    onDraftChange: (update) => update(draft),
     onDraftClear: () => undefined,
     onSubmit: async () => undefined,
     request: quickResponseRequest,
@@ -187,7 +187,7 @@ test("compact live questionnaire keeps one custom input beside the shared submit
   const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
     draft: emptyDraft,
     mode: "live",
-    onDraftChange: () => undefined,
+    onDraftChange: (update) => update(draft),
     onDraftClear: () => undefined,
     onSubmit: async () => undefined,
     presentation: "compact",
@@ -206,7 +206,7 @@ test("full live questionnaire remains the default with its shared submit control
   const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
     draft,
     mode: "live",
-    onDraftChange: () => undefined,
+    onDraftChange: (update) => update(draft),
     onDraftClear: () => undefined,
     onSubmit: async () => undefined,
     request,

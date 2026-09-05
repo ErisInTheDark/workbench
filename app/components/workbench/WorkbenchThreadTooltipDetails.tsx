@@ -1,4 +1,5 @@
 /*
+ * Keywords: sidebar, tooltip, questionnaire, draft identity, proposal, preview.
  * Exports:
  * - default WorkbenchThreadTooltipDetails: select compact plan, questionnaire, and proposal presentation for one sidebar thread. Keywords: sidebar, tooltip, plan, questionnaire, proposal, ownership.
  */
@@ -18,6 +19,7 @@ import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/th
 import ThreadCheckpointCommitItem from "./thread-view/ThreadCheckpointCommitItem";
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
 import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
+import type { DraftUpdate } from "./thread-view/DraftSessionController";
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-view/thread-user-input-request-submission";
 
 export default function WorkbenchThreadTooltipDetails({
@@ -42,8 +44,8 @@ export default function WorkbenchThreadTooltipDetails({
   cwd: string | null;
   harness: WorkbenchHarness;
   materialized: boolean;
-  onDraftChange: (draft: WorkbenchQuestionnaireDraft) => void;
-  onDraftClear: () => void;
+  onDraftChange: (update: DraftUpdate<WorkbenchQuestionnaireDraft>) => Promise<WorkbenchQuestionnaireDraft> | WorkbenchQuestionnaireDraft;
+  onDraftClear: () => Promise<void> | void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
   onReadThread: WorkbenchControls["readThread"] | null;
   onSubmitUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse, options?: WorkbenchSubmitUserInputRequestOptions) => Promise<void>;
@@ -68,6 +70,7 @@ export default function WorkbenchThreadTooltipDetails({
         >
           {questionnaireIsLive ? (
             <ThreadUserInputRequest
+              key={`${projectId}:${threadId}:${pendingRequest.requestKey}`}
               draft={questionnaireDraft}
               mode="live"
               onDraftChange={onDraftChange}

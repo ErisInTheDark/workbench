@@ -1,4 +1,5 @@
 /*
+ * Keywords: thread view, project identity, draft, domain hook, subthread, history.
  * Exports:
  * - default ThreadView: render the main thread, subthread tabs, live activity, and polled turn history through identity-bound thread controllers. Keywords: thread view, domain hook, subthread, polling, workbench.
  * - Local helpers: merge thread history, derive render state, delegate thread interactions, and locate stable lazy-history turn markers. Keywords: thread, history, rendering, interaction.
@@ -79,6 +80,7 @@ import {
 } from "./thread-web-search-state";
 import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
+import type { DraftUpdate } from "./DraftSessionController";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadGoalControl from "./ThreadGoalControl";
@@ -536,10 +538,10 @@ export default memo(function ThreadView ({
     input: UserInput[],
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
-  onThreadComposerDraftChange: (threadId: string, draft: WorkbenchComposerInputDraft, reason?: "autosave" | "submission") => void;
-  onThreadComposerDraftClear: (threadId: string) => void;
-  onThreadQuestionnaireDraftChange: (threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => void;
-  onThreadQuestionnaireDraftClear: (threadId: string, requestKey: string) => void;
+  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission", reservedDraftId?: string, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
+  onThreadComposerDraftClear: (projectId: string, threadId: string, reservedDraftId?: string) => Promise<void> | void;
+  onThreadQuestionnaireDraftChange: (projectId: string, threadId: string, requestKey: string, update: DraftUpdate<WorkbenchQuestionnaireDraft>) => Promise<WorkbenchQuestionnaireDraft> | WorkbenchQuestionnaireDraft;
+  onThreadQuestionnaireDraftClear: (projectId: string, threadId: string, requestKey: string) => Promise<void> | void;
   onThreadSettingsChange: (threadId: string, settings: WorkbenchComposerSettings) => void;
   onSelectedThreadChange?: (threadId: string) => void;
   projectId: string;
@@ -1329,7 +1331,7 @@ export default memo(function ThreadView ({
   const composer = activeThread ? (
     <ThreadComposer
       canToggleHarness={activeThread.isDraft}
-      key={activeThread.id}
+      key={`${projectId}:${activeThread.id}`}
       composerSpellCheck={composerSpellCheck}
       onListModels={threads.listModels}
       onHarnessToggle={handleComposerHarnessToggle}
@@ -1361,7 +1363,7 @@ export default memo(function ThreadView ({
         ? threadComposerDraft
         : threadComposerDraftsByThreadId[activeThread.id] ?? null}
       threadQuestionnaireDraft={activePendingUserInputRequest
-        ? threadQuestionnaireDraftsByKey[`${activeThread.id}:${activePendingUserInputRequest.requestKey}`] ?? null
+        ? threadQuestionnaireDraftsByKey[`${projectId}:${activeThread.id}:${activePendingUserInputRequest.requestKey}`] ?? null
         : null}
       knownSkills={workbenchSkills}
       thread={resolvedActiveThread!}

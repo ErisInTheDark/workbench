@@ -1,4 +1,7 @@
-/* No production exports. Tests protect subscriptions, cross-project pin summaries, optimistic draft queues, revisions, and leave-safe flushing. */
+/*
+ * Keywords: sidebar, observation, draft, persistence, acknowledgement, navigation, retirement.
+ * No production exports. Tests protect subscriptions, project-qualified draft queues and leave-safe flushing.
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import ThreadSidebarClient from "./ThreadSidebarClient.ts";
@@ -486,6 +489,8 @@ test("materialized draft becomes a working thread before its in-flight save sett
   const source = draft("materialize this", 2);
   let releaseSave!: () => void;
   const save = new Promise<void>((resolve) => { releaseSave = resolve; });
+  let markSaveStarted!: () => void;
+  const saveStarted = new Promise<void>((resolve) => { markSaveStarted = resolve; });
   const client = new ThreadSidebarClient({
     onChange: (value) => installed.push(value),
     transport: {
@@ -495,13 +500,13 @@ test("materialized draft becomes a working thread before its in-flight save sett
         ...snapshot(1),
         entries: [{ activityAt: 2, draft: source, entryKind: "draft", metadata: { archived: false, pinned: true, snoozed: true }, title: "materialize this" }],
       }),
-      upsertDraft: async () => await save,
+      upsertDraft: async () => { markSaveStarted(); await save; },
     },
   });
   await client.open("project");
-  client.edit(source);
+  client.edit({ ...source, prompt: "edited before materialisation", clientUpdatedAt: 3 });
   const flushing = client.flush();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await saveStarted;
   const accepting = client.acceptIntent({
     draftId: draft("", 2).draftId,
     identity: { harness: "codex", threadId: "materialized" },
@@ -516,7 +521,7 @@ test("materialized draft becomes a working thread before its in-flight save sett
   assert.equal(materialized?.entryKind === "thread" ? materialized.orderAt : null, materialized?.activityAt);
   let acceptanceSettled = false;
   void accepting.then(() => { acceptanceSettled = true; });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await Promise.resolve();
   assert.equal(acceptanceSettled, false);
   releaseSave?.();
   await Promise.all([accepting, flushing]);
@@ -661,6 +666,7 @@ test("global observation owns full project sidebars and project-qualified draft 
   const movedEntry = sidebars.find(({ projectId }) => projectId === "beta")?.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === sourceDraft.draftId);
   assert.equal(movedEntry?.entryKind === "draft" ? movedEntry.draft.projectId : null, "beta");
   assert.equal(movedEntry?.entryKind === "draft" ? movedEntry.draft.profileId : null, "profile-one");
+  assert.equal(client.getDraft("beta", sourceDraft.draftId)?.profileId, "profile-one");
 });
 
 test("global observation surfaces transport failure and remains recoverable", async () => {
@@ -686,3 +692,174 @@ test("global observation surfaces transport failure and remains recoverable", as
   assert.equal(await client.open("project"), true);
   assert.equal(projectOpenCount, 1);
 });
+
+for (const destination of ["closed", "other project"] as const) {
+  test(`draft edits retain their latest baseline with ${destination} observation`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const writes: WorkbenchThreadDraft[] = [];
+    const client = new ThreadSidebarClient({
+      onChange: () => undefined,
+      transport: {
+        close: async () => undefined,
+        deleteDraft: async () => undefined,
+        open: async (projectId) => ({ ...snapshot(1), projectId }),
+        upsertDraft: async (projectId, value) => {
+          assert.equal(projectId, value.projectId);
+          writes.push(value);
+        },
+      },
+    });
+    await client.open("project");
+    const initial = { ...draft("first draft", 2), profileId: "keep-profile" };
+    client.edit(initial);
+    await client.flushDraft(initial.projectId, initial.draftId);
+    if (destination === "closed") await client.close();
+    else await client.open("other");
+    assert.deepEqual(client.getDraft(initial.projectId, initial.draftId), initial);
+    const next = { ...client.getDraft(initial.projectId, initial.draftId)!, prompt: "later text", clientUpdatedAt: 3, updatedAt: 3 };
+    client.edit(next);
+    await client.flushDraft(next.projectId, next.draftId);
+    const withImage = { ...client.getDraft(next.projectId, next.draftId)!, attachments: [{ id: "late", url: "image:late" }], clientUpdatedAt: 4, updatedAt: 4 };
+    client.edit(withImage);
+    await client.flushDraft(withImage.projectId, withImage.draftId);
+    assert.deepEqual(writes, [initial, next, withImage]);
+    assert.equal(withImage.profileId, "keep-profile");
+    assert.equal(client.getSnapshot()?.projectId ?? null, destination === "closed" ? null : "other");
+  });
+}
+
+test("unobserved draft writes await acknowledgement and propagate save failure without losing input", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.method(console, "error", () => {});
+  let release!: () => void;
+  const acknowledgement = new Promise<void>((resolve) => { release = resolve; });
+  let fail = true;
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => snapshot(1),
+      upsertDraft: async () => {
+        await acknowledgement;
+        if (fail) throw new Error("save rejected");
+      },
+    },
+  });
+  const input = draft("pinned outside observed project", 2);
+  client.edit(input);
+  let settled = false;
+  const flushing = client.flushDraft(input.projectId, input.draftId).finally(() => { settled = true; });
+  const rejected = assert.rejects(flushing, /save rejected/u);
+  await Promise.resolve();
+  assert.equal(settled, false);
+  release();
+  await rejected;
+  assert.deepEqual(client.getDraft(input.projectId, input.draftId), input);
+  fail = false;
+  await client.flushDraft(input.projectId, input.draftId);
+  assert.deepEqual(client.getDraft(input.projectId, input.draftId), input);
+});
+
+test("a delayed acknowledgement cannot mark a newer detached draft saved", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let releaseFirst!: () => void;
+  const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const writes: WorkbenchThreadDraft[] = [];
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => snapshot(1),
+      upsertDraft: async (_projectId, value) => {
+        writes.push(value);
+        if (writes.length === 1) await first;
+      },
+    },
+  });
+  const initial = draft("first", 2);
+  const latest = draft("latest", 3);
+  client.edit(initial);
+  const flushing = client.flushDraft(initial.projectId, initial.draftId);
+  client.edit(latest);
+  assert.deepEqual(client.getDraft(initial.projectId, initial.draftId), latest);
+  releaseFirst();
+  await flushing;
+  await client.flushDraft(initial.projectId, initial.draftId);
+  assert.deepEqual(writes, [initial, latest]);
+});
+
+test("newer observed content replaces a clean draft baseline before detaching", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => snapshot(1),
+      upsertDraft: async () => undefined,
+    },
+  });
+  await client.open("project");
+  const initial = draft("local", 2);
+  client.edit(initial);
+  await client.flush();
+  const newer = draft("updated elsewhere", 3);
+  client.accept({ ...snapshot(2), entries: [{
+    activityAt: 3, draft: newer, entryKind: "draft",
+    metadata: { archived: false, pinned: false, snoozed: false }, title: "updated",
+  }] });
+  await client.close();
+  assert.deepEqual(client.getDraft(initial.projectId, initial.draftId), newer);
+});
+
+test("newer observed content received during a save survives its older acknowledgement", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let release!: () => void;
+  const acknowledgement = new Promise<void>((resolve) => { release = resolve; });
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => snapshot(1),
+      upsertDraft: async () => await acknowledgement,
+    },
+  });
+  await client.open("project");
+  const initial = draft("saving locally", 2);
+  client.edit(initial);
+  const saving = client.flush();
+  const newer = draft("newer server content", 3);
+  client.accept({ ...snapshot(2), entries: [{
+    activityAt: 3, draft: newer, entryKind: "draft",
+    metadata: { archived: false, pinned: false, snoozed: false }, title: "updated",
+  }] });
+  release();
+  await saving;
+  await client.close();
+  assert.deepEqual(client.getDraft(initial.projectId, initial.draftId), newer);
+});
+
+for (const retirement of ["delete", "admission"] as const) {
+  test(`${retirement} retires the detached draft baseline`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const client = new ThreadSidebarClient({
+      onChange: () => undefined,
+      transport: {
+        close: async () => undefined,
+        deleteDraft: async () => undefined,
+        open: async () => snapshot(1),
+        upsertDraft: async () => undefined,
+      },
+    });
+    const initial = draft("retire me", 2);
+    client.edit(initial);
+    await client.flush();
+    assert.deepEqual(client.getDraft(initial.projectId, initial.draftId), initial);
+    if (retirement === "delete") await client.delete(initial.draftId, 3, initial.projectId);
+    else await client.acceptIntent({ projectId: initial.projectId, draftId: initial.draftId, identity: { harness: "codex", threadId: "sent" }, title: "sent", turnId: "turn" });
+    assert.equal(client.getDraft(initial.projectId, initial.draftId), null);
+  });
+}

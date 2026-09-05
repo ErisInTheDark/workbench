@@ -48,7 +48,9 @@ export interface ThreadSidebarAcceptedIntent {
 }
 
 interface DraftQueue {
+  // Observation can disappear while an originating form still has edits or image reads.
   draft: WorkbenchThreadDraft | null;
+  savedDraft: WorkbenchThreadDraft | null;
   folderId: string | null;
   inFlight: Promise<void> | null;
   projectId: string;
@@ -76,6 +78,12 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   readonly getHomeThreadDisplayOrderSupported = () => this.homeThreadDisplayOrderSupported;
   readonly getPinnedThreadLayout = () => this.pinnedThreadLayout;
   readonly getProjectSnapshot = (projectId: string) => this.projectThreadSidebars.projects.find((snapshot) => snapshot.projectId === projectId) ?? null;
+  readonly getDraft = (projectId: string, draftId: string): WorkbenchThreadDraft | null => {
+    const queue = this.queues.get(this.queueKey(projectId, draftId));
+    if (queue) return queue.retired ? null : queue.draft;
+    const entry = this.getProjectSnapshot(projectId)?.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === draftId);
+    return entry?.entryKind === "draft" ? entry.draft : null;
+  };
   readonly getProjectThreadSidebars = () => this.projectThreadSidebars;
   readonly getProjectThreadSummaries = () => this.projectThreadSummaries;
   readonly subscribe = (listener: () => void) => {
@@ -182,11 +190,20 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.syncProjectThreadSummary(next);
     this.publish();
   }
+  receiveDraft(draft: WorkbenchThreadDraft) {
+    const key = this.queueKey(draft.projectId, draft.draftId);
+    const queue = this.queues.get(key);
+    if (!queue) {
+      this.queues.set(key, { draft, savedDraft: draft, folderId: null, inFlight: null, projectId: draft.projectId, retired: false, timer: null });
+    } else if (!queue.retired && !queue.inFlight && queue.draft === queue.savedDraft
+      && (!queue.draft || draft.clientUpdatedAt >= queue.draft.clientUpdatedAt)) {
+      queue.draft = draft;
+      queue.savedDraft = draft;
+    }
+  }
   edit(draft: WorkbenchThreadDraft, options: { folderId?: string } = {}) {
-    if (this.mode === "project" && draft.projectId !== this.projectId) throw new Error("The draft does not belong to the observed project.");
-    if (this.mode === "closed") throw new Error("The draft sidebar is not observed.");
     const queueKey = this.queueKey(draft.projectId, draft.draftId);
-    const queue = this.queues.get(queueKey) ?? { draft: null, folderId: null, inFlight: null, projectId: draft.projectId, retired: false, timer: null };
+    const queue = this.queues.get(queueKey) ?? { draft: null, savedDraft: null, folderId: null, inFlight: null, projectId: draft.projectId, retired: false, timer: null };
     if (queue.retired) return;
     if (options.folderId) queue.folderId = options.folderId;
     queue.draft = draft;
@@ -258,8 +275,14 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     const queueKey = this.queueKey(projectId, draftId);
     const queue = this.queues.get(queueKey);
     if (queue?.timer) clearTimeout(queue.timer);
-    if (queue) { queue.timer = null; queue.draft = null; await queue.inFlight; }
-    await this.options.transport.deleteDraft(projectId, draftId, clientUpdatedAt);
+    if (queue) { queue.timer = null; queue.retired = true; }
+    try {
+      if (queue) await queue.inFlight;
+      await this.options.transport.deleteDraft(projectId, draftId, clientUpdatedAt);
+    } catch (error) {
+      if (queue) queue.retired = false;
+      throw error;
+    }
     this.queues.delete(queueKey);
     const current = this.getProjectSidebar(projectId);
     if (current) {
@@ -275,9 +298,15 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     const queueKey = this.queueKey(sourceProjectId, draftId);
     const queue = this.queues.get(queueKey);
     if (queue) await this.flushQueue(queueKey, queue);
+    const destinationQueueKey = this.queueKey(destinationProjectId, draftId);
+    const destinationQueue = this.queues.get(destinationQueueKey);
+    if (destinationQueue && destinationQueue !== queue) await this.flushQueue(destinationQueueKey, destinationQueue);
+    const sourceDraft = this.getDraft(sourceProjectId, draftId);
     if (!this.options.transport.moveDraft) throw new Error("Draft moves are unavailable.");
     await this.options.transport.moveDraft(sourceProjectId, destinationProjectId, draftId);
     this.queues.delete(queueKey);
+    this.queues.delete(destinationQueueKey);
+    if (sourceDraft) this.receiveDraft({ ...sourceDraft, projectId: destinationProjectId });
 
     const source = this.getProjectSidebar(sourceProjectId);
     const destination = this.getProjectSidebar(destinationProjectId);
@@ -325,8 +354,8 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     }
   }
   async close() {
-    if (this.mode === "closed") return;
     await this.flush();
+    if (this.mode === "closed") return;
     const mode = this.mode;
     const projectId = this.projectId;
     this.mode = "closed";
@@ -390,6 +419,9 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     return true;
   }
   private replaceProjectSidebar(snapshot: WorkbenchThreadSidebarSnapshot) {
+    for (const entry of snapshot.entries) {
+      if (entry.entryKind === "draft") this.receiveDraft(entry.draft);
+    }
     const index = this.projectThreadSidebars.projects.findIndex(({ projectId }) => projectId === snapshot.projectId);
     const projects = [...this.projectThreadSidebars.projects];
     if (index === -1) projects.push(snapshot);
@@ -401,7 +433,8 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     return this.getProjectSnapshot(projectId);
   }
   private findDraftProjectId(draftId: string) {
-    return this.projectThreadSidebars.projects.find(({ entries }) => entries.some((entry) => (
+    return [...this.queues.values()].find((queue) => !queue.retired && queue.draft?.draftId === draftId)?.projectId
+      ?? this.projectThreadSidebars.projects.find(({ entries }) => entries.some((entry) => (
       entry.entryKind === "draft" && entry.draft.draftId === draftId
     )))?.projectId ?? null;
   }
@@ -435,39 +468,40 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.publish();
   }
   private async flushQueue(id: string, queue: DraftQueue) {
-    const readQueuedDraft = () => queue.draft;
     if (queue.timer) { clearTimeout(queue.timer); queue.timer = null; }
     if (queue.inFlight) await queue.inFlight;
     if (queue.retired) return;
     const draft = queue.draft; const projectId = queue.projectId;
-    if (!draft) return;
-    queue.draft = null;
+    if (!draft || draft === queue.savedDraft) return;
     const folderId = queue.folderId ?? undefined;
     queue.inFlight = this.options.transport.upsertDraft(projectId, draft, folderId).then(() => {
+      queue.savedDraft = draft;
       if (queue.folderId === folderId) queue.folderId = null;
     }).finally(() => { queue.inFlight = null; });
     try {
       await queue.inFlight;
       const current = this.getProjectSidebar(projectId);
+      const observed = current?.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === draft.draftId);
+      if (observed?.entryKind === "draft") this.receiveDraft(observed.draft);
       if (current?.error?.startsWith("Draft save failed:")) {
         this.replaceProjectSidebar({ ...current, error: null });
         this.publish();
       }
     } catch (error) {
       if (queue.retired) return;
-      const queuedDraft = readQueuedDraft();
-      if (!queuedDraft || queuedDraft.clientUpdatedAt < draft.clientUpdatedAt) queue.draft = draft;
       const current = this.getProjectSidebar(projectId);
+      const message = error instanceof Error ? error.message : "Unable to save this draft.";
       if (current) {
-        const message = error instanceof Error ? error.message : "Unable to save this draft.";
         this.replaceProjectSidebar({ ...current, error: `Draft save failed: ${message}`.slice(0, 500), freshness: "partial" });
         this.publish();
+      } else {
+        console.error("Unable to save the detached draft.", message.slice(0, 500));
       }
-      const retryDraft = readQueuedDraft();
+      const retryDraft = queue.draft;
       if (retryDraft) this.edit(retryDraft);
       throw error;
     }
-    if (queue.draft) await this.flushQueue(id, queue);
+    if (queue.draft !== queue.savedDraft) await this.flushQueue(id, queue);
   }
   private publish() {
     this.options.onChange(this.snapshot);

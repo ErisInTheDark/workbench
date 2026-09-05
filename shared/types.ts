@@ -1,5 +1,5 @@
 /*
- * Keywords: shared contracts, workbench, project-qualified title mutations.
+ * Keywords: shared contracts, workbench, project-qualified title mutations, draft persistence.
  * Exports:
  * - WorkbenchHarness: supported agent harness identity.
  * - OrchestratorReloadScope: reloadable orchestrator subsystem identity.
@@ -1116,6 +1116,7 @@ export interface ExplorerSnapshot {
 }
 
 export interface WorkbenchThreadSidebarStore {
+  getDraft?: (projectId: string, draftId: string) => WorkbenchThreadDraft | null;
   getHomeThreadDisplayOrder?: () => WorkbenchHomeThreadDisplayOrderSnapshot;
   getHomeThreadDisplayOrderSupported?: () => boolean;
   getPinnedThreadLayout?: () => WorkbenchPinnedThreadLayoutSnapshot;
@@ -1184,7 +1185,7 @@ export interface WorkbenchControls {
   updateThreadStateWithAcceptance: (request: WorkbenchThreadStateRequest) => Promise<boolean>;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
-  deleteThreadDraft: (draftId: string) => Promise<void>;
+  deleteThreadDraft: (draftId: string, projectId?: string) => Promise<void>;
   editThreadDraft: (draft: WorkbenchThreadDraft, options?: { folderId?: string }) => void;
   flushThreadDraft: (projectId: string, draftId: string) => Promise<void>;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;

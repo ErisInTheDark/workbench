@@ -1,11 +1,12 @@
 /*
+ * Keywords: questionnaire, draft session, title, header, freeform, quick response, compact, submission.
  * Exports:
  * - default ThreadUserInputRequest: render questionnaire-owned titles, single-question framing, and full or compact live, preview, historical, freeform, and quick-response inputs. Keywords: questionnaire, title, header, custom input, freeform, quick response, compact.
- * - Local helpers: question display normalization, answered value derivation, pasted image attachments, and submit handling. Keywords: options, answers, drafts, images, presentation, focus.
+ * Local components bind a keyed editing session and render approval command context.
  */
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useMemo, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type {
@@ -37,6 +38,8 @@ import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import { formatQuestionDisplay, shouldUseCompactSingleQuestionDisplay } from "./thread-user-input-request-preview";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import { ThreadCommandSummary } from "./thread-view-primitives";
+import type { DraftUpdate } from "./DraftSessionController";
+import { useDraftSession } from "./use-draft-session";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -44,14 +47,6 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
 
 const EMPTY_HISTORY_CUSTOM_TEXT_SPACER_CLASS = "w-full min-h-[2.45rem] rounded-lg px-3 py-2";
 const APPROVAL_OPTION_REQUIRED_MESSAGE = "Choose one of the approval options before submitting.";
-
-function createAttachmentId () {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-
-  return `questionnaire-attachment:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-}
 
 function deriveAnsweredValues (
   question: WorkbenchUserInputQuestion,
@@ -68,9 +63,9 @@ function deriveAnsweredValues (
   };
 }
 
-function hasSelectedDraftValues (values: Record<string, string[]>) {
-  return Object.values(values).some((questionValues) => questionValues.some((value) => value.trim()));
-}
+const emptyQuestionnaireDraft = (): WorkbenchQuestionnaireDraft => ({
+  attachments: [], customValues: {}, selectedValues: {}, updatedAt: 0,
+});
 
 function isSingleChoiceQuestion (
   request: WorkbenchUserInputRequest,
@@ -90,8 +85,8 @@ type InteractiveThreadUserInputRequestProps = {
   knownSkills?: WorkbenchSkillSummary[];
   leadingActions?: ReactNode;
   mode: "live";
-  onDraftChange: (draft: WorkbenchQuestionnaireDraft) => void;
-  onDraftClear: () => void;
+  onDraftChange: (update: DraftUpdate<WorkbenchQuestionnaireDraft>) => Promise<WorkbenchQuestionnaireDraft> | WorkbenchQuestionnaireDraft;
+  onDraftClear: () => Promise<void> | void;
   onSubmit: (
     response: WorkbenchUserInputResponse,
     supplementalInput?: UserInput[],
@@ -174,6 +169,10 @@ function ThreadApprovalCommandSummary ({
 }
 
 export default function ThreadUserInputRequest (props: ThreadUserInputRequestProps) {
+  return <ThreadUserInputRequestContent key={`${props.mode}:${props.request.id}`} {...props} />;
+}
+
+function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
   const { mode, request } = props;
   const isHistoryMode = mode === "history";
   const isPreviewMode = mode === "preview";
@@ -188,42 +187,24 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
   const interactiveProps = isInteractiveMode ? props : null;
   const highlightSources = props.highlightSources;
   const interactiveDraft = interactiveProps?.draft ?? null;
-  const onInteractiveDraftChange = interactiveProps?.onDraftChange;
-  const onInteractiveDraftClear = interactiveProps?.onDraftClear;
   const quickResponseQuestion = isInteractiveMode
     && !request.approval
     && request.questions.length === 1
     && request.questions[0]?.options.length === 1
     ? request.questions[0]
     : null;
-  const [selectedValues, setSelectedValues] = useState<Record<string, string[]>>(interactiveDraft?.selectedValues ?? {});
-  const [customValues, setCustomValues] = useState<Record<string, string>>(interactiveDraft?.customValues ?? {});
-  const [attachments, setAttachments] = useState<WorkbenchThreadComposerAttachmentDraft[]>(interactiveDraft?.attachments ?? []);
-  const [customInputRequestId, setCustomInputRequestId] = useState("");
-  const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [pendingAttachmentReads, setPendingAttachmentReads] = useState(0);
-  const hydratedDraftKeyRef = useRef("");
-  const hydratedRequestIdRef = useRef("");
-  const onInteractiveDraftChangeRef = useRef(onInteractiveDraftChange);
-  const onInteractiveDraftClearRef = useRef(onInteractiveDraftClear);
-  const latestDraftRef = useRef<WorkbenchQuestionnaireDraft>({
-    attachments,
-    customValues,
-    selectedValues,
-    updatedAt: Date.now(),
+  const initialDraft = useMemo(() => emptyQuestionnaireDraft(), []);
+  const editing = useDraftSession(interactiveDraft ?? initialDraft, {
+    empty: emptyQuestionnaireDraft,
+    save: (update) => interactiveProps
+      ? interactiveProps.onDraftChange(update)
+      : update(initialDraft),
   });
-  const submissionSucceededRef = useRef(false);
-
-  onInteractiveDraftChangeRef.current = onInteractiveDraftChange;
-  onInteractiveDraftClearRef.current = onInteractiveDraftClear;
-  latestDraftRef.current = {
-    attachments,
-    customValues,
-    selectedValues,
-    updatedAt: Date.now(),
-  };
-  const isAttaching = pendingAttachmentReads > 0;
+  const { selectedValues, customValues, attachments } = editing.draft;
+  const [customInputRequestId, setCustomInputRequestId] = useState("");
+  const [localError, setError] = useState("");
+  const error = localError || editing.error;
+  const { isSubmitting, isAttaching } = editing;
   const hasCustomResponseContent = Object.values(customValues).some((value) => value.trim())
     || attachments.length > 0;
   const useQuickResponseLayout = Boolean(
@@ -232,88 +213,9 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
     && !hasCustomResponseContent,
   );
 
-  useEffect(() => {
-    if (!interactiveProps) {
-      return;
-    }
-
-    const requestChanged = hydratedRequestIdRef.current !== request.id;
-    const draftKey = `${request.id}:${interactiveDraft?.updatedAt ?? 0}`;
-    if (requestChanged) {
-      submissionSucceededRef.current = false;
-      hydratedRequestIdRef.current = request.id;
-      hydratedDraftKeyRef.current = draftKey;
-      setCustomInputRequestId("");
-      setSelectedValues(interactiveDraft?.selectedValues ?? {});
-      setCustomValues(interactiveDraft?.customValues ?? {});
-      setAttachments(interactiveDraft?.attachments ?? []);
-    } else if (hydratedDraftKeyRef.current !== draftKey) {
-      hydratedDraftKeyRef.current = draftKey;
-      const hasLocalDraft = hasSelectedDraftValues(selectedValues)
-        || Object.values(customValues).some((value) => value.trim())
-        || attachments.length > 0;
-      if (!hasLocalDraft) {
-        setSelectedValues(interactiveDraft?.selectedValues ?? {});
-        setCustomValues(interactiveDraft?.customValues ?? {});
-        setAttachments(interactiveDraft?.attachments ?? []);
-      }
-    }
-    setError("");
-    setIsSubmitting(false);
-  }, [attachments.length, customValues, interactiveDraft, isInteractiveMode, request.id, selectedValues]);
-
-  useEffect(() => {
-    if (!interactiveProps) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      const hasSelectedValues = hasSelectedDraftValues(selectedValues);
-      const hasCustomValues = Object.values(customValues).some((value) => value.trim());
-      if (!hasSelectedValues && !hasCustomValues && attachments.length === 0) {
-        onInteractiveDraftClearRef.current?.();
-        return;
-      }
-
-      onInteractiveDraftChangeRef.current?.({
-        attachments,
-        customValues,
-        selectedValues,
-        updatedAt: Date.now(),
-      });
-    }, 260);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [attachments, customValues, isInteractiveMode, selectedValues]);
-
-  useEffect(() => {
-    if (!interactiveProps) return;
-    submissionSucceededRef.current = false;
-    return () => {
-      if (submissionSucceededRef.current) return;
-      const draft = latestDraftRef.current;
-      const hasSelectedValues = hasSelectedDraftValues(draft.selectedValues);
-      const hasCustomValues = Object.values(draft.customValues).some((value) => value.trim());
-      if (!hasSelectedValues && !hasCustomValues && draft.attachments.length === 0) {
-        onInteractiveDraftClearRef.current?.();
-        return;
-      }
-      onInteractiveDraftChangeRef.current?.({
-        ...draft,
-        updatedAt: Date.now(),
-      });
-    };
-  }, [isInteractiveMode, request.id]);
-
   const resetAnswers = () => {
-    setSelectedValues({});
-    setCustomValues({});
-    setAttachments([]);
+    void editing.session.reset();
     setError("");
-    setIsSubmitting(false);
-    onInteractiveDraftClearRef.current?.();
   };
 
   const submitResponse = async (
@@ -337,20 +239,20 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
     const activatedSkillPaths = highlightSources
       ? getActivatedWorkbenchSkillPathsForTextValues(Object.values(responseCustomValues), highlightSources)
       : [];
-    setIsSubmitting(true);
     setError("");
-    try {
+    await editing.session.submit(async () => {
       await interactiveProps.onSubmit(
         response,
         supplementalInput.length ? supplementalInput : undefined,
         activatedSkillPaths.length ? activatedSkillPaths : undefined,
       );
-      submissionSucceededRef.current = true;
-      onInteractiveDraftClearRef.current?.();
-    } catch (submissionError) {
-      setError(submissionError instanceof Error ? submissionError.message : "Unable to submit that response.");
-      setIsSubmitting(false);
-    }
+      try {
+        await interactiveProps.onDraftClear();
+      } catch (error) {
+        editing.session.reportError(error, "The answer was sent, but its draft could not be cleared.");
+      }
+      return true;
+    });
   };
 
   const handleSubmit = async () => {
@@ -395,20 +297,7 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
 
     event.preventDefault();
     setError("");
-    setPendingAttachmentReads((count) => count + 1);
-    void (async () => {
-      try {
-        const nextAttachments = (await readClipboardImageDataUrls(event.clipboardData.items)).map((image) => ({
-          id: createAttachmentId(),
-          url: image.url,
-        }));
-        setAttachments((current) => [...current, ...nextAttachments]);
-      } catch (pasteError) {
-        setError(pasteError instanceof Error ? pasteError.message : "Unable to attach the pasted image.");
-      } finally {
-        setPendingAttachmentReads((count) => Math.max(0, count - 1));
-      }
-    })();
+    void editing.session.attachImages(() => readClipboardImageDataUrls(event.clipboardData.items));
   };
 
   const handleLastQuestionKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -612,6 +501,7 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
                         return (
                           <WorkbenchOptionCard
                             key={optionId}
+                            disabled={isSubmitting}
                             description={option.description}
                             isChecked={isChecked}
                             isSingleChoice={isSingleChoice}
@@ -619,32 +509,14 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
                             markerId={optionId}
                             presentation={compact ? "compact-inline" : "card"}
                             onClick={() => {
-                              setSelectedValues((current) => {
-                                const next = { ...current };
-                                const currentQuestionValues = next[question.id] ?? [];
-                                if (isSingleChoice) {
-                                  if (currentQuestionValues.includes(option.label)) {
-                                    delete next[question.id];
-                                  } else {
-                                    next[question.id] = [option.label];
-                                  }
-                                  return next;
-                                }
-
-                                if (currentQuestionValues.includes(option.label)) {
-                                  const nextQuestionValues = currentQuestionValues.filter((value) => value !== option.label);
-                                  if (nextQuestionValues.length) {
-                                    next[question.id] = nextQuestionValues;
-                                  } else {
-                                    delete next[question.id];
-                                  }
-                                } else {
-                                  next[question.id] = [...currentQuestionValues, option.label];
-                                }
-                                if (!next[question.id]?.length) {
-                                  delete next[question.id];
-                                }
-                                return next;
+                              const values = isChecked
+                                ? selectedQuestionValues.filter((value) => value !== option.label)
+                                : isSingleChoice ? [option.label] : [...selectedQuestionValues, option.label];
+                              editing.session.edit((draft) => {
+                                const next = { ...draft.selectedValues };
+                                if (values.length) next[question.id] = values;
+                                else delete next[question.id];
+                                return { ...draft, selectedValues: next };
                               });
                               if (error) {
                                 setError("");
@@ -687,12 +559,13 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
                             highlights={customValueHighlights}
                             mentionSources={highlightSources}
                             mentionSuggestionsPlacement="below"
+                            disabled={isSubmitting}
                             value={customValue}
                             onChange={(nextValue) => {
                               setCustomInputRequestId(request.id);
-                              setCustomValues((current) => ({
-                                ...current,
-                                [question.id]: nextValue,
+                              editing.session.edit((draft) => ({
+                                ...draft,
+                                customValues: { ...draft.customValues, [question.id]: nextValue },
                               }));
                               if (error) {
                                 setError("");
@@ -722,12 +595,13 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
                           highlights={customValueHighlights}
                           mentionSources={highlightSources}
                           mentionSuggestionsPlacement="below"
+                          disabled={isSubmitting}
                           value={customValue}
                           onChange={(nextValue) => {
                             setCustomInputRequestId(request.id);
-                            setCustomValues((current) => ({
-                              ...current,
-                              [question.id]: nextValue,
+                            editing.session.edit((draft) => ({
+                              ...draft,
+                              customValues: { ...draft.customValues, [question.id]: nextValue },
                             }));
                             if (error) {
                               setError("");
@@ -758,11 +632,15 @@ export default function ThreadUserInputRequest (props: ThreadUserInputRequestPro
                     />
                     {!isPreviewMode ? <button
                       type="button"
+                      disabled={isSubmitting}
                       aria-label={`Remove questionnaire attached image ${index + 1}`}
                       title="Remove attached image"
                       className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                       onClick={() => {
-                        setAttachments((current) => current.filter((currentAttachment) => currentAttachment.id !== attachment.id));
+                        editing.session.edit((draft) => ({
+                          ...draft,
+                          attachments: draft.attachments.filter((currentAttachment) => currentAttachment.id !== attachment.id),
+                        }));
                       }}
                     >
                       <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">

@@ -1,8 +1,10 @@
 /*
- * Keywords: client, routes, thread state, title mutations, pinned admission.
+ * Keywords: client, routes, thread state, title mutations, pinned admission, shared draft persistence.
  * Exports:
  * - areExplorerSnapshotsEquivalent: compare root-visible explorer semantics while excluding sidebar-only activity ordering. Keywords: explorer, equality, render boundary.
- * - openWorkbenchThreadStateObservation/openWorkbenchGlobalThreadStateObservation/describeGlobalThreadStateOpenFailure: negotiate sidebar bootstrap versions and expose bounded global-open transport failures. Keywords: thread state, protocol, compatibility, conformance, home.
+ * - openWorkbenchThreadStateObservation: negotiate project sidebar bootstrap versions.
+ * - openWorkbenchGlobalThreadStateObservation: negotiate global sidebar bootstrap versions.
+ * - describeGlobalThreadStateOpenFailure: describe bounded global-open transport failures.
  * - MountedWorkbenchClient: provider-facing controls, thread runtime, sidebar store, and disposal boundary. Keywords: React, domain hook, mount.
  * - WorkbenchClient: wire the workbench DOM, bridge continuity recovery, pushed project/sidebar state, editor behavior, and explorer callbacks together. Keywords: workbench, editor, threads, websocket, resume, global home, durable questionnaire.
  */
@@ -353,7 +355,14 @@ export async function WorkbenchClient(
     transport: {
       close: async (projectId) => { await threadClient.requestWorkbench("workbench/thread-state/close", { projectId }); },
       closeGlobal: async () => { await threadClient.requestWorkbench("workbench/thread-state/global/close", {}); },
-      deleteDraft: async (projectId, draftId, clientUpdatedAt) => { await threadClient.requestWorkbench("workbench/thread-state/draft/delete", { clientUpdatedAt, draftId, projectId }); },
+      deleteDraft: async (projectId, draftId, clientUpdatedAt) => {
+        const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(await threadClient.requestWorkbench("workbench/thread-state/draft/delete", { clientUpdatedAt, draftId, projectId }));
+        if (!parsed.success) {
+          reportClientSchemaError("Rejected Workbench draft deletion response", parsed.error);
+          throw new Error("The draft deletion response was invalid.");
+        }
+        if (!parsed.data.accepted) throw new Error("The draft could not be deleted.");
+      },
       moveDraft: async (sourceProjectId, destinationProjectId, draftId) => {
         const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(await threadClient.requestWorkbench("workbench/thread-state/draft/move", {
           destinationProjectId,
@@ -1079,6 +1088,7 @@ export async function WorkbenchClient(
           return { error: "This draft is missing or belongs to another project.", ok: false };
         }
         selectedPinnedThreadDraft = isHomeThread || isForeignPin ? cloneThreadDraft(entry.draft) : null;
+        threadSidebarClient.receiveDraft(entry.draft);
         applyDraftEntryToCurrentView(entry, { entries: ownerEntries, project: ownerProject });
         return { ok: true };
       }
@@ -1160,47 +1170,24 @@ export async function WorkbenchClient(
     },
     createEntry,
     deleteFile,
-    deleteThreadDraft: async (draftId) => {
+    deleteThreadDraft: async (draftId, projectId) => {
       const selectedDraft = selectedPinnedThreadDraft;
-      if (!selectedDraft || selectedDraft.draftId !== draftId) {
-        await threadSidebarClient.delete(draftId);
-        return;
-      }
-      const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(await threadClient.requestWorkbench("workbench/thread-state/draft/delete", {
-        clientUpdatedAt: selectedDraft.clientUpdatedAt,
-        draftId,
-        projectId: selectedDraft.projectId,
-      }));
-      if (!parsed.success) {
-        reportClientSchemaError("Rejected Workbench pinned draft deletion response", parsed.error);
-        throw new Error("The pinned draft deletion response was invalid.");
-      }
-      if (!parsed.data.accepted) throw new Error("The pinned draft could not be deleted.");
-      selectedPinnedThreadDraft = null;
+      const ownerProjectId = projectId ?? (selectedDraft?.draftId === draftId ? selectedDraft.projectId : undefined);
+      await threadSidebarClient.delete(draftId, Date.now(), ownerProjectId);
+      if (selectedPinnedThreadDraft?.draftId === draftId && selectedPinnedThreadDraft.projectId === ownerProjectId) selectedPinnedThreadDraft = null;
     },
     editThreadDraft: (draft, options) => {
-      if (!selectedPinnedThreadDraft || selectedPinnedThreadDraft.draftId !== draft.draftId || selectedPinnedThreadDraft.projectId !== draft.projectId) {
-        threadSidebarClient.edit(draft, options);
-        return;
+      threadSidebarClient.edit(draft, options);
+      if (selectedPinnedThreadDraft?.draftId === draft.draftId && selectedPinnedThreadDraft.projectId === draft.projectId) {
+        selectedPinnedThreadDraft = cloneThreadDraft(draft);
       }
-      selectedPinnedThreadDraft = cloneThreadDraft(draft);
-      void threadClient.requestWorkbench("workbench/thread-state/draft/upsert", {
-        draft,
-        ...(options?.folderId ? { folderId: options.folderId } : {}),
-        projectId: draft.projectId,
-      }).then((response) => {
-        const parsed = WorkbenchThreadStateMutationResultSchema.safeParse(response);
-        if (!parsed.success) {
-          reportClientSchemaError("Rejected Workbench pinned draft update response", parsed.error);
-          throw new Error("The pinned draft update response was invalid.");
-        }
-        if (!parsed.data.accepted) throw new Error("The pinned draft could not be updated.");
-      }).catch((error: unknown) => {
-        console.error("Unable to update the pinned draft.", error instanceof Error ? error.message.slice(0, 500) : "Unknown pinned draft update failure.");
-      });
     },
     flushThreadDraft: (projectId, draftId) => threadSidebarClient.flushDraft(projectId, draftId),
-    getSelectedThreadDraft: () => selectedPinnedThreadDraft ? cloneThreadDraft(selectedPinnedThreadDraft) : null,
+    getSelectedThreadDraft: () => {
+      if (!selectedPinnedThreadDraft) return null;
+      const draft = threadSidebarClient.getDraft(selectedPinnedThreadDraft.projectId, selectedPinnedThreadDraft.draftId);
+      return draft ? cloneThreadDraft(draft) : null;
+    },
     listModels: threadClient.listModels,
     moveThreadDraft: async (sourceProjectId, destinationProjectId, draftId) => {
       await threadSidebarClient.moveDraft(sourceProjectId, destinationProjectId, draftId);

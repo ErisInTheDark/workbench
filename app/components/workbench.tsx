@@ -1,8 +1,9 @@
 "use client";
 
 /*
+ * Keywords: workbench, project, draft, persistence, navigation, editor, thread, questionnaire.
  * Exports:
- * - default Workbench: domain-hook client shell for projects, editing, search, stats, pinned navigation, and shared questionnaire attention labels. Keywords: workbench, project, search, stats, pinned, editor, thread, questionnaire, global home.
+ * - default Workbench: domain-hook client shell and project-qualified draft persistence bindings.
  * Local helpers: route, title, drag, editor, file, thread, and capability UI transformations. Keywords: navigation, interaction, rendering.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
@@ -107,7 +108,11 @@ import {
 import WorkbenchComposerProfileController from "../workbench/state/WorkbenchComposerProfileController";
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
-import { countDraftPromptTokens, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import { type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import {
+  clearComposerDraft, clearQuestionnaireDraft, saveComposerDraft, saveQuestionnaireDraft, sidebarDraftToInput,
+  type ComposerDraftTarget,
+} from "../workbench/state/draft-persistence";
 import type { WorkbenchDomSurfaces } from "../workbench/workbench-dom";
 import CodexSandboxNetworkSetting from "./workbench/CodexSandboxNetworkSetting";
 import DropTargetBoundary from "./workbench/drag/DropTargetBoundary";
@@ -681,8 +686,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       clientState.records.flatMap((record) => (
         record.kind === "questionnaireDraft"
         && record.daemonRegistrationId === clientState.daemonRegistrationId
-        && record.projectId === selectedThreadProjectId
-          ? [[`${record.threadId}:${record.requestKey}`, record.value]]
+          ? [[`${record.projectId}:${record.threadId}:${record.requestKey}`, record.value]]
           : []
       )),
     )
@@ -1509,17 +1513,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
   const getSidebarDraftComposerInput = useCallback((draft: WorkbenchThreadDraft | null): WorkbenchComposerInputDraft | null => {
     if (!draft) return null;
-    const attachments = draft.attachments.flatMap((attachment) => {
-      if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-        return [];
-      }
-      const candidate = attachment as { id?: string; url?: string };
-      return typeof candidate.id === "string" && typeof candidate.url === "string"
-        ? [{ id: candidate.id, url: candidate.url }]
-        : [];
-    });
-    return { attachments, text: draft.prompt, updatedAt: draft.updatedAt };
-  }, []);
+    const latest = workbenchClient?.mounted?.threadSidebar.getDraft?.(draft.projectId, draft.draftId) ?? draft;
+    return sidebarDraftToInput(latest);
+  }, [workbenchClient]);
 
   const getThreadComposerDraftForTarget = useCallback((target: WorkbenchThreadTarget | null | undefined): WorkbenchComposerInputDraft | null => {
     if (!target || target.kind === "new") return null;
@@ -1532,135 +1528,102 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ? getSidebarDraftComposerInput(activeRouteDraft)
     : getThreadComposerDraftForTarget(route.view === "thread" ? route.threadTarget : null);
 
-  const handleThreadComposerDraftChange = useCallback((threadId: string, draft: WorkbenchComposerInputDraft, reason: "autosave" | "submission" = "autosave") => {
-    if (!selectedThreadProjectId) {
-      return;
+  const getComposerDraftTarget = useCallback((projectId: string, threadId: string, reservedDraftId?: string): ComposerDraftTarget => {
+    if (!projectId) throw new Error("The composer draft has no project identity.");
+    if (threadId !== "new" && !threadId.startsWith("draft:")) {
+      return { kind: "thread", daemonRegistrationId: clientState.daemonRegistrationId, projectId, threadId };
     }
-    const isProviderThread = threadId !== "new" && !threadId.startsWith("draft:");
-    if (isProviderThread) {
-      return clientStateController.put({
-        daemonRegistrationId: clientState.daemonRegistrationId,
-        kind: "composerDraft",
-        projectId: selectedThreadProjectId,
-        threadId,
-        value: draft,
-      }).then(() => undefined).catch((error: Error) => {
-        setSelectionError(error.message);
-        throw error;
-      });
-    }
-    if (!controls || route.view !== "thread") return;
-    const target = route.threadTarget ?? { kind: "provider" as const, threadId: route.threadId };
-    if (target.kind === "provider" || target.kind === "subagent") {
-      return;
-    }
-    if (target.kind === "new" && reason !== "submission" && countDraftPromptTokens(draft.text) < 3) {
-      return;
-    }
-    const now = Date.now();
-    const privateDraftId = threadId.startsWith("draft:") ? threadId.slice("draft:".length) : "";
-    const draftId = target.kind === "draft" ? target.draftId : privateDraftId || crypto.randomUUID();
-    const existing = target.kind === "draft" ? activeRouteDraft : null;
-    const profileSlot = target.kind === "draft"
-      ? { draftId, harness: currentThread?.harness ?? existing?.harness ?? "codex", kind: "draft" as const, projectId: selectedThreadProjectId }
-      : { kind: "new-thread" as const, projectId: selectedThreadProjectId };
-    const profileSelection = composerProfileController.getSelection(profileSlot);
-    const settings: WorkbenchComposerSettings = composerProfileController.resolveSettings(profileSlot)
-      ?? existing?.composerSettings ?? {
-        agentPath: null,
-        agentSource: null,
-        harness: currentThread?.harness ?? "codex",
-        model: "",
-        reasoningEffort: null,
-        serviceTier: null,
-      };
-    const model = settings.model || null;
-    const threadDraft: WorkbenchThreadDraft = {
-      agent: settings.agentPath,
-      attachments: draft.attachments.map((attachment) => ({ id: attachment.id, url: attachment.url })) as WorkbenchThreadDraft["attachments"],
-      clientUpdatedAt: now,
-      composerSettings: settings,
-      createdAt: existing?.createdAt ?? now,
-      draftId,
-      harness: settings.harness,
-      model,
-      profileId: profileSelection.kind === "profile" ? profileSelection.profileId : null,
-      projectId: selectedThreadProjectId,
-      prompt: draft.text,
-      reasoningEffort: settings.reasoningEffort,
-      serviceTier: settings.serviceTier,
-      updatedAt: now,
+    const draftId = threadId.startsWith("draft:") ? threadId.slice("draft:".length) : reservedDraftId;
+    if (!draftId || !controls) throw new Error("The new-thread draft owner is unavailable.");
+    const originTarget = route.view === "thread" ? route.threadTarget : null;
+    const isNew = originTarget?.kind === "new" || threadId === "new";
+    return {
+      kind: "sidebar", projectId, draftId, isNew,
+      ...(originTarget?.kind === "new" && originTarget.folderId ? { folderId: originTarget.folderId } : {}),
+      owner: {
+        read: (ownerProjectId, id) => {
+          const owner = workbenchClient?.mounted?.threadSidebar;
+          if (owner?.getDraft) return owner.getDraft(ownerProjectId, id);
+          const sidebar = owner?.getProjectSnapshot(ownerProjectId);
+          const entry = sidebar?.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === id);
+          if (entry?.entryKind === "draft") return entry.draft;
+          const pinned = controls.getSelectedThreadDraft();
+          return pinned?.projectId === ownerProjectId && pinned.draftId === id ? pinned : null;
+        },
+        create: (ownerProjectId, id) => {
+          const profileSlot = isNew
+            ? { kind: "new-thread" as const, projectId: ownerProjectId }
+            : { kind: "draft" as const, projectId: ownerProjectId, draftId: id, harness: currentThread?.harness ?? "codex" };
+          const selection = composerProfileController.getSelection(profileSlot);
+          const settings: WorkbenchComposerSettings = composerProfileController.resolveSettings(profileSlot) ?? {
+            agentPath: null, agentSource: null, harness: currentThread?.harness ?? "codex", model: "", reasoningEffort: null, serviceTier: null,
+          };
+          const now = Date.now();
+          return {
+            agent: settings.agentPath, attachments: [], clientUpdatedAt: now, composerSettings: settings,
+            createdAt: now, draftId: id, harness: settings.harness, model: settings.model || null,
+            profileId: selection.kind === "profile" ? selection.profileId : null, projectId: ownerProjectId,
+            prompt: "", reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier, updatedAt: now,
+          };
+        },
+        write: async (draft, folderId) => {
+          controls.editThreadDraft(draft, folderId ? { folderId } : undefined);
+          await controls.flushThreadDraft(draft.projectId, draft.draftId);
+        },
+        remove: async (ownerProjectId, id) => {
+          await controls.deleteThreadDraft(id, ownerProjectId);
+        },
+        materialize: (draft) => {
+          if (currentRouteRef.current !== route) return;
+          composerProfileController.materializeDraftSelection({ kind: "new-thread", projectId }, draft.draftId, draft.harness, projectId);
+          navigateToRoute(!route.projectId
+            ? createHomeThreadRoute(projectId, { draftId: draft.draftId, kind: "draft" })
+            : createThreadRoute(projectId, { draftId: draft.draftId, kind: "draft" }), { replace: true });
+        },
+      },
     };
-    controls.editThreadDraft(threadDraft, target.kind === "new" && target.folderId ? { folderId: target.folderId } : undefined);
-    if (target.kind === "new") {
-      composerProfileController.materializeDraftSelection(profileSlot, draftId, settings.harness, selectedThreadProjectId);
-      navigateToRoute(!route.projectId
-        ? createHomeThreadRoute(selectedThreadProjectId, { draftId, kind: "draft" })
-        : createThreadRoute(selectedThreadProjectId, { draftId, kind: "draft" }), { replace: true });
-    }
-  }, [
-    activeRouteDraft,
-    clientState.daemonRegistrationId,
-    clientStateController,
-    composerProfileController,
-    controls,
-    currentThread,
-    navigateToRoute,
-    route,
-    selectedThreadProjectId,
-  ]);
+  }, [clientState.daemonRegistrationId, composerProfileController, controls, currentThread?.harness, navigateToRoute, route, threads, workbenchClient]);
 
-  const handleThreadComposerDraftClear = useCallback((threadId: string) => {
-    if (!selectedThreadProjectId) return;
-    const isProviderThread = threadId !== "new" && !threadId.startsWith("draft:");
-    if (isProviderThread || threadComposerDraftsByThreadId[threadId]) {
-      return clientStateController.delete({
-        daemonRegistrationId: clientState.daemonRegistrationId,
-        kind: "composerDraft",
-        projectId: selectedThreadProjectId,
-        threadId,
-      }).then(() => undefined).catch((error: Error) => {
-        setSelectionError(error.message);
-        throw error;
-      });
+  const handleThreadComposerDraftChange = useCallback(async (
+    projectId: string, threadId: string, update: (draft: WorkbenchComposerInputDraft) => WorkbenchComposerInputDraft,
+    reason: "autosave" | "submission" = "autosave", reservedDraftId?: string, detached = false,
+  ) => {
+    try {
+      return await saveComposerDraft(clientStateController, getComposerDraftTarget(projectId, threadId, reservedDraftId), update, { reason, detached });
+    } catch (error) {
+      setSelectionError(error instanceof Error ? error.message : "Unable to save composer draft.");
+      throw error;
     }
-    const currentRoute = currentRouteRef.current;
-    if (!controls || currentRoute.view !== "thread" || currentRoute.threadTarget?.kind !== "draft" || !isWorkbenchRouteOwnerOfThread(currentRoute, threadId)) {
-      return;
-    }
-    void controls.deleteThreadDraft(currentRoute.threadTarget.draftId);
-  }, [clientState.daemonRegistrationId, clientStateController, controls, selectedThreadProjectId, threadComposerDraftsByThreadId]);
+  }, [clientStateController, getComposerDraftTarget]);
 
-  const handleThreadQuestionnaireDraftChange = useCallback((threadId: string, requestKey: string, draft: WorkbenchQuestionnaireDraft) => {
-    if (!selectedThreadProjectId || !requestKey) {
-      return;
+  const handleThreadComposerDraftClear = useCallback(async (projectId: string, threadId: string, reservedDraftId?: string) => {
+    try {
+      await clearComposerDraft(clientStateController, getComposerDraftTarget(projectId, threadId, reservedDraftId));
+    } catch (error) {
+      setSelectionError(error instanceof Error ? error.message : "Unable to clear composer draft.");
+      throw error;
     }
+  }, [clientStateController, getComposerDraftTarget]);
 
-    void clientStateController.put({
-      daemonRegistrationId: clientState.daemonRegistrationId,
-      kind: "questionnaireDraft",
-      projectId: selectedThreadProjectId,
-      requestKey,
-      threadId,
-      value: draft,
-    }).catch((error: Error) => setSelectionError(error.message));
-  }, [clientState.daemonRegistrationId, clientStateController, selectedThreadProjectId]);
-
-  const handleThreadQuestionnaireDraftClear = useCallback((threadId: string, requestKey: string) => {
-    if (!requestKey) {
-      return;
+  const handleThreadQuestionnaireDraftChange = useCallback(async (
+    projectId: string, threadId: string, requestKey: string, update: (draft: WorkbenchQuestionnaireDraft) => WorkbenchQuestionnaireDraft,
+  ) => {
+    try {
+      return await saveQuestionnaireDraft(clientStateController, { daemonRegistrationId: clientState.daemonRegistrationId, projectId, threadId, requestKey }, update);
+    } catch (error) {
+      setSelectionError(error instanceof Error ? error.message : "Unable to save questionnaire draft.");
+      throw error;
     }
+  }, [clientState.daemonRegistrationId, clientStateController]);
 
-    if (selectedThreadProjectId) {
-      void clientStateController.delete({
-        daemonRegistrationId: clientState.daemonRegistrationId,
-        kind: "questionnaireDraft",
-        projectId: selectedThreadProjectId,
-        requestKey,
-        threadId,
-      }).catch((error: Error) => setSelectionError(error.message));
+  const handleThreadQuestionnaireDraftClear = useCallback(async (projectId: string, threadId: string, requestKey: string) => {
+    try {
+      await clearQuestionnaireDraft(clientStateController, { daemonRegistrationId: clientState.daemonRegistrationId, projectId, threadId, requestKey });
+    } catch (error) {
+      setSelectionError(error instanceof Error ? error.message : "Unable to clear questionnaire draft.");
+      throw error;
     }
-  }, [clientState.daemonRegistrationId, clientStateController, selectedThreadProjectId]);
+  }, [clientState.daemonRegistrationId, clientStateController]);
 
   const setThreadComposerSettings = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
     if (currentThread?.id === threadId && currentThread.isDraft && currentThread.harness !== settings.harness) {
@@ -1875,22 +1838,28 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     const cwd = entry.entryKind === "subagent"
       ? entry.cwd
       : threadSummariesById.get(threadId)?.cwd ?? null;
+    const ownerProjectId = projectThreadSidebars.projects.find(({ entries }) => entries.some((candidate) => (
+      candidate.entryKind !== "draft" && candidate.identity.harness === entry.identity.harness && candidate.identity.threadId === threadId
+    )))?.projectId ?? projectThreadSummaries.projects.find(({ pinnedThreads, unsettledThreads }) => (
+      pinnedThreads.some((candidate) => candidate.entryKind === "thread" && candidate.identity.harness === entry.identity.harness && candidate.identity.threadId === threadId)
+      || unsettledThreads.some((candidate) => candidate.identity.harness === entry.identity.harness && candidate.identity.threadId === threadId)
+    ))?.projectId ?? activeProjectId;
     const questionnaireDraft = pendingRequest
-      ? threadQuestionnaireDraftsByKey[`${threadId}:${pendingRequest.requestKey}`] ?? null
+      ? threadQuestionnaireDraftsByKey[`${ownerProjectId}:${threadId}:${pendingRequest.requestKey}`] ?? null
       : null;
     return (
       <WorkbenchThreadTooltipDetails
         cwd={cwd}
         harness={entry.identity.harness}
         materialized={materializedThreadRootIds.has(rootThreadId)}
-        onDraftChange={(draft) => handleThreadQuestionnaireDraftChange(threadId, pendingRequest?.requestKey ?? "", draft)}
-        onDraftClear={() => handleThreadQuestionnaireDraftClear(threadId, pendingRequest?.requestKey ?? "")}
+        onDraftChange={(update) => handleThreadQuestionnaireDraftChange(ownerProjectId, threadId, pendingRequest?.requestKey ?? "", update)}
+        onDraftClear={() => handleThreadQuestionnaireDraftClear(ownerProjectId, threadId, pendingRequest?.requestKey ?? "")}
         onOpenThread={openThreadFromExplorer}
         onReadThread={controls ? threads.read : null}
         onSubmitUserInputRequest={submitUserInputRequest}
         pendingRequest={pendingRequest}
         projectFilePaths={explorer.projectFilePaths}
-        projectId={activeProjectId}
+        projectId={ownerProjectId}
         projectRootPath={explorer.rootPath}
         proposalId={proposalId}
         questionnaireDraft={questionnaireDraft}
@@ -1909,6 +1878,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     materializedThreadRootIds,
     openThreadFromExplorer,
     projectFileLinkRoots,
+    projectThreadSidebars.projects,
+    projectThreadSummaries.projects,
     resolvedSettings.composerSpellCheck,
     submitUserInputRequest,
     threads,
