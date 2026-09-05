@@ -596,7 +596,7 @@ export default memo(function ThreadView ({
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const historySentinelRef = useRef<HTMLDivElement>(null);
-  const historyBoundaryArmedRef = useRef(true);
+  const triggeredHistoryBoundaryRef = useRef<string | null>(null);
   const pendingPreviousTurnScrollRestoreRef = useRef<PendingPreviousTurnScrollRestore | null>(null);
   const codeBlockCopyResetTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map());
   const subthreadLoadGenerationRef = useRef(0);
@@ -897,7 +897,7 @@ export default memo(function ThreadView ({
 
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;
-    historyBoundaryArmedRef.current = true;
+    triggeredHistoryBoundaryRef.current = null;
     pendingPreviousTurnScrollRestoreRef.current = null;
     setActiveThreadId(selectedThreadId ?? thread.id);
     setSubthreadsById({});
@@ -978,11 +978,11 @@ export default memo(function ThreadView ({
       let shouldLoadPreviousTurn = false;
       for (const entry of entries) {
         if (!entry.isIntersecting) {
-          historyBoundaryArmedRef.current = true;
+          triggeredHistoryBoundaryRef.current = null;
           continue;
         }
-        if (historyBoundaryArmedRef.current) {
-          historyBoundaryArmedRef.current = false;
+        if (triggeredHistoryBoundaryRef.current !== previousTurnLoadKey) {
+          triggeredHistoryBoundaryRef.current = previousTurnLoadKey;
           shouldLoadPreviousTurn = true;
         }
       }
