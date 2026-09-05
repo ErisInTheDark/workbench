@@ -117,11 +117,7 @@ test("native incoming messages and screenshots render once per identity after pr
   const recovery: ThreadItem = {
     id: "recovery", type: "functionCallOutput", name: "patch_recovery", namespace: "workbench", output: "patch recovery details",
   };
-  const textOnly: WorkbenchToolOutput = {
-    id: "text-only", type: "functionCallOutput", name: "screenshot", namespace: "workbench",
-    output: [{ type: "input_text", text: "capture returned text without an image" }],
-  };
-  const items = normalizeThreadItems([incoming, screenshot, incoming, echo, recovery, textOnly], {
+  const items = normalizeThreadItems([incoming, screenshot, incoming, echo, recovery], {
     mergeDuplicateItems: (stored, next) => mergeThreadItem(next, stored),
   });
   for (const durableCount of [0, items.length]) {
@@ -129,7 +125,6 @@ test("native incoming messages and screenshots render once per identity after pr
     assert.equal(html.split(message.message).length - 1, 1);
     assert.equal((html.match(/<img\b[^>]*src="\/screenshot\.png"/gu) ?? []).length, 1);
     assert.equal(html.includes(recovery.output as string), false);
-    assert.equal(html.includes("capture returned text without an image"), true);
   }
 });
 

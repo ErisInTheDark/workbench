@@ -1,5 +1,5 @@
 /*
- * Keywords: native tool output, incoming agent, screenshot, patch recovery.
+ * Keywords: native tool output, context disclosure, incoming agent, screenshot, patch recovery.
  * Exports:
  * - default ThreadToolOutputItem: render supported output bodies with their existing semantic surfaces.
  */
@@ -11,6 +11,7 @@ import { readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { getSubagentSummary } from "../../../workbench/thread/thread-subagents";
 import ThreadAgentScreenshotItem from "./ThreadAgentScreenshotItem";
+import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadIncomingAgentMessageItem from "./ThreadIncomingAgentMessageItem";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadUserImage from "./ThreadUserImage";
@@ -36,12 +37,18 @@ export default function ThreadToolOutputItem({
   }
   const parts = typeof item.output === "string" ? [{ type: "input_text" as const, text: item.output }] : item.output;
   return (
-    <section className="space-y-2 py-2">
-      <p className="m-0 text-[0.78em] text-muted">{[item.namespace, item.name].filter(Boolean).join(".")}</p>
+    <ThreadDisclosure
+      className="py-2"
+      contentClassName="mt-2 space-y-2 pl-6"
+      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
+      summary={<>
+        <span>Context: </span>
+        <span className="thread-item-disclosure-prominent-text-portion font-medium text-text">{[item.namespace, item.name].filter(Boolean).join(".")}</span>
+      </>}
+    >
       {parts.map((part, index) => part.type === "input_text"
         ? <ThreadMarkdown {...markdownProps} key={index} markdown={part.text} />
         : <ThreadUserImage key={index} alt="Tool output image" src={part.image_url} />)}
-      {timestamp}
-    </section>
+    </ThreadDisclosure>
   );
 }
