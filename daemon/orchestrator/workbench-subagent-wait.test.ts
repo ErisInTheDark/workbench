@@ -120,7 +120,7 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
     createHarnessClient: () => client,
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd, project: { id: projectId }, root: {} }) as AgentEndpointProjectResolution,
-    storageRoot,
+    profileStore: { read: async () => ({ profiles: [] }), mutate: async () => ({ profiles: [] }) },
     subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
   const params = { callerThreadId, cwd, threadIds: [inactiveThreadId, questionnaireThreadId] };

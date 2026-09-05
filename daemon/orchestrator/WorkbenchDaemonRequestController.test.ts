@@ -6,8 +6,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController.ts";
+import { applyComposerProfileMutation, normalizeComposerProfileMutation } from "workbench-shared/workbench/state/composer-profile-state";
+import type { WorkbenchComposerProfile } from "workbench-shared/types";
 
-function createController(options: { gitArcResponse?: Response; rejectProjectId?: string } = {}) {
+function createController(options: {
+  gitArcResponse?: Response;
+  rejectProjectId?: string;
+  profiles?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profiles"];
+} = {}) {
   let globalNetworkEnabled = false;
   const projectNetworkOverrides = new Map<string, boolean>();
   const networkWrites: object[] = [];
@@ -62,7 +68,7 @@ function createController(options: { gitArcResponse?: Response; rejectProjectId?
         else projectNetworkOverrides.set(projectId, enabled);
       },
     },
-    profiles: {
+    profiles: options.profiles ?? {
       mutate: async () => ({ profiles: [] }),
       read: async () => ({ profiles: [] }),
     },
@@ -212,6 +218,35 @@ test("Browse registration swaps atomically and stale disposal cannot remove its 
     (await controller.handle({ id: 3, method: "browse/sessions/read", params: {} })).error?.message ?? "",
     /reloading/u,
   );
+});
+
+test("profile RPC preserves field intent and rejects malformed changes instead of erasing them", async () => {
+  const original: WorkbenchComposerProfile = {
+    id: "saved", name: "Saved", harness: "codex", model: "old",
+    agentPath: null, agentSource: null, reasoningEffort: "high", serviceTier: null,
+    createdAt: 1, updatedAt: 1, scope: { kind: "global" },
+  };
+  let profiles = [original];
+  const { controller } = createController({
+    profiles: {
+      read: async () => ({ profiles }),
+      mutate: async (value) => {
+        const mutation = normalizeComposerProfileMutation(value);
+        if (!mutation) throw new Error("Invalid profile mutation");
+        profiles = applyComposerProfileMutation(profiles, mutation);
+        return { profiles };
+      },
+    },
+  });
+  await controller.handle({ id: 1, method: "profiles/upsert", params: { profile: original, changes: { model: "latest" } } });
+  await controller.handle({ id: 2, method: "profiles/upsert", params: { profile: original, changes: { reasoningEffort: null } } });
+  assert.equal(profiles[0]?.model, "latest");
+  assert.equal(profiles[0]?.reasoningEffort, null);
+  for (const changes of [[], null, "invalid", { harness: "copilot" }, { model: "" }]) {
+    const response = await controller.handle({ id: 3, method: "profiles/upsert", params: { profile: original, changes } });
+    assert.ok(response.error, "Malformed changes must fail, never turn into a full upsert or empty patch.");
+  }
+  assert.equal(profiles[0]?.model, "latest");
 });
 
 test("search query dispatch preserves empty text and validates project ids", async () => {

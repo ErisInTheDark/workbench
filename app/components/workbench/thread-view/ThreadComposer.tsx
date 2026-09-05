@@ -251,13 +251,16 @@ export default function ThreadComposer ({
   const isThreadStateBroken = hasStaleApprovalState(thread);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
+  const hasEffectiveProfile = !profileSlot || Boolean(composerProfileController.resolveSettings(profileSlot)?.model);
   const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(thread, threadLifecycle, hasPendingUserInputRequest, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
-  const isSendDisabled = isInputDisabled;
+  const isSendDisabled = isInputDisabled || (!isActiveThread && !hasEffectiveProfile);
   const stopControlState = getThreadComposerStopControlState({ hasPendingUserInputRequest, isActiveThread, isCommentMode, isStopping });
   const isStopDisabled = stopControlState.disabled;
   const isMobileTextInput = useMobileTextInputEnvironment();
-  const helperText = hasVisiblePendingUserInputRequest
+  const helperText = !hasEffectiveProfile
+      ? composerProfileSnapshot.error || "Loading daemon profile settings..."
+      : hasVisiblePendingUserInputRequest
       ? "\xa0"
       : isAttaching
         ? "Attaching pasted image..."
@@ -280,17 +283,13 @@ export default function ThreadComposer ({
   const selectedModelOption = availableModels.find((model) => model.id === selectedModel) ?? null;
   const defaultModelOption = availableModels.find((model) => model.isDefault) ?? null;
   const modelOptionForControls = selectedModelOption ?? defaultModelOption;
-  const modelButtonLabel = selectedModelOption?.displayName
+  const modelButtonLabel = !hasEffectiveProfile ? "Profile unavailable" : selectedModelOption?.displayName
     ?? selectedModel
-    ?? defaultModelOption?.displayName
     ?? "Default model";
   const supportedReasoningEfforts = modelOptionForControls?.supportedReasoningEfforts ?? [];
-  const currentReasoningEffort = thread.reasoningEffort
-    ?? modelOptionForControls?.defaultReasoningEffort
-    ?? supportedReasoningEfforts[0]
-    ?? null;
+  const currentReasoningEffort = thread.reasoningEffort;
   const showsThreadControls = !isCommentMode;
-  const showsReasoningEffortControl = showsThreadControls && Boolean(modelOptionForControls?.supportsReasoningEffort && currentReasoningEffort);
+  const showsReasoningEffortControl = showsThreadControls && Boolean(modelOptionForControls?.supportsReasoningEffort);
   const showsFastModeControl = showsThreadControls && thread.harness === "codex" && Boolean(modelOptionForControls?.supportsFastMode);
   const isFastModeEnabled = thread.serviceTier === "fast";
   const isAgentPickerOpen = showsThreadControls && activePicker === "agent";
@@ -310,7 +309,7 @@ export default function ThreadComposer ({
           : "Continue this thread...";
   const showStopButton = stopControlState.visible;
   const selectedAgent = availableAgents.find((agent) => areWorkbenchAgentPathsEqual(agent.path, thread.agentPath)) ?? null;
-  const agentButtonLabel = selectedAgent?.name
+  const agentButtonLabel = !hasEffectiveProfile ? "Profile unavailable" : selectedAgent?.name
     ?? getWorkbenchAgentPathLabel(thread.agentPath)
     ?? "Default agent";
   const profileSelection = profileSlot
@@ -673,7 +672,7 @@ export default function ThreadComposer ({
   };
 
   const recoverInterruptedTurn = async () => {
-    if (!canRecoverInterruptedTurn || isRecoveringInterruptedTurn || isPickerOpen) {
+    if (!canRecoverInterruptedTurn || isRecoveringInterruptedTurn || isPickerOpen || !hasEffectiveProfile) {
       return;
     }
 
@@ -745,12 +744,12 @@ export default function ThreadComposer ({
   };
 
   const cycleReasoningEffort = (direction: 1 | -1) => {
-    if (!supportedReasoningEfforts.length || !currentReasoningEffort) {
+    if (!supportedReasoningEfforts.length) {
       return;
     }
 
-    const currentIndex = supportedReasoningEfforts.indexOf(currentReasoningEffort);
-    const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+    const currentIndex = currentReasoningEffort ? supportedReasoningEfforts.indexOf(currentReasoningEffort) : -1;
+    const baseIndex = currentIndex >= 0 ? currentIndex : direction === 1 ? -1 : 0;
     const nextIndex = (baseIndex + direction + supportedReasoningEfforts.length) % supportedReasoningEfforts.length;
     const nextEffort = supportedReasoningEfforts[nextIndex] ?? null;
     applyDirectSettingsChange(
@@ -778,7 +777,7 @@ export default function ThreadComposer ({
       type="button"
       aria-label={isRecoveringInterruptedTurn ? "Resuming thread" : "Resume thread"}
       title={isRecoveringInterruptedTurn ? "Resuming thread" : "Resume thread"}
-      disabled={isRecoveringInterruptedTurn}
+      disabled={isRecoveringInterruptedTurn || !hasEffectiveProfile}
       shape="circle"
       onClick={() => {
         void recoverInterruptedTurn();
@@ -876,6 +875,9 @@ export default function ThreadComposer ({
                   workspaceRoots={workspaceRoots}
                   mode="live"
                   onSubmit={async (response, supplementalInput, activatedSkillPaths) => {
+                    if (visiblePendingUserInputRequest.responseMode === "newTurn" && !hasEffectiveProfile) {
+                      throw new Error("The daemon composer profile is unavailable.");
+                    }
                     await onSubmitUserInputRequest(
                       thread.id,
                       response,
@@ -978,7 +980,7 @@ export default function ThreadComposer ({
                     {showsThreadControls ? (
                     <ThreadComposerRibbon
                       agentLabel={agentButtonLabel}
-                      currentReasoningEffort={currentReasoningEffort}
+                      currentReasoningEffort={currentReasoningEffort ?? "default"}
                       isFastModeEnabled={isFastModeEnabled}
                       isProfilePanelOpen={isProfilePickerOpen}
                       modelLabel={modelButtonLabel}

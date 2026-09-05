@@ -37,7 +37,6 @@ export default class WorkbenchSubagentFeature {
       onRelationshipCommitted: context.onRelationshipCommitted,
       profileStore: context.profileStore,
       resolveProjectFromCwd: context.resolveProjectFromCwd,
-      storageRoot: context.storageRoot,
       subagentStore: this.store,
       threadState: context.threadState,
     });

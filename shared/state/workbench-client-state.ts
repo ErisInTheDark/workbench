@@ -101,9 +101,6 @@ export type WorkbenchClientStateRecord =
   | (ProjectScoped & { kind: "sidebarPreference"; preference: WorkbenchSidebarPreference })
   | (ProjectScoped & { folderId: string; kind: "sidebarFolder"; scope: "pinned" | "thread" })
   | (ProjectScoped & { kind: "expandedDirectory"; path: string })
-  | (DaemonScoped & { agentPath: string | null; harness: WorkbenchHarnessValue; kind: "harnessPreference"; model: string | null; serviceTier: "fast" | null })
-  | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "modelEffort"; model: string; reasoningEffort: string | null })
-  | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "threadServiceTier"; serviceTier: "fast" | null; threadId: string })
   | (ProjectScoped & { kind: "fileDraft"; path: string; value: WorkbenchFileDraftValue })
   | (ProjectScoped & { kind: "composerDraft"; threadId: string; value: WorkbenchComposerDraftValue })
   | (ProjectScoped & { kind: "questionnaireDraft"; requestKey: string; threadId: string; value: WorkbenchQuestionnaireDraftValue })
@@ -115,9 +112,6 @@ export type WorkbenchClientStateIdentity =
   | (ProjectScoped & { key: WorkbenchSidebarPreference["key"]; kind: "sidebarPreference" })
   | (ProjectScoped & { folderId: string; kind: "sidebarFolder"; scope: "pinned" | "thread" })
   | (ProjectScoped & { kind: "expandedDirectory"; path: string })
-  | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "harnessPreference" })
-  | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "modelEffort"; model: string })
-  | (DaemonScoped & { harness: WorkbenchHarnessValue; kind: "threadServiceTier"; threadId: string })
   | (ProjectScoped & { kind: "fileDraft"; path: string })
   | (ProjectScoped & { kind: "composerDraft"; threadId: string })
   | (ProjectScoped & { kind: "questionnaireDraft"; requestKey: string; threadId: string })
@@ -154,14 +148,11 @@ const mutationPathByKind = {
   expandedDirectory: "/api/workbench-client-state/expanded-directory",
   fileDraft: "/api/workbench-client-state/file-draft",
   globalPreference: "/api/workbench-client-state/global-preference",
-  harnessPreference: "/api/workbench-client-state/harness-preference",
   lastLaunchTarget: "/api/workbench-client-state/launch-target",
-  modelEffort: "/api/workbench-client-state/model-effort",
   projectPreference: "/api/workbench-client-state/project-preference",
   questionnaireDraft: "/api/workbench-client-state/questionnaire-draft",
   sidebarFolder: "/api/workbench-client-state/sidebar-folder",
   sidebarPreference: "/api/workbench-client-state/sidebar-preference",
-  threadServiceTier: "/api/workbench-client-state/thread-service-tier",
 } as const satisfies Record<WorkbenchClientStateRecord["kind"], string>;
 
 const mutationKindsByPath = new Map<string, WorkbenchClientStateRecord["kind"][]>();

@@ -157,7 +157,7 @@ function createWorkbenchCoreFeature(
   const harnesses = new WorkbenchHarnessController(createHarnessAdapters(context, turnRecovery), {
     admitTurnStart: () => database.assertReady(),
   });
-  const profileStore = new WorkbenchComposerProfileStore(context.legacyMigrationProjectRoot);
+  const profileStore = new WorkbenchComposerProfileStore(context.legacyMigrationProjectRoot, database);
   const logThreadStateWarning = (message: string) => {
     transcriptShadowLog.write({
       event: "thread-state",
@@ -260,6 +260,7 @@ function createWorkbenchCoreFeature(
     },
   });
   threadState = new WorkbenchThreadStateFeature({
+    readComposerProfiles: () => profileStore.read(),
     database,
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
     gitArcs: gitArc,
@@ -366,6 +367,8 @@ function createWorkbenchCoreFeature(
       await questionnaires.dispose();
       reportPhase("thread-state disposal");
       await threadState.dispose();
+      reportPhase("composer profile disposal");
+      await profileStore.dispose();
       reportPhase("thread-state shadow disposal");
       await threadStateShadow.dispose();
       reportPhase("search disposal");
@@ -413,6 +416,7 @@ function createWorkbenchCoreFeature(
     },
     registrations,
     start: async () => {
+      await profileStore.start();
       await projectCatalog.ensureLoaded();
       for (const project of projectCatalog.getCurrentSnapshot().data) {
         try {

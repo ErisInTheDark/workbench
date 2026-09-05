@@ -145,6 +145,10 @@ export type CodexStdioBridgeOptions = {
   instructions?: WorkbenchCodexInstructionPort;
   onAcceptedTurnSteer?: (threadId: string) => void;
   onNotification: (notification: JsonRpcNotification) => void;
+  prepareThreadConfiguration?: (
+    thread: Thread,
+    requests: { resumeRequest: JsonRpcRequest; startRequest: JsonRpcRequest },
+  ) => Promise<{ resumeRequest: JsonRpcRequest; startRequest: JsonRpcRequest }>;
   prepareTurnStart?: (
     message: JsonRpcRequest,
     requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
@@ -902,6 +906,7 @@ export default class CodexStdioBridge {
   private readonly onAcceptedTurnSteer: NonNullable<CodexStdioBridgeOptions["onAcceptedTurnSteer"]>;
   private readonly onNotification: CodexStdioBridgeOptions["onNotification"];
   private readonly prepareTurnStart: NonNullable<CodexStdioBridgeOptions["prepareTurnStart"]>;
+  private readonly prepareThreadConfiguration: CodexStdioBridgeOptions["prepareThreadConfiguration"];
   private readonly questionnaires: NonNullable<CodexStdioBridgeOptions["questionnaires"]>;
   private readonly sqliteTranscriptEnabled: boolean;
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
@@ -940,12 +945,13 @@ export default class CodexStdioBridge {
   private readonly handleWorkbenchRequest: CodexStdioBridgeOptions["handleWorkbenchRequest"];
   private readonly instructions: WorkbenchCodexInstructionPort;
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onNotification, prepareThreadConfiguration, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onAcceptedTurnSteer = onAcceptedTurnSteer;
     this.onNotification = onNotification;
     this.prepareTurnStart = prepareTurnStart;
+    this.prepareThreadConfiguration = prepareThreadConfiguration;
     this.questionnaires = questionnaires;
     this.sqliteTranscriptEnabled = Boolean(recordSqliteTranscript);
     this.readSqliteTranscriptMaterializedTurnIds = readSqliteTranscriptMaterializedTurnIds;
@@ -2981,7 +2987,7 @@ export default class CodexStdioBridge {
     });
     if (readResponse.error) return { id: requestId, error: readResponse.error };
     const readThread = asRecord(readResponse.result)?.thread as ThreadReadResponse["thread"] | undefined;
-    if (!readThread) return { id: requestId, error: { code: -32000, message: "Codex admission could not read the thread." } };
+    if (!readThread || readThread.id !== threadId) return { id: requestId, error: { code: -32000, message: "Codex admission could not read the requested thread." } };
     if (isThreadStatusActive(readThread.status)) {
       const activeTurnResponse = await this.dispatchManagedProviderRequest({
         id: `workbench:admission-active-turn:${String(requestId ?? Date.now())}`,
@@ -3014,6 +3020,10 @@ export default class CodexStdioBridge {
       return { id: requestId, error: { code: -32000, message: `The Codex thread is ${readThread.status.type}, not inactive.` } };
     }
 
+    if (this.prepareThreadConfiguration) {
+      ({ resumeRequest, startRequest } = await this.prepareThreadConfiguration(readThread, { resumeRequest, startRequest }));
+      this.assertAcceptingWork();
+    }
     const unsubscribeResponse = await this.dispatchManagedProviderRequest({
       id: `workbench:admission-unsubscribe:${String(requestId ?? Date.now())}`,
       method: "thread/unsubscribe",

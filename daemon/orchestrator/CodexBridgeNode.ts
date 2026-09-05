@@ -110,6 +110,23 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     bridge = new CodexStdioBridge({
       ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
       instructions: codexInstructions,
+      prepareThreadConfiguration: async (thread, requests) => {
+        const profile = await threadState.prepareCodexProfile(thread);
+        const project = await projectCatalog.resolveProjectById(profile.projectId);
+        const configuration = {
+          cwd: profile.cwd, projectId: profile.projectId,
+          roots: project.roots.map((root, index) => ({
+            id: root.id, isPrimary: index === 0, name: root.name,
+            relativePath: root.relativePath ?? ".", rootPath: root.rootPath,
+          })),
+          settings: profile.selection.settings, subagentName: profile.subagentName, threadId: thread.id,
+        };
+        const resumeRequest = codexInstructions.withThreadConfiguration(requests.resumeRequest, configuration);
+        const startRequest = codexInstructions.withThreadConfiguration(requests.startRequest, configuration);
+        turnRecovery.observeRequest("codex", resumeRequest);
+        turnRecovery.observeRequest("codex", startRequest);
+        return { resumeRequest, startRequest };
+      },
       prepareTurnStart,
       questionnaires,
       readSqliteTranscriptMaterializedTurnIds: (threadId, turnIds) => (

@@ -31,7 +31,7 @@ import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thre
 import { getWorkbenchThreadHarnessCandidates } from "workbench-shared/workbench/thread/thread-harness-candidates";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
-import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
+import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 
 interface PendingQuestionnaireList {
@@ -64,9 +64,8 @@ export interface WorkbenchSubagentControllerOptions {
   bridgeUrl: string;
   createHarnessClient?: () => WorkbenchSubagentHarnessClient;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
-  profileStore?: WorkbenchComposerProfileStore;
+  profileStore: Pick<WorkbenchComposerProfileStore, "read" | "mutate">;
   resolveProjectFromCwd?: typeof resolveAgentEndpointProjectFromCwd;
-  storageRoot: string;
   subagentStore: WorkbenchSubagentControllerStore;
   threadState?: {
     getEntry(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadSidebarEntry | null>;
@@ -129,7 +128,7 @@ export default class WorkbenchSubagentController {
   private createQueue: Promise<void> = Promise.resolve();
   private readonly createHarnessClient: () => WorkbenchSubagentHarnessClient;
   private readonly onRelationshipCommitted: WorkbenchSubagentControllerOptions["onRelationshipCommitted"];
-  private readonly profileStore: WorkbenchComposerProfileStore;
+  private readonly profileStore: WorkbenchSubagentControllerOptions["profileStore"];
   private readonly resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
   private readonly subagentStore: WorkbenchSubagentControllerStore;
   private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
@@ -141,14 +140,13 @@ export default class WorkbenchSubagentController {
     onRelationshipCommitted,
     profileStore,
     resolveProjectFromCwd = resolveAgentEndpointProjectFromCwd,
-    storageRoot,
     subagentStore,
     threadState,
   }: WorkbenchSubagentControllerOptions) {
     this.bridgeUrl = bridgeUrl;
     this.createHarnessClient = createHarnessClient;
     this.onRelationshipCommitted = onRelationshipCommitted;
-    this.profileStore = profileStore ?? new WorkbenchComposerProfileStore(storageRoot);
+    this.profileStore = profileStore;
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.subagentStore = subagentStore;
     this.threadState = threadState;

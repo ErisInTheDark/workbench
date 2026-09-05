@@ -14,6 +14,7 @@ import type { WorkbenchDatabaseMutation, WorkbenchDatabaseQuery, WorkbenchDataba
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchThreadStateFeature, { mapProviderActivityNotification, mapProviderLifecycleNotification, normalizeProviderSidebarEntry, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
 import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
+import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, message: string) {
   const deadline = Date.now() + 1_000;
@@ -193,6 +194,7 @@ test("provider activity mapping observes meaningful cross-provider work without 
 test("Codex MCP admission reads thread metadata without hydrating transcript turns", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-mcp-admission-"));
   const requests: JsonRpcRequest[] = [];
+  const resolvedCwds: string[] = [];
   const feature = new WorkbenchThreadStateFeature({
     database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
@@ -221,7 +223,11 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
     },
     publish: () => undefined,
     resolveProjectById: async () => ({ id: "project", rootPath: storageRoot }),
-    resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: "project", rootPath: storageRoot } }),
+    resolveProjectFromCwd: async (cwd) => {
+      resolvedCwds.push(cwd);
+      if (cwd !== storageRoot) throw new Error("Unowned cwd");
+      return { cwd, project: { id: "project", rootPath: storageRoot } };
+    },
     transitions: { run: async (_key, operation) => await operation() },
   });
 
@@ -234,6 +240,22 @@ test("Codex MCP admission reads thread metadata without hydrating transcript tur
     method: "thread/read",
     params: { includeTurns: false, threadId: "thread" },
   }]);
+  const selection = {
+    kind: "custom" as const,
+    settings: {
+      agentPath: "library:agents/lily.md", agentSource: "library" as const, harness: "codex" as const,
+      model: "daemon-model", reasoningEffort: null, serviceTier: null,
+    },
+  };
+  await feature.controller.setComposerProfileTarget({ kind: "new-thread", projectId: "project" }, selection);
+  const provider = {
+    cwd: storageRoot, id: "thread", projectId: "untrusted-provider-project", status: { type: "notLoaded" }, turns: [], updatedAt: 1,
+  } as ThreadReadResponse["thread"];
+  assert.deepEqual(await feature.prepareCodexProfile(provider), {
+    cwd: storageRoot, projectId: "project", selection, subagentName: null,
+  });
+  assert.equal(resolvedCwds.at(-1), storageRoot);
+  await assert.rejects(feature.prepareCodexProfile({ ...provider, cwd: "/unowned" }), /Unowned cwd/u);
 
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });

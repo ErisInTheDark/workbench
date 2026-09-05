@@ -1565,24 +1565,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       ? { draftId, harness: currentThread?.harness ?? existing?.harness ?? "codex", kind: "draft" as const, projectId: selectedThreadProjectId }
       : { kind: "new-thread" as const, projectId: selectedThreadProjectId };
     const profileSelection = composerProfileController.getSelection(profileSlot);
-    const customSettings: WorkbenchComposerSettings = currentThread
-      ? {
-        agentPath: currentThread.agentPath,
-        agentSource: null,
-        harness: currentThread.harness,
-        model: currentThread.model ?? "",
-        reasoningEffort: currentThread.reasoningEffort,
-        serviceTier: currentThread.serviceTier === "fast" ? "fast" : null,
-      }
-      : existing?.composerSettings ?? {
+    const settings: WorkbenchComposerSettings = composerProfileController.resolveSettings(profileSlot)
+      ?? existing?.composerSettings ?? {
         agentPath: null,
         agentSource: null,
-        harness: "codex",
+        harness: currentThread?.harness ?? "codex",
         model: "",
         reasoningEffort: null,
         serviceTier: null,
       };
-    const settings = composerProfileController.resolveSettings(profileSlot, customSettings) ?? customSettings;
     const model = settings.model || null;
     const threadDraft: WorkbenchThreadDraft = {
       agent: settings.agentPath,

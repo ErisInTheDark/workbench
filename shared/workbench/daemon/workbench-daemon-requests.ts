@@ -22,6 +22,7 @@ import type {
   WorkbenchBrowseSessionListRequest,
   WorkbenchBrowseSessionListResponse,
   WorkbenchComposerProfile,
+  WorkbenchComposerProfileChanges,
   WorkbenchComposerProfileSlot,
   WorkbenchComposerProfileTargetSelection,
   WorkbenchComposerProfileStorePayload,
@@ -111,7 +112,7 @@ export interface WorkbenchDaemonRequestMap {
   "profiles/read": { params: object; result: WorkbenchComposerProfileStorePayload };
   "profiles/target/read": { params: { slot: WorkbenchComposerProfileSlot }; result: { selection: WorkbenchComposerProfileTargetSelection | null } };
   "profiles/target/set": { params: { selection: WorkbenchComposerProfileTargetSelection; slot: WorkbenchComposerProfileSlot }; result: { ok: true } };
-  "profiles/upsert": { params: { profile: WorkbenchComposerProfile }; result: WorkbenchComposerProfileStorePayload };
+  "profiles/upsert": { params: { profile: WorkbenchComposerProfile; changes?: WorkbenchComposerProfileChanges }; result: WorkbenchComposerProfileStorePayload };
   "project/catalog/read": { params: object; result: WorkbenchProjectsPayload };
   "project/file/read": { params: { path: string; projectId: string }; result: FilePayload };
   "project/file/reset": { params: { expectedMtimeMs: number; force?: boolean; path: string; projectId: string }; result: WorkbenchFileWriteResult };

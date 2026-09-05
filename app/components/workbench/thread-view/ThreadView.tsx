@@ -648,19 +648,9 @@ export default memo(function ThreadView ({
   const activeProfileSlot = useMemo(() => activeThread
     ? resolveThreadComposerProfileSlot(projectId, threadTarget, activeThread)
     : null, [activeThread?.harness, activeThread?.id, projectId, threadTarget]);
-  const profileResolvedActiveThread = activeThread && activeProfileSlot
+  const resolvedActiveThread = activeThread && activeProfileSlot
     ? composerProfileController.resolveThread(activeProfileSlot, activeThread)
     : activeThread;
-  const activeSubagentSummary = activeThread ? getSubagentSummary(subagents, activeThread.id) : null;
-  const resolvedActiveThread = profileResolvedActiveThread && !profileResolvedActiveThread.reasoningEffort && activeSubagentSummary
-    ? {
-      ...profileResolvedActiveThread,
-      reasoningEffort: composerProfileController.getProfileReasoningEffort(
-        activeSubagentSummary.profileId,
-        profileResolvedActiveThread.harness,
-      ),
-    }
-    : profileResolvedActiveThread;
   void composerProfileSnapshot;
   useEffect(() => {
     if (activeProfileSlot) void composerProfileController.loadSelection(activeProfileSlot);
@@ -1079,14 +1069,6 @@ export default memo(function ThreadView ({
       throw new ThreadMessageNotSentError();
     }
 
-    await composerProfileController.synchronizeSelection(activeProfileSlot, {
-      agentPath: resolvedActiveThread.agentPath,
-      agentSource: null,
-      harness: resolvedActiveThread.harness,
-      model: resolvedActiveThread.model ?? "",
-      reasoningEffort: resolvedActiveThread.reasoningEffort,
-      serviceTier: resolvedActiveThread.serviceTier === "fast" ? "fast" : null,
-    });
     const payload = await onSendMessage(resolvedActiveThread, input, {
       ...options,
       composerProfileSlot: activeProfileSlot,
@@ -1098,7 +1080,7 @@ export default memo(function ThreadView ({
         [resolvedActiveThread.id]: payload,
       }));
     }
-  }, [activeProfileSlot, composerProfileController, onSendMessage, resolvedActiveThread, thread.id]);
+  }, [activeProfileSlot, onSendMessage, resolvedActiveThread, thread.id]);
 
   const handleStopThread = useCallback(async () => {
     if (!activeThread) {

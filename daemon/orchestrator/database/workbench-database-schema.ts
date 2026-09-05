@@ -23,6 +23,7 @@
 import type Database from "better-sqlite3";
 
 import { codexSandboxNetworkSchemaHistory } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
+import { composerProfileSchemaHistory, composerProfileTables } from "../../lib/workbench/database/schema/composer-profile-schema.ts";
 import { coreSchemaHistory } from "workbench-shared/workbench/database/schema/core-schema";
 import { evidenceSchemaHistory } from "workbench-shared/workbench/database/schema/evidence-schema";
 import { interactionSchemaHistory } from "workbench-shared/workbench/database/schema/interaction-schema";
@@ -64,6 +65,7 @@ export type { ThreadStateSchemaRows } from "../../lib/workbench/database/schema/
 
 const workbenchDatabaseSchema = defineWorkbenchDatabaseSchema({
   subsystems: [
+    composerProfileSchemaHistory,
     codexSandboxNetworkSchemaHistory,
     coreSchemaHistory,
     itemSchemaHistory,
@@ -77,6 +79,7 @@ const workbenchDatabaseSchema = defineWorkbenchDatabaseSchema({
 });
 
 const currentTables = {
+  ...composerProfileTables,
   ...codexSandboxNetworkTables,
   ...coreTables,
   ...itemTables,

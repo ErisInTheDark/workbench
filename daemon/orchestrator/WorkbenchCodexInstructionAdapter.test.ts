@@ -38,6 +38,31 @@ function readPromptInstructions(request: JsonRpcRequest) {
   };
 }
 
+test("daemon thread configuration replaces stale caller settings while preserving message intent", () => {
+  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", process.cwd());
+  const input = [{ type: "text", text: "answer", text_elements: [] }];
+  const result = adapter.withThreadConfiguration({
+    method: "turn/start",
+    params: { input, model: "stale", serviceTier: "fast", effort: "high", collaborationMode: { mode: "plan", settings: { model: "stale", reasoning_effort: "high" } } },
+    workbenchPromptContext: { agentPath: "wrong.md", cwd: "wrong", projectId: "wrong", activatedSkillPaths: ["skill.md"], workflowIds: ["custom"] },
+  }, {
+    cwd: process.cwd(), projectId: "owned", roots: [], threadId: "thread", subagentName: null,
+    settings: { agentPath: null, agentSource: null, harness: "codex", model: "owned-model", reasoningEffort: null, serviceTier: null },
+  });
+  const params = result.params as Record<string, unknown>;
+  assert.equal(params.model, "owned-model");
+  assert.equal(params.serviceTier, null);
+  assert.equal(params.effort, null);
+  assert.deepEqual(params.input, input);
+  assert.deepEqual(params.collaborationMode, { mode: "plan", settings: { model: "owned-model", reasoning_effort: null } });
+  const context = result.workbenchPromptContext as Record<string, unknown>;
+  assert.equal(context.agentPath, null);
+  assert.equal(context.cwd, process.cwd());
+  assert.equal(context.projectId, "owned");
+  assert.deepEqual(context.activatedSkillPaths, ["skill.md"]);
+  assert.deepEqual(context.workflowIds, ["custom"]);
+});
+
 test("start, resume, and fork rebuild one filtered project prefix and disable native project docs", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-project-instructions-"));
   const adapter = new WorkbenchCodexInstructionAdapter("ws://0.0.0.0:4500", root);

@@ -3012,6 +3012,23 @@ test("saved Workbench questionnaires recover through admission and durable histo
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
 }));
 
+test("reopened questionnaire answers preserve explicit default-agent and service-tier nulls", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload({
+    ...activeThread("codex", "previous", "interrupted"),
+    agentPath: "library:agents/stale.md", serviceTier: "fast", reasoningEffort: "high",
+  });
+  const reopened = activeThread("codex", "thread", "interrupted");
+  client.selectThreadPayload(reopened);
+  installRecoveredWorkbenchQuestionnaire(client);
+  await client.submitPendingUserInputRequest("thread", { answers: { details: { answers: ["Continue."] } } });
+  const admission = socket.requests.find((candidate) => candidate.method === "workbench/codex/message/admit");
+  assert.ok(admission);
+  const start = admission.params?.startRequest as { params: { effort: string | null; serviceTier: string | null }; workbenchPromptContext: { agentPath: string | null } };
+  assert.equal(start.params.effort ?? null, null);
+  assert.equal(start.params.serviceTier, null);
+  assert.equal(start.workbenchPromptContext.agentPath, null);
+}));
+
 test("a Workbench waiter lost after live observation is reconciled before answering", async () => withClient(async (client, socket) => {
   client.selectThreadPayload(activeThread("codex", "thread", "interrupted"));
   let live = true;

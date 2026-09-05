@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 
-import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
+import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
@@ -159,6 +159,7 @@ function setEntryDisplaySection(entry: WorkbenchThreadStateEntry, section: Workb
 }
 
 export interface WorkbenchThreadStateControllerOptions {
+  readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
   getProjectCatalog: () => WorkbenchProjectsPayload;
   getReloadDirt?: () => WorkbenchReloadDirtSnapshot;
   hasLiveGitArcClaims: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<boolean>;
@@ -583,8 +584,6 @@ export default class WorkbenchThreadStateController {
       if (homeDisplayOrderUpdate) this.publishHomeDisplayOrder(homeDisplayOrderUpdate);
       state.drafts.delete(input.draftId);
       state.entries.delete(draftKey);
-    } else {
-      profile = (await this.getProject(input.projectId)).newThreadProfile;
     }
     const acceptedAt = this.now();
     const providerEntry: WorkbenchThreadSidebarEntry = {
@@ -611,6 +610,9 @@ export default class WorkbenchThreadStateController {
     const state = await this.getProject(projectId);
     const key = entryKey(providerEntry);
     return await this.enqueue(`${projectId}:thread:${key}`, async () => {
+      const existing = state.entries.get(key);
+      // Raw provider reads cannot classify Workbench parent-child ownership.
+      if (existing?.entryKind === "subagent" && providerEntry.entryKind === "thread") return existing;
       const changed = this.installProviderSnapshot(state, providerEntry.identity.harness, [providerEntry], { complete: false });
       if (changed) await this.persist(projectId, state);
       const entry = state.entries.get(key);
@@ -639,51 +641,95 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  async readComposerProfileTarget(slot: WorkbenchComposerProfileSlot): Promise<WorkbenchComposerProfileTargetSelection | null> {
-    const state = await this.getProject(slot.projectId);
-    if (slot.kind === "new-thread") return state.newThreadProfile;
-    if (slot.kind === "draft") {
-      const draft = state.drafts.get(slot.draftId);
-      return draft && draft.harness === slot.harness ? this.profileFromDraft(draft) : null;
-    }
-    const entry = state.entries.get(`${slot.harness}:${slot.threadId}`);
-    return entry && entry.entryKind !== "draft" ? entry.profile : null;
+  readComposerProfileTarget(slot: WorkbenchComposerProfileSlot): Promise<WorkbenchComposerProfileTargetSelection | null> {
+    const key = `${slot.projectId}:profiles`;
+    const pending = this.operationQueues.get(key);
+    return this.enqueue(key, async () => {
+      await pending;
+      return await this.resolveComposerProfileTarget(await this.getProject(slot.projectId), slot);
+    });
   }
 
-  async setComposerProfileTarget(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection) {
+  setComposerProfileTarget(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection) {
     const parsed = WorkbenchComposerProfileSelectionSchema.parse(selection);
-    const state = await this.getProject(slot.projectId);
-    const key = slot.kind === "new-thread"
-      ? `${slot.projectId}:profile:new`
-      : slot.kind === "draft"
-        ? `${slot.projectId}:draft:${slot.draftId}`
-        : `${slot.projectId}:thread:${slot.harness}:${slot.threadId}`;
-    return await this.enqueue(key, async () => {
-      if (slot.kind === "new-thread") {
-        state.newThreadProfile = parsed;
-      } else if (slot.kind === "draft") {
-        const draft = state.drafts.get(slot.draftId);
-        if (!draft || draft.harness !== slot.harness || parsed.settings.harness !== slot.harness) return false;
-        const next = {
-          ...draft,
-          agent: parsed.settings.agentPath,
-          composerSettings: parsed.settings,
-          model: parsed.settings.model || null,
-          profileId: parsed.kind === "profile" ? parsed.profileId : null,
-          reasoningEffort: parsed.settings.reasoningEffort,
-          serviceTier: parsed.settings.serviceTier,
-        };
-        state.drafts.set(slot.draftId, next);
-        const currentEntry = state.entries.get(`draft:${slot.draftId}`);
-        state.entries.set(`draft:${slot.draftId}`, this.draftEntry(next, currentEntry?.entryKind === "draft" ? currentEntry.metadata : undefined));
-        state.newThreadProfile = parsed;
-      } else {
-        const threadKey = `${slot.harness}:${slot.threadId}`;
-        const entry = state.entries.get(threadKey);
-        if (!entry || entry.entryKind === "draft" || parsed.settings.harness !== slot.harness) return false;
-        state.entries.set(threadKey, { ...entry, profile: parsed });
+    return this.enqueue(`${slot.projectId}:profiles`, async () => {
+      return await this.persistComposerProfileTarget(await this.getProject(slot.projectId), slot, parsed);
+    });
+  }
+
+  prepareComposerProfileTarget(slot: Extract<WorkbenchComposerProfileSlot, { kind: "thread" }>) {
+    const key = `${slot.projectId}:profiles`;
+    const pending = this.operationQueues.get(key);
+    return this.enqueue(key, async () => {
+      await pending;
+      const state = await this.getProject(slot.projectId);
+      const selection = await this.resolveComposerProfileTarget(state, slot);
+      if (!selection) throw new Error("The thread has no available daemon composer profile.");
+      if (!await this.persistComposerProfileTarget(state, slot, selection)) throw new Error("The composer profile target no longer exists.");
+      const entry = state.entries.get(`${slot.harness}:${slot.threadId}`);
+      return { selection, subagentName: entry?.entryKind === "subagent" ? entry.name : null };
+    });
+  }
+
+  private async resolveComposerProfileTarget(state: ProjectState, slot: WorkbenchComposerProfileSlot): Promise<WorkbenchComposerProfileTargetSelection | null> {
+    const entry = slot.kind === "thread" ? state.entries.get(`${slot.harness}:${slot.threadId}`) : null;
+    const draft = slot.kind === "draft" ? state.drafts.get(slot.draftId) : null;
+    if (slot.kind === "thread" && (!entry || entry.entryKind === "draft")) return null;
+    if (slot.kind === "draft" && (!draft || draft.harness !== slot.harness)) return null;
+    let selection = slot.kind === "new-thread" ? state.newThreadProfile
+      : draft ? this.profileFromDraft(draft)
+        : entry && entry.entryKind !== "draft" ? entry.profile ?? (entry.entryKind === "thread" ? state.newThreadProfile : null)
+          : null;
+    const profileId = selection?.kind === "profile" ? selection.profileId
+      : !selection && entry?.entryKind === "subagent" ? entry.profileId : null;
+    if (profileId) {
+      if (!this.options.readComposerProfiles) throw new Error("The daemon composer profile catalogue is unavailable.");
+      const profile = (await this.options.readComposerProfiles()).profiles.find((candidate) => candidate.id === profileId);
+      if (profile) {
+        const { agentPath, agentSource, harness, model, reasoningEffort, serviceTier } = profile;
+        selection = { kind: "profile", profileId, settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier } };
+      } else if (selection) {
+        selection = { kind: "custom", settings: selection.settings };
       }
-      await this.persist(slot.projectId, state);
+    }
+    if (!selection || !selection.settings.model.trim()) return null;
+    if (slot.kind !== "new-thread" && selection.settings.harness !== slot.harness) {
+      throw new Error("The daemon composer profile harness does not match the thread.");
+    }
+    return WorkbenchComposerProfileSelectionSchema.parse(selection);
+  }
+
+  private installComposerProfileTarget(state: ProjectState, slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection) {
+    if (slot.kind === "new-thread") {
+      state.newThreadProfile = selection;
+    } else if (slot.kind === "draft") {
+      const draft = state.drafts.get(slot.draftId);
+      if (!draft || draft.harness !== slot.harness || selection.settings.harness !== slot.harness) return false;
+      const next = {
+        ...draft, agent: selection.settings.agentPath, composerSettings: selection.settings,
+        model: selection.settings.model || null, profileId: selection.kind === "profile" ? selection.profileId : null,
+        reasoningEffort: selection.settings.reasoningEffort, serviceTier: selection.settings.serviceTier,
+      };
+      state.drafts.set(slot.draftId, next);
+      const entry = state.entries.get(`draft:${slot.draftId}`);
+      state.entries.set(`draft:${slot.draftId}`, this.draftEntry(next, entry?.entryKind === "draft" ? entry.metadata : undefined));
+      state.newThreadProfile = selection;
+    } else {
+      const key = `${slot.harness}:${slot.threadId}`;
+      const entry = state.entries.get(key);
+      if (!entry || entry.entryKind === "draft" || selection.settings.harness !== slot.harness) return false;
+      state.entries.set(key, { ...entry, profile: selection });
+    }
+    return true;
+  }
+
+  private persistComposerProfileTarget(state: ProjectState, slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection) {
+    return this.enqueue(`${slot.projectId}:storage:write`, async () => {
+      // Stage only profile mutations: other queued writes must never observe an unacknowledged selection.
+      const staged = { ...state, drafts: new Map(state.drafts), entries: new Map(state.entries) };
+      if (!this.installComposerProfileTarget(staged, slot, selection)) return false;
+      await this.options.threadStateStore.writeProject(slot.projectId, this.storedProject(staged));
+      this.installComposerProfileTarget(state, slot, selection);
       this.publish(slot.projectId, state);
       return true;
     });
@@ -729,12 +775,12 @@ export default class WorkbenchThreadStateController {
       ) return existing;
       const activityAt = event.kind === "acceptedIntent" && providerEntry?.entryKind === "thread" ? providerEntry.activityAt : this.now();
       const lifecycleEntry = existing.entryKind === "subagent"
-        ? { ...existing, activityAt, lifecycle, ...(event.kind === "acceptedIntent" && profile ? { profile } : {}) }
+        ? { ...existing, activityAt, lifecycle, ...(event.kind === "acceptedIntent" && profile && !existing.profile ? { profile } : {}) }
         : {
           ...existing,
           activityAt,
           lifecycle,
-          ...(event.kind === "acceptedIntent" && profile ? { profile } : {}),
+          ...(event.kind === "acceptedIntent" && !existing.profile ? { profile: profile ?? (existing.entryKind === "thread" ? state.newThreadProfile : null) } : {}),
           metadata: existing.metadata.archived
             ? { archived: true as const, pinned: false as const, snoozed: false as const }
             : { ...existing.metadata, snoozed: shouldUnsnooze ? false : existing.metadata.snoozed },
@@ -2361,24 +2407,27 @@ export default class WorkbenchThreadStateController {
     this.synchronizeSettlementTimestamps(state);
     state.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), state.displayOrder);
     return this.enqueue(`${projectId}:storage:write`, async () => {
-      const drafts = [...state.drafts.values()].map((draft): StoredThreadDraft => {
-        const entry = state.entries.get(`draft:${draft.draftId}`);
-        return {
-          ...draft,
-          pinned: entry?.entryKind === "draft" ? entry.metadata.pinned : false,
-          snoozed: entry?.entryKind === "draft" ? entry.metadata.snoozed : false,
-        };
-      });
-      const records = [...state.entries.values()].filter((entry): entry is WorkbenchThreadStateRecord => entry.entryKind !== "draft");
-      const document = {
-        ...(!isWorkbenchThreadDisplayOrderEmpty(state.displayOrder) ? { displayOrder: state.displayOrder } : {}),
-        drafts,
-        newThreadProfile: state.newThreadProfile,
-        records,
-        version: 4,
-      } satisfies StoredProjectState;
-      await this.options.threadStateStore.writeProject(projectId, document);
+      await this.options.threadStateStore.writeProject(projectId, this.storedProject(state));
     });
+  }
+
+  private storedProject(state: ProjectState): StoredProjectState {
+    const drafts = [...state.drafts.values()].map((draft): StoredThreadDraft => {
+      const entry = state.entries.get(`draft:${draft.draftId}`);
+      return {
+        ...draft,
+        pinned: entry?.entryKind === "draft" ? entry.metadata.pinned : false,
+        snoozed: entry?.entryKind === "draft" ? entry.metadata.snoozed : false,
+      };
+    });
+    const records = [...state.entries.values()].filter((entry): entry is WorkbenchThreadStateRecord => entry.entryKind !== "draft");
+    return {
+      ...(!isWorkbenchThreadDisplayOrderEmpty(state.displayOrder) ? { displayOrder: state.displayOrder } : {}),
+      drafts,
+      newThreadProfile: state.newThreadProfile,
+      records,
+      version: 4,
+    };
   }
 }
 

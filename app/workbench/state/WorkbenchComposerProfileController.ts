@@ -5,6 +5,7 @@
  */
 import type {
   WorkbenchComposerProfile,
+  WorkbenchComposerProfileMutation,
   WorkbenchComposerProfileSelection,
   WorkbenchComposerProfileSlot,
   WorkbenchComposerProfileTargetSelection,
@@ -52,13 +53,13 @@ export default class WorkbenchComposerProfileController {
   private error = "";
   private readonly listeners = new Set<() => void>();
   private persistence: ComposerProfilePersistence | null = null;
-  private profileMutationQueue: Promise<void> = Promise.resolve();
+  private profileGeneration = 0;
+  private stableProfileGeneration = 0;
+  private stableProfiles: WorkbenchComposerProfile[] = [];
   private profiles: WorkbenchComposerProfile[] = [];
-  private profilesLoaded = false;
   private readonly selectionGenerations = new Map<string, number>();
-  private readonly selectionMutationQueues = new Map<string, Promise<void>>();
   private readonly slots = new Map<string, WorkbenchComposerProfileSlot>();
-  private readonly stableSelections = new Map<string, WorkbenchComposerProfileTargetSelection>();
+  private readonly stableSelections = new Map<string, { generation: number; selection: WorkbenchComposerProfileTargetSelection }>();
   private selections: Record<string, WorkbenchComposerProfileSelection> = {};
   private snapshot: WorkbenchComposerProfileSnapshot;
   private targetPersistence: ComposerProfileTargetPersistence | null = null;
@@ -69,14 +70,18 @@ export default class WorkbenchComposerProfileController {
 
   async initializePersistence(persistence: ComposerProfilePersistence) {
     this.persistence = persistence;
-    await this.enqueueProfileMutation(async () => {
+    const generation = ++this.profileGeneration;
+    try {
       const payload = await persistence.read();
+      if (generation !== this.profileGeneration) return;
       this.profiles = [...payload.profiles];
-      this.profilesLoaded = true;
+      this.stableProfiles = this.profiles;
+      this.stableProfileGeneration = generation;
       this.error = "";
       this.publish();
-      return true;
-    });
+    } catch (error) {
+      if (generation === this.profileGeneration) this.fail(error instanceof Error ? error.message : "Unable to read composer profiles.");
+    }
   }
 
   initializeTargetPersistence(persistence: ComposerProfileTargetPersistence) {
@@ -91,37 +96,18 @@ export default class WorkbenchComposerProfileController {
   getSnapshot = () => this.snapshot;
   getSelection(slot: WorkbenchComposerProfileSlot) { return this.selections[getSlotKey(slot)] ?? EMPTY_CUSTOM_SELECTION; }
   getProfile(profileId: string) { return this.profiles.find((profile) => profile.id === profileId) ?? null; }
-  getProfileReasoningEffort(profileId: string, harness: WorkbenchHarness) {
-    const profile = this.getProfile(profileId);
-    return profile?.harness === harness ? profile.reasoningEffort : null;
-  }
   getSelectedProfile(slot: WorkbenchComposerProfileSlot) { const selection = this.getSelection(slot); return selection.kind === "profile" ? this.getProfile(selection.profileId) : null; }
   getVisibleProfiles(projectId: string, harness?: WorkbenchHarness | null) {
     return this.profiles.filter((profile) => (!harness || profile.harness === harness) && (profile.scope.kind === "global" || profile.scope.projectId === projectId));
   }
 
-  resolveSettings(slot: WorkbenchComposerProfileSlot, customSettings: WorkbenchComposerSettings | null) {
+  resolveSettings(slot: WorkbenchComposerProfileSlot) {
     const selection = this.getSelection(slot);
-    if (selection.kind === "profile") {
-      const profile = this.getProfile(selection.profileId);
-      if (profile) return cloneSettings(profile);
-      return cloneSettings(selection.settings);
-    }
-    return selection.kind === "custom" && selection.settings
-      ? cloneSettings(selection.settings)
-      : customSettings ? cloneSettings(customSettings) : null;
+    return selection.settings ? cloneSettings(selection.settings) : null;
   }
 
   resolveThread(slot: WorkbenchComposerProfileSlot, thread: ThreadPayload) {
-    const customSettings = thread.model ? {
-      agentPath: thread.agentPath,
-      agentSource: null,
-      harness: thread.harness,
-      model: thread.model,
-      reasoningEffort: thread.reasoningEffort,
-      serviceTier: thread.harness === "codex" && thread.serviceTier === "fast" ? "fast" as const : null,
-    } : null;
-    const settings = this.resolveSettings(slot, customSettings);
+    const settings = this.resolveSettings(slot);
     return settings ? {
       ...thread,
       agentPath: settings.agentPath,
@@ -130,7 +116,7 @@ export default class WorkbenchComposerProfileController {
       reasoningEffort: settings.reasoningEffort,
       serviceTier: settings.serviceTier,
       source: thread.isDraft ? settings.harness : thread.source,
-    } : thread;
+    } : { ...thread, agentPath: null, model: null, reasoningEffort: null, serviceTier: null };
   }
 
   async createProfile(input: Omit<WorkbenchComposerProfile, "createdAt" | "id" | "updatedAt">) {
@@ -138,50 +124,30 @@ export default class WorkbenchComposerProfileController {
     const profile = normalizeComposerProfile({ ...input, createdAt: now, id: createProfileId(), updatedAt: now });
     if (!profile) return this.fail("Profile model and scope are required.");
     if (profile.scope.kind === "global" && profile.agentSource === "project") return this.fail("Profiles using a project agent cannot be global.");
-    return await this.enqueueProfileMutation(async () => {
-      const payload = await this.requirePersistence().mutate({ kind: "upsert", profile });
-      this.profiles = [...payload.profiles];
-      this.error = "";
-      this.publish();
-      return this.getProfile(profile.id);
-    });
+    return await this.persistProfileMutation({ kind: "upsert", profile }, [...this.profiles, profile])
+      ? this.getProfile(profile.id) : null;
   }
 
   async updateProfile(profileId: string, update: Partial<Omit<WorkbenchComposerProfile, "createdAt" | "harness" | "id">>) {
-    return await this.enqueueProfileMutation(async () => {
-      const existing = this.getProfile(profileId);
-      if (!existing) return null;
-      const profile = normalizeComposerProfile({ ...existing, ...update, createdAt: existing.createdAt, harness: existing.harness, id: existing.id, updatedAt: Date.now() });
-      if (!profile) throw new Error("Profile name and model are required.");
-      if (profile.scope.kind === "global" && profile.agentSource === "project") throw new Error("Profiles using a project agent cannot be global.");
-      const payload = await this.requirePersistence().mutate({ kind: "upsert", profile });
-      this.profiles = [...payload.profiles];
-      this.error = "";
-      this.publish();
-      return this.getProfile(profile.id);
-    });
+    const existing = this.getProfile(profileId);
+    if (!existing) return null;
+    const profile = normalizeComposerProfile({ ...existing, ...update, createdAt: existing.createdAt, harness: existing.harness, id: existing.id, updatedAt: Date.now() });
+    if (!profile) return this.fail("Profile name and model are required.");
+    if (profile.scope.kind === "global" && profile.agentSource === "project") return this.fail("Profiles using a project agent cannot be global.");
+    const { updatedAt: _updatedAt, ...changes } = update;
+    return await this.persistProfileMutation({ kind: "upsert", profile, changes }, this.profiles.map((entry) => entry.id === profileId ? profile : entry))
+      ? this.getProfile(profileId) : null;
   }
 
   async deleteProfile(profileId: string) {
-    return await this.enqueueProfileMutation(async () => {
-      const profile = this.getProfile(profileId);
-      if (!profile) return null;
-      const affectedSlots = this.readSelectionSlots().filter(({ selection }) => (
-        selection.kind === "profile" && selection.profileId === profileId
-      ));
-      const payload = await this.requirePersistence().mutate({ kind: "delete", profileId });
-      this.profiles = [...payload.profiles];
-      this.error = "";
-      this.publish();
-      await Promise.all(affectedSlots.map(async ({ slot }) => {
-        await this.persistSelection(slot, { kind: "custom", settings: cloneSettings(profile) });
-      }));
-      return profile;
-    });
+    const profile = this.getProfile(profileId);
+    if (!profile) return null;
+    return await this.persistProfileMutation({ kind: "delete", profileId }, this.profiles.filter((entry) => entry.id !== profileId))
+      ? profile : null;
   }
 
   selectCustom(slot: WorkbenchComposerProfileSlot, settings: WorkbenchComposerSettings) {
-    void this.persistSelection(slot, { kind: "custom", settings: cloneSettings(settings) });
+    return this.persistSelection(slot, { kind: "custom", settings: cloneSettings(settings) });
   }
   selectProfile(slot: WorkbenchComposerProfileSlot, profileId: string) {
     const profile = this.getProfile(profileId);
@@ -212,14 +178,15 @@ export default class WorkbenchComposerProfileController {
   async loadSelection(slot: WorkbenchComposerProfileSlot) {
     const key = getSlotKey(slot);
     this.slots.set(key, slot);
-    const generation = this.selectionGenerations.get(key) ?? 0;
+    const generation = (this.selectionGenerations.get(key) ?? 0) + 1;
+    this.selectionGenerations.set(key, generation);
     try {
       const selection = await this.requireTargetPersistence().read(slot);
       if ((this.selectionGenerations.get(key) ?? 0) !== generation) return;
       if (selection) {
         this.installStableSelection(slot, selection, false);
       }
-      else if (!this.selections[key]) {
+      else {
         this.stableSelections.delete(key);
         const { [key]: _removed, ...rest } = this.selections;
         this.selections = rest;
@@ -227,32 +194,11 @@ export default class WorkbenchComposerProfileController {
       this.error = "";
       this.publish();
     } catch (error) {
+      if (this.selectionGenerations.get(key) !== generation) return;
+      const { [key]: _removed, ...rest } = this.selections;
+      this.selections = rest;
       this.fail(error instanceof Error ? error.message : "Unable to read the composer profile target.");
     }
-  }
-
-  async synchronizeSelection(slot: WorkbenchComposerProfileSlot, fallbackSettings: WorkbenchComposerSettings) {
-    const current = this.getSelection(slot);
-    const profile = current.kind === "profile" ? this.getProfile(current.profileId) : null;
-    const selection: WorkbenchComposerProfileTargetSelection = current.kind === "profile"
-      ? profile
-        ? {
-          kind: "profile",
-          profileId: current.profileId,
-          settings: cloneSettings(profile),
-        }
-        : !this.profilesLoaded
-          ? {
-            kind: "profile",
-            profileId: current.profileId,
-            settings: cloneSettings(current.settings),
-          }
-          : { kind: "custom", settings: cloneSettings(current.settings) }
-      : { kind: "custom", settings: cloneSettings(current.settings ?? fallbackSettings) };
-    if (!await this.persistSelection(slot, selection)) {
-      throw new Error(this.error || "Unable to persist the composer profile selection.");
-    }
-    return selection;
   }
 
   private async persistSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection): Promise<boolean> {
@@ -261,36 +207,38 @@ export default class WorkbenchComposerProfileController {
     this.selectionGenerations.set(key, generation);
     this.installSelection(slot, selection, false);
     this.publish();
-    const priorMutation = this.selectionMutationQueues.get(key) ?? Promise.resolve();
-    const operation = priorMutation.then(async () => {
-      await this.requireTargetPersistence().write(slot, selection);
-    });
-    const queued = operation.catch(() => undefined);
-    this.selectionMutationQueues.set(key, queued);
     try {
-      await operation;
-      this.stableSelections.set(key, this.cloneTargetSelection(selection));
+      const persistence = this.requireTargetPersistence();
+      await persistence.write(slot, selection);
+      const acknowledged = await persistence.read(slot);
+      if (!acknowledged) throw new Error("The daemon composer profile target is unavailable.");
+      if (generation >= (this.stableSelections.get(key)?.generation ?? 0)) {
+        this.stableSelections.set(key, { generation, selection: this.cloneTargetSelection(acknowledged) });
+      }
+      if (this.selectionGenerations.get(key) !== generation) return true;
+      this.installSelection(slot, acknowledged, false);
       this.error = "";
       this.publish();
       return true;
     } catch (error) {
       if ((this.selectionGenerations.get(key) ?? 0) === generation) {
         const stable = this.stableSelections.get(key);
-        if (stable) this.installSelection(slot, stable, false);
+        if (stable) this.installSelection(slot, stable.selection, false);
         else {
           const { [key]: _removed, ...rest } = this.selections;
           this.selections = rest;
         }
       }
-      this.fail(error instanceof Error ? error.message : "Unable to persist the composer profile selection.");
+      if (this.selectionGenerations.get(key) === generation) this.fail(error instanceof Error ? error.message : "Unable to persist the composer profile selection.");
       return false;
-    } finally {
-      if (this.selectionMutationQueues.get(key) === queued) this.selectionMutationQueues.delete(key);
     }
   }
 
   private installStableSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection, publish = true) {
-    this.stableSelections.set(getSlotKey(slot), this.cloneTargetSelection(selection));
+    const key = getSlotKey(slot);
+    const generation = (this.selectionGenerations.get(key) ?? 0) + 1;
+    this.selectionGenerations.set(key, generation);
+    this.stableSelections.set(key, { generation, selection: this.cloneTargetSelection(selection) });
     this.installSelection(slot, selection, publish);
   }
 
@@ -312,16 +260,6 @@ export default class WorkbenchComposerProfileController {
     if (publish) this.publish();
   }
 
-  private readSelectionSlots(): Array<{
-    selection: WorkbenchComposerProfileSelection;
-    slot: WorkbenchComposerProfileSlot;
-  }> {
-    return Object.entries(this.selections).flatMap(([key, selection]) => {
-      const slot = this.slots.get(key);
-      return slot ? [{ selection, slot }] : [];
-    });
-  }
-
   private requirePersistence() {
     if (!this.persistence) throw new Error("Composer profiles are not connected to the daemon.");
     return this.persistence;
@@ -332,13 +270,28 @@ export default class WorkbenchComposerProfileController {
     return this.targetPersistence;
   }
 
-  private async enqueueProfileMutation<Result>(operation: () => Promise<Result>) {
-    const result = this.profileMutationQueue.then(operation);
-    this.profileMutationQueue = result.then(() => undefined, () => undefined);
+  private async persistProfileMutation(mutation: WorkbenchComposerProfileMutation, optimistic: WorkbenchComposerProfile[]) {
+    const generation = ++this.profileGeneration;
+    this.profiles = optimistic;
+    this.publish();
     try {
-      return await result;
+      const payload = await this.requirePersistence().mutate(mutation);
+      if (generation >= this.stableProfileGeneration) {
+        this.stableProfileGeneration = generation;
+        this.stableProfiles = [...payload.profiles];
+      }
+      if (generation !== this.profileGeneration) return true;
+      this.profiles = [...payload.profiles];
+      this.error = "";
+      this.publish();
+      await Promise.all([...this.slots.values()].map((slot) => this.loadSelection(slot)));
+      return true;
     } catch (error) {
-      return this.fail(error instanceof Error ? error.message : "Unable to persist composer profiles.");
+      if (generation === this.profileGeneration) {
+        this.profiles = this.stableProfiles;
+        this.fail(error instanceof Error ? error.message : "Unable to persist composer profiles.");
+      }
+      return false;
     }
   }
 

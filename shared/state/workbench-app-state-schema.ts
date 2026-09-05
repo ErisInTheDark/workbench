@@ -443,37 +443,6 @@ const projectExpandedDirectoriesHistory = initialHistory(defineTable("project_ex
   constraints: [primaryKey([table.daemon_registration_id, table.project_id, table.path])],
 })));
 
-const harnessPreferencesHistory = initialHistory(defineTable("harness_preferences", {
-  daemon_registration_id: registrationForeignKey(),
-  harness: enumText("codex", "copilot", "opencode").notNull(),
-  model: text(),
-  service_tier: enumText("fast"),
-  agent_path: text(),
-  ...revisionColumns(),
-}, (table) => ({
-  constraints: [primaryKey([table.daemon_registration_id, table.harness])],
-})));
-
-const harnessModelEffortsHistory = initialHistory(defineTable("harness_model_efforts", {
-  daemon_registration_id: registrationForeignKey(),
-  harness: enumText("codex", "copilot", "opencode").notNull(),
-  model: text().notNull(),
-  reasoning_effort: text(),
-  ...revisionColumns(),
-}, (table) => ({
-  constraints: [primaryKey([table.daemon_registration_id, table.harness, table.model])],
-})));
-
-const threadServiceTiersHistory = initialHistory(defineTable("thread_service_tiers", {
-  daemon_registration_id: registrationForeignKey(),
-  harness: enumText("codex", "copilot", "opencode").notNull(),
-  thread_id: text().notNull(),
-  service_tier: enumText("fast"),
-  ...revisionColumns(),
-}, (table) => ({
-  constraints: [primaryKey([table.daemon_registration_id, table.harness, table.thread_id])],
-})));
-
 const fileDraftsHistory = initialHistory(defineTable("file_drafts", {
   daemon_registration_id: registrationForeignKey(),
   project_id: text().notNull(),
@@ -620,9 +589,6 @@ const histories = [
   projectSidebarPreferencesHistory,
   projectSidebarFoldersHistory,
   projectExpandedDirectoriesHistory,
-  harnessPreferencesHistory,
-  harnessModelEffortsHistory,
-  threadServiceTiersHistory,
   fileDraftsHistory,
   composerDraftsHistory,
   composerDraftAttachmentsHistory,
@@ -637,8 +603,6 @@ export const appStateClientTables = Object.freeze({
   composerDrafts: composerDraftsHistory.current,
   fileDrafts: fileDraftsHistory.current,
   globalPreferences: globalPreferencesHistory.current,
-  harnessModelEfforts: harnessModelEffortsHistory.current,
-  harnessPreferences: harnessPreferencesHistory.current,
   lastLaunchTarget: lastLaunchTargetHistory.current,
   projectExpandedDirectories: projectExpandedDirectoriesHistory.current,
   projectPreferences: projectPreferencesHistory.current,
@@ -648,7 +612,6 @@ export const appStateClientTables = Object.freeze({
   questionnaireDraftAttachments: questionnaireDraftAttachmentsHistory.current,
   questionnaireDraftSelections: questionnaireDraftSelectionsHistory.current,
   questionnaireDrafts: questionnaireDraftsHistory.current,
-  threadServiceTiers: threadServiceTiersHistory.current,
 });
 
 export const appStateTables = Object.freeze({

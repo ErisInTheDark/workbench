@@ -22,7 +22,7 @@ export function createComposerProfilePersistence(daemon: WorkbenchDaemonClient):
   return {
     mutate: async (mutation) => mutation.kind === "delete"
       ? await daemon.request("profiles/delete", { profileId: mutation.profileId })
-      : await daemon.request("profiles/upsert", { profile: mutation.profile }),
+      : await daemon.request("profiles/upsert", { profile: mutation.profile, ...(mutation.changes ? { changes: mutation.changes } : {}) }),
     read: async () => await daemon.request("profiles/read", {}),
   };
 }

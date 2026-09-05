@@ -37,9 +37,6 @@ export function workbenchClientStateRecordIdentity(
     case "sidebarPreference": return { daemonRegistrationId: record.daemonRegistrationId, key: record.preference.key, kind: record.kind, projectId: record.projectId };
     case "sidebarFolder": return { daemonRegistrationId: record.daemonRegistrationId, folderId: record.folderId, kind: record.kind, projectId: record.projectId, scope: record.scope };
     case "expandedDirectory": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, path: record.path, projectId: record.projectId };
-    case "harnessPreference": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind };
-    case "modelEffort": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind, model: record.model };
-    case "threadServiceTier": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind, threadId: record.threadId };
     case "fileDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, path: record.path, projectId: record.projectId };
     case "composerDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, threadId: record.threadId };
     case "questionnaireDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, requestKey: record.requestKey, threadId: record.threadId };
@@ -123,40 +120,6 @@ export function projectWorkbenchClientStateRows(
     };
     if (row.deleted) remove(row.revision, identity);
     else add(row.revision, 0, identity);
-  }
-  for (const row of rows.harnessPreferences) {
-    const identity = {
-      daemonRegistrationId: row.daemon_registration_id,
-      harness: row.harness,
-      kind: "harnessPreference" as const,
-    };
-    if (row.deleted) remove(row.revision, identity);
-    else add(row.revision, 0, {
-      ...identity,
-      agentPath: row.agent_path,
-      model: row.model,
-      serviceTier: row.service_tier,
-    });
-  }
-  for (const row of rows.harnessModelEfforts) {
-    const identity = {
-      daemonRegistrationId: row.daemon_registration_id,
-      harness: row.harness,
-      kind: "modelEffort" as const,
-      model: row.model,
-    };
-    if (row.deleted) remove(row.revision, identity);
-    else add(row.revision, 0, { ...identity, reasoningEffort: row.reasoning_effort });
-  }
-  for (const row of rows.threadServiceTiers) {
-    const identity = {
-      daemonRegistrationId: row.daemon_registration_id,
-      harness: row.harness,
-      kind: "threadServiceTier" as const,
-      threadId: row.thread_id,
-    };
-    if (row.deleted) remove(row.revision, identity);
-    else add(row.revision, 0, { ...identity, serviceTier: row.service_tier });
   }
   for (const row of rows.lastLaunchTarget) {
     const identity = { kind: "lastLaunchTarget" as const };

@@ -46,9 +46,6 @@ function recordIdentity(record: WorkbenchClientStateRecord): WorkbenchClientStat
     case "sidebarPreference": return { daemonRegistrationId: record.daemonRegistrationId, key: record.preference.key, kind: record.kind, projectId: record.projectId };
     case "sidebarFolder": return { daemonRegistrationId: record.daemonRegistrationId, folderId: record.folderId, kind: record.kind, projectId: record.projectId, scope: record.scope };
     case "expandedDirectory": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, path: record.path, projectId: record.projectId };
-    case "harnessPreference": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind };
-    case "modelEffort": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind, model: record.model };
-    case "threadServiceTier": return { daemonRegistrationId: record.daemonRegistrationId, harness: record.harness, kind: record.kind, threadId: record.threadId };
     case "fileDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, path: record.path, projectId: record.projectId };
     case "composerDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, threadId: record.threadId };
     case "questionnaireDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, requestKey: record.requestKey, threadId: record.threadId };
@@ -126,8 +123,6 @@ export default class WorkbenchAppStateController {
       composerDrafts: changed(this.#repository.query(selectRows(appStateClientTables.composerDrafts))),
       fileDrafts: changed(this.#repository.query(selectRows(appStateClientTables.fileDrafts))),
       globalPreferences: changed(this.#repository.query(selectRows(appStateClientTables.globalPreferences))),
-      harnessModelEfforts: changed(this.#repository.query(selectRows(appStateClientTables.harnessModelEfforts))),
-      harnessPreferences: changed(this.#repository.query(selectRows(appStateClientTables.harnessPreferences))),
       lastLaunchTarget: changed(this.#repository.query(selectRows(appStateClientTables.lastLaunchTarget))),
       projectExpandedDirectories: changed(this.#repository.query(selectRows(appStateClientTables.projectExpandedDirectories))),
       projectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectPreferences))),
@@ -137,7 +132,6 @@ export default class WorkbenchAppStateController {
       questionnaireDraftAttachments: this.#repository.query(selectRows(appStateClientTables.questionnaireDraftAttachments)),
       questionnaireDraftSelections: this.#repository.query(selectRows(appStateClientTables.questionnaireDraftSelections)),
       questionnaireDrafts: changed(this.#repository.query(selectRows(appStateClientTables.questionnaireDrafts))),
-      threadServiceTiers: changed(this.#repository.query(selectRows(appStateClientTables.threadServiceTiers))),
     };
   }
 
@@ -185,21 +179,6 @@ export default class WorkbenchAppStateController {
           daemon_registration_id: record.daemonRegistrationId, deleted: 0, path: record.path,
           project_id: record.projectId, revision,
         }, { conflictColumns: ["daemon_registration_id", "project_id", "path"], updateColumns: ["deleted", "revision"] })];
-      case "harnessPreference":
-        return [upsertRow(appStateTables.harnessPreferences, {
-          agent_path: record.agentPath, daemon_registration_id: record.daemonRegistrationId, deleted: 0,
-          harness: record.harness, model: record.model, revision, service_tier: record.serviceTier,
-        }, { conflictColumns: ["daemon_registration_id", "harness"], updateColumns: ["model", "service_tier", "agent_path", "deleted", "revision"] })];
-      case "modelEffort":
-        return [upsertRow(appStateTables.harnessModelEfforts, {
-          daemon_registration_id: record.daemonRegistrationId, deleted: 0, harness: record.harness,
-          model: record.model, reasoning_effort: record.reasoningEffort, revision,
-        }, { conflictColumns: ["daemon_registration_id", "harness", "model"], updateColumns: ["reasoning_effort", "deleted", "revision"] })];
-      case "threadServiceTier":
-        return [upsertRow(appStateTables.threadServiceTiers, {
-          daemon_registration_id: record.daemonRegistrationId, deleted: 0, harness: record.harness,
-          revision, service_tier: record.serviceTier, thread_id: record.threadId,
-        }, { conflictColumns: ["daemon_registration_id", "harness", "thread_id"], updateColumns: ["service_tier", "deleted", "revision"] })];
       case "lastLaunchTarget":
         return [upsertRow(appStateTables.lastLaunchTarget, {
           daemon_registration_id: record.daemonRegistrationId, deleted: 0, id: "singleton",
@@ -297,18 +276,6 @@ export default class WorkbenchAppStateController {
       case "expandedDirectory":
         return [updateRows(appStateTables.projectExpandedDirectories, { deleted: 1, revision }, {
           daemon_registration_id: identity.daemonRegistrationId, path: identity.path, project_id: identity.projectId,
-        })];
-      case "harnessPreference":
-        return [updateRows(appStateTables.harnessPreferences, {
-          agent_path: null, deleted: 1, model: null, revision, service_tier: null,
-        }, { daemon_registration_id: identity.daemonRegistrationId, harness: identity.harness })];
-      case "modelEffort":
-        return [updateRows(appStateTables.harnessModelEfforts, { deleted: 1, reasoning_effort: null, revision }, {
-          daemon_registration_id: identity.daemonRegistrationId, harness: identity.harness, model: identity.model,
-        })];
-      case "threadServiceTier":
-        return [updateRows(appStateTables.threadServiceTiers, { deleted: 1, revision, service_tier: null }, {
-          daemon_registration_id: identity.daemonRegistrationId, harness: identity.harness, thread_id: identity.threadId,
         })];
       case "fileDraft":
         return [updateRows(appStateTables.fileDrafts, {

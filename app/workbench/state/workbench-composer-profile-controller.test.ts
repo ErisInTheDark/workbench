@@ -39,10 +39,18 @@ class MemoryPersistence implements ComposerProfilePersistence {
 }
 
 class MemoryTargetPersistence implements ComposerProfileTargetPersistence {
+  constructor(private readonly resolveProfile?: (id: string) => WorkbenchComposerProfile | null) {}
   failWrites = false;
   readonly selections = new Map<string, WorkbenchComposerProfileTargetSelection>();
   private key(slot: WorkbenchComposerProfileSlot) { return JSON.stringify(slot); }
-  async read(slot: WorkbenchComposerProfileSlot) { return this.selections.get(this.key(slot)) ?? null; }
+  async read(slot: WorkbenchComposerProfileSlot): Promise<WorkbenchComposerProfileTargetSelection | null> {
+    const selection = this.selections.get(this.key(slot)) ?? null;
+    if (!selection || selection.kind !== "profile" || !this.resolveProfile) return selection;
+    const profile = this.resolveProfile(selection.profileId);
+    if (!profile) return { kind: "custom", settings: selection.settings };
+    const { agentPath, agentSource, harness, model, reasoningEffort, serviceTier } = profile;
+    return { ...selection, settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier } };
+  }
   async write(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection) {
     if (this.failWrites) throw new Error("Daemon rejected the target mutation.");
     this.selections.set(this.key(slot), structuredClone(selection));
@@ -72,12 +80,40 @@ function profile(overrides: Partial<WorkbenchComposerProfile> = {}): WorkbenchCo
 
 async function createController(initialProfiles: WorkbenchComposerProfile[] = []) {
   const persistence = new MemoryPersistence(initialProfiles);
-  const targets = new MemoryTargetPersistence();
+  const targets = new MemoryTargetPersistence((id) => persistence.profiles.find((entry) => entry.id === id) ?? null);
   const controller = new WorkbenchComposerProfileController();
   controller.initializeTargetPersistence(targets);
   await controller.initializePersistence(persistence);
   return { controller, persistence, targets };
 }
+
+test("missing daemon selection never resolves settings from a raw thread", async () => {
+  const { controller } = await createController();
+  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: "project-a", threadId: "thread" };
+  assert.equal(controller.resolveSettings(slot), null);
+  controller.dispose();
+});
+
+test("target edits reach daemon before preceding saves finish", async () => {
+  const controller = new WorkbenchComposerProfileController();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const writes: WorkbenchComposerProfileTargetSelection[] = [];
+  controller.initializeTargetPersistence({
+    read: async () => writes.at(-1) ?? null,
+    write: async (_slot, selection) => { writes.push(selection); await gate; },
+  });
+  const slot = { kind: "new-thread" as const, projectId: "project-a" };
+  try {
+    controller.selectCustom(slot, CODEX_SETTINGS);
+    controller.selectCustom(slot, { ...CODEX_SETTINGS, model: "new-model" });
+    await Promise.resolve();
+    assert.equal(writes.length, 2);
+  } finally {
+    release();
+    controller.dispose();
+  }
+});
 
 test("scope changes retain stable ids and preserve hidden out-of-scope links", async () => {
   const { controller } = await createController();
@@ -94,7 +130,7 @@ test("scope changes retain stable ids and preserve hidden out-of-scope links", a
   assert.equal(demoted?.id, created.id);
   assert.deepEqual(controller.getVisibleProfiles("project-b"), []);
   assert.equal(controller.getSelectedProfile(sourceSlot)?.id, created.id);
-  assert.equal(controller.resolveSettings(sourceSlot, null)?.model, "gpt-5.4");
+  assert.equal(controller.resolveSettings(sourceSlot)?.model, "gpt-5.4");
   controller.dispose();
 });
 
@@ -102,7 +138,7 @@ test("materialization copies only compatible profile links to durable destinatio
   const sourceSlot = { kind: "new-thread" as const, projectId: "project-a" };
   const { controller, targets } = await createController([profile()]);
   controller.selectProfile(sourceSlot, "profile-a");
-  await controller.synchronizeSelection(sourceSlot, CODEX_SETTINGS);
+  await controller.loadSelection(sourceSlot);
 
   controller.materializeSelection(sourceSlot, "thread-a", "codex");
   controller.materializeSelection(sourceSlot, "thread-b", "copilot");
@@ -139,7 +175,7 @@ test("deleting a linked profile preserves its last settings as a durable custom 
   const selection = controller.getSelection(slot);
   assert.equal(selection.kind, "custom");
   assert.deepEqual(selection.kind === "custom" ? selection.settings : null, CODEX_SETTINGS);
-  assert.equal([...targets.selections.values()][0]?.kind, "custom");
+  assert.deepEqual(await targets.read(slot), selection);
   controller.dispose();
 });
 
@@ -215,11 +251,11 @@ test("draft profile slots remain UUID-isolated and harness-bound", async () => {
   controller.dispose();
 });
 
-test("acknowledged tied profile edits update the composer before target synchronization", async () => {
+test("acknowledged tied profile edits refresh the daemon target projection", async () => {
   const slot = { kind: "new-thread" as const, projectId: "project-a" };
   const { controller, targets } = await createController([profile()]);
   controller.selectProfile(slot, "profile-a");
-  await controller.synchronizeSelection(slot, CODEX_SETTINGS);
+  await controller.loadSelection(slot);
   assert.deepEqual(await targets.read(slot), {
     kind: "profile",
     profileId: "profile-a",
@@ -227,12 +263,12 @@ test("acknowledged tied profile edits update the composer before target synchron
   });
 
   await controller.updateProfile("profile-a", { model: "gpt-5.5", reasoningEffort: "medium" });
-  assert.deepEqual(controller.resolveSettings(slot, null), {
+  assert.deepEqual(controller.resolveSettings(slot), {
     ...CODEX_SETTINGS,
     model: "gpt-5.5",
     reasoningEffort: "medium",
   });
-  const synchronized = await controller.synchronizeSelection(slot, CODEX_SETTINGS);
+  const synchronized = controller.getSelection(slot);
   assert.deepEqual(synchronized, {
     kind: "profile",
     profileId: "profile-a",
@@ -242,7 +278,7 @@ test("acknowledged tied profile edits update the composer before target synchron
   controller.dispose();
 });
 
-test("target synchronization preserves a tied snapshot while profile definitions are still loading", async () => {
+test("daemon target settings remain available while profile labels are loading", async () => {
   const slot = { kind: "new-thread" as const, projectId: "project-a" };
   const targets = new MemoryTargetPersistence();
   await targets.write(slot, {
@@ -260,7 +296,7 @@ test("target synchronization preserves a tied snapshot while profile definitions
   });
 
   await controller.loadSelection(slot);
-  assert.deepEqual(await controller.synchronizeSelection(slot, CODEX_SETTINGS), {
+  assert.deepEqual(controller.getSelection(slot), {
     kind: "profile",
     profileId: "profile-a",
     settings: CODEX_SETTINGS,
@@ -271,24 +307,25 @@ test("target synchronization preserves a tied snapshot while profile definitions
   controller.dispose();
 });
 
-test("late target reads cannot erase newer or materialized selections", async () => {
+test("late reads cannot erase newer selections and missing daemon targets clear provisional display", async () => {
   const slot = { kind: "new-thread" as const, projectId: "project-a" };
   let resolveRead: (selection: WorkbenchComposerProfileTargetSelection | null) => void = () => undefined;
   const read = new Promise<WorkbenchComposerProfileTargetSelection | null>((resolve) => { resolveRead = resolve; });
   const persisted = new MemoryTargetPersistence();
+  let reads = 0;
   const controller = new WorkbenchComposerProfileController();
   controller.initializeTargetPersistence({
-    read: async () => await read,
+    read: async (target) => ++reads === 1 ? await read : await persisted.read(target),
     write: async (target, selection) => await persisted.write(target, selection),
   });
   await controller.initializePersistence(new MemoryPersistence([profile()]));
 
   const loading = controller.loadSelection(slot);
-  controller.selectCustom(slot, { ...CODEX_SETTINGS, model: "newer-model" });
+  const saving = controller.selectCustom(slot, { ...CODEX_SETTINGS, model: "newer-model" });
   resolveRead({ kind: "custom", settings: { ...CODEX_SETTINGS, model: "stale-model" } });
   await loading;
-  assert.equal(controller.resolveSettings(slot, null)?.model, "newer-model");
-  await controller.synchronizeSelection(slot, CODEX_SETTINGS);
+  assert.equal(controller.resolveSettings(slot)?.model, "newer-model");
+  await saving;
 
   const draftSlot = {
     draftId: "11111111-1111-4111-8111-111111111111",
@@ -301,21 +338,16 @@ test("late target reads cannot erase newer or materialized selections", async ()
   const emptyTargets = new MemoryTargetPersistence();
   controller.initializeTargetPersistence(emptyTargets);
   await controller.loadSelection(draftSlot);
-  assert.equal(controller.getSelectedProfile(draftSlot)?.id, "profile-a");
+  assert.equal(controller.resolveSettings(draftSlot), null);
   controller.dispose();
 });
 
-test("target persistence failure rejects pre-send synchronization", async () => {
+test("target persistence failure restores acknowledged settings and exposes the failure", async () => {
   const slot = { kind: "new-thread" as const, projectId: "project-a" };
   const { controller, targets } = await createController();
-  await controller.synchronizeSelection(slot, CODEX_SETTINGS);
+  await controller.selectCustom(slot, CODEX_SETTINGS);
   targets.failWrites = true;
-  controller.selectCustom(slot, { ...CODEX_SETTINGS, model: "unsaved-model" });
-
-  await assert.rejects(
-    controller.synchronizeSelection(slot, { ...CODEX_SETTINGS, model: "unsaved-model" }),
-    /daemon rejected the target mutation/i,
-  );
+  assert.equal(await controller.selectCustom(slot, { ...CODEX_SETTINGS, model: "unsaved-model" }), false);
   assert.match(controller.getSnapshot().error, /daemon rejected the target mutation/i);
   assert.deepEqual(controller.getSelection(slot), { kind: "custom", settings: CODEX_SETTINGS });
   controller.dispose();

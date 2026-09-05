@@ -2,9 +2,11 @@
  * Exports:
  * - WorkbenchCodexInstructionSource: explicit request-inherited or cwd-owned context for internal Codex resume configuration. Keywords: Codex, context, cwd, request.
  * - WorkbenchCodexInstructionPort: narrow Codex request-augmentation boundary consumed by the bridge. Keywords: Codex, instructions, MCP, adapter.
+ * - WorkbenchCodexThreadConfiguration: daemon-resolved settings and validated thread ownership.
  * - default WorkbenchCodexInstructionAdapter: adapt stable thread instructions, disabled native project docs, activated skill input, and project-local MCP config into Codex requests. Keywords: Codex, project, instructions, skills, prompt, MCP.
  */
 import path from "node:path";
+import type { WorkbenchComposerSettings, WorkbenchProjectRoot } from "workbench-shared/types";
 
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchPromptInstructions } from "../lib/workbench/instructions/WorkbenchPromptFiles";
@@ -17,6 +19,15 @@ import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./wo
 export type WorkbenchCodexInstructionSource =
   | { readonly kind: "cwd"; readonly cwd?: string | null }
   | { readonly kind: "request"; readonly request: JsonRpcRequest };
+
+export interface WorkbenchCodexThreadConfiguration {
+  cwd: string;
+  projectId: string;
+  roots: readonly WorkbenchProjectRoot[];
+  settings: WorkbenchComposerSettings;
+  subagentName: string | null;
+  threadId: string;
+}
 
 export interface WorkbenchCodexInstructionPort {
   augment(message: JsonRpcRequest, method: string | null): Promise<JsonRpcRequest>;
@@ -92,6 +103,35 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
       method: "thread/resume",
       params: this.withMcpConfig(params, sourceCwd),
       ...(promptContext ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: promptContext } : {}),
+    };
+  }
+
+  withThreadConfiguration(message: JsonRpcRequest, configuration: WorkbenchCodexThreadConfiguration): JsonRpcRequest {
+    const { settings, ...ownership } = configuration;
+    if (settings.harness !== "codex") throw new Error("Codex admission requires a Codex composer profile.");
+    const params = asRecord(message.params);
+    const caller = readWorkbenchPromptContext(message);
+    const collaborationMode = asRecord(params.collaborationMode);
+    return {
+      ...message,
+      [WORKBENCH_PROMPT_CONTEXT_FIELD]: {
+        ...caller, ...ownership, agentPath: settings.agentPath,
+        workflowIds: caller?.workflowIds ?? [configuration.subagentName ? "subagent" : "default"],
+      },
+      params: {
+        ...params, cwd: configuration.cwd, model: settings.model, serviceTier: settings.serviceTier,
+        ...(message.method === "turn/start" ? {
+          effort: settings.reasoningEffort,
+          ...(params.collaborationMode ? {
+            collaborationMode: {
+              ...collaborationMode,
+              settings: { ...asRecord(collaborationMode.settings), model: settings.model, reasoning_effort: settings.reasoningEffort },
+            },
+          } : {}),
+        } : {
+          config: { ...asRecord(params.config), model: settings.model, model_reasoning_effort: settings.reasoningEffort },
+        }),
+      },
     };
   }
 

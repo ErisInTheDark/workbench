@@ -19,8 +19,6 @@ function emptyRows(): WorkbenchClientStateRows {
     composerDrafts: [],
     fileDrafts: [],
     globalPreferences: [],
-    harnessModelEfforts: [],
-    harnessPreferences: [],
     lastLaunchTarget: [],
     projectExpandedDirectories: [],
     projectPreferences: [],
@@ -30,7 +28,6 @@ function emptyRows(): WorkbenchClientStateRows {
     questionnaireDraftAttachments: [],
     questionnaireDraftSelections: [],
     questionnaireDrafts: [],
-    threadServiceTiers: [],
   };
 }
 

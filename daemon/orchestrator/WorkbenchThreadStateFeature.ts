@@ -8,7 +8,7 @@
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { getCurrentTurn } from "workbench-shared/codex/thread-state";
 import { normalizeThreadTitle } from "../lib/thread-bootstrap";
-import type { WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchComposerProfileStorePayload, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { GitArcActiveClaim, GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
@@ -50,6 +50,7 @@ function legacyGitArc(claim: GitArcActiveClaim): RepoGitArcLifecycleState {
 }
 
 export interface WorkbenchThreadStateFeatureContext {
+  readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
   database: WorkbenchThreadStateStoreDatabase;
   gitArcs: {
     findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<GitArcActiveClaim | null>;
@@ -210,6 +211,7 @@ export default class WorkbenchThreadStateFeature {
 
   constructor(private readonly context: WorkbenchThreadStateFeatureContext) {
     this.controller = new WorkbenchThreadStateController({
+      readComposerProfiles: context.readComposerProfiles,
       ...(context.reloadDirt ? {
         getReloadDirt: () => context.reloadDirt!.getSnapshot(),
         subscribeReloadDirt: (listener: () => void) => context.reloadDirt!.subscribe(listener),
@@ -357,6 +359,18 @@ export default class WorkbenchThreadStateFeature {
   }
 
   async dispose() { await this.controller.dispose(); }
+
+  async prepareCodexProfile(thread: ThreadReadResponse["thread"]) {
+    if (!thread.id || !thread.cwd) throw new Error("Codex profile preparation requires a provider thread and cwd.");
+    const resolved = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex profile preparation" });
+    const entry = normalizeProviderSidebarEntry("codex", thread);
+    if (!entry || entry.entryKind === "draft") throw new Error("The managed Codex thread could not be normalized.");
+    await this.controller.ensureProviderEntry(resolved.project.id, entry);
+    const profile = await this.controller.prepareComposerProfileTarget({
+      kind: "thread", harness: "codex", projectId: resolved.project.id, threadId: thread.id,
+    });
+    return { ...profile, cwd: resolved.cwd, projectId: resolved.project.id };
+  }
 
   async getCodexMcpState(
     threadId: string,

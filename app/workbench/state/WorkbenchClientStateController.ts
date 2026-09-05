@@ -49,9 +49,6 @@ function identityKey(identity: WorkbenchClientStateIdentity) {
     case "sidebarPreference": return `sidebar:${identity.daemonRegistrationId}:${identity.projectId}:${identity.key}`;
     case "sidebarFolder": return `folder:${identity.daemonRegistrationId}:${identity.projectId}:${identity.scope}:${identity.folderId}`;
     case "expandedDirectory": return `directory:${identity.daemonRegistrationId}:${identity.projectId}:${identity.path}`;
-    case "harnessPreference": return `harness:${identity.daemonRegistrationId}:${identity.harness}`;
-    case "modelEffort": return `effort:${identity.daemonRegistrationId}:${identity.harness}:${identity.model}`;
-    case "threadServiceTier": return `tier:${identity.daemonRegistrationId}:${identity.harness}:${identity.threadId}`;
     case "fileDraft": return `file:${identity.daemonRegistrationId}:${identity.projectId}:${identity.path}`;
     case "composerDraft": return `composer:${identity.daemonRegistrationId}:${identity.projectId}:${identity.threadId}`;
     case "questionnaireDraft": return `questionnaire:${identity.daemonRegistrationId}:${identity.projectId}:${identity.threadId}:${identity.requestKey}`;

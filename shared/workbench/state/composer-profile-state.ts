@@ -9,7 +9,22 @@ import type {
   WorkbenchComposerSettings,
   WorkbenchHarness,
 } from "../../types.ts";
+import { z } from "zod";
 import { normalizeWorkbenchAgentPath } from "../agent-paths.ts";
+
+const ProfileChangesSchema = z.object({
+  agentPath: z.string().nullable(),
+  agentSource: z.enum(["library", "project"]).nullable(),
+  description: z.string(),
+  model: z.string().trim().min(1),
+  name: z.string(),
+  reasoningEffort: z.string().nullable(),
+  scope: z.union([
+    z.object({ kind: z.literal("global") }).strict(),
+    z.object({ kind: z.literal("project"), projectId: z.string().trim().min(1) }).strict(),
+  ]),
+  serviceTier: z.literal("fast").nullable(),
+}).partial().strict();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -69,7 +84,10 @@ export function normalizeComposerProfileMutation(value: unknown): WorkbenchCompo
   }
   if (value.kind === "upsert") {
     const profile = normalizeComposerProfile(value.profile);
-    return profile ? { kind: "upsert", profile } : null;
+    if (!profile) return null;
+    if (value.changes === undefined) return { kind: "upsert", profile };
+    const changes = ProfileChangesSchema.safeParse(value.changes);
+    return changes.success ? { kind: "upsert", profile, changes: changes.data } : null;
   }
   return null;
 }
@@ -82,6 +100,21 @@ export function applyComposerProfileMutation(
     return profiles.filter((profile) => profile.id !== mutation.profileId);
   }
   const existingIndex = profiles.findIndex((profile) => profile.id === mutation.profile.id);
+  if (mutation.changes) {
+    const existing = profiles[existingIndex];
+    if (!existing) throw new Error("The composer profile does not exist.");
+    const profile = normalizeComposerProfile({
+      ...existing, ...mutation.changes, id: existing.id, harness: existing.harness,
+      createdAt: existing.createdAt, updatedAt: Date.now(),
+    });
+    if (!profile || (profile.scope.kind === "global" && profile.agentSource === "project")) {
+      throw new Error("The composer profile settings or scope are invalid.");
+    }
+    return profiles.map((entry, index) => index === existingIndex ? profile : entry);
+  }
+  if (mutation.profile.scope.kind === "global" && mutation.profile.agentSource === "project") {
+    throw new Error("Profiles using a project agent cannot be global.");
+  }
   return existingIndex < 0
     ? [...profiles, mutation.profile]
     : profiles.map((profile, index) => index === existingIndex ? mutation.profile : profile);

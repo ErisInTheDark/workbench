@@ -2294,6 +2294,22 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() { events.push("receive:notification"); },
+    prepareThreadConfiguration: async (thread, requests) => {
+      assert.equal(thread.id, "thread");
+      events.push("prepare:profile");
+      const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root);
+      const configuration = {
+        cwd: root, projectId: "project", roots: [], subagentName: null, threadId: thread.id,
+        settings: {
+          harness: "codex" as const, agentPath: "library:agents/lily.md", agentSource: "library" as const,
+          model: "saved-model", reasoningEffort: null, serviceTier: null,
+        },
+      };
+      return {
+        resumeRequest: adapter.withThreadConfiguration(requests.resumeRequest, configuration),
+        startRequest: adapter.withThreadConfiguration(requests.startRequest, configuration),
+      };
+    },
     prepareTurnStart: async (_request, requestProvider) => {
       events.push("prepare:mcp");
       const threadRead = await requestProvider({
@@ -2314,7 +2330,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
     storageRoot: root,
   });
   const promptContext = {
-    agentPath: "library:agents/lily.md",
+    agentPath: null,
     cwd: root,
     harness: "codex",
     threadId: "thread",
@@ -2358,6 +2374,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
     assert.deepEqual(events, [
       "send:thread/read",
       "receive:notification",
+      "prepare:profile",
       "send:thread/unsubscribe",
       "receive:notification",
       "send:thread/resume",
@@ -2380,6 +2397,9 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
     };
     assert.match(`${resumeParams.baseInstructions ?? ""}\n${resumeParams.developerInstructions ?? ""}`, /LILY PREFIX SENTINEL/u);
     const startParams = upstreamRequests[5]?.params as Record<string, unknown>;
+    assert.equal(startParams.model, "saved-model");
+    assert.equal(startParams.effort, null);
+    assert.equal(startParams.serviceTier, null);
     assert.equal("baseInstructions" in startParams, false);
     assert.equal("developerInstructions" in startParams, false);
     assert.deepEqual(response?.result, { kind: "started", turn: startedTurn });
@@ -2388,6 +2408,43 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }
+});
+
+test("profile preparation failure prevents native effects for ordinary, detached and native existing-thread starts", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-profile-failure-"));
+  const sent: JsonRpcRequest[] = [];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      sent.push(message);
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage({
+          id: message.id ?? null,
+          result: { thread: { ...bridgeThread(), status: { type: "notLoaded" }, turns: [] } },
+        });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer, bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null, storageRoot: root,
+    prepareThreadConfiguration: async () => { throw new Error("Profile persistence failed"); },
+  });
+  context.after(async () => { await bridge.disposeImmediately(); await fs.rm(root, { force: true, recursive: true }); });
+  const startRequest = { method: "turn/start", params: { threadId: "thread", input: [] } };
+  for (const steer of [true, false]) {
+    await assert.rejects(bridge.handleBridgeRequest({
+      id: 1, method: "workbench/codex/message/admit",
+      params: {
+        threadId: "thread", startRequest,
+        resumeRequest: { method: "thread/resume", params: { threadId: "thread" } },
+        ...(steer ? { steerRequest: { method: "turn/steer", params: {} } } : {}),
+      },
+    }), /Profile persistence failed/u);
+  }
+  await assert.rejects(bridge.handleServerRequest(startRequest), /Profile persistence failed/u);
+  assert.deepEqual(sent.map((request) => request.method), ["thread/read", "thread/read", "thread/read"]);
 });
 
 test("managed admission steers a provider-confirmed active turn without changing its prefix", async () => {
@@ -2421,6 +2478,7 @@ test("managed admission steers a provider-confirmed active turn without changing
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onAcceptedTurnSteer: (threadId) => { acceptedSteers.push(threadId); },
     onNotification() {},
+    prepareThreadConfiguration: async () => { throw new Error("Active steers must not prepare a new profile."); },
     prepareTurnStart: async () => { prepared = true; },
     resolveProjectFromCwd: async () => null,
     sendToClient() {},

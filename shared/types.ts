@@ -86,6 +86,7 @@
  * - WorkbenchComposerProfileScope: composer profile scope.
  * - WorkbenchComposerProfile: stored composer profile.
  * - WorkbenchComposerProfileMutation: composer profile mutation union.
+ * - WorkbenchComposerProfileChanges: editable named-profile fields.
  * - WorkbenchComposerProfileStorePayload: composer profile store payload.
  * - WorkbenchSubagentRelationship: subagent relationship contract.
  * - WorkbenchSubagentSummary: subagent summary alias.
@@ -772,9 +773,11 @@ export interface WorkbenchComposerProfile extends WorkbenchComposerSettings {
   updatedAt: number;
 }
 
+export type WorkbenchComposerProfileChanges = Partial<Omit<WorkbenchComposerProfile, "id" | "harness" | "createdAt" | "updatedAt">>;
+
 export type WorkbenchComposerProfileMutation =
   | { kind: "delete"; profileId: string }
-  | { kind: "upsert"; profile: WorkbenchComposerProfile };
+  | { kind: "upsert"; profile: WorkbenchComposerProfile; changes?: WorkbenchComposerProfileChanges };
 
 export interface WorkbenchComposerProfileStorePayload {
   profiles: WorkbenchComposerProfile[];

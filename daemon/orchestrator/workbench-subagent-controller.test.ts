@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
@@ -15,6 +15,20 @@ import type { WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchSubagent
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
+import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
+import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
+
+async function profileFixture(context: TestContext) {
+  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-profiles-"));
+  const database = new WorkbenchDatabaseController({ databasePath: path.join(storageRoot, "workbench.sqlite3") });
+  const profileStore = new WorkbenchComposerProfileStore(storageRoot, database);
+  context.after(async () => {
+    await profileStore.dispose();
+    await database.close();
+    await rm(storageRoot, { force: true, recursive: true });
+  });
+  return { storageRoot, profileStore };
+}
 
 interface HarnessCall {
   harness: string;
@@ -159,8 +173,7 @@ function createProjectResolver(expectedCwd: string) {
 }
 
 test("creates with one client and delivers a steer before empty questionnaire resolution", async (context) => {
-  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-"));
-  context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
+  const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
   const committed: WorkbenchSubagentRelationship[] = [];
@@ -176,7 +189,7 @@ test("creates with one client and delivers a steer before empty questionnaire re
       committed.push(record);
     },
     resolveProjectFromCwd: createProjectResolver(cwd),
-    storageRoot,
+    profileStore,
     subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
@@ -270,8 +283,7 @@ test("creates with one client and delivers a steer before empty questionnaire re
 });
 
 test("starts an idle direct parent through the pre-reload store surface", async (context) => {
-  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-idle-parent-message-"));
-  context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
+  const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
   const subagentStore = new WorkbenchSubagentStore(storageRoot);
@@ -284,7 +296,7 @@ test("starts an idle direct parent through the pre-reload store surface", async 
     },
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
-    storageRoot,
+    profileStore,
     subagentStore: createPreReloadStoreSurface(subagentStore),
   });
 
@@ -315,8 +327,7 @@ test("starts an idle direct parent through the pre-reload store surface", async 
 });
 
 test("starts an idle child with attributed parent-agent input", async (context) => {
-  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-idle-child-message-"));
-  context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
+  const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
   const controller = new WorkbenchSubagentController({
@@ -328,7 +339,7 @@ test("starts an idle child with attributed parent-agent input", async (context) 
     },
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
-    storageRoot,
+    profileStore,
     subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
@@ -354,8 +365,7 @@ test("starts an idle child with attributed parent-agent input", async (context) 
 });
 
 test("steers an active direct parent and rejects callers without a relationship", async (context) => {
-  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-parent-message-"));
-  context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
+  const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
   const controller = new WorkbenchSubagentController({
@@ -367,7 +377,7 @@ test("steers an active direct parent and rejects callers without a relationship"
     },
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
-    storageRoot,
+    profileStore,
     subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
@@ -401,15 +411,14 @@ test("steers an active direct parent and rejects callers without a relationship"
 });
 
 test("keeps relationship storage independent from lifecycle through create, message, and stop", async (context) => {
-  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-activity-"));
-  context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
+  const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
     createHarnessClient: () => new FakeHarnessClient(cwd),
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
-    storageRoot,
+    profileStore,
     subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 
@@ -446,15 +455,14 @@ test("keeps relationship storage independent from lifecycle through create, mess
 });
 
 test("keeps a created child durable when its first turn fails to start", async (context) => {
-  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-controller-partial-"));
-  context.after(async () => await rm(storageRoot, { force: true, recursive: true }));
+  const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const controller = new WorkbenchSubagentController({
     bridgeUrl: "ws://unused",
     createHarnessClient: () => new FakeHarnessClient(cwd, true),
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: createProjectResolver(cwd),
-    storageRoot,
+    profileStore,
     subagentStore: new WorkbenchSubagentStore(storageRoot),
   });
 

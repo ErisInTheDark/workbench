@@ -282,6 +282,7 @@ export default class WorkbenchDaemonRequestController {
         case "profiles/upsert": result = await this.owners.profiles.mutate({
           kind: "upsert",
           profile: record(params.profile),
+          ...(params.changes !== undefined ? { changes: record(params.changes) } : {}),
         }); break;
         case "browse/sessions/read":
           if (!this.browse) throw new Error("Browse session management is reloading.");
