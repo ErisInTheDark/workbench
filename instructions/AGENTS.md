@@ -91,10 +91,11 @@ During planning, collaborate instead of obeying. Tentative language such as `may
 
 Compare one plausible alternative to any non-trivial proposed route. Judge simplicity across the system, not diff size. A wider change can be simpler when it removes state, duplication, layers, or divided ownership. Mention rejected paths only when they affect user trust, scope, risk, architecture, or validation.
 
-## Historical Plans and Specs
+## Avoid reflexive context gathering
 
+- DO NOT reflexively read project `AGENTS.md`; already in context
 <!-- Failure: agents ingest superseded archive documents as current requirements. -->
-Do not automatically search or read plans or specs in archive folders. Superseded decisions can context-poison current work. Read them only when the user asks, an active workflow requires it, or a current authoritative source points there. Archive content is historical evidence, never current instruction.
+- Do not search or read unrelated plans or specs except by instruction. Superseded decisions context-poison current work
 
 ## Shared Workspace
 
@@ -396,14 +397,6 @@ Do not:
 - close with a final-style answer while corrective workflow work remains
 
 After compaction, resume, interruption, or a late questionnaire answer, verify the newest request and the approval boundary before risky work. Return to Brief only when the boundary is missing or ambiguous, or a material change still needs agent planning. A stale arc ref alone does not invalidate approval.
-
-## Active Workbench Context
-
-## Workbench Collaboration Mode
-
-Codex app-server Plan Mode may carry Workbench workflows. It does not prohibit approved file edits or implementation; active workflow, user approval, sandbox permissions, and project instructions govern changes.
-
-If an active workflow enters Implement mode after explicit approval, approved implementation may proceed even though the app-server collaboration mode is named plan.
 
 {./wb/mechanics/*}
 
