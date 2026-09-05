@@ -11,6 +11,7 @@ import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts
 import { getCurrentInProgressTurn } from "../../codex/thread-state.ts";
 import type { ThreadPayload, WorkbenchUserInputResponse } from "../../types.ts";
 import { defineTagWrapper } from "./tag-wrapper.ts";
+import { stripWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
 import type { WorkbenchThreadLifecycle } from "./thread-state.ts";
 
 export const WORKBENCH_THREAD_RECOVERY_MESSAGE = "<wb:resume />";
@@ -78,8 +79,9 @@ export function isWorkbenchUnfinishedTurnInput(input: readonly UserInput[]) {
 }
 
 export function isWorkbenchQuestionnaireResponseInput(input: readonly UserInput[]) {
-  if (input.length !== 1 || input[0]?.type !== "text") return false;
-  const parsed = WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER.read(input[0].text);
+  const visibleInput = stripWorkbenchActivatedSkillsInput(input);
+  if (visibleInput.length !== 1 || visibleInput[0]?.type !== "text") return false;
+  const parsed = WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER.read(visibleInput[0].text);
   if (!parsed) return false;
   try {
     const response = JSON.parse(parsed.body) as { answers?: unknown };

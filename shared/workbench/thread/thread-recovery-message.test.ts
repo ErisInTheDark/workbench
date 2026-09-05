@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
+import { createWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
 import {
   WORKBENCH_THREAD_RECOVERY_MESSAGE,
   WORKBENCH_UNFINISHED_TURN_MESSAGE,
@@ -71,4 +72,25 @@ test("questionnaire response elements carry exact response JSON and are hidden s
   assert.equal(isWorkbenchQuestionnaireResponseInput(input), true);
   assert.equal(isWorkbenchHiddenSystemSteerInput(input), true);
   assert.equal(isWorkbenchQuestionnaireResponseInput([{ text: `${text} extra`, text_elements: [], type: "text" }]), false);
+});
+
+test("questionnaire responses remain hidden with activated skill transport", () => {
+  const response = createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["approved"] } } });
+  const skill = createWorkbenchActivatedSkillsInput("skill instructions");
+  for (const input of [[...response, skill], [skill, ...response]]) {
+    assert.equal(isWorkbenchQuestionnaireResponseInput(input), true);
+    assert.equal(isWorkbenchHiddenSystemSteerInput(input), true);
+  }
+});
+
+test("skill transport does not hide other input alongside questionnaire responses", () => {
+  const response = createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["approved"] } } });
+  const skill = createWorkbenchActivatedSkillsInput("skill instructions");
+  const ordinary = { text: "additional user message", text_elements: [], type: "text" as const };
+  const image = { type: "image" as const, url: "https://example.com/image.png" };
+  const malformed = { text: "<wb:questionnaire-response>\nnot JSON\n</wb:questionnaire-response>", text_elements: [], type: "text" as const };
+  for (const input of [[...response, ordinary, skill], [...response, image, skill], [malformed, skill], [skill]]) {
+    assert.equal(isWorkbenchQuestionnaireResponseInput(input), false);
+    assert.equal(isWorkbenchHiddenSystemSteerInput(input), false);
+  }
 });
