@@ -1,4 +1,5 @@
 /*
+ * Keywords: questionnaire, history, identity, answer time, tests.
  * No production exports. Tests protect native Workbench request identity and permanent questionnaire item identity when provider keys repeat across turns.
  */
 import assert from "node:assert/strict";
@@ -7,6 +8,7 @@ import test from "node:test";
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
 import type { Turn } from "../../codex/generated/app-server/v2/Turn.ts";
 import type { ThreadPayload, WorkbenchQuestionnaireHistoryEntry } from "../../types.ts";
+import { findWorkbenchThreadItemTimelineEntry } from "./thread-item-timeline.ts";
 import {
   applyQuestionnaireHistoryToThread,
 } from "./thread-questionnaire-history.ts";
@@ -130,6 +132,15 @@ test("questionnaire fallback identity includes the owning turn", () => {
 
   assert.notEqual(resolveQuestionnaireHistoryItemId(older), resolveQuestionnaireHistoryItemId(newer));
   assert.match(resolveQuestionnaireHistoryItemId(older), /:older:reused-request-key$/u);
+});
+
+test("questionnaire overlay carries each answer resolution time through repeated projection", () => {
+  const entries = [entry("older", "question-older"), entry("newer", "question-newer")];
+  const projected = applyQuestionnaireHistoryToThread(applyQuestionnaireHistoryToThread(thread(), entries), entries);
+  for (const saved of entries) {
+    const timeline = projected.turnHistory.find((turn) => turn.turnId === saved.turnId)?.itemTimeline;
+    assert.equal(findWorkbenchThreadItemTimelineEntry(createSyntheticQuestionnaireHistoryItemId(saved), timeline)?.completedAt, saved.resolvedAt);
+  }
 });
 
 test("questionnaire history merging preserves reused keys and replaces only the same item", () => {

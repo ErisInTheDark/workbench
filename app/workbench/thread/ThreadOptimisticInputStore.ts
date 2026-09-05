@@ -1,8 +1,9 @@
 /*
+ * Keywords: optimistic, input, identity, lifecycle, submission time.
  * Exports:
  * - OptimisticInputEntry: one stable optimistic user-input lifecycle record. Keywords: optimistic, input, steer, lifecycle.
  * - OptimisticInputStatus/OptimisticInputPlacement: optimistic rendering state. Keywords: optimistic, status, placement.
- * - ThreadOptimisticInputStoreOptions: injectable native client-ID factory. Keywords: optimistic, identity, test.
+ * - ThreadOptimisticInputStoreOptions: injectable native client-ID factory and enqueue clock. Keywords: optimistic, identity, test.
  * - EnqueueInitialOptimisticInputOptions: native identity and status for one initial message. Keywords: initial, identity, status.
  * - isPendingInitialOptimisticInputItem: derive pre-admission connecting state from optimistic item truth. Keywords: connecting, initial, pending.
  * - ThreadOptimisticInputStore: owner for optimistic input identity, status, placement, and canonical correlation. Keywords: optimistic, thread, delivery.
@@ -15,6 +16,7 @@ import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/co
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import { createThreadDocumentKeyForThread } from "./thread-document-keys";
 import { isSyntheticSteerHistoryItem } from "workbench-shared/workbench/thread/thread-steer-history";
+import { projectWorkbenchThreadItemTimelines } from "workbench-shared/workbench/thread/thread-item-timeline";
 
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 
@@ -22,6 +24,7 @@ export type OptimisticInputPlacement = "initial" | "steer";
 export type OptimisticInputStatus = "pending" | "sent" | "failed" | "interrupted";
 
 export interface OptimisticInputEntry {
+  enqueuedAt: number;
   canonicalItemId: string | null;
   canonicalMatchBaseline: number;
   duplicateOrdinal: number;
@@ -36,6 +39,7 @@ export interface OptimisticInputEntry {
 
 export interface ThreadOptimisticInputStoreOptions {
   createClientUserMessageId?: () => string;
+  now?: () => number;
 }
 
 export interface EnqueueInitialOptimisticInputOptions {
@@ -157,7 +161,7 @@ function placeCanonicalInitialUserMessages(items: ThreadItem[], entries: Optimis
   return changed ? nextItems : items;
 }
 
-function ThreadOptimisticInputStore({ createClientUserMessageId = () => crypto.randomUUID() }: ThreadOptimisticInputStoreOptions = {}): ThreadOptimisticInputStore {
+function ThreadOptimisticInputStore({ createClientUserMessageId = () => crypto.randomUUID(), now = Date.now }: ThreadOptimisticInputStoreOptions = {}): ThreadOptimisticInputStore {
   const entries: OptimisticInputEntry[] = [];
   let nextLocalHandle = 1;
 
@@ -190,6 +194,7 @@ function ThreadOptimisticInputStore({ createClientUserMessageId = () => crypto.r
       ? createClientUserMessageId().toLowerCase()
       : `local-${nextLocalHandle++}`);
     const entry: OptimisticInputEntry = {
+      enqueuedAt: now(),
       canonicalItemId: null,
       canonicalMatchBaseline,
       duplicateOrdinal,
@@ -273,7 +278,21 @@ function ThreadOptimisticInputStore({ createClientUserMessageId = () => crypto.r
         const steerItems = visibleEntries.filter((entry) => entry.placement === "steer").map(projectEntryItem);
         return { ...turn, items: [...insertInitialItems(canonicalItems, initialItems), ...steerItems] };
       });
-      return changed ? { ...stripped, turns } : thread;
+      return projectWorkbenchThreadItemTimelines(changed ? { ...stripped, turns } : thread, (turn) => (
+        matchingEntries.filter((entry) => entry.turnId === turn.id).flatMap((entry) => {
+          const item = turn.items.find((candidate) => isOptimisticItem(candidate) && (
+            candidate.id === entry.item.id
+            || (candidate.type === "userMessage" && candidate.clientId !== null && candidate.clientId === entry.item.clientId)
+          ));
+          return item ? [{
+            completedAt: null,
+            firstSeenAt: entry.enqueuedAt,
+            itemId: item.id,
+            lastSeenAt: null,
+            startedAt: null,
+          }] : [];
+        })
+      ));
     },
     clear() {
       entries.splice(0, entries.length);

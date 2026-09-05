@@ -1,4 +1,5 @@
 /*
+ * Keywords: steer, history, identity, submission time, tests.
  * Exports:
  * - No production exports; Node tests cover native steer-history ordering and exact rendering. Keywords: steer, history, identity, test.
  */
@@ -8,6 +9,7 @@ import { test } from "node:test";
 
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "../../types.ts";
 import { applySteerHistoryToThread } from "./thread-steer-history.ts";
+import { findWorkbenchThreadItemTimelineEntry } from "./thread-item-timeline.ts";
 
 function entry(id: string, sequence: number, status: WorkbenchSteerHistoryEntry["status"]): WorkbenchSteerHistoryEntry {
   return {
@@ -29,6 +31,20 @@ function thread(): ThreadPayload {
 test("native pending history uses dispatch sequence rather than UUID order", () => {
   const projected = applySteerHistoryToThread(thread(), [entry("z", 0, "pending"), entry("a", 1, "pending")]);
   assert.deepEqual(projected.turns[0]?.items.map((item) => item.type === "userMessage" ? item.clientId : null), ["z", "a"]);
+});
+
+test("steer timestamps preserve attempted time for pending, failed and canonical sent messages", () => {
+  for (const status of ["pending", "failed", "sent"] as const) {
+    const source = thread();
+    const saved = { ...entry("steer", 0, status), attemptedAt: 5_000, resolvedAt: 9_000 };
+    if (status === "sent") {
+      source.turns[0]!.items = [{ clientId: "steer", content: saved.input, id: "canonical", type: "userMessage" }];
+    }
+    const projected = applySteerHistoryToThread(source, [saved]);
+    const item = projected.turns[0]!.items[0]!;
+    const timeline = projected.turnHistory.find((turn) => turn.turnId === "turn")?.itemTimeline;
+    assert.equal(findWorkbenchThreadItemTimelineEntry(item.id, timeline)?.firstSeenAt, saved.attemptedAt);
+  }
 });
 
 test("sent history is not synthetic while exact terminal evidence is", () => {

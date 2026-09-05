@@ -1,4 +1,5 @@
 /*
+ * Keywords: optimistic, identity, submission time, turn history, tests.
  * Exports:
  * - No production exports; Node tests cover optimistic steer/initial identity, delivery placement, and history reconciliation. Keywords: optimistic, steer, initial, delivery, test.
  */
@@ -10,6 +11,7 @@ import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import ThreadOptimisticInputStore, { isPendingInitialOptimisticInputItem } from "./ThreadOptimisticInputStore.ts";
 import { applySteerHistoryToThread } from "workbench-shared/workbench/thread/thread-steer-history";
+import { findWorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 
 function input(text: string) {
   return [{ text, text_elements: [], type: "text" as const }];
@@ -49,6 +51,40 @@ test("two identical steers retain independent handles and canonical placement", 
   const projected = store.apply(thread([{ id: "agent", memoryCitation: null, delivery: null, questions: null, phase: null, text: "work", type: "agentMessage" }, canonical]), []);
   assert.deepEqual(projected.turns[0]?.items.map((item) => item.id), ["agent", "canonical-a", second.item.id]);
   assert.equal(store.movePending(first.handle, "other-turn"), false);
+});
+
+test("optimistic event time survives status transitions and turn moves", () => {
+  let now = 5_000;
+  const store = ThreadOptimisticInputStore({ now: () => now });
+  const source = thread();
+  const pending = store.enqueueSteer(source, "turn", input("steer"));
+  now = 9_000;
+  const assertTime = (payload: ThreadPayload, turnId: string) => {
+    const item = payload.turns.find((turn) => turn.id === turnId)!.items.at(-1)!;
+    const timeline = payload.turnHistory.find((turn) => turn.turnId === turnId)?.itemTimeline;
+    assert.equal(findWorkbenchThreadItemTimelineEntry(item.id, timeline)?.firstSeenAt, 5_000);
+  };
+  assertTime(store.apply(source, []), "turn");
+  source.turns.push({ ...source.turns[0]!, id: "next" });
+  store.movePending(pending.handle, "next");
+  assertTime(store.apply(source, []), "next");
+  store.transition(pending.handle, "failed");
+  assertTime(store.apply(source, []), "next");
+});
+
+test("adding optimistic timing preserves untimed turns and existing lazy-history order", () => {
+  const store = ThreadOptimisticInputStore({ now: () => 5_000 });
+  const source = thread();
+  source.turns.push({ ...source.turns[0]!, id: "next" });
+  store.enqueueInitial(source, "turn", input("initial"));
+  const projected = store.apply(source, []);
+  assert.deepEqual(projected.turnHistory.map((entry) => entry.turnId), ["turn", "next"]);
+
+  const nextHistory = { ...projected.turnHistory[1]!, loadState: "unloaded" as const };
+  source.turnHistory = [nextHistory];
+  const withHistory = store.apply(source, []);
+  assert.deepEqual(withHistory.turnHistory.map((entry) => entry.turnId), ["turn", "next"]);
+  assert.equal(withHistory.turnHistory[1], nextHistory);
 });
 
 test("canonical initial input retains its leading user-message position", () => {

@@ -1,4 +1,5 @@
 /*
+ * Keywords: questionnaire, history, identity, answer time.
  * Exports:
  * - WORKBENCH_QUESTIONNAIRE_TOOL_NAME: stable dynamic-tool name used for rendered questionnaire history entries. Keywords: questionnaire, dynamic tool, thread history.
  * - isSyntheticQuestionnaireHistoryItem: detect workbench-injected questionnaire history items in a turn. Keywords: synthetic, questionnaire, history, guard.
@@ -13,6 +14,7 @@ import {
   createSyntheticQuestionnaireHistoryItemId,
 } from "./thread-questionnaire-identity.ts";
 import { isWorkbenchSyntheticSteerUserMessage } from "./thread-steer-history.ts";
+import { projectWorkbenchThreadItemTimelines } from "./thread-item-timeline.ts";
 
 export const WORKBENCH_QUESTIONNAIRE_TOOL_NAME = "workbench_request_user_input";
 const OPENCODE_QUESTION_TOOL_NAMESPACE = "opencode";
@@ -317,12 +319,16 @@ export function applyQuestionnaireHistoryToThread(
     };
   });
 
-  if (!didChange) {
-    return thread;
-  }
-
-  return {
-    ...thread,
-    turns: nextTurns,
-  };
+  return projectWorkbenchThreadItemTimelines(didChange ? { ...thread, turns: nextTurns } : thread, (turn) => (
+    (entriesByTurnId.get(turn.id) ?? []).flatMap((entry) => {
+      const itemId = createSyntheticQuestionnaireHistoryItemId(entry);
+      return turn.items.some((item) => item.id === itemId) ? [{
+        completedAt: entry.resolvedAt,
+        firstSeenAt: null,
+        itemId,
+        lastSeenAt: null,
+        startedAt: null,
+      }] : [];
+    })
+  ));
 }

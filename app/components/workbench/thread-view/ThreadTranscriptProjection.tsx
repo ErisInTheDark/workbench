@@ -1,4 +1,5 @@
 /*
+ * Keywords: transcript, SQLite, projection, canonical, initial message.
  * Exports:
  * - default ThreadTranscriptProjection: render one canonical SQLite transcript projection through the established item UI. Keywords: transcript, SQLite, projection, canonical.
  */
@@ -124,6 +125,7 @@ export default function ThreadTranscriptProjection({
               : "pb-3"}
             >
               <ThreadTranscriptItemsDetails
+                initialUserItemId={turn.items.find((item) => item.type === "userMessage")?.id ?? null}
                 browseResultEntries={browseResultEntries}
                 hiddenReasoningStep={hiddenReasoningStep}
                 inlineMentionSources={inlineMentionSources}

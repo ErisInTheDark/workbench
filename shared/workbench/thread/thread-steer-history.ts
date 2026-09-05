@@ -1,4 +1,5 @@
 /*
+ * Keywords: steer, history, identity, submission time.
  * Exports:
  * - SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX/createSyntheticSteerHistoryItemId: stable identity for Workbench-injected steer history items. Keywords: synthetic, steer, history.
  * - isSyntheticSteerHistoryItem: detect Workbench-injected steer history user messages. Keywords: synthetic, steer, guard.
@@ -11,6 +12,7 @@ import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
 import { areUserInputsEquivalentForUserMessageDedupe } from "../../codex/thread-item-normalization.ts";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "../../types.ts";
+import { projectWorkbenchThreadItemTimelines } from "./thread-item-timeline.ts";
 
 export const SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX = "workbench:steer-history:";
 
@@ -68,8 +70,8 @@ function cloneUserInput(input: UserInput): UserInput {
   throw new Error("Unsupported steer history input.");
 }
 
-function hasCanonicalUserMessage(items: ThreadItem[], entry: WorkbenchSteerHistoryEntry) {
-  return items.some((item) => {
+function findCanonicalUserMessage(items: ThreadItem[], entry: WorkbenchSteerHistoryEntry) {
+  return items.find((item) => {
     if (item.type !== "userMessage" || isSyntheticSteerHistoryItem(item)) {
       return false;
     }
@@ -87,7 +89,7 @@ function shouldRenderSteerHistoryEntry(items: ThreadItem[], entry: WorkbenchStee
     return false;
   }
 
-  return !hasCanonicalUserMessage(items, entry);
+  return !findCanonicalUserMessage(items, entry);
 }
 
 function createSyntheticSteerHistoryItem(entry: WorkbenchSteerHistoryEntry): UserMessageItem {
@@ -163,7 +165,20 @@ export function applySteerHistoryToThread(
     };
   });
 
-  return didChange
+  const projected = didChange
     ? { ...thread, turns: nextTurns }
     : thread;
+  return projectWorkbenchThreadItemTimelines(projected, (turn) => (
+    (entriesByTurnId.get(turn.id) ?? []).flatMap((entry) => {
+      const item = findCanonicalUserMessage(turn.items, entry)
+        ?? turn.items.find((candidate) => candidate.id === createSyntheticSteerHistoryItemId(entry));
+      return item ? [{
+        completedAt: null,
+        firstSeenAt: entry.attemptedAt,
+        itemId: item.id,
+        lastSeenAt: null,
+        startedAt: null,
+      }] : [];
+    })
+  ));
 }

@@ -1,4 +1,5 @@
 /*
+ * Keywords: dynamic tool, questionnaire, answer timestamp, transcript.
  * Exports:
  * - default ThreadDynamicToolCallItem: render dynamic tool calls, including structured questionnaire results, inside thread history. Keywords: workbench, thread, dynamic tool, questionnaire.
  * - Local helpers: normalize questionnaire payloads, parse recorded answers, and render special questionnaire/skill/subagent tools. Keywords: tool result, user input, display.
@@ -25,6 +26,7 @@ import ThreadBubbleCopyButton from "./ThreadBubbleCopyButton";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadMarkdown from "./ThreadMarkdown";
+import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadToolCallDetails from "./ThreadToolCallDetails";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
@@ -247,6 +249,7 @@ function renderQuestionnaireHistorySummary (request: WorkbenchUserInputRequest |
 }
 
 function ThreadQuestionnaireTranscriptPreview ({
+  answeredAt,
   inlineMentionSources,
   pairs,
   threadCwdPath,
@@ -255,6 +258,7 @@ function ThreadQuestionnaireTranscriptPreview ({
   projectRootPath,
   workspaceRoots,
 }: {
+  answeredAt: number | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   pairs: Array<{ answerMarkdown: string; promptText: string }>;
   threadCwdPath?: string;
@@ -289,6 +293,7 @@ function ThreadQuestionnaireTranscriptPreview ({
             />
             <ThreadBubbleCopyButton markdown={pair.answerMarkdown} side="right" />
           </div>
+          <ThreadMessageTimestamp align="right" timestampSeconds={answeredAt === null ? null : answeredAt / 1_000} />
         </div>
       ))}
     </div>
@@ -296,6 +301,7 @@ function ThreadQuestionnaireTranscriptPreview ({
 }
 
 function ThreadQuestionnaireHistorySummary ({
+  answeredAt,
   inlineMentionSources,
   isOpen,
   threadCwdPath,
@@ -306,6 +312,7 @@ function ThreadQuestionnaireHistorySummary ({
   response,
   workspaceRoots,
 }: {
+  answeredAt: number | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isOpen: boolean;
   threadCwdPath?: string;
@@ -323,6 +330,7 @@ function ThreadQuestionnaireHistorySummary ({
       <div className="min-w-0">{renderQuestionnaireHistorySummary(request)}</div>
       {!isOpen ? (
         <ThreadQuestionnaireTranscriptPreview
+          answeredAt={answeredAt}
           inlineMentionSources={inlineMentionSources}
           pairs={transcriptPairs}
           threadCwdPath={threadCwdPath}
@@ -399,6 +407,7 @@ function isOpenCodeQuestionToolCall(item: DynamicToolCallItem) {
 }
 
 function ThreadQuestionnaireToolCallItem ({
+  answeredAt,
   inlineMentionSources,
   item,
   threadCwdPath,
@@ -407,6 +416,7 @@ function ThreadQuestionnaireToolCallItem ({
   projectRootPath,
   workspaceRoots,
 }: {
+  answeredAt: number | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
   threadCwdPath?: string;
@@ -434,6 +444,7 @@ function ThreadQuestionnaireToolCallItem ({
       chevronClassName="mt-[0.22em]"
       summary={(
         <ThreadQuestionnaireHistorySummary
+          answeredAt={response ? answeredAt : null}
           inlineMentionSources={inlineMentionSources}
           isOpen={isOpen}
           threadCwdPath={threadCwdPath}
@@ -466,6 +477,7 @@ function ThreadQuestionnaireToolCallItem ({
             </p>
           )}
         </div>
+        {response ? <ThreadMessageTimestamp align="right" timestampSeconds={answeredAt === null ? null : answeredAt / 1_000} /> : null}
       </>
     </ThreadDisclosure>
   );
@@ -665,6 +677,7 @@ function ThreadTaskToolCallItem ({
 }
 
 export default function ThreadDynamicToolCallItem ({
+  answeredAt = null,
   inlineMentionSources,
   item,
   threadCwdPath,
@@ -673,6 +686,7 @@ export default function ThreadDynamicToolCallItem ({
   projectRootPath,
   workspaceRoots,
 }: {
+  answeredAt?: number | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
   threadCwdPath?: string;
@@ -682,7 +696,7 @@ export default function ThreadDynamicToolCallItem ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   if (item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME || isOpenCodeQuestionToolCall(item)) {
-    return <ThreadQuestionnaireToolCallItem inlineMentionSources={inlineMentionSources} item={item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
+    return <ThreadQuestionnaireToolCallItem answeredAt={answeredAt} inlineMentionSources={inlineMentionSources} item={item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
 
   if (item.tool === COPILOT_SKILL_TOOL_NAME) {

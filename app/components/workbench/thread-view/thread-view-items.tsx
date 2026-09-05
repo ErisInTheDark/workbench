@@ -22,6 +22,7 @@ import { getCurrentTurn } from "workbench-shared/codex/thread-state";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import {
   findWorkbenchThreadItemTimelineEntry,
+  upsertWorkbenchThreadItemTimelineEntry,
   type WorkbenchThreadItemTimelineEntry,
 } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { WorkbenchThreadRecallOutputRecord } from "../../../workbench/thread/thread-recall-output";
@@ -87,7 +88,6 @@ import {
 import WorkbenchSpinningBorder from "../WorkbenchSpinningBorder";
 import {
   formatThreadDuration,
-  formatThreadTimestamp,
   humanizeThreadLabel,
   truncateThreadText,
 } from "./thread-view-formatters";
@@ -146,6 +146,7 @@ import projectThreadRenderTurns from "./thread-render-turns";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import { getUserMessageCopyMarkdown } from "./bubble-copy";
 import ThreadBubbleCopyButton from "./ThreadBubbleCopyButton";
+import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import useThreadPresentedText from "./use-thread-presented-text";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
 
@@ -751,26 +752,6 @@ function ThreadUserInputLine ({
   }
 }
 
-function ThreadMessageTimestamp ({
-  align = "left",
-  className = "",
-  timestampSeconds,
-}: {
-  align?: "left" | "right";
-  className?: string;
-  timestampSeconds: number | null;
-}) {
-  if (timestampSeconds === null) {
-    return null;
-  }
-
-  return (
-    <p className={`m-0 text-[0.67em] leading-[1.5] text-muted${align === "right" ? " text-right" : ""}${className ? ` ${className}` : ""}`}>
-      {formatThreadTimestamp(timestampSeconds)}
-    </p>
-  );
-}
-
 function ThreadUserMessageItem ({
   inlineMentionSources,
   item,
@@ -778,7 +759,6 @@ function ThreadUserMessageItem ({
   projectFilePaths,
   projectId,
   projectRootPath,
-  showStartedAt,
   startedAt,
   subagents = [],
   workspaceRoots,
@@ -789,7 +769,6 @@ function ThreadUserMessageItem ({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
-  showStartedAt: boolean;
   startedAt: number | null;
   subagents?: readonly WorkbenchSubagentSummary[];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
@@ -802,7 +781,7 @@ function ThreadUserMessageItem ({
         message={agentMessage}
         steerState={steerState}
         subagent={getSubagentSummary(subagents, agentMessage.senderThreadId)}
-        timestamp={showStartedAt ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} /> : undefined}
+        timestamp={<ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} />}
         inlineMentionSources={inlineMentionSources}
         threadCwdPath={threadCwdPath}
         projectFilePaths={projectFilePaths}
@@ -817,7 +796,7 @@ function ThreadUserMessageItem ({
     return (
       <ThreadAgentScreenshotItem
         images={getAgentScreenshotSteerImages(item).map((image) => image.url)}
-        timestamp={showStartedAt ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} /> : undefined}
+        timestamp={<ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} />}
       />
     );
   }
@@ -860,7 +839,7 @@ function ThreadUserMessageItem ({
         </div>
         <ThreadBubbleCopyButton markdown={copyMarkdown} side="right" />
       </div>
-      {showStartedAt ? <ThreadMessageTimestamp align="right" className="mt-1" timestampSeconds={startedAt} /> : null}
+      <ThreadMessageTimestamp align="right" className="mt-1" timestampSeconds={startedAt} />
     </section>
   );
 }
@@ -1736,7 +1715,6 @@ function ThreadRecallRecordItem({
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
-          showStartedAt={false}
           startedAt={null}
           threadCwdPath={threadCwdPath}
           workspaceRoots={workspaceRoots}
@@ -2651,7 +2629,9 @@ function ThreadRenderableBlockViewComponent ({
         />
       );
     }
-    case "userMessage":
+    case "userMessage": {
+      const timeline = findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline);
+      const timestampMs = timeline?.firstSeenAt ?? timeline?.startedAt;
       return (
         <ThreadUserMessageItem
           item={block.item}
@@ -2662,10 +2642,12 @@ function ThreadRenderableBlockViewComponent ({
           projectRootPath={projectRootPath}
           subagents={subagents}
           workspaceRoots={workspaceRoots}
-          showStartedAt={block === primaryUserBlock}
-          startedAt={turnStartedAt}
+          startedAt={timestampMs !== undefined && timestampMs !== null
+            ? timestampMs / 1_000
+            : block.item.id === (primaryUserBlock?.kind === "item" ? primaryUserBlock.item.id : null) ? turnStartedAt : null}
         />
       );
+    }
     case "agentMessage":
       return (
         <ThreadAgentMessageItem
@@ -2782,7 +2764,7 @@ function ThreadRenderableBlockViewComponent ({
       );
     }
     case "dynamicToolCall":
-      return <ThreadDynamicToolCallItem inlineMentionSources={inlineMentionSources} item={block.item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
+      return <ThreadDynamicToolCallItem answeredAt={findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline)?.completedAt ?? null} inlineMentionSources={inlineMentionSources} item={block.item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
     case "webSearch":
       return <ThreadWebSearchItem item={block.item} />;
     case "collabAgentToolCall":
@@ -2818,6 +2800,7 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
 ));
 
 interface ThreadTranscriptItemsDetailsProps {
+  initialUserItemId?: string | null;
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   hiddenReasoningStep?: ThreadReasoningStepReference | null;
   inlineMentionSources?: InlineMentionHighlightSources | null;
@@ -2840,6 +2823,7 @@ interface ThreadTranscriptItemsDetailsProps {
 }
 
 export function ThreadTranscriptItemsDetails ({
+  initialUserItemId = null,
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   hiddenReasoningStep = null,
   inlineMentionSources,
@@ -2864,6 +2848,20 @@ export function ThreadTranscriptItemsDetails ({
     | { block: ThreadRenderableBlock; kind: "block" }
     | { item: Extract<WorkbenchProjectedTranscriptItem, { type: "unknown" }>; kind: "unknown" };
   const entries: RenderEntry[] = [];
+  const renderItemTimeline = useMemo(() => {
+    let timeline = itemTimeline ?? [];
+    for (const item of items) {
+      if (!isProjectedInteractionItem(item)) continue;
+      timeline = upsertWorkbenchThreadItemTimelineEntry(timeline, {
+        completedAt: item.resolvedAt,
+        firstSeenAt: null,
+        itemId: item.id,
+        lastSeenAt: null,
+        startedAt: null,
+      });
+    }
+    return timeline;
+  }, [items, itemTimeline]);
   let pendingItems: ThreadItem[] = [];
   const flushItems = () => {
     if (!pendingItems.length) return;
@@ -2887,7 +2885,8 @@ export function ThreadTranscriptItemsDetails ({
   flushItems();
 
   const primaryUserBlock = entries.flatMap((entry) => (
-    entry.kind === "block" && isUserMessageBlock(entry.block) ? [entry.block] : []
+    entry.kind === "block" && entry.block.kind === "item" && entry.block.item.id === initialUserItemId
+      ? [entry.block] : []
   )).at(0) ?? null;
   const finalAgentMessageId = [...items].reverse().find((item) => (
     item.type === "agentMessage" && item.phase === "final_answer"
@@ -2905,7 +2904,7 @@ export function ThreadTranscriptItemsDetails ({
           browseResultEntries={browseResultEntries}
           finalAgentMessageId={finalAgentMessageId}
           inlineMentionSources={inlineMentionSources}
-          itemTimeline={itemTimeline}
+          itemTimeline={renderItemTimeline}
           isMostRecentBlock={index === entries.length - 1}
           knownSkills={knownSkills}
           presentationSource={presentationSource}
@@ -3249,9 +3248,7 @@ function ThreadTurnDetailsComponent ({
   }
 
   const blocks = allBlocks;
-  const primaryUserBlock = isCompleted
-    ? blocks.find((block) => isUserMessageBlock(block)) ?? null
-    : null;
+  const primaryUserBlock = blocks.find((block) => isUserMessageBlock(block)) ?? null;
   const terminalBlocks = isCompleted ? buildBlocksForItems(visibleTerminalItems) : [];
   const workedBlocks = isCompleted
     ? buildBlocksForItems(completedWorkPartition?.workedItems ?? [])
