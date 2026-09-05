@@ -24,7 +24,7 @@ test("normalizes one canonical worktree Git transition key before persistent coo
       keys.push(`runMany:${writeKeys.join(",")}`);
       return await operation();
     },
-  });
+  }, "win32");
   await transitions.read(" C:\\Git\\Project\\ ", async () => undefined);
   await transitions.run(" C:\\Git\\Project\\ ", async () => undefined);
   await transitions.readMany(["c:/git/project", "C:\\Git\\Other"], async () => undefined);
@@ -49,7 +49,7 @@ test("falls back to exclusive reads until the process-stable coordinator restart
       keys.push(`runMany:${writeKeys.join(",")}`);
       return await operation();
     },
-  });
+  }, "win32");
 
   await transitions.read("C:/Git/Project", async () => undefined);
   await transitions.readMany(["C:/Git/Project"], async () => undefined);
@@ -93,6 +93,27 @@ test("shares reads, queues writers fairly, and allows unrelated keys to proceed"
     "read-one:start", "read-two:start", "unrelated",
     "read-one:end", "read-two:end", "writer", "read-late",
   ]);
+});
+
+test("worktree case aliases serialize on Windows and remain independent on Linux", async () => {
+  for (const platform of ["win32", "linux"] as const) {
+    const transitions = createWorktreeGitTransitions(new WorkbenchThreadTransitionCoordinator(), platform);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const held = transitions.run("/work/Repo", async () => { entered(); await gate; });
+    await started;
+    let aliasEntered = false;
+    const alias = transitions.read("/work/repo", async () => { aliasEntered = true; });
+    try {
+      await transitions.run("/work/other", async () => undefined);
+      assert.equal(aliasEntered, platform === "linux");
+    } finally {
+      release();
+      await Promise.all([held, alias]);
+    }
+  }
 });
 
 test("continues a transition queue after a failed operation", async () => {

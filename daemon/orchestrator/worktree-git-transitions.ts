@@ -7,11 +7,12 @@ import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransiti
 export function createWorktreeGitTransitions(
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run" | "runMany">
     & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read" | "readMany">>,
+  platform: NodeJS.Platform = process.platform,
 ) {
   const key = (worktreePath: string) => {
-    const normalized = worktreePath.trim().replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+    const normalized = worktreePath.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
     if (!normalized) throw new Error("A worktree path is required for Git transition coordination.");
-    return `git-worktree\0${normalized}`;
+    return `git-worktree\0${platform === "win32" ? normalized.toLowerCase() : normalized}`;
   };
   const read = transitions.read?.bind(transitions) ?? transitions.run.bind(transitions);
   const readMany = transitions.readMany?.bind(transitions) ?? transitions.runMany.bind(transitions);

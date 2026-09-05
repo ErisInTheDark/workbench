@@ -13,7 +13,7 @@ import path from "node:path";
 
 import { appRoot, normalizeRelativePath, resolveProjectRoot, type ResolvedProject } from "../../project";
 import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
-import { killProcessTreeAsync } from "../../../orchestrator/process-helpers";
+import { killProcessTreeAsync, logError } from "../../../orchestrator/process-helpers";
 import {
   resolveAgentEndpointProjectFromCwd,
   type AgentEndpointProjectResolution,
@@ -63,6 +63,12 @@ export interface WorkbenchBrowseRuntimeProfileStore {
 }
 
 type WorkbenchBrowseProcessRetirer = (pid: number) => Promise<void>;
+
+class BrowseRetirementError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : "Browse retirement failed.", { cause });
+  }
+}
 
 const IDLE_GATE = Promise.resolve();
 const DAEMON_START_TIMEOUT_MS = 30_000;
@@ -169,14 +175,20 @@ export default class WorkbenchBrowseRuntime {
   async run(command: WorkbenchBrowseAgentCommand, execution: WorkbenchBrowseExecutionContext, signal?: AbortSignal): Promise<WorkbenchBrowseCommandResponse> {
     const startedAt = Date.now();
     const deadline = startedAt + command.runtimeRequest.timeoutMs;
-    let enteredSession = false;
     try {
+      const execute = async () => {
+        try {
+          return await this.execute(command.runtimeRequest, execution, deadline, signal);
+        } catch (error) {
+          if (command.runtimeRequest.session && !(error instanceof BrowseRetirementError) && (error instanceof WorkbenchBrowseDaemonTimeoutError || signal?.aborted)) {
+            await this.retireSession(command.runtimeRequest.session);
+          }
+          throw error;
+        }
+      };
       const result = command.runtimeRequest.session
-        ? await this.enqueueSession(command.runtimeRequest.session, async () => {
-            enteredSession = true;
-            return await this.execute(command.runtimeRequest, execution, deadline, signal);
-          }, deadline, signal)
-        : await this.execute(command.runtimeRequest, execution, deadline, signal);
+        ? await this.enqueueSession(command.runtimeRequest.session, execute, deadline, signal)
+        : await execute();
       return {
         durationMs: Date.now() - startedAt,
         exitCode: 0,
@@ -185,9 +197,6 @@ export default class WorkbenchBrowseRuntime {
         stdout: stdout(result as object),
       };
     } catch (error) {
-      if (command.runtimeRequest.session && enteredSession && (error instanceof WorkbenchBrowseDaemonTimeoutError || signal?.aborted)) {
-        await this.retireSession(command.runtimeRequest.session);
-      }
       return {
         durationMs: Date.now() - startedAt,
         error: error instanceof Error ? error.message : "Browse runtime failed.",
@@ -208,7 +217,7 @@ export default class WorkbenchBrowseRuntime {
       try {
         return await this.readStatus(session, remainingTimeout(deadline, session), signal);
       } catch (error) {
-        if (enteredSession && (error instanceof WorkbenchBrowseDaemonTimeoutError || signal?.aborted)) await this.retireSession(session);
+        if (enteredSession && !(error instanceof BrowseRetirementError) && (error instanceof WorkbenchBrowseDaemonTimeoutError || signal?.aborted)) await this.retireSession(session);
         throw error;
       }
     }, deadline, signal);
@@ -229,7 +238,7 @@ export default class WorkbenchBrowseRuntime {
       try {
         return await this.stopNow(session, { deadline, force, signal });
       } catch (error) {
-        if (enteredSession && (error instanceof WorkbenchBrowseDaemonTimeoutError || signal?.aborted)) await this.retireSession(session);
+        if (enteredSession && !(error instanceof BrowseRetirementError) && (error instanceof WorkbenchBrowseDaemonTimeoutError || signal?.aborted)) await this.retireSession(session);
         throw error;
       }
     }, deadline, signal);
@@ -284,6 +293,9 @@ export default class WorkbenchBrowseRuntime {
   private async ensureDaemon(request: Extract<BrowseRuntimeRequest, { kind: "open" }>, execution: WorkbenchBrowseExecutionContext, deadline: number, signal?: AbortSignal) {
     const existing = await this.readStatus(request.session, Math.min(remainingTimeout(deadline, request.session), 1_000), signal);
     if (existing) return;
+    const pid = await this.client.readPid(request.session);
+    if (pid) await this.retireSession(request.session, pid);
+    if (signal?.aborted) throw signal.reason;
     const daemonEntrypoint = path.join(appRoot, "lib", "workbench", "browse", "run-browse-daemon.mjs");
     await fs.access(daemonEntrypoint);
     const profilePath = await this.profileStore.resolveProfilePath({ persistent: request.persistent, sessionName: request.session });
@@ -325,27 +337,34 @@ export default class WorkbenchBrowseRuntime {
     }
   }
 
-  private async retireSession(session: string) {
-    const pid = await this.client.readPid(session).catch(() => null);
-    if (pid) await this.retireProcess(pid).catch(() => undefined);
-    await this.client.cleanupRuntimeFiles(session);
+  private async retireSession(session: string, knownPid?: number | null) {
+    try {
+      const pid = knownPid === undefined ? await this.client.readPid(session) : knownPid;
+      if (pid) await this.retireProcess(pid);
+      await this.client.cleanupRuntimeFiles(session);
+    } catch (error) {
+      logError("browse-retirement", "session retirement or runtime-record cleanup failed");
+      throw new BrowseRetirementError(error);
+    }
   }
 
   private async stopNow(session: string, { deadline, force, signal }: { deadline: number; force: boolean; signal?: AbortSignal }) {
+    const pid = await this.client.readPid(session);
+    let result: BrowseJsonValue;
     try {
       const existing = await this.readStatus(session, remainingTimeout(deadline, session), signal);
       if (!existing) {
-        if (force) await this.retireSession(session);
-        return { stopped: false };
+        if (!force) return { stopped: false };
+        result = { stopped: false };
+      } else {
+        result = await this.client.request(session, { type: "stop" }, remainingTimeout(deadline, session), signal);
       }
-      const result = await this.client.request(session, { type: "stop" }, remainingTimeout(deadline, session), signal);
-      await this.client.cleanupRuntimeFiles(session);
-      return result;
     } catch (error) {
       if (!force) throw error;
-      await this.retireSession(session);
-      return { stopped: true };
+      result = { stopped: true };
     }
+    await this.retireSession(session, pid);
+    return result;
   }
 
   private async enqueueSession<TValue>(

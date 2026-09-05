@@ -9,7 +9,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import {
     createSpawnOptions,
     getSpawnDescriptor,
-    killProcessTree,
     killProcessTreeAsync,
     log,
     logError,
@@ -23,7 +22,6 @@ export type CodexAppServerOptions = {
   onFatalExit: (reason: string) => void;
   onMessage: (message: unknown) => void;
   projectRoot: string;
-  terminateChild?: (child: ChildProcess) => void;
   terminateChildAsync?: (child: ChildProcess) => Promise<void>;
 };
 
@@ -57,8 +55,14 @@ export function getCodexAppServerArgs() {
   ];
 }
 
+type ProcessState =
+  | { kind: "idle" }
+  | { kind: "running"; child: ChildProcess }
+  | { kind: "retiring"; child: ChildProcess; completion: Promise<void> }
+  | { kind: "retirement-failed"; child: ChildProcess; error: unknown };
+
 export default class CodexAppServer {
-  private codexProcess: ChildProcess | null = null;
+  private state: ProcessState = { kind: "idle" };
   private generation = 0;
   private readonly createChild: () => ChildProcess;
   private readonly log: NonNullable<CodexAppServerOptions["log"]>;
@@ -66,45 +70,49 @@ export default class CodexAppServer {
   private readonly onFatalExit: CodexAppServerOptions["onFatalExit"];
   private readonly onMessage: CodexAppServerOptions["onMessage"];
   private readonly projectRoot: string;
-  private readonly terminateChild: (child: ChildProcess) => void;
   private readonly terminateChildAsync: (child: ChildProcess) => Promise<void>;
 
-  constructor({ createChild, log: lifecycleLog, logError: lifecycleLogError, onFatalExit, onMessage, projectRoot, terminateChild, terminateChildAsync }: CodexAppServerOptions) {
+  constructor({ createChild, log: lifecycleLog, logError: lifecycleLogError, onFatalExit, onMessage, projectRoot, terminateChildAsync }: CodexAppServerOptions) {
     this.createChild = createChild ?? (() => this.createStdioChild());
     this.log = lifecycleLog ?? log;
     this.logError = lifecycleLogError ?? logError;
     this.onFatalExit = onFatalExit;
     this.onMessage = onMessage;
     this.projectRoot = projectRoot;
-    this.terminateChild = terminateChild ?? ((child) => killProcessTree(child.pid));
     this.terminateChildAsync = terminateChildAsync ?? (async (child) => await killProcessTreeAsync(child.pid));
   }
 
   send(message: unknown) {
-    this.ensureProcess();
-    if (!this.codexProcess?.stdin.writable) {
+    const child = this.ensureProcess();
+    if (!child.stdin?.writable) {
       throw new Error("Codex app-server bridge is not running.");
     }
 
-    this.codexProcess.stdin.write(`${JSON.stringify(message)}\n`);
+    child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
   stop() {
-    const retiringProcess = this.detachProcess();
-    if (retiringProcess && !retiringProcess.killed) this.terminateChild(retiringProcess);
+    return this.stopAsync();
   }
 
-  async stopAsync() {
-    const retiringProcess = this.detachProcess();
-    if (retiringProcess && !retiringProcess.killed) await this.terminateChildAsync(retiringProcess);
-  }
-
-  private detachProcess() {
-    const retiringProcess = this.codexProcess;
-    if (!retiringProcess) return null;
-    this.codexProcess = null;
+  stopAsync(): Promise<void> {
+    if (this.state.kind === "idle") return Promise.resolve();
+    if (this.state.kind === "retiring") return this.state.completion;
+    const child = this.state.child;
     this.generation += 1;
-    return retiringProcess;
+    const completion = Promise.resolve()
+      .then(() => this.terminateChildAsync(child))
+      .then(() => {
+        this.state = { kind: "idle" };
+        this.log("codex-stdio", "process retirement completed");
+      }, (error: unknown) => {
+        this.state = { kind: "retirement-failed", child, error };
+        this.logError("codex-stdio", "process retirement failed; replacement remains blocked");
+        throw error;
+      });
+    this.state = { kind: "retiring", child, completion };
+    this.log("codex-stdio", "waiting for process retirement");
+    return completion;
   }
 
   private createStdioChild() {
@@ -124,20 +132,22 @@ export default class CodexAppServer {
   }
 
   private ensureProcess() {
-    if (this.codexProcess && !this.codexProcess.killed) {
-      return this.codexProcess;
+    if (this.state.kind === "retiring") throw new Error("Codex process is retiring; replacement is blocked.");
+    if (this.state.kind === "retirement-failed") {
+      throw new Error("Codex process retirement failed; retry stop before replacement.", { cause: this.state.error });
     }
+    if (this.state.kind === "running") return this.state.child;
 
     const generation = this.generation + 1;
     const codexProcess = this.createChild();
     this.generation = generation;
-    this.codexProcess = codexProcess;
+    this.state = { kind: "running", child: codexProcess };
     this.bindStdout(codexProcess, generation);
     pipeChildStream("codex-stdio", codexProcess.stderr, (chunk) => process.stderr.write(chunk));
 
     codexProcess.once("error", (error) => {
       if (!this.owns(codexProcess, generation)) return;
-      this.codexProcess = null;
+      this.state = { kind: "idle" };
       this.generation += 1;
       this.logError("codex-stdio", `failed to start: ${error instanceof Error ? error.message : String(error)}`);
       this.onFatalExit("Codex app-server failed to start.");
@@ -146,7 +156,11 @@ export default class CodexAppServer {
     codexProcess.once("exit", (code, signal) => {
       this.log("codex-stdio", `exited (code=${code ?? "null"}, signal=${signal ?? "null"})`);
       if (!this.owns(codexProcess, generation)) return;
-      this.codexProcess = null;
+      this.state = {
+        kind: "retirement-failed",
+        child: codexProcess,
+        error: new Error("Codex leader exited before process-group retirement."),
+      };
       this.onFatalExit("Codex app-server exited.");
     });
 
@@ -155,7 +169,7 @@ export default class CodexAppServer {
   }
 
   private owns(codexProcess: ChildProcess, generation: number) {
-    return this.codexProcess === codexProcess && this.generation === generation;
+    return this.state.kind === "running" && this.state.child === codexProcess && this.generation === generation;
   }
 
   private bindStdout(codexProcess: ChildProcess, generation: number) {

@@ -10,6 +10,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { SessionEvent } from "@github/copilot-sdk";
+import LinuxProcessGroupRetirement from "./LinuxProcessGroupRetirement";
 
 const COPILOT_EVENT_LOG_MAX_STRING_LENGTH = 1024;
 const ASYNC_PROCESS_TREE_KILL_TIMEOUT_MS = 5_000;
@@ -146,6 +147,10 @@ export function killProcessTree(pid: number | undefined) {
 
 export async function killProcessTreeAsync(pid: number | undefined) {
   if (!pid) return;
+  if (process.platform === "linux") {
+    await new LinuxProcessGroupRetirement().retire(pid);
+    return;
+  }
   if (process.platform !== "win32") {
     try {
       process.kill(-pid, "SIGTERM");

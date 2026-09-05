@@ -233,3 +233,158 @@ test("a queued waiter observes its deadline without retiring the active owner", 
   client.firstResearch.resolve({ initialized: true, session: "research" });
   await first;
 });
+
+test("run keeps its session lease through retirement while other sessions proceed", async () => {
+  const client = new FakeBrowseTransport();
+  client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated deadline"));
+  const retirementStarted = deferred<void>();
+  const releaseRetirement = deferred<void>();
+  const runtime = new WorkbenchBrowseRuntime({
+    client,
+    retireProcess: async () => {
+      retirementStarted.resolve();
+      await releaseRetirement.promise;
+    },
+  });
+  const first = runtime.run({
+    action: "status",
+    args: [],
+    commandRequest: { args: [], cwd: "/work", projectId: null, threadId: "thread", timeoutMs: 5_000 },
+    rememberSession: true,
+    runtimeRequest: { kind: "status", session: "research", timeoutMs: 5_000 },
+    session: "research",
+  }, {
+    cwd: "/work",
+    owningRootPath: "/work",
+    projectId: "work",
+    projectRootPath: "/work",
+    workspaceRoots: [{ id: "work", name: "work", rootPath: "/work" }],
+    workspaceRootPaths: ["/work"],
+  });
+  await retirementStarted.promise;
+  const second = runtime.status("research");
+  try {
+    await runtime.status("other");
+    assert.deepEqual(client.calls, ["research", "other"]);
+    assert.deepEqual(client.cleaned, []);
+  } finally {
+    releaseRetirement.resolve();
+    await Promise.all([first, second]);
+  }
+  assert.deepEqual(client.cleaned, ["research"]);
+});
+
+test("failed retirement retains runtime records and propagates failure", async () => {
+  const client = new FakeBrowseTransport();
+  client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated deadline"));
+  const runtime = new WorkbenchBrowseRuntime({
+    client,
+    retireProcess: async () => { throw new Error("retirement denied"); },
+  });
+  await assert.rejects(runtime.status("research"), /retirement denied/u);
+  assert.deepEqual(client.cleaned, []);
+});
+
+test("force stop does not discard unreadable PID records", async () => {
+  const client = new FakeBrowseTransport();
+  client.readPid = async () => { throw new Error("pid read denied"); };
+  const runtime = new WorkbenchBrowseRuntime({
+    client,
+    retireProcess: async () => { throw new Error("must not signal without a pid"); },
+  });
+  await assert.rejects(runtime.stop("research", { force: true }), /pid read denied/u);
+  assert.deepEqual(client.cleaned, []);
+});
+
+test("a cooperative stop response still requires process retirement before record cleanup", async () => {
+  const client = new FakeBrowseTransport();
+  const events: string[] = [];
+  client.cleanupRuntimeFiles = async () => { events.push("cleanup"); };
+  const runtime = new WorkbenchBrowseRuntime({
+    client,
+    retireProcess: async () => { events.push("retired"); },
+  });
+  await runtime.stop("other");
+  assert.deepEqual(events, ["retired", "cleanup"]);
+});
+
+test("force stop propagates retirement failure without silently retrying it", async () => {
+  const client = new FakeBrowseTransport();
+  let attempts = 0;
+  const runtime = new WorkbenchBrowseRuntime({
+    client,
+    retireProcess: async () => { attempts += 1; throw new Error("retirement denied"); },
+  });
+  await assert.rejects(runtime.stop("other", { force: true }), /retirement denied/u);
+  assert.equal(attempts, 1);
+  assert.deepEqual(client.cleaned, []);
+});
+
+test("an unresponsive recorded process retires before replacement preparation and retains records on failure", async () => {
+  for (const fails of [false, true]) {
+    const client = new FakeBrowseTransport();
+    const events: string[] = [];
+    client.request = async () => { throw Object.assign(new Error("offline"), { code: "ECONNREFUSED" }); };
+    client.cleanupRuntimeFiles = async () => { events.push("cleanup"); };
+    const runtime = new WorkbenchBrowseRuntime({
+      client,
+      retireProcess: async () => {
+        events.push("retire");
+        if (fails) throw new Error("retirement denied");
+      },
+      profileStore: {
+        resolveProfilePath: async () => {
+          events.push("prepare");
+          throw new Error("fixture stops before process creation");
+        },
+      },
+    });
+    const result = await runtime.run({
+      action: "open",
+      args: [],
+      commandRequest: { args: [], cwd: "/work", projectId: null, threadId: "thread", timeoutMs: 5_000 },
+      rememberSession: true,
+      runtimeRequest: {
+        kind: "open", session: "research", timeoutMs: 5_000, mode: "headless", persistent: false,
+        params: { url: "about:blank", waitUntil: "load", timeoutMs: 5_000 },
+      },
+      session: "research",
+    }, {
+      cwd: "/work", owningRootPath: "/work", projectId: "work", projectRootPath: "/work",
+      workspaceRoots: [{ id: "work", name: "work", rootPath: "/work" }], workspaceRootPaths: ["/work"],
+    });
+    assert.equal(result.ok, false);
+    assert.deepEqual(events, fails ? ["retire"] : ["retire", "cleanup", "prepare"]);
+  }
+});
+
+test("cancellation during failed retirement cannot trigger another retirement attempt", async () => {
+  for (const route of ["stop", "run"] as const) {
+    const client = new FakeBrowseTransport();
+    const abort = new AbortController();
+    let attempts = 0;
+    const runtime = new WorkbenchBrowseRuntime({
+      client,
+      retireProcess: async () => {
+        attempts += 1;
+        abort.abort();
+        throw new Error("retirement denied");
+      },
+    });
+    if (route === "stop") {
+      await assert.rejects(runtime.stop("other", { force: true, signal: abort.signal }), /retirement denied/u);
+    } else {
+      const result = await runtime.run({
+        action: "stop", args: [], rememberSession: false, session: "other",
+        commandRequest: { args: [], cwd: "/work", projectId: null, threadId: "thread", timeoutMs: 5_000 },
+        runtimeRequest: { kind: "stop", session: "other", timeoutMs: 5_000, force: true },
+      }, {
+        cwd: "/work", owningRootPath: "/work", projectId: "work", projectRootPath: "/work",
+        workspaceRoots: [{ id: "work", name: "work", rootPath: "/work" }], workspaceRootPaths: ["/work"],
+      }, abort.signal);
+      assert.equal(result.ok, false);
+    }
+    assert.equal(attempts, 1);
+    assert.deepEqual(client.cleaned, []);
+  }
+});

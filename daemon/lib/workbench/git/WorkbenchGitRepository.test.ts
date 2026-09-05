@@ -12,6 +12,21 @@ import { THREAD_GIT_BASE_FIXTURE } from "./WorkbenchGitTestFixtures";
 
 const fixtureCache = new GitTestFixtureCache();
 
+test("repository containment preserves Windows aliases but rejects differently cased Linux siblings", () => {
+  const root = path.resolve("case-parent", "Repo");
+  const sibling = path.resolve("case-parent", "repo", "file.md");
+  const windows = new WorkbenchGitRepository(root, "win32");
+  const linux = new WorkbenchGitRepository(root, "linux");
+  assert.equal(windows.resolvePath(sibling), sibling);
+  assert.throws(() => linux.resolvePath(sibling), /inside the repository/u);
+  assert.throws(() => linux.normalizePaths([sibling]), /inside the Git repository/u);
+  for (const repository of [windows, linux]) {
+    assert.equal(repository.resolvePath("file.md"), path.join(root, "file.md"));
+    assert.throws(() => repository.resolvePath("../Repository/file.md"), /inside the repository/u);
+    assert.throws(() => repository.resolvePath("../other/file.md"), /inside the repository/u);
+  }
+});
+
 test("normalizes the index before atomic ref publication and keeps retries idempotent", async () => {
   const repository = new WorkbenchGitRepository("C:/Git/Project");
   const events: string[] = [];

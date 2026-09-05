@@ -53,7 +53,7 @@ test("app-server arguments suppress Codex-owned prompt and tool systems", () => 
   assert.deepEqual(args.slice(-3), ["app-server", "--listen", "stdio://"]);
 });
 
-test("intentional replacement ignores stale child output and exit", () => {
+test("intentional replacement ignores stale child output and exit", async () => {
   const first = fakeChild(101);
   const second = fakeChild(102);
   const children = [first, second];
@@ -69,14 +69,14 @@ test("intentional replacement ignores stale child output and exit", () => {
     onFatalExit: (reason) => fatalReasons.push(reason),
     onMessage: (message) => messages.push(message),
     projectRoot: "C:/workspace",
-    terminateChild: (child) => {
+    terminateChildAsync: async (child) => {
       terminated.push(child);
       (child as unknown as { killed: boolean }).killed = true;
     },
   });
 
   server.send({ method: "first" });
-  server.stop();
+  await server.stop();
   server.send({ method: "second" });
   first.stdout?.emit("data", Buffer.from('{"source":"stale"}\n'));
   first.emit("exit", 0, null);
@@ -114,8 +114,68 @@ test("asynchronous stop detaches ownership before process-tree termination settl
 
   server.send({ method: "first" });
   const stopping = server.stopAsync();
+  let repeatedFinished = false;
+  const repeated = server.stopAsync().then(() => { repeatedFinished = true; });
+  try {
+    await Promise.resolve();
+    assert.equal(repeatedFinished, false);
+    assert.throws(() => server.send({ method: "second" }), /retir/u);
+    assert.deepEqual(terminated, [first]);
+  } finally {
+    releaseTermination.resolve();
+    await Promise.all([stopping, repeated]);
+  }
   server.send({ method: "second" });
-  assert.deepEqual(terminated, [first]);
-  releaseTermination.resolve();
-  await stopping;
+  assert.equal(children.length, 0);
+});
+
+test("failed retirement fences replacement until an explicit stop retry succeeds", async () => {
+  const children = [fakeChild(301), fakeChild(302)];
+  let fails = true;
+  let attempts = 0;
+  const errors: string[] = [];
+  const server = new CodexAppServer({
+    createChild: () => children.shift()!,
+    log: () => undefined,
+    logError: (_name, message) => errors.push(message),
+    onFatalExit: () => undefined,
+    onMessage: () => undefined,
+    projectRoot: "C:/workspace",
+    terminateChildAsync: async () => {
+      attempts += 1;
+      if (fails) throw new Error("retirement denied");
+    },
+  });
+  server.send({ method: "first" });
+  await assert.rejects(server.stopAsync(), /retirement denied/u);
+  assert.throws(() => server.send({ method: "second" }), /retir/u);
+  assert.equal(children.length, 1);
+  assert.equal(errors.length, 1);
+  fails = false;
+  await server.stopAsync();
+  server.send({ method: "second" });
+  assert.equal(attempts, 2);
+  assert.equal(children.length, 0);
+});
+
+test("unexpected leader exit still retires its group before allowing replacement", async () => {
+  const first = fakeChild(401);
+  const children = [first, fakeChild(402)];
+  const retired: ChildProcess[] = [];
+  const server = new CodexAppServer({
+    createChild: () => children.shift()!,
+    log: () => undefined,
+    logError: () => undefined,
+    onFatalExit: () => undefined,
+    onMessage: () => undefined,
+    projectRoot: "C:/workspace",
+    terminateChildAsync: async (child) => { retired.push(child); },
+  });
+  server.send({ method: "first" });
+  first.emit("exit", 1, null);
+  assert.throws(() => server.send({ method: "second" }), /retir/u);
+  await server.stopAsync();
+  assert.deepEqual(retired, [first]);
+  server.send({ method: "second" });
+  assert.equal(children.length, 0);
 });

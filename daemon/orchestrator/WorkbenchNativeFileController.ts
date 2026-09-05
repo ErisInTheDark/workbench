@@ -28,7 +28,13 @@ async function spawnDetached(command: string, args: string[], detached = process
 }
 
 export default class WorkbenchNativeFileController {
-  constructor(private readonly catalog: Pick<WorkbenchProjectCatalogController, "resolveProjectById">) {}
+  constructor(
+    private readonly catalog: Pick<WorkbenchProjectCatalogController, "resolveProjectById">,
+    private readonly options: {
+      platform?: NodeJS.Platform;
+      resolveLinkRoot?: typeof resolveExternalFileLinkRoot;
+    } = {},
+  ) {}
 
   async open(request: OpenFileInEditorRequest) {
     const project = request.absolutePath ? null : await this.catalog.resolveProjectById(request.projectId);
@@ -64,8 +70,11 @@ export default class WorkbenchNativeFileController {
   async linkRoots(request: ResolveExternalFileLinkRootsRequest) {
     const roots = new Map<string, { id: string; openPathMode: "absolute"; rootPath: string }>();
     for (const filePath of [...new Set(request.paths.map((value) => value.trim()).filter(Boolean))].slice(0, 80)) {
-      const root = await resolveExternalFileLinkRoot(filePath);
-      if (root) roots.set(root.rootPath.toLowerCase(), { id: root.id, openPathMode: "absolute", rootPath: root.rootPath });
+      const root = await (this.options.resolveLinkRoot ?? resolveExternalFileLinkRoot)(filePath);
+      if (root) {
+        const key = (this.options.platform ?? process.platform) === "win32" ? root.rootPath.toLowerCase() : root.rootPath;
+        roots.set(key, { id: root.id, openPathMode: "absolute", rootPath: root.rootPath });
+      }
     }
     return { roots: [...roots.values()] };
   }

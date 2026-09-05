@@ -25,3 +25,21 @@ test("native open rejects non-local absolute paths before filesystem or process 
   );
   assert.equal(projectReads, 0);
 });
+
+test("link roots preserve Windows deduplication and distinct Linux root spelling", async () => {
+  for (const platform of ["win32", "linux"] as const) {
+    const controller = new WorkbenchNativeFileController({
+      resolveProjectById: async () => { throw new Error("unexpected project lookup"); },
+    }, {
+      platform,
+      resolveLinkRoot: async (filePath) => ({
+        id: filePath.split("/").at(-2)!,
+        rootPath: filePath.slice(0, filePath.lastIndexOf("/")),
+      }),
+    });
+    const { roots } = await controller.linkRoots({ paths: ["/work/Repo/a.md", "/work/repo/b.md", "/work/repo/c.md"] });
+    assert.deepEqual(roots.map((root) => root.rootPath), platform === "linux"
+      ? ["/work/Repo", "/work/repo"]
+      : ["/work/repo"]);
+  }
+});

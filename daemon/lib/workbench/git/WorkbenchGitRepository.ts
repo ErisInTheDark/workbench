@@ -2,6 +2,8 @@
  * Exports:
  * - default WorkbenchGitRepository: own raw Git process, stdin pathspec transport, ignored-path classification and tracked traversal, snapshot, path, tree, ref, worktree timestamps, index-normalized publication, and ancestry mechanics for one repository. Keywords: git, repository, pathspec, ignore, staged deletion, tracked path, stdin, argv, large path set, snapshot, ref, mtime, index, transaction.
  * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitWorktreeSnapshot: typed Git history, ancestry, object-read, worktree-snapshot, and atomic ref-update inputs. Keywords: git, commit, paths, head, object, snapshot, ref, transaction.
+ * - GitCommitIdentity/GitCommitBatch: parsed commit metadata and batched read results.
+ * - GIT_STATE_GENERATION_REF: per-worktree mutation generation ref.
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -69,9 +71,13 @@ export interface GitWorktreeSnapshot {
   tree: string;
 }
 
-function isWithinRoot(candidatePath: string, rootPath: string) {
-  const candidate = path.resolve(candidatePath).replace(/\\/g, "/").toLowerCase();
-  const root = path.resolve(rootPath).replace(/\\/g, "/").toLowerCase();
+function isWithinRoot(candidatePath: string, rootPath: string, platform: NodeJS.Platform) {
+  const comparable = (value: string) => {
+    const normalized = path.resolve(value).replace(/\\/g, "/");
+    return platform === "win32" ? normalized.toLowerCase() : normalized;
+  };
+  const candidate = comparable(candidatePath);
+  const root = comparable(rootPath);
   return candidate === root || candidate.startsWith(`${root}/`);
 }
 
@@ -163,7 +169,7 @@ export default class WorkbenchGitRepository {
 
   readonly root: string;
 
-  constructor(repoRoot: string) {
+  constructor(repoRoot: string, private readonly platform: NodeJS.Platform = process.platform) {
     this.root = path.resolve(repoRoot);
   }
 
@@ -248,7 +254,7 @@ export default class WorkbenchGitRepository {
       const value = String(candidate ?? "").trim();
       if (!value) throw new Error("Checkpoint paths must not be empty.");
       const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(this.root, value);
-      if (!isWithinRoot(absolute, this.root)) throw new Error("Checkpoint paths must stay inside the Git repository.");
+      if (!isWithinRoot(absolute, this.root, this.platform)) throw new Error("Checkpoint paths must stay inside the Git repository.");
       const relative = path.relative(this.root, absolute).replace(/\\/g, "/");
       if (!relative || relative.startsWith("../")) {
         throw new Error("Checkpoint paths must identify content inside the Git repository.");
@@ -283,7 +289,7 @@ export default class WorkbenchGitRepository {
 
   resolvePath(relativePath: string) {
     const absolute = path.resolve(this.root, relativePath);
-    if (!isWithinRoot(absolute, this.root)) throw new Error("Git path must stay inside the repository.");
+    if (!isWithinRoot(absolute, this.root, this.platform)) throw new Error("Git path must stay inside the repository.");
     return absolute;
   }
 
