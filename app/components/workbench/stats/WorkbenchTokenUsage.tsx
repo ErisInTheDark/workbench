@@ -16,8 +16,8 @@ export default function WorkbenchTokenUsage({ stats, selected = STATS_TOKEN_TYPE
 }) {
   const shown = STATS_TOKEN_SERIES.filter(({ key }) => selected.includes(key));
   return (
-    <section aria-labelledby="tokens-heading" className="min-w-0 space-y-4">
-      <div className="h-16">
+    <section aria-labelledby="tokens-heading" className="min-w-0 space-y-2">
+      <div>
         <div>
           <h2 className="m-0 text-[1rem] font-semibold text-text" id="tokens-heading">Tokens</h2>
           <p className="m-0 mt-1 text-[0.72rem] text-muted">Independent scales. Cache includes reads and writes.</p>
@@ -27,8 +27,8 @@ export default function WorkbenchTokenUsage({ stats, selected = STATS_TOKEN_TYPE
         buckets={stats?.tokens.buckets.map(({ startedAt }) => startedAt) ?? []}
         formatValue={compactNumber}
         scale="independent"
-        series={shown.map(({ colour, label, count, Icon }) => ({
-          colour,
+        series={shown.map(({ colourClassName, label, count, Icon }) => ({
+          colourClassName,
           label,
           icon: <Icon className="size-3.5" />,
           summary: stats ? compactNumber(count(stats.tokens.totals)) : "",

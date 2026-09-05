@@ -5,7 +5,6 @@
  * - default WorkbenchStatsView: compose stats controls, import state, usage, limits, and claim traffic. Keywords: stats, usage, claims, rate limits.
  */
 import {
-  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -34,6 +33,7 @@ import WorkbenchTokenUsage from "./WorkbenchTokenUsage";
 import WorkbenchUsageDrivers from "./WorkbenchUsageDrivers";
 import WorkbenchTokenTypeControls from "./WorkbenchTokenTypeControls";
 import WorkbenchStatsStatus from "./WorkbenchStatsStatus";
+import WorkbenchTab from "../WorkbenchTab";
 
 export default function WorkbenchStatsView({
   availableProjectId,
@@ -66,7 +66,6 @@ export default function WorkbenchStatsView({
   const [provider, setProvider] = useState<WorkbenchHarness | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [tokenTypes, setTokenTypes] = useState<StatsTokenType[]>([...STATS_TOKEN_TYPES]);
-  const [refreshing, setRefreshing] = useState(false);
   const [actionError, setActionError] = useState("");
   const [importProgress, setImportProgress] = useState<WorkbenchStatsImportProgress | null>(null);
   const request = useMemo<WorkbenchStatsDetailedReadRequest>(
@@ -117,65 +116,38 @@ export default function WorkbenchStatsView({
     };
   }, [client, controller, daemon]);
 
-  const refreshLimits = useCallback(async () => {
-    if (!daemon) return;
-    setRefreshing(true);
-    setActionError("");
-    try {
-      await daemon.request("stats/rate-limits/refresh", {});
-      await controller.refresh();
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Unable to refresh rate limits.");
-    } finally {
-      setRefreshing(false);
-    }
-  }, [controller, daemon]);
-
   const stats = snapshot.stats;
   const legacy = Boolean(stats && !hasStatsCategoryCosts(stats));
   const shownTypes = legacy ? STATS_TOKEN_TYPES : snapshot.displayedRequest?.tokenTypes ?? STATS_TOKEN_TYPES;
   const visibleError = actionError || snapshot.error;
   return (
-    <div className="mx-auto flex w-full max-w-[72rem] flex-col gap-8 py-8">
+    <div className="mx-auto flex w-full max-w-[72rem] flex-col gap-5 py-5">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-2">
           <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-muted uppercase">Recent usage</p>
           <h1 className="m-0 text-[1.65rem] font-semibold leading-tight text-text">Statistics</h1>
         </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <div aria-label="Statistics scope" className="flex items-end gap-4" role="tablist">
-            <a
-              aria-selected={projectId === null}
-              className={`border-b-2 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${projectId === null ? " border-text text-text" : " border-transparent text-muted hover:text-text"}`}
+          <div aria-label="Statistics scope" className="flex max-w-full items-end gap-4 text-[0.9rem]" role="tablist">
+            <WorkbenchTab
+              selected={projectId === null}
               href={createStatsHref(null)}
               onClick={(event) => onNavigate(event, null)}
-              role="tab"
             >
               Global
-            </a>
+            </WorkbenchTab>
             {availableProjectId ? (
-              <a
-                aria-selected={projectId !== null}
-                className={`max-w-[12rem] truncate border-b-2 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${projectId !== null ? " border-text text-text" : " border-transparent text-muted hover:text-text"}`}
+              <WorkbenchTab
+                selected={projectId !== null}
                 href={createStatsHref(availableProjectId)}
                 onClick={(event) => onNavigate(event, availableProjectId)}
-                role="tab"
               >
                 {projectLabel}
-              </a>
+              </WorkbenchTab>
             ) : null}
           </div>
-          <button
-            className="rounded-md px-2 py-1 text-[0.8rem] font-medium text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-50"
-            disabled={refreshing || !daemon}
-            onClick={() => { void refreshLimits(); }}
-            type="button"
-          >
-            {refreshing ? "Refreshing..." : "Refresh limits"}
-          </button>
-        </div>
       </header>
 
+      <div className="flex flex-col gap-2">
       <WorkbenchStatsFilters
         model={model}
         models={stats?.usageFilters.models ?? []}
@@ -196,9 +168,10 @@ export default function WorkbenchStatsView({
         error={visibleError} progress={importProgress ?? stats?.historyImport ?? null}
         failures={stats?.failures ?? []} legacy={legacy}
       />
-      <div aria-busy={snapshot.loading} className="flex flex-col gap-8">
+      </div>
+      <div aria-busy={snapshot.loading} className="flex flex-col gap-6">
           <WorkbenchStatsSummary stats={stats} />
-          <section aria-label="Token and cost usage" className="grid gap-10 lg:grid-cols-2">
+          <section aria-label="Token and cost usage" className="grid gap-6 lg:grid-cols-2">
             <WorkbenchTokenUsage stats={stats} selected={shownTypes} />
             <WorkbenchCostUsage stats={stats} selected={shownTypes} />
           </section>

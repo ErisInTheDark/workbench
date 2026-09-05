@@ -22,12 +22,12 @@ export default function WorkbenchRateLimitUsage({ stats }: {
   stats: Pick<WorkbenchStatsResponse, "rateLimits"> | null;
 }) {
   return (
-    <section aria-labelledby="rate-limit-heading" className="space-y-5">
+    <section aria-labelledby="rate-limit-heading" className="space-y-3">
       <div className="flex items-baseline justify-between gap-4">
         <h2 className="m-0 text-[1rem] font-semibold text-text" id="rate-limit-heading">Rate limits</h2>
         <span className="text-[0.72rem] text-muted">account-wide</span>
       </div>
-      <div className="h-[28rem] overflow-y-auto">
+      <div>
       {stats?.rateLimits.length ? (
         <div className="grid gap-8 lg:grid-cols-2">
           {stats.rateLimits.map((limit) => {

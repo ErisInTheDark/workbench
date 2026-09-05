@@ -22,15 +22,19 @@ export default function WorkbenchStatsStatus({ ready, loading, retained, error, 
         : error ? "Statistics could not be refreshed." : "";
   const hasDetails = Boolean(progress || issues || legacy);
   return (
-    <div className="relative h-12 min-w-0 text-[0.72rem] leading-6 text-muted">
-      <p aria-live="polite" className={`m-0 truncate ${error ? "text-danger" : ""}`}>{status || "\u00a0"}</p>
-      <details className="group" onKeyDown={(event) => {
+    <div className="relative flex h-6 min-w-0 items-center gap-3 text-[0.72rem] leading-6 text-muted">
+      <p aria-live="polite" className={`m-0 min-w-0 flex-1 truncate ${error ? "text-danger" : ""}`}>{status || "\u00a0"}</p>
+      <details className="group order-first shrink-0" onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.currentTarget.open = false;
           event.currentTarget.querySelector("summary")?.focus();
         }
       }}>
-        <summary className={`w-fit max-w-full cursor-pointer truncate rounded-md px-1 hover:bg-surface-hover ${hasDetails ? "" : "invisible"} ${issues ? "text-danger" : ""}`}>
+        <summary className={`
+          w-fit max-w-full cursor-pointer truncate rounded-md px-1 hover:bg-surface-hover
+          ${hasDetails ? "" : "invisible"}
+          ${issues ? "text-danger" : ""}
+        `}>
           {progress?.state === "running" ? `Importing history ${progress.percent.toFixed(0)}%` : "History details"}
           {issues ? ` · ${issues} issues` : ""}
         </summary>

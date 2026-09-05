@@ -18,12 +18,12 @@ export default function WorkbenchClaimHotspots({
   projects: readonly Pick<WorkbenchProjectOption, "id" | "kind" | "roots">[];
 }) {
   return (
-    <section aria-labelledby="claims-heading" className="space-y-5" data-thread-project-file-link-boundary="true">
+    <section aria-labelledby="claims-heading" className="space-y-3" data-thread-project-file-link-boundary="true">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h2 className="m-0 text-[1rem] font-semibold text-text" id="claims-heading">Claim traffic</h2>
         <span className="text-[0.72rem] text-muted">distinct threads declaring each file</span>
       </div>
-      <div className="h-[40rem] lg:h-[20rem]">
+      <div>
         {stats?.claimHotspots.length ? (
           <ol className="m-0 grid auto-rows-[2rem] gap-x-8 p-0 lg:grid-cols-2">
             {stats.claimHotspots.map((hotspot) => {

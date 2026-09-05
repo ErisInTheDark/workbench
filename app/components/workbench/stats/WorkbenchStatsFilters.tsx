@@ -5,6 +5,8 @@
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchStatsRange } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { providerLabel } from "./stats-formatters";
+import WorkbenchRotatorButton from "../WorkbenchRotatorButton";
+import WorkbenchTab from "../WorkbenchTab";
 
 const RANGES: ReadonlyArray<{ label: string; value: WorkbenchStatsRange }> = [
   { label: "7 days", value: "7d" },
@@ -40,40 +42,33 @@ export default function WorkbenchStatsFilters({
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-      <div aria-label="Statistics range" className="flex flex-wrap gap-1" role="group">
+      <div aria-label="Statistics range" className="flex flex-wrap items-end gap-4 text-[0.78rem]" role="tablist">
         {RANGES.map((candidate) => (
-          <button
-            aria-pressed={range === candidate.value}
-            className={`rounded-md px-2.5 py-1.5 text-[0.78rem] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${range === candidate.value ? " bg-surface-hover text-text" : " text-muted hover:bg-surface-hover hover:text-text"}`}
+          <WorkbenchTab
+            selected={range === candidate.value}
             key={candidate.value}
             onClick={() => onRangeChange(candidate.value)}
-            type="button"
           >
             {candidate.label}
-          </button>
+          </WorkbenchTab>
         ))}
       </div>
-      <div aria-label="Usage filters" className="flex flex-wrap items-center gap-2" role="group">
-        <span className="text-[0.7rem] font-medium tracking-[0.08em] text-muted uppercase">Usage filters</span>
-        <button
-          aria-label="Rotate provider filter"
-          className="w-32 truncate rounded-md px-2 py-1 text-[0.78rem] font-medium text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-          onClick={() => onProviderChange(nextValue(provider, providers))}
+      <div aria-label="Usage filters" className="flex flex-wrap items-center gap-2 text-[0.78rem]" role="group">
+        <WorkbenchRotatorButton
+          ariaLabel="Rotate provider filter"
+          onRotate={() => onProviderChange(nextValue(provider, providers))}
           title="Show the next provider"
-          type="button"
         >
           {provider ? providerLabel(provider) : "All providers"}
-        </button>
-        <button
-          aria-label="Rotate model filter"
-          className="w-44 max-w-full truncate rounded-md px-2 py-1 text-[0.78rem] font-medium text-muted transition hover:bg-surface-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-50"
+        </WorkbenchRotatorButton>
+        <WorkbenchRotatorButton
+          ariaLabel="Rotate model filter"
           disabled={!models.length && !model}
-          onClick={() => onModelChange(nextValue(model, models))}
-          title="Show the next model"
-          type="button"
+          onRotate={() => onModelChange(nextValue(model, models))}
+          title={model ?? "Show the next model"}
         >
-          {model ?? "All models"}
-        </button>
+          <span className="truncate">{model ?? "All models"}</span>
+        </WorkbenchRotatorButton>
       </div>
     </div>
   );

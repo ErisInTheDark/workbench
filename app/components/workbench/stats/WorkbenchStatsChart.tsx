@@ -6,17 +6,18 @@
  * ChartSeries: labelled nullable samples with optional shared category icons. Keywords: chart, series.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
-import { chartX as xAt, chartY as yAt, chartSegments as segments, chartMaximum, chartPointerIndex } from "./stats-chart-geometry";
+import { chartMaximum, chartPointerIndex, chartSegments as segments, chartX as xAt, chartY as yAt } from "./stats-chart-geometry";
 
 interface ChartSeries {
-  colour: string;
+  colour?: string;
+  colourClassName?: string;
   label: string;
   summary?: string;
   values: readonly (number | null)[];
   icon?: ReactNode;
 }
 
-export default function WorkbenchStatsChart({
+export default function WorkbenchStatsChart ({
   buckets,
   formatValue,
   series,
@@ -63,13 +64,13 @@ export default function WorkbenchStatsChart({
     ? "No samples"
     : new Date(selectedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   return (
-    <figure className="m-0 min-w-0 space-y-3">
-      <figcaption className="flex h-14 flex-wrap items-center justify-between gap-x-4 gap-y-2 overflow-hidden">
+    <figure className="m-0 min-w-0 space-y-2 [--hue-chroma:50%]">
+      <figcaption className="flex min-h-6 flex-wrap items-center justify-between gap-x-4 gap-y-1">
         <span className="text-[0.9rem] font-semibold text-text">{title}</span>
         <span className="flex flex-wrap gap-x-3 gap-y-1 text-[0.72rem] text-muted">
-          {availableSeries.map(({ colour, label, summary, icon }) => (
-            <span className="inline-flex items-center gap-1.5" key={label}>
-              <span className="inline-flex" style={{ color: colour }}>{icon ?? <span className="size-1.5 rounded-full" style={{ background: colour }} />}</span>
+          {availableSeries.map(({ colour, colourClassName, label, summary, icon }) => (
+            <span className={`inline-flex items-center gap-1.5 font-bold ${colourClassName ?? ""}`} style={{ color: colour }} key={label}>
+              <span className="inline-flex">{icon ?? <span className="size-1.5 rounded-full bg-current" />}</span>
               {label}{summary ? ` ${summary}` : ""}
             </span>
           ))}
@@ -86,29 +87,30 @@ export default function WorkbenchStatsChart({
         role="group"
         tabIndex={0}
       >
-        <svg ref={svg} aria-hidden="true" className="h-32 w-full overflow-visible" viewBox="0 0 100 38">
+        <svg ref={svg} aria-hidden="true" className="h-40 w-full overflow-visible" viewBox="0 0 100 38" preserveAspectRatio="none">
           {[4, 19, 34].map((y) => (
-            <line key={y} stroke="color-mix(in srgb, var(--muted) 18%, transparent)" strokeWidth="0.35" x1="0" x2="100" y1={y} y2={y} />
+            <line key={y} stroke="color-mix(in srgb, var(--muted) 18%, transparent)" strokeWidth="1" vectorEffect="non-scaling-stroke" x1="0" x2="100" y1={y} y2={y} />
           ))}
           {selectedAt !== null ? (
             <line
               stroke="color-mix(in srgb, var(--text) 40%, transparent)"
               strokeDasharray="1 1.5"
-              strokeWidth="0.4"
+              strokeWidth="1"
+              vectorEffect="non-scaling-stroke"
               x1={xAt(selectedIndex, buckets.length)}
               x2={xAt(selectedIndex, buckets.length)}
               y1="3"
               y2="35"
             />
           ) : null}
-          {availableSeries.map(({ colour, label, values, maximum: seriesMaximum }) => (
-            <g key={label}>
+          {availableSeries.map(({ colour, colourClassName, label, values, maximum: seriesMaximum }) => (
+            <g className={`${colourClassName} font-bold`} style={{ color: colour }} key={label}>
               {segments(values, scale === "independent" ? seriesMaximum : maximum).map((pathPoints, segmentIndex) => (
                 <polyline
                   fill="none"
                   key={segmentIndex}
                   points={pathPoints}
-                  stroke={colour}
+                  stroke="currentColor"
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   strokeWidth="1.25"
@@ -116,24 +118,28 @@ export default function WorkbenchStatsChart({
                 />
               ))}
               {values.map((value, index) => value === null ? null : (
-                <circle
-                  cx={xAt(index, values.length)}
-                  cy={yAt(value, scale === "independent" ? seriesMaximum : maximum)}
-                  fill={colour}
+                <line
+                  x1={xAt(index, values.length)}
+                  x2={xAt(index, values.length)}
+                  y1={yAt(value, scale === "independent" ? seriesMaximum : maximum)}
+                  y2={yAt(value, scale === "independent" ? seriesMaximum : maximum)}
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeWidth={index === selectedIndex ? "6" : "3"}
+                  vectorEffect="non-scaling-stroke"
                   key={index}
-                  r={index === selectedIndex ? "1.15" : "0.65"}
                 />
               ))}
             </g>
           ))}
         </svg>
       </div>
-      <div className="grid h-24 grid-cols-2 content-start gap-x-4 gap-y-1 overflow-hidden text-[0.7rem] tabular-nums text-muted">
+      <div className="grid min-h-14 grid-cols-2 content-start gap-x-4 gap-y-1 text-[0.7rem] tabular-nums text-muted">
         <span>{buckets.length ? new Date(buckets[0]!).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : ""}</span>
         <span aria-live="polite" className="col-span-2 row-start-2 grid grid-cols-2 gap-x-3 gap-y-1">
           <span className="font-medium text-text">{selectedDate}</span>
-          {availableSeries.map(({ label, values, icon, colour }) => (
-            <span className="inline-flex items-center gap-1" key={label}><span style={{ color: colour }}>{icon}</span>{label} {values[selectedIndex] === null || values[selectedIndex] === undefined ? "unavailable" : formatValue(values[selectedIndex])}</span>
+          {availableSeries.map(({ label, values, icon, colour, colourClassName }) => (
+            <span className={`inline-flex items-center gap-1 font-bold ${colourClassName ?? ""}`} style={{ color: colour }} key={label}><span>{icon}</span>{label} {values[selectedIndex] === null || values[selectedIndex] === undefined ? "unavailable" : formatValue(values[selectedIndex])}</span>
           ))}
         </span>
         <span className="col-start-2 row-start-1 text-right">{buckets.length ? new Date(buckets.at(-1)!).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : ""}</span>

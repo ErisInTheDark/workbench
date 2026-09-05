@@ -11,11 +11,11 @@ import { SquareArrowRightEnterIcon, SquareEqualIcon, SquareArrowRightExitIcon } 
 export const STATS_TOKEN_SERIES: readonly {
   key: StatsTokenType;
   label: string;
-  colour: string;
+  colourClassName: string;
   Icon: ComponentType<{ className?: string }>;
   count: (tokens: WorkbenchStatsResponse["tokens"]["totals"]) => number;
 }[] = [
-  { key: "input", label: "Input", colour: "var(--accent)", Icon: SquareArrowRightEnterIcon, count: (tokens) => tokens.uncachedInput },
-  { key: "cache", label: "Cache", colour: "var(--muted)", Icon: SquareEqualIcon, count: (tokens) => tokens.cachedInput + tokens.cacheWriteInput },
-  { key: "output", label: "Output", colour: "var(--text)", Icon: SquareArrowRightExitIcon, count: (tokens) => tokens.output },
+  { key: "input", label: "Input", colourClassName: "text-hue-210", Icon: SquareArrowRightEnterIcon, count: (tokens) => tokens.uncachedInput },
+  { key: "cache", label: "Cache", colourClassName: "text-hue-300", Icon: SquareEqualIcon, count: (tokens) => tokens.cachedInput + tokens.cacheWriteInput },
+  { key: "output", label: "Output", colourClassName: "text-hue-140", Icon: SquareArrowRightExitIcon, count: (tokens) => tokens.output },
 ];

@@ -20,10 +20,10 @@ export default function WorkbenchUsageDrivers({
   stats: Pick<WorkbenchStatsResponse, "models" | "topThreads"> | null;
 }) {
   return (
-    <section aria-labelledby="drivers-heading" className="space-y-5">
+    <section aria-labelledby="drivers-heading" className="space-y-3">
       <h2 className="m-0 text-[1rem] font-semibold text-text" id="drivers-heading">Usage drivers</h2>
       <div className="grid gap-8 lg:grid-cols-2">
-        <div className="h-[26rem] min-w-0">
+        <div className="min-w-0">
           <h3 className="m-0 mb-3 text-[0.78rem] font-semibold text-muted">By model</h3>
           {stats?.models.length ? (
             <ol className="m-0 grid auto-rows-[2rem] p-0">
@@ -41,7 +41,7 @@ export default function WorkbenchUsageDrivers({
             </ol>
           ) : <p className="m-0 text-[0.8rem] text-muted">{stats ? "No model usage in this range." : "-"}</p>}
         </div>
-        <div className="h-[26rem] min-w-0">
+        <div className="min-w-0">
           <h3 className="m-0 mb-3 text-[0.78rem] font-semibold text-muted">Top threads</h3>
           {stats?.topThreads.length ? (
             <ol className="m-0 grid auto-rows-[2rem] p-0">

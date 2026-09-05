@@ -20,16 +20,16 @@ export default function WorkbenchCostUsage({ stats, selected = STATS_TOKEN_TYPES
     + basis.defaultModelTokens;
   const share = (value: number) => total ? `${(value / total * 100).toFixed(1)}%` : "0%";
   return (
-    <section aria-labelledby="cost-heading" className="min-w-0 space-y-4">
-      <div className="h-16">
+    <section aria-labelledby="cost-heading" className="min-w-0 space-y-2">
+      <div>
         <h2 className="m-0 text-[1rem] font-semibold text-text" id="cost-heading">API-equivalent cost</h2>
         <p className="m-0 mt-1 text-[0.72rem] text-muted">Current catalogue estimate, not a subscription invoice.</p>
       </div>
       <WorkbenchStatsChart
         buckets={stats?.cost.buckets.map(({ startedAt }) => startedAt) ?? []}
         formatValue={formatMoney}
-        series={detailed ? STATS_TOKEN_SERIES.filter(({ key }) => selected.includes(key)).map(({ key, colour, label, Icon }) => ({
-          colour, label, icon: <Icon className="size-3.5" />,
+        series={detailed ? STATS_TOKEN_SERIES.filter(({ key }) => selected.includes(key)).map(({ key, colourClassName, label, Icon }) => ({
+          colourClassName, label, icon: <Icon className="size-3.5" />,
           summary: formatMoney(detailed.cost.byTokenType[key]),
           values: detailed.cost.buckets.map((bucket) => bucket.byTokenType[key]),
         })) : stats ? [{
