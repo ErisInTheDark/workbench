@@ -1,4 +1,5 @@
 /*
+ * Keywords: provider, title provenance, fallback, lifecycle, reconciliation, persistence.
  * Exports:
  * - No production exports; tests protect provider normalization, SQLite store routing, relationship projection, progressive reconciliation, Git projection and retention routing, managed resume, and controller-owned title mutation. Keywords: provider, sidebar, sqlite, subagent, title, resume, reconciliation, git, retention, test.
  */
@@ -95,6 +96,16 @@ test("provider sidebar normalization replaces identifier titles with first-messa
   const id = "123e4567-e89b-42d3-a456-426614174000";
   const entry = normalizeProviderSidebarEntry("codex", { id, name: id, preview: "First request", status: { type: "idle" }, updatedAt: 1 });
   assert.equal(entry?.title, "First request");
+  assert.equal(entry && "namedTitle" in entry ? entry.namedTitle : undefined, undefined);
+});
+
+test("provider title observations distinguish real names from identical preview text", () => {
+  const named = normalizeProviderSidebarEntry("codex", { id: "thread", name: "First request", preview: "First request", updatedAt: 1 });
+  assert.equal(named && "namedTitle" in named ? named.namedTitle : undefined, "First request");
+  for (const provider of [{}, { name: "New thread" }, { name: "thread" }, { preview: "First request" }]) {
+    const entry = normalizeProviderSidebarEntry("codex", { id: "thread", ...provider, updatedAt: 1 });
+    assert.equal(entry && "namedTitle" in entry ? entry.namedTitle : undefined, undefined);
+  }
 });
 
 test("inactive subagents remain completed but unsettled until an explicit settlement overlay exists", () => {

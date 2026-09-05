@@ -33,8 +33,8 @@ test("dismissal reveals older history and only a new use restores the dismissed 
   assert.equal(history.filter((entry) => entry.title === "five").length, 1);
 });
 
-test("first observation keeps the known prior title without inventing its historical age", () => {
-  const history = recordThreadTitle([], "old", "new", 10);
-  assert.deepEqual(history, [{ title: "new", usedAt: 10 }, { title: "old", usedAt: 10 }]);
+test("first explicit observation does not import the outgoing display fallback", () => {
+  const history = recordThreadTitle([], "first message preview", "new", 10);
+  assert.deepEqual(history, [{ title: "new", usedAt: 10 }]);
   assert.deepEqual(recordThreadTitle(history, "new", "", 20), history);
 });

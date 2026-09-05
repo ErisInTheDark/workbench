@@ -1,6 +1,7 @@
 /*
  * Keywords: thread, state, title history, reconciliation, persistence, lifecycle.
  * Exports:
+ * - WorkbenchObservedThreadEntry: provider sidebar input with an optional explicit name, separate from display fallback.
  * - WorkbenchThreadStateControllerOptions/WorkbenchThreadReconciliationFailure/WorkbenchThreadGitArcSnapshot/WorkbenchThreadClaimContext/WorkbenchObservedLifecycleEvent: catalog, project-state and title ports, Git projection, claim context, progressive reconciliation, and identity-owned provider lifecycle input. Keywords: ownership, reconciliation, notification, title, git.
  * - default WorkbenchThreadStateController: own UI-independent thread records, settlement retention timing, authoritative SQLite state, durable display order, provider observation, and local/cross-project sidebar projection. Keywords: drafts, pinned, project, lifecycle, retention, headless, sqlite.
  */
@@ -85,6 +86,8 @@ import {
   type WorkbenchThreadStateRecord,
   type WorkbenchThreadSnoozeTarget,
 } from "./workbench-thread-state-record";
+
+export type WorkbenchObservedThreadEntry = WorkbenchThreadSidebarEntry & { namedTitle?: string };
 
 interface StoredThreadMetadata { archived: boolean; harness: "codex" | "copilot" | "opencode"; lifecycle: WorkbenchThreadLifecycle; mcpGeneration?: string | null; orderAt?: number; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null; pinned: boolean; questionnaireHistory?: WorkbenchQuestionnaireHistoryEntryState[]; snoozed: boolean; threadId: string; titleFallback?: string }
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
@@ -178,7 +181,7 @@ export interface WorkbenchThreadStateControllerOptions {
   reconcileProject: (
     projectId: string,
     signal: AbortSignal,
-    acceptProviderSnapshot: (harness: WorkbenchHarnessId, entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void,
+    acceptProviderSnapshot: (harness: WorkbenchHarnessId, entries: WorkbenchObservedThreadEntry[], options: { complete: boolean }) => void,
     acceptGitArcSnapshot: (snapshot: WorkbenchThreadGitArcSnapshot) => Promise<void>,
   ) => Promise<WorkbenchThreadReconciliationFailure[]>;
   resolveGitArc: (projectId: string, harness: WorkbenchHarnessId, threadId: string) => Promise<WorkbenchGitArcLifecycleState | LegacyGitArcClaim | null>;
@@ -611,7 +614,7 @@ export default class WorkbenchThreadStateController {
     return this.snapshot(projectId, state);
   }
 
-  async ensureProviderEntry(projectId: string, providerEntry: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>) {
+  async ensureProviderEntry(projectId: string, providerEntry: Exclude<WorkbenchObservedThreadEntry, { entryKind: "draft" }>) {
     const state = await this.getProject(projectId);
     const key = entryKey(providerEntry);
     return await this.enqueue(`${projectId}:thread:${key}`, async () => {
@@ -745,7 +748,7 @@ export default class WorkbenchThreadStateController {
     harness: "codex" | "copilot" | "opencode",
     threadId: string,
     event: WorkbenchLifecycleEvent,
-    providerEntry?: WorkbenchThreadSidebarEntry,
+    providerEntry?: WorkbenchObservedThreadEntry,
     questionnaireMutation?: QuestionnaireStateMutation,
     profile?: WorkbenchComposerProfileSelectionState | null,
   ) {
@@ -754,7 +757,11 @@ export default class WorkbenchThreadStateController {
     const result = await this.enqueue(`${projectId}:thread:${key}`, async () => {
       const wakeReadyBefore = areAllUnsnoozedThreadEntriesSettlementReady(this.naturallyOrderedEntries(state));
       if (!state.entries.has(key) && providerEntry?.entryKind === "thread" && entryKey(providerEntry) === key) {
-        state.entries.set(key, parseWorkbenchThreadStateEntry({ ...providerEntry, mcpGeneration: null, providerObserved: true }));
+        const { namedTitle, ...sidebarEntry } = providerEntry;
+        state.entries.set(key, parseWorkbenchThreadStateEntry({
+          ...sidebarEntry, mcpGeneration: null, providerObserved: true,
+          titleHistory: recordThreadTitle([], "", namedTitle ?? "", this.now()),
+        }));
       }
       const existing = state.entries.get(key);
       if (!existing || existing.entryKind === "draft") return null;
@@ -802,7 +809,7 @@ export default class WorkbenchThreadStateController {
           : lifecycleEntry;
       const parsedNext = parseWorkbenchThreadStateEntry({
         ...next,
-        titleHistory: recordThreadTitle(existing.titleHistory ?? [], existing.title, next.title, this.now()),
+        titleHistory: recordThreadTitle(existing.titleHistory ?? [], existing.title, providerEntry?.namedTitle ?? "", this.now()),
       });
       if (parsedNext.entryKind === "draft") throw new Error("Lifecycle transitions cannot produce draft entries.");
       state.entries.set(key, parsedNext);
@@ -1096,12 +1103,9 @@ export default class WorkbenchThreadStateController {
         .map((history) => [`${history.identity.harness}:${history.identity.threadId}`, history.titles]));
       const records = decoded.records.map((record) => ({
         ...record,
-        titleHistory: recordThreadTitle(histories.get(entryKey(record)) ?? [], record.title, record.title, this.now()),
+        titleHistory: histories.get(entryKey(record)) ?? [],
       }));
-      const needsInitialTitles = records.some((record) => (
-        record.title && !histories.get(entryKey(record))?.some((entry) => entry.title === record.title)
-      ));
-      if (stored === null || !areDeeplyEqual(stored, decoded) || needsInitialTitles) {
+      if (stored === null || !areDeeplyEqual(stored, decoded)) {
         await this.options.threadStateStore.writeProject(projectId, decoded, records.map((record) => ({
           identity: record.identity, titles: record.titleHistory,
         })));
@@ -1477,11 +1481,11 @@ export default class WorkbenchThreadStateController {
   private installProviderSnapshot(
     state: ProjectState,
     harness: WorkbenchHarnessId,
-    entries: WorkbenchThreadSidebarEntry[],
+    entries: WorkbenchObservedThreadEntry[],
     { complete }: { complete: boolean },
   ) {
     let changed = false;
-    const install = (key: string, entry: WorkbenchThreadStateEntry) => {
+    const install = (key: string, entry: WorkbenchThreadStateEntry, namedTitle?: string) => {
       const existing = state.entries.get(key);
       if (entry.entryKind !== "draft") {
         entry = {
@@ -1489,7 +1493,7 @@ export default class WorkbenchThreadStateController {
           titleHistory: recordThreadTitle(
             existing && existing.entryKind !== "draft" ? existing.titleHistory ?? [] : [],
             existing?.title ?? "",
-            entry.title,
+            namedTitle ?? "",
             this.now(),
           ),
         };
@@ -1500,7 +1504,8 @@ export default class WorkbenchThreadStateController {
     };
     const providerKeys = new Set<string>();
     for (const candidate of entries) {
-      const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(candidate);
+      const { namedTitle, ...sidebarEntry } = candidate;
+      const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(sidebarEntry);
       if (!parsed.success || parsed.data.entryKind === "draft" || parsed.data.identity.harness !== harness) continue;
       const key = entryKey(parsed.data);
       providerKeys.add(key);
@@ -1528,7 +1533,7 @@ export default class WorkbenchThreadStateController {
           settledAt: existing.settledAt,
           snoozedUntil: existing.snoozedUntil,
           ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
-        } : { ...providerEntry, mcpGeneration: null, providerObserved: true }));
+        } : { ...providerEntry, mcpGeneration: null, providerObserved: true }), namedTitle);
         continue;
       }
       const metadata = existing?.entryKind === "thread" && existing.metadata.archived
@@ -1551,7 +1556,7 @@ export default class WorkbenchThreadStateController {
         snoozedUntil: existing.snoozedUntil,
         ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
         title: providerEntry.title === "New thread" ? existing.title : providerEntry.title,
-      } : { ...providerEntry, mcpGeneration: null, providerObserved: true }));
+      } : { ...providerEntry, mcpGeneration: null, providerObserved: true }), namedTitle);
     }
     if (!complete) return changed;
     for (const [key, entry] of state.entries) {
@@ -2464,9 +2469,7 @@ export default class WorkbenchThreadStateController {
   private async writeProjectState(projectId: string, state: ProjectState) {
     const histories = [...state.entries.values()].flatMap((entry) => {
       if (entry.entryKind === "draft") return [];
-      const titles = entry.titleHistory ?? recordThreadTitle([], entry.title, entry.title, this.now());
-      if (!entry.titleHistory) state.entries.set(entryKey(entry), { ...entry, titleHistory: titles });
-      return [{ identity: entry.identity, titles }];
+      return [{ identity: entry.identity, titles: entry.titleHistory ?? [] }];
     });
     await this.options.threadStateStore.writeProject(projectId, this.storedProject(state), histories);
   }

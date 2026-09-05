@@ -36,7 +36,7 @@ export default function WorkbenchThreadTitleHistory({ projectId, harness, thread
     <div className="flex min-w-0 flex-col gap-1" aria-busy={pending}>
       {history.previousTitles.map(({ title }) => (
         <div key={title} className="flex min-w-0 items-start gap-1 text-[0.8rem] text-muted">
-          <span className="min-w-0 flex-1 break-words py-1">{title}</span>
+          <span className="min-w-0 flex-1 truncate py-1">{title}</span>
           <button
             type="button"
             aria-label={`Reapply title: ${title}`}

@@ -1,4 +1,7 @@
-/* No production exports. Tests protect authoritative SQLite persistence, headless ownership, folder persistence, MCP generation, observation replay, reconciliation, mutations, and stale publication fences. */
+/*
+ * Keywords: SQLite, title history, fallback, lifecycle, reconciliation, persistence.
+ * Exports: none. Tests protect headless thread ownership, mutations, durability, and publication fences.
+ */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -13,6 +16,7 @@ import { projectWorkbenchThreadDisplaySection } from "workbench-shared/workbench
 import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory, type WorkbenchThreadStateGlobalDocumentId, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
+import { normalizeProviderSidebarEntry } from "./WorkbenchThreadStateFeature";
 
 type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">
   & Partial<Pick<WorkbenchThreadStateControllerOptions, "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">>
@@ -76,6 +80,9 @@ test("first title observation is durable before a rename and keeps its timestamp
   const first = new WorkbenchThreadStateController(options);
   try {
     await first.getSnapshot("project");
+    const observed = normalizeProviderSidebarEntry("codex", { id: identity.threadId, name: "existing title", updatedAt: 1 });
+    assert.ok(observed && observed.entryKind !== "draft");
+    await first.ensureProviderEntry("project", observed);
     assert.deepEqual(await persistence.readTitleHistories("project"), [{
       identity, titles: [{ title: "existing title", usedAt: 10 }],
     }]);
@@ -116,7 +123,9 @@ test("title history records user renames, ignores repeated observations, and sur
   };
   try {
     await controller.open("viewer", "project");
-    await controller.ensureProviderEntry("project", provider);
+    const originalProvider = normalizeProviderSidebarEntry("codex", { id: provider.identity.threadId, name: provider.title, updatedAt: 1 });
+    assert.ok(originalProvider && originalProvider.entryKind !== "draft");
+    await controller.ensureProviderEntry("project", originalProvider);
     now = 20;
     const renamed = await controller.handleRequest("viewer", {
       method: "workbench/thread-state/title/set", projectId: "project", identity: provider.identity, title: "renamed",
@@ -127,7 +136,9 @@ test("title history records user renames, ignores repeated observations, and sur
     assert.deepEqual("previousTitles" in renamedEntry ? renamedEntry.previousTitles : undefined, [{ title: "original", usedAt: 10 }]);
     now = 30;
     await controller.observeTitle("codex", "history-thread", "renamed");
-    await controller.ensureProviderEntry("project", { ...provider, title: "renamed" });
+    const renamedProvider = normalizeProviderSidebarEntry("codex", { id: provider.identity.threadId, name: "renamed", updatedAt: 1 });
+    assert.ok(renamedProvider && renamedProvider.entryKind !== "draft");
+    await controller.ensureProviderEntry("project", renamedProvider);
     assert.deepEqual((await snapshot()).entries[0], renamedEntry);
     const rejected = await controller.handleRequest("viewer", {
       method: "workbench/thread-state/title/set", projectId: "project", identity: provider.identity, title: "rejected",
@@ -141,7 +152,7 @@ test("title history records user renames, ignores repeated observations, and sur
     assert.ok(denied.error);
     const dismissed = await controller.handleRequest("viewer", dismissRequest);
     assert.equal(dismissed.error, undefined);
-    await controller.ensureProviderEntry("project", { ...provider, title: "renamed" });
+    await controller.ensureProviderEntry("project", renamedProvider);
     const afterDismissal = (await snapshot()).entries[0]!;
     assert.deepEqual("previousTitles" in afterDismissal ? afterDismissal.previousTitles : undefined, []);
     now = 40;
@@ -150,6 +161,49 @@ test("title history records user renames, ignores repeated observations, and sur
     assert.deepEqual("previousTitles" in reapplied ? reapplied.previousTitles : undefined, [{ title: "renamed", usedAt: 20 }]);
   } finally {
     await controller.dispose();
+  }
+});
+
+test("fallback displays never enter history through load, reconciliation, lifecycle, or rename", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  const identity = { harness: "codex" as const, threadId: "fallback-thread" };
+  const fallback = normalizeProviderSidebarEntry("codex", { id: identity.threadId, updatedAt: 1 });
+  assert.ok(fallback && fallback.entryKind !== "draft");
+  await persistence.writeProject("project", { drafts: [], records: [fallback], version: 4 });
+  const options: TestControllerOptions = {
+    storageRoot: "fallback-title-history",
+    threadStateStore: persistence,
+    now: () => 10,
+    getProjectCatalog: () => ({ data: [], rootPath: "" }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+  };
+  const first = new WorkbenchThreadStateController(options);
+  try {
+    await first.getSnapshot("project");
+    assert.deepEqual((await persistence.readTitleHistories("project")).flatMap((row) => row.titles), []);
+    await first.ensureProviderEntry("project", fallback);
+    const preview = normalizeProviderSidebarEntry("codex", { id: identity.threadId, preview: "first user request", updatedAt: 2 });
+    assert.ok(preview && preview.entryKind !== "draft");
+    await first.ensureProviderEntry("project", preview);
+    await first.applyLifecycle("project", "codex", identity.threadId, { kind: "acceptedIntent", turnId: "turn" }, preview);
+    assert.deepEqual((await persistence.readTitleHistories("project")).flatMap((row) => row.titles), []);
+    await first.setTitle("project", "codex", identity.threadId, "actual name");
+    assert.deepEqual((await persistence.readTitleHistories("project")).flatMap((row) => row.titles), [{ title: "actual name", usedAt: 10 }]);
+  } finally {
+    await first.dispose();
+  }
+  const restarted = new WorkbenchThreadStateController({ ...options, now: () => 20 });
+  try {
+    await restarted.setTitle("project", "codex", identity.threadId, "first user request");
+    const entry = (await restarted.getSnapshot("project")).entries[0]!;
+    assert.deepEqual("previousTitles" in entry ? entry.previousTitles : undefined, [{ title: "actual name", usedAt: 10 }]);
+    assert.deepEqual((await persistence.readTitleHistories("project")).flatMap((row) => row.titles), [
+      { title: "first user request", usedAt: 20 }, { title: "actual name", usedAt: 10 },
+    ]);
+  } finally {
+    await restarted.dispose();
   }
 });
 

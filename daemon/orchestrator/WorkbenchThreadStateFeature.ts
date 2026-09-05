@@ -1,4 +1,5 @@
 /*
+ * Keywords: provider, sidebar, explicit title, fallback, lifecycle, reconciliation.
  * Exports:
  * - WorkbenchThreadStateFeatureContext: stable database, sidebar, lifecycle, Git retention, and shared project-observation ports. Keywords: dependency injection, thread state, retention, project, sqlite.
  * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result. Keywords: lifecycle, observation, persistence.
@@ -11,11 +12,11 @@ import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchComposerProfileStorePayload, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { GitArcActiveClaim, GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
-import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
-import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchThreadGitArcSnapshot, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
+import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchObservedThreadEntry, type WorkbenchThreadGitArcSnapshot, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
 import WorkbenchThreadStateStore, {
   type WorkbenchThreadStateShadowNotifier,
   type WorkbenchThreadStateStoreDatabase,
@@ -96,7 +97,7 @@ function normalizeOptionalTimestamp(value: unknown) {
     : null;
 }
 
-export function normalizeProviderSidebarEntry(harness: HarnessKind, value: unknown): WorkbenchThreadSidebarEntry | null {
+export function normalizeProviderSidebarEntry(harness: HarnessKind, value: unknown): WorkbenchObservedThreadEntry | null {
   const record = asRecord(value);
   const threadId = typeof record?.id === "string" ? record.id : null;
   if (!threadId) return null;
@@ -113,7 +114,11 @@ export function normalizeProviderSidebarEntry(harness: HarnessKind, value: unkno
     if (startedAt !== null && (latestTurnStartedAt === null || startedAt > latestTurnStartedAt)) latestTurnStartedAt = startedAt;
   }
   const orderAt = latestTurnStartedAt ?? normalizeOptionalTimestamp(record.recencyAt) ?? updatedAt;
+  const namedTitle = resolveWorkbenchThreadTitle({
+    fallback: "", id: threadId, name: typeof record.name === "string" ? record.name : null, preview: null,
+  });
   return {
+    ...(namedTitle ? { namedTitle } : {}),
     activityAt: updatedAt, entryKind: "thread", identity: { harness, threadId },
     lifecycle: active
       ? { agent: { agentStatus: "working", ...(turnId ? { turnId } : {}) }, kind: "working", reason: "acceptedIntent", settled: false }
@@ -424,7 +429,7 @@ export default class WorkbenchThreadStateFeature {
   private async reconcileProject(
     projectId: string,
     signal: AbortSignal,
-    acceptProviderSnapshot: (harness: WorkbenchHarness, entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void,
+    acceptProviderSnapshot: (harness: WorkbenchHarness, entries: WorkbenchObservedThreadEntry[], options: { complete: boolean }) => void,
     acceptGitArcSnapshot: (snapshot: WorkbenchThreadGitArcSnapshot) => Promise<void>,
   ) {
     const project = await this.context.resolveProjectById(projectId);
@@ -452,7 +457,7 @@ export default class WorkbenchThreadStateFeature {
       await acceptGitArcSnapshot(await readGitArcSnapshot());
     });
     const results = await Promise.all(this.context.harnesses.listHarnesses().map(async (harness): Promise<
-      | { entries: WorkbenchThreadSidebarEntry[]; harness: WorkbenchHarness }
+      | { entries: WorkbenchObservedThreadEntry[]; harness: WorkbenchHarness }
       | { failure: WorkbenchThreadReconciliationFailure }
     > => {
       try {
@@ -466,7 +471,7 @@ export default class WorkbenchThreadStateFeature {
         return { failure: { harness, message: error instanceof Error ? error.message : String(error) } };
       }
     }));
-    const completed = results.filter((result): result is Extract<typeof result, { entries: WorkbenchThreadSidebarEntry[] }> => "entries" in result);
+    const completed = results.filter((result): result is Extract<typeof result, { entries: WorkbenchObservedThreadEntry[] }> => "entries" in result);
     await this.context.transitions.run(project.rootPath, async () => {
       const relationships = await this.context.listSubagents(projectId);
       completed.forEach(({ entries, harness }) => {
@@ -481,9 +486,9 @@ export default class WorkbenchThreadStateFeature {
     harness: WorkbenchHarness,
     rootPath: string,
     signal: AbortSignal,
-    acceptFirstPage: (entries: WorkbenchThreadSidebarEntry[]) => Promise<void>,
+    acceptFirstPage: (entries: WorkbenchObservedThreadEntry[]) => Promise<void>,
   ) {
-    const entries: WorkbenchThreadSidebarEntry[] = [];
+    const entries: WorkbenchObservedThreadEntry[] = [];
     let cursor: string | null = null;
     let page = 0;
     do {
@@ -525,7 +530,7 @@ export default class WorkbenchThreadStateFeature {
   private projectProviderEntries(
     projectId: string,
     harness: WorkbenchHarness,
-    providerEntries: WorkbenchThreadSidebarEntry[],
+    providerEntries: WorkbenchObservedThreadEntry[],
     relationships: SubagentRelationshipList,
   ) {
     const harnessRelationships = relationships.subagents.filter((relationship) => relationship.harness === harness);
@@ -536,8 +541,8 @@ export default class WorkbenchThreadStateFeature {
         if (entry.entryKind === "draft") return entry;
         return entry;
       });
-    const providerById = new Map(providerEntries.filter((entry): entry is Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => entry.entryKind === "thread").map((entry) => [entry.identity.threadId, entry]));
-    return [...topLevelEntries, ...harnessRelationships.map((relationship): WorkbenchThreadSidebarEntry => {
+    const providerById = new Map(providerEntries.filter((entry): entry is Extract<WorkbenchObservedThreadEntry, { entryKind: "thread" }> => entry.entryKind === "thread").map((entry) => [entry.identity.threadId, entry]));
+    return [...topLevelEntries, ...harnessRelationships.map((relationship): WorkbenchObservedThreadEntry => {
       const provider = providerById.get(relationship.threadId);
       const lifecycle = normalizeSubagentProviderLifecycle(provider?.lifecycle);
       return {
@@ -545,7 +550,7 @@ export default class WorkbenchThreadStateFeature {
         directSubagentIndex: relationship.directSubagentIndex, entryKind: "subagent", identity: { harness, threadId: relationship.threadId },
         lifecycle, name: relationship.name,
         parentThreadId: relationship.parentThreadId, pinned: false, profileId: relationship.profileId, profileName: relationship.profileName,
-        projectId, title: relationship.title, updatedAt: relationship.updatedAt,
+        projectId, title: relationship.title, namedTitle: relationship.title, updatedAt: relationship.updatedAt,
       };
     })];
   }

@@ -95,7 +95,7 @@ function ThreadTooltipContent({
 }) {
   return (
     <div data-thread-project-file-link-boundary="true" className="flex max-h-full min-w-0 max-w-[min(28rem,calc(100vw-2rem))] flex-col gap-2">
-      <p className="m-0 break-words text-[0.9rem] font-medium leading-[1.45] text-text">{title}</p>
+      <p className="m-0 truncate text-[0.9rem] font-medium leading-[1.45] text-text">{title}</p>
       {identity ? <WorkbenchThreadTitleHistory key={`${projectId}:${identity.harness}:${identity.threadId}`} projectId={projectId} harness={identity.harness} threadId={identity.threadId} /> : null}
       <div className="flex min-w-0 items-center gap-1.5 text-[0.76rem] text-muted">
         <Icon className={`size-3.5 shrink-0 ${statusClassName}`} />
