@@ -1,6 +1,12 @@
 /*
+ * Keywords: thread context, chronology, incoming agent, attribution.
  * Exports:
  * - WorkbenchThreadContextPiece: semantic thread context piece for client and Markdown projections. Keywords: thread, context, projection.
+ * - WorkbenchThreadContextAgentMessagePiece: attributed native incoming message.
+ * - WorkbenchThreadContextUserMessagePiece: canonical user input.
+ * - WorkbenchThreadContextUserSteerPiece: recorded user steer.
+ * - WorkbenchThreadContextQuestionnairePiece: questionnaire response.
+ * - WorkbenchThreadContextPlanBlockPiece: extracted plan block.
  * - createWorkbenchThreadContextSortKey: build one sortable chronological key shared by context projections. Keywords: thread, context, chronology.
  * - extractThreadPlanBlocks: collect literal outer <plan> blocks from agent messages. Keywords: plan, markdown, outer block.
  * - buildWorkbenchThreadContextPieces: build ordered reorientation pieces from a thread context bundle. Keywords: context, questionnaire, steer, user message.
@@ -21,8 +27,9 @@ import {
 } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import { readWorkbenchAgentMessageItem, type WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
 
-type ContextPieceKind = "planBlock" | "questionnaire" | "userMessage" | "userSteer";
+type ContextPieceKind = "agentMessage" | "planBlock" | "questionnaire" | "userMessage" | "userSteer";
 
 interface OrderedContextPieceBase {
   itemId: string | null;
@@ -37,6 +44,12 @@ export interface WorkbenchThreadContextUserMessagePiece extends OrderedContextPi
   input: UserInput[];
   itemId: string;
   kind: "userMessage";
+}
+
+export interface WorkbenchThreadContextAgentMessagePiece extends OrderedContextPieceBase {
+  itemId: string;
+  kind: "agentMessage";
+  message: WorkbenchAgentMessage;
 }
 
 export interface WorkbenchThreadContextUserSteerPiece extends OrderedContextPieceBase {
@@ -59,6 +72,7 @@ export interface WorkbenchThreadContextPlanBlockPiece extends OrderedContextPiec
 }
 
 export type WorkbenchThreadContextPiece =
+  | WorkbenchThreadContextAgentMessagePiece
   | WorkbenchThreadContextPlanBlockPiece
   | WorkbenchThreadContextQuestionnairePiece
   | WorkbenchThreadContextUserMessagePiece
@@ -220,13 +234,28 @@ export function extractThreadPlanBlocks(markdown: string) {
   return blocks;
 }
 
-function pushUserMessagePieces(
+function pushIncomingMessagePieces(
   pieces: MutableContextPiece[],
   bundle: WorkbenchThreadContextBundle,
   sequence: { value: number },
 ) {
   bundle.thread.turns.forEach((turn, turnIndex) => {
     turn.items.forEach((item, itemIndex) => {
+      if (item.type === "functionCallOutput") {
+        const message = readWorkbenchAgentMessageItem(item);
+        if (message) {
+          pieces.push({
+            itemId: item.id,
+            kind: "agentMessage",
+            message,
+            sequence: sequence.value,
+            sortKey: createWorkbenchThreadContextSortKey(turnIndex, itemIndex, 0, sequence.value),
+            turnId: turn.id,
+          });
+          sequence.value += 1;
+        }
+        return;
+      }
       if (item.type !== "userMessage" || !shouldIncludeUserMessage(item, bundle.steerEntries)) {
         return;
       }
@@ -408,7 +437,7 @@ export function buildWorkbenchThreadContextPieces(bundle: WorkbenchThreadContext
   const pieces: MutableContextPiece[] = [];
   const sequence = { value: 0 };
 
-  pushUserMessagePieces(pieces, bundle, sequence);
+  pushIncomingMessagePieces(pieces, bundle, sequence);
   pushSteerPieces(pieces, bundle, itemPositions, clientItemPositions, turnIndexes, turnItemCounts, sequence);
   pushQuestionnairePieces(pieces, bundle, itemPositions, turnIndexes, turnItemCounts, sequence);
   pushPlanBlockPieces(pieces, bundle, sequence);

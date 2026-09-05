@@ -8,7 +8,7 @@
 import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
 
 import { compactCommandOutput } from "workbench-shared/codex/thread-command-output";
-import type { ParsedUnifiedDiff, UnifiedDiffLine } from "../../../workbench/thread/thread-file-diff";
+import type { ParsedUnifiedDiff, UnifiedDiffLine } from "workbench-shared/workbench/thread/unified-diff";
 import ThreadAnsiOutput from "./ThreadAnsiOutput";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 

@@ -97,45 +97,10 @@ test("database worker records claim snapshots and returns bounded stats", async 
   }
 });
 
-function createLegacyToolSources(database: Database.Database) {
-  database.exec(`
-    CREATE TABLE thread_operation_tool_sources (
-      item_id INTEGER PRIMARY KEY,
-      item_type TEXT NOT NULL DEFAULT 'operation' CHECK (item_type = 'operation'),
-      source_kind TEXT NOT NULL DEFAULT 'tool' CHECK (source_kind = 'tool'),
-      source_revision INTEGER NOT NULL,
-      tool_kind TEXT NOT NULL CHECK (tool_kind IN ('callable', 'collaboration')),
-      state TEXT NOT NULL CHECK (state IN ('inProgress', 'completed', 'failed')),
-      tool_name TEXT NOT NULL,
-      duration_ms INTEGER CHECK (duration_ms >= 0),
-      UNIQUE (item_id, tool_kind, source_revision, state, tool_name),
-      FOREIGN KEY (item_id, item_type, source_kind, source_revision)
-        REFERENCES thread_item_operations(item_id, item_type, source_kind, source_revision) ON DELETE CASCADE
-    ) STRICT;
-    CREATE TABLE thread_operation_collaboration_tool_sources (
-      item_id INTEGER PRIMARY KEY,
-      tool_kind TEXT NOT NULL DEFAULT 'collaboration' CHECK (tool_kind = 'collaboration'),
-      source_revision INTEGER NOT NULL,
-      state TEXT NOT NULL CHECK (state IN ('inProgress', 'completed', 'failed')),
-      tool_name TEXT NOT NULL CHECK (tool_name IN ('spawnAgent', 'sendInput', 'resumeAgent', 'wait', 'closeAgent')),
-      sender_thread_id TEXT NOT NULL,
-      prompt TEXT,
-      model TEXT,
-      reasoning_effort TEXT,
-      FOREIGN KEY (item_id, tool_kind, source_revision, state, tool_name)
-        REFERENCES thread_operation_tool_sources(item_id, tool_kind, source_revision, state, tool_name) ON DELETE CASCADE
-    ) STRICT;
-  `);
-}
-
 test("tool schema upgrade preserves collaboration children and callable sources", () => {
   const database = new Database(":memory:");
   try {
-    installWorkbenchDatabaseSchema(database);
-    database.pragma("foreign_keys = OFF");
-    database.exec("DROP TABLE thread_operation_collaboration_tool_sources; DROP TABLE thread_operation_tool_sources;");
-    createLegacyToolSources(database);
-    database.pragma("user_version = 11");
+    installWorkbenchDatabaseSchema(database, { targetVersion: 11 });
     database.pragma("foreign_keys = ON");
     const repository = new WorkbenchTranscriptRepository(database);
     repository.settle([
@@ -157,9 +122,13 @@ test("tool schema upgrade preserves collaboration children and callable sources"
         },
       },
     ]);
-    const before = repository.read({ threadId: "thread", turnLimit: 10 });
+    const sourceTables = [
+      "thread_operation_tool_sources", "thread_operation_collaboration_tool_sources",
+      "thread_collaboration_receivers", "thread_collaboration_agent_states",
+    ];
+    const before = sourceTables.map((table) => database.prepare(`SELECT * FROM ${table} ORDER BY item_id`).all());
     installWorkbenchDatabaseSchema(database);
-    assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 10 }), before);
+    assert.deepEqual(sourceTables.map((table) => database.prepare(`SELECT * FROM ${table} ORDER BY item_id`).all()), before);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
     assert.equal(database.pragma("foreign_keys", { simple: true }), 1);
     repository.settle([{
@@ -179,62 +148,7 @@ test("schema version 4 thread-state rows migrate into the scoped relationship mo
   const database = new Database(":memory:");
   try {
     database.pragma("foreign_keys = ON");
-    createLegacyToolSources(database);
-    database.exec(`
-      CREATE TABLE workbench_thread_state_projection_status (
-        id INTEGER PRIMARY KEY,
-        generation INTEGER NOT NULL,
-        state TEXT NOT NULL,
-        source_project_count INTEGER NOT NULL,
-        source_project_updated_at INTEGER NOT NULL,
-        source_subagent_parent_count INTEGER NOT NULL,
-        source_subagent_count INTEGER NOT NULL,
-        source_digest TEXT NOT NULL,
-        projected_thread_count INTEGER NOT NULL,
-        projected_subagent_count INTEGER NOT NULL,
-        mismatch_count INTEGER NOT NULL,
-        completed_at INTEGER,
-        error_text TEXT,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE workbench_thread_state_threads (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        thread_kind TEXT NOT NULL,
-        visibility TEXT NOT NULL DEFAULT 'placeholder',
-        title TEXT NOT NULL,
-        archived INTEGER NOT NULL,
-        pinned INTEGER NOT NULL,
-        snoozed INTEGER NOT NULL,
-        provider_observed INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        activity_at INTEGER NOT NULL,
-        order_at INTEGER,
-        UNIQUE (id, thread_kind)
-      );
-      CREATE TABLE workbench_thread_state_provider_identities (
-        thread_id TEXT PRIMARY KEY REFERENCES workbench_thread_state_threads(id) ON DELETE CASCADE,
-        harness_id TEXT NOT NULL,
-        provider_thread_id TEXT NOT NULL,
-        UNIQUE (harness_id, provider_thread_id)
-      );
-      CREATE TABLE workbench_thread_state_subagents (
-        thread_id TEXT PRIMARY KEY,
-        thread_kind TEXT NOT NULL DEFAULT 'subagent',
-        parent_thread_id TEXT NOT NULL REFERENCES workbench_thread_state_threads(id),
-        cwd TEXT NOT NULL,
-        name TEXT NOT NULL,
-        name_key TEXT NOT NULL,
-        profile_id TEXT NOT NULL,
-        profile_name TEXT NOT NULL,
-        direct_subagent_index INTEGER NOT NULL,
-        FOREIGN KEY (thread_id, thread_kind)
-          REFERENCES workbench_thread_state_threads(id, thread_kind) ON DELETE CASCADE,
-        UNIQUE (parent_thread_id, direct_subagent_index),
-        UNIQUE (parent_thread_id, name_key)
-      );
-    `);
+    installWorkbenchDatabaseSchema(database, { targetVersion: 4 });
     database.prepare(`
       INSERT INTO workbench_thread_state_projection_status(
         id, generation, state, source_project_count, source_project_updated_at,
@@ -251,7 +165,6 @@ test("schema version 4 thread-state rows migrate into the scoped relationship mo
         VALUES ('historical-child', 'codex', 'historical-child');
       INSERT INTO workbench_thread_state_subagents
         VALUES ('historical-child', 'subagent', 'parent', 'C:/project', 'child', 'child', 'profile', 'Profile', 0);
-      PRAGMA user_version = 4;
     `);
 
     installWorkbenchDatabaseSchema(database);

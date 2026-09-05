@@ -1,4 +1,5 @@
 /*
+ * Keywords: transcript rendering, structural signature, native output.
  * Exports:
  * - getThreadItemRenderSignature: bounded signature for rendered thread item content. Keywords: thread, render, equality.
  * - getThreadItemsRenderChunkSignature: bounded signature for a render chunk made from one or more thread items. Keywords: thread, render, chunk, equality.
@@ -7,6 +8,7 @@
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
+import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 
 const signatureCache = new WeakMap<object, string>();
 
@@ -66,12 +68,23 @@ function fileChangeSignature(item: Extract<ThreadItem, { type: "fileChange" }>) 
     textFingerprint(change.diff),
     change.workbenchAdditions ?? "",
     change.workbenchDeletions ?? "",
+    change.workbenchAnalysis ? [
+      change.workbenchAnalysis.outcome, change.workbenchAnalysis.additions, change.workbenchAnalysis.deletions,
+      textFingerprint(change.workbenchAnalysis.detail ?? ""),
+      ...change.workbenchAnalysis.hunks.map((hunk) => [
+        hunk.index, hunk.outcome, hunk.additions, hunk.deletions, hunk.currentStart, hunk.currentEnd,
+        hunk.oldStart, hunk.newStart, hunk.candidates.join(","), textFingerprint(hunk.reason ?? ""),
+      ].join(":")),
+    ].join("|") : "",
   ].join(":"));
   return [
     item.id,
     item.type,
     item.status,
     workbenchItem.workbenchFailureKind ?? "",
+    workbenchItem.workbenchPolicy ?? "",
+    workbenchItem.workbenchRecovery?.state ?? "",
+    textFingerprint(workbenchItem.workbenchRecovery?.detail ?? ""),
     changes.length,
     ...changes,
   ].join(":");
@@ -80,6 +93,15 @@ function fileChangeSignature(item: Extract<ThreadItem, { type: "fileChange" }>) 
 export function getThreadItemRenderSignature(item: ThreadItem) {
   return cachedSignature(item, () => {
     switch (item.type) {
+      case "functionCallOutput": {
+        const output = readWorkbenchToolOutput(item);
+        const body = output && typeof output.output !== "string"
+          ? output.output.map((part) => part.type === "input_text"
+            ? `text:${textFingerprint(part.text)}`
+            : `image:${textFingerprint(part.image_url)}:${part.detail ?? ""}`).join("|")
+          : textFingerprint(typeof item.output === "string" ? item.output : stableStringify(item.output));
+        return [item.id, item.type, item.name, item.namespace ?? "", body, output?.workbenchInjectionAcceptedAt ?? ""].join(":");
+      }
       case "userMessage":
         return `${item.id}:${item.type}:${stableStringify(item.content)}`;
       case "hookPrompt":

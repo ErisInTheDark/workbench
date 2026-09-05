@@ -8,13 +8,51 @@ import { test } from "node:test";
 
 import type { ThreadItem } from "./generated/app-server/v2/ThreadItem.ts";
 import {
+  mergeThreadItem,
   normalizeThreadItems,
   reconcileCompleteThreadItems,
 } from "./thread-item-normalization.ts";
+import type { WorkbenchToolOutput } from "../workbench/thread/thread-tool-output.ts";
+import type { WorkbenchFileChangeItem } from "../workbench/thread/workbench-file-change.ts";
 
 function user(id: string, clientId: string | null, text = "same"): Extract<ThreadItem, { type: "userMessage" }> {
   return { clientId, content: [{ text, text_elements: [], type: "text" }], id, type: "userMessage" };
 }
+
+test("patch findings survive matching provider echoes but never attach to a changed attempt", () => {
+  const stored: WorkbenchFileChangeItem = {
+    id: "patch", type: "fileChange", status: "failed", workbenchPolicy: "automaticEscalation",
+    workbenchRecovery: { state: "queued", detail: null },
+    changes: [{
+      path: "file.ts", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-old\n+new\n",
+      workbenchAnalysis: { additions: 1, deletions: 1, detail: null, hunks: [], outcome: "present" },
+    }],
+  };
+  const native: WorkbenchFileChangeItem = {
+    id: stored.id, type: "fileChange", status: "declined",
+    changes: stored.changes.map(({ workbenchAnalysis: _, ...change }) => change),
+  };
+  const merged = mergeThreadItem(native, stored) as WorkbenchFileChangeItem;
+  assert.equal(merged.workbenchPolicy, stored.workbenchPolicy);
+  assert.deepEqual(merged.workbenchRecovery, stored.workbenchRecovery);
+  assert.deepEqual(merged.changes, stored.changes);
+  const changed = { ...native, changes: [{ ...native.changes[0]!, diff: "different patch" }] };
+  const unrelated = mergeThreadItem(changed, stored) as WorkbenchFileChangeItem;
+  assert.equal(unrelated.workbenchPolicy, undefined);
+  assert.equal(unrelated.workbenchRecovery, undefined);
+  assert.equal(unrelated.changes[0]!.workbenchAnalysis, undefined);
+});
+
+test("native output echoes retain matching acceptance without merging separate deliveries", () => {
+  const stored: WorkbenchToolOutput = {
+    id: "fco_one", type: "functionCallOutput", name: "screenshot", namespace: "workbench",
+    output: "same content", workbenchInjectionAcceptedAt: 10,
+  };
+  const { workbenchInjectionAcceptedAt: _, ...native } = stored;
+  assert.deepEqual(mergeThreadItem(native, stored), stored);
+  assert.deepEqual(mergeThreadItem({ ...native, output: "changed content" }, stored), { ...native, output: "changed content" });
+  assert.equal(normalizeThreadItems([stored, { ...native, id: "fco_two" }]).length, 2);
+});
 
 test("normalization preserves distinct identical deliveries", () => {
   const items = [user("canonical-a", "client-a"), user("canonical-b", "client-b")];

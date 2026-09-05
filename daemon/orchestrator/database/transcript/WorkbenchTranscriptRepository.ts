@@ -13,9 +13,12 @@ import {
 } from "workbench-shared/codex/thread-item-normalization";
 import { SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX } from "workbench-shared/workbench/thread/thread-steer-history";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
+import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import {
   projectWorkbenchTranscriptItems,
+  projectWorkbenchToolOutput,
+  projectWorkbenchFileChange,
   type WorkbenchProjectedTranscriptItem,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import type {
@@ -161,6 +164,7 @@ export default class WorkbenchTranscriptRepository {
         orderBy: [{ column: "item_position" }],
       }));
       const itemIds = threadItems.map(({ id }) => id);
+      this.#promoteLegacyToolOutputs(threadItems);
       const rows = this.#readRows(request.threadId, itemIds);
       rows.threadItems = threadItems;
       return {
@@ -183,6 +187,21 @@ export default class WorkbenchTranscriptRepository {
     }));
     const materializedTurnIds = new Set(materializations.map(({ turn_id }) => turn_id));
     return requestedTurnIds.filter((turnId) => materializedTurnIds.has(turnId));
+  }
+
+  #promoteLegacyToolOutputs(items: TranscriptItemRow[]) {
+    const roots = new Map(items.flatMap((item, index) => item.type === "unknown" ? [[item.id, { item, index }] as const] : []));
+    for (const row of this.#rowsByItemIds(itemTables.threadItemUnknown, [...roots.keys()])) {
+      if (row.native_type !== "functionCallOutput") continue;
+      const parsed = readWorkbenchToolOutput(JSON.parse(row.safe_json));
+      const { item: root, index } = roots.get(row.item_id)!;
+      if (!parsed || parsed.id !== root.source_id) continue;
+      this.#settleObservation({
+        kind: "item", item: parsed, threadId: root.thread_id, turnId: root.turn_id,
+        lifecycle: "completed", observedAt: root.updated_at, itemPosition: root.item_position,
+      });
+      items[index] = { ...root, type: "functionCallOutput" };
+    }
   }
 
   #createCanonicalSettlementIndex(threadId: string): CanonicalSettlementIndex {
@@ -264,13 +283,19 @@ export default class WorkbenchTranscriptRepository {
       }
     }
     for (const row of this.#rowsByItemIds(itemTables.threadItemFileChanges, itemIds)) {
-      if (row.workbench_failure_kind) protectedItemIds.add(row.item_id);
+      if (row.workbench_failure_kind || row.workbench_policy || row.recovery_state) protectedItemIds.add(row.item_id);
+    }
+    for (const row of this.#rowsByItemIds(itemTables.threadFileChanges, itemIds)) {
+      if (row.analysis_outcome) protectedItemIds.add(row.item_id);
     }
     for (const row of this.#rowsByItemIds(itemTables.threadItemUnknown, itemIds)) {
       if (row.native_type === "workbenchSteer") protectedItemIds.add(row.item_id);
     }
     for (const row of this.#rowsByItemIds(evidenceTables.threadBrowseEntries, itemIds)) {
       protectedItemIds.add(row.item_id);
+    }
+    for (const row of this.#rowsByItemIds(itemTables.threadItemToolOutputs, itemIds)) {
+      if (row.injection_accepted_at !== null) protectedItemIds.add(row.item_id);
     }
     return protectedItemIds;
   }
@@ -737,9 +762,35 @@ export default class WorkbenchTranscriptRepository {
       return observation.threadId;
     }
     if (observation.kind === "item") {
+      let item = observation.item;
+      if (item.type === "functionCallOutput" || item.type === "fileChange") {
+        const existing = canonicalIndex?.itemsBySourceId.get(item.id)
+          ?? this.#one(selectRows(itemTables.threadItems, { where: { thread_id: observation.threadId, source_id: item.id } }));
+        if (item.type === "functionCallOutput" && existing?.type === "functionCallOutput") {
+          const owner = this.#one(selectRows(itemTables.threadItemToolOutputs, { where: { item_id: existing.id } }));
+          if (owner && owner.injection_accepted_at !== null) {
+            item = mergeThreadItem(item, projectWorkbenchToolOutput(
+              item.id, owner, this.#rowsByItemIds(itemTables.threadToolOutputParts, [existing.id]),
+            ));
+          }
+        }
+        if (item.type === "fileChange" && existing?.type === "fileChange") {
+          const owner = this.#one(selectRows(itemTables.threadItemFileChanges, { where: { item_id: existing.id } }));
+          if (owner) {
+            const changes = this.#rowsByItemIds(itemTables.threadFileChanges, [existing.id]);
+            if (owner.workbench_failure_kind || owner.workbench_policy || owner.recovery_state || changes.some(({ analysis_outcome }) => analysis_outcome)) {
+              item = mergeThreadItem(item, projectWorkbenchFileChange(
+                item.id, owner, changes,
+                this.#rowsByItemIds(itemTables.threadFileChangeHunks, [existing.id]),
+                this.#rowsByItemIds(itemTables.threadFileChangeCandidates, [existing.id]),
+              ));
+            }
+          }
+        }
+      }
       this.#writeItem({
         createTransform: (itemId, sourceRevision) => transformWorkbenchTranscriptItem({
-          item: observation.item,
+          item,
           itemId,
           lifecycle: observation.lifecycle,
           sourceRevision,
@@ -753,6 +804,7 @@ export default class WorkbenchTranscriptRepository {
         turnId: observation.turnId,
         allowUnmaterializedTurn: insideCanonicalWindow,
         canonicalIndex,
+        allowToolOutputTransition: item.type === "functionCallOutput",
       });
       return observation.threadId;
     }
@@ -824,9 +876,11 @@ export default class WorkbenchTranscriptRepository {
     threadId,
     turnId,
     allowUnmaterializedTurn = false,
+    allowToolOutputTransition = false,
     canonicalIndex,
   }: {
     allowUnmaterializedTurn?: boolean;
+    allowToolOutputTransition?: boolean;
     canonicalIndex?: CanonicalSettlementIndex;
     createTransform: (itemId: number, sourceRevision: number) => WorkbenchTranscriptItemTransform;
     itemPosition?: number;
@@ -925,7 +979,20 @@ export default class WorkbenchTranscriptRepository {
       }))?.source_revision ?? null;
     const transform = createTransform(itemId, (existingOperationRevision ?? -1) + 1);
     if (existing && existing.type !== transform.itemType) {
-      throw new Error(`Transcript item ${sourceId} changed type from ${existing.type} to ${transform.itemType}`);
+      if (!allowToolOutputTransition
+        || !["unknown", "functionCallOutput"].includes(existing.type)
+        || !["unknown", "functionCallOutput"].includes(transform.itemType)) {
+        throw new Error(`Transcript item ${sourceId} changed type from ${existing.type} to ${transform.itemType}`);
+      }
+      if (existing.type === "unknown") {
+        const opaque = this.#one(selectRows(itemTables.threadItemUnknown, { where: { item_id: itemId } }));
+        if (opaque?.native_type !== "functionCallOutput") {
+          throw new Error(`Transcript item ${sourceId} is not the same native tool output.`);
+        }
+        this.#run(deleteRows(itemTables.threadItemUnknown, { item_id: itemId }));
+      } else {
+        this.#run(deleteRows(itemTables.threadItemToolOutputs, { item_id: itemId }));
+      }
     }
     this.#run(updateRows(itemTables.threadItems, {
       turn_id: stableTurnId,
@@ -1180,8 +1247,12 @@ export default class WorkbenchTranscriptRepository {
       threadReasoningSections: itemRows(itemTables.threadReasoningSections),
       threadItemFileChanges: itemRows(itemTables.threadItemFileChanges),
       threadFileChanges: itemRows(itemTables.threadFileChanges),
+      threadFileChangeHunks: itemRows(itemTables.threadFileChangeHunks),
+      threadFileChangeCandidates: itemRows(itemTables.threadFileChangeCandidates),
       threadItemContextCompactions: itemRows(itemTables.threadItemContextCompactions),
       threadItemUnknown: itemRows(itemTables.threadItemUnknown),
+      threadItemToolOutputs: itemRows(itemTables.threadItemToolOutputs),
+      threadToolOutputParts: itemRows(itemTables.threadToolOutputParts),
       threadItemOperations: itemRows(operationSourceTables.threadItemOperations),
       threadOperationProcessSources: itemRows(operationSourceTables.threadOperationProcessSources),
       threadProcessCommandActions: itemRows(operationSourceTables.threadProcessCommandActions),

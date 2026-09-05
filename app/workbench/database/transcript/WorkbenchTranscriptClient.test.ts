@@ -34,6 +34,35 @@ const emptySnapshot = {
   rows: {},
 };
 
+test("native-item support follows server capabilities and is cleared on reconnect", async () => {
+  const requests: Array<{ method: string; params: unknown }> = [];
+  let notify!: (notification: { method: string; params: unknown }) => void;
+  let disconnect!: () => void;
+  const client = new WorkbenchTranscriptClient({
+    transport: {
+      onNotification: (listener) => { notify = listener; return () => undefined; },
+      onDisconnect: (listener) => { disconnect = listener; return () => undefined; },
+      request: async (method, params) => {
+        requests.push({ method, params });
+        return method === workbenchTranscriptOperations.read.method ? { snapshot: null } : { subscribed: true };
+      },
+    },
+  });
+  try {
+    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 2 } });
+    await client.read({ threadId: "thread", turnLimit: 1 });
+    await client.subscribe({ threadId: "thread", turnLimit: 1, subscriptionId: "sub" }, () => undefined);
+    assert.deepEqual(requests.map(({ params }) => (params as { protocolVersion?: number }).protocolVersion), [2, 2]);
+    disconnect();
+    await assert.rejects(client.read({ threadId: "thread", turnLimit: 1 }), /unavailable/);
+    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 1 } });
+    await client.read({ threadId: "thread", turnLimit: 1 });
+    assert.equal((requests.at(-1)!.params as { protocolVersion?: number }).protocolVersion, undefined);
+  } finally {
+    client.dispose();
+  }
+});
+
 test("transcript client uses operation identities but never trusts their matching response", async () => {
   const reports: WorkbenchTranscriptConformanceReport[] = [];
   const requests: Array<{ method: string; params: unknown }> = [];

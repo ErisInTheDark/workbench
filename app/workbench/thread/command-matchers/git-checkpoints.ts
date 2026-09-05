@@ -16,7 +16,7 @@ import {
 } from "workbench-shared/workbench/git/git-arc-receipts";
 import { GIT_ARC_DIFF_TRAILER_PREFIX } from "workbench-shared/workbench/git/git-arc-diff-pages";
 import { parseGitArcMoveArguments, type GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
-import { parseUnifiedDiffFileChanges } from "../thread-file-diff";
+import { parseUnifiedDiffFileChanges } from "workbench-shared/workbench/thread/unified-diff";
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
 import { unwrapLeadingPowerShellLiteralHereStringAssignment } from "./shells";

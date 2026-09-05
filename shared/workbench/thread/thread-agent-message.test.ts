@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   createWorkbenchAgentMessageText,
   readWorkbenchAgentMessageInput,
+  readWorkbenchAgentMessageItem,
   readWorkbenchAgentMessageText,
 } from "./thread-agent-message.ts";
 
@@ -30,6 +31,20 @@ test("agent messages retain sender attribution behind an explanatory prelude", (
     text_elements: [],
     type: "text",
   }]), readWorkbenchAgentMessageText(text));
+});
+
+test("native agent attribution requires the named Workbench output boundary", () => {
+  const message = { message: "findings", senderName: "luna", senderThreadId: "child" };
+  const item = {
+    id: "fco_message", type: "functionCallOutput" as const, name: "agent_message", namespace: "workbench",
+    output: createWorkbenchAgentMessageText(message),
+  };
+  assert.deepEqual(readWorkbenchAgentMessageItem(item), message);
+  assert.equal(readWorkbenchAgentMessageItem({ ...item, namespace: "another_tool" }), null);
+  assert.equal(readWorkbenchAgentMessageItem({ ...item, name: "screenshot" }), null);
+  assert.deepEqual(readWorkbenchAgentMessageItem({
+    ...item, output: [{ type: "input_text", text: item.output }],
+  }), message);
 });
 
 test("agent messages reject malformed or incomplete envelopes", () => {

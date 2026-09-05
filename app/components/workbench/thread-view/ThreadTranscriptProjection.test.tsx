@@ -7,6 +7,9 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import { mergeThreadItem, normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
+import { createWorkbenchAgentMessageOutput } from "workbench-shared/workbench/thread/thread-agent-message";
+import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
 import type {
@@ -101,6 +104,34 @@ function renderItems(
     />,
   );
 }
+
+test("native incoming messages and screenshots render once per identity after provider echo reconciliation", () => {
+  const message = { message: "check cancellation cleanup", senderName: "iris", senderThreadId: "child" };
+  const incoming: ThreadItem = { ...createWorkbenchAgentMessageOutput(message), id: "incoming", type: "functionCallOutput" };
+  const screenshot: WorkbenchToolOutput = {
+    id: "screenshot", type: "functionCallOutput", name: "screenshot", namespace: "workbench",
+    output: [{ type: "input_text", text: "capture context" }, { type: "input_image", image_url: "/screenshot.png", detail: "auto" }],
+    workbenchInjectionAcceptedAt: 10,
+  };
+  const { workbenchInjectionAcceptedAt: _acceptedAt, ...echo } = screenshot;
+  const recovery: ThreadItem = {
+    id: "recovery", type: "functionCallOutput", name: "patch_recovery", namespace: "workbench", output: "patch recovery details",
+  };
+  const textOnly: WorkbenchToolOutput = {
+    id: "text-only", type: "functionCallOutput", name: "screenshot", namespace: "workbench",
+    output: [{ type: "input_text", text: "capture returned text without an image" }],
+  };
+  const items = normalizeThreadItems([incoming, screenshot, incoming, echo, recovery, textOnly], {
+    mergeDuplicateItems: (stored, next) => mergeThreadItem(next, stored),
+  });
+  for (const durableCount of [0, items.length]) {
+    const html = renderItems(items, null, durableCount);
+    assert.equal(html.split(message.message).length - 1, 1);
+    assert.equal((html.match(/<img\b[^>]*src="\/screenshot\.png"/gu) ?? []).length, 1);
+    assert.equal(html.includes(recovery.output as string), false);
+    assert.equal(html.includes("capture returned text without an image"), true);
+  }
+});
 
 test("SQLite projection renders canonical segments and turn-owned Browse details without JSON", () => {
   const first: ThreadItem = {

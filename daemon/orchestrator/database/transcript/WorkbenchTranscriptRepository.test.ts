@@ -10,6 +10,8 @@ import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/
 import { projectWorkbenchTranscriptItems } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import { createSyntheticSteerHistoryItemId } from "workbench-shared/workbench/thread/thread-steer-history";
+import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
+import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
 import type {
@@ -125,6 +127,112 @@ function providerTurnScope(
     threadId,
   };
 }
+
+test("patch observations retain partial evidence and failed feedback through echoes and provider omission", () => {
+  const { database, repository } = createRepository();
+  try {
+    const item: WorkbenchFileChangeItem = {
+      id: "patch", type: "fileChange", status: "failed", workbenchPolicy: "automaticEscalation",
+      workbenchRecovery: { state: "failed", detail: "injection connection closed" },
+      changes: [{
+        path: "file.ts", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-old\n+new\n",
+        workbenchAnalysis: {
+          additions: 1, deletions: 1, detail: "another hunk is ambiguous", outcome: "partial",
+          hunks: [{
+            additions: 1, deletions: 1, index: 0, outcome: "present", reason: null,
+            candidates: [4], currentStart: 4, currentEnd: 4, oldStart: 1, newStart: 1,
+          }, {
+            additions: 0, deletions: 0, index: 1, outcome: "uncertain", reason: "repeated matches",
+            candidates: [8, 12], currentStart: null, currentEnd: null, oldStart: 7, newStart: 7,
+          }],
+        },
+      }],
+    };
+    const observation: WorkbenchTranscriptAtomicObservation = {
+      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 9, item,
+    };
+    repository.settle([threadObservation(), turnObservation("turn", 0), observation]);
+    const readItem = () => {
+      const snapshot = repository.read({ threadId: "thread", turnLimit: 1 })!;
+      const projection = projectWorkbenchTranscriptItems(snapshot.rows);
+      assert.ok(projection.success);
+      assert.equal(projection.data.length, 1);
+      return projection.data[0]!.item;
+    };
+    assert.deepEqual(readItem(), item);
+    const native: WorkbenchFileChangeItem = {
+      id: item.id, type: "fileChange", status: "failed",
+      changes: item.changes.map(({ workbenchAnalysis: _, ...change }) => change),
+    };
+    repository.settle([{ ...observation, item: native }]);
+    assert.deepEqual(readItem(), item);
+    repository.settle([providerTurnScope([turnObservation("turn", 0), { ...observation, item: native }], ["turn"])]);
+    repository.settle([providerTurnScope([turnObservation("turn", 0)], ["turn"])]);
+    assert.deepEqual(readItem(), item);
+  } finally {
+    database.close();
+  }
+});
+
+test("native output content and queue acceptance survive echoes and omitted provider history", () => {
+  const { database, repository } = createRepository();
+  try {
+    const item: WorkbenchToolOutput = {
+      id: "fco_screenshot", type: "functionCallOutput", name: "screenshot", namespace: "workbench",
+      output: [{ type: "input_text", text: "captured" }, { type: "input_image", image_url: "/image.png", detail: "original" }],
+      workbenchInjectionAcceptedAt: 9,
+    };
+    const observation: WorkbenchTranscriptAtomicObservation = {
+      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 9, item,
+    };
+    repository.settle([threadObservation(), turnObservation("turn", 0), observation]);
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 })!;
+    const projected = projectWorkbenchTranscriptItems(snapshot.rows);
+    assert.ok(projected.success);
+    assert.deepEqual(projected.data[0]?.item, item);
+    const originalRoot = snapshot.rows.threadItems[0]!;
+    const { workbenchInjectionAcceptedAt: _, ...native } = item;
+    repository.settle([providerTurnScope([turnObservation("turn", 0), { ...observation, item: native }], ["turn"])]);
+    repository.settle([providerTurnScope([turnObservation("turn", 0)], ["turn"])]);
+    const after = repository.read({ threadId: "thread", turnLimit: 1 })!;
+    assert.deepEqual(after.rows.threadItems.map(({ id, source_id, item_position }) => ({ id, source_id, item_position })), [
+      { id: originalRoot.id, source_id: item.id, item_position: originalRoot.item_position },
+    ]);
+    const afterProjection = projectWorkbenchTranscriptItems(after.rows);
+    assert.ok(afterProjection.success);
+    assert.deepEqual(afterProjection.data[0]?.item, item);
+  } finally {
+    database.close();
+  }
+});
+
+test("selected legacy opaque outputs become supported without losing identity or unsupported neighbours", () => {
+  const { database, repository } = createRepository();
+  try {
+    const unsupported: ThreadItem = {
+      id: "legacy", type: "functionCallOutput", name: "context", namespace: null,
+      output: [{ type: "input_audio", audio_url: "audio" }],
+    };
+    const observation: WorkbenchTranscriptAtomicObservation = {
+      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 9, item: unsupported,
+    };
+    repository.settle([threadObservation(), turnObservation("turn", 0), observation, { ...observation, item: { ...unsupported, id: "unsupported" } }]);
+    const original = repository.read({ threadId: "thread", turnLimit: 1 })!;
+    const supported = { ...unsupported, output: "old retained context" };
+    database.prepare("UPDATE thread_item_unknown SET safe_json = ? WHERE item_id = ?").run(
+      JSON.stringify(supported), original.rows.threadItems.find(({ source_id }) => source_id === "legacy")!.id,
+    );
+    const after = repository.read({ threadId: "thread", turnLimit: 1 })!;
+    assert.deepEqual(after.rows.threadItems.map(({ id, source_id, item_position }) => ({ id, source_id, item_position })),
+      original.rows.threadItems.map(({ id, source_id, item_position }) => ({ id, source_id, item_position })));
+    const projected = projectWorkbenchTranscriptItems(after.rows);
+    assert.ok(projected.success);
+    assert.deepEqual(projected.data[0]?.item, supported);
+    assert.equal(projected.data[1]?.item.type, "unknown");
+  } finally {
+    database.close();
+  }
+});
 
 test("standalone provider turns establish a readable live materialization", () => {
   const { database, repository } = createRepository();
@@ -1438,11 +1546,12 @@ test("collaboration tools preserve native status and relationships through SQLit
   }
 });
 
-test("function output survives opaque storage without losing its payload", () => {
+test("unsupported function output retains all parts in opaque storage", () => {
   const { database, repository } = createRepository();
   try {
     const item: ThreadItem = {
-      type: "functionCallOutput", id: "output", name: "lookup", namespace: "tools", output: "lookup result",
+      type: "functionCallOutput", id: "output", name: "lookup", namespace: "tools",
+      output: [{ type: "input_text", text: "lookup result" }, { type: "input_audio", audio_url: "audio" }],
     };
     repository.settle([
       threadObservation(),

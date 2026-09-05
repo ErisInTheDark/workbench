@@ -41,6 +41,7 @@ import WorkbenchWebSocketStreamController, {
   type WorkbenchWebSocketStreamControllerState,
 } from "./WorkbenchWebSocketStreamController";
 import { dimWebSocketDetail } from "./websocket-log-format";
+import { transcriptSnapshotForProtocol } from "./database/transcript/transcript-wire-compatibility";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
 const DEFAULT_PENDING_THRESHOLD_MS = 2_000;
@@ -83,6 +84,7 @@ export interface WorkbenchWebSocketReloadDirtObserverState {
 interface WorkbenchWebSocketTranscriptSubscriptionState {
   client: BridgeClient;
   connectionId: string;
+  protocolVersion?: 1 | 2;
   subscriptionId: string;
   threadId: string;
   turnIds?: string[];
@@ -516,7 +518,7 @@ export default class WorkbenchWebSocketRequestController {
   ) {
     if (request.kind === "read") {
       return {
-        snapshot: await this.transcript.read(request.params),
+        snapshot: transcriptSnapshotForProtocol(await this.transcript.read(request.params), request.params.protocolVersion),
       };
     }
     if (request.kind === "reportConformance") {
@@ -560,6 +562,7 @@ export default class WorkbenchWebSocketRequestController {
     await this.subscribeTranscript({
       client,
       connectionId,
+      protocolVersion: request.params.protocolVersion,
       subscriptionId,
       threadId: request.params.threadId,
       turnIds: request.params.turnIds,
@@ -609,7 +612,7 @@ export default class WorkbenchWebSocketRequestController {
             params: {
               stream: "workbench:transcript",
               subscriptionId: subscription.subscriptionId,
-              snapshot,
+              snapshot: transcriptSnapshotForProtocol(snapshot, subscription.protocolVersion),
             },
           });
         },

@@ -1,4 +1,5 @@
 /*
+ * Keywords: transcript lifecycle, recovery, subscription, Workbench item facts.
  * Exports:
  * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, and disposal. Keywords: transcript, controller, lifecycle, recovery.
  * Local helpers: derive settlement identity, refresh boundaries, and recovered turn coverage. Keywords: transcript, observation, subscription, recovery.
@@ -60,7 +61,10 @@ function reportSubscriptionFailure(error: unknown) {
   );
 }
 
-function requestsSubscriptionRefresh(observations: readonly WorkbenchTranscriptObservation[]) {
+function requestsSubscriptionRefresh(
+  observations: readonly WorkbenchTranscriptObservation[],
+  source: WorkbenchTranscriptRecordingContext["source"],
+) {
   return observations.some((observation) => {
     switch (observation.kind) {
       case "canonicalWindow":
@@ -75,8 +79,9 @@ function requestsSubscriptionRefresh(observations: readonly WorkbenchTranscriptO
           || observation.state === "failed";
       case "steer":
         return observation.entry.resolvedAt !== null;
-      case "captureGap":
       case "item":
+        return source === "workbench";
+      case "captureGap":
       case "nativeEvidence":
         return false;
     }
@@ -196,7 +201,7 @@ export default class WorkbenchTranscriptController {
           ...identity,
         });
       }
-      if (requestsSubscriptionRefresh(recoveryObservations)) {
+      if (requestsSubscriptionRefresh(recoveryObservations, context.source)) {
         this.#subscriptions.settle(settlement.changedThreadIds);
       }
       return settlement;
@@ -212,7 +217,7 @@ export default class WorkbenchTranscriptController {
         ...identity,
       });
     }
-    if (requestsSubscriptionRefresh(observations)) {
+    if (requestsSubscriptionRefresh(observations, context.source)) {
       this.#subscriptions.settle(settlement.changedThreadIds);
     }
     return settlement;

@@ -32,7 +32,7 @@ import {
 } from "./thread-context-recall.ts";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryId, createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
-import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import { createWorkbenchAgentMessageOutput, createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import { installWorkbenchDatabaseSchema } from "../../../orchestrator/database/workbench-database-schema.ts";
 import WorkbenchTranscriptRepository from "../../../orchestrator/database/transcript/WorkbenchTranscriptRepository.ts";
@@ -50,6 +50,56 @@ const ALL_KINDS: WorkbenchThreadRecallKind[] = [
   "user-message",
   "user-steer",
 ];
+
+test("native incoming agent recall preserves identity and excludes passive outputs in both history owners", () => {
+  const message = { message: "cancellation needs cleanup", senderName: "iris", senderThreadId: "child" };
+  const incoming: ThreadItem = {
+    ...createWorkbenchAgentMessageOutput(message), id: "native-agent", type: "functionCallOutput",
+  };
+  const items: ThreadItem[] = [
+    incoming,
+    { id: "screenshot", type: "functionCallOutput", namespace: "workbench", name: "screenshot", output: message.message },
+    { ...incoming, id: "native-agent-again" },
+  ];
+  const bundle = createBundle();
+  bundle.thread.turns = [turn("turn-sqlite", items)];
+  bundle.questionnaireEntries = [];
+  bundle.steerEntries = [];
+  const legacyRecords = buildWorkbenchThreadRecallRecords(bundle);
+
+  const database = new Database(":memory:");
+  try {
+    installWorkbenchDatabaseSchema(database);
+    const repository = new WorkbenchTranscriptRepository(database);
+    repository.settle([sqliteWindow([{
+      activityAt: 10, createdAt: 1, kind: "thread", projectId: "project",
+      projectRoot: "C:/project", threadId: "thread-sqlite", title: "SQLite recall", updatedAt: 10,
+    }, {
+      createdAt: 1, durationMs: 9,
+      endedAt: 10, harnessId: "codex", kind: "turn", nativeLocation: "C:/project",
+      nativeThreadId: "native-thread", nativeTurnId: "native-turn", startedAt: 1,
+      state: "completed", threadId: "thread-sqlite", turnId: "turn-sqlite", turnIndex: 0,
+    }, ...items.map((item, itemPosition): WorkbenchTranscriptAtomicObservation => ({
+      item, itemPosition, kind: "item", lifecycle: "completed", observedAt: 2,
+      threadId: "thread-sqlite", turnId: "turn-sqlite",
+    }))])]);
+    const snapshot = repository.read({ threadId: "thread-sqlite", turnLimit: 1 });
+    assert.ok(snapshot);
+    const records = buildSqliteWorkbenchThreadRecallRecords(snapshot);
+    assert.deepEqual(records.map(({ ref }) => readSqliteWorkbenchThreadRecallRef(ref)?.itemId), [
+      "native-agent", "native-agent-again",
+    ]);
+    assert.equal(legacyRecords.length, 2);
+    assert.equal(new Set(legacyRecords.map(({ ref }) => ref)).size, 2);
+    assert.deepEqual(records.map(({ kind, text }) => ({ kind, text })), legacyRecords.map(({ kind, text }) => ({ kind, text })));
+    for (const record of records) {
+      assert.equal(record.kind, "agent-message");
+      for (const value of Object.values(message)) assert.ok(record.text.includes(value));
+    }
+  } finally {
+    database.close();
+  }
+});
 
 function sqliteWindow(
   observations: WorkbenchTranscriptAtomicObservation[],

@@ -1,7 +1,7 @@
 /*
  * WORKBENCH_DATABASE_TABLE_NAMES: exact current Workbench database table inventory. Keywords: database, schema, tables.
  * WORKBENCH_DATABASE_SCHEMA_VERSION: current global SQLite schema version. Keywords: database, schema, version.
- * installWorkbenchDatabaseSchema: apply every missing schema version transactionally. Keywords: database, schema, install.
+ * installWorkbenchDatabaseSchema: install latest or an explicit historical target transactionally, never downgrade. Keywords: database, schema, install.
  * coreTables: current core table map. Keywords: database, schema, core.
  * CoreSchemaRows: current core selected-row registry. Keywords: database, schema, types.
  * codexSandboxNetworkTables: current Codex sandbox network table map. Keywords: database, schema, Codex, network.
@@ -101,6 +101,6 @@ export const WORKBENCH_DATABASE_TABLE_NAMES = Object.freeze(
 
 export const WORKBENCH_DATABASE_SCHEMA_VERSION = workbenchDatabaseSchema.currentVersion;
 
-export function installWorkbenchDatabaseSchema(database: Database.Database) {
-  applyWorkbenchDatabaseSchema(database, workbenchDatabaseSchema);
+export function installWorkbenchDatabaseSchema(database: Database.Database, options: { targetVersion?: number } = {}) {
+  applyWorkbenchDatabaseSchema(database, workbenchDatabaseSchema, options);
 }

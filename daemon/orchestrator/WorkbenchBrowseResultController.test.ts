@@ -9,6 +9,7 @@ import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-se
 import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import type { WorkbenchBrowseResultEvent } from "../lib/workbench/browse/browse-result-events";
 import WorkbenchBrowseResultController from "./WorkbenchBrowseResultController";
+import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 function deferred<TValue>() {
   let resolve!: (value: TValue) => void;
@@ -146,10 +147,10 @@ test("logs background metadata failures without rejecting Browse execution", asy
   assert.deepEqual(errors, ["thread unavailable"]);
 });
 
-test("resolves explicit screenshot steering behind the thread-owned boundary", async () => {
+test("resolves non-codex screenshot steering behind the thread-owned boundary", async () => {
   const steers: string[] = [];
   const controller = new WorkbenchBrowseResultController({
-    listHarnesses: () => ["codex", "copilot", "opencode"],
+    listHarnesses: () => ["copilot"],
     logError: () => undefined,
     readThread: async () => createThreadResponse("thread-1", "turn-1"),
     recordResult: async () => undefined,
@@ -159,6 +160,52 @@ test("resolves explicit screenshot steering behind the thread-owned boundary", a
     },
   });
 
-  assert.equal(await controller.steerScreenshot("thread-1", "data:image/png;base64,AA=="), "turn-2");
+  assert.deepEqual(await controller.deliverScreenshot("thread-1", "data:image/png;base64,AA=="), { kind: "steered", turnId: "turn-2" });
   assert.deepEqual(steers, ["thread-1:turn-1"]);
+});
+
+test("codex screenshots use passive context and return queue acceptance, not a steer", async () => {
+  const delivered: object[] = [];
+  const controller = new WorkbenchBrowseResultController({
+    listHarnesses: () => ["codex"],
+    logError() {}, recordResult: async () => undefined,
+    readThread: async () => createThreadResponse("thread-1", "turn-1"),
+    steerTurn: async () => { throw new Error("Codex screenshot must not steer."); },
+    injectToolContext: async (request) => {
+      delivered.push(request);
+      return { acceptedAt: 123, itemId: "image-output", turnId: "turn-1" };
+    },
+  });
+  const url = "data:image/png;base64,AA==";
+  assert.deepEqual(await controller.deliverScreenshot("thread-1", url), { kind: "injected", acceptedAt: 123, turnId: "turn-1" });
+  assert.deepEqual(delivered, [{
+    threadId: "thread-1", expectedTurnId: "turn-1",
+    toolOutput: { name: "screenshot", namespace: "workbench", output: [
+      { type: "input_text", text: createAgentScreenshotSteerText() },
+      { type: "input_image", image_url: url },
+    ] },
+  }]);
+});
+
+test("screenshot delivery never wakes stopped targets and propagates injection failure", async () => {
+  let active = false;
+  let injections = 0;
+  const controller = new WorkbenchBrowseResultController({
+    listHarnesses: () => ["codex"], logError() {}, recordResult: async () => undefined,
+    readThread: async () => {
+      const response = createThreadResponse("thread-1", "turn-1");
+      if (!active) {
+        response.thread.status = { type: "idle" };
+        response.thread.turns[0].status = "completed";
+      }
+      return response;
+    },
+    steerTurn: async () => { throw new Error("Unexpected steer."); },
+    injectToolContext: async () => { injections++; throw new Error("provider rejected injection"); },
+  });
+  await assert.rejects(controller.deliverScreenshot("thread-1", "image"), /no active turn/);
+  assert.equal(injections, 0);
+  active = true;
+  await assert.rejects(controller.deliverScreenshot("thread-1", "image"), /provider rejected injection/);
+  assert.equal(injections, 1);
 });

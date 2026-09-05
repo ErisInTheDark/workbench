@@ -788,12 +788,12 @@ function getRawBrowseArgsError(args: readonly string[]) {
   return null;
 }
 
-function normalizeScreenshotSteerArgs(args: readonly string[]) {
+function normalizeScreenshotDeliveryArgs(args: readonly string[]) {
   if (args[0] !== "screenshot") {
     throw new Error("Screenshots can only be captured through the browse screenshot command.");
   }
   if (hasBrowseFlag(args, "--path") || hasBrowseFlag(args, "-p")) {
-    throw new Error("Workbench Browse screenshots are steered into the thread and do not allow --path.");
+    throw new Error("Workbench Browse screenshots are delivered into the thread and do not allow --path.");
   }
   return hasBrowseFlag(args, "--base64")
     ? [...args]
@@ -922,44 +922,34 @@ async function captureBrowseSessionScreenshotAsset(
   };
 }
 
-async function steerScreenshotAsset(
-  results: WorkbenchBrowseResultSink,
-  threadId: string,
-  steerImageUrl: string,
-) {
-  return await results.steerScreenshot(threadId, steerImageUrl);
-}
-
-function shouldSteerScreenshot(args: readonly string[]) {
-  return args[0] === "screenshot";
-}
-
-async function runBrowseCommandAndMaybeSteerScreenshot(
+async function runBrowseCommandAndMaybeDeliverScreenshot(
   execution: WorkbenchBrowseExecutionContext,
   payload: WorkbenchBrowseCommandRequest,
   typedCommand?: WorkbenchBrowseAgentCommand,
   projectExecution?: WorkbenchBrowseProjectExecution,
 ) {
-  const shouldSteer = shouldSteerScreenshot(payload.args);
-  const commandPayload = shouldSteer
-    ? { ...payload, args: normalizeScreenshotSteerArgs(payload.args) }
+  const shouldDeliver = payload.args[0] === "screenshot";
+  const commandPayload = shouldDeliver
+    ? { ...payload, args: normalizeScreenshotDeliveryArgs(payload.args) }
     : payload;
   const result = await runBrowseCommand(execution, commandPayload, typedCommand, projectExecution);
-  if (!shouldSteer || !result.ok) {
+  if (!shouldDeliver || !result.ok) {
     return result;
   }
 
   const image = parseScreenshotBase64(result.stdout);
   await writeScreenshotTranscriptAsset(payload.threadId, image);
-  const steerTurnId = await steerScreenshotAsset(execution.results, payload.threadId, createScreenshotDataUrl(image));
+  const delivery = await execution.results.deliverScreenshot(payload.threadId, createScreenshotDataUrl(image));
+  const deliveryFields = delivery.kind === "injected"
+    ? { injected: true, injectionAcceptedAt: delivery.acceptedAt, injectionTurnId: delivery.turnId }
+    : { steered: true, steerTurnId: delivery.turnId };
   return {
     ...result,
     stdout: JSON.stringify({
       screenshot: "captured",
-      steered: true,
+      ...deliveryFields,
     }, null, 2),
-    steered: true,
-    steerTurnId,
+    ...deliveryFields,
   };
 }
 
@@ -1124,7 +1114,7 @@ async function runBrowseAgentCommand(
 
   const command = normalized.command;
   const executionContext = projectExecution ?? await execution.runtime.resolveExecutionContext(command.commandRequest);
-  const result = await runBrowseCommandAndMaybeSteerScreenshot(execution, command.commandRequest, command, executionContext);
+  const result = await runBrowseCommandAndMaybeDeliverScreenshot(execution, command.commandRequest, command, executionContext);
   const recordResult = (assetUrl: string | null) => {
     execution.results.record(createAutomaticBrowseResult({
       action: command.action,
@@ -1375,7 +1365,7 @@ export default class WorkbenchBrowseRequestHandler {
       }, { status: 403 });
     }
 
-      return browseCommandResponse(await runSerialized(async () => await runBrowseCommandAndMaybeSteerScreenshot(execution, payload)));
+      return browseCommandResponse(await runSerialized(async () => await runBrowseCommandAndMaybeDeliverScreenshot(execution, payload)));
     } catch (error) {
       return browseCommandResponse({
         durationMs: Date.now() - startedAt,

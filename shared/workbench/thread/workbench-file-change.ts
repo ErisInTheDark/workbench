@@ -1,12 +1,17 @@
 /*
+ * Keywords: patch findings, automatic escalation, unclaimed prevention, recovery.
  * Exports:
  * - WorkbenchFileChangeFailureKind/WorkbenchFileChangeFailureMarker: Workbench-owned file-change presentation metadata and synthetic item. Keywords: file change, failure, unclaimed.
  * - WorkbenchFileChangeItem/WorkbenchFileUpdateChange: Codex file-change shapes with optional Workbench presentation metadata. Keywords: codex, thread item, extension.
  * - WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX/createWorkbenchFileChangeFailureSystemMessage: identify claim denials and encode bounded attempted-change metadata. Keywords: apply_patch, claim, hook.
  * - readWorkbenchFileChangeFailureMarker: derive one synthetic failed item from an ordered Codex hook notification. Keywords: validation, hook, marker.
  * - getWorkbenchFileChangeFailureKey/withWorkbenchFileChangeFailure: identify and decorate matching file-change items. Keywords: correlation, presentation.
+ * - WorkbenchFileChangeRecovery: passive feedback queue result.
+ * - mergeWorkbenchFileChange: retain findings only for matching attempted changes.
  */
 import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
+import type { FileChangeAnalysis } from "./file-change-analysis.ts";
+import { areDeeplyEqual } from "../deep-equality.ts";
 
 type CodexFileChangeItem = Extract<ThreadItem, { type: "fileChange" }>;
 type CodexFileUpdateChange = CodexFileChangeItem["changes"][number];
@@ -28,14 +33,46 @@ export interface WorkbenchFileChangeFailureMarker {
 }
 
 export type WorkbenchFileUpdateChange = CodexFileUpdateChange & {
+  workbenchAnalysis?: FileChangeAnalysis;
   workbenchAdditions?: number;
   workbenchDeletions?: number;
 };
 
+export interface WorkbenchFileChangeRecovery {
+  state: "queued" | "failed";
+  detail: string | null;
+}
+
 export type WorkbenchFileChangeItem = Omit<CodexFileChangeItem, "changes"> & {
   changes: WorkbenchFileUpdateChange[];
   workbenchFailureKind?: WorkbenchFileChangeFailureKind;
+  workbenchPolicy?: "automaticEscalation";
+  workbenchRecovery?: WorkbenchFileChangeRecovery;
 };
+
+export function mergeWorkbenchFileChange(incoming: WorkbenchFileChangeItem, stored: WorkbenchFileChangeItem): WorkbenchFileChangeItem {
+  const attemptedChanges = (item: WorkbenchFileChangeItem) => item.changes.map(({ path, kind, diff }) => ({ path, kind, diff }));
+  if (incoming.id !== stored.id || !areDeeplyEqual(attemptedChanges(incoming), attemptedChanges(stored))) return incoming;
+  const workbenchFailureKind = incoming.workbenchFailureKind ?? stored.workbenchFailureKind;
+  const workbenchPolicy = incoming.workbenchPolicy ?? stored.workbenchPolicy;
+  const workbenchRecovery = incoming.workbenchRecovery ?? stored.workbenchRecovery;
+  return {
+    ...incoming,
+    ...(workbenchFailureKind ? { workbenchFailureKind } : {}),
+    ...(workbenchPolicy ? { workbenchPolicy } : {}),
+    ...(workbenchRecovery ? { workbenchRecovery } : {}),
+    changes: incoming.changes.map((change, index) => {
+      const previous = stored.changes[index]!;
+      const workbenchAnalysis = change.workbenchAnalysis ?? previous.workbenchAnalysis;
+      return {
+        ...change,
+        ...(workbenchAnalysis ? { workbenchAnalysis } : {}),
+        ...(change.workbenchAdditions === undefined && previous.workbenchAdditions !== undefined ? { workbenchAdditions: previous.workbenchAdditions } : {}),
+        ...(change.workbenchDeletions === undefined && previous.workbenchDeletions !== undefined ? { workbenchDeletions: previous.workbenchDeletions } : {}),
+      };
+    }),
+  };
+}
 
 export interface WorkbenchFileChangeFailureSummary {
   additions: number;

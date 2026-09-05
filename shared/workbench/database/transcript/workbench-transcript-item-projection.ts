@@ -8,6 +8,8 @@
  * - WorkbenchTranscriptProjectionIssue: bounded relational integrity failure.
  * - WorkbenchTranscriptItemProjectionResult: ordered items or integrity failures.
  * - projectWorkbenchTranscriptItems: reconstruct items from one relational scope.
+ * - projectWorkbenchToolOutput: reconstruct typed context for persistence and projection.
+ * - projectWorkbenchFileChange: reconstruct attempted changes and owned recovery findings.
  */
 import type { JsonValue } from "../../../codex/generated/app-server/serde_json/JsonValue.ts";
 import type { ThreadItem } from "../../../codex/generated/app-server/v2/ThreadItem.ts";
@@ -16,6 +18,7 @@ import type {
   WorkbenchUserInputResponse,
 } from "../../../types.ts";
 import type { WorkbenchFileChangeItem } from "../../thread/workbench-file-change.ts";
+import type { WorkbenchToolOutput } from "../../thread/thread-tool-output.ts";
 import type { WorkbenchTranscriptSnapshot } from "./workbench-transcript-contract.ts";
 
 export interface WorkbenchProjectedInteractionItem {
@@ -73,6 +76,48 @@ class ProjectionFailure extends Error {
 }
 
 type Rows = WorkbenchTranscriptSnapshot["rows"];
+
+export function projectWorkbenchFileChange(
+  itemId: string,
+  owner: Rows["threadItemFileChanges"][number],
+  changes: Rows["threadFileChanges"],
+  hunks: Rows["threadFileChangeHunks"],
+  candidates: Rows["threadFileChangeCandidates"],
+): WorkbenchFileChangeItem {
+  return {
+    id: itemId,
+    status: owner.state,
+    type: "fileChange",
+    ...(owner.workbench_failure_kind ? { workbenchFailureKind: owner.workbench_failure_kind } : {}),
+    ...(owner.workbench_policy ? { workbenchPolicy: owner.workbench_policy } : {}),
+    ...(owner.recovery_state ? { workbenchRecovery: { state: owner.recovery_state, detail: owner.recovery_detail } } : {}),
+    changes: indexedRows(changes, ({ change_index }) => change_index, "threadFileChanges", itemId).map((change) => ({
+      diff: change.diff,
+      kind: change.change_kind === "update" ? { move_path: change.move_path, type: "update" as const } : { type: change.change_kind },
+      path: change.path,
+      ...(change.workbench_additions === null ? {} : { workbenchAdditions: change.workbench_additions }),
+      ...(change.workbench_deletions === null ? {} : { workbenchDeletions: change.workbench_deletions }),
+      ...(change.analysis_outcome ? { workbenchAnalysis: {
+        outcome: change.analysis_outcome,
+        detail: change.analysis_detail,
+        additions: change.analysis_additions ?? fail("invalidRow", "threadFileChanges", itemId),
+        deletions: change.analysis_deletions ?? fail("invalidRow", "threadFileChanges", itemId),
+        hunks: indexedRows(
+          hunks.filter((hunk) => hunk.change_index === change.change_index),
+          ({ hunk_index }) => hunk_index, "threadFileChangeHunks", itemId,
+        ).map((hunk) => ({
+          index: hunk.hunk_index, outcome: hunk.outcome, reason: hunk.reason,
+          additions: hunk.additions, deletions: hunk.deletions,
+          currentStart: hunk.current_start, currentEnd: hunk.current_end, oldStart: hunk.old_start, newStart: hunk.new_start,
+          candidates: indexedRows(
+            candidates.filter((candidate) => candidate.change_index === change.change_index && candidate.hunk_index === hunk.hunk_index),
+            ({ candidate_index }) => candidate_index, "threadFileChangeCandidates", itemId,
+          ).map(({ current_line }) => current_line),
+        })),
+      } } : {}),
+    })),
+  };
+}
 
 function fail(
   code: WorkbenchTranscriptProjectionIssue["code"],
@@ -405,12 +450,35 @@ function interactionItem(
   };
 }
 
+export function projectWorkbenchToolOutput(
+  id: string,
+  owner: Rows["threadItemToolOutputs"][number],
+  parts: Rows["threadToolOutputParts"],
+): WorkbenchToolOutput {
+  if (owner.body_kind === "text" && parts.length) fail("unexpectedRow", "threadToolOutputParts", id);
+  return {
+    id, type: "functionCallOutput", name: owner.name, namespace: owner.namespace,
+    output: owner.body_kind === "text" ? owner.body_text! : indexedRows(
+      parts, ({ part_index }) => part_index, "threadToolOutputParts", id,
+    ).map((part) => part.part_type === "text"
+      ? { type: "input_text" as const, text: part.text! }
+      : { type: "input_image" as const, image_url: part.image_url!, ...(part.image_detail ? { detail: part.image_detail } : {}) }),
+    ...(owner.injection_accepted_at === null ? {} : { workbenchInjectionAcceptedAt: owner.injection_accepted_at }),
+  };
+}
+
 function projectItem(
   root: Rows["threadItems"][number],
   indexes: ReturnType<typeof createIndexes>,
 ): WorkbenchProjectedTranscriptItem {
   const itemId = root.source_id;
   switch (root.type) {
+    case "functionCallOutput":
+      return projectWorkbenchToolOutput(
+        itemId,
+        one(indexes.toolOutputs.get(itemId) ?? [], "threadItemToolOutputs", itemId),
+        indexes.toolOutputParts.get(itemId) ?? [],
+      );
     case "userMessage":
       return userMessage(itemId, indexes);
     case "assistantMessage": {
@@ -449,26 +517,7 @@ function projectItem(
     }
     case "fileChange": {
       const owner = one(indexes.fileChangeItems.get(itemId) ?? [], "threadItemFileChanges", itemId);
-      return {
-        changes: indexedRows(
-          indexes.fileChanges.get(itemId) ?? [],
-          ({ change_index }) => change_index,
-          "threadFileChanges",
-          itemId,
-        ).map((change) => ({
-          diff: change.diff,
-          kind: change.change_kind === "update"
-            ? { move_path: change.move_path, type: "update" as const }
-            : { type: change.change_kind },
-          path: change.path,
-          ...(change.workbench_additions === null ? {} : { workbenchAdditions: change.workbench_additions }),
-          ...(change.workbench_deletions === null ? {} : { workbenchDeletions: change.workbench_deletions }),
-        })),
-        id: itemId,
-        status: owner.state,
-        type: "fileChange",
-        ...(owner.workbench_failure_kind ? { workbenchFailureKind: owner.workbench_failure_kind } : {}),
-      };
+      return projectWorkbenchFileChange(itemId, owner, indexes.fileChanges.get(itemId) ?? [], indexes.fileChangeHunks.get(itemId) ?? [], indexes.fileChangeCandidates.get(itemId) ?? []);
     }
     case "webSearch": {
       const owner = one(indexes.webSearchItems.get(itemId) ?? [], "threadItemWebSearches", itemId);
@@ -526,6 +575,8 @@ function createIndexes(rows: Rows, sourceIdsByItemId: ReadonlyMap<number, string
     dynamicContent: byItem(rows.threadCallableDynamicContent, sourceIdsByItemId),
     fileChangeItems: byItem(rows.threadItemFileChanges, sourceIdsByItemId),
     fileChanges: byItem(rows.threadFileChanges, sourceIdsByItemId),
+    fileChangeHunks: byItem(rows.threadFileChangeHunks ?? [], sourceIdsByItemId),
+    fileChangeCandidates: byItem(rows.threadFileChangeCandidates ?? [], sourceIdsByItemId),
     interactionAnswers: byItem(rows.threadInteractionAnswers, sourceIdsByItemId),
     interactions: byItem(rows.threadItemInteractions, sourceIdsByItemId),
     interactionOptions: byItem(rows.threadInteractionOptions, sourceIdsByItemId),
@@ -540,6 +591,8 @@ function createIndexes(rows: Rows, sourceIdsByItemId: ReadonlyMap<number, string
     reasoningSections: byItem(rows.threadReasoningSections, sourceIdsByItemId),
     toolSources: byItem(rows.threadOperationToolSources, sourceIdsByItemId),
     unknownItems: byItem(rows.threadItemUnknown, sourceIdsByItemId),
+    toolOutputs: byItem(rows.threadItemToolOutputs ?? [], sourceIdsByItemId),
+    toolOutputParts: byItem(rows.threadToolOutputParts ?? [], sourceIdsByItemId),
     userMessages: byItem(rows.threadItemUserMessages, sourceIdsByItemId),
     userMessageParts: byItem(rows.threadUserMessageParts, sourceIdsByItemId),
     webSearchItems: byItem(rows.threadItemWebSearches, sourceIdsByItemId),

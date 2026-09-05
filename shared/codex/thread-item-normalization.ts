@@ -9,6 +9,8 @@
 import type { ThreadItem } from "./generated/app-server/v2/ThreadItem.ts";
 import type { UserInput } from "./generated/app-server/v2/UserInput.ts";
 import { compactCommandOutput } from "./thread-command-output.ts";
+import { mergeWorkbenchToolOutput } from "../workbench/thread/thread-tool-output.ts";
+import { mergeWorkbenchFileChange } from "../workbench/thread/workbench-file-change.ts";
 
 interface NormalizeThreadItemsOptions {
   mergeDuplicateItems?: (existingItem: ThreadItem, incomingItem: ThreadItem) => ThreadItem;
@@ -61,6 +63,8 @@ export function mergeThreadItem(incoming: ThreadItem, stored: ThreadItem): Threa
   }
 
   switch (incoming.type) {
+    case "functionCallOutput":
+      return mergeWorkbenchToolOutput(incoming, stored as Extract<ThreadItem, { type: "functionCallOutput" }>);
     case "agentMessage": {
       const storedItem = stored as Extract<ThreadItem, { type: "agentMessage" }>;
       return {
@@ -98,11 +102,11 @@ export function mergeThreadItem(incoming: ThreadItem, stored: ThreadItem): Threa
     }
     case "fileChange": {
       const storedItem = stored as Extract<ThreadItem, { type: "fileChange" }>;
-      return {
+      return mergeWorkbenchFileChange({
         ...incoming,
         changes: preferValue(incoming.changes, storedItem.changes, isNonEmptyArray),
         status: mergeStatus(incoming.status, storedItem.status) as typeof incoming.status,
-      };
+      }, storedItem);
     }
     case "mcpToolCall": {
       const storedItem = stored as Extract<ThreadItem, { type: "mcpToolCall" }>;
@@ -258,6 +262,8 @@ function normalizeTextSegment(value: string) {
 
 function getTurnItemDedupeKey(item: ThreadItem) {
   switch (item.type) {
+    case "functionCallOutput":
+      return `functionCallOutput:${item.id}`;
     case "hookPrompt":
       return `hookPrompt:${stableStringify(item.fragments)}`;
     case "agentMessage":

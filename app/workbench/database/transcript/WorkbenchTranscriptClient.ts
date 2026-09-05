@@ -48,7 +48,7 @@ function conformanceReportSignature(report: WorkbenchTranscriptConformanceReport
 }
 
 export default class WorkbenchTranscriptClient {
-  private available = false;
+  private protocolVersion: 1 | 2 | null = null;
   private readonly availabilityListeners = new Set<(available: boolean) => void>();
   private readonly listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   private readonly reportedConformanceSignatures = new Set<string>();
@@ -56,6 +56,10 @@ export default class WorkbenchTranscriptClient {
   private readonly stopDisconnect: () => void;
   private readonly stopNotifications: () => void;
   private readonly transport: WorkbenchTranscriptTransport;
+
+  private get available() {
+    return this.protocolVersion !== null;
+  }
 
   constructor({
     reportConformance = () => undefined,
@@ -81,7 +85,9 @@ export default class WorkbenchTranscriptClient {
   }
 
   async read(params: WorkbenchTranscriptReadRequest) {
-    return (await this.request(workbenchTranscriptOperations.read, params)).snapshot;
+    return (await this.request(workbenchTranscriptOperations.read, {
+      ...params, ...(this.protocolVersion === 2 ? { protocolVersion: 2 as const } : {}),
+    })).snapshot;
   }
 
   async reportParity(params: WorkbenchTranscriptParityDiagnostic) {
@@ -94,7 +100,9 @@ export default class WorkbenchTranscriptClient {
   ) {
     this.listeners.set(params.subscriptionId, listener);
     try {
-      await this.request(workbenchTranscriptOperations.subscribe, params);
+      await this.request(workbenchTranscriptOperations.subscribe, {
+        ...params, ...(this.protocolVersion === 2 ? { protocolVersion: 2 as const } : {}),
+      });
     } catch (error) {
       if (this.listeners.get(params.subscriptionId) === listener) this.listeners.delete(params.subscriptionId);
       throw error;
@@ -138,7 +146,7 @@ export default class WorkbenchTranscriptClient {
           issues: "data" in conformed ? [] : conformed.issues,
         });
       }
-      if ("data" in conformed) this.setAvailable(true);
+      if ("data" in conformed) this.setProtocolVersion(conformed.data.protocolVersion >= 2 ? 2 : 1);
       return;
     }
     if (notification.method !== workbenchTranscriptNotifications.updated.method) return;
@@ -154,16 +162,17 @@ export default class WorkbenchTranscriptClient {
     this.listeners.get(conformed.data.subscriptionId)?.(conformed.data.snapshot);
   }
 
-  private setAvailable(available: boolean) {
-    if (this.available === available) return;
-    this.available = available;
-    for (const listener of this.availabilityListeners) listener(available);
+  private setProtocolVersion(version: 1 | 2 | null) {
+    const wasAvailable = this.available;
+    this.protocolVersion = version;
+    if (wasAvailable === this.available) return;
+    for (const listener of this.availabilityListeners) listener(this.available);
   }
 
   private resetConnectionState() {
     this.listeners.clear();
     this.reportedConformanceSignatures.clear();
-    this.setAvailable(false);
+    this.setProtocolVersion(null);
   }
 
   private reportConformanceOnce(report: WorkbenchTranscriptConformanceReport) {

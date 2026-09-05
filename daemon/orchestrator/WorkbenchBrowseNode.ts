@@ -8,12 +8,17 @@ import type { OrchestratorBrowseExecution, OrchestratorProviderNotification, Orc
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchBrowseController from "./WorkbenchBrowseController";
 import WorkbenchBrowseResultController from "./WorkbenchBrowseResultController";
+import type { WorkbenchBrowseResultCallbacks } from "./WorkbenchBrowseResultController";
+import { WORKBENCH_TOOL_CONTEXT_METHOD, WorkbenchToolContextResponseSchema } from "workbench-shared/workbench/thread/thread-tool-output";
 
 class BrowseExecution implements OrchestratorBrowseExecution {
   private controller: WorkbenchBrowseController | null = null;
   private readonly runtime: WorkbenchBrowseRuntime;
 
-  constructor(private readonly context: OrchestratorProcessContext) {
+  constructor(
+    context: OrchestratorProcessContext,
+    private readonly resultCallbacks: WorkbenchBrowseResultCallbacks,
+  ) {
     this.runtime = new WorkbenchBrowseRuntime(context.browseProjectResolvers);
   }
 
@@ -69,7 +74,7 @@ class BrowseExecution implements OrchestratorBrowseExecution {
   }
 
   private getController() {
-    this.controller ??= new WorkbenchBrowseController(new WorkbenchBrowseResultController(this.context.browseResultCallbacks), this.runtime);
+    this.controller ??= new WorkbenchBrowseController(new WorkbenchBrowseResultController(this.resultCallbacks), this.runtime);
     return this.controller;
   }
 }
@@ -78,9 +83,17 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   access: "agent",
   children: [],
   create: (context, build) => {
+    const harnesses = build.get("harnesses");
     const execution = build.mode === "restore"
       ? (build.handoffState as { execution: BrowseExecution }).execution
-      : new BrowseExecution(context);
+      : new BrowseExecution(context, {
+        ...context.browseResultCallbacks,
+        injectToolContext: async (params) => {
+          const response = await harnesses.request("codex", { method: WORKBENCH_TOOL_CONTEXT_METHOD, params });
+          if (response.error) throw new Error(response.error.message);
+          return WorkbenchToolContextResponseSchema.parse(response.result);
+        },
+      });
     let detached = false;
     const unregisterBrowse = build.get("daemonRequests").registerBrowse({
       controlSession: async (request) => await execution.controlSession(request),
@@ -107,7 +120,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload orchestrator-owned Browse execution without restarting browser sessions.",
   lifecycle: "handoff",
   provides: ["browseExecution"],
-  requires: ["daemonRequests"],
+  requires: ["daemonRequests", "harnesses"],
   safeAll: true,
   scope: "server:browse",
   sources: [

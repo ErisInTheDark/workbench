@@ -11,7 +11,7 @@
  * defineTableHistory: validate private versions and brand only the final table. Keywords: database, schema, history.
  * defineSubsystemHistory: combine table histories under one owner. Keywords: database, schema, subsystem.
  * defineWorkbenchDatabaseSchema: assemble and validate all subsystem histories. Keywords: database, schema, assembly.
- * applyWorkbenchDatabaseSchema: apply missing global schema versions transactionally. Keywords: database, schema, migration.
+ * applyWorkbenchDatabaseSchema: apply missing versions through an explicit target or latest, without downgrades. Keywords: database, schema, migration.
  */
 import type Database from "better-sqlite3";
 
@@ -433,14 +433,24 @@ function executeMigration(database: Database.Database, operation: TableMigration
   executeRebuild(database, operation, schemaVersion);
 }
 
-export function applyWorkbenchDatabaseSchema(database: Database.Database, schema: WorkbenchDatabaseSchema) {
+export function applyWorkbenchDatabaseSchema(
+  database: Database.Database,
+  schema: WorkbenchDatabaseSchema,
+  { targetVersion = schema.currentVersion }: { targetVersion?: number } = {},
+) {
   const versions = databaseSchemaVersionData.get(schema);
   if (!versions) throw new Error("Unknown Workbench database schema token");
+  if (!Number.isSafeInteger(targetVersion) || targetVersion < 1 || targetVersion > schema.currentVersion) {
+    throw new Error(`Invalid Workbench database schema target: ${targetVersion}`);
+  }
   const installedVersion = database.pragma("user_version", { simple: true }) as number;
   if (installedVersion > schema.currentVersion) {
     throw new Error(`Workbench database schema ${installedVersion} is newer than supported schema ${schema.currentVersion}`);
   }
-  for (let schemaVersion = installedVersion + 1; schemaVersion <= schema.currentVersion; schemaVersion += 1) {
+  if (installedVersion > targetVersion) {
+    throw new Error(`Workbench database schema ${installedVersion} is newer than target schema ${targetVersion}`);
+  }
+  for (let schemaVersion = installedVersion + 1; schemaVersion <= targetVersion; schemaVersion += 1) {
     const operations = versions.get(schemaVersion)!;
     const needsRebuild = operations.some((operation) => operation.kind === "rebuildTable");
     const foreignKeysEnabled = database.pragma("foreign_keys", { simple: true }) === 1;

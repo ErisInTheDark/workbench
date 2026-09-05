@@ -1,4 +1,5 @@
 /*
+ * Keywords: native tool output, inline image, hashed transcript asset.
  * Exports:
  * - CodexTranscriptImageAssetContext: thread-local destination for externalized transcript image assets. Keywords: codex, transcript, image assets.
  * - CodexTranscriptImageAssetExternalization: result of replacing inline transcript data URLs with local asset URLs. Keywords: codex, transcript, image assets.
@@ -9,6 +10,11 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 const DATA_IMAGE_URL_PATTERN = /^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([a-z0-9+/=\s]+)$/iu;
+const IMAGE_FIELDS: Readonly<Record<string, string>> = {
+  image: "url",
+  inputImage: "imageUrl",
+  input_image: "image_url",
+};
 
 export interface CodexTranscriptImageAssetContext {
   encodedThreadId: string;
@@ -68,14 +74,6 @@ async function writeImageAsset(context: CodexTranscriptImageAssetContext, dataUr
   return `/api/transcript-assets/codex/${encodeURIComponent(context.encodedThreadId)}/${encodeURIComponent(fileName)}`;
 }
 
-function shouldExternalizeUserImageRecord(record: Record<string, unknown>) {
-  return record.type === "image" && typeof record.url === "string";
-}
-
-function shouldExternalizeInputImageRecord(record: Record<string, unknown>) {
-  return record.type === "inputImage" && typeof record.imageUrl === "string";
-}
-
 async function externalizeValue(
   value: unknown,
   context: CodexTranscriptImageAssetContext,
@@ -109,20 +107,11 @@ async function externalizeValue(
   let changed = false;
   let assetCount = 0;
   const nextRecord: Record<string, unknown> = {};
+  const imageField = typeof record.type === "string" ? IMAGE_FIELDS[record.type] : undefined;
 
   for (const [key, nestedValue] of Object.entries(record)) {
-    if (key === "url" && shouldExternalizeUserImageRecord(record)) {
-      const assetUrl = await writeImageAsset(context, nestedValue as string);
-      if (assetUrl) {
-        nextRecord[key] = assetUrl;
-        changed = true;
-        assetCount += 1;
-        continue;
-      }
-    }
-
-    if (key === "imageUrl" && shouldExternalizeInputImageRecord(record)) {
-      const assetUrl = await writeImageAsset(context, nestedValue as string);
+    if (key === imageField && typeof nestedValue === "string") {
+      const assetUrl = await writeImageAsset(context, nestedValue);
       if (assetUrl) {
         nextRecord[key] = assetUrl;
         changed = true;

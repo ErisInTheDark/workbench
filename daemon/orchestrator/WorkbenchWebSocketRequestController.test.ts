@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { conformWorkbenchTranscriptSnapshot, type WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReloadController";
 import WorkbenchWebSocketRequestController, { type WorkbenchWebSocketRequestControllerOptions } from "./WorkbenchWebSocketRequestController";
@@ -104,6 +105,44 @@ function createController(options: {
   });
   return { controller, lines };
 }
+
+test("read and subscription replies honour each client's transcript protocol", async () => {
+  const parsed = conformWorkbenchTranscriptSnapshot({
+    thread: {
+      id: "thread", project_id: "project", project_root: "/", title: "thread", archived: 0, pinned: 0, snoozed: 0,
+      transcript_content_version: 3, next_turn_index: 1, created_at: 1, updated_at: 2, activity_at: 2,
+    },
+    turns: [], loadedTurnIds: [], hasPreviousTurns: false,
+    rows: {
+      threadItems: [{ id: 1, source_id: "fco", thread_id: "thread", turn_id: "turn", item_position: 0, type: "functionCallOutput", created_at: 1, updated_at: 2 }],
+      threadItemToolOutputs: [{ item_id: 1, item_type: "functionCallOutput", name: "context", namespace: null, body_kind: "text", body_text: "result", injection_accepted_at: null }],
+    },
+  });
+  assert.ok(parsed.success);
+  const publications: Array<(snapshot: WorkbenchTranscriptSnapshot) => void | Promise<void>> = [];
+  const { controller } = createController({
+    clock: new FakeClock(),
+    transcript: {
+      read: async () => parsed.data,
+      subscribe: async ({ publish }) => { publications.push(publish); },
+      unsubscribe: () => undefined,
+    },
+  });
+  const sent: Array<{ id?: number; method?: string; result?: { snapshot: WorkbenchTranscriptSnapshot }; params?: { snapshot: WorkbenchTranscriptSnapshot } }> = [];
+  const client = createClient((data, callback) => { sent.push(JSON.parse(String(data))); callback?.(); });
+  try {
+    for (const [offset, protocolVersion] of [undefined, 2].entries()) {
+      const params = { threadId: "thread", turnLimit: 1, ...(protocolVersion ? { protocolVersion } : {}) };
+      await controller.handleMessage(client, "connection", frame("workbench/transcript/read", offset + 1, { params }), false);
+      await controller.handleMessage(client, "connection", frame("workbench/transcript/subscribe", offset + 3, { params: { ...params, subscriptionId: `sub-${offset}` } }), false);
+    }
+    assert.deepEqual(sent.filter(({ result }) => result?.snapshot).map(({ result }) => result!.snapshot.rows.threadItems[0]?.type), ["unknown", "functionCallOutput"]);
+    for (const publish of publications) await publish(parsed.data);
+    assert.deepEqual(sent.filter(({ method }) => method === "workbench/transcript/updated").map(({ params }) => params!.snapshot.rows.threadItems[0]?.type), ["unknown", "functionCallOutput"]);
+  } finally {
+    controller.dispose();
+  }
+});
 
 test("stats import observers receive pushed progress and disconnect cleanly", async () => {
   const sent: Array<{ method?: string }> = [];
@@ -419,7 +458,7 @@ test("transcript dispatch decodes the exact shared operation before calling the 
     transcript: {
       read: async (request) => {
         reads.push(request);
-        return {} as never;
+        return null;
       },
       subscribe: async () => undefined,
       unsubscribe: () => undefined,

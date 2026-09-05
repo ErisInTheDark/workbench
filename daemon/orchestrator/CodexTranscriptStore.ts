@@ -1,4 +1,5 @@
 /*
+ * Keywords: transcript persistence, runtime version, native images, turn ownership.
  * Exports:
  * - CodexTranscriptStore: persist, de-bloat, hydrate, and expose retained turn usage from Codex compatibility transcripts. Keywords: codex, transcript, questionnaire, pruning, usage, image assets.
  */
@@ -11,6 +12,7 @@ import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
 import { compactCommandOutputPayload } from "workbench-shared/codex/thread-command-output";
 import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
+import { WORKBENCH_TOOL_CONTEXT_METHOD, type WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchThreadHydrationRequest } from "../lib/codex/thread-hydration";
 import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadContextReadResponse, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
@@ -717,6 +719,7 @@ export default class CodexTranscriptStore {
     projectRoot: string,
     getProtectedThreadIds: () => Iterable<string> = () => [],
     transcriptShadowLog?: OrchestratorTranscriptShadowLog,
+    private readonly getRuntimeUserAgent: () => string | null = () => null,
   ) {
     this.getProtectedThreadIds = getProtectedThreadIds;
     this.threadsDirectoryPath = path.join(projectRoot, ".workbench", "transcripts", "codex", "threads");
@@ -747,6 +750,7 @@ export default class CodexTranscriptStore {
   async recordClientRequest(
     request: JsonRpcRequest,
     admittedSteer: WorkbenchSteerHistoryEntry | null | undefined = undefined,
+    originatingTurnId: string | null = null,
   ) {
     await this.ready();
     const steerEntry = admittedSteer === undefined
@@ -762,10 +766,10 @@ export default class CodexTranscriptStore {
       return;
     }
 
-    return this.recordRawTraffic("client-request", request, null, request);
+    return this.recordRawTraffic("client-request", request, null, request, originatingTurnId);
   }
 
-  async recordUpstreamResponse(originalRequest: JsonRpcRequest | null, response: JsonRpcResponse) {
+  async recordUpstreamResponse(originalRequest: JsonRpcRequest | null, response: JsonRpcResponse, originatingTurnId: string | null = null) {
     await this.ready();
     if (originalRequest?.method === "turn/steer") {
       const steerEntry = createSteerHistoryEntryFromRequest(originalRequest);
@@ -794,7 +798,23 @@ export default class CodexTranscriptStore {
       }
     }
 
-    await this.recordRawTraffic("upstream-response", response, originalRequest?.method ?? null, originalRequest);
+    await this.recordRawTraffic("upstream-response", response, originalRequest?.method ?? null, originalRequest, originatingTurnId);
+  }
+
+  async recordWorkbenchToolContext(threadId: string, turnId: string, item: WorkbenchToolOutput) {
+    await this.ready();
+    const externalized = (await this.externalizeInlineImages(threadId, item)).value;
+    await this.recordTurnItem(threadId, turnId, externalized, createRawEvent(
+      "workbench", { item: externalized, threadId, turnId }, WORKBENCH_TOOL_CONTEXT_METHOD, item.id,
+    ));
+    return externalized;
+  }
+
+  async recordWorkbenchFileChange(threadId: string, turnId: string, item: ThreadItem) {
+    await this.ready();
+    await this.recordTurnItem(threadId, turnId, item, createRawEvent(
+      "workbench", { item, threadId, turnId }, "workbench/patch/findings", item.id,
+    ));
   }
 
   async recordClientRequestFailure(request: JsonRpcRequest, errorMessage: string) {
@@ -1397,6 +1417,7 @@ export default class CodexTranscriptStore {
     payload: unknown,
     fallbackMethod: string | null = null,
     originalRequest: JsonRpcRequest | null = null,
+    originatingTurnId: string | null = null,
   ) {
     const compactedPayload = compactCommandOutputPayload(payload);
     const originalParams = asRecord(originalRequest?.params);
@@ -1426,7 +1447,7 @@ export default class CodexTranscriptStore {
       return;
     }
 
-    const turnId = extractTurnId(payloadForRecord) ?? asString(originalParams?.turnId) ?? asString(originalParams?.expectedTurnId);
+    const turnId = originatingTurnId ?? extractTurnId(payloadForRecord) ?? asString(originalParams?.turnId) ?? asString(originalParams?.expectedTurnId);
     const item = extractItem(payloadForRecord);
     if (turnId && item) {
       await this.recordTurnItem(threadId, turnId, item, event);
@@ -1474,6 +1495,7 @@ export default class CodexTranscriptStore {
   }
 
   private async recordThreadSnapshotTurn(threadId: string, turn: Turn) {
+    turn = (await this.externalizeInlineImages(threadId, turn)).value;
     await this.updateTurnFile(threadId, turn.id, (file) => {
       const { aliasesByItemId, turn: reconciledTurn } = reconcileSnapshotContextCompactionItemIds(file.turn, turn);
       const itemOrder = reconciledTurn.items.map((item) => item.id);
@@ -1502,6 +1524,9 @@ export default class CodexTranscriptStore {
   }
 
   private async recordTurnSnapshot(threadId: string, turn: Turn, event: CodexTranscriptRawEvent) {
+    const runtimeCliVersion = event.source === "upstream-notification" && event.method === "turn/started"
+      ? /^[^\s/]+\/([^\s/]+)(?:\s|$)/u.exec(this.getRuntimeUserAgent() ?? "")?.[1]
+      : undefined;
     if (hasNativeSteerReconciliationEvidence(turn)) {
       await this.updateThreadFile(threadId, (file) => {
         const entries = file.steerEntries ?? [];
@@ -1529,6 +1554,7 @@ export default class CodexTranscriptStore {
         itemOrder: nextItemOrder,
         itemTimeline: nextItemTimeline,
         lastTouchedAt: now(),
+        ...(runtimeCliVersion && !file.runtimeCliVersion ? { runtimeCliVersion } : {}),
         steerEntries: updatePendingSteerEntriesForInterruptedTurn(file.steerEntries ?? [], mergedTurn, event.receivedAt),
         turn: applyTurnTimeline(mergedTurn, {
           ...file,
@@ -1635,7 +1661,7 @@ export default class CodexTranscriptStore {
     return path.join(this.threadsDirectoryPath, encodeTranscriptPathSegment(threadId));
   }
 
-  private externalizeInlineImages<TValue>(threadId: string, value: TValue) {
+  externalizeInlineImages<TValue>(threadId: string, value: TValue) {
     return externalizeCodexTranscriptInlineImages(value, {
       encodedThreadId: encodeTranscriptPathSegment(threadId),
       threadDirectoryPath: this.threadDirectoryPath(threadId),

@@ -1,4 +1,5 @@
 /*
+ * Keywords: Codex bridge, patch controller, reload handoff, transcript readiness.
  * Exports:
  * - recoverCodexSqliteTranscriptBeforeAvailability: settle marked recovery and active provider baselines before reopening Codex. Keywords: codex, transcript, recovery, baseline.
  * - default CodexBridgeNode: own reloadable Codex bridge code and questionnaire routing while preserving the parent app-server process. Keywords: codex, bridge, questionnaire, handoff.
@@ -202,6 +203,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/CodexBridgeNode.ts",
     "daemon/orchestrator/codex-sandbox-policy.ts",
     "daemon/orchestrator/CodexStdioBridge.ts",
+    "daemon/orchestrator/CodexFileChangeController.ts",
     "daemon/orchestrator/CodexThreadWindowLoader.ts",
     "shared/workbench/thread/workbench-thread-page.ts",
     "daemon/orchestrator/workbench-agent-mcp-request-registry.ts",

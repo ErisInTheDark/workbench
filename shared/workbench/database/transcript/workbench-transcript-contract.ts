@@ -32,8 +32,12 @@ export const transcriptSnapshotTables = Object.freeze({
   threadReasoningSections: itemTables.threadReasoningSections,
   threadItemFileChanges: itemTables.threadItemFileChanges,
   threadFileChanges: itemTables.threadFileChanges,
+  threadFileChangeHunks: itemTables.threadFileChangeHunks,
+  threadFileChangeCandidates: itemTables.threadFileChangeCandidates,
   threadItemContextCompactions: itemTables.threadItemContextCompactions,
   threadItemUnknown: itemTables.threadItemUnknown,
+  threadItemToolOutputs: itemTables.threadItemToolOutputs,
+  threadToolOutputParts: itemTables.threadToolOutputParts,
   threadItemOperations: operationSourceTables.threadItemOperations,
   threadOperationProcessSources: operationSourceTables.threadOperationProcessSources,
   threadProcessCommandActions: operationSourceTables.threadProcessCommandActions,
@@ -67,6 +71,7 @@ export type WorkbenchTranscriptSnapshotRows = {
 
 export interface WorkbenchTranscriptReadRequest {
   beforeTurnIndex?: number;
+  protocolVersion?: 1 | 2;
   threadId: string;
   turnIds?: string[];
   turnLimit: number;
@@ -367,6 +372,9 @@ function decodeReadParams(value: unknown): DecodeResult<WorkbenchTranscriptReadR
   const turnLimit = value.turnLimit;
   const beforeTurnIndex = value.beforeTurnIndex;
   const turnIds = value.turnIds;
+  if (value.protocolVersion !== undefined && value.protocolVersion !== 1 && value.protocolVersion !== 2) {
+    return { success: false, message: "Unsupported transcript protocol version." };
+  }
   if (!threadId || typeof turnLimit !== "number" || !Number.isSafeInteger(turnLimit) || turnLimit <= 0) {
     return { success: false, message: "Transcript read requires threadId and a positive turnLimit." };
   }
@@ -387,6 +395,7 @@ function decodeReadParams(value: unknown): DecodeResult<WorkbenchTranscriptReadR
   const data: WorkbenchTranscriptReadRequest = { threadId, turnLimit };
   if (typeof beforeTurnIndex === "number") data.beforeTurnIndex = beforeTurnIndex;
   if (Array.isArray(turnIds)) data.turnIds = turnIds;
+  if (value.protocolVersion === 1 || value.protocolVersion === 2) data.protocolVersion = value.protocolVersion;
   return { success: true, data };
 }
 
@@ -554,7 +563,7 @@ export interface WorkbenchTranscriptUpdatedParams {
   subscriptionId: string;
 }
 
-export const WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION = 1;
+export const WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION = 2;
 
 export interface WorkbenchTranscriptCapabilities {
   protocolVersion: number;

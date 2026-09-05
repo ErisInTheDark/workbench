@@ -57,7 +57,7 @@ test("usage and claim imports resume safely and isolate failed work", () => {
 test("usage schema v10 preserves pricing context while discarding v1 token facts", () => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
-  installWorkbenchDatabaseSchema(database);
+  installWorkbenchDatabaseSchema(database, { targetVersion: 9 });
   database.exec(`
     INSERT INTO workbench_harnesses (id) VALUES ('codex');
     INSERT INTO workbench_threads
@@ -70,44 +70,12 @@ test("usage schema v10 preserves pricing context while discarding v1 token facts
     VALUES ('turn', 'thread', 0, 'codex', 'C:/project', 'provider-thread', 'turn',
       'completed', 1, 1, 2, 1);
   `);
-  database.pragma("foreign_keys = OFF");
   database.exec(`
-    DROP TABLE thread_turn_usage;
-    CREATE TABLE thread_turn_usage (
-      turn_id TEXT PRIMARY KEY REFERENCES thread_turns(id) ON DELETE CASCADE,
-      model TEXT,
-      service_tier TEXT,
-      input_tokens INTEGER,
-      cached_input_tokens INTEGER,
-      cache_write_input_tokens INTEGER,
-      output_tokens INTEGER,
-      reasoning_output_tokens INTEGER,
-      total_tokens INTEGER,
-      context_observed_at INTEGER,
-      usage_observed_at INTEGER
-    );
     INSERT INTO thread_turn_usage VALUES
       ('turn', 'gpt-5.4', 'standard', 100, 80, 0, 20, 5, 120, 1, 2);
-    DROP TABLE thread_usage_imports;
-    CREATE TABLE thread_usage_imports (
-      project_id TEXT NOT NULL,
-      harness_id TEXT NOT NULL,
-      provider_thread_id TEXT NOT NULL,
-      state TEXT NOT NULL,
-      run_id TEXT,
-      attempt_count INTEGER NOT NULL DEFAULT 0,
-      discovered_at INTEGER NOT NULL,
-      source_activity_at INTEGER NOT NULL,
-      started_at INTEGER,
-      settled_at INTEGER,
-      updated_at INTEGER NOT NULL,
-      error_text TEXT
-    );
     INSERT INTO thread_usage_imports VALUES
       ('project', 'codex', 'provider-thread', 'completed', NULL, 1, 1, 2, 2, 2, 2, NULL);
-    PRAGMA user_version = 9;
   `);
-  database.pragma("foreign_keys = ON");
   try {
     installWorkbenchDatabaseSchema(database);
     const usageColumns = (database.prepare("PRAGMA table_info(thread_turn_usage)").all() as Array<{ name: string }>)

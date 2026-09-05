@@ -23,6 +23,7 @@ import {
 } from "workbench-shared/workbench/thread/workbench-file-change";
 import type { WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/workbench-thread-page";
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
+import { WORKBENCH_TOOL_CONTEXT_METHOD, readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
 import type { WorkbenchTranscriptObservation } from "./database/transcript/workbench-transcript-types";
@@ -198,65 +199,254 @@ test("stats usage hydration reads Workbench journals without requesting provider
   }
 });
 
-test("generic failed-patch retries are declined without hiding real file-change approvals", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-file-approval-"));
-  const upstreamMessages: unknown[] = [];
-  const notifications: unknown[] = [];
-  const pendingUserInputRequests = new Map();
+for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload", "restart"] as const) {
+  test(`automatic patch recovery settles ${settlement} through the pending response owner`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-file-approval-"));
+    await fs.writeFile(path.join(root, "target.txt"), "new\n");
+    const upstreamMessages: JsonRpcRequest[] = [];
+    const notifications: Array<{ method?: string; params?: unknown }> = [];
+    const pendingUserInputRequests = new Map();
+    const metadata = { ...bridgeThread(), cwd: root, turns: [] };
+    const options: ConstructorParameters<typeof CodexStdioBridge>[0] = {
+      appServer: { send(message: JsonRpcRequest) {
+        upstreamMessages.push(message);
+        if (message.method === "thread/read" || message.method === "thread/turns/list") {
+          queueMicrotask(() => void bridge.handleUpstreamMessage({
+            id: message.id,
+            result: message.method === "thread/read" ? { thread: metadata } : { data: bridgeThread().turns },
+          }));
+        }
+      } } as unknown as CodexAppServer,
+      bridgeUrl: "ws://127.0.0.1:1",
+      handleWorkbenchRequest: rejectWorkbenchRequest,
+      initialState: {
+        initializeResult: {}, pendingResponses: new Map(), pendingUserInputRequests,
+        requestIdAllocator: { next: 100 }, upstreamInitialized: true,
+      },
+      onNotification(notification) { notifications.push(notification); },
+      resolveProjectFromCwd: async () => ({
+        cwd: root,
+        project: { id: "project", kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
+        root: { id: "root", name: "repo", root, rootPath: root },
+      }),
+      sendToClient() {}, storageRoot: root,
+    };
+    let bridge = new CodexStdioBridge(options);
+    try {
+      await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: metadata } });
+      await bridge.handleUpstreamMessage({ method: "turn/started", params: { threadId: "thread", turn: bridgeThread().turns[0] } });
+      await bridge.handleUpstreamMessage({ method: "item/started", params: {
+        threadId: "thread", turnId: "turn",
+        item: { id: "failed-patch", type: "fileChange", status: "inProgress", changes: [
+          { path: "target.txt", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-old\n+new\n" },
+        ] },
+      } });
+      await bridge.handleUpstreamMessage({
+        id: 10, method: "item/fileChange/requestApproval",
+        params: {
+          grantRoot: null, itemId: "failed-patch", reason: "command failed; retry without sandbox?",
+          startedAtMs: 1, threadId: "thread", turnId: "turn",
+        },
+      });
+      await bridge.waitForIdle();
+      const injection = upstreamMessages.find((message) => message.method === "thread/inject_items");
+      assert.ok(injection, "recovery must be injected before the approval is answered");
+      assert.equal(upstreamMessages.some((message) => message.id === 10), false);
+      const items = (injection.params as { items: Array<{ id: string; name: string; namespace: string; output: string; call_id?: string }> }).items;
+      assert.equal(items.length, 1);
+      assert.equal(items[0].name, "patch_recovery");
+      assert.equal(items[0].namespace, "workbench");
+      assert.equal(items[0].call_id, undefined);
+      assert.match(items[0].output, /target\.txt.*present/);
+      assert.equal(pendingUserInputRequests.size, 0);
+      if (settlement === "resolved") {
+        await bridge.handleUpstreamMessage({ method: "serverRequest/resolved", params: { threadId: "thread", requestId: 10 } });
+      } else if (settlement === "cancelled") {
+        await bridge.handleUpstreamMessage({ method: "turn/completed", params: {
+          threadId: "thread", turn: { ...bridgeThread().turns[0], status: "interrupted", items: [] },
+        } });
+      } else if (settlement === "reload" || settlement === "restart") {
+        const initialState = await bridge.detachForReload({ restartingAppServer: settlement === "restart" });
+        bridge = new CodexStdioBridge({ ...options, initialState });
+      }
+      await bridge.handleUpstreamMessage(settlement === "failed"
+        ? { id: injection.id, error: { code: -32000, message: "injection rejected" } }
+        : { id: injection.id, result: {} });
+      await bridge.waitForIdle();
+      const decisions = upstreamMessages.filter((message) => message.id === 10);
+      assert.equal(decisions.length, ["resolved", "cancelled", "restart"].includes(settlement) ? 0 : 1);
+      if (decisions.length) assert.deepEqual(decisions[0], { id: 10, result: { decision: "decline" } });
+      assert.equal(upstreamMessages.some((message) => message.method === "turn/steer" || message.method === "turn/start"), false);
+      const owner = bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore };
+      const stored = await owner.ensureTranscriptStore().readStoredThreadWindow("thread", ["turn"]);
+      const patch = stored?.turns[0]?.items.find((item) => item.id === "failed-patch") as WorkbenchFileChangeItem;
+      assert.equal(patch.workbenchPolicy, "automaticEscalation");
+      assert.equal(patch.changes[0]?.workbenchAnalysis?.outcome, "present");
+      assert.equal(patch.workbenchRecovery?.state, settlement === "failed" || settlement === "restart" ? "failed" : "queued");
+
+      const before = upstreamMessages.length;
+      await bridge.handleUpstreamMessage({
+        id: 11, method: "item/fileChange/requestApproval",
+        params: {
+          grantRoot: "C:/outside", itemId: "real-permission-request", reason: "write outside the workspace",
+          startedAtMs: 2, threadId: "thread", turnId: "turn",
+        },
+      });
+      assert.equal(upstreamMessages.length, before);
+      assert.equal(pendingUserInputRequests.size, 1);
+      assert.equal(notifications.at(-1)?.method, "questionnaire/requested");
+    } finally {
+      await bridge.dispose();
+      await fs.rm(root, { force: true, recursive: true });
+    }
+  });
+}
+
+for (const origin of ["active", "idle", "changed", "failed"] as const) {
+  test(`passive screenshot context handles ${origin} origin without user input or a new turn`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-passive-context-"));
+    const requests: JsonRpcRequest[] = [];
+    const facts: WorkbenchTranscriptObservation[] = [];
+    const visible: unknown[] = [];
+    const metadata = { ...bridgeThread(), turns: [], status: origin === "idle" ? { type: "idle" as const } : bridgeThread().status };
+    const bridge = new CodexStdioBridge({
+      appServer: { send(message: JsonRpcRequest) {
+        requests.push(message);
+        if (message.method === "thread/read" || message.method === "thread/turns/list") {
+          queueMicrotask(() => void bridge.handleUpstreamMessage({ id: message.id, result: message.method === "thread/read"
+            ? { thread: metadata }
+            : { data: [{ ...bridgeThread().turns[0], id: origin === "changed" ? "new-turn" : "turn" }] },
+          }));
+        }
+      } } as unknown as CodexAppServer,
+      bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+      onNotification(message) { visible.push(message); },
+      recordSqliteTranscript: async (batch) => { facts.push(...batch); },
+      resolveProjectFromCwd: async () => ({
+        cwd: "C:/repo", project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+        root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+      }),
+      sendToClient() {}, storageRoot: root,
+    });
+    try {
+      await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: metadata } });
+      await bridge.handleUpstreamMessage({ method: "turn/started", params: { threadId: "thread", turn: bridgeThread().turns[0] } });
+      await bridge.waitForIdle();
+      const before = visible.length;
+      const output = { name: "screenshot", namespace: "workbench", output: [
+        { type: "input_image" as const, image_url: "data:image/png;base64,aGVsbG8=" },
+      ] };
+      const delivery = bridge.handleServerRequest({ id: "screenshot", method: WORKBENCH_TOOL_CONTEXT_METHOD, params: {
+        threadId: "thread", expectedTurnId: "turn", toolOutput: output,
+      } });
+      await bridge.waitForIdle();
+      assert.equal(visible.length, before, "nothing is admitted before acknowledgement");
+      const injection = requests.find(({ method }) => method === "thread/inject_items");
+      if (origin === "idle" || origin === "changed") {
+        assert.equal(injection, undefined);
+        assert.ok((await delivery).error);
+      } else {
+        assert.ok(injection);
+        const submitted = (injection.params as { items: Array<{ id: string }> }).items[0];
+        assert.ok(submitted.id);
+        await bridge.handleUpstreamMessage(origin === "failed"
+          ? { id: injection.id, error: { code: -32000, message: "rejected" } }
+          : { id: injection.id, result: {} });
+        const response = await delivery;
+        if (origin === "failed") {
+          assert.ok(response.error);
+          assert.equal(visible.length, before);
+        } else {
+          assert.equal(response.error, undefined);
+          const accepted = facts.flatMap((fact) => fact.kind === "item" ? [readWorkbenchToolOutput(fact.item)] : []).find(Boolean)!;
+          assert.equal(accepted.id, submitted.id);
+          assert.equal(typeof accepted.workbenchInjectionAcceptedAt, "number");
+          assert.ok(Array.isArray(accepted.output));
+          await bridge.handleUpstreamMessage({ method: "item/completed", params: {
+            threadId: "thread", turnId: "turn", item: { ...output, id: submitted.id, type: "functionCallOutput" },
+          } });
+          await bridge.waitForIdle();
+          const echo = facts.flatMap((fact) => fact.kind === "item" ? [readWorkbenchToolOutput(fact.item)] : []).filter(Boolean).at(-1)!;
+          assert.deepEqual(echo.output, accepted.output, "inline provider echoes must use the same asset identity before persistence merging");
+          const owner = bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore };
+          const stored = await owner.ensureTranscriptStore().readStoredThreadWindow("thread", ["turn"]);
+          const outputs = stored?.turns[0].items.filter((item) => item.type === "functionCallOutput") ?? [];
+          assert.equal(outputs.length, 1);
+          assert.equal(readWorkbenchToolOutput(outputs[0])?.workbenchInjectionAcceptedAt, accepted.workbenchInjectionAcceptedAt);
+        }
+      }
+      assert.equal(requests.some(({ method }) => method === "turn/steer" || method === "turn/start"), false);
+    } finally {
+      await bridge.dispose();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("stopping before passive-context preparation dispatches no provider work", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-stop-context-"));
+  const requests: JsonRpcRequest[] = [];
   const bridge = new CodexStdioBridge({
-    appServer: { send(message: unknown) { upstreamMessages.push(message); } } as unknown as CodexAppServer,
-    bridgeUrl: "ws://127.0.0.1:1",
-    handleWorkbenchRequest: rejectWorkbenchRequest,
-    initialState: {
-      initializeResult: {},
-      pendingResponses: new Map(),
-      pendingUserInputRequests,
-      requestIdAllocator: { next: 1 },
-      upstreamInitialized: true,
-    },
-    onNotification(notification) { notifications.push(notification); },
-    resolveProjectFromCwd: async () => null,
-    sendToClient() {},
-    storageRoot: root,
+    appServer: { send(message: JsonRpcRequest) {
+      requests.push(message);
+      throw new Error("Provider is stopped.");
+    } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null, storageRoot: root,
   });
   try {
-    await bridge.handleUpstreamMessage({
-      id: 10,
-      method: "item/fileChange/requestApproval",
-      params: {
-        grantRoot: null,
-        itemId: "failed-patch",
-        reason: "command failed; retry without sandbox?",
-        startedAtMs: 1,
-        threadId: "thread",
-        turnId: "turn",
+    const delivery = bridge.handleServerRequest({
+      method: WORKBENCH_TOOL_CONTEXT_METHOD, params: {
+        threadId: "thread", expectedTurnId: "turn",
+        toolOutput: { name: "screenshot", namespace: "workbench", output: "capture" },
       },
     });
-    assert.deepEqual(upstreamMessages, [{ id: 10, result: { decision: "decline" } }]);
-    assert.equal(pendingUserInputRequests.size, 0);
-    assert.deepEqual(notifications, []);
+    bridge.beginStopping();
+    assert.ok((await delivery).error);
+    await bridge.waitForIdle();
+    assert.deepEqual(requests, []);
+  } finally {
+    await bridge.disposeImmediately();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
-    await bridge.handleUpstreamMessage({
-      id: 11,
-      method: "item/fileChange/requestApproval",
-      params: {
-        grantRoot: "C:/outside",
-        itemId: "real-permission-request",
-        reason: "write outside the workspace",
-        startedAtMs: 2,
-        threadId: "thread",
-        turnId: "turn",
-      },
-    });
-    assert.equal(upstreamMessages.length, 1);
-    assert.equal(pendingUserInputRequests.size, 1);
-    assert.equal(
-      (notifications[0] as { method?: string } | undefined)?.method,
-      "questionnaire/requested",
-    );
+test("ordinary failed patches receive current-file findings without automatic rejection attribution", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-terminal-patch-"));
+  await fs.writeFile(path.join(root, "target"), "new\n");
+  const requests: JsonRpcRequest[] = [];
+  const metadata = { ...bridgeThread(), cwd: root, turns: [] };
+  const bridge = new CodexStdioBridge({
+    appServer: { send(message: JsonRpcRequest) {
+      requests.push(message);
+      queueMicrotask(() => void bridge.handleUpstreamMessage({ id: message.id, result: { thread: metadata } }));
+    } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {}, sendToClient() {}, storageRoot: root,
+    resolveProjectFromCwd: async () => ({
+      cwd: root, project: { id: "project", kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
+      root: { id: "root", name: "repo", root, rootPath: root },
+    }),
+  });
+  try {
+    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: metadata } });
+    await bridge.handleUpstreamMessage({ method: "turn/started", params: { threadId: "thread", turn: bridgeThread().turns[0] } });
+    await bridge.handleUpstreamMessage({ method: "item/completed", params: { threadId: "thread", turnId: "turn", item: {
+      id: "patch", type: "fileChange", status: "failed", changes: [
+        { path: "target", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-old\n+new\n" },
+      ],
+    } } });
+    await bridge.waitForIdle();
+    const owner = bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore };
+    const stored = await owner.ensureTranscriptStore().readStoredThreadWindow("thread", ["turn"]);
+    const item = stored?.turns[0].items[0] as WorkbenchFileChangeItem;
+    assert.equal(item.changes[0].workbenchAnalysis?.outcome, "present");
+    assert.equal(item.workbenchPolicy, undefined);
+    assert.equal(item.workbenchRecovery, undefined);
+    assert.equal(requests.some(({ method }) => method !== "thread/read"), false);
   } finally {
     await bridge.dispose();
-    await fs.rm(root, { force: true, recursive: true });
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 
@@ -1953,7 +2143,7 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
       },
     });
     const completedState = await bridge.detachForReload();
-    assert.equal(completedState.fileChangeTurnCursors?.size, 0);
+    assert.equal(completedState.fileChanges?.turnCursors.size, 0);
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
@@ -2483,6 +2673,8 @@ test("managed admission steers a provider-confirmed active turn without changing
           ? { data: [activeTurn], nextCursor: null }
         : message.method === "turn/steer"
           ? { turnId: "turn" }
+          : message.method === "turn/start"
+            ? { turn: activeTurn }
           : null;
       queueMicrotask(() => {
         void bridge.handleUpstreamMessage(result
@@ -2497,6 +2689,10 @@ test("managed admission steers a provider-confirmed active turn without changing
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onAcceptedTurnSteer: (threadId) => { acceptedSteers.push(threadId); },
     onNotification() {},
+    instructions: {
+      augment: async (message) => message,
+      createThreadResume: (params) => ({ method: "thread/resume", params }),
+    },
     prepareThreadConfiguration: async () => { throw new Error("Active steers must not prepare a new profile."); },
     prepareTurnStart: async () => { prepared = true; },
     resolveProjectFromCwd: async () => null,
@@ -2568,6 +2764,16 @@ test("managed admission steers a provider-confirmed active turn without changing
       upstreamRequests.slice(startOnlyOffset).map(({ method }) => method),
       ["thread/read", "thread/turns/list"],
     );
+    const toolOutput = { name: "agent_message", namespace: "workbench", output: "agent information" };
+    const outputOffset = upstreamRequests.length;
+    const outputResponse = await bridge.handleServerRequest({
+      id: 722, method: "turn/start", params: { input: [], threadId: "thread", toolOutput },
+    });
+    assert.equal(outputResponse.error, undefined);
+    assert.deepEqual(upstreamRequests.slice(outputOffset).map(({ method }) => method), ["thread/read", "turn/start"]);
+    assert.deepEqual((upstreamRequests.at(-1)?.params as { toolOutput?: object }).toolOutput, toolOutput);
+    assert.equal(prepared, false);
+    assert.deepEqual(acceptedSteers, ["thread"], "agent information must not interrupt user-steer waits");
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();

@@ -155,7 +155,7 @@ export interface OrchestratorTranscriptRegistration {
   subscribe(subscription: {
     id: string;
     request: { threadId: string; turnIds?: string[]; turnLimit: number };
-    publish(snapshot: object | null): void | Promise<void>;
+    publish(snapshot: WorkbenchTranscriptSnapshot | null): void | Promise<void>;
   }): Promise<void>;
   unsubscribe(id: string): void;
 }

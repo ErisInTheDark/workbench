@@ -1,4 +1,5 @@
 /*
+ * Keywords: canonical message, file change, typed patch findings, transform.
  * transformCoreTranscriptItem: convert visible message, reasoning, plan, file-change, compaction, and unknown items to relational mutations. Keywords: transcript, transform, canonical item.
  */
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
@@ -170,9 +171,12 @@ export function transformCoreTranscriptItem(
           state: item.status,
           error_text: null,
           workbench_failure_kind: workbenchItem.workbenchFailureKind ?? null,
+          workbench_policy: workbenchItem.workbenchPolicy ?? null,
+          recovery_state: workbenchItem.workbenchRecovery?.state ?? null,
+          recovery_detail: workbenchItem.workbenchRecovery?.detail ?? null,
         }, {
           conflictColumns: ["item_id"],
-          updateColumns: ["state", "error_text", "workbench_failure_kind"],
+          updateColumns: ["state", "error_text", "workbench_failure_kind", "workbench_policy", "recovery_state", "recovery_detail"],
         }),
         ...workbenchItem.changes.map((change, changeIndex) => insertRow(itemTables.threadFileChanges, {
           item_id: itemId,
@@ -183,7 +187,21 @@ export function transformCoreTranscriptItem(
           move_path: change.kind.type === "update" ? change.kind.move_path : null,
           workbench_additions: change.workbenchAdditions ?? null,
           workbench_deletions: change.workbenchDeletions ?? null,
+          analysis_outcome: change.workbenchAnalysis?.outcome ?? null,
+          analysis_detail: change.workbenchAnalysis?.detail ?? null,
+          analysis_additions: change.workbenchAnalysis?.additions ?? null,
+          analysis_deletions: change.workbenchAnalysis?.deletions ?? null,
         })),
+        ...workbenchItem.changes.flatMap((change, changeIndex) => (change.workbenchAnalysis?.hunks ?? []).flatMap((hunk) => [
+          insertRow(itemTables.threadFileChangeHunks, {
+            item_id: itemId, change_index: changeIndex, hunk_index: hunk.index,
+            outcome: hunk.outcome, reason: hunk.reason, additions: hunk.additions, deletions: hunk.deletions,
+            current_start: hunk.currentStart, current_end: hunk.currentEnd, old_start: hunk.oldStart, new_start: hunk.newStart,
+          }),
+          ...hunk.candidates.map((line, candidateIndex) => insertRow(itemTables.threadFileChangeCandidates, {
+            item_id: itemId, change_index: changeIndex, hunk_index: hunk.index, candidate_index: candidateIndex, current_line: line,
+          })),
+        ])),
       ],
     };
   }

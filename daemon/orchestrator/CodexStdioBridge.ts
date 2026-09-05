@@ -4,7 +4,7 @@
  * - CodexStdioBridgeReloadState: transferable bridge state preserved across code-only reload. Keywords: codex, reload, state.
  * - default CodexStdioBridge: translate websocket requests, questionnaires, and Codex app-server messages around a stable app-server process. Keywords: codex, stdio, websocket, questionnaire, bridge.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -43,11 +43,16 @@ import type {
 } from "workbench-shared/types";
 import type { resolveAgentEndpointProjectFromCwd } from "../lib/workbench/project/agent-endpoint-project";
 import {
-  getWorkbenchFileChangeFailureKey,
   readWorkbenchFileChangeFailureMarker,
-  withWorkbenchFileChangeFailure,
   type WorkbenchFileChangeFailureMarker,
+  type WorkbenchFileChangeItem,
 } from "workbench-shared/workbench/thread/workbench-file-change";
+import {
+  WORKBENCH_TOOL_CONTEXT_METHOD,
+  readWorkbenchToolOutput,
+  type WorkbenchToolOutput,
+} from "workbench-shared/workbench/thread/thread-tool-output";
+import CodexFileChangeController, { type CodexFileChangeState } from "./CodexFileChangeController";
 import {
   readWorkbenchThreadPageNextCursor,
   WORKBENCH_THREAD_PAGE_READ_METHOD,
@@ -109,6 +114,7 @@ type CodexTranscriptStoreConstructor = new (
   projectRoot: string,
   getProtectedThreadIds?: () => Iterable<string>,
   transcriptShadowLog?: OrchestratorTranscriptShadowLog,
+  getRuntimeUserAgent?: () => string | null,
 ) => CodexTranscriptStoreInstance;
 
 type PendingClientResponse = {
@@ -129,6 +135,12 @@ type PendingInternalResponse = {
   resolve: (value: JsonRpcResponse) => void;
   threadHydration: WorkbenchThreadHydrationRequest | null;
   upstreamRequest: JsonRpcRequest;
+  toolContext?: {
+    threadId: string;
+    turnId: string;
+    item: WorkbenchToolOutput;
+    patch?: { itemId: string; approvalId: number | string | null };
+  };
 };
 
 type PendingResponse = PendingClientResponse | PendingInternalResponse;
@@ -189,6 +201,7 @@ type RequestIdAllocator = {
 };
 
 export type CodexStdioBridgeReloadState = {
+  fileChanges?: CodexFileChangeState;
   fileChangeFailureMarkers?: Map<string, WorkbenchFileChangeFailureMarker>;
   fileChangeTurnCursors?: Map<string, string>;
   initializeResult: unknown;
@@ -205,13 +218,6 @@ export type CodexStdioBridgeReloadState = {
 type CodexTranscriptThreadContext = CodexTranscriptProviderContext;
 
 type CodexSqliteTranscriptObservation = WorkbenchTranscriptObservation;
-
-const MAX_FILE_CHANGE_FAILURE_MARKERS = 2_048;
-const MAX_FILE_CHANGE_TURN_CURSORS = 2_048;
-
-function fileChangeTurnKey(threadId: string, turnId: string) {
-  return `${threadId}\0${turnId}`;
-}
 
 function threadPageReadKey(message: JsonRpcRequest) {
   const params = WorkbenchThreadPageReadParamsSchema.parse(message.params);
@@ -901,8 +907,7 @@ function loadCodexTranscriptStore({ reload = false }: { reload?: boolean } = {})
 export default class CodexStdioBridge {
   private readonly appServer: CodexAppServer;
   private readonly bridgeUrl: string;
-  private readonly fileChangeFailureMarkers: Map<string, WorkbenchFileChangeFailureMarker>;
-  private readonly fileChangeTurnCursors: Map<string, string>;
+  private readonly fileChanges: CodexFileChangeController;
   private readonly onAcceptedTurnSteer: NonNullable<CodexStdioBridgeOptions["onAcceptedTurnSteer"]>;
   private readonly onNotification: CodexStdioBridgeOptions["onNotification"];
   private readonly prepareTurnStart: NonNullable<CodexStdioBridgeOptions["prepareTurnStart"]>;
@@ -969,8 +974,10 @@ export default class CodexStdioBridge {
       if (!dispatch.response) throw new Error(`${request.method ?? "Codex request"} did not create an internal response.`);
       return await dispatch.response;
     });
-    this.fileChangeFailureMarkers = initialState?.fileChangeFailureMarkers ?? new Map();
-    this.fileChangeTurnCursors = initialState?.fileChangeTurnCursors ?? new Map();
+    this.fileChanges = new CodexFileChangeController(initialState?.fileChanges ?? {
+      items: initialState?.fileChangeFailureMarkers ?? new Map(),
+      turnCursors: initialState?.fileChangeTurnCursors ?? new Map(),
+    });
     this.initializeResult = initialState?.initializeResult ?? null;
     this.pendingResponses = initialState?.pendingResponses ?? new Map();
     this.pendingUserInputRequests = initialState?.pendingUserInputRequests ?? new Map();
@@ -1011,8 +1018,7 @@ export default class CodexStdioBridge {
   stop() {
     this.beginStopping();
     clearInterval(this.transcriptInstrumentationTimer);
-    this.fileChangeFailureMarkers.clear();
-    this.fileChangeTurnCursors.clear();
+    this.fileChanges.clear();
     this.transcriptSteers.clear();
   }
 
@@ -1035,6 +1041,7 @@ export default class CodexStdioBridge {
     await this.threadPageReads.waitForIdle();
     await this.waitForIdle();
     this.stop();
+    await this.waitForIdle();
   }
 
   async prepareForReload(options: CodexStdioBridgeReloadOptions = {}) {
@@ -1073,16 +1080,16 @@ export default class CodexStdioBridge {
     }
     this.acceptingWork = false;
     clearInterval(this.transcriptInstrumentationTimer);
+    if (options.restartingAppServer) {
+      this.resetUpstreamState("Codex app-server restarted before the upstream response arrived.");
+      await this.waitForIdle();
+    }
     if (this.transcriptStore) {
       await this.transcriptStore.dispose();
       this.transcriptStore = null;
     }
-    if (options.restartingAppServer) {
-      this.resetUpstreamState("Codex app-server restarted before the upstream response arrived.");
-    }
     return {
-      fileChangeFailureMarkers: this.fileChangeFailureMarkers,
-      fileChangeTurnCursors: this.fileChangeTurnCursors,
+      fileChanges: this.fileChanges.state,
       initializeResult: this.initializeResult,
       pendingResponses: this.pendingResponses,
       pendingUserInputRequests: this.pendingUserInputRequests,
@@ -1100,7 +1107,13 @@ export default class CodexStdioBridge {
     this.transcriptActiveTurns.clear();
     this.unmaterializedThreadIds.clear();
     for (const pending of this.pendingResponses.values()) {
-      if (isPendingInternalResponse(pending)) pending.reject(new Error(reason));
+      if (!isPendingInternalResponse(pending)) continue;
+      if (pending.toolContext) {
+        if (pending.toolContext.patch) pending.toolContext.patch.approvalId = null;
+        void this.settleToolContext(pending, {
+          id: pending.upstreamRequest.id ?? null, error: { code: -32000, message: reason },
+        }).then(pending.resolve);
+      } else pending.reject(new Error(reason));
     }
     this.pendingResponses.clear();
     this.initializeResult = null;
@@ -1112,6 +1125,7 @@ export default class CodexStdioBridge {
   async disposeImmediately() {
     this.threadPageReads.beginDrain();
     this.stop();
+    await this.waitForIdle();
     if (this.transcriptStore) {
       await this.transcriptStore.dispose();
       this.transcriptStore = null;
@@ -1195,6 +1209,20 @@ export default class CodexStdioBridge {
   }
 
   async handleBridgeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+    if (message.method === WORKBENCH_TOOL_CONTEXT_METHOD) {
+      this.assertAcceptingWork();
+      const params = asRecord(message.params);
+      const threadId = asString(params?.threadId)?.trim();
+      const turnId = asString(params?.expectedTurnId)?.trim();
+      const item = readWorkbenchToolOutput({
+        ...asRecord(params?.toolOutput), id: randomUUID(), type: "functionCallOutput",
+      });
+      if (!threadId || !turnId || !item) {
+        return { id: message.id ?? null, error: { code: -32602, message: "Passive context requires a thread, originating turn and supported tool output." } };
+      }
+      const response = await this.queueToolContext({ threadId, turnId, item });
+      return { ...response, id: message.id ?? null };
+    }
     if (message.method === "workbench/codex/message/admit") {
       return await this.enqueueCommand(() => this.handleManagedMessageAdmission(message));
     }
@@ -1547,128 +1575,6 @@ export default class CodexStdioBridge {
     return requestId;
   }
 
-  private recordFileChangeFailure(marker: WorkbenchFileChangeFailureMarker) {
-    const key = getWorkbenchFileChangeFailureKey({
-      itemId: marker.item.id,
-      threadId: marker.threadId,
-      turnId: marker.turnId,
-    });
-    if (this.fileChangeFailureMarkers.has(key)) return false;
-    this.fileChangeFailureMarkers.set(key, {
-      ...marker,
-      insertAfterItemId: this.fileChangeTurnCursors.get(fileChangeTurnKey(marker.threadId, marker.turnId)) ?? null,
-    });
-    while (this.fileChangeFailureMarkers.size > MAX_FILE_CHANGE_FAILURE_MARKERS) {
-      const oldestKey = this.fileChangeFailureMarkers.keys().next().value as string | undefined;
-      if (oldestKey === undefined) break;
-      this.fileChangeFailureMarkers.delete(oldestKey);
-    }
-    return true;
-  }
-
-  private recordFileChangeTurnCursor(value: unknown) {
-    const params = asRecord(value);
-    const item = asRecord(params?.item);
-    const itemId = asString(item?.id);
-    const threadId = asString(params?.threadId);
-    const turnId = asString(params?.turnId);
-    if (!itemId || !threadId || !turnId) return;
-    const key = fileChangeTurnKey(threadId, turnId);
-    this.fileChangeTurnCursors.delete(key);
-    this.fileChangeTurnCursors.set(key, itemId);
-    while (this.fileChangeTurnCursors.size > MAX_FILE_CHANGE_TURN_CURSORS) {
-      const oldestKey = this.fileChangeTurnCursors.keys().next().value as string | undefined;
-      if (oldestKey === undefined) break;
-      this.fileChangeTurnCursors.delete(oldestKey);
-    }
-  }
-
-  private clearFileChangeTurnCursor(value: unknown) {
-    const params = asRecord(value);
-    const turn = asRecord(params?.turn);
-    const threadId = asString(params?.threadId);
-    const turnId = asString(turn?.id);
-    if (threadId && turnId) this.fileChangeTurnCursors.delete(fileChangeTurnKey(threadId, turnId));
-  }
-
-  private withFileChangeFailurePresentation<TMessage extends JsonRpcNotification | JsonRpcResponse>(message: TMessage): TMessage {
-    if ("method" in message && message.method === "item/completed") {
-      const params = asRecord(message.params);
-      const item = asRecord(params?.item);
-      if (item?.type !== "fileChange" || item.status !== "failed") return message;
-      const threadId = asString(params?.threadId);
-      const turnId = asString(params?.turnId);
-      const itemId = asString(item.id);
-      if (!threadId || !turnId || !itemId) return message;
-      const marker = this.fileChangeFailureMarkers.get(getWorkbenchFileChangeFailureKey({ itemId, threadId, turnId }));
-      if (!marker) return message;
-      return {
-        ...message,
-        params: {
-          ...params,
-          item: withWorkbenchFileChangeFailure(item as Extract<ThreadItem, { type: "fileChange" }>, "unclaimed"),
-        },
-      } as TMessage;
-    }
-
-    if (!("result" in message)) return message;
-    const result = asRecord(message.result);
-    const thread = asRecord(result?.thread) as Thread | null;
-    if (!thread?.id) return message;
-    const markersByTurnId = new Map<string, WorkbenchFileChangeFailureMarker[]>();
-    for (const marker of this.fileChangeFailureMarkers.values()) {
-      if (marker.threadId !== thread.id) continue;
-      const turnMarkers = markersByTurnId.get(marker.turnId) ?? [];
-      turnMarkers.push(marker);
-      markersByTurnId.set(marker.turnId, turnMarkers);
-    }
-    if (!markersByTurnId.size) return message;
-    let threadChanged = false;
-    const turns = thread.turns.map((turn) => {
-      const turnMarkers = markersByTurnId.get(turn.id);
-      if (!turnMarkers?.length) return turn;
-      const markerByItemId = new Map(turnMarkers.map((marker) => [marker.item.id, marker]));
-      let turnChanged = false;
-      const items = turn.items.map((item) => {
-        const marker = markerByItemId.get(item.id);
-        if (!marker || item.type !== "fileChange" || item.status !== "failed") return item;
-        turnChanged = true;
-        threadChanged = true;
-        return withWorkbenchFileChangeFailure(item, "unclaimed");
-      });
-      const existingItemIds = new Set(items.map((item) => item.id));
-      const missingMarkers = turnMarkers.filter((marker) => !existingItemIds.has(marker.item.id));
-      if (missingMarkers.length) {
-        const markersByAnchor = new Map<string | null, WorkbenchFileChangeFailureMarker[]>();
-        const orphanedMarkers: WorkbenchFileChangeFailureMarker[] = [];
-        for (const marker of missingMarkers) {
-          if (marker.insertAfterItemId !== null && !existingItemIds.has(marker.insertAfterItemId)) {
-            orphanedMarkers.push(marker);
-            continue;
-          }
-          const anchoredMarkers = markersByAnchor.get(marker.insertAfterItemId) ?? [];
-          anchoredMarkers.push(marker);
-          markersByAnchor.set(marker.insertAfterItemId, anchoredMarkers);
-        }
-        const orderedItems: ThreadItem[] = [
-          ...(markersByAnchor.get(null) ?? []).map((marker) => marker.item),
-        ];
-        for (const item of items) {
-          orderedItems.push(item);
-          orderedItems.push(...(markersByAnchor.get(item.id) ?? []).map((marker) => marker.item));
-        }
-        orderedItems.push(...orphanedMarkers.map((marker) => marker.item));
-        items.splice(0, items.length, ...orderedItems);
-        turnChanged = true;
-        threadChanged = true;
-      }
-      return turnChanged ? { ...turn, items } : turn;
-    });
-    return threadChanged
-      ? { ...message, result: { ...result, thread: { ...thread, turns } } } as TMessage
-      : message;
-  }
-
   private assertAcceptingWork() {
     if (!this.acceptingWork) {
       throw new Error("Codex bridge is reloading.");
@@ -1678,6 +1584,178 @@ export default class CodexStdioBridge {
   private send(message: unknown) {
     this.assertAcceptingWork();
     this.appServer.send(message);
+  }
+
+  private queueToolContext(context: NonNullable<PendingInternalResponse["toolContext"]>) {
+    const id = this.nextUpstreamRequestId();
+    let pending!: PendingInternalResponse;
+    const response = new Promise<JsonRpcResponse>((resolve, reject) => {
+      pending = {
+        internal: true, method: "thread/inject_items", requestSource: "internal",
+        resolve, reject, threadHydration: null, toolContext: context,
+        upstreamRequest: { id, method: "thread/inject_items", params: { threadId: context.threadId, items: [] } },
+      };
+      // Register before filesystem work: resolution can arrive while analysis is still preparing.
+      this.pendingResponses.set(id, pending);
+    });
+    void this.enqueueCommand(async () => {
+      try {
+        await this.prepareToolContext(pending);
+      } catch (error) {
+        if (this.pendingResponses.get(id) !== pending) return;
+        this.pendingResponses.delete(id);
+        pending.resolve(await this.settleToolContext(pending, {
+          id, error: { code: -32000, message: sanitizeTranscriptErrorMessage(error) },
+        }));
+      }
+    });
+    return response;
+  }
+
+  private async prepareToolContext(pending: PendingInternalResponse) {
+    const context = pending.toolContext!;
+    const { threadId, turnId, patch } = context;
+    const read = await this.dispatchManagedProviderRequest({
+      method: "thread/read", params: { threadId, includeTurns: false },
+    });
+    if (read.error) throw new Error(getJsonRpcErrorMessage(read) ?? "Could not read the originating thread.");
+    const thread = asRecord(read.result)?.thread as Thread | undefined;
+    if (!thread || thread.id !== threadId) throw new Error("Passive context could not read its originating thread.");
+    if (patch) {
+      const attempt = this.fileChanges.get(threadId, turnId, patch.itemId)?.item ?? {
+        id: patch.itemId, type: "fileChange" as const, status: "failed" as const, changes: [],
+      };
+      const resolution = await this.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex patch recovery" });
+      const findings = await this.fileChanges.analyse({
+        cwd: thread.cwd, roots: resolution?.project.roots.map((root) => root.rootPath) ?? [],
+        threadId, turnId, item: { ...attempt, status: "failed", workbenchPolicy: "automaticEscalation" },
+      });
+      context.item = {
+        ...context.item,
+        output: findings.recoveryText + (attempt.changes.length ? "" : "\nAttempted changes were unavailable. Re-read all intended targets before repairing anything."),
+      };
+      await this.recordPatchFindings(threadId, turnId, findings.item);
+    }
+    if (!isThreadStatusActive(thread.status)) throw new Error("Passive context requires an active originating turn; no turn was started.");
+    const turns = await this.dispatchManagedProviderRequest({
+      method: "thread/turns/list",
+      params: { threadId, itemsView: "notLoaded", limit: 1, sortDirection: "desc" },
+    });
+    if (turns.error) throw new Error(getJsonRpcErrorMessage(turns) ?? "Could not read the active turn.");
+    const data = asRecord(turns.result)?.data;
+    const active = Array.isArray(data) ? this.readManagedActiveTurn(thread, data as Turn[]) : null;
+    if (active?.id !== turnId) throw new Error("The originating turn is no longer active; passive context was not sent.");
+    if (this.pendingResponses.get(Number(pending.upstreamRequest.id)) !== pending) return;
+    if (patch && patch.approvalId === null) throw new Error("The patch approval resolved before recovery context could be queued.");
+    this.assertAcceptingWork();
+    const { id, name, namespace, output } = context.item;
+    pending.upstreamRequest = {
+      ...pending.upstreamRequest,
+      params: { threadId, items: [{ type: "function_call_output", id, name, namespace, output }] },
+    };
+    await this.captureTranscript("client-request:thread/inject_items", () => (
+      this.ensureTranscriptStore().recordClientRequest(pending.upstreamRequest, undefined, turnId)
+    ), { propagateFailure: true });
+    this.send(pending.upstreamRequest);
+  }
+
+  private async recordPatchFindings(threadId: string, turnId: string, item: WorkbenchFileChangeItem) {
+    this.fileChanges.remember(threadId, turnId, item);
+    this.onNotification({ method: "item/completed", params: { threadId, turnId, item } });
+    await this.captureTranscript("workbench:patch/findings", () => this.transcriptRecording.recordWorkbenchMutation({
+      observations: [createCodexTranscriptProviderItemObservation({
+        threadId, turnId, item, lifecycle: "completed", observedAt: Date.now(),
+      })],
+      recordLegacy: () => this.ensureTranscriptStore().recordWorkbenchFileChange(threadId, turnId, item),
+    }), { propagateFailure: true });
+  }
+
+  private async analyseFailedPatch(threadId: string, turnId: string, item: WorkbenchFileChangeItem) {
+    try {
+      const response = await this.dispatchManagedProviderRequest({
+        method: "thread/read", params: { threadId, includeTurns: false },
+      });
+      const thread = asRecord(response.result)?.thread as Thread | undefined;
+      if (response.error || thread?.id !== threadId) {
+        throw new Error(getJsonRpcErrorMessage(response) ?? "Failed patch has no readable originating thread.");
+      }
+      const resolution = await this.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex patch findings" });
+      const findings = await this.fileChanges.analyse({
+        cwd: thread.cwd, roots: resolution?.project.roots.map((root) => root.rootPath) ?? [],
+        threadId, turnId, item,
+      });
+      await this.recordPatchFindings(threadId, turnId, findings.item);
+    } catch (failure) {
+      const detail = sanitizeTranscriptErrorMessage(failure);
+      logError("codex-patch-findings", detail);
+      await this.recordPatchFindings(threadId, turnId, {
+        ...item, changes: item.changes.map((change) => ({
+          ...change,
+          workbenchAnalysis: { outcome: "uncertain", detail, additions: 0, deletions: 0, hunks: [] },
+        })),
+      });
+    }
+  }
+
+  private async settleToolContext(pending: PendingInternalResponse, response: JsonRpcResponse): Promise<JsonRpcResponse> {
+    const { threadId, turnId, item, patch } = pending.toolContext!;
+    const acceptedAt = Date.now();
+    const error = response.error
+      ? sanitizeTranscriptErrorMessage(new Error(getJsonRpcErrorMessage(response) ?? "Passive context injection failed.")).slice(0, 500)
+      : null;
+    // Capture the patch before stop clears in-memory attempts. Persistence stays on the transcript queue.
+    const attempt = patch ? this.fileChanges.get(threadId, turnId, patch.itemId)?.item : null;
+    try {
+      if (error) logError("codex-tool-context", error);
+      const finding = patch ? {
+        ...(attempt ?? { id: patch.itemId, type: "fileChange" as const, changes: [] }),
+        status: "failed" as const, workbenchPolicy: "automaticEscalation" as const,
+        workbenchRecovery: { state: error ? "failed" as const : "queued" as const, detail: error },
+      } : null;
+      // Queue synchronously so shutdown's transcript drain includes these facts.
+      const patchRecording = finding ? this.recordPatchFindings(threadId, turnId, finding) : null;
+      const contextRecording = this.captureTranscript("upstream-response:thread/inject_items", async () => {
+        const store = this.ensureTranscriptStore();
+        await store.recordUpstreamResponse(pending.upstreamRequest, response, turnId);
+        if (error || patch) return;
+        const accepted = (await store.externalizeInlineImages(threadId, {
+          ...item, workbenchInjectionAcceptedAt: acceptedAt,
+        })).value;
+        await this.transcriptRecording.recordWorkbenchMutation({
+          observations: [createCodexTranscriptProviderItemObservation({
+            threadId, turnId, item: accepted, lifecycle: "completed", observedAt: acceptedAt,
+          })],
+          recordLegacy: async () => { await store.recordWorkbenchToolContext(threadId, turnId, accepted); },
+        });
+        this.onNotification({ method: "item/completed", params: { threadId, turnId, item: accepted } });
+      }, { propagateFailure: true });
+      await Promise.all([patchRecording, contextRecording]);
+      return error ? response : { id: response.id, result: { acceptedAt, itemId: item.id, turnId } };
+    } catch (failure) {
+      const detail = sanitizeTranscriptErrorMessage(failure);
+      logError("codex-tool-context", detail);
+      if (patch) {
+        const failed: WorkbenchFileChangeItem = {
+          ...(attempt ?? { id: patch.itemId, type: "fileChange", changes: [] }),
+          status: "failed", workbenchPolicy: "automaticEscalation",
+          workbenchRecovery: { state: "failed", detail },
+        };
+        // The transcript boundary reports persistence failure; retain visible failure even if disk is unavailable.
+        this.fileChanges.remember(threadId, turnId, failed);
+        this.onNotification({ method: "item/completed", params: { threadId, turnId, item: failed } });
+      }
+      return { id: response.id, error: { code: -32000, message: detail } };
+    } finally {
+      if (patch?.approvalId !== null && patch?.approvalId !== undefined) {
+        const approvalId = patch.approvalId;
+        patch.approvalId = null;
+        try {
+          this.send({ id: approvalId, result: { decision: "decline" satisfies FileChangeApprovalDecision } });
+        } catch (failure) {
+          logError("codex-patch-approval", sanitizeTranscriptErrorMessage(failure));
+        }
+      }
+    }
   }
 
   private async dispatchRequest(
@@ -1814,7 +1892,7 @@ export default class CodexStdioBridge {
     const TranscriptStore = loadCodexTranscriptStore({ reload });
     return new TranscriptStore(this.storageRoot, () => (
       Array.from(this.pendingUserInputRequests.values(), (request) => request.threadId)
-    ), this.transcriptShadowLog);
+    ), this.transcriptShadowLog, () => asString(asRecord(this.initializeResult)?.userAgent));
   }
 
   private ensureTranscriptStore() {
@@ -1842,6 +1920,11 @@ export default class CodexStdioBridge {
     }
 
     this.pendingResponses.delete(Number(message.id));
+    if (isPendingInternalResponse(pending) && pending.toolContext) {
+      const response = await this.settleToolContext(pending, message);
+      pending.resolve(response);
+      return;
+    }
     if (!message.error && pending.method === "thread/start") {
       const threadId = asString(asRecord(asRecord(message.result)?.thread)?.id)?.trim();
       if (threadId) this.unmaterializedThreadIds.add(threadId);
@@ -1887,9 +1970,14 @@ export default class CodexStdioBridge {
       const capture = this.captureTranscript(`upstream-response:${pending.upstreamRequest.method ?? "unknown"}`, async () => {
         const transcriptStore = this.ensureTranscriptStore();
         const responseToRecord = pending.threadHydration ? hydratedMessage : message;
+        const threadId = asString(asRecord(asRecord(message.result)?.thread)?.id)
+          ?? asString(asRecord(pending.upstreamRequest.params)?.threadId);
+        const normalisedMessage = threadId
+          ? (await transcriptStore.externalizeInlineImages(threadId, message)).value
+          : message;
         const providerObservations = await this.createSqliteProviderResponseObservations(
           pending.upstreamRequest,
-          message,
+          normalisedMessage,
           Boolean(pending.threadHydration),
         );
         await this.transcriptRecording.recordProviderFact({
@@ -1916,7 +2004,7 @@ export default class CodexStdioBridge {
       if (sqliteRecoveryBoundary || sqliteBaseline) await capture;
       else void capture;
     }
-    const presentedMessage = this.withFileChangeFailurePresentation(hydratedMessage);
+    const presentedMessage = this.fileChanges.present(hydratedMessage);
     if (isPendingInternalResponse(pending)) {
       pending.resolve(presentedMessage);
       return;
@@ -1970,20 +2058,44 @@ export default class CodexStdioBridge {
         if (threadId && turnId) this.transcriptActiveTurns.set(turnId, threadId);
       }
       if (message.method === "item/started" || message.method === "item/completed") {
-        this.recordFileChangeTurnCursor(message.params);
+        this.fileChanges.recordTurnCursor(message.params);
+        const params = asRecord(message.params);
+        const item = params?.item as WorkbenchFileChangeItem | undefined;
+        const threadId = asString(params?.threadId);
+        const turnId = asString(params?.turnId);
+        if (message.method === "item/completed" && item?.type === "fileChange" && item.status === "failed" && threadId && turnId) {
+          const remembered = this.fileChanges.get(threadId, turnId, item.id)?.item ?? item;
+          const recovering = [...this.pendingResponses.values()].some((pending) => (
+            isPendingInternalResponse(pending) && pending.toolContext?.threadId === threadId
+            && pending.toolContext.turnId === turnId && pending.toolContext.patch?.itemId === item.id
+          ));
+          if (!recovering && !remembered.workbenchPolicy && !remembered.workbenchFailureKind
+            && !remembered.changes.some((change) => change.workbenchAnalysis)) {
+            void this.enqueueCommand(() => this.analyseFailedPatch(threadId, turnId, remembered))
+              .catch((failure) => logError("codex-patch-findings", sanitizeTranscriptErrorMessage(failure)));
+          }
+        }
       }
       if (message.method === "turn/completed") {
         const turnId = asString(asRecord(message.params)?.turnId)
           ?? asString(asRecord(asRecord(message.params)?.turn)?.id);
         if (turnId) this.transcriptActiveTurns.delete(turnId);
-        this.clearFileChangeTurnCursor(message.params);
+        const threadId = asString(asRecord(message.params)?.threadId);
+        for (const pending of this.pendingResponses.values()) {
+          if (!isPendingInternalResponse(pending)) continue;
+          const context = pending.toolContext;
+          if (context?.threadId === threadId && context.turnId === turnId && context.patch) {
+            context.patch.approvalId = null;
+          }
+        }
+        this.fileChanges.clearTurnCursor(message.params);
       }
       if (message.method === "serverRequest/resolved") {
         this.handleServerRequestResolved(message.params);
       }
       if (message.method === "hook/completed") {
         const marker = readWorkbenchFileChangeFailureMarker(message.params);
-        if (marker && this.recordFileChangeFailure(marker)) {
+        if (marker && this.fileChanges.recordFailure(marker)) {
           syntheticFileChangeNotification = {
             method: "item/completed",
             params: {
@@ -1995,7 +2107,7 @@ export default class CodexStdioBridge {
           };
         }
       }
-      this.onNotification(this.withFileChangeFailurePresentation(message));
+      this.onNotification(this.fileChanges.present(message));
       if (syntheticFileChangeNotification) this.onNotification(syntheticFileChangeNotification);
       if (!shouldRecordDurableTranscriptNotification(message.method)) {
         return;
@@ -2003,7 +2115,12 @@ export default class CodexStdioBridge {
 
       void this.captureTranscript(`upstream-notification:${message.method}`, async () => {
         const transcriptStore = this.ensureTranscriptStore();
-        const providerObservations = await this.createSqliteProviderNotificationObservations(message);
+        const threadId = asString(asRecord(message.params)?.threadId)
+          ?? asString(asRecord(asRecord(message.params)?.thread)?.id);
+        const normalisedMessage = threadId
+          ? (await transcriptStore.externalizeInlineImages(threadId, message)).value
+          : message;
+        const providerObservations = await this.createSqliteProviderNotificationObservations(normalisedMessage);
         if (syntheticFileChangeNotification) {
           providerObservations.push(
             ...await this.createSqliteProviderNotificationObservations(syntheticFileChangeNotification),
@@ -2036,6 +2153,13 @@ export default class CodexStdioBridge {
     }
 
     const requestKey = String(requestId);
+    for (const pending of this.pendingResponses.values()) {
+      if (!isPendingInternalResponse(pending)) continue;
+      const context = pending.toolContext;
+      if (context?.threadId === threadId && context.patch && String(context.patch.approvalId) === requestKey) {
+        context.patch.approvalId = null;
+      }
+    }
     const pendingRequest = this.pendingUserInputRequests.get(requestKey);
     if (!pendingRequest || pendingRequest.threadId !== threadId) {
       return;
@@ -2215,8 +2339,12 @@ export default class CodexStdioBridge {
     request: Extract<ServerRequest, { method: "item/fileChange/requestApproval" }>,
   ) {
     if (request.params.reason === "command failed; retry without sandbox?" && !request.params.grantRoot) {
-      // Codex misclassifies ordinary patch failures as possible sandbox denials.
-      this.send({ id: request.id, result: { decision: "decline" satisfies FileChangeApprovalDecision } });
+      const { threadId, turnId, itemId } = request.params;
+      void this.queueToolContext({
+        threadId, turnId,
+        item: { id: randomUUID(), type: "functionCallOutput", name: "patch_recovery", namespace: "workbench", output: "" },
+        patch: { itemId, approvalId: request.id },
+      });
       return;
     }
     const requestKey = String(request.id);
@@ -2989,6 +3117,9 @@ export default class CodexStdioBridge {
     const readThread = asRecord(readResponse.result)?.thread as ThreadReadResponse["thread"] | undefined;
     if (!readThread || readThread.id !== threadId) return { id: requestId, error: { code: -32000, message: "Codex admission could not read the requested thread." } };
     if (isThreadStatusActive(readThread.status)) {
+      if (asRecord(asRecord(startRequest.params)?.toolOutput)) {
+        return await this.dispatchAdmittedTurnStart(requestId, startRequest);
+      }
       const activeTurnResponse = await this.dispatchManagedProviderRequest({
         id: `workbench:admission-active-turn:${String(requestId ?? Date.now())}`,
         method: "thread/turns/list",
@@ -3046,6 +3177,9 @@ export default class CodexStdioBridge {
       const resumedTurns = resumeResult.initialTurnsPage?.data ?? resumedThread.turns;
       const resumedActiveTurn = this.readManagedActiveTurn(resumedThread, resumedTurns);
       if (resumedActiveTurn) {
+        if (asRecord(asRecord(startRequest.params)?.toolOutput)) {
+          return await this.dispatchAdmittedTurnStart(requestId, startRequest);
+        }
         return await this.dispatchManagedMessageSteer(requestId, threadId, resumedActiveTurn, startRequest, steerRequest);
       }
       if (resumedThread.status.type !== "idle" && resumedThread.status.type !== "systemError") {
@@ -3089,6 +3223,10 @@ export default class CodexStdioBridge {
       startRequest,
       (request) => this.dispatchManagedProviderRequest(request),
     );
+    return await this.dispatchAdmittedTurnStart(requestId, startRequest);
+  }
+
+  private async dispatchAdmittedTurnStart(requestId: number | string | null, startRequest: JsonRpcRequest): Promise<JsonRpcResponse> {
     const response = await this.dispatchManagedProviderRequest(startRequest);
     if (response.error) return { id: requestId, error: response.error };
     const turn = asRecord(response.result)?.turn;

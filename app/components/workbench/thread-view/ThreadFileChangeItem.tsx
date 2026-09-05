@@ -1,8 +1,10 @@
 /*
+ * Keywords: file change, partial application, observed counts, attempted diff.
  * Exports:
  * - default ThreadFileChangeItem: render one or more adjacent fileChange items with per-file counts and expandable unified diffs. Keywords: workbench, thread, file change, diff.
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes. Keywords: workbench, thread, file change, diff list.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts. Keywords: workbench, thread, file change, totals.
+ * - ThreadFileChangeListChange: reusable file-change row input.
  * - Local helpers: format paths, summary labels, lifecycle rows, and change totals for thread file changes. Keywords: additions, deletions, status, path display.
  */
 "use client";
@@ -11,10 +13,11 @@ import type { ReactNode } from "react";
 
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
+import type { FileChangeAnalysis } from "workbench-shared/workbench/thread/file-change-analysis";
 import {
   parseUnifiedDiff,
   type ParsedUnifiedDiff,
-} from "../../../workbench/thread/thread-file-diff";
+} from "workbench-shared/workbench/thread/unified-diff";
 import ProjectFilePath from "../ProjectFilePath";
 import { FileAddIcon, FileDeleteIcon, FileMoveIcon, FileUpdateIcon } from "../workbench-icons";
 import ThreadCodeDisplay from "./ThreadCodeDisplay";
@@ -130,8 +133,18 @@ function getFileChangePresentation (change: FileUpdateChange): FileChangePresent
   }
 }
 
-function getFileChangeLifecycleLabel(change: FileUpdateChange, item: FileChangeItem) {
+function getFileChangeLifecycleLabel(change: FileUpdateChange, item: FileChangeItem, analysis?: FileChangeAnalysis) {
   const presentation = getFileChangePresentation(change);
+  if (analysis) {
+    switch (analysis.outcome) {
+      case "present": return presentation.completedLabel;
+      case "unapplied": return `Failed to ${presentation.failureVerb}`;
+      case "partial": return "Partially edited";
+      case "copied": return "Copied";
+      case "uncertain": return `Could not verify ${presentation.failureVerb}`;
+    }
+  }
+  if (item.workbenchPolicy === "automaticEscalation") return `Failed to ${presentation.failureVerb}`;
   switch (item.status) {
     case "inProgress":
       return presentation.inProgressLabel;
@@ -159,6 +172,11 @@ function parseWholeFileTextDiff (diffText: string, lineType: "addition" | "delet
     deletions: isAddition ? 0 : changedLines.length,
     headers: [],
     hunks: changedLines.length ? [{
+      complete: false,
+      newCount: isAddition ? changedLines.length : 0,
+      newStart: isAddition ? 1 : 0,
+      oldCount: isAddition ? 0 : changedLines.length,
+      oldStart: isAddition ? 0 : 1,
       header: isAddition
         ? `@@ -0,0 +1,${changedLines.length} @@`
         : `@@ -1,${changedLines.length} +0,0 @@`,
@@ -198,6 +216,21 @@ function ThreadFileChangeDetails ({
 }) {
   return (
     <div className="space-y-3">
+      {parsedChange.change.workbenchAnalysis ? (
+        <div className="space-y-1 text-[0.78em] leading-[1.6] text-muted">
+          <p className="m-0">Counts show requested changes found in the observed file, not who wrote them or untouched-file integrity.</p>
+          {parsedChange.change.workbenchAnalysis.detail ? <p className="m-0">{parsedChange.change.workbenchAnalysis.detail}</p> : null}
+          {parsedChange.change.workbenchAnalysis.hunks.map((hunk) => (
+            <p className="m-0" key={hunk.index}>
+              Hunk {hunk.index + 1}{": "}
+              {hunk.outcome === "present" ? "requested changes present" : hunk.outcome === "unapplied" ? "requested changes not applied" : "uncertain"}
+              {hunk.currentStart === null ? "" : ` at observed line ${hunk.currentStart}`}
+              {hunk.reason ? `. ${hunk.reason}` : ""}
+            </p>
+          ))}
+          <p className="m-0 font-medium">Attempted diff</p>
+        </div>
+      ) : null}
       {parsedChange.movePathDisplay ? (
         <p className="m-0 flex flex-wrap items-baseline gap-2 text-[0.78em] leading-[1.6] text-muted">
           <span>From</span>
@@ -346,7 +379,7 @@ function ThreadFileChangeOutcome ({ item }: { item: FileChangeItem }) {
 
   const label = item.status === "inProgress"
     ? "Applying patch..."
-    : item.status === "failed"
+    : item.status === "failed" || item.workbenchPolicy === "automaticEscalation"
       ? "Failed to apply patch"
       : "Patch declined";
   const danger = item.status === "failed" || item.status === "declined";
@@ -381,26 +414,34 @@ export default function ThreadFileChangeItem ({
       {items.map((item) => (
         <div className="space-y-0.5" key={item.id}>
           <ThreadFileChangeRows
-            changes={item.changes.map((change, sourceChangeIndex) => ({
-              change,
-              danger: item.status === "failed" || item.status === "declined",
-              detailsAvailable: item.status === "completed",
-              presentationLabel: getFileChangeLifecycleLabel(change, item),
-              sourceChangeIndex,
-              sourceItemId: item.id,
-              staticMarker: true,
-              summaryTotals: change.workbenchAdditions !== undefined || change.workbenchDeletions !== undefined
-                ? {
-                  additions: change.workbenchAdditions ?? 0,
-                  deletions: change.workbenchDeletions ?? 0,
-                }
-                : undefined,
-            }))}
+            changes={item.changes.map((change, sourceChangeIndex) => {
+              const analysis = item.status !== "completed" && item.workbenchFailureKind !== "unclaimed" ? change.workbenchAnalysis : undefined;
+              return {
+                change,
+                danger: analysis ? analysis.outcome !== "present" && analysis.outcome !== "copied" : item.status === "failed" || item.status === "declined",
+                detailsAvailable: item.status === "completed" || Boolean(analysis),
+                presentationLabel: getFileChangeLifecycleLabel(change, item, analysis),
+                sourceChangeIndex,
+                sourceItemId: item.id,
+                staticMarker: true,
+                summaryTotals: analysis
+                  ? { additions: analysis.additions, deletions: analysis.deletions }
+                  : change.workbenchAdditions !== undefined || change.workbenchDeletions !== undefined
+                    ? { additions: change.workbenchAdditions ?? 0, deletions: change.workbenchDeletions ?? 0 }
+                    : undefined,
+              };
+            })}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
             workspaceRoots={workspaceRoots}
           />
+          {item.workbenchPolicy === "automaticEscalation" ? (
+            <p className="m-0 pl-6 text-[0.78em] leading-[1.6] text-muted">Workbench blocked the escalated retry, not the user.</p>
+          ) : null}
+          {item.workbenchRecovery?.state === "failed" ? (
+            <p className="m-0 pl-6 text-[0.78em] leading-[1.6] text-danger">Recovery context could not be queued{item.workbenchRecovery.detail ? `. ${item.workbenchRecovery.detail}` : "."}</p>
+          ) : null}
           <ThreadFileChangeOutcome item={item} />
         </div>
       ))}

@@ -249,6 +249,9 @@ export interface WorkbenchBrowseCommandResponse {
   stderr: string;
   steered?: boolean;
   steerTurnId?: string;
+  injected?: boolean;
+  injectionAcceptedAt?: number;
+  injectionTurnId?: string;
   stdout: string;
   timedOut?: boolean;
 }

@@ -10,6 +10,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type {
   WorkbenchBrowseResultEntry,
   WorkbenchQuestionnaireHistoryEntry,
@@ -143,6 +144,82 @@ async function withStore(run: (store: CodexTranscriptStore, root: string) => Pro
     await fs.rm(root, { force: true, recursive: true });
   }
 }
+
+test("only live turn starts acquire the current runtime product version", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-runtime-version-"));
+  let userAgent = "workbench/0.153.3 (Windows; x86_64) terminal (client; 9.9.9)";
+  const store = new CodexTranscriptStore(root, () => [], undefined, () => userAgent);
+  try {
+    await store.recordHydratedThreadSnapshot({ id: 1, result: { thread: snapshot([transcriptTurn("old", [])]) } });
+    await store.recordUpstreamNotification({ method: "turn/started", params: {
+      threadId: "thread", turn: { ...transcriptTurn("first", []), status: "inProgress" },
+    } });
+    userAgent = "workbench/0.154.0-beta.1 (Windows; x86_64) terminal (client; 9.9.9)";
+    await store.recordUpstreamNotification({ method: "turn/started", params: {
+      threadId: "thread", turn: { ...transcriptTurn("second", []), status: "inProgress" },
+    } });
+    await store.recordHydratedThreadSnapshot({ id: 2, result: {
+      thread: snapshot(["old", "first", "second"].map((id) => transcriptTurn(id, []))),
+    } });
+    const versions = await Promise.all(["old", "first", "second"].map(async (id) => {
+      const file = JSON.parse(await fs.readFile(turnFilePath(root, id), "utf8")) as CodexTranscriptTurnFile & { runtimeCliVersion?: string };
+      return file.runtimeCliVersion;
+    }));
+    assert.deepEqual(versions, [undefined, "0.153.3", "0.154.0-beta.1"]);
+    assert.equal((await readThreadFile(root)).cliVersion, "test");
+  } finally {
+    await store.dispose();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("native output images use hashed assets and matching refreshed content retains injection acceptance", async () => withStore(async (store, root) => {
+  const item: WorkbenchToolOutput = {
+    id: "capture", type: "functionCallOutput", namespace: "workbench", name: "screenshot",
+    output: [{ type: "input_text", text: "capture" }, { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=", detail: "auto" }],
+    workbenchInjectionAcceptedAt: 12,
+  };
+  await store.recordUpstreamNotification({ method: "item/completed", params: { item, threadId: "thread", turnId: "turn-a" } });
+  const stored = JSON.parse(await fs.readFile(turnFilePath(root, "turn-a"), "utf8")) as CodexTranscriptTurnFile;
+  const captured = stored.turn!.items[0] as WorkbenchToolOutput;
+  assert.ok(Array.isArray(captured.output));
+  const image = captured.output[1];
+  assert.ok(image?.type === "input_image");
+  assert.ok(image.image_url.startsWith("/api/transcript-assets/codex/"));
+  const filename = decodeURIComponent(image.image_url.split("/").at(-1)!);
+  assert.equal(await fs.readFile(path.join(path.dirname(threadFilePath(root)), "assets", filename), "utf8"), "hello");
+  const { workbenchInjectionAcceptedAt: _acceptedAt, ...echo } = item;
+  const refreshed = { ...transcriptTurn("turn-a", []), items: [echo] };
+  await store.recordHydratedThreadSnapshot({ id: 1, result: { thread: snapshot([refreshed]) } });
+  const after = JSON.parse(await fs.readFile(turnFilePath(root, "turn-a"), "utf8")) as CodexTranscriptTurnFile;
+  assert.equal(after.turn!.items.length, 1);
+  assert.deepEqual(after.turn!.items[0], captured);
+}));
+
+test("accepted passive context and its RPC evidence retain the originating turn without fabricated provider events", async () => withStore(async (store, root) => {
+  await store.recordUpstreamNotification({ method: "turn/started", params: {
+    threadId: "thread", turn: { ...transcriptTurn("origin", []), status: "inProgress" },
+  } });
+  const item: WorkbenchToolOutput = {
+    id: "injected", type: "functionCallOutput", namespace: "workbench", name: "screenshot",
+    output: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=", detail: "original" }],
+    workbenchInjectionAcceptedAt: 123,
+  };
+  const request: JsonRpcRequest = { id: 71, method: "thread/inject_items", params: { threadId: "thread", items: [] } };
+  await store.recordClientRequest(request, null, "origin");
+  await store.recordUpstreamResponse(request, { id: 71, result: {} }, "origin");
+  const admitted = await store.recordWorkbenchToolContext("thread", "origin", item);
+  const file = JSON.parse(await fs.readFile(turnFilePath(root, "origin"), "utf8")) as CodexTranscriptTurnFile;
+  assert.deepEqual(file.turn!.items, [admitted]);
+  assert.equal(admitted.id, item.id);
+  assert.ok(Array.isArray(admitted.output) && admitted.output[0]?.type === "input_image");
+  assert.ok(admitted.output[0].image_url.startsWith("/api/transcript-assets/"));
+  const journal = (await fs.readFile(turnFilePath(root, "origin").replace(/\.json$/u, ".ndjson"), "utf8"))
+    .trim().split("\n").map((line) => JSON.parse(line) as CodexTranscriptRawEvent);
+  assert.deepEqual(journal.filter(({ requestId }) => requestId === 71).map(({ source }) => source), ["client-request", "upstream-response"]);
+  assert.equal(journal.some(({ source, method }) => source === "workbench" && method === "workbench/thread/inject-tool-context"), true);
+  assert.equal(journal.some(({ source, method }) => source === "upstream-notification" && method === "item/completed"), false);
+}));
 
 test("stored item ownership rejects later duplicate turns without hiding their new items", async () => withStore(async (store, root) => {
   await store.recordHydratedThreadSnapshot({

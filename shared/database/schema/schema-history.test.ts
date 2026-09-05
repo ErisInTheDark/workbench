@@ -84,6 +84,40 @@ const currentSchema = defineWorkbenchDatabaseSchema({
   subsystems: [defineSubsystemHistory([currentHistory])],
 });
 
+test("explicit historical installation upgrades through the same history without losing data", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    applyWorkbenchDatabaseSchema(database, currentSchema, { targetVersion: 1 });
+    assert.equal(database.pragma("user_version", { simple: true }), 1);
+    database.prepare("INSERT INTO schema_history_records(id, legacy_value, kept_value) VALUES (1, 'old', 'retained')").run();
+    applyWorkbenchDatabaseSchema(database, currentSchema, { targetVersion: 2 });
+    database.prepare("UPDATE schema_history_records SET added_value = 'new' WHERE id = 1").run();
+    applyWorkbenchDatabaseSchema(database, currentSchema);
+    assert.deepEqual(database.prepare("SELECT * FROM schema_history_records").get(), {
+      id: 1, kept_value: "retained", added_value: "new",
+    });
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    assert.equal(database.pragma("foreign_keys", { simple: true }), 1);
+  } finally {
+    database.close();
+  }
+});
+
+test("invalid schema targets and downgrades do not mutate installed history", () => {
+  const database = new Database(":memory:");
+  try {
+    applyWorkbenchDatabaseSchema(database, currentSchema, { targetVersion: 2 });
+    const before = database.serialize();
+    for (const targetVersion of [0, -1, 1.5, 4, NaN, Infinity, 1]) {
+      assert.throws(() => applyWorkbenchDatabaseSchema(database, currentSchema, { targetVersion }));
+      assert.deepEqual(database.serialize(), before);
+    }
+  } finally {
+    database.close();
+  }
+});
+
 test("schema history adds and deletes columns while preserving current data", () => {
   const database = new Database(":memory:");
   try {

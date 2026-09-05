@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover profile listing, subagent creation/activity, direct-parent ownership, one-client lifecycle, and questionnaire steer ordering. Keywords: subagent, profile, controller, activity, authorization, questionnaire, test.
+ * - No production exports; Node tests cover profile listing, subagent creation/activity, direct-parent ownership, one-client lifecycle, and questionnaire delivery ordering. Keywords: subagent, profile, controller, activity, authorization, questionnaire, native output, test.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -9,10 +9,10 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { CodexJsonRpcResponse } from "workbench-shared/codex/protocol";
 import type { WorkbenchComposerProfile, WorkbenchSubagentPage, WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "workbench-shared/types";
-import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
+import { readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread/thread-agent-message";
+import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
@@ -35,6 +35,16 @@ interface HarnessCall {
   method: string;
   params: Record<string, unknown>;
   promptContext: Record<string, unknown> | null;
+}
+
+function incomingAgentMessage(call: HarnessCall | undefined) {
+  assert.ok(call);
+  assert.deepEqual(call.params.input, []);
+  const item = readWorkbenchToolOutput({
+    ...(call.params.toolOutput as object), id: "provider-output", type: "functionCallOutput",
+  });
+  assert.ok(item);
+  return readWorkbenchAgentMessageItem(item);
 }
 
 const callerThreadId = "parent-thread";
@@ -172,7 +182,7 @@ function createProjectResolver(expectedCwd: string) {
   };
 }
 
-test("creates with one client and delivers a steer before empty questionnaire resolution", async (context) => {
+test("creates with one client and delivers native agent output before empty questionnaire resolution", async (context) => {
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
@@ -222,7 +232,7 @@ test("creates with one client and delivers a steer before empty questionnaire re
   });
   assert.equal((turnStart?.params.collaborationMode as { settings?: { reasoning_effort?: string } })?.settings?.reasoning_effort, "medium");
   assert.equal((turnStart?.params.collaborationMode as { settings?: { developer_instructions?: string } })?.settings?.developer_instructions, "");
-  assert.deepEqual(readWorkbenchAgentMessageInput(turnStart?.params.input as UserInput[]), {
+  assert.deepEqual(incomingAgentMessage(turnStart), {
     message: "Inspect the code.",
     senderName: "parent agent",
     senderThreadId: callerThreadId,
@@ -243,9 +253,9 @@ test("creates with one client and delivers a steer before empty questionnaire re
   assert.equal(clients.length, 2);
   assert.equal(clients[1].connectCount, 1);
   assert.equal(clients[1].closeCount, 1);
-  const lifecycleCalls = clients[1].calls.filter(({ method }) => method === "turn/steer" || method === "questionnaire/respond");
-  assert.deepEqual(lifecycleCalls.map(({ method }) => method), ["turn/steer", "questionnaire/respond"]);
-  assert.deepEqual(readWorkbenchAgentMessageInput(lifecycleCalls[0].params.input as UserInput[]), {
+  const lifecycleCalls = clients[1].calls.filter(({ method }) => method === "turn/start" || method === "questionnaire/respond");
+  assert.deepEqual(lifecycleCalls.map(({ method }) => method), ["turn/start", "questionnaire/respond"]);
+  assert.deepEqual(incomingAgentMessage(lifecycleCalls[0]), {
     message: "Take the safer route.",
     senderName: "parent agent",
     senderThreadId: callerThreadId,
@@ -318,7 +328,7 @@ test("starts an idle direct parent through the pre-reload store surface", async 
   );
   const parentTurnStart = clients[1].calls.find(({ method, params }) => method === "turn/start" && params.threadId === callerThreadId);
   assert(parentTurnStart);
-  assert.deepEqual(readWorkbenchAgentMessageInput(parentTurnStart.params.input as UserInput[]), {
+  assert.deepEqual(incomingAgentMessage(parentTurnStart), {
     message: "The safe route is ready.",
     senderName: "Mimi",
     senderThreadId: childThreadId,
@@ -357,14 +367,14 @@ test("starts an idle child with attributed parent-agent input", async (context) 
   }), { id: 3, result: {} });
   const childTurnStart = clients[1].calls.find(({ method, params }) => method === "turn/start" && params.threadId === childThreadId);
   assert(childTurnStart);
-  assert.deepEqual(readWorkbenchAgentMessageInput(childTurnStart.params.input as UserInput[]), {
+  assert.deepEqual(incomingAgentMessage(childTurnStart), {
     message: "Continue with the safe route.",
     senderName: "parent agent",
     senderThreadId: callerThreadId,
   });
 });
 
-test("steers an active direct parent and rejects callers without a relationship", async (context) => {
+test("delivers native output to an active direct parent and rejects callers without a relationship", async (context) => {
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
   const clients: FakeHarnessClient[] = [];
@@ -393,9 +403,9 @@ test("steers an active direct parent and rejects callers without a relationship"
     method: "workbench/subagent/message",
     params: { callerThreadId: childThreadId, cwd, message: "Active parent note.", parent: true },
   }), { id: 3, result: {} });
-  const parentSteer = clients[1].calls.find(({ method, params }) => method === "turn/steer" && params.threadId === callerThreadId);
-  assert(parentSteer);
-  assert.deepEqual(readWorkbenchAgentMessageInput(parentSteer.params.input as UserInput[]), {
+  const parentOutput = clients[1].calls.find(({ method, params }) => method === "turn/start" && params.threadId === callerThreadId);
+  assert(parentOutput);
+  assert.deepEqual(incomingAgentMessage(parentOutput), {
     message: "Active parent note.",
     senderName: "Mimi",
     senderThreadId: childThreadId,

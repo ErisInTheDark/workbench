@@ -343,6 +343,13 @@ test("durable item facts refresh subscriptions only at complete projection bound
       kind: "browse",
     }, "workbench");
     assert.equal(reads, 5);
+    published = deferred<void>();
+    await controller.record([{
+      item: { id: "screenshot", type: "functionCallOutput", namespace: "workbench", name: "screenshot", output: "queued capture" },
+      kind: "item", lifecycle: "completed", observedAt: 5, threadId: "thread", turnId: "turn",
+    }], { source: "workbench" });
+    assert.equal(reads, 6, "Workbench item admission must request a snapshot without waiting for a provider terminal boundary");
+    await published.promise;
   } finally {
     controller.dispose();
   }

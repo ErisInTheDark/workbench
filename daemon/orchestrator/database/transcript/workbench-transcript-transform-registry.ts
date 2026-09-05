@@ -9,6 +9,7 @@ import type { WorkbenchDatabaseMutation } from "workbench-shared/database/workbe
 import { transformCoreTranscriptItem } from "./workbench-transcript-core-transformers.ts";
 import { transformInteractionTranscriptItem } from "./workbench-transcript-interaction-transformers.ts";
 import { transformOperationTranscriptItem } from "./workbench-transcript-operation-transformers.ts";
+import { transformToolOutputTranscriptItem } from "./workbench-transcript-tool-output-transformer.ts";
 import type { WorkbenchTranscriptItemLifecycle } from "./workbench-transcript-types.ts";
 
 export interface WorkbenchTranscriptItemTransformContext {
@@ -27,7 +28,8 @@ export interface WorkbenchTranscriptItemTransform {
 export function transformWorkbenchTranscriptItem(
   context: WorkbenchTranscriptItemTransformContext,
 ): WorkbenchTranscriptItemTransform {
-  return transformCoreTranscriptItem(context)
+  return transformToolOutputTranscriptItem(context)
+    ?? transformCoreTranscriptItem(context)
     ?? transformInteractionTranscriptItem(context)
     ?? transformOperationTranscriptItem(context);
 }

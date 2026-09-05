@@ -1,4 +1,5 @@
 /*
+ * Keywords: transcript evidence, runtime version, turn ownership.
  * Exports:
  * - SerializableJson: recursive JSON value type for raw transcript payloads. Keywords: json, raw events, transcript.
  * - CodexTranscriptRawEvent: raw bridge/app-server event persisted in thread transcript files. Keywords: codex, transcript, raw event.
@@ -71,6 +72,7 @@ export interface CodexTranscriptTurnFile {
   itemTimeline: CodexTranscriptTurnTimelineEntry[];
   lastTouchedAt: number;
   questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
+  runtimeCliVersion?: string;
   schemaVersion: number;
   steerEntries: WorkbenchSteerHistoryEntry[];
   threadId: string;

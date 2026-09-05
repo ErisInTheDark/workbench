@@ -1,4 +1,5 @@
 /*
+ * Keywords: thread recall, narrative, native attribution, SQLite, stable refs.
  * Exports:
  * - WorkbenchThreadRecallRecord/WorkbenchThreadRecallMatch/WorkbenchThreadRecallSearchResult/WorkbenchThreadRecallExpansion/WorkbenchThreadRecallCursor/SqliteWorkbenchThreadRecallRef: recall projection, paging, cursor, and SQLite ref contracts. Keywords: thread recall, search, expansion, cursor, SQLite.
  * - buildWorkbenchThreadRecallRecords/buildSqliteWorkbenchThreadRecallRecords/selectWorkbenchThreadRecallRecords: project and filter ordered narrative records without embedded-plan duplication. Keywords: recall, narrative, kinds, plan, SQLite.
@@ -28,7 +29,7 @@ import {
   extractThreadPlanBlocks,
   type WorkbenchThreadContextPiece,
 } from "./thread-context-projection.ts";
-import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
+import { readWorkbenchAgentMessageInput, readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread/thread-agent-message";
 import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import { SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX } from "workbench-shared/workbench/thread/thread-steer-history";
@@ -125,6 +126,8 @@ function stripOuterPlanTag(value: string) {
 
 function contextPieceKind(piece: WorkbenchThreadContextPiece): WorkbenchThreadRecallKind {
   switch (piece.kind) {
+    case "agentMessage":
+      return "agent-message";
     case "userMessage":
       if (readWorkbenchAgentMessageInput(piece.input)) return "agent-message";
       return "user-message";
@@ -144,6 +147,8 @@ function contextPieceLabel(piece: WorkbenchThreadContextPiece) {
     if (agentMessage) return `Agent message from ${agentMessage.senderName}`;
   }
   switch (piece.kind) {
+    case "agentMessage":
+      return `Agent message from ${piece.message.senderName}`;
     case "userMessage":
       return "User message";
     case "userSteer":
@@ -408,6 +413,25 @@ export function buildSqliteWorkbenchThreadRecallRecords(
         itemId: item.id,
         kind: agentMessage ? "agent-message" : isSteer ? "user-steer" : "user-message",
         label: agentMessage ? `Agent message from ${agentMessage.senderName}` : isSteer ? "User steer" : "User message",
+        sequence,
+        sortKey,
+        text: renderWorkbenchThreadContextPieceMarkdown(piece),
+        turnId: root.turn_id,
+      });
+      if (record) records.push(record);
+      sequence += 1;
+      continue;
+    }
+    if (item.type === "functionCallOutput") {
+      const message = readWorkbenchAgentMessageItem(item);
+      if (!message) continue;
+      const piece: WorkbenchThreadContextPiece = {
+        itemId: item.id, kind: "agentMessage", message, sequence, sortKey, turnId: root.turn_id,
+      };
+      const record = sqliteRecord({
+        itemId: item.id,
+        kind: contextPieceKind(piece),
+        label: contextPieceLabel(piece),
         sequence,
         sortKey,
         text: renderWorkbenchThreadContextPieceMarkdown(piece),

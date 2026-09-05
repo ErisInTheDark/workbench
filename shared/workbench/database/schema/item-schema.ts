@@ -1,4 +1,5 @@
 /*
+ * Keywords: canonical items, typed tool output, patch observations, schema history.
  * threadItems: current canonical thread item table. Keywords: database, schema, item.
  * threadItemUserMessages: current user-message augmentation table. Keywords: database, schema, user-message.
  * threadUserMessageParts: current ordered user-message part table. Keywords: database, schema, user-message.
@@ -8,8 +9,10 @@
  * threadReasoningSections: current ordered reasoning section table. Keywords: database, schema, reasoning.
  * threadItemFileChanges: current file-change augmentation table. Keywords: database, schema, file-change.
  * threadFileChanges: current ordered file change table. Keywords: database, schema, file-change.
+ * threadFileChangeHunks/threadFileChangeCandidates: ordered hunk findings and candidate current lines.
  * threadItemContextCompactions: current context-compaction augmentation table. Keywords: database, schema, compaction.
  * threadItemUnknown: current opaque unknown-item augmentation table. Keywords: database, schema, unknown.
+ * threadItemToolOutputs/threadToolOutputParts: native context and ordered text/image parts. Keywords: database, tool.
  * threadItemTimelines/threadItemTimelineAliases: optional semantic item timing and alias augmentations. Keywords: database, schema, timeline, alias.
  * itemTables: current item table inventory. Keywords: database, schema, item.
  * ItemSchemaRows: selected row types for current item tables. Keywords: database, schema, types.
@@ -19,6 +22,7 @@ import {
   check,
   defineTable,
   enumText,
+  evolveTable,
   foreignKey,
   integer,
   jsonText,
@@ -30,11 +34,11 @@ import {
   type SelectRow,
   type TableDefinition,
 } from "../../../database/schema/schema-definition.ts";
-import { createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "../../../database/schema/schema-history.ts";
+import { addColumns, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion } from "../../../database/schema/schema-history.ts";
 
-function initialHistory<Table extends TableDefinition>(table: Table) {
+function initialHistory<Table extends TableDefinition>(table: Table, schemaVersion = 1) {
   return defineTableHistory({
-    versions: [tableVersion({ schemaVersion: 1, table, migration: createTable(table) })],
+    versions: [tableVersion({ schemaVersion, table, migration: createTable(table) })],
     current: table,
   });
 }
@@ -74,7 +78,20 @@ const threadItemsV1 = defineTable("thread_items", {
     }),
   ],
 }));
-const threadItemsHistory = initialHistory(threadItemsV1);
+const threadItemsV2 = evolveTable(threadItemsV1, {
+  drop: ["type"],
+  add: { type: enumText(
+    "userMessage", "assistantMessage", "plan", "reasoning", "operation", "fileChange",
+    "webSearch", "questionnaire", "approval", "contextCompaction", "unknown", "functionCallOutput",
+  ).notNull() },
+});
+const threadItemsHistory = defineTableHistory({
+  current: threadItemsV2,
+  versions: [
+    tableVersion({ schemaVersion: 1, table: threadItemsV1, migration: createTable(threadItemsV1) }),
+    tableVersion({ schemaVersion: 13, table: threadItemsV2, migration: rebuildTable({ from: threadItemsV1, to: threadItemsV2 }) }),
+  ],
+});
 export const threadItems = threadItemsHistory.current;
 
 const threadItemUserMessagesV1 = defineTable("thread_item_user_messages", {
@@ -192,7 +209,22 @@ const threadItemFileChangesV1 = defineTable("thread_item_file_changes", {
     }),
   ],
 }));
-const threadItemFileChangesHistory = initialHistory(threadItemFileChangesV1);
+const threadItemFileChangesV2 = evolveTable(threadItemFileChangesV1, {
+  add: {
+    workbench_policy: enumText("automaticEscalation"),
+    recovery_state: enumText("queued", "failed"),
+    recovery_detail: text(),
+  },
+});
+const threadItemFileChangesHistory = defineTableHistory({
+  current: threadItemFileChangesV2,
+  versions: [
+    tableVersion({ schemaVersion: 1, table: threadItemFileChangesV1, migration: createTable(threadItemFileChangesV1) }),
+    tableVersion({ schemaVersion: 14, table: threadItemFileChangesV2, migration: addColumns({
+      from: threadItemFileChangesV1, to: threadItemFileChangesV2, columns: ["workbench_policy", "recovery_state", "recovery_detail"],
+    }) }),
+  ],
+});
 export const threadItemFileChanges = threadItemFileChangesHistory.current;
 
 const threadFileChangesV1 = defineTable("thread_file_changes", {
@@ -214,8 +246,62 @@ const threadFileChangesV1 = defineTable("thread_file_changes", {
     `),
   ],
 }));
-const threadFileChangesHistory = initialHistory(threadFileChangesV1);
+const threadFileChangesV2 = evolveTable(threadFileChangesV1, {
+  add: {
+    analysis_outcome: enumText("present", "unapplied", "partial", "copied", "uncertain"),
+    analysis_detail: text(),
+    analysis_additions: integer().nonNegative(),
+    analysis_deletions: integer().nonNegative(),
+  },
+});
+const threadFileChangesHistory = defineTableHistory({
+  current: threadFileChangesV2,
+  versions: [
+    tableVersion({ schemaVersion: 1, table: threadFileChangesV1, migration: createTable(threadFileChangesV1) }),
+    tableVersion({ schemaVersion: 14, table: threadFileChangesV2, migration: addColumns({
+      from: threadFileChangesV1, to: threadFileChangesV2, columns: ["analysis_outcome", "analysis_detail", "analysis_additions", "analysis_deletions"],
+    }) }),
+  ],
+});
 export const threadFileChanges = threadFileChangesHistory.current;
+
+const threadFileChangeHunksV1 = defineTable("thread_file_change_hunks", {
+  item_id: integer().notNull(),
+  change_index: integer().notNull().nonNegative(),
+  hunk_index: integer().notNull().nonNegative(),
+  outcome: enumText("present", "unapplied", "uncertain").notNull(),
+  reason: text(),
+  additions: integer().notNull().nonNegative(),
+  deletions: integer().notNull().nonNegative(),
+  current_start: integer().nonNegative(),
+  current_end: integer().nonNegative(),
+  old_start: integer().nonNegative(),
+  new_start: integer().nonNegative(),
+}, (table) => ({
+  constraints: [
+    primaryKey([table.item_id, table.change_index, table.hunk_index]),
+    foreignKey([table.item_id, table.change_index], { table: "thread_file_changes", columns: ["item_id", "change_index"], onDelete: "CASCADE" }),
+  ],
+}));
+const threadFileChangeHunksHistory = initialHistory(threadFileChangeHunksV1, 14);
+export const threadFileChangeHunks = threadFileChangeHunksHistory.current;
+
+const threadFileChangeCandidatesV1 = defineTable("thread_file_change_candidates", {
+  item_id: integer().notNull(),
+  change_index: integer().notNull().nonNegative(),
+  hunk_index: integer().notNull().nonNegative(),
+  candidate_index: integer().notNull().nonNegative(),
+  current_line: integer().notNull().nonNegative(),
+}, (table) => ({
+  constraints: [
+    primaryKey([table.item_id, table.change_index, table.hunk_index, table.candidate_index]),
+    foreignKey([table.item_id, table.change_index, table.hunk_index], {
+      table: "thread_file_change_hunks", columns: ["item_id", "change_index", "hunk_index"], onDelete: "CASCADE",
+    }),
+  ],
+}));
+const threadFileChangeCandidatesHistory = initialHistory(threadFileChangeCandidatesV1, 14);
+export const threadFileChangeCandidates = threadFileChangeCandidatesHistory.current;
 
 const threadItemContextCompactionsV1 = defineTable("thread_item_context_compactions", {
   item_id: integer().primaryKey(),
@@ -250,6 +336,45 @@ const threadItemUnknownV1 = defineTable("thread_item_unknown", {
 const threadItemUnknownHistory = initialHistory(threadItemUnknownV1);
 export const threadItemUnknown = threadItemUnknownHistory.current;
 
+const threadItemToolOutputsV1 = defineTable("thread_item_tool_outputs", {
+  item_id: integer().primaryKey(),
+  item_type: enumText("functionCallOutput").notNull().default("functionCallOutput"),
+  name: text().notNull(),
+  namespace: text(),
+  body_kind: enumText("text", "parts").notNull(),
+  body_text: text(),
+  injection_accepted_at: integer().nonNegative(),
+}, (table) => ({
+  constraints: [
+    foreignKey([table.item_id, table.item_type], { table: "thread_items", columns: ["id", "type"], onDelete: "CASCADE" }),
+    check(sql`
+      (${table.body_kind} = ${literal("text")} AND ${table.body_text} IS NOT NULL)
+      OR (${table.body_kind} = ${literal("parts")} AND ${table.body_text} IS NULL)
+    `),
+  ],
+}));
+const threadItemToolOutputsHistory = initialHistory(threadItemToolOutputsV1, 13);
+export const threadItemToolOutputs = threadItemToolOutputsHistory.current;
+
+const threadToolOutputPartsV1 = defineTable("thread_tool_output_parts", {
+  item_id: integer().notNull().references("thread_item_tool_outputs", "item_id", { onDelete: "CASCADE" }),
+  part_index: integer().notNull().nonNegative(),
+  part_type: enumText("text", "image").notNull(),
+  text: text(),
+  image_url: text(),
+  image_detail: enumText("auto", "low", "high", "original"),
+}, (table) => ({
+  constraints: [
+    primaryKey([table.item_id, table.part_index]),
+    check(sql`
+      (${table.part_type} = ${literal("text")} AND ${table.text} IS NOT NULL AND ${table.image_url} IS NULL AND ${table.image_detail} IS NULL)
+      OR (${table.part_type} = ${literal("image")} AND ${table.text} IS NULL AND ${table.image_url} IS NOT NULL)
+    `),
+  ],
+}));
+const threadToolOutputPartsHistory = initialHistory(threadToolOutputPartsV1, 13);
+export const threadToolOutputParts = threadToolOutputPartsHistory.current;
+
 const threadItemTimelinesV1 = defineTable("thread_item_timelines", {
   item_id: integer().primaryKey().references("thread_items", "id", { onDelete: "CASCADE" }),
   first_seen_at: integer(),
@@ -281,8 +406,12 @@ export const itemTables = Object.freeze({
   threadReasoningSections,
   threadItemFileChanges,
   threadFileChanges,
+  threadFileChangeHunks,
+  threadFileChangeCandidates,
   threadItemContextCompactions,
   threadItemUnknown,
+  threadItemToolOutputs,
+  threadToolOutputParts,
 });
 
 export type ItemSchemaRows = {
@@ -301,6 +430,10 @@ export const itemSchemaHistory = defineSubsystemHistory([
   threadReasoningSectionsHistory,
   threadItemFileChangesHistory,
   threadFileChangesHistory,
+  threadFileChangeHunksHistory,
+  threadFileChangeCandidatesHistory,
   threadItemContextCompactionsHistory,
   threadItemUnknownHistory,
+  threadItemToolOutputsHistory,
+  threadToolOutputPartsHistory,
 ]);

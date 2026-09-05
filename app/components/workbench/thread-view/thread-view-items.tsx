@@ -1,4 +1,5 @@
 /*
+ * Keywords: transcript rendering, grouping, incoming agent, native output.
  * Exports:
  * - ThreadTranscriptItemDetails: render one provider or relational transcript item with the established item UI. Keywords: workbench, transcript, comparison, item.
  * - ThreadTranscriptItemsDetails: render adjacent provider or relational items through shared command and reasoning grouping. Keywords: workbench, transcript, grouping, items.
@@ -44,6 +45,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
+import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import {
@@ -108,7 +110,9 @@ import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
-import ThreadAgentIncomingMessage from "./ThreadAgentIncomingMessage";
+import ThreadIncomingAgentMessageItem from "./ThreadIncomingAgentMessageItem";
+import ThreadAgentScreenshotItem from "./ThreadAgentScreenshotItem";
+import ThreadToolOutputItem from "./ThreadToolOutputItem";
 import ThreadSubagentMessageItem from "./ThreadSubagentMessageItem";
 import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
@@ -790,31 +794,26 @@ function ThreadUserMessageItem ({
   if (agentMessage) {
     const steerState = getSteerUserMessageState(item);
     return (
-      <ThreadAgentIncomingMessage
-        name={agentMessage.senderName}
+      <ThreadIncomingAgentMessageItem
+        message={agentMessage}
         steerState={steerState}
         subagent={getSubagentSummary(subagents, agentMessage.senderThreadId)}
         timestamp={showStartedAt ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} /> : undefined}
-      >
-        <ThreadMarkdown
-          inlineMentionSources={inlineMentionSources}
-          markdown={agentMessage.message}
-          threadCwdPath={threadCwdPath}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
-        />
-      </ThreadAgentIncomingMessage>
+        inlineMentionSources={inlineMentionSources}
+        threadCwdPath={threadCwdPath}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        workspaceRoots={workspaceRoots}
+      />
     );
   }
 
   if (isAgentScreenshotSteerUserMessage(item)) {
     return (
-      <ThreadAgentScreenshotSteerItem
-        item={item}
-        showStartedAt={showStartedAt}
-        startedAt={startedAt}
+      <ThreadAgentScreenshotItem
+        images={getAgentScreenshotSteerImages(item).map((image) => image.url)}
+        timestamp={showStartedAt ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} /> : undefined}
       />
     );
   }
@@ -858,37 +857,6 @@ function ThreadUserMessageItem ({
         <ThreadBubbleCopyButton markdown={copyMarkdown} side="right" />
       </div>
       {showStartedAt ? <ThreadMessageTimestamp align="right" className="mt-1" timestampSeconds={startedAt} /> : null}
-    </section>
-  );
-}
-
-function ThreadAgentScreenshotSteerItem ({
-  item,
-  showStartedAt,
-  startedAt,
-}: {
-  item: Extract<ThreadItem, { type: "userMessage" }>;
-  showStartedAt: boolean;
-  startedAt: number | null;
-}) {
-  const images = getAgentScreenshotSteerImages(item);
-  if (!images.length) {
-    return null;
-  }
-
-  return (
-    <section className="flex flex-col items-start py-2" data-thread-user-message-state="agent-screenshot-steer">
-      <div className="w-full max-w-[42rem] space-y-2">
-        {images.map((image, index) => (
-          <ThreadUserImage
-            key={`${item.id}:agent-screenshot:${index}`}
-            alt="Agent-captured screenshot"
-            className="max-w-[28rem]"
-            src={image.url}
-          />
-        ))}
-      </div>
-      {showStartedAt ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} /> : null}
     </section>
   );
 }
@@ -2660,6 +2628,25 @@ function ThreadRenderableBlockViewComponent ({
   }
 
   switch (block.item.type) {
+    case "functionCallOutput": {
+      const item = readWorkbenchToolOutput(block.item);
+      if (!item) return <ThreadFallbackItem item={block.item} />;
+      const timeline = findWorkbenchThreadItemTimelineEntry(item.id, itemTimeline);
+      const timestamp = timeline?.firstSeenAt ?? item.workbenchInjectionAcceptedAt;
+      return (
+        <ThreadToolOutputItem
+          item={item}
+          subagents={subagents}
+          timestamp={timestamp === undefined || timestamp === null ? undefined : <ThreadMessageTimestamp className="mt-1" timestampSeconds={timestamp / 1_000} />}
+          inlineMentionSources={inlineMentionSources}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          threadCwdPath={threadCwdPath}
+          projectRootPath={projectRootPath}
+          workspaceRoots={workspaceRoots}
+        />
+      );
+    }
     case "userMessage":
       return (
         <ThreadUserMessageItem

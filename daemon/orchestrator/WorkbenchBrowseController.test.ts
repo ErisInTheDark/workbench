@@ -26,7 +26,7 @@ function createController(
 ) {
   const results: WorkbenchBrowseResultSink = {
     record: () => undefined,
-    steerScreenshot: async () => "turn-1",
+    deliverScreenshot: async () => ({ kind: "steered", turnId: "turn-1" }),
     waitForIdle: async () => undefined,
   };
   return new WorkbenchBrowseController(results, new WorkbenchBrowseRuntime(), {

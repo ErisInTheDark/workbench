@@ -1,4 +1,5 @@
 /*
+ * Keywords: thread context, attribution, markdown, stable refs.
  * Exports:
  * - renderUserInputMarkdown: convert UserInput records into reorientation-safe Markdown with image placeholders. Keywords: user input, image placeholder, markdown.
  * - renderWorkbenchThreadContextPieceMarkdown: render one heading-free chronological context piece. Keywords: thread context, piece, markdown.
@@ -66,13 +67,17 @@ function renderQuestionnaireMarkdown(piece: Extract<WorkbenchThreadContextPiece,
 }
 
 export function renderWorkbenchThreadContextPieceMarkdown(piece: WorkbenchThreadContextPiece) {
-  if (piece.kind === "userMessage" || piece.kind === "userSteer") {
-    const agentMessage = readWorkbenchAgentMessageInput(piece.input);
-    if (agentMessage) {
-      return `Agent message from ${agentMessage.senderName} (${agentMessage.senderThreadId})\n\n${agentMessage.message}`;
-    }
+  const agentMessage = piece.kind === "agentMessage"
+    ? piece.message
+    : piece.kind === "userMessage" || piece.kind === "userSteer"
+      ? readWorkbenchAgentMessageInput(piece.input)
+      : null;
+  if (agentMessage) {
+    return `Agent message from ${agentMessage.senderName} (${agentMessage.senderThreadId})\n\n${agentMessage.message}`;
   }
   switch (piece.kind) {
+    case "agentMessage":
+      return piece.message.message;
     case "userMessage":
       return renderUserInputMarkdown(piece.displayInput);
     case "userSteer":
@@ -86,6 +91,8 @@ export function renderWorkbenchThreadContextPieceMarkdown(piece: WorkbenchThread
 
 export function getWorkbenchThreadContextPieceRef(piece: WorkbenchThreadContextPiece) {
   switch (piece.kind) {
+    case "agentMessage":
+      return `agent-message:${piece.itemId}`;
     case "userMessage":
       return `user:${piece.itemId}`;
     case "userSteer":

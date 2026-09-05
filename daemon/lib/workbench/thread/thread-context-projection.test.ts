@@ -10,6 +10,7 @@ import type { ThreadPayload, WorkbenchThreadContextBundle } from "workbench-shar
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { renderWorkbenchThreadContextPieceMarkdown } from "./thread-context-markdown.ts";
 import { buildWorkbenchThreadContextPieces } from "./thread-context-projection.ts";
+import { createWorkbenchAgentMessageOutput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 function thread(): ThreadPayload {
@@ -23,6 +24,26 @@ function thread(): ThreadPayload {
     ], itemsView: "full", startedAt: 1, status: "completed" }],
   };
 }
+
+test("native incoming agents retain attribution and position without becoming user input", () => {
+  const source = thread();
+  const message = { message: "review the cancellation owner", senderName: "iris", senderThreadId: "child" };
+  source.turns[0]!.items.splice(1, 0, {
+    ...createWorkbenchAgentMessageOutput(message), id: "native-agent", type: "functionCallOutput",
+  }, {
+    id: "passive", type: "functionCallOutput", namespace: "workbench", name: "patch_recovery", output: "tool context",
+  });
+  const pieces = buildWorkbenchThreadContextPieces({
+    browseResultEntries: [], questionnaireEntries: [], steerEntries: [], thread: source,
+  });
+  assert.deepEqual(pieces.map((piece) => [piece.kind, piece.itemId]), [
+    ["userMessage", "canonical-a"], ["agentMessage", "native-agent"], ["userMessage", "canonical-b"],
+  ]);
+  const incoming = pieces[1]!;
+  assert.equal("input" in incoming, false);
+  const markdown = renderWorkbenchThreadContextPieceMarkdown(incoming);
+  for (const value of Object.values(message)) assert.ok(markdown.includes(value));
+});
 
 test("native steer suppresses and positions only its exact canonical message", () => {
   const bundle: WorkbenchThreadContextBundle = {

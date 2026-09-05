@@ -27,7 +27,7 @@ import type { ThreadMarkdownAppendRenderTarget } from "../../../workbench/markdo
 import {
   splitUnifiedDiffLine,
   type UnifiedDiffDisplayLine,
-} from "../../../workbench/thread/thread-file-diff";
+} from "workbench-shared/workbench/thread/unified-diff";
 import ChevronIcon from "../ChevronIcon";
 import ProjectFilePath from "../ProjectFilePath";
 import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-icons";

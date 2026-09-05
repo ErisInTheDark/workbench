@@ -26,6 +26,17 @@ const thread = {
   activity_at: 1,
 };
 
+test("read and subscription decoding retain supported protocol versions and reject unsupported ones", () => {
+  for (const method of [workbenchTranscriptOperations.read.method, workbenchTranscriptOperations.subscribe.method]) {
+    const input = { threadId: "thread", turnLimit: 1, subscriptionId: "sub", protocolVersion: 2 };
+    const decoded = decodeWorkbenchTranscriptRequest(method, input);
+    assert.ok(decoded?.success);
+    assert.equal((decoded.data.params as { protocolVersion?: number }).protocolVersion, 2);
+    assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 0 })?.success, false);
+    assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 3 })?.success, false);
+  }
+});
+
 test("transcript requests resolve exact shared operation values and decode their params", () => {
   const decoded = decodeWorkbenchTranscriptRequest(
     workbenchTranscriptOperations.read.method,

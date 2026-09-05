@@ -3,10 +3,15 @@
  * - WORKBENCH_AGENT_MESSAGE_TAG_WRAPPER: shared UI-visible wrapper owned by cross-agent messaging. Keywords: agent, message, tag, wrapper.
  * - WorkbenchAgentMessage/readWorkbenchAgentMessageText/readWorkbenchAgentMessageInput: parse attributed cross-agent messages from thread input. Keywords: agent, message, parse, render, recall.
  * - createWorkbenchAgentMessageText: build an attributed cross-agent message with agent-facing context. Keywords: agent, message, envelope.
+ * - readWorkbenchAgentMessageItem: read attribution from legacy or native incoming items.
+ * - createWorkbenchAgentMessageOutput: encode agent information at tool authority.
  */
 
 import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts";
+import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
+import type { TurnToolOutput } from "../../codex/generated/app-server/v2/TurnToolOutput.ts";
 import { defineTagWrapper } from "./tag-wrapper.ts";
+import { getWorkbenchToolOutputText, readWorkbenchToolOutput } from "./thread-tool-output.ts";
 
 export const WORKBENCH_AGENT_MESSAGE_TAG_WRAPPER = defineTagWrapper("wb:agent-message", {
   allowLeadingText: true,
@@ -60,4 +65,15 @@ export function readWorkbenchAgentMessageInput(input: readonly UserInput[]) {
     if (message) return message;
   }
   return null;
+}
+
+export function readWorkbenchAgentMessageItem(item: ThreadItem) {
+  if (item.type === "userMessage") return readWorkbenchAgentMessageInput(item.content);
+  if (item.type !== "functionCallOutput" || item.namespace !== "workbench" || item.name !== "agent_message") return null;
+  const output = readWorkbenchToolOutput(item);
+  return output ? readWorkbenchAgentMessageText(getWorkbenchToolOutputText(output)) : null;
+}
+
+export function createWorkbenchAgentMessageOutput(message: WorkbenchAgentMessage): TurnToolOutput {
+  return { name: "agent_message", namespace: "workbench", output: createWorkbenchAgentMessageText(message) };
 }
