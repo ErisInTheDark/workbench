@@ -7,7 +7,6 @@
   "scripts": {
     "dev": "pnpm --dir .. dev",
     "dev:orchestrator": "node --env-file-if-exists=.env.local --import tsx orchestrator/index.ts",
-    "codex:generate-types": "codex app-server generate-ts --experimental --out ../shared/codex/generated/app-server",
     "test": "pnpm --dir .. test"
   },
   "dependencies": {

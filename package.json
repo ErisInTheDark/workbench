@@ -6,7 +6,8 @@
     "build:tray": "node scripts/build-tray.mjs",
     "test": "node --disable-warning=ExperimentalWarning --import tsx test/run-project-tests.mjs",
     "typecheck": "node scripts/typecheck.mjs",
-    "dev": "node --env-file-if-exists=./daemon/.env.local --import tsx ./runner/index.ts"
+    "dev": "node --env-file-if-exists=./daemon/.env.local --import tsx ./runner/index.ts",
+    "codex:types": "codex app-server generate-ts --experimental --out ./shared/codex/generated/app-server"
   },
   "devDependencies": {
     "@types/better-sqlite3": "9.6.0",
