@@ -1183,6 +1183,7 @@ export async function WorkbenchClient(
         console.error("Unable to update the pinned draft.", error instanceof Error ? error.message.slice(0, 500) : "Unknown pinned draft update failure.");
       });
     },
+    flushThreadDraft: (projectId, draftId) => threadSidebarClient.flushDraft(projectId, draftId),
     getSelectedThreadDraft: () => selectedPinnedThreadDraft ? cloneThreadDraft(selectedPinnedThreadDraft) : null,
     listModels: threadClient.listModels,
     moveThreadDraft: async (sourceProjectId, destinationProjectId, draftId) => {

@@ -1,4 +1,5 @@
 /*
+ * Keywords: composer, profile, persistence, connection, projection.
  * Exports:
  * - default WorkbenchComposerProfileController: own daemon profile definitions and guarded daemon-target projections. Keywords: composer, profile, controller, daemon, projection.
  * - WorkbenchComposerProfileSnapshot: immutable React-facing profile, selection, and failure snapshot. Keywords: composer, profile, snapshot, error.
@@ -84,11 +85,22 @@ export default class WorkbenchComposerProfileController {
     }
   }
 
-  initializeTargetPersistence(persistence: ComposerProfileTargetPersistence) {
+  async initializeTargetPersistence(persistence: ComposerProfileTargetPersistence) {
     this.targetPersistence = persistence;
+    await Promise.all([...this.slots.values()].map((slot) => this.loadSelection(slot)));
+  }
+
+  disconnectPersistence() {
+    this.persistence = null;
+    this.targetPersistence = null;
+    this.profileGeneration++;
+    for (const [key, generation] of this.selectionGenerations) {
+      this.selectionGenerations.set(key, generation + 1);
+    }
   }
 
   dispose() {
+    this.disconnectPersistence();
     this.listeners.clear();
   }
 
@@ -178,10 +190,12 @@ export default class WorkbenchComposerProfileController {
   async loadSelection(slot: WorkbenchComposerProfileSlot) {
     const key = getSlotKey(slot);
     this.slots.set(key, slot);
+    const persistence = this.targetPersistence;
+    if (!persistence) return;
     const generation = (this.selectionGenerations.get(key) ?? 0) + 1;
     this.selectionGenerations.set(key, generation);
     try {
-      const selection = await this.requireTargetPersistence().read(slot);
+      const selection = await persistence.read(slot);
       if ((this.selectionGenerations.get(key) ?? 0) !== generation) return;
       if (selection) {
         this.installStableSelection(slot, selection, false);

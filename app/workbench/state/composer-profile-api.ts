@@ -1,4 +1,5 @@
 /*
+ * Keywords: composer, profile, daemon, draft, persistence, boundary.
  * Exports:
  * - ComposerProfilePersistence: typed browser boundary for daemon-owned composer profiles. Keywords: composer, profile, daemon, api.
  * - ComposerProfileTargetPersistence: typed browser boundary for daemon-owned target profile snapshots. Keywords: composer, profile, target, daemon.
@@ -27,9 +28,18 @@ export function createComposerProfilePersistence(daemon: WorkbenchDaemonClient):
   };
 }
 
-export function createComposerProfileTargetPersistence(daemon: WorkbenchDaemonClient): ComposerProfileTargetPersistence {
+export function createComposerProfileTargetPersistence(
+  daemon: Pick<WorkbenchDaemonClient, "request">,
+  flushDraft: (projectId: string, draftId: string) => Promise<void>,
+): ComposerProfileTargetPersistence {
   return {
-    read: async (slot) => (await daemon.request("profiles/target/read", { slot })).selection,
-    write: async (slot, selection) => { await daemon.request("profiles/target/set", { selection, slot }); },
+    read: async (slot) => {
+      if (slot.kind === "draft") await flushDraft(slot.projectId, slot.draftId);
+      return (await daemon.request("profiles/target/read", { slot })).selection;
+    },
+    write: async (slot, selection) => {
+      if (slot.kind === "draft") await flushDraft(slot.projectId, slot.draftId);
+      await daemon.request("profiles/target/set", { selection, slot });
+    },
   };
 }

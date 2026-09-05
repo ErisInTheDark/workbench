@@ -1,7 +1,7 @@
 /*
+ * Keywords: composer, thread, questionnaire, model, agent, attachments, sticky composer.
  * Exports:
  * - default ThreadComposer: render thread composer controls, message input, attachments, and questionnaire handoff. Keywords: composer, thread, questionnaire, model, agent.
- * - Local helpers: attachment reading, sticky composer preview rendering, saved draft shelf rendering, and compact composer icons. Keywords: attachments, saved drafts, user input, controls, sticky composer.
  */
 "use client";
 
@@ -259,7 +259,7 @@ export default function ThreadComposer ({
   const isStopDisabled = stopControlState.disabled;
   const isMobileTextInput = useMobileTextInputEnvironment();
   const helperText = !hasEffectiveProfile
-      ? composerProfileSnapshot.error || "Loading daemon profile settings..."
+      ? composerProfileSnapshot.error
       : hasVisiblePendingUserInputRequest
       ? "\xa0"
       : isAttaching
@@ -978,6 +978,13 @@ export default function ThreadComposer ({
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     {showsThreadControls ? (
+                    !hasEffectiveProfile && !composerProfileSnapshot.error ? (
+                      <div
+                        role="status"
+                        aria-label="Loading composer profile"
+                        className="workbench-skeleton h-9 w-48 max-w-full rounded-full"
+                      />
+                    ) :
                     <ThreadComposerRibbon
                       agentLabel={agentButtonLabel}
                       currentReasoningEffort={currentReasoningEffort ?? "default"}

@@ -219,6 +219,39 @@ test("optimistic draft edits preserve pushed pin and snooze metadata", async () 
   assert.deepEqual(optimistic?.entryKind === "draft" ? optimistic.metadata : null, { archived: false, pinned: true, snoozed: true });
 });
 
+test("a profile target flush waits for its draft without flushing another draft", async () => {
+  const writes: WorkbenchThreadDraft[] = [];
+  let release!: () => void;
+  const saving = new Promise<void>((resolve) => { release = resolve; });
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: {
+      close: async () => undefined,
+      deleteDraft: async () => undefined,
+      open: async () => snapshot(1),
+      upsertDraft: async (_projectId, value) => { writes.push(value); await saving; },
+    },
+  });
+  await client.open("project");
+  const selected = draft("selected draft", 2);
+  const other = { ...draft("other draft", 2), draftId: "00000000-0000-4000-8000-000000000099" };
+  client.edit(selected);
+  client.edit(other);
+  try {
+    let flushed = false;
+    const flushing = client.flushDraft(selected.projectId, selected.draftId).then(() => { flushed = true; });
+    assert.deepEqual(writes.map((value) => value.draftId), [selected.draftId]);
+    assert.equal(flushed, false);
+    release();
+    await flushing;
+    assert.equal(flushed, true);
+    assert.deepEqual(writes.map((value) => value.draftId), [selected.draftId]);
+  } finally {
+    release();
+    await client.close();
+  }
+});
+
 test("project-qualified snapshots preserve the route snapshot identity in project mode", async () => {
   const client = new ThreadSidebarClient({
     onChange: () => undefined,

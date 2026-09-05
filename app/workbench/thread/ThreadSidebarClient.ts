@@ -1,7 +1,12 @@
 /*
+ * Keywords: sidebar, project, pinned, drafts, debounce, flush, observation.
  * Exports:
- * - ThreadSidebarTransport/ThreadSidebarClientOptions/ThreadSidebarAcceptedIntent: project and global observation, mutation ports, and provider-confirmed local admission. Keywords: browser, websocket, drafts, intent.
- * - default ThreadSidebarClient: subscribable project/global sidebar map, cross-project pin projection, revision, optimistic draft, and leave-safe project-qualified queue owner. Keywords: sidebar, project, pinned, status, external store, debounce, flush.
+ * - ThreadSidebarOpenResult: project observation bootstrap.
+ * - ThreadSidebarGlobalOpenResult: global observation bootstrap.
+ * - ThreadSidebarTransport: observation and draft mutation ports.
+ * - ThreadSidebarClientOptions: transport and snapshot callback.
+ * - ThreadSidebarAcceptedIntent: provider-confirmed local admission.
+ * - default ThreadSidebarClient: project/global sidebar state and project-qualified draft save queues.
  */
 import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -295,6 +300,11 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.publish();
   }
   async flush() { for (const [id, queue] of this.queues) await this.flushQueue(id, queue); }
+  async flushDraft(projectId: string, draftId: string) {
+    const id = this.queueKey(projectId, draftId);
+    const queue = this.queues.get(id);
+    if (queue) await this.flushQueue(id, queue);
+  }
   async guardNavigation(action: () => void | Promise<void>) { await this.flush(); await action(); }
   bestEffortFlush() { void this.flush().catch(() => undefined); }
   async reopen() {

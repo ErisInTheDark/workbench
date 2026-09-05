@@ -504,9 +504,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const controls = workbenchClient.controls;
   useEffect(() => {
     if (!controls) return;
-    composerProfileController.initializeTargetPersistence(createComposerProfileTargetPersistence(controls.daemon));
+    void composerProfileController.initializeTargetPersistence(createComposerProfileTargetPersistence(controls.daemon, controls.flushThreadDraft));
     void composerProfileController.initializePersistence(createComposerProfilePersistence(controls.daemon));
-    return () => { composerProfileController.dispose(); };
+    return () => { composerProfileController.disconnectPersistence(); };
   }, [composerProfileController, controls]);
   const [harness, setHarness] = useState<WorkbenchHarness>(() => (
     clientStateController.records("globalPreference").find((record) => (

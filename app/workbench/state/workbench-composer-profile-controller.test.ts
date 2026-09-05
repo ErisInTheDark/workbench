@@ -16,6 +16,8 @@ import type {
 } from "workbench-shared/types";
 import type { ComposerProfilePersistence, ComposerProfileTargetPersistence } from "./composer-profile-api";
 import WorkbenchComposerProfileController from "./WorkbenchComposerProfileController";
+import { createComposerProfileTargetPersistence } from "./composer-profile-api";
+import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 
 class MemoryPersistence implements ComposerProfilePersistence {
   failMutations = false;
@@ -92,6 +94,89 @@ test("missing daemon selection never resolves settings from a raw thread", async
   const slot = { kind: "thread" as const, harness: "codex" as const, projectId: "project-a", threadId: "thread" };
   assert.equal(controller.resolveSettings(slot), null);
   controller.dispose();
+});
+
+test("targets requested before connection load when persistence arrives", async () => {
+  const controller = new WorkbenchComposerProfileController();
+  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: "project-a", threadId: "thread" };
+  const targets = new MemoryTargetPersistence();
+  await targets.write(slot, { kind: "custom", settings: CODEX_SETTINGS });
+  let notifications = 0;
+  const unsubscribe = controller.subscribe(() => { notifications++; });
+
+  await controller.loadSelection(slot);
+  await controller.initializeTargetPersistence(targets);
+
+  assert.deepEqual(controller.resolveSettings(slot), CODEX_SETTINGS);
+  assert.equal(controller.getSnapshot().error, "");
+  assert.ok(notifications > 0);
+  unsubscribe();
+  controller.dispose();
+});
+
+test("disconnect fences late reads without severing profile subscribers", async () => {
+  const controller = new WorkbenchComposerProfileController();
+  const slot = { kind: "thread" as const, harness: "codex" as const, projectId: "project-a", threadId: "thread" };
+  let release!: (selection: WorkbenchComposerProfileTargetSelection) => void;
+  const pending = new Promise<WorkbenchComposerProfileTargetSelection>((resolve) => { release = resolve; });
+  await controller.initializeTargetPersistence({ read: async () => pending, write: async () => undefined });
+  let notifications = 0;
+  const unsubscribe = controller.subscribe(() => { notifications++; });
+  const loading = controller.loadSelection(slot);
+  controller.disconnectPersistence();
+  const replacement = new MemoryTargetPersistence();
+  await replacement.write(slot, { kind: "custom", settings: { ...CODEX_SETTINGS, model: "replacement" } });
+  await controller.initializeTargetPersistence(replacement);
+  release({ kind: "custom", settings: CODEX_SETTINGS });
+  await loading;
+  assert.equal(controller.resolveSettings(slot)?.model, "replacement");
+  assert.ok(notifications > 0);
+  unsubscribe();
+  controller.dispose();
+});
+
+test("draft profile reads wait for persistence and propagate save failures", async () => {
+  let release!: () => void;
+  const saving = new Promise<void>((resolve) => { release = resolve; });
+  let reads = 0;
+  const daemon: Pick<WorkbenchDaemonClient, "request"> = {
+    request: async () => { reads++; return { selection: { kind: "custom", settings: CODEX_SETTINGS } } as never; },
+  };
+  const slot = { kind: "draft" as const, harness: "codex" as const, projectId: "project-a", draftId: "draft" };
+  const persistence = createComposerProfileTargetPersistence(daemon, async (projectId, draftId) => {
+    assert.equal(projectId, slot.projectId);
+    assert.equal(draftId, slot.draftId);
+    await saving;
+  });
+  const reading = persistence.read(slot);
+  assert.equal(reads, 0);
+  release();
+  assert.deepEqual(await reading, { kind: "custom", settings: CODEX_SETTINGS });
+  const failing = createComposerProfileTargetPersistence(daemon, async () => { throw new Error("Draft save failed"); });
+  await assert.rejects(failing.read(slot), /Draft save failed/);
+  assert.equal(reads, 1);
+  await failing.read({ kind: "thread", harness: "codex", projectId: "project-a", threadId: "thread" });
+  assert.equal(reads, 2);
+});
+
+test("draft profile edits cannot overtake a queued draft save", async () => {
+  let release!: () => void;
+  const saving = new Promise<void>((resolve) => { release = resolve; });
+  let writes = 0;
+  const daemon: Pick<WorkbenchDaemonClient, "request"> = {
+    request: async () => { writes++; return {} as never; },
+  };
+  const slot = { kind: "draft" as const, harness: "codex" as const, projectId: "project-a", draftId: "draft" };
+  const selection = { kind: "custom" as const, settings: CODEX_SETTINGS };
+  const persistence = createComposerProfileTargetPersistence(daemon, async () => saving);
+  const writing = persistence.write(slot, selection);
+  assert.equal(writes, 0);
+  release();
+  await writing;
+  assert.equal(writes, 1);
+  const failing = createComposerProfileTargetPersistence(daemon, async () => { throw new Error("Draft save failed"); });
+  await assert.rejects(failing.write(slot, selection), /Draft save failed/);
+  assert.equal(writes, 1);
 });
 
 test("target edits reach daemon before preceding saves finish", async () => {
