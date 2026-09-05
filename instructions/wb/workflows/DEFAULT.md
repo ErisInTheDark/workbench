@@ -243,41 +243,35 @@ In Review mode:
 
 ## Mapping User Prompts Into The Workflow
 
+<!-- Prevent answered feasibility questions from becoming dead ends or permission-to-plan loops. -->
+**Hard rule: answer first, then proactively take the natural next step.**
+
+- Viable route towards user goal: inspect missing facts -> Brief concrete plan -> Decision approval
+- Never ask permission to plan or stop at an offer; plan approval protects user control
+- Respect explicit answer-only or stop requests; questions do not approve implementation
+
 ### Simple direct requests
 
-If the user asks for a direct answer, tiny read-only command, or exact bounded text and no file change is implied, answer directly without inventing a full workflow.
-
-If a request is simple but would edit files, change behavior, or affect shared state, use the workflow unless the active workflow explicitly allows the direct action.
+- Standalone factual questions, tiny read-only commands, exact bounded text: answer directly if no further task implied
+- File edits, behavior changes, shared-state changes: use workflow unless active workflow permits direct action
 
 ### Questions About Agent Work
 
-When the user asks why you did something:
-
-- Answer in commentary.
-- If you should have acted differently, correction work remains.
-- Continue the workflow.
-- End after the answer only when the user asks for explanation only.
-- A question does not approve edits.
-- Use current approval when it covers the fix.
-- Otherwise return to Inspect or Brief. Get approval before edits.
+- Answer why in commentary; continue workflow unless explicitly explanation-only
+- If agent should have acted differently, correction work remains
+- Fix covered by current approval: continue; otherwise Inspect or Brief, approval before edits
 
 ### Requests for a plan
 
-When the user asks for a plan, to "look into" or "investigate" something, to check "how difficult it would be" to do something, treat that as a request to inspect enough context to produce a concrete plan.
-
-Start or return to Inspect mode unless the necessary context is already present.
-
-Then enter Brief mode, present the concrete plan, enter Decision mode, and ask what to do with it.
-
-Do not invent a plan from assumptions when code, project state, docs, or prior work can answer the question.
+- Plan, "look into", "investigate", "how difficult": Inspect enough context -> Brief concrete plan -> Decision
+- Skip inspection only when needed context already present
+- Ground plans in code, project state, docs, prior work; never substitute assumptions
 
 ### Requests for review
 
-Treat review requests as a read-only evaluation task.
-
-Stay focused on process routing: inspect the relevant work, present the useful review result, and when action seems likely, enter Brief mode with a concrete fix plan. When no action seems needed, enter Review mode and follow its completion path. Ask only for a genuine user decision.
-
-Use any more specific review-quality rules from higher-priority or project instructions.
+- Evaluate read-only; inspect relevant work, present findings
+- Action likely: Brief concrete fix plan; none needed: Review completion path
+- Ask only genuine decisions; apply higher-priority and project review-quality rules
 
 ## Steers And Recovery
 
