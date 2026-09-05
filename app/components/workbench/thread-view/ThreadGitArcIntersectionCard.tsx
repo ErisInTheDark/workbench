@@ -44,7 +44,7 @@ export default function ThreadGitArcIntersectionCard({
   const activeThreadCount = intersections.activeEntries.length;
   const plannedThreadCount = intersections.plannedEntries.length;
   const visibleThreadCount = activeThreadCount + (compact ? 0 : plannedThreadCount);
-  const snoozedPlannedThreadCount = intersections.plannedEntries.filter((entry) => entry.metadata.snoozed).length;
+  const snoozedPlannedThreadCount = intersections.plannedEntries.filter(({ entry }) => entry.metadata.snoozed).length;
   const activePlannedThreadCount = plannedThreadCount - snoozedPlannedThreadCount;
   const plannedThreadSummary = [
     activePlannedThreadCount ? formatThreadCount(activePlannedThreadCount, "active") : null,

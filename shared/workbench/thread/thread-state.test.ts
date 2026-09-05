@@ -483,8 +483,16 @@ test("plan intersections classify active and planned siblings while stabilizing 
     plannedEntries: [],
   });
   const intersections = getWorkbenchThreadPlanIntersections(entries, owner.identity);
-  assert.deepEqual(intersections.activeEntries.map((entry) => entry.title), ["working", "completed", "attention", "settled"]);
-  assert.deepEqual(intersections.plannedEntries.map((entry) => entry.title), ["planned"]);
+  assert.deepEqual(intersections.activeEntries.map(({ entry }) => entry.title), ["working", "completed", "attention", "settled"]);
+  assert.deepEqual(intersections.activeEntries.map(({ paths }) => paths), [
+    ["src/feature"], ["src/feature"], ["src/feature/card.tsx"], ["src/feature/deep/file.ts"],
+  ]);
+  assert.deepEqual(intersections.plannedEntries.map(({ entry, paths }) => [entry.title, paths]), [["planned", ["src/feature/planned.ts"]]]);
+  const duplicateMatches = getWorkbenchThreadPlanIntersections([
+    { ...owner, gitArcPlan: { ...owner.gitArcPlan, scopePaths: ["src/feature", "src/feature/card.tsx"] } },
+    { ...attention, gitArc: { ...attention.gitArc!, claimedPaths: ["src/feature/card.tsx", "docs/unrelated.ts"] } },
+  ], owner.identity);
+  assert.deepEqual(duplicateMatches.activeEntries.map(({ paths }) => paths), [["src/feature/card.tsx"]]);
   assert.equal(getWorkbenchThreadPlanIntersections(entries, { harness: "codex", threadId: "missing" }).hasPlannedClaims, false);
 
   const select = createWorkbenchThreadPlanIntersectionSelector(owner.identity);
@@ -493,7 +501,7 @@ test("plan intersections classify active and planned siblings while stabilizing 
   assert.equal(select({ ...snapshot, error: "unrelated", revision: 2 }), first);
   const changed = select({ ...snapshot, entries: entries.map((entry) => entry === working ? { ...working, title: "working changed" } : entry), revision: 3 });
   assert.notEqual(changed, first);
-  assert.equal(changed.activeEntries[0]?.title, "working changed");
+  assert.equal(changed.activeEntries[0]?.entry.title, "working changed");
 });
 
 test("lifecycle parsing preserves canonical attention variants and normalizes legacy reasons", () => {

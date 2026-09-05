@@ -11,7 +11,7 @@
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, project-summary, mutation, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
  * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness. Keywords: git, arc, settlement, proposal, wake.
  * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition already-ordered entries into hidden, pinned, main, snoozed, and settled render sections. Keywords: grouping, pin, sidebar.
- * - WorkbenchThreadPlanIntersections/getWorkbenchThreadPlanIntersections/createWorkbenchThreadPlanIntersectionSelector: describe, derive, and identity-stabilize visible sibling active and planned claim intersections from one inactive plan and the live sidebar snapshot. Keywords: plan, claim, intersection, sidebar, selector.
+ * - WorkbenchThreadPlanIntersections/getWorkbenchThreadPlanIntersections/createWorkbenchThreadPlanIntersectionSelector: derive and identity-stabilize sibling active and planned intersections with narrower overlapping paths. Keywords: plan, claim, intersection, sidebar, selector.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback. Keywords: title, preview, uuid.
  * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: manual-status eligibility, exact-turn transitions, and direct-child status projection. Keywords: working, attention, completed, stopped, parent.
@@ -698,9 +698,9 @@ export function groupWorkbenchThreadSidebarEntries(entries: readonly WorkbenchTh
 }
 
 export interface WorkbenchThreadPlanIntersections {
-  activeEntries: WorkbenchTopLevelThreadSidebarEntry[];
+  activeEntries: Array<{ entry: WorkbenchTopLevelThreadSidebarEntry; paths: string[] }>;
   hasPlannedClaims: boolean;
-  plannedEntries: WorkbenchTopLevelThreadSidebarEntry[];
+  plannedEntries: Array<{ entry: WorkbenchTopLevelThreadSidebarEntry; paths: string[] }>;
 }
 
 const EMPTY_WORKBENCH_THREAD_PLAN_INTERSECTIONS: WorkbenchThreadPlanIntersections = {
@@ -729,13 +729,19 @@ export function getWorkbenchThreadPlanIntersections(
     entry.entryKind === "thread"
     && (entry.identity.harness !== identity.harness || entry.identity.threadId !== identity.threadId)
   ));
-  const overlapsPlan = (candidatePaths: readonly string[]) => candidatePaths.some((candidatePath) => (
-    scopePaths.some((scopePath) => gitArcPathsOverlap(candidatePath, scopePath))
-  ));
+  const intersect = (selectPaths: (entry: WorkbenchTopLevelThreadSidebarEntry) => readonly string[]) => (
+    orderWorkbenchTopLevelThreadEntries(candidates).flatMap((entry) => {
+      const paths = [...new Set(selectPaths(entry).flatMap((candidatePath) => (
+        scopePaths.filter((scopePath) => gitArcPathsOverlap(candidatePath, scopePath))
+          .map((scopePath) => candidatePath.length >= scopePath.length ? candidatePath : scopePath)
+      )))];
+      return paths.length ? [{ entry, paths }] : [];
+    })
+  );
   return {
-    activeEntries: orderWorkbenchTopLevelThreadEntries(candidates.filter((entry) => overlapsPlan(entry.gitArc?.claimedPaths ?? []))),
+    activeEntries: intersect((entry) => entry.gitArc?.claimedPaths ?? []),
     hasPlannedClaims: true,
-    plannedEntries: orderWorkbenchTopLevelThreadEntries(candidates.filter((entry) => overlapsPlan(entry.gitArcPlan?.scopePaths ?? []))),
+    plannedEntries: intersect((entry) => entry.gitArcPlan?.scopePaths ?? []),
   };
 }
 

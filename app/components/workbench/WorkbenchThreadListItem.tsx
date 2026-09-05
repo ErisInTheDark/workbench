@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, draft presence, direct navigation, tooltip detail, drag targets, and explicit context-menu access. Keywords: thread, project, sidebar, navigation, tooltip, context menu, claim, composer, draft, priority, pin, snooze, compact, drag.
- * - Local helpers: derive full or compact pinned-draft row targets and render bounded thread tooltip details. Keywords: thread, draft, target, tooltip, status.
+ * - Local helpers: derive full or compact pinned-draft row targets and render bounded thread tooltip details. Compact rows accept secondary content. Keywords: thread, draft, target, tooltip, status, secondary row.
  */
 "use client";
 
@@ -137,6 +137,7 @@ export default function WorkbenchThreadListItem({
   projectId,
   role,
   selected = false,
+  secondaryRow,
   showActions = false,
   showPinPriorityIcon = false,
   showTooltip = true,
@@ -165,6 +166,7 @@ export default function WorkbenchThreadListItem({
   projectId: string;
   role?: "tab";
   selected?: boolean;
+  secondaryRow?: ReactNode;
   showActions?: boolean;
   showPinPriorityIcon?: boolean;
   showTooltip?: boolean;
@@ -299,6 +301,7 @@ export default function WorkbenchThreadListItem({
             <time dateTime={dateTime} title={exactTime}>{relativeTime}</time>
           </span>
           {actionButton}
+          {secondaryRow ? <div className="col-span-3 row-start-2 min-w-0 pb-1 text-[0.9em]">{secondaryRow}</div> : null}
         </div>
       ) : (
         <WorkbenchThreadListFullRowContent

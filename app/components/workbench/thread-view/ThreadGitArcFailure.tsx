@@ -7,9 +7,9 @@
 import { useContext } from "react";
 
 import { describeGitArcFailure, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
-import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
-import ProjectFilePath from "../ProjectFilePath";
+import ProjectFileLinkList from "../ProjectFileLinkList";
 import { GitArcConflictIcon } from "./GitArcIcon";
 import ThreadGitArcConflictList from "./ThreadGitArcConflictList";
 import ThreadInlineCode from "./ThreadInlineCode";
@@ -54,17 +54,6 @@ export default function ThreadGitArcFailure({
     || missingOwners.length,
   );
 
-  const renderPath = (filePath: string) => {
-    const displayPath = toWorkspaceDisplayPath(filePath, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? filePath;
-    return (
-      <ProjectFilePath
-        className="min-w-0 max-w-full shrink text-[0.9em]"
-        disambiguationPaths={projectFilePaths}
-        path={displayPath}
-        projectId={resolvedProjectId}
-      />
-    );
-  };
   const message = failure.code === "missingArcRef"
     ? <>There is no git arc by the <ThreadInlineCode>{failure.ref}</ThreadInlineCode> ref.</>
     : failure.code === "proposalAlreadyCommitted"
@@ -98,9 +87,7 @@ export default function ThreadGitArcFailure({
                     <span className="shrink-0 font-mono">{commit.slice(0, 8)}</span>
                     <span className="min-w-0 truncate text-text">{subject || "No commit subject"}</span>
                   </div>
-                  <div className="mt-0.5 flex flex-wrap gap-1 text-muted">
-                    {paths.map((filePath) => <span key={filePath}>{renderPath(filePath)}</span>)}
-                  </div>
+                  <ProjectFileLinkList paths={paths} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath ?? ""} workspaceRoots={workspaceRoots} />
                 </div>
               ))}
             </div>
@@ -117,7 +104,7 @@ export default function ThreadGitArcFailure({
           ) : null}
           {canRenderLiveThreads ? (
             <ThreadGitArcConflictList
-              entries={liveEntries}
+              entries={liveEntries.map((entry) => ({ entry, paths: [] }))}
               onOpenThread={presentationContext!.onOpenThread!}
               projectId={resolvedProjectId!}
             />

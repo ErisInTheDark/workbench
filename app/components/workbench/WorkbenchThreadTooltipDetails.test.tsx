@@ -13,6 +13,8 @@ import type { WorkbenchClientController } from "./workbench-client-context";
 import WorkbenchContextMenuProvider from "./WorkbenchContextMenuProvider";
 import WorkbenchThreadTooltipDetails from "./WorkbenchThreadTooltipDetails";
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
+import ThreadGitArcConflictList from "./thread-view/ThreadGitArcConflictList";
+import { getWorkbenchThreadPlanIntersections } from "workbench-shared/workbench/thread/thread-state";
 
 const pendingRequest = {
   harness: "codex",
@@ -121,7 +123,7 @@ const planOwner = planThread("thread", null, {
 });
 const activeIntersection = planThread("active intersection", {
   checkpointCommit: "b".repeat(40),
-  claimedPaths: ["src/feature/card.tsx"],
+  claimedPaths: ["src/feature/card.tsx", "docs/unrelated.ts"],
   intentDescription: "",
   intentName: "active work",
   phase: "active",
@@ -183,6 +185,8 @@ test("planned-work tooltips keep active intersection navigation and omit planned
     sidebarStore: planStore,
   });
   assert.match(compactHtml, /href="\/project\/@\/thread\/active%20intersection"/u);
+  assert.match(compactHtml, /data-project-file-project-id="project"[^>]*data-project-file-relative-path="src\/feature\/card.tsx"/u);
+  assert.doesNotMatch(compactHtml, /data-project-file-relative-path="docs\/unrelated.ts"/u);
   assert.doesNotMatch(compactHtml, /href="\/project\/@\/thread\/planned%20intersection"|<details/u);
 
   const fullHtml = renderWithClient(
@@ -195,6 +199,12 @@ test("planned-work tooltips keep active intersection navigation and omit planned
     planStore,
   );
   assert.match(fullHtml, /<details/u);
+  const plannedHtml = renderWithClient(createElement(ThreadGitArcConflictList, {
+    entries: getWorkbenchThreadPlanIntersections(planSnapshot.entries, planOwner.identity).plannedEntries,
+    onOpenThread: () => undefined,
+    projectId: "project",
+  }), planStore);
+  assert.match(plannedHtml, /data-project-file-relative-path="src\/feature\/other.ts"/u);
 });
 
 test("Git arc waits show active claim owners without planned-only intersections", () => {
@@ -210,6 +220,8 @@ test("Git arc waits show active claim owners without planned-only intersections"
   );
 
   assert.match(html, /data-thread-git-arc-intersection-card="wait"/u);
+  assert.match(html, /data-project-file-relative-path="src\/feature\/card.tsx"/u);
+  assert.doesNotMatch(html, /data-project-file-relative-path="(?:docs\/unrelated.ts|src\/feature\/other.ts)"/u);
   assert.match(html, /href="\/project\/@\/thread\/active%20intersection"/u);
   assert.doesNotMatch(html, /planned%20intersection|<details/u);
 });
