@@ -3284,6 +3284,10 @@ export default class CodexStdioBridge {
       ({ resumeRequest, startRequest } = await this.prepareThreadConfiguration(readThread, { resumeRequest, startRequest }));
       this.assertAcceptingWork();
     }
+    // Fresh threads still need stored configuration, but have no rollout to resume.
+    if (this.unmaterializedThreadIds.has(threadId)) {
+      return await this.dispatchPreparedTurnStart(requestId, startRequest);
+    }
     const unsubscribeResponse = await this.dispatchManagedProviderRequest({
       id: `workbench:admission-unsubscribe:${String(requestId ?? Date.now())}`,
       method: "thread/unsubscribe",
@@ -3329,9 +3333,6 @@ export default class CodexStdioBridge {
     const threadId = asString(asRecord(startRequest.params)?.threadId)?.trim();
     if (!threadId) {
       return { id: requestId, error: { code: -32602, message: "Codex turn start requires a thread id." } };
-    }
-    if (this.unmaterializedThreadIds.has(threadId)) {
-      return await this.dispatchPreparedTurnStart(requestId, startRequest);
     }
     return await this.admitCodexTurn({
       requestId,

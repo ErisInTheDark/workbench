@@ -95,3 +95,48 @@ test("committed turn admission supplies native delta lookup and advances the pen
   controller.dispose();
   assert.throws(() => controller.knownTurn(turn.turnId), /disposed/iu);
 });
+
+test("Windows native path aliases resolve together after cold start without changing stored paths", async () => {
+  const locations = ["C:\\Project", "c:/project", "\\\\?\\C:\\PROJECT"];
+  const retained = {
+    ...record,
+    bindings: locations.map((nativeLocation) => ({ ...record.bindings[0]!, nativeLocation })),
+  };
+  const controller = new WorkbenchThreadIdentityController(database({
+    listThreadIdentities: async () => [retained],
+  }), "win32");
+  await controller.start();
+  try {
+    assert.ok(locations.includes(controller.knownNativeBinding("codex", "provider-owned").nativeLocation));
+    for (const nativeLocation of locations) {
+      assert.equal(controller.workbenchIdForNative({ ...record.bindings[0]!, nativeLocation }), record.threadId);
+    }
+    assert.deepEqual(controller.knownThread(record.threadId).bindings, retained.bindings);
+  } finally { controller.dispose(); }
+});
+
+test("Linux case-distinct native locations remain separate owners", async () => {
+  const first = { ...record, bindings: [{ ...record.bindings[0]!, nativeLocation: "/repo/Project" }] };
+  const second = { ...record, threadId: "another-owner", bindings: [{ ...record.bindings[0]!, nativeLocation: "/repo/project" }] };
+  const controller = new WorkbenchThreadIdentityController(database({
+    listThreadIdentities: async () => [first, second],
+  }), "linux");
+  await controller.start();
+  try {
+    assert.equal(controller.workbenchIdForNative(first.bindings[0]!), first.threadId);
+    assert.equal(controller.workbenchIdForNative(second.bindings[0]!), second.threadId);
+    assert.throws(() => controller.knownNativeBinding("codex", "provider-owned"), /requires a location/);
+  } finally { controller.dispose(); }
+});
+
+test("Windows path equivalence does not hide competing Workbench owners", async () => {
+  const controller = new WorkbenchThreadIdentityController(database({
+    listThreadIdentities: async () => [
+      { ...record, bindings: [{ ...record.bindings[0]!, nativeLocation: "C:\\Project" }] },
+      { ...record, threadId: "other", bindings: [{ ...record.bindings[0]!, nativeLocation: "c:/project" }] },
+    ],
+  }), "win32");
+  try {
+    await assert.rejects(controller.start(), /conflicting Workbench owners/);
+  } finally { controller.dispose(); }
+});

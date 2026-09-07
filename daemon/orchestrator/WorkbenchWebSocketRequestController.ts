@@ -32,6 +32,7 @@ import type { ServerNotification } from "workbench-shared/codex/generated/app-se
 import {
   mapNativeProviderResponse, mapNativeThreadStateSnapshot, mapNativeThreadStateResult,
   mapWorkbenchThreadStateRequest, mapWorkbenchProviderRequest,
+  type NativeThreadStateIdentityOwners,
 } from "./thread-identity-workbench-mapping";
 import { mapProviderNotification } from "./thread-identity-provider-mapping";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
@@ -104,7 +105,8 @@ interface PendingRequest extends WorkbenchWebSocketPendingRequestState {
 export interface WorkbenchWebSocketRequestControllerOptions {
   clearTimeout?: (timer: Timer) => void;
   daemonRequests?: Pick<WorkbenchDaemonRequestController, "accepts" | "handle">;
-  harnesses: Pick<WorkbenchHarnessController, "handleNativeBrowserMessage" | "resolvePublicRequest" | "request" | "resolveHarness">;
+  harnesses: Pick<WorkbenchHarnessController, "handleNativeBrowserMessage" | "resolvePublicRequest" | "request" | "resolveHarness">
+    & Partial<Pick<WorkbenchHarnessController, "resolveThreadIdentity" | "resolveTurnIdentity">>;
   identities?: NativeTranscriptIdentityOwners;
   initialState?: WorkbenchWebSocketRequestControllerState;
   now?: () => number;
@@ -173,6 +175,7 @@ export default class WorkbenchWebSocketRequestController {
   private detached = false;
   private readonly harnesses: WorkbenchWebSocketRequestControllerOptions["harnesses"];
   private readonly identities: WorkbenchWebSocketRequestControllerOptions["identities"];
+  private readonly threadStateIdentities: NativeThreadStateIdentityOwners | undefined;
   private readonly daemonRequests: NonNullable<WorkbenchWebSocketRequestControllerOptions["daemonRequests"]>;
   private readonly now: NonNullable<WorkbenchWebSocketRequestControllerOptions["now"]>;
   private readonly pending = new Map<BridgeClient, Map<RequestId, PendingRequest>>();
@@ -214,6 +217,11 @@ export default class WorkbenchWebSocketRequestController {
     this.daemonRequests = daemonRequests;
     this.harnesses = harnesses;
     this.identities = identities;
+    this.threadStateIdentities = identities ? {
+      ...identities,
+      ...(harnesses.resolveThreadIdentity ? { resolveThreadIdentity: harnesses.resolveThreadIdentity.bind(harnesses) } : {}),
+      ...(harnesses.resolveTurnIdentity ? { resolveTurnIdentity: harnesses.resolveTurnIdentity.bind(harnesses) } : {}),
+    } : undefined;
     this.now = now;
     this.reload = reload;
     this.reloadDirtRevision = initialState?.reloadDirtRevision ?? 0;
@@ -367,7 +375,7 @@ export default class WorkbenchWebSocketRequestController {
         const request = this.identities && parsed.success ? await mapWorkbenchThreadStateRequest(this.identities, parsed.data) : input;
         const result = await this.threadState.handleRequest(connectionId, request);
         await this.sendJsonToClient(client, { id: requestId, ...result,
-          ...("result" in result && this.identities ? { result: await mapNativeThreadStateResult(this.identities, result.result) } : {}),
+          ...("result" in result && this.threadStateIdentities ? { result: await mapNativeThreadStateResult(this.threadStateIdentities, result.result) } : {}),
         });
       } catch (error) {
         await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: error instanceof Error ? error.message : "Thread state identity projection failed." } });
@@ -405,7 +413,7 @@ export default class WorkbenchWebSocketRequestController {
       } else {
         const envelope = asRecord(message);
         if (envelope?.method === "workbench/thread-state/updated") {
-          message = { ...envelope, params: await mapNativeThreadStateSnapshot(this.identities, envelope.params as WorkbenchThreadStateSnapshot) };
+          message = { ...envelope, params: await mapNativeThreadStateSnapshot(this.threadStateIdentities!, envelope.params as WorkbenchThreadStateSnapshot) };
           this.assertActive();
         } else if (envelope?.[WORKBENCH_HARNESS_FIELD]) {
           const harness = this.harnesses.resolveHarness(envelope[WORKBENCH_HARNESS_FIELD]);

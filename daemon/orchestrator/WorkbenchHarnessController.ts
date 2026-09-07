@@ -7,6 +7,7 @@
  */
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ThreadTurnsListResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadTurnsListResponse";
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -185,6 +186,40 @@ export default class WorkbenchHarnessController {
     if (!thread || thread.id !== input.threadId) throw new Error("Provider metadata returned a different thread.");
     await this.admitThreads(harness, [thread]);
     return await this.identities.resolve(input);
+  }
+
+  async resolveTurnIdentity(input: WorkbenchThreadIdentityLookup & { turnId: string }) {
+    if (!this.identities || !this.itemIdentities) throw new Error("Turn identity resolution is unavailable.");
+    const thread = await this.resolveThreadIdentity(input);
+    if (!thread) throw new Error("Thread metadata is unavailable for turn identity resolution.");
+    const known = await this.identities.resolveTurn({ threadId: thread.threadId, turnId: input.turnId });
+    if (known) return known;
+    const harness = this.resolveHarness(input.harness, { defaultToCodex: true });
+    const native = thread.bindings.find((binding) => binding.harness === harness && binding.nativeThreadId === input.threadId)
+      ?? thread.bindings.find((binding) => binding.harness === harness);
+    if (!native) throw new Error("Turn identity has no admitted native thread.");
+    if (harness !== "codex") throw new Error("Provider turn metadata is unavailable for public projection.");
+    let cursor: string | null = null;
+    do {
+      const response = await this.request(harness, {
+        method: "thread/turns/list",
+        params: {
+          threadId: native.nativeThreadId, cwd: native.nativeLocation,
+          itemsView: "notLoaded", limit: 100, sortDirection: "asc", cursor,
+        },
+      });
+      if (response.error) throw new Error(response.error.message);
+      const result = response.result as ThreadTurnsListResponse | undefined;
+      if (!result || !Array.isArray(result.data)) throw new Error("Provider turn metadata response is invalid.");
+      await admitProviderNotifications({ threads: this.identities, items: this.itemIdentities }, native, result.data.map((turn) => ({
+        method: "turn/started" as const, params: { threadId: native.nativeThreadId, turn },
+      })));
+      const admitted = await this.identities.resolveTurn({ threadId: thread.threadId, turnId: input.turnId });
+      if (admitted) return admitted;
+      if (result.nextCursor !== null && result.nextCursor === cursor) throw new Error("Provider turn metadata cursor did not advance.");
+      cursor = result.nextCursor;
+    } while (cursor);
+    throw new Error("Referenced turn is absent from the provider metadata catalog.");
   }
 
   async requestServer(harnessValue: unknown, request: JsonRpcRequest) {

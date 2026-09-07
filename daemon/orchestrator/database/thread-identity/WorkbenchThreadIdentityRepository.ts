@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import type Database from "better-sqlite3";
 
+import { nativeLocationKey } from "./native-location-key.ts";
 import { compileWorkbenchDatabaseStatement, updateRows } from "workbench-shared/database/workbench-database-statements";
 import {
   coreTables,
@@ -40,7 +41,10 @@ interface ThreadRow {
 type TurnRow = CoreSchemaRows["threadTurns"];
 
 export default class WorkbenchThreadIdentityRepository {
-  constructor(private readonly database: Database.Database) {}
+  constructor(
+    private readonly database: Database.Database,
+    private readonly platform: NodeJS.Platform = process.platform,
+  ) {}
 
   observeMany(inputs: readonly WorkbenchThreadIdentityMetadata[]): WorkbenchThreadIdentityRecord[] {
     return this.database.transaction(() => inputs.map((input) => this.observe(input)))();
@@ -74,7 +78,7 @@ export default class WorkbenchThreadIdentityRepository {
         input.createdAt, input.updatedAt, input.activityAt);
       const hasTurns = existing?.bindings.some((binding) => !binding.pending
         && binding.harness === input.native.harness
-        && binding.nativeLocation === input.native.nativeLocation
+        && this.sameLocation(binding.nativeLocation, input.native.nativeLocation)
         && binding.nativeThreadId === input.native.nativeThreadId);
       if (!hasTurns) {
         this.database.prepare(`
@@ -138,19 +142,75 @@ export default class WorkbenchThreadIdentityRepository {
 
   private resolveNativeInTransaction(native: WorkbenchNativeThreadIdentity): WorkbenchThreadIdentityRecord | null {
     const rows = this.database.prepare(`
-      SELECT DISTINCT thread_id FROM (
+      SELECT DISTINCT thread_id, native_location FROM (
         SELECT thread_id, harness_id, native_location, native_thread_id FROM thread_turns
         UNION SELECT thread_id, harness_id, native_location, native_thread_id FROM workbench_pending_import_threads
-      ) WHERE harness_id = ? AND native_location = ? AND native_thread_id = ?
-    `).all(native.harness, native.nativeLocation, native.nativeThreadId) as Array<{ thread_id: string }>;
-    if (rows.length > 1) throw new Error("Native thread identity has conflicting Workbench owners.");
-    return rows[0] ? this.canonical(rows[0].thread_id) : null;
+      ) WHERE harness_id = ? AND native_thread_id = ?
+    `).all(native.harness, native.nativeThreadId) as Array<{ thread_id: string; native_location: string }>;
+    const owners = new Set(rows.filter((row) => this.sameLocation(row.native_location, native.nativeLocation)).map((row) => row.thread_id));
+    if (owners.size > 1) throw new Error("Native thread identity has conflicting Workbench owners.");
+    const owner = owners.values().next().value;
+    return owner ? this.canonical(owner) : null;
   }
 
   list(): WorkbenchThreadIdentityRecord[] {
-    const rows = this.database.prepare("SELECT id FROM workbench_threads WHERE identity_origin = 'workbench'")
-      .all() as Array<{ id: string }>;
-    return rows.map(({ id }) => this.read(id)!);
+    return this.database.transaction(() => {
+      this.repairPendingLocationAliases();
+      const rows = this.database.prepare("SELECT id FROM workbench_threads WHERE identity_origin = 'workbench'")
+        .all() as Array<{ id: string }>;
+      return rows.map(({ id }) => this.read(id)!);
+    })();
+  }
+
+  private repairPendingLocationAliases() {
+    if (this.platform !== "win32") return;
+    type BindingRow = Pick<TurnRow, "thread_id" | "harness_id" | "native_location" | "native_thread_id">;
+    const key = (row: BindingRow) => JSON.stringify([
+      row.harness_id, nativeLocationKey(row.native_location, this.platform), row.native_thread_id,
+    ]);
+    const imported = new Map<string, Set<string>>();
+    const turns = this.database.prepare("SELECT DISTINCT thread_id, harness_id, native_location, native_thread_id FROM thread_turns").all() as BindingRow[];
+    for (const turn of turns) {
+      const owners = imported.get(key(turn)) ?? new Set<string>();
+      owners.add(turn.thread_id);
+      imported.set(key(turn), owners);
+    }
+    const pending = this.database.prepare("SELECT thread_id, harness_id, native_location, native_thread_id FROM workbench_pending_import_threads").all() as BindingRow[];
+    for (const binding of pending) {
+      const owners = imported.get(key(binding));
+      if (!owners?.size) continue;
+      if (owners.size !== 1) throw new Error("Native thread identity has conflicting imported Workbench owners.");
+      const owner = this.resolveInTransaction({ threadId: owners.values().next().value! })!;
+      if (owner.threadId === binding.thread_id) {
+        this.database.prepare("DELETE FROM workbench_pending_import_threads WHERE thread_id = ?").run(binding.thread_id);
+        continue;
+      }
+      const duplicate = this.database.prepare("SELECT * FROM workbench_threads WHERE id = ?")
+        .get(binding.thread_id) as CoreSchemaRows["workbenchThreads"];
+      if (duplicate.project_id !== owner.projectId || !this.sameLocation(duplicate.project_root, owner.projectRoot)) {
+        throw new Error("Pending native alias changed its Workbench project owner.");
+      }
+      // Only the old metadata-only allocation bug is repairable here. Do not
+      // merge transcript histories or cascade away independently admitted facts.
+      const ownsFacts = duplicate.archived || duplicate.pinned || duplicate.snoozed || [
+        coreTables.threadTurns, coreTables.workbenchThreadLifecycle,
+        transcriptIdentityTables.itemIdentities, evidenceTables.transcriptAssetRefs,
+        evidenceTables.transcriptCaptureGaps, evidenceTables.transcriptNativeRecords,
+      ].some((table) => this.database.prepare(`SELECT 1 FROM ${table.name} WHERE thread_id = ? LIMIT 1`).get(binding.thread_id));
+      if (ownsFacts) throw new Error("Duplicate pending thread owns durable facts and cannot be retired.");
+      this.database.prepare(`
+        UPDATE workbench_threads SET
+          title = CASE WHEN ? >= updated_at THEN ? ELSE title END,
+          created_at = MIN(created_at, ?), updated_at = MAX(updated_at, ?), activity_at = MAX(activity_at, ?)
+        WHERE id = ?
+      `).run(duplicate.updated_at, duplicate.title, duplicate.created_at,
+        duplicate.updated_at, duplicate.activity_at, owner.threadId);
+      this.database.prepare("UPDATE workbench_thread_legacy_aliases SET thread_id = ? WHERE thread_id = ?")
+        .run(owner.threadId, binding.thread_id);
+      this.preserveLegacyAlias(owner.threadId, binding.thread_id);
+      this.database.prepare("DELETE FROM workbench_pending_import_threads WHERE thread_id = ?").run(binding.thread_id);
+      this.database.prepare("DELETE FROM workbench_threads WHERE id = ?").run(binding.thread_id);
+    }
   }
 
   preserveLegacyAlias(threadId: string, alias: string) {
@@ -185,14 +245,7 @@ export default class WorkbenchThreadIdentityRepository {
   observeTurns(inputs: readonly WorkbenchTurnIdentityMetadata[]): WorkbenchTurnIdentityRecord[] {
     if (inputs.length === 1 && inputs[0]!.turnIndex === undefined) return [this.observeTurn(inputs[0]!)];
     return this.database.transaction(() => {
-      const findNative = this.database.prepare(`
-        SELECT * FROM thread_turns
-        WHERE thread_id = ? AND harness_id = ? AND native_location = ?
-          AND native_thread_id = ? AND native_turn_id IS ?
-      `);
-      const known = inputs.map((input) => input.nativeTurnId === null ? this.turnRow(input.turnId) : findNative.get(
-        input.threadId, input.harnessId, input.nativeLocation, input.nativeThreadId, input.nativeTurnId,
-      ) as TurnRow | undefined);
+      const known = inputs.map((input) => input.nativeTurnId === null ? this.turnRow(input.turnId) : this.nativeTurnRow(input));
       if (known.every(Boolean)) return inputs.map((input) => this.observeTurn(input));
       const existing = new Map<string, TurnRow>();
       for (const threadId of new Set(inputs.map((input) => input.threadId))) {
@@ -203,19 +256,19 @@ export default class WorkbenchThreadIdentityRepository {
       const following = inputs.map((): { input: WorkbenchTurnIdentityMetadata; row: TurnRow } | undefined => undefined);
       for (let index = inputs.length - 1; index >= 0; index -= 1) {
         const input = inputs[index]!;
-        const scope = JSON.stringify([input.threadId, input.harnessId, input.nativeLocation, input.nativeThreadId]);
+        const scope = JSON.stringify([input.threadId, input.harnessId, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId]);
         following[index] = successors.get(scope);
         if (known[index]) successors.set(scope, { input, row: known[index]! });
       }
       const previousKnown = new Map<string, TurnRow>();
       const admitted = inputs.map((input, index) => {
-        const scope = JSON.stringify([input.threadId, input.harnessId, input.nativeLocation, input.nativeThreadId]);
+        const scope = JSON.stringify([input.threadId, input.harnessId, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId]);
         const previous = previousKnown.get(scope);
         if (known[index]) previousKnown.set(scope, known[index]!);
         const next = !known[index] ? following[index] : undefined;
-        const successor = next ? next.input.nativeTurnId === null ? this.turnRow(next.row.id) : findNative.get(
-          next.input.threadId, next.input.harnessId, next.input.nativeLocation, next.input.nativeThreadId, next.input.nativeTurnId,
-        ) as TurnRow | undefined : undefined;
+        const successor = next
+          ? next.input.nativeTurnId === null ? this.turnRow(next.row.id) : this.nativeTurnRow(next.input)
+          : undefined;
         return this.observeTurn({
           ...input,
           ...(input.turnIndex === undefined && successor
@@ -246,13 +299,10 @@ export default class WorkbenchThreadIdentityRepository {
       if (owner?.threadId !== input.threadId) throw new Error("Turn metadata changed its Workbench thread owner.");
       const existing = input.nativeTurnId === null
         ? this.turnRow(input.turnId)
-        : this.database.prepare(`
-          SELECT * FROM thread_turns
-          WHERE harness_id = ? AND native_location = ? AND native_thread_id = ? AND native_turn_id = ?
-        `).get(input.harnessId, input.nativeLocation, input.nativeThreadId, input.nativeTurnId) as TurnRow | undefined;
+        : this.nativeTurnRow(input);
       if (existing) {
         if (existing.thread_id !== input.threadId || existing.harness_id !== input.harnessId
-          || existing.native_location !== input.nativeLocation || existing.native_thread_id !== input.nativeThreadId) {
+          || !this.sameLocation(existing.native_location, input.nativeLocation) || existing.native_thread_id !== input.nativeThreadId) {
           throw new Error("Turn metadata changed its native or Workbench thread owner.");
         }
         return this.canonicalTurn(existing);
@@ -291,10 +341,26 @@ export default class WorkbenchThreadIdentityRepository {
     if (owner.identity_origin !== "workbench") return;
     const resolved = this.resolveNativeInTransaction(native);
     if (resolved?.threadId !== threadId) throw new Error("Turn native identity belongs to another Workbench thread.");
-    this.database.prepare(`
-      DELETE FROM workbench_pending_import_threads
-      WHERE thread_id = ? AND harness_id = ? AND native_location = ? AND native_thread_id = ?
-    `).run(threadId, native.harness, native.nativeLocation, native.nativeThreadId);
+    const pending = this.database.prepare(`
+      SELECT native_location FROM workbench_pending_import_threads
+      WHERE thread_id = ? AND harness_id = ? AND native_thread_id = ?
+    `).get(threadId, native.harness, native.nativeThreadId) as { native_location: string } | undefined;
+    if (pending && this.sameLocation(pending.native_location, native.nativeLocation)) {
+      this.database.prepare("DELETE FROM workbench_pending_import_threads WHERE thread_id = ?").run(threadId);
+    }
+  }
+
+  private sameLocation(left: string, right: string) {
+    return nativeLocationKey(left, this.platform) === nativeLocationKey(right, this.platform);
+  }
+
+  private nativeTurnRow(input: WorkbenchTurnIdentityMetadata) {
+    const rows = this.database.prepare(`
+      SELECT * FROM thread_turns WHERE harness_id = ? AND native_thread_id = ? AND native_turn_id = ?
+    `).all(input.harnessId, input.nativeThreadId, input.nativeTurnId) as TurnRow[];
+    const matching = rows.filter((row) => this.sameLocation(row.native_location, input.nativeLocation));
+    if (matching.length > 1) throw new Error("Native turn identity has conflicting Workbench owners.");
+    return matching[0];
   }
 
   private canonical(threadId: string) {

@@ -2585,7 +2585,7 @@ test("accepted internal steers do not interrupt MCP waits", async () => {
   }
 });
 
-test("fresh first turn survives bridge reload and failed admission without resume", async () => {
+test("fresh first turn prepares its stored profile across reload and failed admission without resume", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-fresh-start-"));
   const events: string[] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
@@ -2595,7 +2595,7 @@ test("fresh first turn survives bridge reload and failed admission without resum
     send(message: JsonRpcRequest) {
       upstreamRequests.push(message);
       queueMicrotask(() => {
-        if (message.method === "thread/start") {
+        if (message.method === "thread/start" || message.method === "thread/read") {
           void bridge.handleUpstreamMessage({
             id: message.id ?? null,
             result: {
@@ -2628,7 +2628,16 @@ test("fresh first turn survives bridge reload and failed admission without resum
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState,
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() {},
+    prepareThreadConfiguration: async (thread, requests) => {
+      assert.equal(thread.id, "fresh");
+      events.push("prepare:profile");
+      return {
+        ...requests,
+        startRequest: { ...requests.startRequest, params: { ...requests.startRequest.params as object, model: "saved-model", effort: "low" } },
+      };
+    },
     prepareTurnStart: async () => { events.push("prepare:mcp"); },
     resolveProjectFromCwd: async () => null,
     sendToClient() {},
@@ -2640,6 +2649,8 @@ test("fresh first turn survives bridge reload and failed admission without resum
     method: "turn/start",
     params: {
       input: [{ text: "hello", text_elements: [], type: "text" }],
+      model: "stale-model",
+      effort: "high",
       threadId: "fresh",
     },
   };
@@ -2657,12 +2668,18 @@ test("fresh first turn survives bridge reload and failed admission without resum
     assert.equal(failed.error?.message, "first admission failed");
     const admitted = await bridge.handleServerRequest({ ...firstTurn, id: 3 });
     assert.equal((admitted.result as { turn?: { id?: string } } | undefined)?.turn?.id, "fresh-turn");
+    for (const request of upstreamRequests.filter(({ method }) => method === "turn/start")) {
+      assert.equal((request.params as { model: string }).model, "saved-model");
+      assert.equal((request.params as { effort: string }).effort, "low");
+    }
     assert.deepEqual(upstreamRequests.map(({ method }) => method), [
       "thread/start",
+      "thread/read",
       "turn/start",
+      "thread/read",
       "turn/start",
     ]);
-    assert.deepEqual(events, ["prepare:mcp", "prepare:mcp"]);
+    assert.deepEqual(events, ["prepare:profile", "prepare:mcp", "prepare:profile", "prepare:mcp"]);
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
@@ -3632,7 +3649,7 @@ test("turn start responses admit the live turn before materialisation can consul
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
     send(message: JsonRpcRequest) {
-      const result = message.method === "thread/start"
+      const result = message.method === "thread/start" || message.method === "thread/read"
         ? { thread: { ...bridgeThread(), status: { type: "idle" as const }, turns: [] } }
         : message.method === "turn/start"
           ? { turn: bridgeThread().turns[0] }

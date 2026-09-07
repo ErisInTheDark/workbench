@@ -100,7 +100,10 @@ export function mapNativeTranscriptObservation(
       const id = input.nativeTurnId === null ? input.turnId : turnId(input.threadId, input.nativeTurnId);
       const admitted = owners.threads.knownTurn(id);
       if (admitted.threadId !== threadId(input.threadId)) throw new Error("Transcript turn changed its admitted owner.");
-      return { ...input, threadId: admitted.threadId, turnId: id, turnIndex: admitted.turnIndex };
+      return {
+        ...input, threadId: admitted.threadId, turnId: id, turnIndex: admitted.turnIndex,
+        nativeLocation: admitted.native.nativeLocation,
+      };
     },
     turnUsageContext: (input) => ({
       ...input, threadId: threadId(input.threadId), turnId: turnId(input.threadId, input.turnId),

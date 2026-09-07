@@ -36,11 +36,11 @@ import type { ServerNotification } from "workbench-shared/codex/generated/app-se
 import type { V2Event } from "@opencode-ai/sdk/v2";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 
-async function setup() {
+async function setup(platform: NodeJS.Platform = process.platform) {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
-  const repository = new WorkbenchThreadIdentityRepository(database);
+  const repository = new WorkbenchThreadIdentityRepository(database, platform);
   const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
   const threads = new WorkbenchThreadIdentityController({
     listThreadIdentities: async () => repository.list(),
@@ -49,7 +49,7 @@ async function setup() {
     resolveNativeThreadIdentity: async (input) => repository.resolveNative(input),
     observeTurnIdentities: async (inputs) => repository.observeTurns(inputs),
     resolveTurnIdentity: async (input) => repository.resolveTurn(input),
-  });
+  }, platform);
   let admissions = 0;
   const items = new WorkbenchTranscriptIdentityController({
     admitTranscriptItemIdentities: async (input) => {
@@ -75,6 +75,24 @@ async function setup() {
   });
   return { database, owners: { threads, items }, native, parent, child, turn, admissions: () => admissions };
 }
+
+test("equivalent Windows paths preserve the admitted turn location at durable recording", async () => {
+  const { database, owners, native, parent, turn } = await setup("win32");
+  try {
+    const observation = mapNativeTranscriptObservation(owners, { ...native, nativeLocation: "\\\\?\\C:\\REPO" }, {
+      kind: "turn", threadId: native.nativeThreadId, turnId: native.nativeTurnId,
+      harnessId: native.harness, nativeLocation: "\\\\?\\C:\\REPO", nativeThreadId: native.nativeThreadId,
+      nativeTurnId: native.nativeTurnId, state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1,
+    });
+    assert.equal(observation.kind, "turn");
+    if (observation.kind !== "turn") throw new Error("Expected a turn observation.");
+    assert.equal(observation.nativeLocation, native.nativeLocation);
+    assert.equal(observation.turnId, turn.turnId);
+    new WorkbenchTranscriptRepository(database).settle([observation]);
+    assert.equal(owners.threads.knownTurn(turn.turnId).threadId, parent.threadId);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { owners.threads.dispose(); owners.items.dispose(); database.close(); }
+});
 
 test("thread Git resolves public and native callers to the same existing selection", async () => {
   const { database, owners, native, parent } = await setup();

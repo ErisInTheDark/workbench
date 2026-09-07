@@ -7,6 +7,7 @@
  * - mapNativeThreadStateResult: project thread-state open and target responses.
  * - mapWorkbenchThreadStateRequest: resolve public mutation targets while retaining native storage keys.
  * - mapNativeSubagentResult: project relationship references before agent formatting.
+ * - NativeThreadStateIdentityOwners: committed identity lookup plus metadata-only cold admission.
  */
 import type { WorkbenchHarness, WorkbenchThreadContextReadResponse, WorkbenchQuestionnaireHistoryEntry } from "workbench-shared/types";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
@@ -29,6 +30,11 @@ import {
 } from "workbench-shared/workbench/thread/thread-display-layout";
 import { z } from "zod";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import type WorkbenchHarnessController from "./WorkbenchHarnessController";
+import { reconcileWorkbenchThreadDisplayOrder } from "workbench-shared/workbench/thread/thread-display-order";
+
+export type NativeThreadStateIdentityOwners = NativeTranscriptIdentityOwners
+  & Partial<Pick<WorkbenchHarnessController, "resolveThreadIdentity" | "resolveTurnIdentity">>;
 
 const admissionRequests = {
   resumeRequest: "thread/resume",
@@ -61,20 +67,19 @@ export async function mapNativeSubagentResult(owners: NativeTranscriptIdentityOw
   return result;
 }
 
-async function resolveNativeReference(owners: NativeTranscriptIdentityOwners, identity: ThreadIdentity, projectId?: string) {
-  const native = owners.threads.findNativeBinding(identity.harness, identity.threadId);
-  const known = native ? owners.threads.findNativeThread(native) : undefined;
-  const thread = known ?? await owners.threads.resolve({ ...identity, ...(projectId ? { projectId } : {}) });
+async function resolveNativeReference(owners: NativeThreadStateIdentityOwners, identity: { threadId: string; harness?: WorkbenchHarness }, projectId?: string) {
+  const input = { ...identity, ...(projectId ? { projectId } : {}) };
+  const thread = await owners.threads.resolve(input)
+    ?? (identity.harness ? await owners.resolveThreadIdentity?.(input) : null);
   if (!thread) throw new Error("Thread metadata has not been admitted for public projection.");
   if (projectId && thread.projectId !== projectId) throw new Error("Thread reference does not belong to the requested project.");
   return thread;
 }
 
-async function mapNativeTurnReference(owners: NativeTranscriptIdentityOwners, identity: ThreadIdentity, turnId: string) {
-  const native = owners.threads.findNativeBinding(identity.harness, identity.threadId);
-  const known = native ? owners.threads.findNativeTurn({ ...native, nativeTurnId: turnId }) : undefined;
+async function mapNativeTurnReference(owners: NativeThreadStateIdentityOwners, identity: ThreadIdentity, turnId: string) {
   const thread = await resolveNativeReference(owners, identity);
-  const turn = known ?? await owners.threads.resolveTurn({ threadId: thread.threadId, turnId });
+  const turn = await owners.threads.resolveTurn({ threadId: thread.threadId, turnId })
+    ?? await owners.resolveTurnIdentity?.({ ...identity, turnId });
   if (!turn) throw new Error("Turn metadata has not been admitted for public projection.");
   return turn.turnId;
 }
@@ -146,7 +151,7 @@ async function mapNativeSidebarEntry(owners: NativeTranscriptIdentityOwners, pro
     }))) } } : {}),
   };
   return entry.entryKind === "subagent"
-    ? { ...mapped, entryKind: "subagent", parentThreadId: (await resolveNativeReference(owners, { harness: entry.identity.harness, threadId: entry.parentThreadId }, projectId)).threadId } as WorkbenchThreadSidebarEntry
+    ? { ...mapped, entryKind: "subagent", parentThreadId: (await resolveNativeReference(owners, { threadId: entry.parentThreadId }, projectId)).threadId } as WorkbenchThreadSidebarEntry
     : mapped;
 }
 
@@ -180,11 +185,31 @@ async function mapNativeLayout(owners: NativeTranscriptIdentityOwners, layout: T
   return result;
 }
 
+async function mapNativeSidebarEntries(
+  owners: NativeTranscriptIdentityOwners, projectId: string, source: WorkbenchThreadSidebarEntry[],
+): Promise<{ source: WorkbenchThreadSidebarEntry[]; entries: WorkbenchThreadSidebarEntry[] }> {
+  const entries: WorkbenchThreadSidebarEntry[] = [];
+  const local: WorkbenchThreadSidebarEntry[] = [];
+  // Admit each entry's own provider before resolving relationships. A child can
+  // precede its parent and use a different provider. Keep cold reads sequential.
+  for (const entry of source) {
+    // Historical provider lists could be persisted in every project. Resolve
+    // their real owner rather than assigning the requesting sidebar's project.
+    if (entry.entryKind === "draft"
+      || (await resolveNativeReference(owners, entry.identity)).projectId === projectId) local.push(entry);
+  }
+  for (const entry of local) entries.push(await mapNativeSidebarEntry(owners, projectId, entry));
+  return { source: local, entries };
+}
+
 async function mapNativeSidebar(owners: NativeTranscriptIdentityOwners, sidebar: WorkbenchThreadSidebarSnapshot): Promise<WorkbenchThreadSidebarSnapshot> {
+  const mapped = await mapNativeSidebarEntries(owners, sidebar.projectId, sidebar.entries);
+  const displayOrder = mapped.source.length === sidebar.entries.length ? sidebar.displayOrder
+    : reconcileWorkbenchThreadDisplayOrder(mapped.source, sidebar.displayOrder);
   return {
     ...sidebar,
-    entries: await Promise.all(sidebar.entries.map((entry) => mapNativeSidebarEntry(owners, sidebar.projectId, entry))),
-    ...(sidebar.displayOrder ? { displayOrder: await mapNativeLayout(owners, sidebar.displayOrder, sidebar.projectId) } : {}),
+    entries: mapped.entries,
+    ...(displayOrder ? { displayOrder: await mapNativeLayout(owners, displayOrder, sidebar.projectId) } : {}),
   };
 }
 
@@ -203,7 +228,7 @@ async function mapNativeProjectSummary(owners: NativeTranscriptIdentityOwners, s
   };
 }
 
-export async function mapNativeThreadStateSnapshot(owners: NativeTranscriptIdentityOwners, snapshot: WorkbenchThreadStateSnapshot): Promise<WorkbenchThreadStateSnapshot> {
+export async function mapNativeThreadStateSnapshot(owners: NativeThreadStateIdentityOwners, snapshot: WorkbenchThreadStateSnapshot): Promise<WorkbenchThreadStateSnapshot> {
   if (!("updateKind" in snapshot)) return mapNativeSidebar(owners, snapshot);
   switch (snapshot.updateKind) {
     case "activity": return { ...snapshot,
@@ -226,11 +251,13 @@ async function mapThreadTarget(owners: NativeTranscriptIdentityOwners, target: W
     : ((await mapWorkbenchProviderRequest(owners.threads, harness, { params: { threadId } })).request.params as { threadId: string }).threadId;
   return {
     ...target, threadId: await map(target.threadId),
-    ...(target.kind === "subagent" ? { parentThreadId: await map(target.parentThreadId) } : {}),
+    ...(target.kind === "subagent" ? { parentThreadId: direction === "public"
+      ? (await resolveNativeReference(owners, { threadId: target.parentThreadId }, projectId)).threadId
+      : await map(target.parentThreadId) } : {}),
   };
 }
 
-export async function mapNativeThreadStateResult(owners: NativeTranscriptIdentityOwners, value: unknown): Promise<unknown> {
+export async function mapNativeThreadStateResult(owners: NativeThreadStateIdentityOwners, value: unknown): Promise<unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   let result = value as Record<string, unknown>;
   if ("sidebar" in result) {
@@ -253,10 +280,12 @@ export async function mapNativeThreadStateResult(owners: NativeTranscriptIdentit
   }
   if ("context" in result) {
     const { context } = value as WorkbenchPinnedThreadContextResult;
-    if (context) result = { ...result, context: {
-      ...context, target: await mapThreadTarget(owners, context.target, context.projectId, "public"),
-      entries: await Promise.all(context.entries.map((entry) => mapNativeSidebarEntry(owners, context.projectId, entry))),
-    } };
+    if (context) {
+      const { entries } = await mapNativeSidebarEntries(owners, context.projectId, context.entries);
+      result = { ...result, context: {
+        ...context, target: await mapThreadTarget(owners, context.target, context.projectId, "public"), entries,
+      } };
+    }
   }
   if ("identity" in result) {
     const identity = result.identity as ThreadIdentity;

@@ -31,6 +31,97 @@ function setup() {
   return { database, identity: new WorkbenchThreadIdentityRepository(database) };
 }
 
+test("Windows metadata and turn catalogs reuse retained identities across equivalent path spellings", () => {
+  const { database } = setup();
+  const identity = new WorkbenchThreadIdentityRepository(database, "win32");
+  try {
+    const original = metadata("native-thread", "C:\\Project");
+    const thread = identity.observe(original);
+    const turn = (nativeLocation: string, nativeTurnId: string): WorkbenchTurnIdentityMetadata => ({
+      kind: "turn", threadId: thread.threadId, turnId: nativeTurnId, nativeTurnId,
+      harnessId: "codex", nativeLocation, nativeThreadId: original.native.nativeThreadId,
+      state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
+    });
+    const first = identity.observeTurn(turn(original.native.nativeLocation, "first"));
+    for (const nativeLocation of ["c:/project", "\\\\?\\C:\\PROJECT"]) {
+      const observed = identity.observe({ ...original, native: { ...original.native, nativeLocation } });
+      assert.equal(observed.threadId, thread.threadId);
+      assert.equal(identity.resolveNative({ ...original.native, nativeLocation })?.threadId, thread.threadId);
+      assert.equal(identity.observeTurn(turn(nativeLocation, "first")).turnId, first.turnId);
+      assert.equal(identity.observeTurns([turn(nativeLocation, "first"), turn(nativeLocation, "second")])[0]?.turnId, first.turnId);
+    }
+    assert.equal(identity.list().length, 1);
+    assert.deepEqual(database.prepare("SELECT COUNT(*) AS count FROM thread_turns").get(), { count: 2 });
+    assert.equal(identity.resolveTurn({ threadId: thread.threadId, turnId: first.turnId })?.native.nativeLocation, "C:\\Project");
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
+test("Linux metadata never merges case-distinct provider locations", () => {
+  const { database } = setup();
+  const identity = new WorkbenchThreadIdentityRepository(database, "linux");
+  try {
+    const first = identity.observe(metadata("same-native", "/repo/Project"));
+    const second = identity.observe(metadata("same-native", "/repo/project"));
+    assert.notEqual(first.threadId, second.threadId);
+    assert.equal(identity.resolveNative(metadata("same-native", "/repo/Project").native)?.threadId, first.threadId);
+    assert.equal(identity.resolveNative(metadata("same-native", "/repo/project").native)?.threadId, second.threadId);
+    assert.throws(() => identity.resolve({ threadId: "same-native" }), /ambiguous/);
+  } finally { database.close(); }
+});
+
+function retainedPendingDuplicate(database: Database.Database) {
+  // Reproduce the old spelling-sensitive allocator, even when this test runs on Windows.
+  const previous = new WorkbenchThreadIdentityRepository(database, "linux");
+  const durable = previous.observe(metadata("same-native", "C:\\Project"));
+  const turn = previous.observeTurn({
+    kind: "turn", threadId: durable.threadId, turnId: "native-turn", nativeTurnId: "native-turn",
+    harnessId: "codex", nativeLocation: "C:\\Project", nativeThreadId: "same-native",
+    state: "completed", createdAt: 2, startedAt: 2, endedAt: 3, durationMs: 1,
+  });
+  database.prepare("INSERT INTO thread_turn_materializations(turn_id, thread_id, materialized_at) VALUES (?, ?, ?)")
+    .run(turn.turnId, durable.threadId, 3);
+  new WorkbenchTranscriptRepository(database).settle([{
+    kind: "item", threadId: durable.threadId, turnId: turn.turnId, lifecycle: "completed", observedAt: 3,
+    item: { id: "saved", type: "agentMessage", text: "Retained history", phase: "commentary", memoryCitation: null, delivery: null, questions: null },
+  }]);
+  const pending = previous.observe({ ...metadata("same-native", "c:\\project"), title: "New title", updatedAt: 40 });
+  return { durable, pending };
+}
+
+test("startup retires only empty pending duplicates and preserves their public IDs as aliases", () => {
+  const { database } = setup();
+  try {
+    const { durable, pending } = retainedPendingDuplicate(database);
+    const before = database.prepare("SELECT * FROM thread_items").all();
+    const identity = new WorkbenchThreadIdentityRepository(database, "win32");
+    const records = identity.list();
+    assert.equal(records.length, 1);
+    assert.equal(records[0]?.threadId, durable.threadId);
+    assert.equal(identity.resolve({ threadId: pending.threadId })?.threadId, durable.threadId);
+    assert.equal(identity.resolveNative(metadata("same-native", "c:\\project").native)?.threadId, durable.threadId);
+    assert.deepEqual(database.prepare("SELECT * FROM thread_items").all(), before);
+    assert.deepEqual(database.prepare("SELECT title FROM workbench_threads WHERE id = ?").get(durable.threadId), { title: "New title" });
+    assert.deepEqual(identity.list(), records);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
+test("pending duplicate repair is Windows-only and rolls back when the duplicate owns other facts", () => {
+  const { database } = setup();
+  try {
+    const { pending } = retainedPendingDuplicate(database);
+    assert.equal(new WorkbenchThreadIdentityRepository(database, "linux").list().length, 2);
+    database.prepare("INSERT INTO workbench_transcript_item_identities(id, thread_id) VALUES (?, ?)")
+      .run("00000000-0000-4000-8000-000000000001", pending.threadId);
+    const identity = new WorkbenchThreadIdentityRepository(database, "win32");
+    assert.throws(() => identity.list(), /pending.*durable facts/i);
+    assert.deepEqual(database.prepare("SELECT COUNT(*) AS count FROM workbench_threads").get(), { count: 2 });
+    assert.deepEqual(database.prepare("SELECT COUNT(*) AS count FROM workbench_pending_import_threads").get(), { count: 1 });
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
 test("a converted metadata-only row keeps its identity when native metadata arrives", () => {
   const { database, identity } = setup();
   try {

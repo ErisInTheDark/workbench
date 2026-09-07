@@ -3,6 +3,7 @@
  * Exports:
  * - default WorkbenchThreadIdentityController: expose database-owned identity and index admitted native bindings for live events.
  */
+import { nativeLocationKey } from "./database/thread-identity/native-location-key";
 import type {
   WorkbenchNativeThreadIdentity,
   WorkbenchThreadIdentityDatabase,
@@ -22,7 +23,10 @@ export default class WorkbenchThreadIdentityController {
   private readonly turns = new Map<string, WorkbenchTurnIdentityRecord>();
   private readonly nativeTurnOwners = new Map<string, string>();
 
-  constructor(private readonly database: WorkbenchThreadIdentityDatabase) {}
+  constructor(
+    private readonly database: WorkbenchThreadIdentityDatabase,
+    private readonly platform: NodeJS.Platform = process.platform,
+  ) {}
 
   async start() {
     this.assertActive();
@@ -163,7 +167,7 @@ export default class WorkbenchThreadIdentityController {
       this.nativeOwners.delete(this.nativeKey(binding));
       const key = JSON.stringify([binding.harness, binding.nativeThreadId]);
       const references = this.nativeReferences.get(key);
-      references?.delete(binding.nativeLocation);
+      references?.delete(nativeLocationKey(binding.nativeLocation, this.platform));
       if (!references?.size) this.nativeReferences.delete(key);
     }
     this.records.set(committed.threadId, committed);
@@ -173,7 +177,7 @@ export default class WorkbenchThreadIdentityController {
       // bindings, so event projection never performs a database lookup.
       const key = JSON.stringify([binding.harness, binding.nativeThreadId]);
       const references = this.nativeReferences.get(key) ?? new Map<string, WorkbenchNativeThreadIdentity>();
-      references.set(binding.nativeLocation, binding);
+      references.set(nativeLocationKey(binding.nativeLocation, this.platform), binding);
       this.nativeReferences.set(key, references);
     }
     return committed;
@@ -212,11 +216,11 @@ export default class WorkbenchThreadIdentityController {
   }
 
   private nativeTurnKey(input: WorkbenchNativeThreadIdentity & { nativeTurnId: string | null }) {
-    return JSON.stringify([input.harness, input.nativeLocation, input.nativeThreadId, input.nativeTurnId]);
+    return JSON.stringify([input.harness, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId, input.nativeTurnId]);
   }
 
   private nativeKey(input: WorkbenchNativeThreadIdentity) {
-    return JSON.stringify([input.harness, input.nativeLocation, input.nativeThreadId]);
+    return JSON.stringify([input.harness, nativeLocationKey(input.nativeLocation, this.platform), input.nativeThreadId]);
   }
 
   private assertActive() {
