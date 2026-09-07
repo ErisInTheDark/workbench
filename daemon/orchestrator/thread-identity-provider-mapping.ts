@@ -64,6 +64,11 @@ export async function admitProviderNotifications(
     if (event.method === "item/started" || event.method === "item/completed") {
       return [{ turnId: event.params.turnId, item: event.params.item }];
     }
+    if (event.method === "item/fileChange/patchUpdated") {
+      return [{ turnId: event.params.turnId, item: {
+        type: "fileChange" as const, id: event.params.itemId, changes: event.params.changes, status: "inProgress" as const,
+      } }];
+    }
     if ((event.method === "turn/started" || event.method === "turn/completed")
       && getWorkbenchTurnAdmission(event.params.turn) === "admitted") {
       return event.params.turn.items.map((item) => ({ turnId: event.params.turn.id, item }));
@@ -72,7 +77,7 @@ export async function admitProviderNotifications(
   });
   if (items.length) {
     const threadId = owners.threads.workbenchIdForNative(native);
-    await owners.items.admit(items.map(({ turnId: nativeTurnId, item }) => {
+    const admissions = items.map(({ turnId: nativeTurnId, item }) => {
       const turnId = owners.threads.workbenchTurnIdForNative({ ...native, nativeTurnId });
       return {
         threadId,
@@ -82,7 +87,8 @@ export async function admitProviderNotifications(
         ],
         legacyAliases: [],
       };
-    }));
+    }).filter((input) => !owners.items.hasAdmitted(input));
+    if (admissions.length) await owners.items.admit(admissions);
   }
 }
 

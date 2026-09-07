@@ -253,6 +253,58 @@ test("OpenCode identity failure reports the affected thread without publishing a
   }
 });
 
+test("managed message routing preserves the steer template and rejects explicit cross-thread targets", async () => {
+  const { database, owners, native, parent, child } = await setup();
+  try {
+    for (const threadId of [parent.threadId, native.nativeThreadId]) {
+      const steerRequest = { method: "turn/steer", params: {}, workbenchPromptContext: { source: "template" } };
+      const request = {
+        method: "workbench/codex/message/admit",
+        params: {
+          threadId,
+          resumeRequest: { method: "thread/resume", params: { threadId } },
+          startRequest: { method: "turn/start", params: { threadId, input: [] } },
+          steerRequest,
+        },
+      };
+      const mapped = await mapWorkbenchProviderRequest(owners.threads, "codex", request);
+      const params = mapped.request.params as typeof request.params;
+      assert.equal(params.threadId, native.nativeThreadId);
+      assert.equal(params.startRequest.params.threadId, native.nativeThreadId);
+      assert.equal(params.resumeRequest.params.threadId, native.nativeThreadId);
+      assert.deepEqual(params.steerRequest, steerRequest, "The admission owner supplies the active destination later");
+      await assert.rejects(mapWorkbenchProviderRequest(owners.threads, "codex", {
+        ...request, params: { ...request.params, steerRequest: {
+          ...steerRequest, params: { threadId: child.threadId },
+        } },
+      }), /same thread/);
+    }
+  } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
+});
+
+test("pending questionnaire lists use the same public identity as the durable sidebar", async () => {
+  const { database, owners, native, parent, turn } = await setup();
+  try {
+    const [item] = await admitProviderThreadItems(owners, native, [{
+      type: "dynamicToolCall", id: "native-question", namespace: null, tool: "request_user_input",
+      arguments: {}, status: "inProgress", contentItems: null, success: null, durationMs: null,
+    }]);
+    const pending = {
+      threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: "native-question",
+      requestKey: "opaque-request-key",
+      request: { id: "request", title: "Choose", summary: "", submitLabel: "", questions: [] },
+    };
+    const response = await mapNativeProviderResponse(owners, "codex", { method: "questionnaire/list" }, {
+      id: 1, result: { data: [pending, { ...pending, turnId: null, itemId: null }] },
+    });
+    const result = response.result as { data: Array<Omit<typeof pending, "turnId" | "itemId"> & { turnId: string | null; itemId: string | null }> };
+    assert.deepEqual(result.data, [
+      { ...pending, threadId: parent.threadId, turnId: turn.turnId, itemId: item!.id },
+      { ...pending, threadId: parent.threadId, turnId: null, itemId: null },
+    ]);
+  } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
+});
+
 test("repeated provider catalogues admit only new identity evidence without hiding conflicts", async () => {
   const fixture = await setup();
   const { database, owners, native, parent, turn } = fixture;

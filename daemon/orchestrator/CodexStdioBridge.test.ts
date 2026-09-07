@@ -206,6 +206,29 @@ test("bridge admits public identity before structural publication and records th
       { threadId: start.params.threadId, turnId: start.params.turnId, itemId: start.params.item.id, delta: "first " },
       { threadId: start.params.threadId, turnId: start.params.turnId, itemId: start.params.item.id, delta: "second" },
     ]);
+    const patch = {
+      method: "item/fileChange/patchUpdated" as const,
+      params: { threadId: "thread", turnId: "turn", itemId: "patch-preview",
+        changes: [{ path: "example.ts", kind: { type: "add" as const }, diff: "+preview" }] },
+    };
+    await bridge.handleUpstreamMessage(patch);
+    const preview = publicEvents.at(-1);
+    assert.equal(preview?.method, patch.method);
+    if (preview?.method !== patch.method) throw new Error("Missing public patch preview");
+    assert.notEqual(preview.params.itemId, patch.params.itemId);
+    const afterFirstPreview = writes;
+    await bridge.handleUpstreamMessage(patch);
+    assert.equal(writes, afterFirstPreview, "Repeated previews must not re-admit identity or record bodies");
+    const canonicalPatch: ThreadItem = {
+      type: "fileChange", id: patch.params.itemId, changes: patch.params.changes, status: "inProgress",
+    };
+    await bridge.handleUpstreamMessage({
+      method: "item/started", params: { threadId: "thread", turnId: "turn", item: canonicalPatch },
+    });
+    const patchStart = publicEvents.at(-1);
+    assert.equal(patchStart?.method, "item/started");
+    if (patchStart?.method !== "item/started") throw new Error("Missing public patch start");
+    assert.equal(patchStart.params.item.id, preview.params.itemId);
     readPage = true;
     await bridge.handleServerRequest({ id: 1, method: "thread/turns/list", params: { threadId: "thread", itemsView: "full" } });
     const pageIdentity = threads.findNativeTurn({ ...native, nativeTurnId: pageTurn.id });

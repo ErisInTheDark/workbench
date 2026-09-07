@@ -9,7 +9,7 @@
  * - mapNativeSubagentResult: project relationship references before agent formatting.
  * - NativeThreadStateIdentityOwners: committed identity lookup plus metadata-only cold admission.
  */
-import type { WorkbenchHarness, WorkbenchThreadContextReadResponse, WorkbenchQuestionnaireHistoryEntry } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchThreadContextReadResponse, WorkbenchQuestionnaireHistoryEntry, WorkbenchPendingUserInputRequest } from "workbench-shared/types";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
@@ -421,6 +421,14 @@ export async function mapNativeProviderResponse(
   if (request.method === "thread/turns/list") {
     mapped.data = (result.data as Turn[]).map((turn) => mapProviderTurn(owners, native(), turn));
   }
+  if (request.method === "questionnaire/list") {
+    const pending = result.data as Array<Omit<WorkbenchPendingUserInputRequest, "harness" | "responseMode">>;
+    mapped.data = await Promise.all(pending.map(async (entry) => {
+      const identity = { harness, threadId: entry.threadId };
+      const thread = await resolveNativeReference(owners, identity);
+      return { ...entry, ...await mapNativeQuestionnaire(owners, identity, entry), threadId: thread.threadId };
+    }));
+  }
   if (result.turn) mapped.turn = mapProviderTurn(owners, native(), result.turn as Turn);
   if (typeof result.turnId === "string") {
     mapped.turnId = owners.threads.workbenchTurnIdForNative({ ...native(), nativeTurnId: result.turnId });
@@ -506,6 +514,13 @@ export async function mapWorkbenchProviderRequest(
       if (field === "steerRequest" && (nested === null || nested === undefined)) return;
       if (!nested || typeof nested !== "object" || Array.isArray(nested) || !("method" in nested) || nested.method !== method) {
         throw new Error(`Message admission requires its ${field}.`);
+      }
+      if (field === "steerRequest" && "params" in nested && nested.params
+        && typeof nested.params === "object" && !Array.isArray(nested.params) && !("threadId" in nested.params)) {
+        // This is a template, not a routed turn/steer. The admission owner supplies
+        // the checked thread and current turn only after reading provider state.
+        mappedParams[field] = nested;
+        return;
       }
       const mapped = await mapWorkbenchProviderRequest(threads, harness, nested as JsonRpcRequest);
       const target = mapped.request.params as Record<string, unknown> | undefined;

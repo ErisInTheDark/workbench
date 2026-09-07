@@ -12,6 +12,7 @@ import type { ApplyPatchApprovalParams } from "workbench-shared/codex/generated/
 import type { ExecCommandApprovalParams } from "workbench-shared/codex/generated/app-server/ExecCommandApprovalParams";
 import type { ReviewDecision } from "workbench-shared/codex/generated/app-server/ReviewDecision";
 import type { ServerRequest } from "workbench-shared/codex/generated/app-server/ServerRequest";
+import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 import type { CommandExecutionApprovalDecision } from "workbench-shared/codex/generated/app-server/v2/CommandExecutionApprovalDecision";
 import type { CommandExecutionRequestApprovalParams } from "workbench-shared/codex/generated/app-server/v2/CommandExecutionRequestApprovalParams";
 import type { FileChangeApprovalDecision } from "workbench-shared/codex/generated/app-server/v2/FileChangeApprovalDecision";
@@ -2209,6 +2210,13 @@ export default class CodexStdioBridge {
       }
       if (this.identities && syntheticFileChangeNotification) {
         await admitNativeTranscriptObservations(this.identities, await this.createSqliteProviderNotificationObservations(syntheticFileChangeNotification));
+      }
+      if (this.identities && message.method === "item/fileChange/patchUpdated") {
+        // Codex streams the preview before item/started. Admit only its identity;
+        // cumulative patch bodies remain live presentation until lifecycle settlement.
+        const preview = message as Extract<ServerNotification, { method: "item/fileChange/patchUpdated" }>;
+        const native = this.identities.threads.knownNativeBinding("codex", preview.params.threadId);
+        await admitProviderNotifications(this.identities, native, [preview]);
       }
       this.onNotification(this.fileChanges.present(message));
       if (syntheticFileChangeNotification) this.onNotification(syntheticFileChangeNotification);
