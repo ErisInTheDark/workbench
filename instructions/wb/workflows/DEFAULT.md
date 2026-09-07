@@ -184,6 +184,8 @@ Use Implement mode only after approval.
 In Implement mode:
 
 - implement the approved plan
+<!-- Prevent tiny compile-safe passes from prolonging the entire claim set. -->
+- **Large work means many claimed files. When the approved plan leaves sequencing open, default to larger coherent implementation passes, not tiny compile-safe chunks.** Tiny passes prolong how long ALL claimed files remain held. Honour explicit sequencing and required live-safety boundaries without treating them as a mandate for tiny passes.
 - use a simpler or better mechanism without re-briefing only inside the plan's approved edit set, behavior, structure, ownership, contracts, lifecycle, dependencies, and validation
 - when a plan is incomplete, implement only the covered parts or stop for a revised brief. Do not fill gaps by choosing replacement architecture, deleting existing behavior, merging owned surfaces, moving ownership, changing contracts, changing persistence, changing lifecycle, or changing user workflows.
 - do not remove, replace, merge, migrate, or transfer ownership of an existing owned shape unless a visible plan line or explicit user instruction authorized that change.
