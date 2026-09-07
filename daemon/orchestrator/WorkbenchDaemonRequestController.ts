@@ -14,6 +14,11 @@ import type WorkbenchProjectFileController from "./WorkbenchProjectFileControlle
 import type WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotSchema } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
+import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import {
+  WorkbenchThreadIdentityResolutionSchema,
+  WorkbenchThreadIdentityResolveRequestSchema,
+} from "workbench-shared/workbench/thread/workbench-thread-identity";
 import type WorkbenchSearchController from "./WorkbenchSearchController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import { WorkbenchStatsReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
@@ -35,6 +40,7 @@ import type {
   OpenFileInEditorRequest,
   ResolveExternalFileLinkRootsRequest,
   RevealProjectEntryRequest,
+  WorkbenchComposerProfileSlot,
 } from "workbench-shared/types";
 
 export interface WorkbenchBrowseSessionPort {
@@ -55,6 +61,7 @@ const METHODS = new Set([
   "search/query",
   "stats/import/start", "stats/rate-limits/refresh", "stats/read", "stats/read/detailed",
   "skills/read",
+  "thread/identity/resolve",
 ]);
 
 function record(value: unknown) {
@@ -135,10 +142,19 @@ export default class WorkbenchDaemonRequestController {
     search: Pick<WorkbenchSearchController, "search">;
     stats: Pick<WorkbenchStatsController, "read" | "readDetailed" | "refreshRateLimits" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
+    threadIdentity: Pick<WorkbenchThreadIdentityController, "resolve">;
   }) {}
 
   accepts(method: string) { return METHODS.has(method); }
   registerBrowse(port: WorkbenchBrowseSessionPort) { this.browse = port; return () => { if (this.browse === port) this.browse = null; }; }
+
+  private async nativeProfileSlot(slot: WorkbenchComposerProfileSlot): Promise<WorkbenchComposerProfileSlot> {
+    if (slot.kind !== "thread") return slot;
+    const thread = await this.owners.threadIdentity.resolve({ threadId: slot.threadId, projectId: slot.projectId, harness: slot.harness });
+    const binding = thread?.bindings[0];
+    if (!binding) throw new InvalidParamsError("Composer thread has no native profile destination.");
+    return WorkbenchComposerProfileSlotSchema.parse({ ...slot, threadId: binding.nativeThreadId, harness: binding.harness });
+  }
 
   async handle(request: JsonRpcRequest): Promise<JsonRpcResponse> {
     const id = request.id ?? null;
@@ -149,6 +165,17 @@ export default class WorkbenchDaemonRequestController {
       }
       let result: object;
       switch (request.method) {
+        case "thread/identity/resolve": {
+          const parsed = WorkbenchThreadIdentityResolveRequestSchema.safeParse(params);
+          if (!parsed.success) throw new InvalidParamsError("Invalid thread identity lookup.");
+          const identity = await this.owners.threadIdentity.resolve(parsed.data);
+          result = { data: identity ? WorkbenchThreadIdentityResolutionSchema.parse({
+            threadId: identity.threadId,
+            projectId: identity.projectId,
+            harness: identity.bindings[0]?.harness,
+          }) : null };
+          break;
+        }
         case "codex-sandbox-network/read": {
           const projectId = requiredString(params, "projectId");
           await this.owners.projects.resolveProjectById(projectId);
@@ -259,7 +286,7 @@ export default class WorkbenchDaemonRequestController {
         case "profiles/target/read": {
           const slot = WorkbenchComposerProfileSlotSchema.safeParse(params.slot);
           if (!slot.success) throw new InvalidParamsError("slot must identify a composer profile target.");
-          result = { selection: await this.owners.profileTargets.readComposerProfileTarget(slot.data) };
+          result = { selection: await this.owners.profileTargets.readComposerProfileTarget(await this.nativeProfileSlot(slot.data)) };
           break;
         }
         case "profiles/target/set": {
@@ -268,7 +295,7 @@ export default class WorkbenchDaemonRequestController {
           if (!slot.success) throw new InvalidParamsError("slot must identify a composer profile target.");
           if (!selection.success) throw new InvalidParamsError("selection must contain exact composer settings.");
           const ok = await this.owners.profileTargets.setComposerProfileTarget(
-            slot.data,
+            await this.nativeProfileSlot(slot.data),
             selection.data,
           );
           if (!ok) throw new InvalidParamsError("The composer profile target does not exist or rejects these settings.");

@@ -1,5 +1,6 @@
 /*
  * createSteerHistoryEntryFromRequest: admit one typed Workbench steer from a Codex request. Keywords: codex, transcript, steer, admission.
+ * readSteerHistoryRequest: parse steer correlation without allocating transcript identity. Keywords: codex, steer, correlation.
  * getJsonRpcErrorMessage: read one bounded JSON-RPC steer failure. Keywords: codex, transcript, steer, error.
  * getNextSteerDispatchSequence: derive the next durable native-steer order. Keywords: codex, transcript, steer, order.
  * hasNativeSteerReconciliationEvidence: identify provider turns that can settle native steers. Keywords: codex, transcript, steer, provider.
@@ -11,6 +12,7 @@
  * updatePendingSteerEntriesForInterruptedTurn: settle legacy steers from one interrupted provider turn. Keywords: codex, transcript, steer, interrupted.
  * updateSteerEntryStatus: apply one terminal or delivered steer state. Keywords: codex, transcript, steer, state.
  */
+import { randomUUID } from "node:crypto";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
@@ -114,7 +116,7 @@ export function sortSteerEntries(entries: WorkbenchSteerHistoryEntry[]) {
   });
 }
 
-export function createSteerHistoryEntryFromRequest(request: JsonRpcRequest): WorkbenchSteerHistoryEntry | null {
+export function readSteerHistoryRequest(request: JsonRpcRequest) {
   if (request.method !== "turn/steer") return null;
   const params = asRecord(request.params);
   const threadId = asString(params?.threadId)?.trim() ?? "";
@@ -126,24 +128,34 @@ export function createSteerHistoryEntryFromRequest(request: JsonRpcRequest): Wor
     ? String(request.id)
     : null;
   const clientUserMessageId = asString(params?.clientUserMessageId)?.trim() || null;
-  const attemptedAt = Date.now();
   return {
-    attemptedAt,
-    canonicalItemId: null,
     clientUserMessageId,
-    dispatchSequence: null,
     entryKey: clientUserMessageId
       ? `turn-steer-client:${clientUserMessageId}`
       : requestId
         ? `turn-steer:${requestId}`
-        : `turn-steer:${attemptedAt}:${Math.random().toString(36).slice(2)}`,
-    error: null,
+        : null,
     input: input.map(cloneUserInput),
     requestId,
-    resolvedAt: null,
-    status: "pending",
     threadId,
     turnId,
+  };
+}
+
+export function createSteerHistoryEntryFromRequest(request: JsonRpcRequest): WorkbenchSteerHistoryEntry | null {
+  const parsed = readSteerHistoryRequest(request);
+  if (!parsed) return null;
+  const itemId = randomUUID();
+  return {
+    ...parsed,
+    itemId,
+    entryKey: parsed.entryKey ?? `turn-steer:${itemId}`,
+    attemptedAt: Date.now(),
+    canonicalItemId: null,
+    dispatchSequence: null,
+    error: null,
+    resolvedAt: null,
+    status: "pending",
   };
 }
 

@@ -60,7 +60,7 @@ const parent: WorkbenchSubagentParentSnapshot = {
   nextDirectSubagentIndex: 1,
   parentThreadId: "parent",
   projectId: "project",
-  relationships: [relationship],
+  relationships: [{ ...relationship, kind: "active" }],
 };
 
 test("start projects the complete relationship snapshot", async () => {

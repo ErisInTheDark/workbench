@@ -29,10 +29,13 @@ import type { AgentEndpointProjectResolution } from "../lib/workbench/project/ag
 import type { WorkbenchThreadClaimContext } from "./WorkbenchThreadStateController";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 import WorkbenchWorkspaceGitArcController, { type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
+import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
 export interface WorkbenchGitArcFeatureOptions {
+  identities?: WorkbenchThreadIdentityController;
   getReloadScopesForPaths?(paths: readonly string[]): string[];
   getThreadCreatedAt(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<number | null>;
   getThreadClaimContext(projectId: string, harness: WorkbenchHarness, threadId: string): Promise<WorkbenchThreadClaimContext | null>;
@@ -232,7 +235,15 @@ export default class WorkbenchGitArcFeature {
     if (!parsed.success) return failureResponse(createGitArcOperationRejected("unknown", "Invalid checkpoint request."));
     try {
       const project = await this.resolveProject(parsed.data.cwd);
-      const request = { ...parsed.data, cwd: project.cwd };
+      const identity = await this.options.identities?.resolve({
+        threadId: parsed.data.threadId, projectId: project.project.id, harness: parsed.data.harness,
+      });
+      if (this.options.identities && !identity?.bindings[0]) throw new Error("The managed thread has no native Git arc identity.");
+      const binding = identity?.bindings[0];
+      const request = {
+        ...parsed.data, cwd: project.cwd,
+        ...(binding ? { harness: WorkbenchHarnessSchema.parse(binding.harness), threadId: binding.nativeThreadId } : {}),
+      };
       const modifiedSince = request.action === "compare" || request.action === "diff"
         ? await this.options.getThreadCreatedAt(project.project.id, request.harness, request.threadId)
         : null;
@@ -498,7 +509,9 @@ export default class WorkbenchGitArcFeature {
           harness: collision.entry.harness,
           intentName: owner.intentName,
           lifecycle: ownerContext?.lifecycle.kind ?? "unknown",
-          threadId: collision.entry.threadId,
+          threadId: this.options.identities
+            ? await this.publicThreadId(projectId, collision.entry.harness as WorkbenchHarness, collision.entry.threadId)
+            : collision.entry.threadId,
           title: ownerContext?.title.trim() || owner.intentName,
         },
       };
@@ -580,6 +593,12 @@ export default class WorkbenchGitArcFeature {
       })),
       threadId,
     });
+  }
+
+  private async publicThreadId(projectId: string, harness: WorkbenchHarness, threadId: string) {
+    const identity = await this.options.identities!.resolve({ projectId, harness, threadId });
+    if (!identity) throw new Error("Git arc owner metadata is unavailable for public projection.");
+    return identity.threadId;
   }
 
   private async dispatch(input: GitCheckpointRequest, modifiedSince?: number) {

@@ -9,6 +9,8 @@
  * - toThreadSummary: normalize generated Codex threads for the explorer sidebar. Keywords: summary, thread list.
  * - toThreadPayload: normalize generated Codex threads for the thread detail view. Keywords: payload, turns, thread read.
  * - toThreadResumePayload: normalize resume metadata plus its optional initial turn page. Keywords: payload, resume, pagination, lifecycle.
+ * - toThreadTurn: admit native item identity evidence before a turn reaches Workbench consumers.
+ * - readWorkbenchTurnHistory: normalise the existing provider-thread history extension at its boundary.
  */
 import type { ThreadPayload, ThreadSummary, WorkbenchHarness, WorkbenchThreadTurnHistoryEntry } from "../types.ts";
 import type { SessionSource } from "./generated/app-server/v2/SessionSource.ts";
@@ -16,7 +18,9 @@ import type { Thread } from "./generated/app-server/v2/Thread.ts";
 import type { ThreadResumeResponse } from "./generated/app-server/v2/ThreadResumeResponse.ts";
 import type { ThreadStatus } from "./generated/app-server/v2/ThreadStatus.ts";
 import type { ThreadTokenUsage } from "./generated/app-server/v2/ThreadTokenUsage.ts";
+import type { Turn } from "./generated/app-server/v2/Turn.ts";
 import { normalizeWorkbenchThreadItemTimeline } from "../workbench/thread/thread-item-timeline.ts";
+import { withCodexItemMetadata } from "./thread-item-source.ts";
 
 type ThreadResumePayloadSource = Pick<ThreadResumeResponse, "thread">
   & Partial<Pick<ThreadResumeResponse, "initialTurnsPage" | "model" | "reasoningEffort" | "serviceTier">>;
@@ -159,10 +163,16 @@ export function toThreadSummary(thread: Thread, harness: WorkbenchHarness = "cod
     cwd: thread.cwd,
     source: formatSessionSource(thread.source),
     path: thread.path,
-    forkedFromId: thread.forkedFromId,
     agentNickname: thread.agentNickname,
     agentRole: thread.agentRole,
   };
+}
+
+export function toThreadTurn(turn: Turn, harness: WorkbenchHarness = "codex"): Turn {
+  return harness === "codex" ? {
+    ...turn,
+    items: turn.items.map(withCodexItemMetadata),
+  } : turn;
 }
 
 export function toThreadPayload(
@@ -185,7 +195,7 @@ export function toThreadPayload(
     ...(nextPageCursor !== undefined ? { nextPageCursor } : {}),
     tokenUsage,
     turnHistory: readWorkbenchTurnHistory(thread) ?? createTurnHistoryFromTurns(thread.turns),
-    turns: thread.turns,
+    turns: thread.turns.map((turn) => toThreadTurn(turn, harness)),
   };
 }
 
@@ -216,7 +226,7 @@ function createTurnHistoryFromTurns(turns: Thread["turns"]): WorkbenchThreadTurn
   }));
 }
 
-function readWorkbenchTurnHistory(thread: Thread) {
+export function readWorkbenchTurnHistory(thread: Thread) {
   const value = (thread as Thread & { workbenchTurnHistory?: unknown }).workbenchTurnHistory;
   return Array.isArray(value)
     ? value

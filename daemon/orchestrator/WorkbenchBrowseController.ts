@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchBrowseController: own command tracking, cancellation, session access, HTTP adaptation, result-drain coordination, and reload state. Keywords: browse, orchestrator, controller, cancel, streaming, result, reload.
+ * - WorkbenchBrowseIdentityPort: map declared public targets and native session results without touching browser payloads.
  */
 import type http from "node:http";
 
@@ -8,6 +9,13 @@ import type { WorkbenchBrowseSessionControlRequest, WorkbenchBrowseSessionListRe
 import WorkbenchBrowseRequestHandler from "../lib/workbench/browse/WorkbenchBrowseRequestHandler";
 import type { WorkbenchBrowseResultSink } from "../lib/workbench/browse/browse-result-events";
 import WorkbenchBrowseRuntime from "../lib/workbench/browse/WorkbenchBrowseRuntime";
+
+export interface WorkbenchBrowseIdentityPort {
+  nativeTarget(request: { threadId: string; cwd?: string | null; projectId?: string | null }): Promise<{
+    threadId: string; cwd?: string | null; projectId?: string | null;
+  }>;
+  publicThreadId(threadId: string, projectId?: string | null): Promise<string>;
+}
 
 const SESSION_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,80}$/u;
 const MAX_BROWSE_SESSION_TIMEOUT_MS = 10 * 60_000;
@@ -113,6 +121,7 @@ export default class WorkbenchBrowseController {
     results: WorkbenchBrowseResultSink,
     runtime: WorkbenchBrowseRuntime = new WorkbenchBrowseRuntime(),
     requestHandler: WorkbenchBrowseRequestHandlerPort = new WorkbenchBrowseRequestHandler(results, runtime),
+    private readonly identity?: WorkbenchBrowseIdentityPort,
   ) {
     this.results = results;
     this.requestHandler = requestHandler;
@@ -126,19 +135,67 @@ export default class WorkbenchBrowseController {
   }
 
   async listSessions(request: WorkbenchBrowseSessionListRequest, signal?: AbortSignal) {
-    return await this.requestHandler.listSessions(request, signal);
+    return await this.runCommand(async () => {
+      const result = await this.requestHandler.listSessions(await this.nativeTarget(request), signal);
+      if (!this.identity) return result;
+      return { ...result, sessions: await Promise.all(result.sessions.map((session) => this.publicSession(session))) };
+    });
   }
 
   async controlSession(request: WorkbenchBrowseSessionControlRequest, signal?: AbortSignal) {
-    return await this.runCommand(() => this.requestHandler.controlSession(request, signal));
+    return await this.runCommand(async () => {
+      const result = await this.requestHandler.controlSession(await this.nativeTarget(request), signal);
+      return { ...result, session: result.session ? await this.publicSession(result.session) : null };
+    });
   }
 
   async executeBrowseRequest(body: Buffer, signal: AbortSignal) {
+    return await this.runCommand(() => this.prepareBrowseRequest(body, signal));
+  }
+
+  private async prepareBrowseRequest(body: Buffer, signal: AbortSignal) {
+    if (this.identity) {
+      let value: unknown;
+      try { value = JSON.parse(body.toString("utf8")); }
+      catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        return jsonResponse({ error: "A valid Browse request is required." }, 400);
+      }
+      const target = async (input: unknown) => {
+        if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+        return await this.nativeTarget(input as Record<string, unknown>);
+      };
+      if (Array.isArray(value)) value = await Promise.all(value.map(target));
+      else if (value && typeof value === "object") {
+        const request = value as Record<string, unknown>;
+        value = Array.isArray(request.actions)
+          ? { ...request, actions: await Promise.all(request.actions.map(target)) }
+          : await target(request);
+      }
+      body = Buffer.from(JSON.stringify(value));
+    }
+    signal.throwIfAborted();
     return await this.requestHandler.handle(
       body,
       signal,
       (task) => this.runCommand(task),
     );
+  }
+
+  private async nativeTarget<T extends object>(request: T): Promise<T> {
+    if (!this.identity || !("threadId" in request) || typeof request.threadId !== "string") return request;
+    const input = request as T & { threadId: string; cwd?: string | null; projectId?: string | null };
+    const target = await this.identity.nativeTarget({
+      threadId: input.threadId,
+      ...(typeof input.cwd === "string" ? { cwd: input.cwd } : {}),
+      ...(typeof input.projectId === "string" ? { projectId: input.projectId } : {}),
+    });
+    return { ...request, ...target };
+  }
+
+  private async publicSession<T extends { threadId: string | null; projectId: string | null }>(session: T): Promise<T> {
+    if (!session.threadId || !this.identity) return session;
+    return { ...session, threadId: await this.identity.publicThreadId(session.threadId, session.projectId) };
   }
 
   async executeSessionRequest({

@@ -45,6 +45,7 @@ const SandboxStateSchema = z.object({
 export const WORKBENCH_SHELL_TOOL_DESCRIPTION = "Run a shell command inside the current Codex turn sandbox. This tool never escalates or opens an approval prompt. If a necessary command fails because the sandbox blocked it, diagnose that restriction before retrying with the direct shell_command tool and require_escalated.";
 
 export interface WorkbenchShellControllerOptions {
+  resolveThreadId?: (nativeThreadId: string, cwd: string) => Promise<string>;
   commandExec?: Pick<CodexCommandExecController, "execute">;
   platform?: NodeJS.Platform;
   requestCodex?: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
@@ -96,12 +97,14 @@ export default class WorkbenchShellController {
   private readonly commandExec: Pick<CodexCommandExecController, "execute">;
   private readonly platform: NodeJS.Platform;
   private readonly shellEnvironment: NodeJS.ProcessEnv;
+  private readonly resolveThreadId: WorkbenchShellControllerOptions["resolveThreadId"];
 
-  constructor({ commandExec, platform = process.platform, requestCodex, shellEnvironment = process.env }: WorkbenchShellControllerOptions) {
+  constructor({ commandExec, platform = process.platform, requestCodex, resolveThreadId, shellEnvironment = process.env }: WorkbenchShellControllerOptions) {
     if (!commandExec && !requestCodex) throw new Error("Codex command execution is not configured.");
     this.commandExec = commandExec ?? new CodexCommandExecController({ requestCodex: requestCodex! });
     this.platform = platform;
     this.shellEnvironment = shellEnvironment;
+    this.resolveThreadId = resolveThreadId;
   }
 
   async execute(input: object, meta: Record<string, unknown> | undefined, signal: AbortSignal) {
@@ -126,9 +129,13 @@ export default class WorkbenchShellController {
       "--",
       ...shellCommand.command,
     ], this.platform);
+    const nativeThreadId = typeof meta?.threadId === "string" ? meta.threadId : "";
+    if (this.resolveThreadId && !nativeThreadId) throw new Error("Codex did not provide trusted MCP thread identity.");
+    const threadId = this.resolveThreadId ? await this.resolveThreadId(nativeThreadId, sandboxCwd) : null;
 
     const result = await this.commandExec.execute({
       ...launch,
+      ...(threadId ? { env: { ...launch.env, WORKBENCH_THREAD_ID: threadId, WORKBENCH_HARNESS: "codex" } } : {}),
       cwd: commandCwd,
       sandboxPolicy: { type: "dangerFullAccess" },
       ...(request.timeout_ms === undefined ? {} : { timeoutMs: request.timeout_ms }),

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ThreadPayload } from "workbench-shared/types";
+import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import {
   transcriptSnapshotTables,
   type WorkbenchTranscriptParityDiagnostic,
@@ -31,7 +32,6 @@ function thread(id: string, turnIds = ["turn"]): ThreadPayload {
     browseResultEntries: [],
     createdAt: 1,
     cwd: "C:/project",
-    forkedFromId: null,
     harness: "codex",
     id,
     isDraft: false,
@@ -85,6 +85,7 @@ function emptySnapshot(threadId: string): WorkbenchTranscriptSnapshot {
       archived: 0,
       created_at: 1_000,
       id: threadId,
+      identity_origin: "legacy",
       next_turn_index: 0,
       pinned: 0,
       project_id: "project",
@@ -497,14 +498,15 @@ test("a connecting turn stays in the live overlay and never enters durable subsc
     },
     turnLimit: 4,
   });
-  const connecting = thread("thread", ["workbench:connecting:test"]);
+  const connectingId = "af798e44-f0a4-46b7-b249-ae89388806cc";
+  const connecting = thread("thread", [connectingId]);
   connecting.status = "active";
-  connecting.turns[0] = {
+  connecting.turns[0] = withWorkbenchTurnAdmission({
     ...connecting.turns[0]!,
     completedAt: null,
     durationMs: null,
     status: "inProgress",
-  };
+  }, "connecting");
   connecting.turnHistory[0] = {
     ...connecting.turnHistory[0]!,
     completedAt: null,
@@ -516,7 +518,7 @@ test("a connecting turn stays in the live overlay and never enters durable subsc
   await flush();
   assert.deepEqual(subscriptions[0]?.turnIds, []);
   listeners.get(subscriptions[0]!.subscriptionId)?.(emptySnapshot("thread"));
-  assert.deepEqual(readyTurnIds.at(-1), ["workbench:connecting:test"]);
+  assert.deepEqual(readyTurnIds.at(-1), [connectingId]);
 
   const admitted = thread("thread", ["provider-turn"]);
   admitted.status = "active";

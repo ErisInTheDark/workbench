@@ -41,6 +41,7 @@ const MCP_CLIENT_SCOPE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0
 type WorkbenchAgentMcpRequestId = number | string;
 
 export interface WorkbenchAgentMcpControllerOptions {
+  resolveThreadId?: (nativeThreadId: string, cwd: string) => Promise<string>;
   executeCommand: (request: WorkbenchAgentCommandRequest, signal: AbortSignal) => Promise<Response>;
   getReloadScopeCatalog?: () => readonly OrchestratorReloadScopeDescriptor[];
   lifecycleLogError?: (name: string, message: string) => void;
@@ -129,6 +130,7 @@ export default class WorkbenchAgentMcpController {
   private readonly runLoggedCommand: NonNullable<WorkbenchAgentMcpControllerOptions["runLoggedCommand"]>;
   private readonly runtimeOwner = {};
   private readonly shell: Pick<WorkbenchShellController, "execute">;
+  private readonly resolveThreadId: NonNullable<WorkbenchAgentMcpControllerOptions["resolveThreadId"]>;
 
   constructor({
     executeCommand,
@@ -139,6 +141,7 @@ export default class WorkbenchAgentMcpController {
     requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry(),
     runLoggedCommand = async (_label, _signal, operation) => await operation(),
     shell,
+    resolveThreadId = async (threadId) => threadId,
   }: WorkbenchAgentMcpControllerOptions) {
     this.executeCommand = executeCommand;
     this.getReloadScopeCatalog = getReloadScopeCatalog;
@@ -147,7 +150,8 @@ export default class WorkbenchAgentMcpController {
     this.requestRegistry = requestRegistry;
     this.requestCodex = requestCodex;
     this.runLoggedCommand = runLoggedCommand;
-    this.shell = shell ?? new WorkbenchShellController({ requestCodex });
+    this.resolveThreadId = resolveThreadId;
+    this.shell = shell ?? new WorkbenchShellController({ requestCodex, resolveThreadId });
   }
 
   beginRuntimeDrain() {
@@ -351,7 +355,7 @@ export default class WorkbenchAgentMcpController {
       const cwd = readThreadCwd(threadResponse);
       const request = await definition.buildRequestFromJson(input, {
         callerHarness: "codex",
-        callerThreadId,
+        callerThreadId: await this.resolveThreadId(callerThreadId, cwd),
         cwd,
         workbenchOrigin: this.orchestratorOrigin,
       });

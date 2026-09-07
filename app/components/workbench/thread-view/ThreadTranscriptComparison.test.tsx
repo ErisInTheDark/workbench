@@ -33,7 +33,6 @@ function createThread(items: ThreadItem[]): ThreadPayload {
     browseResultEntries: [],
     createdAt: 1,
     cwd: "C:/project",
-    forkedFromId: null,
     harness: "codex",
     id: "thread",
     isDraft: false,

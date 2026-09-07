@@ -45,6 +45,8 @@ import {
   isAgentScreenshotSteerUserMessage,
 } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
+import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
+import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { isWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
@@ -301,11 +303,10 @@ function getSteerUserMessageState(item: Extract<ThreadItem, { type: "userMessage
     return "pending";
   }
 
+  const input = getWorkbenchInputState(item);
   if (
-    item.id.startsWith("optimistic-user-message:steer:interrupted:")
-    || item.id.startsWith("optimistic-user-message:steer:failed:")
-    || item.id.startsWith("workbench:steer-history:interrupted:")
-    || item.id.startsWith("workbench:steer-history:failed:")
+    (input?.kind === "steer" || (input?.kind === "optimistic" && input.placement === "steer"))
+    && (input.status === "interrupted" || input.status === "failed")
   ) {
     return "unsent";
   }
@@ -317,10 +318,6 @@ function isFinalAgentMessageBlock (block: ThreadRenderableBlock, finalAgentMessa
   return block.kind === "item"
     && block.item.type === "agentMessage"
     && block.item.id === finalAgentMessageId;
-}
-
-function isGenericSnapshotItemId(itemId: string) {
-  return /^item-\d+$/u.test(itemId);
 }
 
 function getNarrativeTextForSnapshotDedupe(item: ThreadItem) {
@@ -354,7 +351,7 @@ function getNarrativeSnapshotDedupeKey(item: ThreadItem) {
 }
 
 function isGenericSnapshotNarrativeArtifact(item: ThreadItem) {
-  return isGenericSnapshotItemId(item.id)
+  return getWorkbenchThreadItemIdentityKind(item) === "provisional"
     && (item.type === "agentMessage" || item.type === "plan" || item.type === "reasoning");
 }
 

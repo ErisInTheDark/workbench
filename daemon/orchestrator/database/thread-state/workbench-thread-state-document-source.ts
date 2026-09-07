@@ -1,14 +1,18 @@
 /*
+ * Keywords: thread state, source, relational, repair, digest, parity.
  * Exports:
- * - ProjectDocument/SourceProject: canonical authoritative document projection inputs. Keywords: thread state, source, relational.
- * - asRecord/parseProjectDocument: decode current and legacy documents through canonical repair rules. Keywords: thread state, source, repair.
- * - createSourceDigest: fingerprint exact authoritative documents and relationship state. Keywords: thread state, digest, parity.
+ * - ProjectDocument: parsed project state.
+ * - SourceProject: project state with source identity and update time.
+ * - asRecord: narrow external object input.
+ * - parseProjectDocument: repair current and legacy project documents.
+ * - decodeGlobalDocument: decode a global state document.
+ * - createSourceDigest: fingerprint source documents and relationship state.
  */
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchStoredSubagent } from "../../workbench-subagent-store-state.ts";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import {
   WorkbenchComposerProfileSelectionSchema,
@@ -156,25 +160,26 @@ export function decodeGlobalDocument(encoded: string, id: string) {
 export function createSourceDigest(
   projects: ReadonlyArray<{ documentJson: string; projectId: string; updatedAt: number }>,
   globals: ReadonlyArray<{ documentJson: string; id: string }>,
-  relationships: readonly WorkbenchSubagentRelationship[],
+  relationships: readonly WorkbenchStoredSubagent[],
 ) {
-  const relationshipRows = relationships.map((relationship) => ({
+  const relationshipRows = [...relationships].sort((left, right) => (
+    `${left.projectId}\0${left.harness}\0${left.kind === "reserved" ? left.reservationId : left.threadId}`
+      .localeCompare(`${right.projectId}\0${right.harness}\0${right.kind === "reserved" ? right.reservationId : right.threadId}`)
+  )).map((relationship) => ({
     createdAt: relationship.createdAt,
     cwd: relationship.cwd,
     directSubagentIndex: relationship.directSubagentIndex,
     harness: relationship.harness,
+    kind: relationship.kind,
     name: relationship.name,
     parentThreadId: relationship.parentThreadId,
     profileId: relationship.profileId,
     profileName: relationship.profileName,
     projectId: relationship.projectId,
-    threadId: relationship.threadId,
+    ...(relationship.kind === "reserved" ? { reservationId: relationship.reservationId } : { threadId: relationship.threadId }),
     title: relationship.title,
     updatedAt: relationship.updatedAt,
-  })).sort((left, right) => (
-    `${left.projectId}\0${left.harness}\0${left.threadId}`
-      .localeCompare(`${right.projectId}\0${right.harness}\0${right.threadId}`)
-  ));
+  }));
   return createHash("sha256").update(JSON.stringify({
     globals: [...globals].sort((left, right) => left.id.localeCompare(right.id)),
     projects: [...projects].sort((left, right) => left.projectId.localeCompare(right.projectId)),

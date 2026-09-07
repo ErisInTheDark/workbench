@@ -22,8 +22,17 @@ import type {
 import type {
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,
+  WorkbenchTranscriptItemIdentityAdmission,
+  WorkbenchTranscriptItemIdentityLookup,
 } from "./transcript/workbench-transcript-types";
 import type { WorkbenchThreadStateShadowRefresh } from "./thread-state/workbench-thread-state-shadow-types";
+import type {
+  WorkbenchNativeThreadIdentity,
+  WorkbenchThreadIdentityLookup,
+  WorkbenchThreadIdentityMetadata,
+  WorkbenchTurnIdentityLookup,
+  WorkbenchTurnIdentityMetadata,
+} from "./thread-identity/workbench-thread-identity-types";
 import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
 import type { WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchStatsDetailedReadRequest } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
@@ -133,6 +142,81 @@ export default class WorkbenchDatabaseController {
       throw new WorkbenchDatabaseFailure(`Unexpected database query response: ${response.type}`);
     }
     return response.rows as Row[];
+  }
+
+  async observeThreadIdentities(inputs: readonly WorkbenchThreadIdentityMetadata[]) {
+    await this.start();
+    if (!inputs.length) return [];
+    const response = await this.#request({ type: "observeThreadIdentities", inputs });
+    if (response.type !== "threadIdentities") {
+      throw new WorkbenchDatabaseFailure(`Unexpected thread identity admission response: ${response.type}`);
+    }
+    return response.identities;
+  }
+
+  async resolveThreadIdentity(input: WorkbenchThreadIdentityLookup) {
+    await this.start();
+    const response = await this.#request({ type: "resolveThreadIdentity", input });
+    if (response.type !== "threadIdentity") {
+      throw new WorkbenchDatabaseFailure(`Unexpected thread identity lookup response: ${response.type}`);
+    }
+    return response.identity;
+  }
+
+  async resolveNativeThreadIdentity(input: WorkbenchNativeThreadIdentity) {
+    await this.start();
+    const response = await this.#request({ type: "resolveNativeThreadIdentity", input });
+    if (response.type !== "threadIdentity") {
+      throw new WorkbenchDatabaseFailure(`Unexpected native thread identity lookup response: ${response.type}`);
+    }
+    return response.identity;
+  }
+
+  async listThreadIdentities() {
+    await this.start();
+    const response = await this.#request({ type: "listThreadIdentities" });
+    if (response.type !== "threadIdentities") {
+      throw new WorkbenchDatabaseFailure(`Unexpected thread identity catalog response: ${response.type}`);
+    }
+    return response.identities;
+  }
+
+  async observeTurnIdentities(inputs: readonly WorkbenchTurnIdentityMetadata[]) {
+    await this.start();
+    if (!inputs.length) return [];
+    const response = await this.#request({ type: "observeTurnIdentities", inputs });
+    if (response.type !== "turnIdentities") {
+      throw new WorkbenchDatabaseFailure(`Unexpected turn identity admission response: ${response.type}`);
+    }
+    return response.identities;
+  }
+
+  async resolveTurnIdentity(input: WorkbenchTurnIdentityLookup) {
+    await this.start();
+    const response = await this.#request({ type: "resolveTurnIdentity", input });
+    if (response.type !== "turnIdentity") {
+      throw new WorkbenchDatabaseFailure(`Unexpected turn identity lookup response: ${response.type}`);
+    }
+    return response.identity;
+  }
+
+  async admitTranscriptItemIdentities(inputs: readonly WorkbenchTranscriptItemIdentityAdmission[]) {
+    await this.start();
+    if (!inputs.length) return [];
+    const response = await this.#request({ type: "admitTranscriptItemIdentities", inputs });
+    if (response.type !== "transcriptItemIdentities") {
+      throw new WorkbenchDatabaseFailure(`Unexpected item identity admission response: ${response.type}`);
+    }
+    return response.identities;
+  }
+
+  async resolveTranscriptItemIdentity(input: WorkbenchTranscriptItemIdentityLookup) {
+    await this.start();
+    const response = await this.#request({ type: "resolveTranscriptItemIdentity", input });
+    if (response.type !== "transcriptItemIdentity") {
+      throw new WorkbenchDatabaseFailure(`Unexpected item identity lookup response: ${response.type}`);
+    }
+    return response.identity;
   }
 
   async rebuildThreadStateShadow(request: WorkbenchThreadStateShadowRefresh) {

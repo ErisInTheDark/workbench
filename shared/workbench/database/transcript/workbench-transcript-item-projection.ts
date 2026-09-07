@@ -13,11 +13,13 @@
  */
 import type { JsonValue } from "../../../codex/generated/app-server/serde_json/JsonValue.ts";
 import type { ThreadItem } from "../../../codex/generated/app-server/v2/ThreadItem.ts";
+import { getCodexItemIdentityKind } from "../../../codex/thread-item-source.ts";
 import type {
   WorkbenchUserInputRequest,
   WorkbenchUserInputResponse,
 } from "../../../types.ts";
 import type { WorkbenchFileChangeItem } from "../../thread/workbench-file-change.ts";
+import { withWorkbenchInputState } from "../../thread/thread-input-item.ts";
 import type { WorkbenchToolOutput } from "../../thread/thread-tool-output.ts";
 import type { WorkbenchTranscriptSnapshot } from "./workbench-transcript-contract.ts";
 
@@ -223,7 +225,13 @@ function userMessage(
         return { name: part.name, path: part.path, type: part.part_type };
     }
   });
-  return { clientId: owner.client_id, content: parts, id: itemId, type: "userMessage" };
+  const item = { clientId: owner.client_id, content: parts, id: itemId, type: "userMessage" as const };
+  return owner.input_kind === "steer"
+    ? withWorkbenchInputState(item, {
+      kind: "steer",
+      status: owner.delivery_state === "delivered" ? "sent" : owner.delivery_state,
+    })
+    : item;
 }
 
 function processOperation(
@@ -471,7 +479,7 @@ function projectItem(
   root: Rows["threadItems"][number],
   indexes: ReturnType<typeof createIndexes>,
 ): WorkbenchProjectedTranscriptItem {
-  const itemId = root.source_id;
+  const itemId = root.public_id ?? root.source_id;
   switch (root.type) {
     case "functionCallOutput":
       return projectWorkbenchToolOutput(
@@ -607,15 +615,34 @@ export function projectWorkbenchTranscriptItems(
   try {
     const itemRootsById = new Map(rows.threadItems.map((item) => [item.id, item]));
     if (itemRootsById.size !== rows.threadItems.length) fail("duplicateRow", "threadItems");
-    const sourceIdsByItemId = new Map(rows.threadItems.map((item) => [item.id, item.source_id]));
-    const itemRootsBySourceId = new Map(rows.threadItems.map((item) => [item.source_id, item]));
-    if (itemRootsBySourceId.size !== rows.threadItems.length) fail("duplicateRow", "threadItems");
+    const sourceIdsByItemId = new Map(rows.threadItems.map((item) => [item.id, item.public_id ?? item.source_id]));
+    if (new Set(sourceIdsByItemId.values()).size !== rows.threadItems.length) fail("duplicateRow", "threadItems");
+    const identities = new Map(rows.itemIdentities.map((identity) => [identity.id, identity]));
+    if (identities.size !== rows.itemIdentities.length) fail("duplicateRow", "itemIdentities");
+    const sourceKinds = new Map<string, "provisional" | "stable">();
+    for (const source of rows.itemSourceAliases) {
+      if (identities.get(source.item_identity_id)?.thread_id !== source.thread_id) {
+        fail("invalidReference", "itemSourceAliases", source.item_identity_id);
+      }
+      if (sourceKinds.get(source.item_identity_id) !== "stable") {
+        sourceKinds.set(source.item_identity_id, source.source_kind === "provisional" ? "provisional" : "stable");
+      }
+    }
     const indexes = createIndexes(rows, sourceIdsByItemId);
     return {
-      data: rows.threadItems.map((root) => ({
-        item: projectItem(root, indexes),
-        root,
-      })),
+      data: rows.threadItems.map((root) => {
+        if (root.public_id !== null && identities.get(root.public_id)?.thread_id !== root.thread_id) {
+          fail("invalidReference", "itemIdentities", root.public_id);
+        }
+        const item = projectItem(root, indexes);
+        const identityKind = root.public_id === null ? getCodexItemIdentityKind(item) : sourceKinds.get(root.public_id) ?? "stable";
+        return {
+          item: identityKind === "provisional"
+            ? { ...item, workbenchIdentityKind: "provisional" as const }
+            : item,
+          root,
+        };
+      }),
       success: true,
     };
   } catch (error) {

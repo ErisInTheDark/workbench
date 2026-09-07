@@ -19,6 +19,28 @@ function thread(): Thread {
   };
 }
 
+test("OpenCode metadata lookup does not fetch transcript messages", async () => {
+  const bridge = new OpenCodeBridge({
+    appServer: {} as OpenCodeAppServer, projectRoot: "C:/repo", onNotification() {},
+    getReloadableModules: () => ({
+      opencodeLiveThreadState: { createOpenCodeLiveThreadState: () => ({ sessions: new Map() }) },
+      opencodeThreadState: { opencodeSessionToThread: ({ messages }: { messages: object[] }) => {
+        assert.deepEqual(messages, []);
+        return thread();
+      } },
+    }) as OrchestratorReloadableModules,
+  });
+  let metadataReads = 0;
+  (bridge as unknown as { ensureClient(): Promise<object> }).ensureClient = async () => ({ session: {
+    get: async () => { metadataReads++; return { data: { id: "thread", directory: "C:/repo" } }; },
+    status: async () => ({ data: {} }),
+    messages: async () => { throw new Error("Metadata lookup fetched transcript bodies"); },
+  } });
+  const result = await bridge.handleRequest({ id: 1, method: "thread/read", params: { threadId: "thread", includeTurns: false } });
+  assert.equal(result.error, undefined);
+  assert.equal(metadataReads, 1);
+});
+
 test("maps the Workbench first page to the existing OpenCode thread read and rejects continuation", async () => {
   const bridge = new OpenCodeBridge({
     appServer: {} as OpenCodeAppServer,

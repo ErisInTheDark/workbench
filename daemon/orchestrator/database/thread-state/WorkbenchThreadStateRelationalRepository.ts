@@ -1,19 +1,22 @@
 /*
+ * Keywords: thread state, relational, sqlite, parity, constraints.
  * Exports:
- * - default WorkbenchThreadStateRelationalRepository: own relational projection, parity status, and transactional reconciliation. Keywords: thread state, relational, sqlite, repository.
- * Local helpers project thread/draft/subagent facts, validate required augmentations, and reconcile changed rows. Keywords: thread state, parity, constraints.
+ * - default WorkbenchThreadStateRelationalRepository: own shadow projection and transactional reconciliation.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type Database from "better-sqlite3";
+import { z } from "zod";
 
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 import {
   type WorkbenchComposerProfileSelectionState,
+  type WorkbenchDurableQuestionnaire,
   type WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
 import { normalizeThreadDisplayLayout } from "workbench-shared/workbench/thread/thread-display-layout";
+import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import {
   asRecord,
   createSourceDigest,
@@ -21,7 +24,11 @@ import {
   parseProjectDocument,
   type SourceProject,
 } from "./workbench-thread-state-document-source.ts";
-import { projectThreadStateLayout } from "./workbench-thread-state-layout-projector.ts";
+import {
+  projectThreadStateLayout,
+  type ThreadStateLayoutIdentity,
+  type ThreadStateLayoutTarget,
+} from "./workbench-thread-state-layout-projector.ts";
 import { projectThreadStateQuestionnaires } from "./workbench-thread-state-questionnaire-projector.ts";
 import {
   ANSWER_TABLE,
@@ -30,12 +37,14 @@ import {
   DELETE_ORDER,
   DRAFT_TABLE,
   FOLDER_MEMBER_TABLE,
+  FOLDER_TABLE,
   GLOBAL_DOCUMENT_TABLE,
   GLOBAL_LAYOUT_TABLE,
   IDENTITY_TABLE,
   LAYOUT_DRAFT_TABLE,
   LAYOUT_FOLDER_TABLE,
   LAYOUT_ITEM_TABLE,
+  LAYOUT_RELATION_TABLE,
   LAYOUT_TABLE,
   LAYOUT_THREAD_TABLE,
   LIFECYCLE_TABLE,
@@ -47,6 +56,8 @@ import {
   PROJECT_PROFILE_TABLE,
   PROJECTION_STATUS_TABLE,
   QUESTIONNAIRE_TABLE,
+  QUESTION_TABLE,
+  OPTION_TABLE,
   RELATIONAL_TABLE_KEYS,
   RELATIONAL_TABLES,
   RETENTION_TABLE,
@@ -57,12 +68,9 @@ import {
   THREAD_TABLE,
   addRow,
   canonicalRows,
-  questionnaireId,
   rowKey,
   rowSignatures,
-  subagentParentKey,
-  subagentRelationshipKey,
-  threadKey,
+  providerReferenceKey,
   type RelationalTableName,
   type RowSets,
   type SqlRow,
@@ -73,6 +81,8 @@ import type {
   WorkbenchThreadStateShadowRefresh,
   WorkbenchThreadStateShadowStatus,
 } from "./workbench-thread-state-shadow-types.ts";
+import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
+import WorkbenchTranscriptIdentityRepository from "../transcript/WorkbenchTranscriptIdentityRepository.ts";
 
 function profileRow(profile: WorkbenchComposerProfileSelectionState) {
   return {
@@ -148,7 +158,11 @@ function readStatusRow(row: Record<string, SqlValue>): WorkbenchThreadStateShado
 export default class WorkbenchThreadStateRelationalRepository {
   private readonly database: Database.Database;
 
-  constructor(database: Database.Database) {
+  constructor(
+    database: Database.Database,
+    private readonly threadIdentity = new WorkbenchThreadIdentityRepository(database),
+    private readonly itemIdentity = new WorkbenchTranscriptIdentityRepository(database),
+  ) {
     this.database = database;
   }
 
@@ -184,7 +198,6 @@ export default class WorkbenchThreadStateRelationalRepository {
       id,
       decodeGlobalDocument(document_json, id),
     ]));
-    const rows = this.projectRows(projects, request.parents, globals);
     const digest = sourceDigestWithParents(createSourceDigest(
       sourceRows.map(({ document_json, project_id, updated_at }) => ({
         documentJson: document_json,
@@ -197,6 +210,10 @@ export default class WorkbenchThreadStateRelationalRepository {
     const previousGeneration = this.readStatus()?.generation ?? 0;
 
     return this.database.transaction(() => {
+      this.database.pragma("defer_foreign_keys = ON");
+      this.normaliseThreadIdentities();
+      this.normaliseOpaqueIdentities();
+      const rows = this.projectRows(projects, request.parents, globals);
       const actualRows = new Map(RELATIONAL_TABLES.map((table) => [
         table,
         this.database.prepare(`SELECT * FROM ${table}`).all() as SqlRow[],
@@ -308,17 +325,16 @@ export default class WorkbenchThreadStateRelationalRepository {
     const rows: RowSets = new Map(RELATIONAL_TABLES.map((table) => [table, []]));
     const threads = new Map<string, SqlRow>();
     const identities = new Map<string, SqlRow>();
-    const relationshipsByThread = new Map(relationships.map((relationship) => [
-      threadKey(relationship.projectId, relationship.harness, relationship.threadId),
-      relationship,
-    ]));
+    const relationshipsByThread = new Map(relationships.flatMap((relationship) => relationship.kind === "active" ? [[
+      providerReferenceKey(relationship.projectId, relationship.harness, relationship.threadId), relationship,
+    ] as const] : []));
     const ensureThread = (
       projectId: string,
       harness: "codex" | "copilot" | "opencode",
       providerThreadId: string,
       defaults: Partial<SqlRow> = {},
     ) => {
-      const id = threadKey(projectId, harness, providerThreadId);
+      const id = this.resolveThreadIdentity(projectId, harness, providerThreadId);
       const existing = threads.get(id);
       if (existing && defaults.thread_kind && defaults.thread_kind !== existing.thread_kind) {
         throw new Error("One provider thread identity appeared with multiple thread kinds.");
@@ -339,16 +355,18 @@ export default class WorkbenchThreadStateRelationalRepository {
           activity_at: defaults.activity_at ?? 0,
           order_at: defaults.order_at ?? null,
         });
-        identities.set(id, { thread_id: id, project_id: projectId, harness_id: harness, provider_thread_id: providerThreadId });
       } else {
         threads.set(id, { ...existing, ...defaults, id, project_id: projectId });
       }
+      identities.set(providerReferenceKey(projectId, harness, providerThreadId), {
+        thread_id: id, project_id: projectId, harness_id: harness, provider_thread_id: providerThreadId,
+      });
       return id;
     };
 
     for (const { document, projectId } of projects) {
       for (const record of document.records) {
-        const relationship = relationshipsByThread.get(threadKey(projectId, record.identity.harness, record.identity.threadId));
+        const relationship = relationshipsByThread.get(providerReferenceKey(projectId, record.identity.harness, record.identity.threadId));
         const metadata = record.entryKind === "thread"
           ? record.metadata
           : { archived: false as const, pinned: record.pinned, snoozed: false };
@@ -393,7 +411,8 @@ export default class WorkbenchThreadStateRelationalRepository {
             updatedAt: record.updatedAt,
           }, id, ensureThread);
         }
-        projectThreadStateQuestionnaires(rows, id, record);
+        projectThreadStateQuestionnaires(rows, id, record,
+          (entry) => this.questionnaireIdentity(id, record.identity.threadId, entry));
       }
       for (const draft of document.drafts) {
         addRow(rows, DRAFT_TABLE, {
@@ -426,23 +445,31 @@ export default class WorkbenchThreadStateRelationalRepository {
 
     for (const parent of parents) {
       const parentThreadId = ensureThread(parent.projectId, parent.harness, parent.parentThreadId);
-      const parentId = subagentParentKey(parent.projectId, parent.harness, parent.parentThreadId);
+      const parentIdentity = this.database.prepare(`
+        SELECT id, legacy_id FROM ${SUBAGENT_PARENT_TABLE}
+        WHERE project_id = ? AND harness_id = ? AND parent_thread_id = ?
+      `).get(parent.projectId, parent.harness, parentThreadId) as { id: string; legacy_id: string | null } | undefined;
+      const parentId = parentIdentity?.id ?? randomUUID();
       addRow(rows, SUBAGENT_PARENT_TABLE, {
-        id: parentId, project_id: parent.projectId, harness_id: parent.harness,
+        id: parentId, legacy_id: parentIdentity?.legacy_id ?? null, project_id: parent.projectId, harness_id: parent.harness,
         parent_thread_id: parentThreadId, next_direct_subagent_index: parent.nextDirectSubagentIndex,
       });
       for (const relationship of parent.relationships) {
-        const relationshipId = subagentRelationshipKey(parentId, relationship.directSubagentIndex);
-        const pending = relationship.threadId.startsWith("pending:");
+        const relationshipIdentity = this.database.prepare(`
+          SELECT id, legacy_id FROM ${SUBAGENT_RELATIONSHIP_TABLE} WHERE parent_id = ? AND direct_subagent_index = ?
+        `).get(parentId, relationship.directSubagentIndex) as { id: string; legacy_id: string | null } | undefined;
+        const relationshipId = relationshipIdentity?.id ?? randomUUID();
+        const pending = relationship.kind === "reserved";
         addRow(rows, SUBAGENT_RELATIONSHIP_TABLE, {
-          id: relationshipId, parent_id: parentId, relationship_kind: pending ? "pending" : "active",
+          id: relationshipId, legacy_id: relationshipIdentity?.legacy_id ?? null,
+          parent_id: parentId, relationship_kind: pending ? "pending" : "active",
           name_key: relationship.name.toLocaleLowerCase(), direct_subagent_index: relationship.directSubagentIndex,
           created_at: relationship.createdAt, updated_at: relationship.updatedAt,
         });
         if (pending) {
           addRow(rows, PENDING_SUBAGENT_RELATIONSHIP_TABLE, {
             relationship_id: relationshipId, relationship_kind: "pending",
-            reservation_thread_id: relationship.threadId, cwd: relationship.cwd, name: relationship.name,
+            reservation_id: relationship.reservationId, cwd: relationship.cwd, name: relationship.name,
             profile_id: relationship.profileId, profile_name: relationship.profileName, title: relationship.title,
           });
           continue;
@@ -466,41 +493,47 @@ export default class WorkbenchThreadStateRelationalRepository {
         if (!record.snoozedUntil || record.entryKind !== "thread") continue;
         const target = record.snoozedUntil;
         addRow(rows, SNOOZE_TABLE, {
-          source_thread_id: threadKey(projectId, record.identity.harness, record.identity.threadId),
+          source_thread_id: ensureThread(projectId, record.identity.harness, record.identity.threadId),
           source_thread_kind: "topLevel",
           target_thread_id: ensureThread(target.projectId, target.identity.harness, target.identity.threadId),
           target_thread_kind: "topLevel",
         });
       }
+      const identity = this.layoutIdentity("project", projectId);
       projectThreadStateLayout(rows, {
         displayOrder: document.displayOrder,
         ensureThread,
-        layoutId: `project:${projectId}`,
+        identity,
         ownerKind: "project",
         projectId,
+        resolveItemIdentity: (target) => this.layoutItemIdentity(identity.id, target),
         revision: 0,
       });
     }
     const pinned = globals.get("pinnedLayout") ?? {};
+    const pinnedIdentity = this.layoutIdentity("pinned");
     projectThreadStateLayout(rows, {
       displayOrder: normalizeThreadDisplayLayout(asRecord(pinned.displayOrder)),
       ensureThread,
-      layoutId: "global:pinned",
+      identity: pinnedIdentity,
       ownerKind: "pinned",
+      resolveItemIdentity: (target) => this.layoutItemIdentity(pinnedIdentity.id, target),
       revision: typeof pinned.revision === "number" && Number.isSafeInteger(pinned.revision) && pinned.revision >= 0 ? pinned.revision : 0,
     });
     const importedProjectIds = new Set(Array.isArray(pinned.importedProjectIds) ? pinned.importedProjectIds : []);
     for (const projectId of importedProjectIds) {
       if (typeof projectId === "string" && projectId) {
-        addRow(rows, PINNED_IMPORT_TABLE, { project_id: projectId, layout_id: "global:pinned" });
+        addRow(rows, PINNED_IMPORT_TABLE, { project_id: projectId, layout_id: pinnedIdentity.id });
       }
     }
     const home = globals.get("homeDisplayOrder") ?? {};
+    const homeIdentity = this.layoutIdentity("home");
     projectThreadStateLayout(rows, {
       displayOrder: normalizeThreadDisplayLayout(asRecord(home.displayOrder)),
       ensureThread,
-      layoutId: "global:home",
+      identity: homeIdentity,
       ownerKind: "home",
+      resolveItemIdentity: (target) => this.layoutItemIdentity(homeIdentity.id, target),
       revision: typeof home.revision === "number" && Number.isSafeInteger(home.revision) && home.revision >= 0 ? home.revision : 0,
     });
 
@@ -520,6 +553,122 @@ export default class WorkbenchThreadStateRelationalRepository {
     for (const row of threads.values()) addRow(rows, THREAD_TABLE, row);
     for (const row of identities.values()) addRow(rows, IDENTITY_TABLE, row);
     return rows;
+  }
+
+  private layoutIdentity(ownerKind: "project" | "pinned" | "home", projectId?: string): ThreadStateLayoutIdentity {
+    const row = (ownerKind === "project"
+      ? this.database.prepare(`
+          SELECT layout.id, layout.legacy_id FROM ${LAYOUT_TABLE} layout
+          JOIN ${PROJECT_LAYOUT_TABLE} owner ON owner.layout_id = layout.id WHERE owner.project_id = ?
+        `).get(projectId)
+      : this.database.prepare(`
+          SELECT layout.id, layout.legacy_id FROM ${LAYOUT_TABLE} layout
+          JOIN ${GLOBAL_LAYOUT_TABLE} owner ON owner.layout_id = layout.id WHERE owner.owner_kind = ?
+        `).get(ownerKind)) as { id: string; legacy_id: string | null } | undefined;
+    return row ? { id: row.id, legacyId: row.legacy_id } : { id: randomUUID(), legacyId: null };
+  }
+
+  private resolveThreadIdentity(projectId: string, harness: "codex" | "copilot" | "opencode", threadId: string) {
+    const identity = this.threadIdentity.resolve({ projectId, harness, threadId });
+    if (!identity) throw new Error("Thread-state projection is awaiting canonical thread metadata.");
+    return identity.threadId;
+  }
+
+  private resolveQuestionnaireItemId(threadId: string, nativeThreadId: string, entry: WorkbenchDurableQuestionnaire) {
+    const turnId = entry.turnId === null ? null
+      : this.threadIdentity.resolveTurn({ threadId, turnId: entry.turnId })?.turnId;
+    if (turnId === undefined) throw new Error("Thread-state projection is awaiting canonical questionnaire turn metadata.");
+    if (!entry.itemId && !entry.turnId) throw new Error("Thread-state projection is awaiting canonical questionnaire item metadata.");
+    const reference = entry.itemId ?? resolveQuestionnaireHistoryItemId({
+      requestKey: entry.requestKey, threadId: nativeThreadId, turnId: entry.turnId!,
+    });
+    const identity = this.itemIdentity.resolve({ threadId, turnId, itemId: reference });
+    if (!identity) throw new Error("Thread-state projection is awaiting canonical questionnaire item metadata.");
+    return identity.itemId;
+  }
+
+  private questionnaireIdentity(threadId: string, nativeThreadId: string, entry: WorkbenchDurableQuestionnaire) {
+    const id = this.resolveQuestionnaireItemId(threadId, nativeThreadId, entry);
+    const existing = this.database.prepare(`
+      SELECT id, legacy_id FROM ${QUESTIONNAIRE_TABLE}
+      WHERE thread_id = ? AND (id = ? OR (provider_item_id IS ? AND provider_turn_id IS ? AND request_key = ?))
+    `).get(threadId, id, entry.itemId, entry.turnId, entry.requestKey) as { id: string; legacy_id: string | null } | undefined;
+    const legacyId = existing?.legacy_id ?? (existing && existing.id !== id ? existing.id : null);
+    if (existing && existing.id !== id) {
+      for (const table of [QUESTION_TABLE, OPTION_TABLE, ANSWER_TABLE]) {
+        this.database.prepare(`UPDATE ${table} SET questionnaire_id = ? WHERE questionnaire_id = ?`).run(id, existing.id);
+      }
+      this.database.prepare(`UPDATE ${QUESTIONNAIRE_TABLE} SET id = ?, legacy_id = ? WHERE id = ?`)
+        .run(id, legacyId, existing.id);
+    }
+    return { id, legacyId };
+  }
+
+  private normaliseThreadIdentities() {
+    const sources = this.database.prepare(`
+      SELECT thread_id, project_id, harness_id, provider_thread_id FROM ${IDENTITY_TABLE}
+    `).all() as Array<{
+      thread_id: string; project_id: string; harness_id: "codex" | "copilot" | "opencode"; provider_thread_id: string;
+    }>;
+    for (const source of sources) {
+      const id = this.resolveThreadIdentity(source.project_id, source.harness_id, source.provider_thread_id);
+      if (id === source.thread_id) continue;
+      this.threadIdentity.preserveLegacyAlias(id, source.thread_id);
+      const references = [
+        [IDENTITY_TABLE, "thread_id"], [LIFECYCLE_TABLE, "thread_id"],
+        [SUBAGENT_TABLE, "thread_id"], [SUBAGENT_TABLE, "parent_thread_id"],
+        [SUBAGENT_PARENT_TABLE, "parent_thread_id"], [ACTIVE_SUBAGENT_RELATIONSHIP_TABLE, "thread_id"],
+        [RETENTION_TABLE, "thread_id"], [PROFILE_TABLE, "thread_id"],
+        [SNOOZE_TABLE, "source_thread_id"], [SNOOZE_TABLE, "target_thread_id"],
+        [LAYOUT_THREAD_TABLE, "thread_id"], [QUESTIONNAIRE_TABLE, "thread_id"],
+      ] as const;
+      for (const [table, column] of references) {
+        this.database.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).run(id, source.thread_id);
+      }
+      this.database.prepare(`UPDATE ${THREAD_TABLE} SET id = ? WHERE id = ?`).run(id, source.thread_id);
+    }
+  }
+
+  private layoutItemIdentity(layoutId: string, target: ThreadStateLayoutTarget): ThreadStateLayoutIdentity {
+    const [table, column, targetId] = target.kind === "thread" ? [LAYOUT_THREAD_TABLE, "thread_id", target.threadId]
+      : target.kind === "draft" ? [LAYOUT_DRAFT_TABLE, "draft_id", target.draftId]
+      : [LAYOUT_FOLDER_TABLE, "folder_id", target.folderId];
+    const row = this.database.prepare(`
+      SELECT item.id, item.legacy_id FROM ${LAYOUT_ITEM_TABLE} item
+      JOIN ${table} target ON target.item_id = item.id WHERE item.layout_id = ? AND target.${column} = ?
+    `).get(layoutId, targetId) as { id: string; legacy_id: string | null } | undefined;
+    return row ? { id: row.id, legacyId: row.legacy_id } : { id: randomUUID(), legacyId: null };
+  }
+
+  private normaliseOpaqueIdentities() {
+    const references = [
+      [SUBAGENT_PARENT_TABLE, [[SUBAGENT_RELATIONSHIP_TABLE, "parent_id"]]],
+      [SUBAGENT_RELATIONSHIP_TABLE, [
+        [PENDING_SUBAGENT_RELATIONSHIP_TABLE, "relationship_id"], [ACTIVE_SUBAGENT_RELATIONSHIP_TABLE, "relationship_id"],
+      ]],
+      [LAYOUT_TABLE, [
+        [PROJECT_LAYOUT_TABLE, "layout_id"], [GLOBAL_LAYOUT_TABLE, "layout_id"], [FOLDER_TABLE, "layout_id"],
+        [LAYOUT_ITEM_TABLE, "layout_id"], [LAYOUT_RELATION_TABLE, "layout_id"], [FOLDER_MEMBER_TABLE, "layout_id"],
+        [PINNED_IMPORT_TABLE, "layout_id"],
+      ]],
+      [LAYOUT_ITEM_TABLE, [
+        [LAYOUT_THREAD_TABLE, "item_id"], [LAYOUT_DRAFT_TABLE, "item_id"], [LAYOUT_FOLDER_TABLE, "item_id"],
+        [LAYOUT_RELATION_TABLE, "item_id"], [LAYOUT_RELATION_TABLE, "related_item_id"],
+        [FOLDER_MEMBER_TABLE, "folder_item_id"], [FOLDER_MEMBER_TABLE, "member_item_id"],
+      ]],
+    ] as const;
+    for (const [table, children] of references) {
+      const rows = this.database.prepare(`SELECT id FROM ${table}`).all() as Array<{ id: string }>;
+      for (const row of rows) {
+        if (z.uuid().safeParse(row.id).success) continue;
+        const id = randomUUID();
+        for (const [child, column] of children) {
+          this.database.prepare(`UPDATE ${child} SET ${column} = ? WHERE ${column} = ?`).run(id, row.id);
+        }
+        this.database.prepare(`UPDATE ${table} SET id = ?, legacy_id = COALESCE(legacy_id, ?) WHERE id = ?`)
+          .run(id, row.id, row.id);
+      }
+    }
   }
 
   private addSubagentRow(
@@ -553,7 +702,10 @@ export default class WorkbenchThreadStateRelationalRepository {
     parents: readonly WorkbenchSubagentParentSnapshot[],
   ) {
     const relationships = sourceRelationships(parents);
-    const identities = new Set((rows.get(IDENTITY_TABLE) ?? []).map((row) => row.thread_id as string));
+    const identityBySource = new Map((rows.get(IDENTITY_TABLE) ?? []).map((row) => [
+      providerReferenceKey(row.project_id as string, row.harness_id as string, row.provider_thread_id as string),
+      row.thread_id as string,
+    ]));
     const lifecycles = new Set((rows.get(LIFECYCLE_TABLE) ?? []).map((row) => row.thread_id as string));
     const subagents = new Set((rows.get(SUBAGENT_TABLE) ?? []).map((row) => row.thread_id as string));
     const drafts = new Set((rows.get(DRAFT_TABLE) ?? []).map((row) => row.draft_id as string));
@@ -561,8 +713,11 @@ export default class WorkbenchThreadStateRelationalRepository {
     let mismatches = 0;
     for (const { document, projectId } of projects) {
       for (const record of document.records) {
-        const id = threadKey(projectId, record.identity.harness, record.identity.threadId);
-        if (!identities.has(id)) mismatches += 1;
+        const id = identityBySource.get(providerReferenceKey(projectId, record.identity.harness, record.identity.threadId));
+        if (!id) {
+          mismatches += 1;
+          continue;
+        }
         if (!lifecycles.has(id)) mismatches += 1;
         if (record.entryKind === "subagent" && !subagents.has(id)) mismatches += 1;
         const entries = [
@@ -570,7 +725,7 @@ export default class WorkbenchThreadStateRelationalRepository {
           ...(record.questionnaireHistory ?? []),
         ];
         for (const entry of entries) {
-          if (!questionnaires.has(questionnaireId(id, entry.itemId, entry.turnId, entry.requestKey))) mismatches += 1;
+          if (!questionnaires.has(this.resolveQuestionnaireItemId(id, record.identity.threadId, entry))) mismatches += 1;
         }
       }
       for (const draft of document.drafts) {
@@ -578,8 +733,9 @@ export default class WorkbenchThreadStateRelationalRepository {
       }
     }
     for (const relationship of relationships) {
-      if (!relationship.threadId.startsWith("pending:")
-        && !subagents.has(threadKey(relationship.projectId, relationship.harness, relationship.threadId))) mismatches += 1;
+      if (relationship.kind === "reserved") continue;
+      const id = identityBySource.get(providerReferenceKey(relationship.projectId, relationship.harness, relationship.threadId));
+      if (!id || !subagents.has(id)) mismatches += 1;
     }
     return mismatches + this.relationalInvariantMismatchCount(rows);
   }

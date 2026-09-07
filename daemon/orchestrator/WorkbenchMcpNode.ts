@@ -1,4 +1,5 @@
 /*
+ * Keywords: mcp, http, assets, identity, reload graph.
  * Exports:
  * - default WorkbenchMcpNode: own the wb MCP server and HTTP router after core and topology parents are active. Keywords: mcp, router, graph.
  */
@@ -21,6 +22,7 @@ const REQUIRED_REGISTRATIONS = [
   "projectSnapshot",
   "reloadController",
   "threadGit",
+  "threadIdentity",
   "threadState",
 ] as const satisfies readonly (keyof OrchestratorRuntimeObjects)[];
 
@@ -48,6 +50,12 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       threadState.controller.setThreadWaitState("codex", threadId, toolNames);
     });
     const mcp = new WorkbenchAgentMcpController({
+      resolveThreadId: async (threadId, cwd) => {
+        const project = await build.get("projectCatalog").resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench MCP" });
+        const identity = await build.get("threadIdentity").resolve({ threadId, projectId: project.project.id, harness: "codex" });
+        if (!identity) throw new Error("The managed Codex thread has no Workbench identity.");
+        return identity.threadId;
+      },
       executeCommand: async (request, signal) => await requestRegistry.executeCommand(request, signal),
       getReloadScopeCatalog: context.getReloadScopeCatalog,
       orchestratorOrigin: context.localOrchestratorOrigin,
@@ -66,7 +74,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       projectCatalog: build.get("projectCatalog"),
       projectSnapshot: build.get("projectSnapshot"),
       threadGit: build.get("threadGit"),
-      transcriptAssets: new WorkbenchTranscriptAssetController(context.legacyMigrationProjectRoot),
+      transcriptAssets: new WorkbenchTranscriptAssetController(context.legacyMigrationProjectRoot, build.get("threadIdentity")),
     });
     return {
       activate: () => {
@@ -102,6 +110,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchMcpNode.ts",
     "daemon/orchestrator/WorkbenchAgentMcpController.ts",
     "daemon/orchestrator/WorkbenchOrchestratorHttpRouter.ts",
+    "daemon/orchestrator/WorkbenchTranscriptAssetController.ts",
     "daemon/orchestrator/WorkbenchShellController*.ts",
     "shared/workbench/commands/workbench-shell-command.ts",
     "daemon/orchestrator/workbench-agent-mcp-request-registry.ts",

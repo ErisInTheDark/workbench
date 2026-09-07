@@ -25,6 +25,7 @@ import {
 import reportClientSchemaError from "../report-client-schema-error.ts";
 import { WorkbenchProjectsPayloadSchema } from "../project/project-state.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../thread/thread-state.ts";
+import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thread-identity.ts";
 import { WorkbenchSearchResponseSchema } from "../search/workbench-search.ts";
 import { WorkbenchStatsDetailedResponseSchema } from "../stats/workbench-stats-detail-contract.ts";
 import {
@@ -65,6 +66,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
       }).strict(),
     }).strict();
     case "project/catalog/read": return WorkbenchProjectsPayloadSchema;
+    case "thread/identity/resolve": return z.object({ data: WorkbenchThreadIdentityResolutionSchema.nullable() }).strict();
     case "project/file/read": return z.object({
       content: z.string(), headContent: z.string().nullable(), mtimeMs: z.number(), path: z.string(), projectId: z.string(), updatedAt: z.string(),
     }).strict();

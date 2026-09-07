@@ -12,6 +12,7 @@ import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared
 import ThreadOptimisticInputStore, { isPendingInitialOptimisticInputItem } from "./ThreadOptimisticInputStore.ts";
 import { applySteerHistoryToThread } from "workbench-shared/workbench/thread/thread-steer-history";
 import { findWorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
+import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 
 function input(text: string) {
   return [{ text, text_elements: [], type: "text" as const }];
@@ -24,7 +25,7 @@ function user(id: string, clientId: string | null, text: string): Extract<Thread
 function thread(items: ThreadItem[] = []): ThreadPayload {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    forkedFromId: null, harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
+    harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
     reasoningEffort: null, serviceTier: null, source: "codex", status: "active", tokenUsage: null, turnHistory: [],
     turns: [{ completedAt: null, durationMs: null, error: null, id: "turn", items, itemsView: "full", startedAt: 1, status: "inProgress" }], updatedAt: 1,
   };
@@ -34,7 +35,7 @@ function history(handle: string, status: WorkbenchSteerHistoryEntry["status"], c
   return {
     attemptedAt: 1, canonicalItemId, clientUserMessageId: handle, dispatchSequence: 0, entryKey: `turn-steer-client:${handle}`,
     error: null, input: input("same"), requestId: "1", resolvedAt: status === "pending" ? null : 2, status,
-    threadId: "thread", turnId: "turn",
+    itemId: handle, threadId: "thread", turnId: "turn",
   };
 }
 
@@ -61,6 +62,7 @@ test("optimistic event time survives status transitions and turn moves", () => {
   now = 9_000;
   const assertTime = (payload: ThreadPayload, turnId: string) => {
     const item = payload.turns.find((turn) => turn.id === turnId)!.items.at(-1)!;
+    assert.equal(item.id, pending.item.id);
     const timeline = payload.turnHistory.find((turn) => turn.turnId === turnId)?.itemTimeline;
     assert.equal(findWorkbenchThreadItemTimelineEntry(item.id, timeline)?.firstSeenAt, 5_000);
   };
@@ -69,7 +71,9 @@ test("optimistic event time survives status transitions and turn moves", () => {
   store.movePending(pending.handle, "next");
   assertTime(store.apply(source, []), "next");
   store.transition(pending.handle, "failed");
-  assertTime(store.apply(source, []), "next");
+  const failed = store.apply(source, []);
+  assertTime(failed, "next");
+  assert.equal(getWorkbenchInputState(failed.turns.find((turn) => turn.id === "next")!.items.at(-1)!)?.status, "failed");
 });
 
 test("adding optimistic timing preserves untimed turns and existing lazy-history order", () => {
@@ -134,7 +138,8 @@ test("exact pending history suppresses only its matching local placeholder", () 
   const withHistory = applySteerHistoryToThread(thread(), entries);
   const projected = store.apply(withHistory, entries);
   assert.equal(projected.turns[0]?.items.length, 2);
-  assert.ok(projected.turns[0]?.items.every((item) => item.id.startsWith("workbench:steer-history:")));
+  assert.deepEqual(projected.turns[0]?.items.map(({ id }) => id), entries.map(({ itemId }) => itemId));
+  assert.ok(projected.turns[0]?.items.every((item) => getWorkbenchInputState(item)?.kind === "steer"));
 });
 
 test("sent is monotonic against delayed failure and aliases stay on one handle", () => {
@@ -183,7 +188,7 @@ test("sent history without a raw canonical item retains one sent local projectio
   const entry = store.enqueueSteer(thread(), "turn", input("same"));
   const projected = store.apply(thread(), [history(entry.handle, "sent", "canonical")]);
   assert.equal(projected.turns[0]?.items.length, 1);
-  assert.match(projected.turns[0]?.items[0]?.id ?? "", /:sent:/u);
+  assert.equal(getWorkbenchInputState(projected.turns[0]!.items[0]!)?.status, "sent");
 
   const withCanonical = store.apply(
     thread([user("canonical", entry.handle, "same")]),

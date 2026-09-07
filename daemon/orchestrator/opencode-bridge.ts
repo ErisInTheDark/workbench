@@ -10,6 +10,7 @@
  * - OpenCodeBridge: own SDK client, event pump, session state, pending input, recovery, and notifications. Keywords: opencode, sdk, bridge, session, events.
  */
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 
 import type {
   Event as OpenCodeEvent,
@@ -28,6 +29,8 @@ import type { GetAccountRateLimitsResponse } from "workbench-shared/codex/genera
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadStatus } from "workbench-shared/codex/generated/app-server/v2/ThreadStatus";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
+import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import { getCurrentTurn } from "workbench-shared/codex/thread-state";
 import type { WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
@@ -48,6 +51,8 @@ import { log, logError } from "./process-helpers";
 import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
 import type { WorkbenchTurnRecoveryHandoffCandidate } from "./WorkbenchTurnRecoveryHandoffStore";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
+import { admitProviderNotifications, admitProviderThreads } from "./thread-identity-provider-mapping";
+import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
 
 export type OpenCodeBridgeOptions = {
   appServer: OpenCodeAppServer;
@@ -55,6 +60,8 @@ export type OpenCodeBridgeOptions = {
   initialState?: OpenCodeBridgeState;
   onNotification: (notification: JsonRpcNotification) => void;
   projectRoot: string;
+  identities?: NativeTranscriptIdentityOwners;
+  resolveProject?: (cwd: string) => Promise<{ projectId: string; projectRoot: string }>;
 };
 
 type OpenCodeSessionResponse = {
@@ -277,22 +284,7 @@ function normalizeOpenCodeStreamEvent(event: OpenCodeStreamEvent): V2Event {
 }
 
 function eventThreadId(event: V2Event) {
-  switch (event.type) {
-    case "message.updated":
-      return event.data.sessionID;
-    case "message.part.delta":
-      return event.data.sessionID;
-    case "message.part.updated":
-      return event.data.sessionID;
-    case "message.part.removed":
-      return event.data.sessionID;
-    case "message.removed":
-      return event.data.sessionID;
-    case "session.error":
-      return event.data.sessionID ?? null;
-    default:
-      return null;
-  }
+  return "sessionID" in event.data ? asString(event.data.sessionID) : null;
 }
 
 function openCodeQuestionRequestKey(question: QuestionRequest | QuestionV2Request) {
@@ -307,21 +299,21 @@ function openCodeQuestionDisplayRequest(question: PendingQuestion) {
 
 function createSyntheticTurn(threadId: string, input: UserInput[], clientUserMessageId: string | null): Turn {
   const now = Math.floor(Date.now() / 1000);
-  return {
+  return withWorkbenchTurnAdmission({
     completedAt: null,
     durationMs: null,
     error: null,
-    id: `opencode:turn:${threadId}:pending:${now}`,
+    id: randomUUID(),
     items: [{
       content: input,
-      id: clientUserMessageId ? `opencode:user:${clientUserMessageId}` : `opencode:user:pending:${now}`,
-      clientId: null,
+      id: randomUUID(),
+      clientId: clientUserMessageId,
       type: "userMessage",
     }],
     itemsView: "full",
     startedAt: now,
     status: "inProgress",
-  };
+  }, "providerPending");
 }
 
 export type OpenCodeRecoveryDisposition = "busy" | "completed" | "prompt";
@@ -363,6 +355,8 @@ export class OpenCodeBridge {
   private readonly getReloadableModules: OpenCodeBridgeOptions["getReloadableModules"];
   private readonly onNotification: OpenCodeBridgeOptions["onNotification"];
   private readonly projectRoot: string;
+  private readonly identities: OpenCodeBridgeOptions["identities"];
+  private readonly resolveProject: OpenCodeBridgeOptions["resolveProject"];
   private client: OpencodeClient | null = null;
   private eventAbortController: AbortController | null = null;
   private eventPumpPromise: Promise<void> | null = null;
@@ -374,11 +368,13 @@ export class OpenCodeBridge {
   private snapshotRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private sessionStatuses = new Map<string, SessionStatus>();
 
-  constructor({ appServer, getReloadableModules, initialState, onNotification, projectRoot }: OpenCodeBridgeOptions) {
+  constructor({ appServer, getReloadableModules, initialState, onNotification, projectRoot, identities, resolveProject }: OpenCodeBridgeOptions) {
     this.appServer = appServer;
     this.getReloadableModules = getReloadableModules;
     this.onNotification = onNotification;
     this.projectRoot = projectRoot;
+    this.identities = identities;
+    this.resolveProject = resolveProject;
     this.client = null;
     this.liveThreadState = initialState?.liveThreadState
       ?? getReloadableModules().opencodeLiveThreadState.createOpenCodeLiveThreadState();
@@ -485,7 +481,10 @@ export class OpenCodeBridge {
           if (!threadId) {
             return errorResponse(requestId, -32602, "Missing thread id.");
           }
-          return okResponse(requestId, await this.readThread(threadId, requestDirectory(message.params, this.projectRoot)));
+          return okResponse(requestId, await this.readThread(
+            threadId, requestDirectory(message.params, this.projectRoot),
+            asRecord(message.params)?.includeTurns !== false && asRecord(message.params)?.excludeTurns !== true,
+          ));
         }
         case "thread/start":
           return okResponse(requestId, await this.startThread(message.params));
@@ -558,11 +557,13 @@ export class OpenCodeBridge {
         const password = process.env.OPENCODE_SERVER_PASSWORD || "";
         headers.Authorization = `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
       }
-      this.client = createOpencodeClient({
+      const client = createOpencodeClient({
         baseUrl,
         headers,
       });
-      this.startEventPump(this.client);
+      await this.restoreLiveIdentities();
+      this.client = client;
+      this.startEventPump(client);
       log("opencode-bridge", `connected to ${baseUrl}`);
       return this.client;
     })();
@@ -585,7 +586,11 @@ export class OpenCodeBridge {
       try {
         const events = await client.v2.event.subscribe({ signal: abortController.signal });
         for await (const event of events.stream) {
-          this.handleEvent(event);
+          try {
+            await this.handleEvent(event);
+          } catch (error) {
+            logError("opencode-bridge", `event admission failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
         }
       } catch (error) {
         if (!abortController.signal.aborted) {
@@ -595,23 +600,34 @@ export class OpenCodeBridge {
     })();
   }
 
-  private handleEvent(streamEvent: OpenCodeStreamEvent) {
+  private async handleEvent(streamEvent: OpenCodeStreamEvent) {
     const event = normalizeOpenCodeStreamEvent(streamEvent);
+    try {
+      await this.applyEvent(event);
+    } catch (error) {
+      const threadId = eventThreadId(event);
+      if (threadId) this.onNotification({ method: "thread/status/changed", params: { threadId, status: { type: "systemError" } } });
+      throw error;
+    }
+  }
+
+  private async applyEvent(event: V2Event) {
     switch (event.type) {
       case "session.created":
-      case "session.updated":
+      case "session.updated": {
         this.rememberSessionDirectory(event.data.sessionID, event.data.info.directory);
+        const thread = this.getReloadableModules().opencodeThreadState.opencodeSessionToThread({
+          messages: [], session: event.data.info, status: this.sessionStatuses.get(event.data.sessionID),
+        });
+        await this.admitThreads([thread]);
         this.onNotification({
           method: event.type === "session.created" ? "thread/started" : "thread/name/updated",
           params: event.type === "session.created"
-            ? { thread: this.getReloadableModules().opencodeThreadState.opencodeSessionToThread({
-              messages: [],
-              session: event.data.info,
-              status: this.sessionStatuses.get(event.data.sessionID),
-            }) }
+            ? { thread }
             : { threadId: event.data.sessionID, threadName: event.data.info.title },
         });
         break;
+      }
       case "session.status":
         this.sessionStatuses.set(event.data.sessionID, event.data.status);
         this.onNotification({
@@ -624,7 +640,7 @@ export class OpenCodeBridge {
         break;
       case "session.idle":
         this.sessionStatuses.set(event.data.sessionID, { type: "idle" });
-        this.getReloadableModules().opencodeLiveThreadState.applyOpenCodeLiveEvent(this.liveThreadState, event, this.onNotification);
+        await this.publishLiveEvent(event);
         this.onNotification({
           method: "thread/status/changed",
           params: {
@@ -676,7 +692,7 @@ export class OpenCodeBridge {
       case "session.next.tool.success":
       case "session.next.tool.failed":
       case "message.part.delta":
-        this.getReloadableModules().opencodeLiveThreadState.applyOpenCodeLiveEvent(this.liveThreadState, event, this.onNotification);
+        await this.publishLiveEvent(event);
         break;
       case "message.updated":
       case "message.part.updated":
@@ -691,7 +707,7 @@ export class OpenCodeBridge {
           this.clearPendingUserInputForThread(threadId);
         }
         if (event.type === "message.updated" || event.type === "message.part.updated") {
-          this.getReloadableModules().opencodeLiveThreadState.applyOpenCodeLiveEvent(this.liveThreadState, event, this.onNotification);
+          await this.publishLiveEvent(event);
         }
         this.onNotification({
           method: "thread/status/changed",
@@ -706,6 +722,53 @@ export class OpenCodeBridge {
         break;
       }
     }
+  }
+
+  private async admitThreads(threads: readonly Thread[]) {
+    if (!this.identities) return;
+    const resolveProject = this.resolveProject;
+    if (!resolveProject) throw new Error("OpenCode identity admission requires the project owner.");
+    const inputs = await Promise.all(threads.map(async (thread) => ({
+      thread,
+      metadata: {
+        ...await resolveProject(thread.cwd),
+        native: { harness: "opencode", nativeLocation: thread.cwd, nativeThreadId: thread.id },
+        title: thread.name ?? "", createdAt: thread.createdAt * 1_000,
+        updatedAt: thread.updatedAt * 1_000, activityAt: thread.updatedAt * 1_000,
+      },
+    })));
+    await admitProviderThreads(this.identities, inputs);
+  }
+
+  private async restoreLiveIdentities() {
+    if (!this.identities) return;
+    for (const [nativeThreadId, session] of this.liveThreadState.sessions) {
+      const native = this.identities.threads.knownNativeBinding("opencode", nativeThreadId);
+      const threadId = this.identities.threads.workbenchIdForNative(native);
+      if (session.currentTurnId && !await this.identities.threads.resolveTurn({ threadId, turnId: session.currentTurnId })) {
+        throw new Error("OpenCode live turn has no retained identity.");
+      }
+      for (const item of session.startedItems.values()) {
+        const turn = await this.identities.threads.resolveTurn({ threadId, turnId: item.turnId });
+        if (!turn || !await this.identities.items.resolve({ threadId, turnId: turn.turnId, itemId: item.itemId })) {
+          throw new Error("OpenCode live item has no retained identity.");
+        }
+      }
+    }
+  }
+
+  private async publishLiveEvent(event: V2Event) {
+    const notifications: JsonRpcNotification[] = [];
+    this.getReloadableModules().opencodeLiveThreadState.applyOpenCodeLiveEvent(
+      this.liveThreadState, event, (notification) => notifications.push(notification),
+    );
+    if (this.identities && notifications.length) {
+      const threadId = eventThreadId(event);
+      if (!threadId) throw new Error("OpenCode live event has no thread identity.");
+      const native = this.identities.threads.knownNativeBinding("opencode", threadId);
+      await admitProviderNotifications(this.identities, native, notifications as ServerNotification[]);
+    }
+    for (const notification of notifications) this.onNotification(notification);
   }
 
   private rememberSessionDirectory(threadId: string | null | undefined, directory: string | null | undefined) {
@@ -778,20 +841,20 @@ export class OpenCodeBridge {
     for (const session of visibleSessions) {
       this.rememberSessionDirectory(session.id, session.directory);
     }
-    return {
-      data: visibleSessions.map((session) => this.getReloadableModules().opencodeThreadState.opencodeSessionToThread({
+    const data = visibleSessions.map((session) => this.getReloadableModules().opencodeThreadState.opencodeSessionToThread({
         messages: [],
         session,
         status: this.sessionStatuses.get(session.id),
-      })),
-    };
+      }));
+    await this.admitThreads(data);
+    return { data };
   }
 
-  private async readThread(threadId: string, directory: string): Promise<OpenCodeSessionResponse> {
+  private async readThread(threadId: string, directory: string, includeTurns = true): Promise<OpenCodeSessionResponse> {
     const client = await this.ensureClient(directory);
     const [session, messages, statuses] = await Promise.all([
       client.session.get({ directory, sessionID: threadId }).then(unwrapResponse),
-      client.session.messages({ directory, limit: 100, sessionID: threadId }).then(unwrapResponse),
+      includeTurns ? client.session.messages({ directory, limit: 100, sessionID: threadId }).then(unwrapResponse) : Promise.resolve([]),
       client.session.status({ directory }).then(unwrapResponse).catch(() => ({} as Record<string, SessionStatus>)),
     ]);
     const status = statuses[threadId] ?? this.sessionStatuses.get(threadId) ?? null;
@@ -800,6 +863,7 @@ export class OpenCodeBridge {
     }
     this.rememberSessionDirectory(session.id, session.directory);
     const thread = this.getReloadableModules().opencodeThreadState.opencodeSessionToThread({ messages, session, status });
+    await this.admitThreads([thread]);
     return {
       model: (thread as Thread & { model?: string | null }).model ?? null,
       modelProvider: thread.modelProvider,
@@ -825,6 +889,7 @@ export class OpenCodeBridge {
       session,
       status: this.sessionStatuses.get(session.id),
     });
+    await this.admitThreads([thread]);
     return {
       model: requestModel(params),
       modelProvider: requestModel(params)?.split("/")[0] ?? "opencode",
@@ -882,10 +947,13 @@ export class OpenCodeBridge {
 
   private async buildTurnSystemPrompt(message: JsonRpcRequest, threadId: string, params: unknown) {
     const untrustedPromptContext = readWorkbenchPromptContext(message);
+    const publicThreadId = this.identities ? this.identities.threads.workbenchIdForNative(
+      this.identities.threads.knownNativeBinding("opencode", threadId),
+    ) : threadId;
     let systemPrompt: string | null;
     const promptContext = untrustedPromptContext
-      ? { ...untrustedPromptContext, harness: "opencode" as const, threadId: untrustedPromptContext.threadId ?? threadId }
-      : { harness: "opencode" as const, threadId, workbenchOrigin: asString(asRecord(params)?.workbenchOrigin) };
+      ? { ...untrustedPromptContext, harness: "opencode" as const, threadId: publicThreadId }
+      : { harness: "opencode" as const, threadId: publicThreadId, workbenchOrigin: asString(asRecord(params)?.workbenchOrigin) };
     if (untrustedPromptContext) {
       const resolvedPromptContext = {
         ...promptContext,
@@ -904,13 +972,16 @@ export class OpenCodeBridge {
       systemPrompt = null;
     }
     const available = await this.getReloadableModules().workbenchPromptFiles.listWorkbenchInstructionMechanics(promptContext);
-    return this.getReloadableModules().workbenchPromptFiles.filterWorkbenchInstructionContent(systemPrompt, {
+    const filtered = this.getReloadableModules().workbenchPromptFiles.filterWorkbenchInstructionContent(systemPrompt, {
       available,
       field: "opencode.systemPrompt",
       harness: "opencode",
       onWarning: (warning) => logError("instruction-filter", `\u001b[31m${warning.field}:${warning.line} ${warning.recovery}: ${warning.source}\u001b[0m`),
       shell: process.platform === "win32" ? "pwsh" : "bash",
     });
+    return this.identities
+      ? this.getReloadableModules().opencodeWorkbenchInstructions.withOpenCodeWorkbenchThreadIdentity(filtered, publicThreadId)
+      : filtered;
   }
 
   private async startTurn(message: JsonRpcRequest) {

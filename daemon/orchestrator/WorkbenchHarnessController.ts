@@ -3,14 +3,22 @@
  * - WorkbenchHarnessRuntimePort: stable bridge operations supplied to reloadable harness registrations. Keywords: harness, bridge, port, lifecycle.
  * - WorkbenchHarnessAdapter: exhaustive provider capability registration. Keywords: harness, capability, recovery.
  * - default WorkbenchHarnessController: validate registrations and own browser, server, Browse, and recovery routing. Keywords: harness, routing, recovery.
+ * - WorkbenchHarnessControllerOptions: turn admission and public identity boundary.
  */
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchStatsHydrationResult } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchStatsUsageImportCandidate } from "./database/stats/WorkbenchStatsImportRepository";
 import type { BridgeClient, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { WorkbenchTurnRecoveryPort } from "./WorkbenchTurnRecoveryController";
+import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
+import { mapWorkbenchProviderRequest, mapNativeProviderResponse } from "./thread-identity-workbench-mapping";
+import { admitProviderNotifications, admitProviderThreads } from "./thread-identity-provider-mapping";
+import type { WorkbenchThreadIdentityLookup } from "./database/thread-identity/workbench-thread-identity-types";
 
 export interface WorkbenchHarnessRuntimePort {
   handleBrowserMessage(message: JsonRpcRequest, client: BridgeClient): Promise<void>;
@@ -18,6 +26,7 @@ export interface WorkbenchHarnessRuntimePort {
   readThread(threadId: string): Promise<ThreadReadResponse>;
   steerTurn(threadId: string, expectedTurnId: string, input: UserInput[]): Promise<string | null>;
   recoverInterruptedTurn?: WorkbenchTurnRecoveryPort;
+  readLoadedThreads?: () => readonly Thread[];
 }
 
 type WorkbenchHarnessRecoveryCapability =
@@ -43,10 +52,14 @@ export interface WorkbenchHarnessAdapter {
   recovery: WorkbenchHarnessRecoveryCapability;
   serverMethods: readonly string[];
   usageHydration?: (candidate: WorkbenchStatsUsageImportCandidate) => Promise<WorkbenchStatsHydrationResult>;
+  readLoadedThreads?: WorkbenchHarnessRuntimePort["readLoadedThreads"];
 }
 
 export interface WorkbenchHarnessControllerOptions {
   admitTurnStart?: () => void;
+  identities?: WorkbenchThreadIdentityController;
+  itemIdentities?: WorkbenchTranscriptIdentityController;
+  resolveProject?: (cwd: string) => Promise<{ projectId: string; projectRoot: string }>;
 }
 
 function requireNonEmptyUniqueValues(values: readonly string[], label: string) {
@@ -61,6 +74,9 @@ export default class WorkbenchHarnessController {
   private readonly adapters: readonly WorkbenchHarnessAdapter[];
   private readonly adaptersById: ReadonlyMap<WorkbenchHarness, WorkbenchHarnessAdapter>;
   private readonly admitTurnStart: () => void;
+  private readonly identities: WorkbenchHarnessControllerOptions["identities"];
+  private readonly itemIdentities: WorkbenchHarnessControllerOptions["itemIdentities"];
+  private readonly resolveProject: WorkbenchHarnessControllerOptions["resolveProject"];
 
   constructor(adapters: readonly WorkbenchHarnessAdapter[], options: WorkbenchHarnessControllerOptions = {}) {
     if (!adapters.length) throw new Error("At least one Workbench harness adapter is required.");
@@ -74,10 +90,39 @@ export default class WorkbenchHarnessController {
     this.adapters = [...adapters];
     this.adaptersById = adaptersById;
     this.admitTurnStart = options.admitTurnStart ?? (() => undefined);
+    this.identities = options.identities;
+    this.itemIdentities = options.itemIdentities;
+    this.resolveProject = options.resolveProject;
+  }
+
+  async admitThreads(harness: WorkbenchHarness, threads: readonly Thread[]) {
+    if (!this.identities || !this.itemIdentities || !this.resolveProject) throw new Error("Provider identity admission is unavailable.");
+    const inputs = await Promise.all(threads.map(async (thread) => ({
+      thread, metadata: {
+        ...await this.resolveProject!(thread.cwd),
+        native: { harness, nativeLocation: thread.cwd, nativeThreadId: thread.id },
+        title: thread.name ?? "", createdAt: thread.createdAt * 1_000,
+        updatedAt: thread.updatedAt * 1_000, activityAt: thread.updatedAt * 1_000,
+      },
+    })));
+    await admitProviderThreads({ threads: this.identities, items: this.itemIdentities }, inputs);
+  }
+
+  async admitNotifications(harness: WorkbenchHarness, threadId: string, notifications: readonly JsonRpcNotification[]) {
+    if (!this.identities || !this.itemIdentities) throw new Error("Provider identity admission is unavailable.");
+    const native = this.identities.knownNativeBinding(harness, threadId);
+    await admitProviderNotifications({ threads: this.identities, items: this.itemIdentities }, native, notifications as ServerNotification[]);
   }
 
   listHarnesses() {
     return this.adapters.map(({ id }) => id);
+  }
+
+  async restoreLoadedIdentities() {
+    for (const adapter of this.adapters) {
+      const threads = adapter.readLoadedThreads?.() ?? [];
+      if (threads.length) await this.admitThreads(adapter.id, threads);
+    }
   }
 
   listUsageHydrationHarnesses() {
@@ -99,7 +144,12 @@ export default class WorkbenchHarnessController {
   }
 
   async handleBrowserMessage(value: unknown, message: JsonRpcRequest, client: BridgeClient) {
-    const adapter = this.getAdapter(this.resolveHarness(value, { defaultToCodex: true }));
+    const resolved = await this.resolvePublicRequest(value, message);
+    await this.handleNativeBrowserMessage(resolved.harness, resolved.request, client);
+  }
+
+  async handleNativeBrowserMessage(harness: WorkbenchHarness, message: JsonRpcRequest, client: BridgeClient) {
+    const adapter = this.getAdapter(harness);
     if (message.method === "turn/start") this.admitTurnStart();
     if (adapter.recovery.kind !== "none" && "id" in message) adapter.recovery.observeRequest(message);
     await adapter.browser.handleBrowserMessage(message, client);
@@ -112,6 +162,31 @@ export default class WorkbenchHarnessController {
     return await adapter.internal.request(request);
   }
 
+  async resolvePublicRequest(value: unknown, request: JsonRpcRequest) {
+    const harness = this.resolveHarness(value, { defaultToCodex: true });
+    const params = request.params;
+    if (this.identities && params && typeof params === "object" && "threadId" in params
+      && typeof params.threadId === "string") {
+      await this.resolveThreadIdentity({ threadId: params.threadId, harness });
+    }
+    return this.identities ? mapWorkbenchProviderRequest(this.identities, harness, request) : { harness, request };
+  }
+
+  async resolveThreadIdentity(input: WorkbenchThreadIdentityLookup) {
+    if (!this.identities) throw new Error("Thread identity resolution is unavailable.");
+    const known = await this.identities.resolve(input);
+    if (known) return known;
+    const harness = this.resolveHarness(input.harness, { defaultToCodex: true });
+    const response = await this.request(harness, {
+      method: "thread/read", params: { threadId: input.threadId, includeTurns: false },
+    });
+    if (response.error) throw new Error(response.error.message);
+    const thread = (response.result as ThreadReadResponse | undefined)?.thread;
+    if (!thread || thread.id !== input.threadId) throw new Error("Provider metadata returned a different thread.");
+    await this.admitThreads(harness, [thread]);
+    return await this.identities.resolve(input);
+  }
+
   async requestServer(harnessValue: unknown, request: JsonRpcRequest) {
     const harness = this.resolveHarness(harnessValue);
     const adapter = this.getAdapter(harness);
@@ -119,7 +194,11 @@ export default class WorkbenchHarnessController {
     if (!method || !adapter.serverMethods.includes(method)) {
       throw new Error(`Workbench bridge method ${method || "missing"} is not allowed for ${harness}.`);
     }
-    return await this.request(harness, { ...request, method });
+    const resolved = await this.resolvePublicRequest(harness, { ...request, method });
+    const response = await this.request(resolved.harness, resolved.request);
+    return this.identities && this.itemIdentities
+      ? mapNativeProviderResponse({ threads: this.identities, items: this.itemIdentities }, resolved.harness, resolved.request, response)
+      : response;
   }
 
   async readThread(harness: WorkbenchHarness, threadId: string) {

@@ -22,7 +22,7 @@ function observationIdentity(observations: readonly WorkbenchTranscriptObservati
   const threadIds = new Set<string>();
   const turnIds = new Set<string>();
   for (const observation of observations) {
-    if (observation.kind === "usageWindow") {
+    if (observation.kind === "usageWindow" || observation.kind === "turnCatalog") {
       threadIds.add(observation.threadId);
       continue;
     }
@@ -88,6 +88,7 @@ function requestsSubscriptionRefresh(
       case "captureGap":
       case "nativeEvidence":
       case "usageWindow":
+      case "turnCatalog":
       case "turnUsageContext":
       case "turnTokenUsage":
         return false;
@@ -159,8 +160,8 @@ export default class WorkbenchTranscriptController {
 
   async start() {
     this.#assertActive();
-    await this.#captureGaps.start();
     await this.#database.start();
+    await this.#captureGaps.start();
   }
 
   async record(
@@ -169,8 +170,9 @@ export default class WorkbenchTranscriptController {
   ) {
     this.#assertActive();
     if (observations.length === 0) return { changedThreadIds: [] };
+    await this.#captureGaps.prepareReferences();
     const identity = observationIdentity(observations);
-    if (context.source === "compatibility" && observations.some(({ kind }) => kind !== "usageWindow")
+    if (context.source === "compatibility" && observations.some(({ kind }) => kind !== "usageWindow" && kind !== "turnCatalog")
       && this.#captureGaps.hasGap(identity.threadId)) {
       throw new Error(
         `SQLite transcript compatibility import is disabled for gapped thread ${identity.threadId}.`,

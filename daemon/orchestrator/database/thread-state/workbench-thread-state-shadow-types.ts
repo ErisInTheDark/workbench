@@ -5,13 +5,14 @@
  * - WorkbenchThreadStateShadowRefresh: one typed full-source projection request. Keywords: thread state, shadow, subagent, rebuild.
  */
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchStoredSubagent } from "../../workbench-subagent-store-state";
 
 export interface WorkbenchSubagentParentSnapshot {
   harness: WorkbenchSubagentRelationship["harness"];
   nextDirectSubagentIndex: number;
   parentThreadId: string;
   projectId: string;
-  relationships: WorkbenchSubagentRelationship[];
+  relationships: WorkbenchStoredSubagent[];
 }
 
 export interface WorkbenchThreadStateShadowStatus {

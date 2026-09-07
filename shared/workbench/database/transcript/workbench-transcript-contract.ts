@@ -11,6 +11,7 @@ import { evidenceTables } from "../schema/evidence-schema.ts";
 import { interactionTables } from "../schema/interaction-schema.ts";
 import { itemTables } from "../schema/item-schema.ts";
 import { operationSourceTables } from "../schema/operation-source-schema.ts";
+import { transcriptIdentityTables } from "../schema/transcript-identity-schema.ts";
 import {
   conformSelectedRow,
   conformSelectedRows,
@@ -21,6 +22,9 @@ import {
 import type { SelectRow } from "../../../database/schema/schema-definition.ts";
 
 export const transcriptSnapshotTables = Object.freeze({
+  itemIdentities: transcriptIdentityTables.itemIdentities,
+  itemSourceAliases: transcriptIdentityTables.itemSourceAliases,
+  itemLegacyAliases: transcriptIdentityTables.itemLegacyAliases,
   threadItems: itemTables.threadItems,
   threadItemTimelines: itemTables.threadItemTimelines,
   threadItemTimelineAliases: itemTables.threadItemTimelineAliases,

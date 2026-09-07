@@ -79,7 +79,7 @@ export default class WorkbenchStatsImportRepository {
           ?, t.activity_at, NULL, NULL, ?, NULL, NULL
         FROM workbench_thread_state_provider_identities i
         JOIN workbench_thread_state_threads t ON t.id = i.thread_id
-        WHERE i.harness_id IN (${placeholders}) AND i.provider_thread_id NOT LIKE 'pending:%'
+        WHERE i.harness_id IN (${placeholders})
       `).run(now, now, ...harnesses);
       this.database.prepare(`
         UPDATE thread_usage_imports

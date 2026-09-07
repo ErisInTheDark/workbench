@@ -29,6 +29,8 @@ import type {
 } from "./database/transcript/workbench-transcript-types.ts";
 import type { CodexTranscriptRawEvent, CodexTranscriptTurnIndexEntry } from "./codex-transcript-types.ts";
 import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
+import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
+import { withWorkbenchThreadItemIdentity } from "workbench-shared/workbench/thread/thread-item-identity";
 import type { JsonRpcNotification, JsonRpcRequest } from "./bridge-types.ts";
 import { WORKBENCH_STATS_USAGE_DATA_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
 import { createFirstTurnItemOwners } from "./codex-transcript-item-ownership.ts";
@@ -194,7 +196,7 @@ function secondsToMilliseconds(value: number | null) {
 function normalizeProviderTurn(turn: Turn): Turn {
   return {
     ...turn,
-    items: normalizeThreadItems(turn.items, { mergeDuplicateItems: mergeThreadItem }),
+    items: normalizeThreadItems(turn.items, { mergeDuplicateItems: mergeThreadItem, classifyItem: getCodexItemIdentityKind }),
   };
 }
 
@@ -262,7 +264,7 @@ export function createCodexTranscriptProviderItemObservation({
 }): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> {
   const hasTimeline = startedAtMs !== undefined || completedAtMs !== undefined;
   return {
-    item,
+    item: withWorkbenchThreadItemIdentity(item, getCodexItemIdentityKind(item)),
     kind: "item",
     lifecycle,
     observedAt,

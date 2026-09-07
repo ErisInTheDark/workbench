@@ -17,6 +17,7 @@ import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared
 import { createThreadDocumentKeyForThread } from "./thread-document-keys";
 import { isSyntheticSteerHistoryItem } from "workbench-shared/workbench/thread/thread-steer-history";
 import { projectWorkbenchThreadItemTimelines } from "workbench-shared/workbench/thread/thread-item-timeline";
+import { getWorkbenchInputState, withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 
@@ -25,6 +26,7 @@ export type OptimisticInputStatus = "pending" | "sent" | "failed" | "interrupted
 
 export interface OptimisticInputEntry {
   enqueuedAt: number;
+  clientUserMessageId: string | null;
   canonicalItemId: string | null;
   canonicalMatchBaseline: number;
   duplicateOrdinal: number;
@@ -78,22 +80,21 @@ function cloneUserInput(input: UserInput): UserInput {
 }
 
 function isOptimisticItem(item: ThreadItem) {
-  return item.type === "userMessage" && item.id.startsWith("optimistic-user-message:");
+  return getWorkbenchInputState(item)?.kind === "optimistic";
 }
 
 export function isPendingInitialOptimisticInputItem(item: ThreadItem) {
-  return item.type === "userMessage" && item.id.startsWith("optimistic-user-message:initial:pending:");
+  const input = getWorkbenchInputState(item);
+  return input?.kind === "optimistic" && input.placement === "initial" && input.status === "pending";
 }
 
-function createOptimisticItem(entry: Pick<OptimisticInputEntry, "handle" | "input" | "placement" | "status" | "threadKey">): UserMessageItem {
-  const hasNativeCodexIdentity = entry.threadKey.startsWith("codex:")
-    && (entry.placement === "steer" || !entry.handle.startsWith("local-"));
-  return {
-    clientId: hasNativeCodexIdentity ? entry.handle : null,
+function createOptimisticItem(entry: Pick<OptimisticInputEntry, "handle" | "input" | "placement" | "status" | "clientUserMessageId">): UserMessageItem {
+  return withWorkbenchInputState({
+    clientId: entry.clientUserMessageId,
     content: entry.input.map(cloneUserInput),
-    id: `optimistic-user-message:${entry.placement}:${entry.status}:${entry.handle}`,
+    id: entry.handle,
     type: "userMessage",
-  };
+  }, { kind: "optimistic", placement: entry.placement, status: entry.status });
 }
 
 function getTurn(thread: ThreadPayload, turnId: string) {
@@ -163,7 +164,6 @@ function placeCanonicalInitialUserMessages(items: ThreadItem[], entries: Optimis
 
 function ThreadOptimisticInputStore({ createClientUserMessageId = () => crypto.randomUUID(), now = Date.now }: ThreadOptimisticInputStoreOptions = {}): ThreadOptimisticInputStore {
   const entries: OptimisticInputEntry[] = [];
-  let nextLocalHandle = 1;
 
   function replaceEntry(index: number, entry: OptimisticInputEntry) {
     const nextEntry = { ...entry, item: createOptimisticItem(entry) };
@@ -190,11 +190,13 @@ function ThreadOptimisticInputStore({ createClientUserMessageId = () => crypto.r
       && entry.status !== "interrupted"
       && areUserInputsEquivalentForUserMessageDedupe(entry.input, clonedInput)
     )).length;
-    const handle = clientUserMessageId?.trim().toLowerCase() || (thread.harness === "codex" && placement === "steer"
-      ? createClientUserMessageId().toLowerCase()
-      : `local-${nextLocalHandle++}`);
+    const nativeClientId = thread.harness === "codex"
+      ? clientUserMessageId?.trim().toLowerCase() || (placement === "steer" ? createClientUserMessageId().toLowerCase() : null)
+      : null;
+    const handle = nativeClientId ?? crypto.randomUUID();
     const entry: OptimisticInputEntry = {
       enqueuedAt: now(),
+      clientUserMessageId: nativeClientId,
       canonicalItemId: null,
       canonicalMatchBaseline,
       duplicateOrdinal,
@@ -257,7 +259,7 @@ function ThreadOptimisticInputStore({ createClientUserMessageId = () => crypto.r
             return true;
           }
 
-          if (entry.threadKey.startsWith("codex:") && entry.item.clientId) {
+          if (entry.item.clientId) {
             return !canonicalItems.some((item) => item.type === "userMessage" && !isSyntheticSteerHistoryItem(item) && item.clientId === entry.handle);
           }
 

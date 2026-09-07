@@ -12,7 +12,7 @@ import ThreadSourceStore from "./ThreadSourceStore.ts";
 function thread(harness: ThreadPayload["harness"], id = "same"): ThreadPayload {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    forkedFromId: null, harness, id, isDraft: false, model: null, name: null, path: null, preview: "", reasoningEffort: null,
+    harness, id, isDraft: false, model: null, name: null, path: null, preview: "", reasoningEffort: null,
     serviceTier: null, source: harness, status: "active", tokenUsage: null, turnHistory: [], turns: [], updatedAt: 1,
   };
 }

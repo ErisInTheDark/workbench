@@ -1,9 +1,50 @@
 /*
+ * Keywords: thread state, relational projection, table keys, reconciliation.
  * Exports:
- * - relational table constants and registries: identify permanent thread-state tables, dependency order, and primary keys. Keywords: thread state, relational, sqlite.
- * - SqlValue/SqlRow/RowSets: projector-owned relational row shapes. Keywords: thread state, relational, rows.
- * - addRow/canonicalRows/rowKey/rowSignatures: deterministic row collection and comparison. Keywords: relational, parity, reconciliation.
- * - threadKey/layoutItemId/questionnaireId: stable relational identities. Keywords: thread state, identity, projection.
+ * - SqlValue: bound SQL scalar.
+ * - SqlRow: named SQL values.
+ * - RowSets: projected rows by table.
+ * - PROJECT_DOCUMENT_TABLE: source project documents.
+ * - GLOBAL_DOCUMENT_TABLE: source global documents.
+ * - PROJECTION_STATUS_TABLE: projection health.
+ * - THREAD_TABLE: canonical thread roots.
+ * - IDENTITY_TABLE: private native references.
+ * - LIFECYCLE_TABLE: lifecycle variants.
+ * - SUBAGENT_TABLE: child thread metadata.
+ * - SUBAGENT_PARENT_TABLE: parent identities.
+ * - SUBAGENT_RELATIONSHIP_TABLE: relationship roots.
+ * - PENDING_SUBAGENT_RELATIONSHIP_TABLE: pending reservations.
+ * - ACTIVE_SUBAGENT_RELATIONSHIP_TABLE: active child references.
+ * - RETENTION_TABLE: cleanup metadata.
+ * - PROFILE_TABLE: thread profile selections.
+ * - PROJECT_PROFILE_TABLE: project profile defaults.
+ * - SNOOZE_TABLE: wake dependencies.
+ * - DRAFT_TABLE: durable draft inputs.
+ * - ATTACHMENT_TABLE: opaque draft attachments.
+ * - LAYOUT_TABLE: layout roots.
+ * - PROJECT_LAYOUT_TABLE: project layout owners.
+ * - GLOBAL_LAYOUT_TABLE: global layout owners.
+ * - FOLDER_TABLE: folder metadata.
+ * - LAYOUT_ITEM_TABLE: typed layout members.
+ * - LAYOUT_THREAD_TABLE: thread member targets.
+ * - LAYOUT_DRAFT_TABLE: draft member targets.
+ * - LAYOUT_FOLDER_TABLE: folder member targets.
+ * - LAYOUT_RELATION_TABLE: sidebar ordering relations.
+ * - FOLDER_MEMBER_TABLE: ordered folder membership.
+ * - PINNED_IMPORT_TABLE: imported project markers.
+ * - QUESTIONNAIRE_TABLE: interaction roots.
+ * - QUESTION_TABLE: ordered questions.
+ * - OPTION_TABLE: offered choices.
+ * - ANSWER_TABLE: settled answers.
+ * - RELATIONAL_TABLES: insertion dependency order.
+ * - RelationalTableName: projected table names.
+ * - DELETE_ORDER: child-first deletion order.
+ * - RELATIONAL_TABLE_KEYS: row identity columns.
+ * - providerReferenceKey: private map key for a project/provider/native reference, never an entity id.
+ * - addRow: collect a projected row.
+ * - canonicalRows: normalise row comparison fields.
+ * - rowSignatures: compare unordered row collections.
+ * - rowKey: serialise relational lookup columns.
  */
 export type SqlValue = string | number | null;
 export type SqlRow = Record<string, SqlValue>;
@@ -110,7 +151,7 @@ export const DELETE_ORDER: readonly RelationalTableName[] = [
 
 export const RELATIONAL_TABLE_KEYS: Record<RelationalTableName, readonly string[]> = {
   [THREAD_TABLE]: ["id"],
-  [IDENTITY_TABLE]: ["thread_id"],
+  [IDENTITY_TABLE]: ["project_id", "harness_id", "provider_thread_id"],
   [LIFECYCLE_TABLE]: ["thread_id"],
   [SUBAGENT_TABLE]: ["thread_id"],
   [SUBAGENT_PARENT_TABLE]: ["id"],
@@ -140,28 +181,8 @@ export const RELATIONAL_TABLE_KEYS: Record<RelationalTableName, readonly string[
   [ANSWER_TABLE]: ["questionnaire_id", "question_id", "answer_index"],
 };
 
-function encodePart(value: string) {
-  return `${value.length}:${value}`;
-}
-
-export function threadKey(projectId: string, harness: string, providerThreadId: string) {
-  return `thread:${encodePart(projectId)}${encodePart(harness)}${encodePart(providerThreadId)}`;
-}
-
-export function subagentParentKey(projectId: string, harness: string, parentThreadId: string) {
-  return `subagent-parent:${encodePart(projectId)}${encodePart(harness)}${encodePart(parentThreadId)}`;
-}
-
-export function subagentRelationshipKey(parentId: string, directSubagentIndex: number) {
-  return `subagent-relationship:${encodePart(parentId)}${encodePart(String(directSubagentIndex))}`;
-}
-
-export function layoutItemId(layoutId: string, key: string) {
-  return `layout-item:${encodePart(layoutId)}${encodePart(key)}`;
-}
-
-export function questionnaireId(threadId: string, providerItemId: string | null, turnId: string | null, requestKey: string) {
-  return `questionnaire:${encodePart(threadId)}${encodePart(providerItemId ?? "")}${encodePart(turnId ?? "")}${encodePart(requestKey)}`;
+export function providerReferenceKey(projectId: string, harness: string, providerThreadId: string) {
+  return JSON.stringify([projectId, harness, providerThreadId]);
 }
 
 export function addRow(rows: RowSets, table: string, row: SqlRow) {

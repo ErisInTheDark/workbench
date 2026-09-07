@@ -16,7 +16,6 @@ function thread(id: string): ThreadPayload {
     agentRole: null,
     createdAt: 1,
     cwd: "C:/project",
-    forkedFromId: null,
     harness: "codex",
     id,
     isDraft: false,

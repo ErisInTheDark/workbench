@@ -2,11 +2,13 @@
  * Exports:
  * - hydrateThreadWithStoredTurns: merge disk transcript turns into an upstream thread snapshot. Keywords: codex, transcript, hydration, turns.
  * - mergeStoredTurnIntoUpstreamTurn: preserve richer stored items and backfill omitted lifecycle facts without replacing provider truth. Keywords: turn merge, itemsView, lifecycle.
+ * - StoredTurnWithTimeline: stored native turn and its admission timeline.
  */
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
+import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
 import type { CodexTranscriptTurnTimelineEntry } from "./codex-transcript-types";
 import { mergeThreadItem } from "./codex-transcript-item-merge";
 import { orderMergedItemsByTimeline } from "./codex-transcript-timeline";
@@ -20,16 +22,12 @@ interface MergeTurnItemListsOptions {
   pruneSecondarySnapshotNarrativeArtifacts?: boolean;
 }
 
-function isGenericSnapshotItemId(itemId: string) {
-  return /^item-\d+$/u.test(itemId);
-}
-
 function hasContextCompactionItem(items: ThreadItem[]) {
   return items.some((item) => item.type === "contextCompaction");
 }
 
 function isGenericSnapshotNarrativeArtifact(item: ThreadItem) {
-  return isGenericSnapshotItemId(item.id)
+  return getCodexItemIdentityKind(item) === "provisional"
     && (item.type === "agentMessage" || item.type === "plan" || item.type === "reasoning");
 }
 
@@ -155,7 +153,7 @@ function mergeTurnItemLists(
       && isDuplicateGenericSnapshotNarrativeArtifact(item, primaryNarrativeDedupeKeys)
     );
   });
-  return orderMergedItemsByTimeline(normalizeThreadItems([...mergedPrimaryItems, ...secondaryOnlyItems], { mergeDuplicateItems: mergeThreadItem }), timeline);
+  return orderMergedItemsByTimeline(normalizeThreadItems([...mergedPrimaryItems, ...secondaryOnlyItems], { mergeDuplicateItems: mergeThreadItem, classifyItem: getCodexItemIdentityKind }), timeline);
 }
 
 export function mergeStoredTurnIntoUpstreamTurn(upstreamTurn: Turn, storedTurn: StoredTurnWithTimeline) {
@@ -215,7 +213,7 @@ export function hydrateThreadWithStoredTurns(thread: Thread, storedTurns: Stored
 
     turns.push({
       ...storedTurn.turn,
-      items: orderMergedItemsByTimeline(normalizeThreadItems(storedTurn.turn.items, { mergeDuplicateItems: mergeThreadItem }), storedTurn.itemTimeline),
+      items: orderMergedItemsByTimeline(normalizeThreadItems(storedTurn.turn.items, { mergeDuplicateItems: mergeThreadItem, classifyItem: getCodexItemIdentityKind }), storedTurn.itemTimeline),
     });
     changed = true;
   }

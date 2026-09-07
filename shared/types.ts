@@ -847,7 +847,6 @@ export interface ThreadSummary {
   cwd: string;
   source: string;
   path: string | null;
-  forkedFromId: string | null;
   agentNickname: string | null;
   agentRole: string | null;
 }
@@ -1003,6 +1002,7 @@ export interface WorkbenchQuestionnaireHistoryEntry {
 export type WorkbenchSteerHistoryStatus = "pending" | "sent" | "interrupted" | "failed";
 
 export interface WorkbenchSteerHistoryEntry {
+  itemId?: string;
   entryKey: string;
   threadId: string;
   turnId: string;
@@ -1145,6 +1145,7 @@ export interface WorkbenchThreadRuntimeStore {
 }
 
 export interface WorkbenchRouteLoadResult {
+  canonicalRoute?: WorkbenchRoute;
   error?: string;
   ok: boolean;
 }

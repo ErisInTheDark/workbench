@@ -105,8 +105,10 @@ function browseEntries(
       return {
         action: entry.action,
         actionIndex: entry.action_index,
-        assetUrl: asset?.storage_key ?? null,
-        commandItemId: root.source_id,
+        assetUrl: asset && snapshot.thread.identity_origin === "workbench"
+          ? asset.storage_key.replace(/^\/api\/transcript-assets\/codex\/[^/]+\//u, `/api/transcript-assets/codex/${encodeURIComponent(snapshot.thread.id)}/`)
+          : asset?.storage_key ?? null,
+        commandItemId: root.public_id ?? root.source_id,
         detailKind: entry.detail_kind,
         detailLabel: entry.detail_label,
         detailText: entry.detail_text,
@@ -133,9 +135,6 @@ export function projectWorkbenchTranscript(
 
     const itemRootsById = new Map(snapshot.rows.threadItems.map((item) => [item.id, item]));
     if (itemRootsById.size !== snapshot.rows.threadItems.length) fail("duplicateRow", "threadItems");
-    const sourceIdsByItemId = new Map(snapshot.rows.threadItems.map((item) => [item.id, item.source_id]));
-    const itemRootsBySourceId = new Map(snapshot.rows.threadItems.map((item) => [item.source_id, item]));
-    if (itemRootsBySourceId.size !== snapshot.rows.threadItems.length) fail("duplicateRow", "threadItems");
     for (const root of snapshot.rows.threadItems) {
       if (!loadedTurnIds.has(root.turn_id)) fail("invalidReference", "threadItems", root.source_id);
       if (root.thread_id !== snapshot.thread.id) fail("invalidReference", "threadItems", root.source_id);
@@ -144,6 +143,7 @@ export function projectWorkbenchTranscript(
     if ("issues" in itemProjection) {
       return { issues: itemProjection.issues, success: false };
     }
+    const publicIdsByItemId = new Map(itemProjection.data.map(({ item, root }) => [root.id, item.id]));
     const projectedItems = itemProjection.data
       .map(({ item, root }) => ({ payload: item, root }))
       .sort((left, right) => (
@@ -159,14 +159,14 @@ export function projectWorkbenchTranscript(
 
     const timelinesByItemId = new Map<string, Rows["threadItemTimelines"][number]>();
     for (const entry of snapshot.rows.threadItemTimelines) {
-      const sourceId = sourceIdsByItemId.get(entry.item_id);
+      const sourceId = publicIdsByItemId.get(entry.item_id);
       if (!sourceId) fail("invalidReference", "threadItemTimelines", String(entry.item_id));
       if (timelinesByItemId.has(sourceId)) fail("duplicateRow", "threadItemTimelines", sourceId);
       timelinesByItemId.set(sourceId, entry);
     }
     const aliasesByItemId = new Map<string, string[]>();
     for (const entry of snapshot.rows.threadItemTimelineAliases) {
-      const sourceId = sourceIdsByItemId.get(entry.item_id);
+      const sourceId = publicIdsByItemId.get(entry.item_id);
       if (!sourceId) fail("invalidReference", "threadItemTimelineAliases", String(entry.item_id));
       const aliases = aliasesByItemId.get(sourceId) ?? [];
       aliases.push(entry.alias);
@@ -223,7 +223,7 @@ export function projectWorkbenchTranscript(
     });
     const display = planCanonicalTranscriptDisplay({
       items: projectedItems.map(({ payload, root }, itemIndex) => ({
-        itemId: root.source_id,
+        itemId: payload.id,
         itemIndex,
         payload,
         turnId: root.turn_id,

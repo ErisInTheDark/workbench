@@ -25,6 +25,7 @@ import WorkbenchRipgrepController from "./WorkbenchRipgrepController";
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
 interface WorkbenchAgentDirectPort {
+  resolveCaller?: (threadId: string, cwd: string, harness: string) => Promise<{ threadId: string; nativeThreadId: string; harness: WorkbenchHarness }>;
   checkApplyPatchClaims?: (request: { cwd: string; harness: WorkbenchHarness; paths: string[]; threadId: string }) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
@@ -224,9 +225,10 @@ export default class WorkbenchAgentCommandController {
         await this.handleApplyPatchClaimHook(form, callerHarness, callerThreadId, response, signal);
         return;
       }
+      const caller = callerThreadId && this.direct.resolveCaller ? await this.direct.resolveCaller(callerThreadId, cwd, callerHarness) : null;
       const parsed = await parseWorkbenchAgentCliCommand(argv, {
-        callerHarness,
-        callerThreadId,
+        callerHarness: caller?.harness ?? callerHarness,
+        callerThreadId: caller?.threadId ?? callerThreadId,
         cwd,
         reloadCatalog: this.direct.getReloadScopeCatalog?.() ?? [],
         projectRoot: this.direct.workbenchProjectRoot ?? null,
@@ -285,7 +287,9 @@ export default class WorkbenchAgentCommandController {
       if (callerHarness !== "codex") throw new Error("A managed Codex thread is required for the apply_patch claim hook.");
       if (!this.direct.checkApplyPatchClaims) throw new Error("The apply_patch claim checker is not configured.");
       const hook = parseCodexApplyPatchClaimHook(form.get("hookInput") ?? "");
-      if (callerThreadId && hook.sessionId !== callerThreadId) throw new Error("Codex hook session_id does not match the managed thread.");
+      const caller = callerThreadId && this.direct.resolveCaller
+        ? await this.direct.resolveCaller(callerThreadId, hook.cwd, callerHarness) : null;
+      if (callerThreadId && hook.sessionId !== (caller?.nativeThreadId ?? callerThreadId)) throw new Error("Codex hook session_id does not match the managed thread.");
       const result = await this.direct.checkApplyPatchClaims({ cwd: hook.cwd, harness: "codex", paths: hook.paths, threadId: hook.sessionId });
       if (result.allowed) {
         decision = allowCodexApplyPatch();

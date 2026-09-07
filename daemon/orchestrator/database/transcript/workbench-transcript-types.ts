@@ -5,12 +5,18 @@
  * - WorkbenchTranscriptAtomicObservation: one source-owned semantic transcript or turn-usage fact. Keywords: transcript, observation, atomic, stats.
  * - WorkbenchTranscriptCaptureGapObservation: one closed failed-capture interval. Keywords: transcript, capture gap, recovery.
  * - WorkbenchTranscriptProviderTurnScopeObservation: one complete provider-owned turn replacement boundary. Keywords: transcript, provider, replacement.
- * - WorkbenchTranscriptObservation: ordered transcript input, including restricted usage-only catalog windows.
+ * - WorkbenchTranscriptObservation: ordered transcript input, metadata-only catalogs and restricted usage windows.
  * - WorkbenchTranscriptRecordingContext: fact ownership and provider-recovery boundary for one settlement. Keywords: transcript, recording, recovery.
  * - WorkbenchTranscriptSettlement: semantic commit result used to refresh subscriptions. Keywords: transcript, settlement, subscription.
  * - WorkbenchTranscriptReadRequest: bounded relational read request.
  * - WorkbenchTranscriptSnapshot: hydrated transcript result.
  * - WorkbenchTranscriptSnapshotRows: typed canonical rows.
+ * - WorkbenchTranscriptItemSource: provider-scoped item identity evidence.
+ * - WorkbenchTranscriptItemLegacyAlias: turn-scoped reference retained from an older projection.
+ * - WorkbenchTranscriptItemIdentityAdmission: one structural identity admission, independent of body recording.
+ * - WorkbenchTranscriptItemIdentityLookup: public-first, thread-scoped item lookup.
+ * - WorkbenchTranscriptItemIdentity: resolved public identity and private alias evidence.
+ * - WorkbenchTranscriptIdentityDatabase: structural identity operations on the existing database worker.
  */
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type {
@@ -30,6 +36,42 @@ export type {
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 
 export type WorkbenchTranscriptItemLifecycle = "streaming" | "completed" | "interrupted";
+
+export interface WorkbenchTranscriptItemSource {
+  turnId: string;
+  kind: "stable" | "provisional" | "client";
+  sourceId: string;
+}
+
+export interface WorkbenchTranscriptItemLegacyAlias {
+  turnId: string;
+  alias: string;
+}
+
+export interface WorkbenchTranscriptItemIdentityAdmission {
+  threadId: string;
+  itemId?: string;
+  sources: readonly WorkbenchTranscriptItemSource[];
+  legacyAliases: readonly WorkbenchTranscriptItemLegacyAlias[];
+}
+
+export interface WorkbenchTranscriptItemIdentityLookup {
+  threadId: string;
+  itemId: string;
+  turnId?: string;
+}
+
+export interface WorkbenchTranscriptItemIdentity {
+  threadId: string;
+  itemId: string;
+  sources: readonly WorkbenchTranscriptItemSource[];
+  legacyAliases: readonly WorkbenchTranscriptItemLegacyAlias[];
+}
+
+export interface WorkbenchTranscriptIdentityDatabase {
+  admitTranscriptItemIdentities(inputs: readonly WorkbenchTranscriptItemIdentityAdmission[]): Promise<WorkbenchTranscriptItemIdentity[]>;
+  resolveTranscriptItemIdentity(input: WorkbenchTranscriptItemIdentityLookup): Promise<WorkbenchTranscriptItemIdentity | null>;
+}
 
 export type WorkbenchTranscriptAtomicObservation =
   | {
@@ -78,6 +120,7 @@ export type WorkbenchTranscriptAtomicObservation =
     kind: "item";
     threadId: string;
     turnId: string;
+    publicItemId?: string;
     item: ThreadItem | WorkbenchFileChangeItem;
     lifecycle: WorkbenchTranscriptItemLifecycle;
     observedAt: number;
@@ -86,12 +129,14 @@ export type WorkbenchTranscriptAtomicObservation =
   }
   | {
     kind: "questionnaire";
+    publicItemId?: string;
     entry: WorkbenchQuestionnaireHistoryEntry;
     observedAt: number;
     itemPosition?: number;
   }
   | {
     kind: "steer";
+    publicItemId?: string;
     entry: WorkbenchSteerHistoryEntry;
     observedAt: number;
     itemPosition?: number;
@@ -147,6 +192,11 @@ export type WorkbenchTranscriptObservation =
   | WorkbenchTranscriptAtomicObservation
   | WorkbenchTranscriptCaptureGapObservation
   | WorkbenchTranscriptProviderTurnScopeObservation
+  | {
+    kind: "turnCatalog";
+    threadId: string;
+    catalog: readonly Extract<WorkbenchTranscriptAtomicObservation, { kind: "thread" | "turn" }>[];
+  }
   | {
     kind: "usageWindow";
     threadId: string;

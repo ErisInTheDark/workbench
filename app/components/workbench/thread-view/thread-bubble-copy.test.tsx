@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "workbench-shared/workbench/thread/thread-user-input-requests";
@@ -76,7 +77,7 @@ test("user message copy Markdown preserves source syntax and excludes attachment
 test("ordinary user messages and pending steers render source-Markdown copy actions", () => {
   const html = renderUserItems([
     createUserMessage("prompt", "Original **prompt**"),
-    createUserMessage("optimistic-user-message:steer:pending:request", "Pending *steer*"),
+    withWorkbenchInputState(createUserMessage("792ed0f9-6f35-441b-abde-39a7a8ddcb67", "Pending *steer*"), { kind: "optimistic", placement: "steer", status: "pending" }),
   ]);
 
   assert.equal(html.match(/data-thread-bubble-copy-button="true"/gu)?.length, 2, html);

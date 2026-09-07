@@ -9,6 +9,8 @@ import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
+import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
+import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
 
 const signatureCache = new WeakMap<object, string>();
 
@@ -39,7 +41,7 @@ function cachedSignature(item: ThreadItem, compute: () => string) {
   if (cached) {
     return cached;
   }
-  const signature = compute();
+  const signature = `${getWorkbenchThreadItemIdentityKind(item)}:${compute()}`;
   signatureCache.set(item, signature);
   return signature;
 }
@@ -102,8 +104,13 @@ export function getThreadItemRenderSignature(item: ThreadItem) {
           : textFingerprint(typeof item.output === "string" ? item.output : stableStringify(item.output));
         return [item.id, item.type, item.name, item.namespace ?? "", body, output?.workbenchInjectionAcceptedAt ?? ""].join(":");
       }
-      case "userMessage":
-        return `${item.id}:${item.type}:${stableStringify(item.content)}`;
+      case "userMessage": {
+        const input = getWorkbenchInputState(item);
+        return [
+          item.id, item.type, item.clientId ?? "", input?.kind ?? "", input?.status ?? "",
+          input?.kind === "optimistic" ? input.placement : "", stableStringify(item.content),
+        ].join(":");
+      }
       case "hookPrompt":
         return `${item.id}:${item.type}:${stableStringify(item.fragments)}`;
       case "agentMessage":

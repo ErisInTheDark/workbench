@@ -110,6 +110,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     };
     bridge = new CodexStdioBridge({
       ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
+      identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
       instructions: codexInstructions,
       prepareThreadConfiguration: async (thread, requests) => {
         const profile = await threadState.prepareCodexProfile(thread);
@@ -120,7 +121,10 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
             id: root.id, isPrimary: index === 0, name: root.name,
             relativePath: root.relativePath ?? ".", rootPath: root.rootPath,
           })),
-          settings: profile.selection.settings, subagentName: profile.subagentName, threadId: thread.id,
+          settings: profile.selection.settings, subagentName: profile.subagentName,
+          threadId: build.get("threadIdentity").workbenchIdForNative(
+            build.get("threadIdentity").knownNativeBinding("codex", thread.id),
+          ),
         };
         const resumeRequest = codexInstructions.withThreadConfiguration(requests.resumeRequest, configuration);
         const startRequest = codexInstructions.withThreadConfiguration(requests.startRequest, configuration);
@@ -196,13 +200,15 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge"],
-  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "harnesses", "projectCatalog", "questionnaires", "threadState", "transcript", "transcriptShadowLog", "turnRecovery"],
+  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "harnesses", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptShadowLog", "turnRecovery"],
   safeAll: true,
   scope: "server:codex",
   sources: [
     "daemon/orchestrator/CodexBridgeNode.ts",
     "daemon/orchestrator/codex-sandbox-policy.ts",
     "daemon/orchestrator/CodexStdioBridge.ts",
+    "daemon/orchestrator/thread-identity-provider-mapping.ts",
+    "daemon/orchestrator/thread-identity-transcript-mapping.ts",
     "daemon/orchestrator/CodexFileChangeController.ts",
     "daemon/orchestrator/CodexThreadWindowLoader.ts",
     "shared/workbench/thread/workbench-thread-page.ts",

@@ -25,6 +25,7 @@ import type {
   WorkbenchTranscriptRecordingContext,
 } from "./database/transcript/workbench-transcript-types";
 import type { WorkbenchDatabaseMutationResult } from "./database/workbench-database-protocol";
+import type { WorkbenchThreadIdentityDatabase } from "./database/thread-identity/workbench-thread-identity-types";
 import type { WorkbenchSearchRequest, WorkbenchSearchResponse } from "workbench-shared/workbench/search/workbench-search";
 import type { WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchRateLimitObservation } from "./database/stats/WorkbenchStatsRepository";
@@ -73,6 +74,9 @@ import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireContr
 import type WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import type WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
+import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
+import type { WorkbenchTranscriptIdentityDatabase } from "./database/transcript/workbench-transcript-types";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
@@ -83,7 +87,7 @@ export type OrchestratorReloadableModules = {
   copilotThreadState: Pick<typeof copilotThreadState, "applyCopilotEvent" | "cloneThread" | "createThreadState" | "formatPromptFromInput" | "INITIALIZE_RESULT" | "metadataToThread">;
   opencodeLiveThreadState: Pick<typeof opencodeLiveThreadState, "applyOpenCodeLiveEvent" | "createOpenCodeLiveThreadState">;
   opencodeThreadState: Pick<typeof opencodeThreadState, "cloneThread" | "createOpenCodeLegacyPermissionRequest" | "createOpenCodePermissionRequest" | "createOpenCodeQuestionRequest" | "EMPTY_OPENCODE_RATE_LIMITS" | "formatPromptFromInput" | "mapOpenCodeModelsToWorkbenchOptions" | "OPENCODE_INITIALIZE_RESULT" | "opencodeSessionToThread">;
-  opencodeWorkbenchInstructions: Pick<typeof opencodeWorkbenchInstructions, "buildOpenCodeWorkbenchSystemPrompt" | "ensureOpenCodeWorkbenchConfigDirectory">;
+  opencodeWorkbenchInstructions: Pick<typeof opencodeWorkbenchInstructions, "buildOpenCodeWorkbenchSystemPrompt" | "ensureOpenCodeWorkbenchConfigDirectory" | "withOpenCodeWorkbenchThreadIdentity">;
   project: Pick<typeof project, "isPathWithinRoot" | "readUserInvocableAgentDefinition" | "resolveProjectRoot">;
   threadBootstrap: Pick<typeof threadBootstrap, "buildThreadTitleBootstrapInstructions" | "normalizeThreadTitle">;
   workbenchLibrary: Pick<typeof workbenchLibrary, "buildWorkbenchLibraryBootstrapInstructions">;
@@ -109,7 +113,7 @@ export interface OrchestratorBrowseExecution {
   initialize(): Promise<void>;
 }
 
-export interface OrchestratorDatabaseRegistration {
+export interface OrchestratorDatabaseRegistration extends WorkbenchThreadIdentityDatabase, WorkbenchTranscriptIdentityDatabase {
   assertReady(): void;
   close(): Promise<void>;
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult>;
@@ -191,6 +195,8 @@ export interface OrchestratorRuntimeObjects {
   subagents: WorkbenchSubagentFeature;
   stats: WorkbenchStatsController;
   threadGit: WorkbenchThreadGitFeature;
+  threadIdentity: WorkbenchThreadIdentityController;
+  transcriptIdentity: WorkbenchTranscriptIdentityController;
   threadState: WorkbenchThreadStateFeature;
   transcript: OrchestratorTranscriptRegistration;
   transcriptShadowLog: OrchestratorTranscriptShadowLog;

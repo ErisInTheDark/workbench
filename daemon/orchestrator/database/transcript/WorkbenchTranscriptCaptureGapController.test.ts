@@ -11,6 +11,42 @@ import WorkbenchTranscriptCaptureGapController, {
   type WorkbenchTranscriptCaptureGapMarker,
 } from "./WorkbenchTranscriptCaptureGapController.ts";
 
+test("marker conversion preserves unknown and unrecoverable obligations across aliases and reopening", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-transcript-gap-identity-"));
+  const markerPath = join(directory, "gap.json");
+  const marker: WorkbenchTranscriptCaptureGapMarker = {
+    version: 1, entries: [
+      { id: "first", threadId: "native", turnId: "old-turn", recoverability: "provider", openedAt: 1, errorText: "first failure" },
+      { id: "second", threadId: "canonical", turnId: "canonical-turn", recoverability: "unrecoverable", openedAt: 2, errorText: "Workbench failure" },
+      { id: "unknown", threadId: "unobserved", turnId: null, recoverability: "provider", openedAt: 3, errorText: "unknown failure" },
+    ],
+  };
+  const options = {
+    markerPath,
+    resolveReference: async (entry: { threadId: string; turnId: string | null }) => entry.threadId === "native"
+      ? { threadId: "canonical", turnId: "canonical-turn" } : entry,
+  };
+  try {
+    await writeFile(markerPath, JSON.stringify(marker));
+    const controller = new WorkbenchTranscriptCaptureGapController(options);
+    await controller.start();
+    assert.deepEqual(controller.pendingRecoveryThreadIds, ["unobserved"]);
+    assert.equal(controller.hasGap("canonical"), true);
+    assert.throws(() => controller.requireRecovery("canonical"), /not provider-recoverable/);
+    const saved = JSON.parse(await readFile(markerPath, "utf8")) as WorkbenchTranscriptCaptureGapMarker;
+    assert.equal(saved.entries.length, 2);
+    const converted = saved.entries.find(({ threadId }) => threadId === "canonical")!;
+    assert.equal(converted.id, "first");
+    assert.equal(converted.turnId, "canonical-turn");
+    assert.equal(converted.openedAt, 1);
+    assert.deepEqual(saved.entries.find(({ id }) => id === "unknown"), marker.entries[2]);
+    const reopened = new WorkbenchTranscriptCaptureGapController(options);
+    await reopened.start();
+    assert.deepEqual(JSON.parse(await readFile(markerPath, "utf8")), saved);
+    assert.throws(() => reopened.assertCutoverReady(), /capture gaps/);
+  } finally { await rm(directory, { force: true, recursive: true }); }
+});
+
 test("capture-gap markers merge threads while only provider gaps enter recovery", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-transcript-gap-"));
   const markerPath = join(directory, "gap.json");

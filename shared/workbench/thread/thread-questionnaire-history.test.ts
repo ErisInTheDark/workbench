@@ -11,12 +11,11 @@ import type { ThreadPayload, WorkbenchQuestionnaireHistoryEntry } from "../../ty
 import { findWorkbenchThreadItemTimelineEntry } from "./thread-item-timeline.ts";
 import {
   applyQuestionnaireHistoryToThread,
+  isSyntheticQuestionnaireHistoryItem,
 } from "./thread-questionnaire-history.ts";
 import {
-  createSyntheticQuestionnaireHistoryItemId,
   isWorkbenchMcpQuestionnaireRequestKey,
   mergeQuestionnaireHistoryEntries,
-  readSyntheticQuestionnaireHistoryItemId,
   resolveQuestionnaireHistoryItemId,
 } from "./thread-questionnaire-identity.ts";
 
@@ -83,7 +82,6 @@ function thread(): ThreadPayload {
     browseResultEntries: [],
     createdAt: 1,
     cwd: "C:/project",
-    forkedFromId: null,
     harness: "codex",
     id: "thread",
     isDraft: false,
@@ -120,10 +118,23 @@ test("questionnaire overlay identity follows item ids rather than reusable reque
   const overlaid = applyQuestionnaireHistoryToThread(thread(), entries);
   const questionnaireIds = overlaid.turns.map((currentTurn) => currentTurn.items[1]?.id);
 
-  assert.deepEqual(questionnaireIds, entries.map(createSyntheticQuestionnaireHistoryItemId));
-  assert.deepEqual(questionnaireIds.map((itemId) => (
-    readSyntheticQuestionnaireHistoryItemId(itemId!)
-  )), ["question-older", "question-newer"]);
+  assert.deepEqual(questionnaireIds, entries.map(({ itemId }) => itemId));
+  const repeated = applyQuestionnaireHistoryToThread(overlaid, entries);
+  assert.deepEqual(repeated.turns.map(({ items }) => items.filter(isSyntheticQuestionnaireHistoryItem).map(({ id }) => id)),
+    entries.map(({ itemId }) => [itemId]));
+});
+
+test("questionnaire presentation preserves unfinished and failed tool calls", () => {
+  for (const status of ["inProgress", "failed"] as const) {
+    const current = thread();
+    const item: ThreadItem = {
+      type: "dynamicToolCall", id: "tool-call", namespace: null, tool: "workbench_request_user_input",
+      arguments: {}, contentItems: null, status, success: status === "failed" ? false : null, durationMs: null,
+    };
+    current.turns[0]!.items.push(item);
+    assert.equal(isSyntheticQuestionnaireHistoryItem(item), false);
+    assert.ok(applyQuestionnaireHistoryToThread(current, []).turns[0]!.items.includes(item));
+  }
 });
 
 test("questionnaire fallback identity includes the owning turn", () => {
@@ -139,7 +150,7 @@ test("questionnaire overlay carries each answer resolution time through repeated
   const projected = applyQuestionnaireHistoryToThread(applyQuestionnaireHistoryToThread(thread(), entries), entries);
   for (const saved of entries) {
     const timeline = projected.turnHistory.find((turn) => turn.turnId === saved.turnId)?.itemTimeline;
-    assert.equal(findWorkbenchThreadItemTimelineEntry(createSyntheticQuestionnaireHistoryItemId(saved), timeline)?.completedAt, saved.resolvedAt);
+    assert.equal(findWorkbenchThreadItemTimelineEntry(resolveQuestionnaireHistoryItemId(saved), timeline)?.completedAt, saved.resolvedAt);
   }
 });
 

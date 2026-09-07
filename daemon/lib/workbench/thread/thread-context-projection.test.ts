@@ -16,7 +16,7 @@ import { createWorkbenchQuestionnaireResponseInput, createWorkbenchThreadRecover
 function thread(): ThreadPayload {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    forkedFromId: null, harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
+    harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
     reasoningEffort: null, serviceTier: null, source: "codex", status: "idle", tokenUsage: null, turnHistory: [], updatedAt: 1,
     turns: [{ completedAt: 3, durationMs: 2, error: null, id: "turn", items: [
       { clientId: "native-a", content: [{ text: "same", text_elements: [], type: "text" }], id: "canonical-a", type: "userMessage" },

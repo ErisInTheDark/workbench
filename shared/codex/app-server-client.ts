@@ -13,6 +13,9 @@ import {
 } from "../workbench/websocket-stream.ts";
 import type { CodexAppServerNotification } from "./app-server-notifications.ts";
 import { isCodexAppServerNotification } from "./app-server-notifications.ts";
+import { toThreadTurn } from "./thread-adapter.ts";
+import { getCodexItemIdentityKind } from "./thread-item-source.ts";
+import { withWorkbenchThreadItemIdentity } from "../workbench/thread/thread-item-identity.ts";
 import { getCodexAppServerUrl } from "./config.ts";
 import type {
     CodexClientNotification,
@@ -300,8 +303,17 @@ export class CodexAppServerClient {
     if (isCodexAppServerNotification(parsed)) {
       const rawHarness = (parsed as CodexAppServerNotification & { workbenchHarness?: WorkbenchHarness }).workbenchHarness;
       const harness = rawHarness === "copilot" || rawHarness === "opencode" ? rawHarness : "codex";
+      let notification = parsed;
+      if (harness === "codex" && (parsed.method === "item/started" || parsed.method === "item/completed")) {
+        const item = withWorkbenchThreadItemIdentity(parsed.params.item, getCodexItemIdentityKind(parsed.params.item));
+        notification = parsed.method === "item/started"
+          ? { ...parsed, params: { ...parsed.params, item } }
+          : { ...parsed, params: { ...parsed.params, item } };
+      } else if (parsed.method === "turn/started" || parsed.method === "turn/completed") {
+        notification = { ...parsed, params: { ...parsed.params, turn: toThreadTurn(parsed.params.turn, harness) } };
+      }
       for (const listener of this.notificationListeners) {
-        listener(parsed, harness);
+        listener(notification, harness);
       }
       const sequence = (parsed as unknown as Record<string, unknown>)[WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD];
       if (typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0) {

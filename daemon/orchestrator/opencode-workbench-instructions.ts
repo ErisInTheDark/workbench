@@ -1,6 +1,8 @@
 /*
  * Exports:
  * - buildOpenCodeWorkbenchSystemPrompt: compose sentinel-wrapped Workbench instructions for OpenCode prompt calls. Keywords: opencode, system, instructions.
+ * - buildOpenCodeSystemReplacementPluginSource: emit the provider-side instruction and shell identity adapter.
+ * - withOpenCodeWorkbenchThreadIdentity: carry admitted WB identity alongside the turn's system instructions.
  * - ensureOpenCodeWorkbenchConfigDirectory: create the managed-server config directory by overlaying the Workbench OpenCode plugin onto the user's OpenCode config. Keywords: opencode, plugin, config, overlay.
  */
 import fs from "node:fs/promises";
@@ -13,6 +15,8 @@ import WorkbenchTemporaryDirectory from "../lib/workbench/WorkbenchTemporaryDire
 
 const WORKBENCH_OPENCODE_SYSTEM_BEGIN = "<<<WORKBENCH_OPENCODE_SYSTEM_REPLACEMENT_BEGIN_V1>>>";
 const WORKBENCH_OPENCODE_SYSTEM_END = "<<<WORKBENCH_OPENCODE_SYSTEM_REPLACEMENT_END_V1>>>";
+const WORKBENCH_OPENCODE_IDENTITY_BEGIN = "<<<WORKBENCH_OPENCODE_IDENTITY_BEGIN>>>";
+const WORKBENCH_OPENCODE_IDENTITY_END = "<<<WORKBENCH_OPENCODE_IDENTITY_END>>>";
 const WORKBENCH_OPENCODE_CONFIG_DIR_NAME = "workbench-opencode";
 const WORKBENCH_OPENCODE_PLUGIN_FILE = "plugins/workbench-system-replacement.js";
 const WORKBENCH_OPENCODE_PLUGIN_CONFIG_ENTRY = `./${WORKBENCH_OPENCODE_PLUGIN_FILE}`;
@@ -44,14 +48,36 @@ function joinInstructionSections(sections: Array<string | null | undefined>) {
 
 export function buildOpenCodeSystemReplacementPluginSource() {
   return `
-export const WorkbenchSystemReplacementPlugin = async () => ({
+export const WorkbenchSystemReplacementPlugin = async () => {
+  const identities = new Map();
+  return {
   "shell.env": async (input, output) => {
     if (input.sessionID) {
-      output.env.WORKBENCH_THREAD_ID = input.sessionID;
+      const threadId = identities.get(input.sessionID);
+      if (!threadId) throw new Error("Workbench thread identity was not supplied for this OpenCode session.");
+      output.env.WORKBENCH_THREAD_ID = threadId;
       output.env.WORKBENCH_HARNESS = "opencode";
     }
   },
-  "experimental.chat.system.transform": async (_input, output) => {
+  "experimental.chat.system.transform": async (input, output) => {
+    const identityStart = ${JSON.stringify(WORKBENCH_OPENCODE_IDENTITY_BEGIN)};
+    const identityEnd = ${JSON.stringify(WORKBENCH_OPENCODE_IDENTITY_END)};
+    for (let index = 0; index < output.system.length; index += 1) {
+      const entry = output.system[index];
+      const start = entry.indexOf(identityStart);
+      if (start < 0) continue;
+      const end = entry.indexOf(identityEnd, start + identityStart.length);
+      if (end < 0) throw new Error("Workbench thread identity payload is incomplete.");
+      const identity = JSON.parse(entry.slice(start + identityStart.length, end));
+      if (!input.sessionID || typeof identity.threadId !== "string"
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(identity.threadId)) {
+        throw new Error("Workbench thread identity payload is invalid.");
+      }
+      identities.set(input.sessionID, identity.threadId);
+      const remaining = (entry.slice(0, start) + entry.slice(end + identityEnd.length)).trim();
+      if (remaining) output.system[index] = remaining;
+      else output.system.splice(index--, 1);
+    }
     const markerStart = ${JSON.stringify(WORKBENCH_OPENCODE_SYSTEM_BEGIN)};
     const markerEnd = ${JSON.stringify(WORKBENCH_OPENCODE_SYSTEM_END)};
     const replacement = output.system.find((entry) => entry.includes(markerStart) && entry.includes(markerEnd));
@@ -72,8 +98,13 @@ export const WorkbenchSystemReplacementPlugin = async () => ({
 
     output.system.splice(0, output.system.length, system);
   },
-});
+  };
+};
 `.trimStart();
+}
+
+export function withOpenCodeWorkbenchThreadIdentity(system: string | null, threadId: string) {
+  return `${WORKBENCH_OPENCODE_IDENTITY_BEGIN}${JSON.stringify({ threadId })}${WORKBENCH_OPENCODE_IDENTITY_END}\n${system ?? ""}`;
 }
 
 export function buildOpenCodeWorkbenchSystemPrompt(instructions: WorkbenchPromptInstructions) {

@@ -19,12 +19,15 @@ import {
 } from "./thread-context-recall-markdown";
 import {
   buildSqliteWorkbenchThreadRecallRecords,
+  createSqliteWorkbenchThreadRecallRef,
+  createWorkbenchThreadRecallCursor,
   expandWorkbenchThreadRecall,
   readSqliteWorkbenchThreadRecallRef,
   readWorkbenchThreadRecallCursor,
   searchWorkbenchThreadRecall,
   selectWorkbenchThreadRecallRecords,
   type WorkbenchThreadRecallRecord,
+  type SqliteWorkbenchThreadRecallRef,
 } from "./thread-context-recall";
 
 const THREAD_RECALL_KINDS: readonly WorkbenchThreadRecallKind[] = [
@@ -45,6 +48,7 @@ export interface WorkbenchThreadRecallControllerRequest {
 }
 
 export interface WorkbenchThreadRecallControllerOptions {
+  resolveReference?: (threadId: string, reference: SqliteWorkbenchThreadRecallRef, signal: AbortSignal) => Promise<SqliteWorkbenchThreadRecallRef>;
   materializeTurn(threadId: string, turnId: string | null, signal: AbortSignal): Promise<void>;
   readTranscript(request: WorkbenchTranscriptReadRequest): Promise<WorkbenchTranscriptSnapshot | null>;
   resolveProjectFromCwd(cwd: string): Promise<void>;
@@ -130,6 +134,15 @@ function parseRecallRequest(value: unknown): WorkbenchThreadRecallRequest {
 
 export default class WorkbenchThreadRecallController {
   constructor(private readonly options: WorkbenchThreadRecallControllerOptions) {}
+
+  async #resolveReference(threadId: string, value: string | null, signal: AbortSignal) {
+    if (!value || !this.options.resolveReference) return value;
+    const cursor = readWorkbenchThreadRecallCursor(value);
+    const reference = readSqliteWorkbenchThreadRecallRef(cursor?.ref ?? value);
+    if (!reference) throw new Error("Invalid Thread Recall reference.");
+    const resolved = createSqliteWorkbenchThreadRecallRef(await this.options.resolveReference(threadId, reference, signal));
+    return cursor ? createWorkbenchThreadRecallCursor(resolved, cursor.offset) : resolved;
+  }
 
   async #readCatalog(threadId: string, signal: AbortSignal) {
     signal.throwIfAborted();
@@ -247,8 +260,9 @@ export default class WorkbenchThreadRecallController {
         : null;
       const snapshot = await this.#readCatalog(threadId, signal);
       if (request.method === "GET") {
-        const before = readString(request.searchParams.get("before")) || null;
+        let before = readString(request.searchParams.get("before")) || null;
         if (before && before.length > 1_000) throw new Error("Thread Recall history ref must contain at most 1,000 characters.");
+        before = await this.#resolveReference(snapshot.thread.id, before, signal);
         const requestedKinds = request.searchParams.getAll("kind");
         const kinds = (requestedKinds.length ? readRecallKinds(requestedKinds) : undefined) ?? THREAD_RECALL_KINDS;
         return markdownResponse(await this.#renderHistory(snapshot, {
@@ -262,21 +276,22 @@ export default class WorkbenchThreadRecallController {
       if (recallRequest.action === "search") {
         const records = await this.#readAllRecords(snapshot, signal);
         const result = searchWorkbenchThreadRecall(records, {
-          before: recallRequest.before ?? null,
+          before: await this.#resolveReference(snapshot.thread.id, recallRequest.before ?? null, signal),
           kinds: recallRequest.kinds ?? THREAD_RECALL_KINDS,
           limit: recallRequest.limit ?? 10,
           query: recallRequest.query,
         });
         return markdownResponse(renderWorkbenchThreadRecallSearchMarkdown(result, snapshot.thread.id));
       }
-      const locator = readSqliteWorkbenchThreadRecallRef(recallRequest.ref);
+      const ref = (await this.#resolveReference(snapshot.thread.id, recallRequest.ref, signal))!;
+      const locator = readSqliteWorkbenchThreadRecallRef(ref);
       if (!locator) throw new Error(`Unknown Thread Recall ref: ${recallRequest.ref}`);
       const records = buildSqliteWorkbenchThreadRecallRecords(
         await this.#readTurn(snapshot.thread.id, locator.turnId, signal),
       );
       const expansion = expandWorkbenchThreadRecall(records, {
-        cursor: recallRequest.cursor ?? null,
-        ref: recallRequest.ref,
+        cursor: await this.#resolveReference(snapshot.thread.id, recallRequest.cursor ?? null, signal),
+        ref,
       });
       return markdownResponse(renderWorkbenchThreadRecallExpansionMarkdown(expansion, snapshot.thread.id));
     } catch (error) {

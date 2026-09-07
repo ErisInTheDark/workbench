@@ -26,7 +26,7 @@ function thread(id: string, active: boolean): Thread {
 
 type Route = "create" | "child-active" | "child-idle" | "parent-active" | "parent-idle";
 
-async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery = false) {
+async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery = false, nativePort = false) {
   const requests: JsonRpcRequest[] = [];
   const profile: WorkbenchComposerProfile = {
     agentPath: null, agentSource: null, createdAt: 1, harness, id: "profile", model: "test-model", name: "test profile",
@@ -37,12 +37,10 @@ async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery 
     profileId: profile.id, profileName: profile.name, projectId: "project", threadId: "child", title: "review", updatedAt: 1,
   };
   let relationships = route === "create" ? [] : [relationship];
-  const controller = new WorkbenchSubagentController({
-    bridgeUrl: "ws://unused",
-    createHarnessClient: () => ({
+  const provider = {
       connect: async () => {},
       close() {},
-      async sendRequest<T>(request) {
+      async sendRequest<T>(request: JsonRpcRequest) {
         requests.push(request);
         const params = request.params as Record<string, unknown>;
         if (request.workbenchHarness !== harness) return { id: 1, error: { code: -32000, message: "not this harness" } };
@@ -62,7 +60,17 @@ async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery 
         }
         return { id: 1, result: result as T };
       },
-    }),
+    };
+  const controller = new WorkbenchSubagentController({
+    bridgeUrl: "ws://unused",
+    createHarnessClient: () => {
+      assert.equal(nativePort, false, "Internal provider work must not connect through the public socket.");
+      return provider;
+    },
+    ...(nativePort ? {
+      requestNativeHarness: (providerHarness: WorkbenchHarness, request: JsonRpcRequest) => provider.sendRequest<object>({ ...request, workbenchHarness: providerHarness }),
+      publicThreadId: async (threadId: string) => threadId === "parent" ? "public-parent" : "public-child",
+    } : {}),
     onRelationshipCommitted: async () => {},
     profileStore: {
       read: async () => ({ profiles: [profile] }),
@@ -131,4 +139,17 @@ test("failed native agent admission does not release a waiting child questionnai
   const { requests, response } = await exercise("child-active", "codex", true);
   assert.match(response.error?.message ?? "", /delivery rejected/u);
   assert.equal(requests.some(({ method }) => method === "questionnaire/respond"), false);
+});
+
+test("the native subagent port keeps native destinations and canonical prompt/sender context", async () => {
+  for (const route of ["create", "child-idle"] as const) {
+    const { requests, response } = await exercise(route, "codex", false, true);
+    assert.equal(response.error, undefined);
+    const delivery = requests.find(({ method }) => method === "turn/start")!;
+    const params = delivery.params as TurnStartParams;
+    assert.equal(params.threadId, "child");
+    assert.equal((delivery.workbenchPromptContext as { threadId: string }).threadId, "public-child");
+    const sender = readWorkbenchAgentMessageText(params.toolOutput!.output as string);
+    assert.equal(sender?.senderThreadId, "public-parent");
+  }
 });

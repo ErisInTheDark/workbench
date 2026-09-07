@@ -19,6 +19,7 @@
  * ThreadStateSchemaRows: current thread-state selected-row registry. Keywords: database, schema, thread state, types.
  * searchTables/SearchSchemaRows: current workspace-search projection registry. Keywords: database, schema, search.
  * usageTables/UsageSchemaRows: durable token, rate-limit, and claim-session facts. Keywords: database, schema, stats.
+ * transcriptIdentityTables/TranscriptIdentitySchemaRows: permanent identity and compatibility aliases.
  * workbenchDatabaseTables: every current table keyed by its SQLite name. Keywords: database, schema, statements.
  */
 import type Database from "better-sqlite3";
@@ -32,6 +33,7 @@ import { itemSchemaHistory } from "workbench-shared/workbench/database/schema/it
 import { operationSourceSchemaHistory } from "workbench-shared/workbench/database/schema/operation-source-schema";
 import { searchSchemaHistory } from "workbench-shared/workbench/database/schema/search-schema";
 import { usageSchemaHistory } from "workbench-shared/workbench/database/schema/usage-schema";
+import { transcriptIdentitySchemaHistory, transcriptIdentityTables } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 import { threadStateSchemaHistory } from "../../lib/workbench/database/schema/thread-state-schema.ts";
 import { threadTitleHistorySchemaHistory, threadTitleHistoryTables } from "../../lib/workbench/database/schema/thread-title-history-schema.ts";
 import type { CurrentTableDefinition } from "workbench-shared/database/schema/schema-definition";
@@ -64,12 +66,15 @@ export { usageTables } from "workbench-shared/workbench/database/schema/usage-sc
 export type { UsageSchemaRows } from "workbench-shared/workbench/database/schema/usage-schema";
 export { threadStateTables } from "../../lib/workbench/database/schema/thread-state-schema.ts";
 export type { ThreadStateSchemaRows } from "../../lib/workbench/database/schema/thread-state-schema.ts";
+export { transcriptIdentityTables } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
+export type { TranscriptIdentitySchemaRows } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 
 const workbenchDatabaseSchema = defineWorkbenchDatabaseSchema({
   subsystems: [
     composerProfileSchemaHistory,
     codexSandboxNetworkSchemaHistory,
     coreSchemaHistory,
+    transcriptIdentitySchemaHistory,
     itemSchemaHistory,
     operationSourceSchemaHistory,
     interactionSchemaHistory,
@@ -85,6 +90,7 @@ const currentTables = {
   ...composerProfileTables,
   ...codexSandboxNetworkTables,
   ...coreTables,
+  ...transcriptIdentityTables,
   ...itemTables,
   ...operationSourceTables,
   ...interactionTables,

@@ -1,17 +1,26 @@
 /*
+ * Keywords: subagent, reservation, relationship, reload, serialised mutation.
  * Exports:
- * - WorkbenchSubagentStoreState/createWorkbenchSubagentStoreState: plain relationship and mutation state shared by fresh store wrappers. Keywords: subagent, store, reload, state, queue.
- * - getProcessWorkbenchSubagentStoreState: resolve one reload-stable state owner for each storage root. Keywords: subagent, process, storage root, reload.
+ * - WorkbenchSubagentReservation: reserved child metadata without a thread id.
+ * - WorkbenchStoredSubagent: reserved or active stored relationship.
+ * - WorkbenchSubagentStoreState: shared relationships and mutation queues.
+ * - createWorkbenchSubagentStoreState: construct fresh store state.
+ * - getProcessWorkbenchSubagentStoreState: resolve storage-root state across scoped reloads.
  */
 import path from "node:path";
 
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 
+export type WorkbenchSubagentReservation = Omit<WorkbenchSubagentRelationship, "threadId"> & { reservationId: string };
+export type WorkbenchStoredSubagent =
+  | (WorkbenchSubagentReservation & { kind: "reserved" })
+  | (WorkbenchSubagentRelationship & { kind: "active" });
+
 export interface WorkbenchSubagentStoreState {
   initializationPromise: Promise<void> | null;
   nextDirectSubagentIndexes: Map<string, number>;
   operations: Map<string, Promise<void>>;
-  parents: Map<string, Map<string, WorkbenchSubagentRelationship>>;
+  parents: Map<string, Map<string, WorkbenchStoredSubagent>>;
 }
 
 const PROCESS_STATES_KEY = Symbol.for("workbench.subagentStoreStates.v1");

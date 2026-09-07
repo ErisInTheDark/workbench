@@ -782,6 +782,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       if (cancelled) {
         return;
       }
+      if (result.canonicalRoute) {
+        navigateToRoute(result.canonicalRoute, { replace: true });
+        return;
+      }
       if (!result.ok && result.error) {
         setSelectionError(result.error);
       }
@@ -790,7 +794,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     return () => {
       cancelled = true;
     };
-  }, [controls, routeToApplyToControls]);
+  }, [controls, navigateToRoute, routeToApplyToControls]);
 
   const expandedDirectories = new Set(explorer.expandedDirectories);
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
@@ -1434,7 +1438,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       }
 
       const currentRoute = currentRouteRef.current;
-      if (!isWorkbenchRouteOwnerOfThread(currentRoute, thread.id)) {
+      if (!isWorkbenchRouteOwnerOfThread(currentRoute, thread.id, thread.isDraft)) {
         return false;
       }
 
@@ -1528,15 +1532,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ? getSidebarDraftComposerInput(activeRouteDraft)
     : getThreadComposerDraftForTarget(route.view === "thread" ? route.threadTarget : null);
 
-  const getComposerDraftTarget = useCallback((projectId: string, threadId: string, reservedDraftId?: string): ComposerDraftTarget => {
+  const getComposerDraftTarget = useCallback((projectId: string, threadId: string, originTarget?: WorkbenchThreadTarget): ComposerDraftTarget => {
     if (!projectId) throw new Error("The composer draft has no project identity.");
-    if (threadId !== "new" && !threadId.startsWith("draft:")) {
+    if (originTarget?.kind !== "new" && originTarget?.kind !== "draft") {
       return { kind: "thread", daemonRegistrationId: clientState.daemonRegistrationId, projectId, threadId };
     }
-    const draftId = threadId.startsWith("draft:") ? threadId.slice("draft:".length) : reservedDraftId;
+    const draftId = originTarget.kind === "draft" ? originTarget.draftId : threadId;
     if (!draftId || !controls) throw new Error("The new-thread draft owner is unavailable.");
-    const originTarget = route.view === "thread" ? route.threadTarget : null;
-    const isNew = originTarget?.kind === "new" || threadId === "new";
+    const isNew = originTarget.kind === "new";
     return {
       kind: "sidebar", projectId, draftId, isNew,
       ...(originTarget?.kind === "new" && originTarget.folderId ? { folderId: originTarget.folderId } : {}),
@@ -1586,19 +1589,19 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
   const handleThreadComposerDraftChange = useCallback(async (
     projectId: string, threadId: string, update: (draft: WorkbenchComposerInputDraft) => WorkbenchComposerInputDraft,
-    reason: "autosave" | "submission" = "autosave", reservedDraftId?: string, detached = false,
+    reason: "autosave" | "submission" = "autosave", target?: WorkbenchThreadTarget, detached = false,
   ) => {
     try {
-      return await saveComposerDraft(clientStateController, getComposerDraftTarget(projectId, threadId, reservedDraftId), update, { reason, detached });
+      return await saveComposerDraft(clientStateController, getComposerDraftTarget(projectId, threadId, target), update, { reason, detached });
     } catch (error) {
       setSelectionError(error instanceof Error ? error.message : "Unable to save composer draft.");
       throw error;
     }
   }, [clientStateController, getComposerDraftTarget]);
 
-  const handleThreadComposerDraftClear = useCallback(async (projectId: string, threadId: string, reservedDraftId?: string) => {
+  const handleThreadComposerDraftClear = useCallback(async (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => {
     try {
-      await clearComposerDraft(clientStateController, getComposerDraftTarget(projectId, threadId, reservedDraftId));
+      await clearComposerDraft(clientStateController, getComposerDraftTarget(projectId, threadId, target));
     } catch (error) {
       setSelectionError(error instanceof Error ? error.message : "Unable to clear composer draft.");
       throw error;
@@ -1718,8 +1721,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     showThreadView
     && thread
     && (
-      isWorkbenchRouteOwnerOfThread(effectiveThreadRoute, thread.id)
-      || isWorkbenchRouteOwnerOfThread(effectiveThreadRoute, getThreadViewInstanceKey(thread))
+      isWorkbenchRouteOwnerOfThread(effectiveThreadRoute, thread.id, thread.isDraft)
+      || isWorkbenchRouteOwnerOfThread(effectiveThreadRoute, getThreadViewInstanceKey(thread), getThreadViewInstanceKey(thread) !== thread.id)
     )
   );
   const documentThreadForThreadView = showThreadView

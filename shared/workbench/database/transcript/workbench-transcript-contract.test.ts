@@ -140,7 +140,7 @@ test("transcript snapshot conformance supplies missing augmentation collections 
 
   assert.equal(result.success, true);
   if (!result.success) return;
-  assert.deepEqual(result.data.thread, thread);
+  assert.deepEqual(result.data.thread, { ...thread, identity_origin: "legacy" });
   assert.deepEqual(Object.keys(result.data.rows), Object.keys(transcriptSnapshotTables));
   assert.ok(Object.values(result.data.rows).every((rows) => rows.length === 0));
   assert.ok(result.repairedPaths.some((path) => path.join(".") === "futureRoot"));

@@ -10,8 +10,7 @@ import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.
 import type { ThreadPayload, WorkbenchQuestionnaireHistoryEntry } from "../../types.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 import {
-  SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX,
-  createSyntheticQuestionnaireHistoryItemId,
+  resolveQuestionnaireHistoryItemId,
 } from "./thread-questionnaire-identity.ts";
 import { isWorkbenchSyntheticSteerUserMessage } from "./thread-steer-history.ts";
 import { projectWorkbenchThreadItemTimelines } from "./thread-item-timeline.ts";
@@ -28,8 +27,8 @@ type QuestionnaireHistoryAnchorResolution =
   | { type: "fallback" };
 
 export function isSyntheticQuestionnaireHistoryItem(item: ThreadItem): item is DynamicToolCallItem {
-  return item.type === "dynamicToolCall"
-    && item.id.startsWith(SYNTHETIC_QUESTIONNAIRE_HISTORY_ITEM_ID_PREFIX);
+  return isWorkbenchQuestionnaireToolCallItem(item)
+    && item.namespace === null && item.status === "completed" && item.success === true;
 }
 
 function isWorkbenchQuestionnaireToolCallItem(item: ThreadItem): item is DynamicToolCallItem {
@@ -109,7 +108,7 @@ function isEquivalentSyntheticQuestionnaireHistoryItem(
 ) {
   const firstContentItem = item.contentItems?.[0];
   return item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME
-    && item.id === createSyntheticQuestionnaireHistoryItemId(entry)
+    && item.id === resolveQuestionnaireHistoryItemId(entry)
     && item.status === "completed"
     && item.success === true
     && item.namespace === null
@@ -135,7 +134,7 @@ function createSyntheticQuestionnaireHistoryItem(
       type: "inputText",
     }],
     durationMs: null,
-    id: createSyntheticQuestionnaireHistoryItemId(entry),
+    id: resolveQuestionnaireHistoryItemId(entry),
     namespace: null,
     status: "completed",
     success: true,
@@ -267,7 +266,7 @@ function applyQuestionnaireHistoryToItems(
   for (const entry of sortQuestionnaireHistoryEntries(entries)) {
     const syntheticItem = createSyntheticQuestionnaireHistoryItem(
       entry,
-      syntheticItemsById.get(createSyntheticQuestionnaireHistoryItemId(entry)) ?? null,
+      syntheticItemsById.get(resolveQuestionnaireHistoryItemId(entry)) ?? null,
     );
     const anchorResolution = resolveQuestionnaireHistoryAnchor(nextItems, baseItems, entry, itemsView);
 
@@ -321,7 +320,7 @@ export function applyQuestionnaireHistoryToThread(
 
   return projectWorkbenchThreadItemTimelines(didChange ? { ...thread, turns: nextTurns } : thread, (turn) => (
     (entriesByTurnId.get(turn.id) ?? []).flatMap((entry) => {
-      const itemId = createSyntheticQuestionnaireHistoryItemId(entry);
+      const itemId = resolveQuestionnaireHistoryItemId(entry);
       return turn.items.some((item) => item.id === itemId) ? [{
         completedAt: entry.resolvedAt,
         firstSeenAt: null,

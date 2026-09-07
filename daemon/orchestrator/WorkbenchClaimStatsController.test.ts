@@ -24,7 +24,6 @@ test("claim CLI derives project from cwd and accepts historical paths in the own
       reads.push(request);
       return { kind: "threads", page: 1, pages: 1, rows: [
         { threadId: "managed-id", title: "Useful title", harness: "codex", identity: "managed" },
-        { threadId: "native-id", title: null, harness: "codex", identity: "provider" },
       ] };
     },
   });
@@ -32,12 +31,24 @@ test("claim CLI derives project from cwd and accepts historical paths in the own
     const response = await controller.execute({ cwd: resolution.cwd, file, range: "all", page: 1 }, signal());
     assert.equal(response.status, 200);
     const output = await response.text();
-    assert.ok(output.includes("managed-id") && output.includes("Useful title") && output.includes("native-id"));
+    assert.ok(output.includes("managed-id") && output.includes("Useful title"));
   }
   assert.deepEqual(reads.map(({ projectId, file }) => ({ projectId, file })), [
     { projectId: "owned", file: { rootId: "secondary", path: "gone/file.ts" } },
     { projectId: "owned", file: { rootId: "primary", path: "gone/file.ts" } },
   ]);
+});
+
+test("unresolved claimants fail the scoped report without exposing native IDs", async () => {
+  const controller = new WorkbenchClaimStatsController({
+    resolveProjectFromCwd: async () => resolution,
+    read: async () => ({ kind: "threads", page: 1, pages: 1, rows: [
+      { threadId: "native-id", title: null, harness: "codex", identity: "provider" },
+    ] }),
+  });
+  const response = await controller.execute({ cwd: resolution.cwd, file: "file", range: "all", page: 1 }, signal());
+  assert.equal(response.status, 409);
+  assert.equal((await response.text()).includes("native-id"), false);
 });
 
 test("invalid paths and cancellation never reach claim reads, and database failures propagate", async () => {

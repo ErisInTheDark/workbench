@@ -10,7 +10,7 @@ import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thre
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
-import { createQuestionnaireCollaborationMode, isCodexJsonRpcFailure } from "workbench-shared/codex/protocol";
+import { createQuestionnaireCollaborationMode } from "workbench-shared/codex/protocol";
 import type {
   WorkbenchComposerProfile,
   WorkbenchHarness,
@@ -64,6 +64,8 @@ type WorkbenchSubagentControllerStore = Pick<
 
 export interface WorkbenchSubagentControllerOptions {
   bridgeUrl: string;
+  requestNativeHarness?: (harness: WorkbenchHarness, request: JsonRpcRequest) => Promise<JsonRpcResponse>;
+  publicThreadId?: (threadId: string, projectId: string) => Promise<string>;
   createHarnessClient?: () => WorkbenchSubagentHarnessClient;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
   profileStore: Pick<WorkbenchComposerProfileStore, "read" | "mutate">;
@@ -129,6 +131,8 @@ function delay(ms: number, signal: AbortSignal) {
 
 export default class WorkbenchSubagentController {
   private readonly bridgeUrl: string;
+  private readonly requestNativeHarness: WorkbenchSubagentControllerOptions["requestNativeHarness"];
+  private readonly publicThreadId: NonNullable<WorkbenchSubagentControllerOptions["publicThreadId"]>;
   private createQueue: Promise<void> = Promise.resolve();
   private readonly createHarnessClient: () => WorkbenchSubagentHarnessClient;
   private readonly onRelationshipCommitted: WorkbenchSubagentControllerOptions["onRelationshipCommitted"];
@@ -140,6 +144,8 @@ export default class WorkbenchSubagentController {
 
   constructor({
     bridgeUrl,
+    requestNativeHarness,
+    publicThreadId = async (threadId) => threadId,
     createHarnessClient = () => new CodexAppServerClient(),
     onRelationshipCommitted,
     profileStore,
@@ -148,6 +154,8 @@ export default class WorkbenchSubagentController {
     threadState,
   }: WorkbenchSubagentControllerOptions) {
     this.bridgeUrl = bridgeUrl;
+    this.requestNativeHarness = requestNativeHarness;
+    this.publicThreadId = publicThreadId;
     this.createHarnessClient = createHarnessClient;
     this.onRelationshipCommitted = onRelationshipCommitted;
     this.profileStore = profileStore;
@@ -187,7 +195,8 @@ export default class WorkbenchSubagentController {
     return this.profileStore.mutate(value);
   }
 
-  private async withHarnessClient<T>(operation: (client: WorkbenchSubagentHarnessClient) => Promise<T>) {
+  private async withHarnessClient<T>(operation: (client: WorkbenchSubagentHarnessClient | null) => Promise<T>) {
+    if (this.requestNativeHarness) return await operation(null);
     const client = this.createHarnessClient();
     try {
       await client.connect(this.bridgeUrl);
@@ -197,13 +206,16 @@ export default class WorkbenchSubagentController {
     }
   }
 
-  private async requestHarness<T>(client: WorkbenchSubagentHarnessClient, harness: WorkbenchHarness, message: { method: string; params?: unknown } & Record<string, unknown>) {
-    const response = await client.sendRequest<T>({ ...message, workbenchHarness: harness });
-    if (isCodexJsonRpcFailure(response)) throw new Error(response.error.message);
-    return response.result;
+  private async requestHarness<T>(client: WorkbenchSubagentHarnessClient | null, harness: WorkbenchHarness, message: { method: string; params?: unknown } & Record<string, unknown>) {
+    const response = this.requestNativeHarness
+      ? await this.requestNativeHarness(harness, message)
+      : await client!.sendRequest<T>({ ...message, workbenchHarness: harness });
+    if ("error" in response && response.error) throw new Error(response.error.message);
+    if (!("result" in response)) throw new Error("The native subagent request returned no result.");
+    return response.result as T;
   }
 
-  private async readThread(client: WorkbenchSubagentHarnessClient, harness: WorkbenchHarness, threadId: string, cwd: string) {
+  private async readThread(client: WorkbenchSubagentHarnessClient | null, harness: WorkbenchHarness, threadId: string, cwd: string) {
     return (await this.requestHarness<ThreadReadResponse>(client, harness, {
       method: "thread/read",
       params: { cwd, includeTurns: true, threadId },
@@ -211,7 +223,7 @@ export default class WorkbenchSubagentController {
     })).thread;
   }
 
-  private async readThreadForWaitPoll(client: WorkbenchSubagentHarnessClient, record: WorkbenchSubagentRelationship) {
+  private async readThreadForWaitPoll(client: WorkbenchSubagentHarnessClient | null, record: WorkbenchSubagentRelationship) {
     if (record.harness !== "codex") {
       return await this.readThread(client, record.harness, record.threadId, record.cwd);
     }
@@ -224,7 +236,7 @@ export default class WorkbenchSubagentController {
   }
 
   private async readThreadForWaitBoundary(
-    client: WorkbenchSubagentHarnessClient,
+    client: WorkbenchSubagentHarnessClient | null,
     record: WorkbenchSubagentRelationship,
     polledThread: Thread,
   ) {
@@ -236,7 +248,7 @@ export default class WorkbenchSubagentController {
   }
 
   private async resolveThreadHarness(
-    client: WorkbenchSubagentHarnessClient,
+    client: WorkbenchSubagentHarnessClient | null,
     threadId: string,
     cwd: string,
     project: AgentEndpointProjectResolution["project"],
@@ -256,7 +268,7 @@ export default class WorkbenchSubagentController {
   }
 
   private async resolveCaller(
-    client: WorkbenchSubagentHarnessClient,
+    client: WorkbenchSubagentHarnessClient | null,
     params: Record<string, unknown>,
     {
       knownHarness,
@@ -310,7 +322,7 @@ export default class WorkbenchSubagentController {
     return { profiles };
   }
 
-  private buildPromptContext(caller: ResolvedSubagentCaller, profile: WorkbenchComposerProfile, threadId: string, name: string, workbenchOrigin: string | undefined) {
+  private async buildPromptContext(caller: ResolvedSubagentCaller, profile: WorkbenchComposerProfile, threadId: string, name: string, workbenchOrigin: string | undefined) {
     return {
       agentPath: profile.agentPath,
       cwd: caller.cwd,
@@ -318,13 +330,13 @@ export default class WorkbenchSubagentController {
       projectId: caller.project.id,
       roots: caller.project.roots.map((root, index) => ({ id: root.id, isPrimary: index === 0, name: root.name, relativePath: ".", rootPath: root.rootPath })),
       subagentName: name,
-      threadId,
+      threadId: threadId ? await this.publicThreadId(threadId, caller.project.id) : null,
       workbenchOrigin: workbenchOrigin ?? null,
       workflowIds: ["subagent"],
     };
   }
 
-  private async create(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
+  private async create(client: WorkbenchSubagentHarnessClient | null, params: Record<string, unknown>) {
     const caller = await this.resolveCaller(client, params);
     const relationships = await this.subagentStore.list({ projectId: caller.project.id });
     if (relationships.subagents.some(({ threadId }) => threadId === caller.callerThreadId)) {
@@ -345,34 +357,35 @@ export default class WorkbenchSubagentController {
       }
       const profile = (await this.profileStore.read()).profiles.find((candidate) => candidate.id === profileId);
       if (!profile || (profile.scope.kind === "project" && profile.scope.projectId !== caller.project.id)) throw new Error("That profile is not visible in this cwd project.");
-      const reservationId = `pending:${randomUUID()}`;
+      const reservationId = randomUUID();
       const now = Date.now();
       const reservation = await this.subagentStore.reserve({
         createdAt: now, cwd: caller.cwd, harness: profile.harness,
         name, parentThreadId: caller.callerThreadId, profileId: profile.id, profileName: profile.name,
-        projectId: caller.project.id, threadId: reservationId, title, updatedAt: now,
+        projectId: caller.project.id, reservationId, title, updatedAt: now,
       });
       let childId = "";
       try {
         const start = await this.requestHarness<{ thread: Thread }>(client, profile.harness, {
           method: "thread/start",
-          [WORKBENCH_PROMPT_CONTEXT_FIELD]: this.buildPromptContext(caller, profile, "", name, workbenchOrigin),
+          [WORKBENCH_PROMPT_CONTEXT_FIELD]: await this.buildPromptContext(caller, profile, "", name, workbenchOrigin),
           params: { cwd: caller.cwd, effort: profile.reasoningEffort, ephemeral: false, model: profile.model, serviceTier: profile.serviceTier },
         });
         childId = start.thread.id;
         const startedAt = Date.now();
-        const record = { ...reservation, threadId: childId, updatedAt: startedAt };
+        const { reservationId: _reservationId, ...metadata } = reservation;
+        const record = { ...metadata, threadId: childId, updatedAt: startedAt };
         await this.subagentStore.replace(caller.callerThreadId, reservationId, record);
         await this.onRelationshipCommitted(record);
         await this.requestHarness(client, profile.harness, { method: "thread/name/set", params: { cwd: caller.cwd, name: title, threadId: childId } });
-        const turnContext = this.buildPromptContext(caller, profile, childId, name, workbenchOrigin);
+          const turnContext = await this.buildPromptContext(caller, profile, childId, name, workbenchOrigin);
         await this.requestHarness(client, profile.harness, {
           method: "turn/start",
           [WORKBENCH_PROMPT_CONTEXT_FIELD]: turnContext,
           params: {
             ...(profile.harness === "codex" ? { collaborationMode: createQuestionnaireCollaborationMode(profile.model, profile.reasoningEffort) } : {}),
             cwd: caller.cwd, effort: profile.reasoningEffort,
-            ...agentMessageParams(profile.harness, userMessage, PARENT_AGENT_NAME, caller.callerThreadId),
+            ...agentMessageParams(profile.harness, userMessage, PARENT_AGENT_NAME, await this.publicThreadId(caller.callerThreadId, caller.project.id)),
             model: profile.model,
             serviceTier: profile.serviceTier, summary: "detailed", threadId: childId,
           },
@@ -382,7 +395,7 @@ export default class WorkbenchSubagentController {
         if (!childId) {
           await this.subagentStore.remove(caller.callerThreadId, reservationId);
         }
-        throw new Error(`${error instanceof Error ? error.message : String(error)}${childId ? ` (subagent thread ${childId})` : ""}`);
+        throw new Error(`${error instanceof Error ? error.message : String(error)}${childId ? ` (subagent thread ${await this.publicThreadId(childId, caller.project.id)})` : ""}`);
       }
     });
     this.createQueue = operation.then(() => undefined, () => undefined);
@@ -453,7 +466,7 @@ export default class WorkbenchSubagentController {
     if (locked?.entryKind === "subagent") throw new Error(`Subagent ${locked.name} is locked: this subagent is user-owned and may send you follow-up messages.`);
   }
 
-  private async pendingQuestionnaires(client: WorkbenchSubagentHarnessClient, harness: WorkbenchHarness, cwd: string) {
+  private async pendingQuestionnaires(client: WorkbenchSubagentHarnessClient | null, harness: WorkbenchHarness, cwd: string) {
     return (await this.requestHarness<PendingQuestionnaireList>(client, harness, {
       method: "questionnaire/list",
       params: { cwd },
@@ -461,11 +474,11 @@ export default class WorkbenchSubagentController {
     })).data;
   }
 
-  private async pendingQuestionnaire(client: WorkbenchSubagentHarnessClient, record: WorkbenchSubagentRelationship) {
+  private async pendingQuestionnaire(client: WorkbenchSubagentHarnessClient | null, record: WorkbenchSubagentRelationship) {
     return (await this.pendingQuestionnaires(client, record.harness, record.cwd)).find((entry) => entry.threadId === record.threadId) ?? null;
   }
 
-  private async wait(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
+  private async wait(client: WorkbenchSubagentHarnessClient | null, params: Record<string, unknown>) {
     const records = await this.ownedRecords(params);
     await this.assertUnlocked(records[0]!.projectId, records);
     const waitId = requiredString(params, "waitId");
@@ -497,7 +510,7 @@ export default class WorkbenchSubagentController {
             controller.signal.addEventListener("abort", onAbort, { once: true });
           });
         }
-        if (ready.entry.pinned) return { output: `Subagent ${ready.record.name} (${ready.record.threadId}) was locked by the user.` };
+        if (ready.entry.pinned) return { output: `Subagent ${ready.record.name} (${await this.publicThreadId(ready.record.threadId, ready.record.projectId)}) was locked by the user.` };
         const thread = await this.readThread(client, ready.record.harness, ready.record.threadId, ready.record.cwd);
         const pending = ready.entry.lifecycle.kind === "needsAttention" && ready.entry.lifecycle.reason === "pendingInput"
           ? await this.pendingQuestionnaire(client, ready.record)
@@ -507,7 +520,7 @@ export default class WorkbenchSubagentController {
           name: ready.record.name,
           outcome: pending ? "needs-interaction" : "finished",
           output: pending ? renderSubagentQuestionnaireOutput(thread, pending.request) : renderSubagentTurnOutput(thread),
-          threadId: ready.record.threadId,
+          threadId: await this.publicThreadId(ready.record.threadId, ready.record.projectId),
         }) };
       }
       while (true) {
@@ -537,7 +550,7 @@ export default class WorkbenchSubagentController {
             name: questionnaireState.record.name,
             outcome: "needs-interaction",
             output: renderSubagentQuestionnaireOutput(thread, questionnaireState.pending.request),
-            threadId: questionnaireState.record.threadId,
+            threadId: await this.publicThreadId(questionnaireState.record.threadId, questionnaireState.record.projectId),
           }) };
         }
         const finishedState = states.find((state) => state.record.harness === "codex"
@@ -557,7 +570,7 @@ export default class WorkbenchSubagentController {
             name: finishedState.record.name,
             outcome: "finished",
             output: renderSubagentTurnOutput(thread),
-            threadId: finishedState.record.threadId,
+            threadId: await this.publicThreadId(finishedState.record.threadId, finishedState.record.projectId),
           }) };
         }
         await delay(POLL_INTERVAL_MS, controller.signal);
@@ -574,14 +587,14 @@ export default class WorkbenchSubagentController {
     return { cancelled: Boolean(waiter) };
   }
 
-  private async message(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
+  private async message(client: WorkbenchSubagentHarnessClient | null, params: Record<string, unknown>) {
     if (params.parent === true) {
       return await this.messageParent(client, params);
     }
     const { caller, record } = await this.ownedRecord(params);
     await this.assertUnlocked(record.projectId, [record]);
     const message = requiredString(params, "message");
-    const messageParams = agentMessageParams(record.harness, message, PARENT_AGENT_NAME, caller.callerThreadId);
+    const messageParams = agentMessageParams(record.harness, message, PARENT_AGENT_NAME, await this.publicThreadId(caller.callerThreadId, record.projectId));
     const thread = await this.readThread(client, record.harness, record.threadId, record.cwd);
     const turn = currentTurn(thread);
     const pending = await this.pendingQuestionnaire(client, record);
@@ -603,7 +616,7 @@ export default class WorkbenchSubagentController {
     if (!profile) throw new Error("The subagent profile no longer exists.");
     await this.requestHarness(client, record.harness, {
       method: "turn/start",
-      [WORKBENCH_PROMPT_CONTEXT_FIELD]: this.buildPromptContext(caller, profile, record.threadId, record.name, typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : undefined),
+      [WORKBENCH_PROMPT_CONTEXT_FIELD]: await this.buildPromptContext(caller, profile, record.threadId, record.name, typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : undefined),
       params: {
         ...(record.harness === "codex" ? { collaborationMode: createQuestionnaireCollaborationMode(profile.model, profile.reasoningEffort) } : {}),
         cwd: record.cwd, effort: profile.reasoningEffort, ...messageParams, model: profile.model,
@@ -613,7 +626,7 @@ export default class WorkbenchSubagentController {
     return {};
   }
 
-  private async messageParent(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
+  private async messageParent(client: WorkbenchSubagentHarnessClient | null, params: Record<string, unknown>) {
     const callerThreadId = requiredString(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
     const requestedProject = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
@@ -634,7 +647,7 @@ export default class WorkbenchSubagentController {
       parent.harness,
       requiredString(params, "message"),
       relationship.name,
-      relationship.threadId,
+      await this.publicThreadId(relationship.threadId, relationship.projectId),
     );
     const turn = currentTurn(parent.thread);
     if (turn?.status === "inProgress" && parent.harness !== "codex") {
@@ -656,7 +669,7 @@ export default class WorkbenchSubagentController {
     return {};
   }
 
-  private async stop(client: WorkbenchSubagentHarnessClient, params: Record<string, unknown>) {
+  private async stop(client: WorkbenchSubagentHarnessClient | null, params: Record<string, unknown>) {
     const records = await this.ownedRecords(params);
     await this.assertUnlocked(records[0]!.projectId, records);
     for (const record of records) {

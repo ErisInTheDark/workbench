@@ -37,6 +37,15 @@ test("the database worker opens, proves readiness, reports all tables, and close
     assert.equal(inventory.schemaVersion, WORKBENCH_DATABASE_SCHEMA_VERSION);
     assert.deepEqual(coalescedInventory, inventory);
     assert.deepEqual(implicitInventory, inventory);
+    const catalog = ["first", "second"].map((nativeThreadId) => ({
+      native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId },
+      projectId: "project", projectRoot: "C:/project", title: nativeThreadId,
+      createdAt: 1, updatedAt: 2, activityAt: 2,
+    }));
+    const identities = await controller.observeThreadIdentities(catalog);
+    assert.equal(identities.length, 2);
+    assert.notEqual(identities[0]!.threadId, identities[1]!.threadId);
+    assert.deepEqual(await controller.query(selectRows(coreTables.threadTurns)), []);
     await controller.close();
     assert.equal(controller.state, "closed");
     await assert.rejects(controller.start(), /closed/);
@@ -59,6 +68,8 @@ test("the database worker opens, proves readiness, reports all tables, and close
 
     reopened = new WorkbenchDatabaseController({ databasePath });
     assert.deepEqual(await reopened.getInventory(), inventory);
+    assert.deepEqual(await reopened.observeThreadIdentities(catalog), identities);
+    assert.deepEqual(await reopened.resolveNativeThreadIdentity(catalog[0]!.native), identities[0]);
     await reopened.close();
   } finally {
     await reopened?.close();
@@ -117,7 +128,11 @@ test("mixed-model schema addition preserves usage counters, attribution and unre
     installWorkbenchDatabaseSchema(database);
     assert.deepEqual(database.prepare("SELECT * FROM thread_turn_usage").get(), { ...beforeUsage, model_is_mixed: 0 });
     assert.deepEqual(database.prepare("SELECT * FROM thread_usage_model_attributions").all(), beforeAttribution);
-    assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 1 }), beforeTranscript);
+    assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 1 }), {
+      ...beforeTranscript,
+      thread: { ...beforeTranscript!.thread, identity_origin: "legacy" },
+      turns: beforeTranscript!.turns.map((turn) => ({ ...turn, identity_origin: "legacy" })),
+    });
     repository.settle([{ kind: "turnUsageContext", threadId: "thread", turnId: "turn", observedAt: 3, model: "rerouted", serviceTier: null, modelChanged: true }]);
     assert.deepEqual(database.prepare("SELECT model, model_is_mixed, cumulative_total_tokens FROM thread_turn_usage").get(), {
       model: "rerouted", model_is_mixed: 1, cumulative_total_tokens: 150,
@@ -133,26 +148,32 @@ test("tool schema upgrade preserves collaboration children and callable sources"
   try {
     installWorkbenchDatabaseSchema(database, { targetVersion: 11 });
     database.pragma("foreign_keys = ON");
-    const repository = new WorkbenchTranscriptRepository(database);
-    repository.settle([
-      { kind: "thread", threadId: "thread", projectId: "project", projectRoot: "C:/project", title: "thread", createdAt: 1, updatedAt: 1, activityAt: 1 },
-      { kind: "turn", threadId: "thread", turnId: "turn", turnIndex: 0, harnessId: "codex", nativeLocation: "C:/project", nativeThreadId: "thread", nativeTurnId: "turn", state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1_000 },
-      {
-        kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 2,
-        item: {
-          type: "collabAgentToolCall", id: "collab", tool: "spawnAgent", status: "completed",
-          senderThreadId: "thread", receiverThreadIds: ["child"], prompt: "task", model: null, reasoningEffort: null,
-          agentsStates: { child: { status: "running", message: null } },
-        },
-      },
-      {
-        kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 2,
-        item: {
-          type: "dynamicToolCall", id: "callable", tool: "lookup", namespace: null, arguments: {},
-          status: "completed", contentItems: [{ type: "inputText", text: "result" }], success: true, durationMs: 1,
-        },
-      },
-    ]);
+    // Seed the historical schema directly; the current recorder requires the current schema.
+    database.exec(`
+      INSERT INTO workbench_harnesses(id) VALUES ('codex');
+      INSERT INTO workbench_threads(id, project_id, project_root, title, transcript_content_version,
+        next_turn_index, created_at, updated_at, activity_at)
+        VALUES ('thread', 'project', 'C:/project', 'thread', 1, 1, 1, 1, 1);
+      INSERT INTO thread_turns(id, thread_id, turn_index, harness_id, native_location, native_thread_id,
+        native_turn_id, state, created_at, started_at, ended_at, duration_ms)
+        VALUES ('turn', 'thread', 0, 'codex', 'C:/project', 'thread', 'turn', 'completed', 1, 1, 2, 1000);
+      INSERT INTO thread_turn_materializations(turn_id, thread_id, materialized_at) VALUES ('turn', 'thread', 2);
+      INSERT INTO thread_items(id, source_id, thread_id, turn_id, item_position, type, created_at, updated_at)
+        VALUES (1, 'collab', 'thread', 'turn', 0, 'operation', 2, 2),
+          (2, 'callable', 'thread', 'turn', 1, 'operation', 2, 2);
+      INSERT INTO thread_item_operations(item_id, source_kind, source_revision) VALUES (1, 'tool', 0), (2, 'tool', 0);
+      INSERT INTO thread_operation_tool_sources(item_id, source_revision, tool_kind, state, tool_name, duration_ms)
+        VALUES (1, 0, 'collaboration', 'completed', 'spawnAgent', NULL),
+          (2, 0, 'callable', 'completed', 'lookup', 1);
+      INSERT INTO thread_operation_collaboration_tool_sources(item_id, source_revision, state, tool_name, sender_thread_id, prompt)
+        VALUES (1, 0, 'completed', 'spawnAgent', 'thread', 'task');
+      INSERT INTO thread_collaboration_receivers(item_id, receiver_index, receiver_thread_id) VALUES (1, 0, 'child');
+      INSERT INTO thread_collaboration_agent_states(item_id, agent_thread_id, status) VALUES (1, 'child', 'running');
+      INSERT INTO thread_operation_callable_tool_sources(item_id, source_revision, state, tool_name, callable_kind, arguments_json, success)
+        VALUES (2, 0, 'completed', 'lookup', 'dynamic', '{}', 1);
+      INSERT INTO thread_callable_dynamic_content(item_id, content_index, source_revision, content_kind, text)
+        VALUES (2, 0, 0, 'inputText', 'result');
+    `);
     const sourceTables = [
       "thread_operation_tool_sources", "thread_operation_collaboration_tool_sources",
       "thread_collaboration_receivers", "thread_collaboration_agent_states",
@@ -162,6 +183,7 @@ test("tool schema upgrade preserves collaboration children and callable sources"
     assert.deepEqual(sourceTables.map((table) => database.prepare(`SELECT * FROM ${table} ORDER BY item_id`).all()), before);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
     assert.equal(database.pragma("foreign_keys", { simple: true }), 1);
+    const repository = new WorkbenchTranscriptRepository(database);
     repository.settle([{
       kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 3,
       item: {
@@ -198,7 +220,37 @@ test("schema version 4 thread-state rows migrate into the scoped relationship mo
         VALUES ('historical-child', 'subagent', 'parent', 'C:/project', 'child', 'child', 'profile', 'Profile', 0);
     `);
 
+    installWorkbenchDatabaseSchema(database, { targetVersion: 5 });
+    database.exec(`
+      INSERT INTO workbench_thread_state_subagent_parents
+        VALUES ('parent-scope', 'project', 'codex', 'parent', 2);
+      INSERT INTO workbench_thread_state_subagent_relationships
+        VALUES ('reservation', 'parent-scope', 'pending', 'reserved-child', 1, 1, 2);
+      INSERT INTO workbench_thread_state_pending_subagent_relationships
+        VALUES ('reservation', 'pending', 'pending:6bca4a6a-9d20-4b7f-8a14-87ca3461b310',
+          'C:/project', 'reserved-child', 'profile', 'Profile', 'Reserved');
+      INSERT INTO workbench_thread_state_questionnaires
+        VALUES ('old-questionnaire', 'parent', 'answered', 'turn', 'item', 'reusable-key',
+          'request', 'Choose', '', 'Submit', NULL, NULL, 2);
+      INSERT INTO workbench_thread_state_questionnaire_questions
+        VALUES ('old-questionnaire', 0, 'choice', '', 'Continue?', 1, 0);
+      INSERT INTO workbench_thread_state_questionnaire_options
+        VALUES ('old-questionnaire', 0, 0, 'Yes', '');
+      INSERT INTO workbench_thread_state_questionnaire_answers
+        VALUES ('old-questionnaire', 'answered', 'choice', 0, 'Yes');
+    `);
     installWorkbenchDatabaseSchema(database);
+    installWorkbenchDatabaseSchema(database);
+
+    assert.deepEqual(database.prepare(`
+      SELECT reservation_id, name, profile_id FROM workbench_thread_state_pending_subagent_relationships
+    `).get(), { reservation_id: "6bca4a6a-9d20-4b7f-8a14-87ca3461b310", name: "reserved-child", profile_id: "profile" });
+    assert.deepEqual(database.prepare(`
+      SELECT q.id, a.answer, o.label FROM workbench_thread_state_questionnaires q
+      JOIN workbench_thread_state_questionnaire_answers a ON a.questionnaire_id = q.id
+      JOIN workbench_thread_state_questionnaire_options o ON o.questionnaire_id = q.id
+    `).all(), [{ id: "old-questionnaire", answer: "Yes", label: "Yes" }]);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
 
     assert.equal(database.pragma("user_version", { simple: true }), WORKBENCH_DATABASE_SCHEMA_VERSION);
     assert.deepEqual(database.prepare(`
@@ -359,6 +411,7 @@ test("typed statement transactions preserve stable rows and roll back incomplete
       await controller.query(selectRows(coreTables.workbenchThreads, { where: { id: "thread" } })),
       [{
         id: "thread",
+        identity_origin: "legacy",
         project_id: "project",
         project_root: "C:/project",
         title: "renamed",

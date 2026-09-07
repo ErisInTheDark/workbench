@@ -3,7 +3,7 @@
  * - WORKBENCH_ROUTE_MARKER: route marker for canonical workbench URLs. Keywords: URL, route, navigation.
  * - WorkbenchRouteView, WorkbenchSettingsScope, WorkbenchRoute, WorkbenchRouteParseResult: normalized route contracts. Keywords: URL source of truth, home, project, file, thread, settings, stats, mosaic.
  * - createHomeRoute/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createStatsRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct route objects. Keywords: navigation, route builder, home, pinned, owner.
- * - getWorkbenchDraftIdFromThreadId/getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive durable draft, parent hydration, materialized mosaic roots, selected tab identity, and sidebar selection. Keywords: thread, draft, subagent, parent, mosaic.
+ * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive draft, parent hydration, mosaic roots, selected tab identity, and sidebar selection. Keywords: thread, draft, subagent, parent, mosaic.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse browser URL state without mutating history. Keywords: route parser, legacy query, malformed URL.
  * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref/createStatsHref: build canonical hrefs. Keywords: links, URL, encode, home, pinned, stats.
  * - isSameWorkbenchRoute/routeHasSelection/isWorkbenchRouteOwnerOfThread: compare, classify, and fence route-owned thread transitions. Keywords: route equality, active selection, draft promotion.
@@ -132,7 +132,7 @@ export function createHomeThreadRoute(
 export function getWorkbenchThreadTargetRootId(target: WorkbenchThreadTarget) {
   if (target.kind === "provider") return target.threadId;
   if (target.kind === "subagent") return target.parentThreadId;
-  return target.kind === "draft" ? `draft:${target.draftId}` : "new";
+  return target.kind === "draft" ? target.draftId : "new";
 }
 
 export function getWorkbenchThreadTargetSelectedId(target: WorkbenchThreadTarget) {
@@ -171,17 +171,11 @@ export function isWorkbenchThreadTargetSelected(
     && (!target.harness || !currentTarget.harness || target.harness === currentTarget.harness);
 }
 
-export function getWorkbenchDraftIdFromThreadId(threadId: string) {
-  if (!threadId.startsWith("draft:")) return null;
-  const parsed = WorkbenchThreadTargetSchema.safeParse({ draftId: threadId.slice("draft:".length), kind: "draft" });
-  return parsed.success && parsed.data.kind === "draft" ? parsed.data.draftId : null;
-}
-
-export function isWorkbenchRouteOwnerOfThread(route: WorkbenchRoute, threadId: string) {
+export function isWorkbenchRouteOwnerOfThread(route: WorkbenchRoute, threadId: string, isDraft = false) {
   if (route.view !== "thread" || !route.threadTarget) return false;
   const target = route.threadTarget;
-  if (target.kind === "new") return threadId.startsWith("draft:");
-  if (target.kind === "draft") return threadId === `draft:${target.draftId}`;
+  if (target.kind === "new") return isDraft;
+  if (target.kind === "draft") return threadId === target.draftId;
   if (target.kind === "provider") return threadId === target.threadId;
   return threadId === target.threadId || threadId === target.parentThreadId;
 }

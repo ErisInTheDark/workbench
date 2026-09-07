@@ -18,6 +18,11 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       appServer: build.get("openCodeAppServer"),
       getReloadableModules: () => modules,
       initialState: build.handoffState as OpenCodeBridgeState | undefined,
+      identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
+      resolveProject: async (cwd) => {
+        const { project } = await build.get("projectCatalog").resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "OpenCode identity" });
+        return { projectId: project.id, projectRoot: project.rootPath };
+      },
     });
     let activated = build.mode === "initial";
     let detached = false;
@@ -43,7 +48,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload OpenCode bridge code without restarting the OpenCode app-server.",
   lifecycle: "handoff",
   provides: ["openCodeBridge"],
-  requires: ["harnesses", "modules", "openCodeAppServer"],
+  requires: ["harnesses", "modules", "openCodeAppServer", "threadIdentity", "transcriptIdentity", "projectCatalog"],
   safeAll: true,
   scope: "server:opencode",
   sources: [
@@ -52,6 +57,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/opencode-live-thread-state.ts",
     "daemon/orchestrator/opencode-thread-state.ts",
     "daemon/orchestrator/opencode-workbench-instructions.ts",
+    "daemon/orchestrator/thread-identity-provider-mapping.ts",
     "shared/workbench/thread/workbench-thread-page.ts",
   ].join("\n"),
 });

@@ -254,7 +254,6 @@ function createBundle(): WorkbenchThreadContextBundle {
       agentRole: null,
       createdAt: 1,
       cwd: "C:/workspace",
-      forkedFromId: null,
       harness: "codex",
       id: "thread-1",
       isDraft: false,

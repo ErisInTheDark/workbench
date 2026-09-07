@@ -113,6 +113,7 @@ function createHarnessAdapters(context: OrchestratorProcessContext, controller: 
       browser: ports.copilot,
       id: "copilot",
       internal: ports.copilot,
+      readLoadedThreads: ports.copilot.readLoadedThreads,
       recovery: createObservationCapability("copilot", controller),
       serverMethods: ["thread/name/set"],
     },
@@ -136,6 +137,8 @@ function createWorkbenchCoreFeature(
   codexSandboxNetwork: OrchestratorRuntimeObjects["codexSandboxNetwork"],
   transcript: Pick<OrchestratorTranscriptRegistration, "read">,
   transcriptShadowLog: OrchestratorTranscriptShadowLog,
+  threadIdentity: OrchestratorRuntimeObjects["threadIdentity"],
+  transcriptIdentity: OrchestratorRuntimeObjects["transcriptIdentity"],
 ) {
   const modules = createModules();
   const projectCatalog = new WorkbenchProjectCatalogController();
@@ -156,6 +159,12 @@ function createWorkbenchCoreFeature(
   };
   const harnesses = new WorkbenchHarnessController(createHarnessAdapters(context, turnRecovery), {
     admitTurnStart: () => database.assertReady(),
+    identities: threadIdentity,
+    itemIdentities: transcriptIdentity,
+    resolveProject: async (cwd) => {
+      const { project } = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Provider identity" });
+      return { projectId: project.id, projectRoot: project.rootPath };
+    },
   });
   const profileStore = new WorkbenchComposerProfileStore(context.legacyMigrationProjectRoot, database);
   const logThreadStateWarning = (message: string) => {
@@ -171,6 +180,7 @@ function createWorkbenchCoreFeature(
     log: logThreadStateWarning,
   });
   const gitArc = new WorkbenchGitArcFeature({
+    identities: threadIdentity,
     getThreadCreatedAt: async (projectId, _harness, threadId) => {
       const snapshot = await transcript.read({ threadId, turnLimit: 1 });
       if (!snapshot) return null;
@@ -235,13 +245,17 @@ function createWorkbenchCoreFeature(
     search,
     settings: new WorkbenchServerSettings(),
     stats,
+    threadIdentity: { resolve: (input) => harnesses.resolveThreadIdentity(input) },
   });
   const threadGit = new WorkbenchThreadGitFeature({
+    identities: threadIdentity,
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" }),
     transitions: worktreeGitTransitions,
   });
   const subagents = new WorkbenchSubagentFeature({
     bridgeUrl: context.codexBridgeUrl,
+    identities: { threads: threadIdentity, items: transcriptIdentity },
+    requestNativeHarness: (harness, request) => harnesses.request(harness, request),
     onRelationshipCommitted: context.installSubagentRelationship,
     resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     profileStore,
@@ -260,6 +274,7 @@ function createWorkbenchCoreFeature(
     },
   });
   threadState = new WorkbenchThreadStateFeature({
+    identities: { threads: threadIdentity, items: transcriptIdentity },
     readComposerProfiles: () => profileStore.read(),
     database,
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
@@ -312,7 +327,7 @@ function createWorkbenchCoreFeature(
       if (!turnId) {
         throw new Error("The questionnaire caller does not have an active observed turn in this cwd project.");
       }
-      return { projectId: resolved.project.id, turnId };
+      return { projectId: resolved.project.id, turnId, pendingQuestionnaire: entry.pendingQuestionnaire };
     },
     subscribePending: (listener) => threadState!.controller.subscribe((projectId, entry) => {
       if (entry.entryKind === "draft" || entry.identity.harness !== "codex") return;
@@ -418,6 +433,7 @@ function createWorkbenchCoreFeature(
     start: async () => {
       await profileStore.start();
       await projectCatalog.ensureLoaded();
+      await harnesses.restoreLoadedIdentities();
       for (const project of projectCatalog.getCurrentSnapshot().data) {
         try {
           await gitArc.reconcileClaimSnapshots(project.rootPath);
@@ -446,19 +462,23 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     get("codexSandboxNetwork"),
     get("transcript"),
     get("transcriptShadowLog"),
+    get("threadIdentity"),
+    get("transcriptIdentity"),
   ),
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: ["codexSandboxNetwork", "database", "reloadDirt", "transcriptShadowLog", "turnRecovery", "transcript"],
+  requires: ["codexSandboxNetwork", "database", "reloadDirt", "transcriptShadowLog", "turnRecovery", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:core",
   sources: [
     "daemon/orchestrator/WorkbenchCoreNode.ts",
+    "shared/workbench/thread/workbench-thread-identity.ts",
     "daemon/orchestrator/WorkbenchCoreFeature.ts",
     "daemon/orchestrator/WorkbenchBridgeRequestController.ts",
     "daemon/orchestrator/*git*.ts",
     "daemon/orchestrator/WorkbenchHarnessController.ts",
+    "daemon/orchestrator/thread-identity-workbench-mapping.ts",
     "daemon/orchestrator/WorkbenchLegacyMigrationSourceController.ts",
     "daemon/orchestrator/WorkbenchProjectCatalogController.ts",
     "daemon/orchestrator/WorkbenchProjectSnapshotController.ts",

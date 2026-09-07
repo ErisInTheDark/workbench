@@ -47,6 +47,10 @@ import type {
   WorkbenchStatsReadRequest,
   WorkbenchStatsResponse,
 } from "../stats/workbench-stats-contract.ts";
+import type {
+  WorkbenchThreadIdentityResolution,
+  WorkbenchThreadIdentityResolveRequest,
+} from "../thread/workbench-thread-identity.ts";
 
 export interface WorkbenchInstructionPack {
   content: string;
@@ -126,6 +130,7 @@ export interface WorkbenchDaemonRequestMap {
     result: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedResponse;
   };
   "skills/read": { params: { projectId: string | null }; result: WorkbenchSkillCatalogResponse };
+  "thread/identity/resolve": { params: WorkbenchThreadIdentityResolveRequest; result: { data: WorkbenchThreadIdentityResolution | null } };
 }
 
 type BrowseSessionParams = Omit<WorkbenchBrowseSessionControlRequest, "action">;

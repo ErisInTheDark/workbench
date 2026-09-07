@@ -233,7 +233,11 @@ test("answers the private apply_patch hook from the active claim owner", async (
   const controller = new WorkbenchAgentCommandController(
     "http://127.0.0.1:4500",
     {
-      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+        ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+        resolveCaller: async (threadId) => {
+          assert.equal(threadId, "97d84a45-0d43-4d20-a996-e6b8bd8ad149");
+          return { harness: "codex", threadId, nativeThreadId: "provider-thread" };
+        },
       checkApplyPatchClaims: async ({ paths, threadId }) => {
         checkedPaths.push(paths);
         checkedThreadIds.push(threadId);
@@ -247,7 +251,7 @@ test("answers the private apply_patch hook from the active claim owner", async (
   const server = await startController(controller);
   try {
     const request = async (filePath: string) => await fetch(`${server.origin}/orchestrator/agent-command`, {
-      body: applyPatchHookBody(`*** Begin Patch\n*** Update File: ${filePath}\n@@\n-old\n+new\n*** End Patch`, "provider-thread", null),
+      body: applyPatchHookBody(`*** Begin Patch\n*** Update File: ${filePath}\n@@\n-old\n+new\n*** End Patch`, "provider-thread", "97d84a45-0d43-4d20-a996-e6b8bd8ad149"),
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       method: "POST",
     });

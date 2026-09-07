@@ -38,6 +38,23 @@ test("unloaded questionnaire submissions preserve exact durable ids without inve
   });
 });
 
+test("a Workbench questionnaire identity is not a transcript positioning anchor", () => {
+  const request = {
+    ...pendingRequest,
+    itemId: "a76de745-ad2b-425f-b1dd-4de62db119b3",
+    requestKey: "workbench-mcp:request",
+  };
+  assert.deepEqual(buildPendingUserInputRequestSubmissionOptions(null, request), {
+    insertAfterItemId: null, insertAfterItemIndex: null, turnId: "turn",
+  });
+  const thread = threadWithItems([
+    { id: "commentary", type: "agentMessage", text: "Choose." },
+  ] as ThreadPayload["turns"][number]["items"]);
+  assert.deepEqual(buildPendingUserInputRequestSubmissionOptions(thread, request), {
+    insertAfterItemId: "commentary", insertAfterItemIndex: 0, turnId: "turn",
+  });
+});
+
 test("loaded questionnaire submissions resolve the requested visible item index", () => {
   const thread = threadWithItems([
     { id: "prompt", text: "Please choose.", type: "userMessage" },

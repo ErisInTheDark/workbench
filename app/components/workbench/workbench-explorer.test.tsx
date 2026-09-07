@@ -146,21 +146,6 @@ test("jit project bootstrap exposes available slices before unrelated hydration"
   assert.doesNotMatch(workbenchSource, /isSidebarThreadsLoading|explorer\.threadSidebar/u);
 });
 
-test("blank thread routes render their private draft and preserve one view instance through promotion", async () => {
-  const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
-  const threadViewSource = await readFile(new URL("./thread-view/ThreadView.tsx", import.meta.url), "utf8");
-  const clientSource = await readFile(new URL("../../WorkbenchClient.ts", import.meta.url), "utf8");
-  assert.match(workbenchSource, /isThreadOwnedByEffectiveRoute\(currentThread\)/u);
-  assert.match(workbenchSource, /isWorkbenchRouteOwnerOfThread\(effectiveThreadRoute, getThreadViewInstanceKey\(thread\)\)/u);
-  assert.doesNotMatch(workbenchSource, /currentThread\?\.id === effectiveThreadId/u);
-  assert.match(workbenchSource, /key=\{`\$\{threadProjectId\}:\$\{threadViewInstanceKey\}`\}/u);
-  assert.match(workbenchSource, /viewInstanceKey=\{threadViewInstanceKey\}/u);
-  assert.match(threadViewSource, /\[projectId, viewInstanceKey\]/u);
-  assert.doesNotMatch(threadViewSource, /\[projectId, thread\.id\]/u);
-  assert.match(clientSource, /onThreadCreated: \(createdThread\) => \{[\s\S]*?applyThreadPayloadToCurrentView\(createdThread, "Connecting thread\."\)/u);
-  assert.match(clientSource, /sessionState\.currentThreadId === createdThreadId[\s\S]*?applyThreadPayloadToCurrentView\(thread\)/u);
-});
-
 test("successful settlement leaves the still-selected thread for a fresh draft", async () => {
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
@@ -170,14 +155,3 @@ test("successful settlement leaves the still-selected thread for a fresh draft",
   assert.match(workbenchSource, /onThreadSettled=\{handleThreadSettled\}/u);
 });
 
-test("active saved drafts hydrate composer input from the subscribed sidebar draft", async () => {
-  const [source, clientSource] = await Promise.all([
-    readFile(new URL("../workbench.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../../WorkbenchClient.ts", import.meta.url), "utf8"),
-  ]);
-  assert.match(source, /route\.threadTarget\?\.kind === "draft"[\s\S]*?controls\?\.getSelectedThreadDraft\(\)[\s\S]*?getSidebarDraftComposerInput\(activeRouteDraft\)/u);
-  assert.match(clientSource, /selectedPinnedThreadDraft = isHomeThread \|\| isForeignPin \? cloneThreadDraft\(entry\.draft\) : null/u);
-  assert.match(clientSource, /workbench\/thread-state\/draft\/upsert[\s\S]*?projectId: draft\.projectId/u);
-  assert.match(clientSource, /workbench\/thread-state\/draft\/delete[\s\S]*?projectId: selectedDraft\.projectId/u);
-  assert.doesNotMatch(source, /useMemo\(\(\) => getThreadComposerDraftForTarget\(/u);
-});

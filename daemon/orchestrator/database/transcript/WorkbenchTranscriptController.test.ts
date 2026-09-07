@@ -224,6 +224,7 @@ test("durable item facts refresh subscriptions only at complete projection bound
   }, new WorkbenchTranscriptCaptureGapController({
     markerPath: join(tmpdir(), "unused-transcript-boundary-gap.json"),
   }));
+  await controller.start();
   const awaitNextPublication = async (
     observation: WorkbenchTranscriptObservation,
     source: "compatibility" | "provider" | "workbench" = "provider",

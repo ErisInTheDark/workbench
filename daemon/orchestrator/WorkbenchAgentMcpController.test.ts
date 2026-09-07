@@ -477,7 +477,13 @@ test("thread steer interruption ends declared waits but preserves questionnaires
   const allStarted = deferred<void>();
   const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
   const controller = new WorkbenchAgentMcpController({
+    resolveThreadId: async (nativeId, cwd) => {
+      assert.equal(nativeId, "thread-1");
+      assert.equal(cwd, "C:/authoritative");
+      return "97d84a45-0d43-4d20-a996-e6b8bd8ad149";
+    },
     executeCommand: async (request, signal) => await new Promise<Response>((resolve) => {
+      assert.equal(request.body?.callerThreadId, "97d84a45-0d43-4d20-a996-e6b8bd8ad149");
       executions.set(request.responseKind, { resolve, signal });
       if (executions.size === 3) allStarted.resolve();
       signal.addEventListener("abort", () => resolve(new Response(

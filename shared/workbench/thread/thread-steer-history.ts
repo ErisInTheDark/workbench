@@ -1,7 +1,9 @@
 /*
  * Keywords: steer, history, identity, submission time.
  * Exports:
- * - SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX/createSyntheticSteerHistoryItemId: stable identity for Workbench-injected steer history items. Keywords: synthetic, steer, history.
+ * - SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX: legacy reference conversion only.
+ * - resolveSteerHistoryItemId: reuse admitted identity, with retained-history fallback.
+ * - resolveSteerTranscriptSourceId: correlate delivered provider input or retained unsent history.
  * - isSyntheticSteerHistoryItem: detect Workbench-injected steer history user messages. Keywords: synthetic, steer, guard.
  * - isWorkbenchSyntheticSteerUserMessage: detect Workbench-only steer user messages that must not become durable anchors. Keywords: optimistic, synthetic, steer, anchor.
  * - isWorkbenchPendingSteerUserMessage: detect Workbench-only steer messages still queued for the active turn. Keywords: optimistic, synthetic, steer, pending.
@@ -13,33 +15,42 @@ import type { UserInput } from "../../codex/generated/app-server/v2/UserInput.ts
 import { areUserInputsEquivalentForUserMessageDedupe } from "../../codex/thread-item-normalization.ts";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "../../types.ts";
 import { projectWorkbenchThreadItemTimelines } from "./thread-item-timeline.ts";
+import { getWorkbenchInputState, withWorkbenchInputState } from "./thread-input-item.ts";
 
 export const SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX = "workbench:steer-history:";
 
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 
-export function createSyntheticSteerHistoryItemId(entry: WorkbenchSteerHistoryEntry) {
-  return `${SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX}${entry.status}:${entry.threadId}:${entry.entryKey}`;
+export function resolveSteerHistoryItemId(entry: WorkbenchSteerHistoryEntry) {
+  return entry.itemId ?? `${SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX}${entry.status}:${entry.threadId}:${entry.entryKey}`;
+}
+
+export function resolveSteerTranscriptSourceId(entry: WorkbenchSteerHistoryEntry) {
+  return entry.status === "sent"
+    ? entry.canonicalItemId ?? entry.clientUserMessageId ?? `workbench-steer:${entry.threadId}:${entry.entryKey}`
+    : resolveSteerHistoryItemId(entry);
 }
 
 export function isSyntheticSteerHistoryItem(item: ThreadItem) {
-  return item.type === "userMessage"
-    && item.id.startsWith(SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX);
+  const input = getWorkbenchInputState(item);
+  return input?.kind === "steer" && input.status !== "sent";
 }
 
 export function isWorkbenchSyntheticSteerUserMessage(item: ThreadItem) {
+  const input = getWorkbenchInputState(item);
   return item.type === "userMessage"
     && (
-      item.id.startsWith("optimistic-user-message:steer:")
-      || item.id.startsWith(SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX)
+      (input?.kind === "optimistic" && input.placement === "steer")
+      || isSyntheticSteerHistoryItem(item)
     );
 }
 
 export function isWorkbenchPendingSteerUserMessage(item: ThreadItem) {
+  const input = getWorkbenchInputState(item);
   return item.type === "userMessage"
     && (
-      item.id.startsWith("optimistic-user-message:steer:pending:")
-      || item.id.startsWith(`${SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX}pending:`)
+      (input?.kind === "optimistic" && input.placement === "steer" && input.status === "pending")
+      || (input?.kind === "steer" && input.status === "pending")
     );
 }
 
@@ -93,12 +104,12 @@ function shouldRenderSteerHistoryEntry(items: ThreadItem[], entry: WorkbenchStee
 }
 
 function createSyntheticSteerHistoryItem(entry: WorkbenchSteerHistoryEntry): UserMessageItem {
-  return {
+  return withWorkbenchInputState({
     content: entry.input.map(cloneUserInput),
-    id: createSyntheticSteerHistoryItemId(entry),
+    id: resolveSteerHistoryItemId(entry),
     clientId: entry.clientUserMessageId ?? null,
     type: "userMessage",
-  };
+  }, { kind: "steer", status: entry.status });
 }
 
 function sortSteerHistoryEntries(entries: WorkbenchSteerHistoryEntry[]) {
@@ -171,7 +182,7 @@ export function applySteerHistoryToThread(
   return projectWorkbenchThreadItemTimelines(projected, (turn) => (
     (entriesByTurnId.get(turn.id) ?? []).flatMap((entry) => {
       const item = findCanonicalUserMessage(turn.items, entry)
-        ?? turn.items.find((candidate) => candidate.id === createSyntheticSteerHistoryItemId(entry));
+        ?? turn.items.find((candidate) => candidate.id === resolveSteerHistoryItemId(entry));
       return item ? [{
         completedAt: null,
         firstSeenAt: entry.attemptedAt,

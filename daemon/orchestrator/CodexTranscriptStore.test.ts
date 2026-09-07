@@ -528,6 +528,12 @@ test("native steer admissions are thread-global and sequence ordered", async () 
     ["native-z", 0, "9"],
     ["native-a", 1, "10"],
   ]);
+  assert.ok(entries.every(({ itemId }) => typeof itemId === "string" && itemId.length > 0));
+  assert.equal(new Set(entries.map(({ itemId }) => itemId)).size, 2);
+  await store.recordClientRequestFailure(request(9, "native-z", "turn-a"), "rejected");
+  const settled = await store.listSteerHistory("thread");
+  assert.deepEqual(settled.map(({ itemId }) => itemId), entries.map(({ itemId }) => itemId));
+  assert.equal(settled[0]?.status, "failed");
 }));
 
 test("source-owned steer admission and settlement persist the exact shared mutation", async () => withStore(async (store) => {

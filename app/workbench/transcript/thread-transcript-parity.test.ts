@@ -7,7 +7,7 @@ import test from "node:test";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { ThreadPayload } from "workbench-shared/types";
-import { createSyntheticQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
 import {
   compareWorkbenchTranscriptParity,
@@ -41,7 +41,6 @@ function thread(items: ThreadItem[]): ThreadPayload {
     browseResultEntries: [],
     createdAt: 1,
     cwd: "C:/project",
-    forkedFromId: null,
     harness: "codex",
     id: "thread",
     isDraft: false,
@@ -227,7 +226,7 @@ test("settled questionnaire projection equals the current synthetic renderer ite
     arguments: request,
     contentItems: [{ text: JSON.stringify(response, null, 2), type: "inputText" }],
     durationMs: null,
-    id: createSyntheticQuestionnaireHistoryItemId({
+    id: resolveQuestionnaireHistoryItemId({
       itemId: "durable-questionnaire",
       requestKey,
       threadId: "thread",
@@ -271,7 +270,7 @@ test("parity keeps distinct questionnaire items when provider request keys repea
     arguments: request,
     contentItems: [{ text: JSON.stringify(response, null, 2), type: "inputText" }],
     durationMs: null,
-    id: createSyntheticQuestionnaireHistoryItemId({
+    id: resolveQuestionnaireHistoryItemId({
       itemId,
       requestKey,
       threadId: "thread",
@@ -362,7 +361,7 @@ test("visual comparison uses the durable identity for synthetic questionnaire it
     arguments: request,
     contentItems: [{ text: JSON.stringify(response, null, 2), type: "inputText" }],
     durationMs: null,
-    id: createSyntheticQuestionnaireHistoryItemId({
+    id: resolveQuestionnaireHistoryItemId({
       itemId: "durable-questionnaire",
       requestKey,
       threadId: "thread",

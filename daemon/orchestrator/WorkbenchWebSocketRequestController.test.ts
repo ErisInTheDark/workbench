@@ -70,7 +70,11 @@ function createController(options: {
     clearTimeout: options.clock.clearTimeout,
     ...(options.daemonRequests ? { daemonRequests: options.daemonRequests } : {}),
     harnesses: {
-      handleBrowserMessage: async (_harness, message, client) => await options.onHarnessMessage?.(message, client),
+      handleNativeBrowserMessage: async (_harness, message, client) => await options.onHarnessMessage?.(message, client),
+      resolvePublicRequest: async (value, request) => {
+        if (value !== "codex" && value !== "copilot" && value !== "opencode") throw new Error("Unknown Workbench harness.");
+        return { harness: value, request };
+      },
       request: async (_harness, message) => await options.onHarnessRequest?.(message) ?? {
         id: message.id ?? null,
         result: {},

@@ -8,6 +8,7 @@ import type http from "node:http";
 import WorkbenchThreadGit from "../lib/workbench/git/WorkbenchThreadGit";
 import type { WorkbenchThreadGitCommitResult, WorkbenchThreadGitSelectionResult } from "../lib/workbench/git/WorkbenchThreadGit";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
+import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -21,8 +22,9 @@ interface ThreadGitPort {
 }
 
 export interface WorkbenchThreadGitFeatureOptions {
+  identities?: WorkbenchThreadIdentityController;
   createThreadGit?: (options: { cwd: string; targetWorktree?: string; threadId: string }) => Promise<ThreadGitPort>;
-  resolveProjectFromCwd(cwd: string): Promise<{ cwd: string }>;
+  resolveProjectFromCwd(cwd: string): Promise<{ cwd: string; project?: { id: string } }>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">;
 }
 
@@ -95,7 +97,11 @@ export default class WorkbenchThreadGitFeature {
       if (!action) throw new Error("A valid thread Git action is required.");
       if (!threadId) throw new Error("A managed Workbench thread id is required.");
       const resolved = await this.options.resolveProjectFromCwd(cwd);
-      const threadGit = await this.createThreadGit({ cwd: resolved.cwd, targetWorktree, threadId });
+      const identity = await this.options.identities?.resolve({ threadId, projectId: resolved.project?.id });
+      if (this.options.identities && !identity?.bindings[0]) throw new Error("The managed thread has no native Git storage identity.");
+      const threadGit = await this.createThreadGit({
+        cwd: resolved.cwd, targetWorktree, threadId: identity?.bindings[0]?.nativeThreadId ?? threadId,
+      });
       return await this.options.transitions.run(threadGit.repoRoot, async () => {
         if (action === "commit") {
           const amendTarget = readString(body.amendTarget) || undefined;

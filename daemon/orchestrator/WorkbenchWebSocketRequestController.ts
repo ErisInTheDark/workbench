@@ -27,7 +27,15 @@ import {
   WorkbenchEventStreamAckSchema,
   type WorkbenchEventStreamHealth,
 } from "workbench-shared/workbench/websocket-stream";
-import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
+import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
+import {
+  mapNativeProviderResponse, mapNativeThreadStateSnapshot, mapNativeThreadStateResult,
+  mapWorkbenchThreadStateRequest, mapWorkbenchProviderRequest,
+} from "./thread-identity-workbench-mapping";
+import { mapProviderNotification } from "./thread-identity-provider-mapping";
+import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
+import { WorkbenchThreadStateRequestSchema, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import type WorkbenchOrchestratorReloadController from "./WorkbenchOrchestratorReloadController";
@@ -63,6 +71,7 @@ export interface WorkbenchWebSocketPendingRequestState {
   method: string;
   nextWarningAt: number;
   startedAt: number;
+  provider?: { harness: WorkbenchHarness; request: JsonRpcRequest };
 }
 
 export interface WorkbenchWebSocketRequestControllerState {
@@ -95,7 +104,8 @@ interface PendingRequest extends WorkbenchWebSocketPendingRequestState {
 export interface WorkbenchWebSocketRequestControllerOptions {
   clearTimeout?: (timer: Timer) => void;
   daemonRequests?: Pick<WorkbenchDaemonRequestController, "accepts" | "handle">;
-  harnesses: Pick<WorkbenchHarnessController, "handleBrowserMessage" | "request" | "resolveHarness">;
+  harnesses: Pick<WorkbenchHarnessController, "handleNativeBrowserMessage" | "resolvePublicRequest" | "request" | "resolveHarness">;
+  identities?: NativeTranscriptIdentityOwners;
   initialState?: WorkbenchWebSocketRequestControllerState;
   now?: () => number;
   reload: Pick<
@@ -162,6 +172,7 @@ function readResponseErrorMessage(message: unknown) {
 export default class WorkbenchWebSocketRequestController {
   private detached = false;
   private readonly harnesses: WorkbenchWebSocketRequestControllerOptions["harnesses"];
+  private readonly identities: WorkbenchWebSocketRequestControllerOptions["identities"];
   private readonly daemonRequests: NonNullable<WorkbenchWebSocketRequestControllerOptions["daemonRequests"]>;
   private readonly now: NonNullable<WorkbenchWebSocketRequestControllerOptions["now"]>;
   private readonly pending = new Map<BridgeClient, Map<RequestId, PendingRequest>>();
@@ -188,6 +199,7 @@ export default class WorkbenchWebSocketRequestController {
       handle: async (request) => ({ id: request.id ?? null, error: { code: -32601, message: "Daemon method not found." } }),
     },
     harnesses,
+    identities,
     initialState,
     now = Date.now,
     reload,
@@ -201,6 +213,7 @@ export default class WorkbenchWebSocketRequestController {
     this.cancel = cancel;
     this.daemonRequests = daemonRequests;
     this.harnesses = harnesses;
+    this.identities = identities;
     this.now = now;
     this.reload = reload;
     this.reloadDirtRevision = initialState?.reloadDirtRevision ?? 0;
@@ -339,22 +352,36 @@ export default class WorkbenchWebSocketRequestController {
           const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
           const turnId = typeof params.turnId === "string" ? params.turnId.trim() : "";
           if (!projectId || !threadId || !turnId) throw new Error("Invalid accepted-intent lifecycle evidence.");
-          const result = await this.threadState.acceptIntent(connectionId, { harness: acceptedHarness, projectId, threadId, turnId });
+          const mapped = this.identities ? await mapWorkbenchProviderRequest(this.identities.threads, acceptedHarness, { params: { threadId, turnId } }) : null;
+          const native = mapped?.request.params as { threadId: string; turnId: string } | undefined;
+          const result = await this.threadState.acceptIntent(connectionId, { harness: mapped?.harness ?? acceptedHarness, projectId, threadId: native?.threadId ?? threadId, turnId: native?.turnId ?? turnId });
           await this.sendJsonToClient(client, { id: requestId, result });
         } catch (error) {
           await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: error instanceof Error ? error.message : "Accepted-intent publication failed." } });
         }
         return;
       }
-      const result = await this.threadState.handleRequest(connectionId, { method, ...(asRecord(message.params) ?? {}) });
-      await this.sendJsonToClient(client, { id: requestId, ...result });
+      try {
+        const input = { method, ...(asRecord(message.params) ?? {}) };
+        const parsed = WorkbenchThreadStateRequestSchema.safeParse(input);
+        const request = this.identities && parsed.success ? await mapWorkbenchThreadStateRequest(this.identities, parsed.data) : input;
+        const result = await this.threadState.handleRequest(connectionId, request);
+        await this.sendJsonToClient(client, { id: requestId, ...result,
+          ...("result" in result && this.identities ? { result: await mapNativeThreadStateResult(this.identities, result.result) } : {}),
+        });
+      } catch (error) {
+        await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: error instanceof Error ? error.message : "Thread state identity projection failed." } });
+      }
       return;
     }
 
     const strippedMessage = { ...message };
     delete strippedMessage[WORKBENCH_HARNESS_FIELD];
     try {
-      await this.harnesses.handleBrowserMessage(harness, strippedMessage, client);
+      const resolved = await this.harnesses.resolvePublicRequest(harness, strippedMessage);
+      const pending = isRequest ? this.pending.get(client)?.get(requestId) : undefined;
+      if (pending) pending.provider = resolved;
+      await this.harnesses.handleNativeBrowserMessage(resolved.harness, resolved.request, client);
     } catch (error) {
       if (!isRequest) throw error;
       await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: error instanceof Error ? error.message : "Harness bridge request failed." } });
@@ -363,10 +390,37 @@ export default class WorkbenchWebSocketRequestController {
 
   async sendJsonToClient(client: BridgeClient, message: unknown) {
     this.assertActive();
-    const streamEvent = this.stream.prepareDelivery(client, message);
-    const deliveryMessage = streamEvent?.message ?? message;
     const responseId = readResponseId(message);
     const pending = responseId === undefined ? null : this.pending.get(client)?.get(responseId) ?? null;
+    if (this.identities) {
+      if (pending?.provider) {
+        try {
+          message = await mapNativeProviderResponse(this.identities, pending.provider.harness, pending.provider.request, message as JsonRpcResponse);
+          this.assertActive();
+        } catch (error) {
+          const detail = (error instanceof Error ? error.message : "Public transcript identity projection failed.").slice(0, 500);
+          this.writeLine(`[workbench-identity] ${detail}`);
+          message = { id: pending.id, error: { code: -32000, message: detail } };
+        }
+      } else {
+        const envelope = asRecord(message);
+        if (envelope?.method === "workbench/thread-state/updated") {
+          message = { ...envelope, params: await mapNativeThreadStateSnapshot(this.identities, envelope.params as WorkbenchThreadStateSnapshot) };
+          this.assertActive();
+        } else if (envelope?.[WORKBENCH_HARNESS_FIELD]) {
+          const harness = this.harnesses.resolveHarness(envelope[WORKBENCH_HARNESS_FIELD]);
+          const params = asRecord(envelope.params);
+          const thread = asRecord(params?.thread);
+          const threadId = typeof params?.threadId === "string" ? params.threadId : thread?.id;
+          if (typeof threadId === "string") {
+            const native = this.identities.threads.knownNativeBinding(harness, threadId);
+            message = mapProviderNotification(this.identities, native, message as ServerNotification);
+          }
+        }
+      }
+    }
+    const streamEvent = this.stream.prepareDelivery(client, message);
+    const deliveryMessage = streamEvent?.message ?? message;
     const responseErrorMessage = readResponseErrorMessage(message);
     const serializeStartedAt = this.now();
     let serialized: string;
@@ -552,7 +606,24 @@ export default class WorkbenchWebSocketRequestController {
     this.transcriptSubscriptions.set(key, subscription);
     try {
       if (subscription.turnIds) {
-        const response = await this.harnesses.request("codex", {
+        const requests: JsonRpcRequest[] = [];
+        if (this.identities) {
+          const thread = await this.identities.threads.resolve({ threadId: subscription.threadId });
+          if (!thread) throw new Error("Transcript thread identity has not been admitted.");
+          const groups = new Map<string, { threadId: string; turnIds: string[] }>();
+          for (const turnId of subscription.turnIds) {
+            const turn = await this.identities.threads.resolveTurn({ threadId: thread.threadId, turnId });
+            if (!turn?.native.nativeTurnId || turn.native.harness !== "codex") throw new Error("Transcript turn has no Codex materialisation source.");
+            const native = turn.native;
+            const group = groups.get(native.nativeThreadId) ?? { threadId: native.nativeThreadId, turnIds: [] };
+            group.turnIds.push(native.nativeTurnId);
+            groups.set(native.nativeThreadId, group);
+          }
+          for (const params of groups.values()) requests.push({
+            id: `workbench:transcript:materialize:${key}`,
+            method: "workbench/transcript/materialize", params,
+          });
+        } else requests.push({
           id: `workbench:transcript:materialize:${key}`,
           method: "workbench/transcript/materialize",
           params: {
@@ -560,8 +631,10 @@ export default class WorkbenchWebSocketRequestController {
             turnIds: subscription.turnIds,
           },
         });
-        if (response.error) {
-          throw new Error(response.error.message);
+        for (const request of requests) {
+          const response = await this.harnesses.request("codex", request);
+          if (response.error) throw new Error(response.error.message);
+          if (this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
         }
         if (this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
       }

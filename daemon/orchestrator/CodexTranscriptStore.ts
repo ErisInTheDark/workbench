@@ -12,6 +12,7 @@ import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
 import { compactCommandOutputPayload } from "workbench-shared/codex/thread-command-output";
 import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
+import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
 import { WORKBENCH_TOOL_CONTEXT_METHOD, type WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchThreadHydrationRequest } from "../lib/codex/thread-hydration";
 import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadContextReadResponse, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
@@ -56,6 +57,7 @@ import { runCodexTranscriptMigrations } from "./codex-transcript-migrations";
 import { queueCodexTranscriptRequestSidecarCleanup } from "./codex-transcript-migrations/v3";
 import {
   createSteerHistoryEntryFromRequest,
+  readSteerHistoryRequest,
   getJsonRpcErrorMessage,
   getNextSteerDispatchSequence,
   hasNativeSteerReconciliationEvidence,
@@ -393,7 +395,7 @@ function applyTurnTimeline(turn: Turn | null, file: Pick<CodexTranscriptTurnFile
 
   const normalizedTurn = {
     ...turn,
-    items: normalizeThreadItems(turn.items, { mergeDuplicateItems: mergeThreadItem }),
+    items: normalizeThreadItems(turn.items, { mergeDuplicateItems: mergeThreadItem, classifyItem: getCodexItemIdentityKind }),
   };
   return {
     ...normalizedTurn,
@@ -405,10 +407,6 @@ function getContextCompactionItems(turn: Turn | null) {
   return (turn?.items ?? []).filter((item): item is Extract<ThreadItem, { type: "contextCompaction" }> => (
     item.type === "contextCompaction"
   ));
-}
-
-function isGenericSnapshotItemId(itemId: string) {
-  return /^item-\d+$/u.test(itemId);
 }
 
 function reconcileSnapshotContextCompactionItemIds(currentTurn: Turn | null, incomingTurn: Turn) {
@@ -428,8 +426,8 @@ function reconcileSnapshotContextCompactionItemIds(currentTurn: Turn | null, inc
     if (
       !currentItem
       || currentItem.id === incomingItem.id
-      || isGenericSnapshotItemId(currentItem.id)
-      || !isGenericSnapshotItemId(incomingItem.id)
+      || getCodexItemIdentityKind(currentItem) === "provisional"
+      || getCodexItemIdentityKind(incomingItem) !== "provisional"
     ) {
       return;
     }
@@ -616,7 +614,7 @@ function mergeTurnItems(currentTurn: Turn | null, incomingTurn: Turn) {
   if (!currentTurn) {
     return {
       ...incomingTurn,
-      items: normalizeThreadItems(incomingTurn.items, { mergeDuplicateItems: mergeThreadItem }),
+      items: normalizeThreadItems(incomingTurn.items, { mergeDuplicateItems: mergeThreadItem, classifyItem: getCodexItemIdentityKind }),
     };
   }
 
@@ -628,7 +626,7 @@ function mergeTurnItems(currentTurn: Turn | null, incomingTurn: Turn) {
   });
   return {
     ...incomingTurn,
-    items: normalizeThreadItems([...mergedCurrentItems, ...incomingOnlyItems], { mergeDuplicateItems: mergeThreadItem }),
+    items: normalizeThreadItems([...mergedCurrentItems, ...incomingOnlyItems], { mergeDuplicateItems: mergeThreadItem, classifyItem: getCodexItemIdentityKind }),
     itemsView: incomingTurn.itemsView === "full" || currentTurn.itemsView !== "full"
       ? incomingTurn.itemsView
       : currentTurn.itemsView,
@@ -656,7 +654,7 @@ function upsertItem(turn: Turn | null, item: ThreadItem, turnId: string): Turn {
 
   return {
     ...baseTurn,
-    items: normalizeThreadItems(nextItems, { mergeDuplicateItems: mergeThreadItem }),
+    items: normalizeThreadItems(nextItems, { mergeDuplicateItems: mergeThreadItem, classifyItem: getCodexItemIdentityKind }),
     itemsView: "full",
   };
 }
@@ -772,7 +770,7 @@ export default class CodexTranscriptStore {
   async recordUpstreamResponse(originalRequest: JsonRpcRequest | null, response: JsonRpcResponse, originatingTurnId: string | null = null) {
     await this.ready();
     if (originalRequest?.method === "turn/steer") {
-      const steerEntry = createSteerHistoryEntryFromRequest(originalRequest);
+      const steerEntry = readSteerHistoryRequest(originalRequest);
       const errorMessage = getJsonRpcErrorMessage(response);
       if (steerEntry?.clientUserMessageId) {
         const event = createRawEvent("upstream-response", response, originalRequest.method, response.id ?? null);
@@ -786,14 +784,12 @@ export default class CodexTranscriptStore {
         return;
       }
 
-      if (errorMessage && steerEntry) {
+      if (errorMessage && steerEntry?.entryKey) {
         const event = createRawEvent("upstream-response", response, originalRequest.method, response.id ?? null);
-          await this.recordSteerHistoryEntry(updateSteerEntryStatus(
-            steerEntry,
-            "failed",
-            event.receivedAt,
-            { error: errorMessage },
-        ), event);
+        await this.updateSteerHistoryEntryStatus(
+          steerEntry.threadId, steerEntry.turnId, steerEntry.entryKey,
+          "failed", event, { error: errorMessage },
+        );
         return;
       }
     }
@@ -819,7 +815,7 @@ export default class CodexTranscriptStore {
 
   async recordClientRequestFailure(request: JsonRpcRequest, errorMessage: string) {
     await this.ready();
-    const steerEntry = createSteerHistoryEntryFromRequest(request);
+    const steerEntry = readSteerHistoryRequest(request);
     if (!steerEntry?.clientUserMessageId) {
       return;
     }
@@ -943,7 +939,7 @@ export default class CodexTranscriptStore {
   }
 
   private async updateNativeSteerAdmissionResult(
-    requestedEntry: WorkbenchSteerHistoryEntry,
+    requestedEntry: NonNullable<ReturnType<typeof readSteerHistoryRequest>>,
     acknowledgedTurnId: string,
     errorMessage: string | null,
     event: CodexTranscriptRawEvent,

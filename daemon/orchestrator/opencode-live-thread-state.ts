@@ -28,7 +28,7 @@ type LiveSessionState = {
     kind: Part["type"];
     messageId: string;
   }>;
-  startedItems: Set<string>;
+  startedItems: Map<string, { turnId: string; itemId: string }>;
   textDeltaSourceByItemId: Map<string, "messagePart" | "sessionNext">;
   toolInputTextByCallId: Map<string, string>;
 };
@@ -50,7 +50,7 @@ function liveSession(state: OpenCodeLiveThreadState, sessionId: string) {
       currentTurnId: null,
       messageRoleById: new Map(),
       partById: new Map(),
-      startedItems: new Set(),
+      startedItems: new Map(),
       textDeltaSourceByItemId: new Map(),
       toolInputTextByCallId: new Map(),
     };
@@ -166,7 +166,7 @@ function ensureItemStarted(
     return;
   }
 
-  live.startedItems.add(key);
+  live.startedItems.set(key, { turnId, itemId: item.id });
   onNotification({
     method: "item/started",
     params: {

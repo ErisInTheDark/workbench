@@ -14,6 +14,7 @@ import {
   check,
   defineTable,
   enumText,
+  evolveTable,
   foreignKey,
   index,
   integer,
@@ -25,6 +26,7 @@ import {
   type TableDefinition,
 } from "../../../database/schema/schema-definition.ts";
 import {
+  addColumns,
   createTable,
   defineSubsystemHistory,
   defineTableHistory,
@@ -62,7 +64,20 @@ const workbenchThreadsV1 = defineTable("workbench_threads", {
     check(sql`${table.archived} = ${literal(0)} OR (${table.pinned} = ${literal(0)} AND ${table.snoozed} = ${literal(0)})`),
   ],
 }));
-const workbenchThreadsHistory = initialHistory(workbenchThreadsV1);
+const workbenchThreadsV2 = evolveTable(workbenchThreadsV1, {
+  add: { identity_origin: enumText("legacy", "workbench").notNull().default("legacy") },
+});
+const workbenchThreadsHistory = defineTableHistory({
+  current: workbenchThreadsV2,
+  versions: [
+    tableVersion({ schemaVersion: 1, table: workbenchThreadsV1, migration: createTable(workbenchThreadsV1) }),
+    tableVersion({
+      schemaVersion: 17,
+      table: workbenchThreadsV2,
+      migration: addColumns({ from: workbenchThreadsV1, to: workbenchThreadsV2, columns: ["identity_origin"] }),
+    }),
+  ],
+});
 export const workbenchThreads = workbenchThreadsHistory.current;
 
 const workbenchPendingImportThreadsV1 = defineTable("workbench_pending_import_threads", {
@@ -105,7 +120,20 @@ const threadTurnsV1 = defineTable("thread_turns", {
     }),
   ],
 }));
-const threadTurnsHistory = initialHistory(threadTurnsV1);
+const threadTurnsV2 = evolveTable(threadTurnsV1, {
+  add: { identity_origin: enumText("legacy", "workbench").notNull().default("legacy") },
+});
+const threadTurnsHistory = defineTableHistory({
+  current: threadTurnsV2,
+  versions: [
+    tableVersion({ schemaVersion: 1, table: threadTurnsV1, migration: createTable(threadTurnsV1) }),
+    tableVersion({
+      schemaVersion: 18,
+      table: threadTurnsV2,
+      migration: addColumns({ from: threadTurnsV1, to: threadTurnsV2, columns: ["identity_origin"] }),
+    }),
+  ],
+});
 export const threadTurns = threadTurnsHistory.current;
 
 const threadTurnMaterializationsV1 = defineTable("thread_turn_materializations", {

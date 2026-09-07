@@ -15,7 +15,6 @@ const thread = (id: string, updatedAt: number): ThreadSummary => ({
   agentRole: null,
   createdAt: 1,
   cwd: "C:/repo",
-  forkedFromId: null,
   harness: "codex",
   id,
   name: id,

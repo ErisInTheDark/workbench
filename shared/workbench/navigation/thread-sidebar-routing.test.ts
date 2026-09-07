@@ -9,7 +9,6 @@ import {
   createStatsHref,
   createStatsRoute,
   createThreadHref,
-  getWorkbenchDraftIdFromThreadId,
   getWorkbenchMosaicThreadRootIds,
   isWorkbenchRouteOwnerOfThread,
   isWorkbenchThreadTargetSelected,
@@ -112,22 +111,15 @@ test("pinned routes preserve viewed and owning projects through the existing thr
 
 test("blank routes own their private future draft identity without owning unrelated drafts", () => {
   const blank = parseWorkbenchRouteFromPath("/p/@/thread/new");
-  assert.equal(isWorkbenchRouteOwnerOfThread(blank, "draft:123e4567-e89b-42d3-a456-426614174000"), true);
+  assert.equal(isWorkbenchRouteOwnerOfThread(blank, "123e4567-e89b-42d3-a456-426614174000", true), true);
   assert.equal(isWorkbenchRouteOwnerOfThread(blank, "provider"), false);
   const draft = parseWorkbenchRouteFromPath("/p/@/thread/new/123e4567-e89b-42d3-a456-426614174000");
-  assert.equal(isWorkbenchRouteOwnerOfThread(draft, "draft:123e4567-e89b-42d3-a456-426614174000"), true);
-  assert.equal(isWorkbenchRouteOwnerOfThread(draft, "draft:223e4567-e89b-42d3-a456-426614174000"), false);
+  assert.equal(isWorkbenchRouteOwnerOfThread(draft, "123e4567-e89b-42d3-a456-426614174000", true), true);
+  assert.equal(isWorkbenchRouteOwnerOfThread(draft, "223e4567-e89b-42d3-a456-426614174000", true), false);
   assert.equal(isWorkbenchRouteOwnerOfThread(draft, "provider"), false);
   const provider = parseWorkbenchRouteFromPath("/p/@/thread/provider");
   assert.equal(isWorkbenchRouteOwnerOfThread(provider, "provider"), true);
   assert.equal(isWorkbenchRouteOwnerOfThread(provider, "draft:123e4567-e89b-42d3-a456-426614174000"), false);
-});
-
-test("private draft thread ids expose only canonical durable draft identities", () => {
-  const draftId = "123e4567-e89b-42d3-a456-426614174000";
-  assert.equal(getWorkbenchDraftIdFromThreadId(`draft:${draftId}`), draftId);
-  assert.equal(getWorkbenchDraftIdFromThreadId("draft:not-a-uuid"), null);
-  assert.equal(getWorkbenchDraftIdFromThreadId("provider"), null);
 });
 
 test("thread target selection matches the visible root without crossing unrelated identities", () => {

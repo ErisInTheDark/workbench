@@ -1,13 +1,17 @@
 /*
- * transformInteractionTranscriptItem: convert provider web-search items to typed relational rows. Keywords: transcript, transform, web search.
- * resolveQuestionnaireTranscriptSourceId: derive one settled questionnaire's renderer identity. Keywords: transcript, questionnaire, identity.
- * resolveSteerTranscriptSourceId: derive one settled steer's renderer identity. Keywords: transcript, steer, identity.
- * transformQuestionnaireEntry: convert one settled Workbench interaction to typed relational rows. Keywords: transcript, questionnaire, approval.
- * transformSteerEntry: convert one settled Workbench steer to a canonical user-message row. Keywords: transcript, steer, user message.
+ * Keywords: transcript, transform, web search, questionnaire, steer, identity.
+ * Exports:
+ * - WorkbenchInteractionTransform: relational interaction mutations.
+ * - transformInteractionTranscriptItem: convert provider web-search items.
+ * - resolveQuestionnaireTranscriptSourceId: retain private questionnaire source lookup.
+ * - resolveSteerTranscriptSourceId: retain private steer source lookup.
+ * - transformQuestionnaireEntry: convert settled questionnaires and approvals.
+ * - transformSteerEntry: convert a settled steer to a typed user-message row.
  */
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
-import { createSyntheticSteerHistoryItemId } from "workbench-shared/workbench/thread/thread-steer-history";
+import { resolveSteerTranscriptSourceId } from "workbench-shared/workbench/thread/thread-steer-history";
+export { resolveSteerTranscriptSourceId } from "workbench-shared/workbench/thread/thread-steer-history";
 import type {
   WorkbenchQuestionnaireHistoryEntry,
   WorkbenchSteerHistoryEntry,
@@ -29,12 +33,6 @@ export interface WorkbenchInteractionTransform extends WorkbenchTranscriptItemTr
 
 export function resolveQuestionnaireTranscriptSourceId(entry: WorkbenchQuestionnaireHistoryEntry) {
   return resolveQuestionnaireHistoryItemId(entry);
-}
-
-export function resolveSteerTranscriptSourceId(entry: WorkbenchSteerHistoryEntry) {
-  return entry.status === "sent"
-    ? entry.canonicalItemId ?? entry.clientUserMessageId ?? `workbench-steer:${entry.threadId}:${entry.entryKey}`
-    : createSyntheticSteerHistoryItemId(entry);
 }
 
 function actionFields(action: Extract<ThreadItem, { type: "webSearch" }>["action"]) {
@@ -224,12 +222,13 @@ export function transformSteerEntry(
     mutations: [
       upsertRow(itemTables.threadItemUserMessages, {
         item_id: itemId,
+        input_kind: "steer",
         delivery_state: entry.status === "sent" ? "delivered" : entry.status,
         client_id: entry.clientUserMessageId ?? null,
         error_text: entry.status === "failed" ? entry.error ?? "Steer delivery failed." : null,
       }, {
         conflictColumns: ["item_id"],
-        updateColumns: ["delivery_state", "client_id", "error_text"],
+        updateColumns: ["input_kind", "delivery_state", "client_id", "error_text"],
       }),
       ...entry.input.map((part, partIndex) => {
         if (part.type === "text") {

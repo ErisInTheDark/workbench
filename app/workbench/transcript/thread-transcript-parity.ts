@@ -15,9 +15,7 @@ import type {
   WorkbenchTranscriptParityScope,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import {
-  readSyntheticQuestionnaireHistoryItemId,
-} from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import { isSyntheticQuestionnaireHistoryItem } from "workbench-shared/workbench/thread/thread-questionnaire-history";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import {
   planCanonicalTranscriptDisplay,
@@ -222,13 +220,10 @@ function parseQuestionnaireResponse(item: Extract<ThreadItem, { type: "dynamicTo
 }
 
 function normalizeJsonItem(item: ThreadItem): SemanticItem {
-  const questionnaireItemId = item.type === "dynamicToolCall"
-    ? readSyntheticQuestionnaireHistoryItemId(item.id)
-    : null;
-  if (item.type === "dynamicToolCall" && questionnaireItemId) {
+  if (isSyntheticQuestionnaireHistoryItem(item)) {
     const approval = isRecord(item.arguments) && item.arguments.approval !== undefined;
     return {
-      id: questionnaireItemId,
+      id: item.id,
       payload: {
         errorText: null,
         request: item.arguments,

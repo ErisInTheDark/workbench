@@ -321,7 +321,6 @@ test("profile resolution preserves the thread payload contract", async () => {
     browseResultEntries: [],
     createdAt: 1,
     cwd: "C:/workspace",
-    forkedFromId: null,
     harness: "codex",
     id: "draft:1",
     isDraft: true,

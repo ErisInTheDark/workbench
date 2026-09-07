@@ -27,6 +27,12 @@ import { WORKBENCH_TOOL_CONTEXT_METHOD, readWorkbenchToolOutput } from "workbenc
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
 import type { WorkbenchTranscriptObservation } from "./database/transcript/workbench-transcript-types";
+import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
+import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
+import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
+import { mapProviderNotification } from "./thread-identity-provider-mapping";
+import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 
 const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
 let testWorkbenchLibraryRoot = "";
@@ -116,6 +122,119 @@ function bridgeThread(items: ThreadItem[] = []) {
     updatedAt: 1,
   };
 }
+
+test("bridge admits public identity before structural publication and records the same identity without blocking deltas on bodies", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-identity-"));
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  const repository = new WorkbenchThreadIdentityRepository(database);
+  const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
+  let writes = 0;
+  const threads = new WorkbenchThreadIdentityController({
+    listThreadIdentities: async () => repository.list(),
+    observeThreadIdentities: async (inputs) => { writes++; return repository.observeMany(inputs); },
+    observeTurnIdentities: async (inputs) => { writes++; return repository.observeTurns(inputs); },
+    resolveThreadIdentity: async (input) => repository.resolve(input),
+    resolveNativeThreadIdentity: async (input) => repository.resolveNative(input),
+    resolveTurnIdentity: async (input) => repository.resolveTurn(input),
+  });
+  const items = new WorkbenchTranscriptIdentityController({
+    admitTranscriptItemIdentities: async (inputs) => { writes++; return itemRepository.admitMany(inputs); },
+    resolveTranscriptItemIdentity: async (input) => itemRepository.resolve(input),
+  });
+  const identities = { threads, items };
+  const publicEvents: ServerNotification[] = [];
+  const facts: WorkbenchTranscriptObservation[] = [];
+  const body = deferred<void>();
+  const bodyEntered = deferred<void>();
+  const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: "thread" };
+  let readPage = false;
+  const pageTurn = { ...bridgeThread().turns[0]!, id: "historical-page-turn" };
+  const bridge = new CodexStdioBridge({
+    appServer: { send(request: JsonRpcRequest) {
+      if (!readPage || request.method !== "thread/turns/list") throw new Error("Identity admission must not request provider history");
+      queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result: { data: [pageTurn], nextCursor: null } }));
+    } } as unknown as CodexAppServer,
+    initialState: {
+      upstreamInitialized: true, initializeResult: {}, requestIdAllocator: { next: 100 },
+      pendingResponses: new Map(), pendingUserInputRequests: new Map(),
+    },
+    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    ...{ identities },
+    onNotification(notification) {
+      publicEvents.push(mapProviderNotification(identities, native, notification as ServerNotification));
+    },
+    recordSqliteTranscript: async (batch) => {
+      facts.push(...batch);
+      if (batch.some((fact) => fact.kind === "item")) {
+        bodyEntered.resolve();
+        await body.promise;
+      }
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo", project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {}, storageRoot: root,
+  });
+  try {
+    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: { ...bridgeThread(), turns: [] } } });
+    await bridge.handleUpstreamMessage({ method: "turn/started", params: { threadId: "thread", turn: bridgeThread().turns[0] } });
+    const item: ThreadItem = { type: "agentMessage", id: "native-message", text: "", phase: "commentary", memoryCitation: null, delivery: null, questions: null };
+    await bridge.handleUpstreamMessage({ method: "item/started", params: { threadId: "thread", turnId: "turn", item } });
+    await bodyEntered.promise;
+    const beforeDeltas = writes;
+    for (const delta of ["first ", "second"]) {
+      await bridge.handleUpstreamMessage({ method: "item/agentMessage/delta", params: {
+        threadId: "thread", turnId: "turn", itemId: item.id, delta,
+      } });
+    }
+    assert.equal(writes, beforeDeltas);
+    const start = publicEvents.find((event) => event.method === "item/started");
+    assert.equal(start?.method, "item/started");
+    if (start?.method !== "item/started") throw new Error("Missing public start");
+    assert.notEqual(start.params.item.id, item.id);
+    const recorded = facts.find((fact) => fact.kind === "item");
+    assert.equal(recorded?.kind, "item");
+    if (recorded?.kind !== "item") throw new Error("Missing recorded item");
+    assert.equal(recorded.publicItemId, start.params.item.id);
+    assert.equal(recorded.threadId, start.params.threadId);
+    assert.equal(recorded.turnId, start.params.turnId);
+    assert.equal(recorded.item.id, item.id);
+    assert.deepEqual(publicEvents.filter((event) => event.method === "item/agentMessage/delta").map((event) => event.params), [
+      { threadId: start.params.threadId, turnId: start.params.turnId, itemId: start.params.item.id, delta: "first " },
+      { threadId: start.params.threadId, turnId: start.params.turnId, itemId: start.params.item.id, delta: "second" },
+    ]);
+    readPage = true;
+    await bridge.handleServerRequest({ id: 1, method: "thread/turns/list", params: { threadId: "thread", itemsView: "full" } });
+    const pageIdentity = threads.findNativeTurn({ ...native, nativeTurnId: pageTurn.id });
+    assert.ok(pageIdentity);
+    for (const pageItem of pageTurn.items) {
+      assert.ok(items.itemIdForReference(pageIdentity.threadId, pageIdentity.turnId, pageItem.id));
+    }
+    const bytes = Buffer.from("canonical browse asset");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const encodedNative = Buffer.from("thread").toString("base64url");
+    const directory = path.join(root, ".workbench", "transcripts", "codex", "threads", encodedNative, "assets");
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, `${digest}.png`), bytes);
+    const verify = (bridge as unknown as {
+      readSqliteBrowseAsset(threadId: string, url: string): Promise<{ digest: string }>;
+    }).readSqliteBrowseAsset.bind(bridge);
+    for (const urlThreadId of [encodedNative, start.params.threadId]) {
+      assert.equal((await verify("thread", `/api/transcript-assets/codex/${urlThreadId}/${digest}.png`)).digest, digest);
+    }
+    await assert.rejects(verify("thread", `/api/transcript-assets/codex/unrelated/${digest}.png`), /another thread/u);
+  } finally {
+    body.resolve();
+    await bridge.disposeImmediately();
+    items.dispose();
+    threads.dispose();
+    database.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("stats usage hydration reads Workbench journals without requesting provider history", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-stats-hydration-"));

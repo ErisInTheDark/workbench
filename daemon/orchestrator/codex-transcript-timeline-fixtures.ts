@@ -4,6 +4,7 @@
  */
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import { normalizeThreadItems } from "workbench-shared/codex/thread-item-normalization";
+import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
 import { mergeThreadItem } from "./codex-transcript-item-merge";
 import { orderMergedItemsByTimeline, rememberTimelineItem } from "./codex-transcript-timeline";
 import type { CodexTranscriptTurnTimelineEntry } from "./codex-transcript-types";
@@ -169,30 +170,30 @@ const normalizedReasoningItems = normalizeThreadItems([
   granularReasoningA,
   granularReasoningB,
   cumulativeSnapshotReasoning,
-]);
+], { classifyItem: getCodexItemIdentityKind });
 const normalizedReasoningItemsFromGenericFirst = normalizeThreadItems([
   cumulativeSnapshotReasoning,
   granularReasoningA,
   granularReasoningB,
-]);
+], { classifyItem: getCodexItemIdentityKind });
 const normalizedIndexedGenericSnapshotReasoning = normalizeThreadItems([
   granularReasoningA,
   indexedGenericSnapshotReasoning,
-]);
+], { classifyItem: getCodexItemIdentityKind });
 const normalizedRepeatedCanonicalReasoning = normalizeThreadItems([
   granularReasoningA,
   repeatedCanonicalReasoningA,
-]);
+], { classifyItem: getCodexItemIdentityKind });
 const normalizedDuplicateUserMessages = normalizeThreadItems([
   canonicalUserMessage,
   agentMessage,
   genericSnapshotUserMessage,
-]);
+], { classifyItem: getCodexItemIdentityKind });
 const normalizedDuplicateImageUserMessages = normalizeThreadItems([
   inlineImageUserMessage,
   agentMessage,
   transcriptAssetImageUserMessage,
-], { mergeDuplicateItems: mergeThreadItem });
+], { mergeDuplicateItems: mergeThreadItem, classifyItem: getCodexItemIdentityKind });
 
 const contextCompaction = {
   id: "compaction-live-a",

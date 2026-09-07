@@ -1,5 +1,5 @@
 /*
- * Keywords: canonical items, typed tool output, patch observations, schema history.
+ * Keywords: canonical items, public identity, typed tool output, patch observations, schema history.
  * threadItems: current canonical thread item table. Keywords: database, schema, item.
  * threadItemUserMessages: current user-message augmentation table. Keywords: database, schema, user-message.
  * threadUserMessageParts: current ordered user-message part table. Keywords: database, schema, user-message.
@@ -24,6 +24,7 @@ import {
   enumText,
   evolveTable,
   foreignKey,
+  index,
   integer,
   jsonText,
   literal,
@@ -85,11 +86,36 @@ const threadItemsV2 = evolveTable(threadItemsV1, {
     "webSearch", "questionnaire", "approval", "contextCompaction", "unknown", "functionCallOutput",
   ).notNull() },
 });
+const threadItemsV3 = evolveTable(threadItemsV2, {
+  add: { public_id: text() },
+  extras: (table) => ({
+    constraints: [
+      unique([table.public_id]),
+      unique([table.turn_id, table.item_position]),
+      unique([table.id, table.type]),
+      unique([table.id, table.thread_id, table.type]),
+      unique([table.id, table.thread_id, table.turn_id]),
+      foreignKey([table.turn_id, table.thread_id], {
+        table: "thread_turns", columns: ["id", "thread_id"], onDelete: "CASCADE",
+      }),
+      foreignKey([table.public_id, table.thread_id], {
+        table: "workbench_transcript_item_identities", columns: ["id", "thread_id"], onDelete: "CASCADE",
+      }),
+    ],
+    indexes: [
+      index("thread_items_legacy_source_idx", [table.thread_id, table.source_id], {
+        unique: true, where: sql`${table.public_id} IS NULL`,
+      }),
+      index("thread_items_source_idx", [table.thread_id, table.source_id]),
+    ],
+  }),
+});
 const threadItemsHistory = defineTableHistory({
-  current: threadItemsV2,
+  current: threadItemsV3,
   versions: [
     tableVersion({ schemaVersion: 1, table: threadItemsV1, migration: createTable(threadItemsV1) }),
     tableVersion({ schemaVersion: 13, table: threadItemsV2, migration: rebuildTable({ from: threadItemsV1, to: threadItemsV2 }) }),
+    tableVersion({ schemaVersion: 19, table: threadItemsV3, migration: rebuildTable({ from: threadItemsV2, to: threadItemsV3 }) }),
   ],
 });
 export const threadItems = threadItemsHistory.current;
@@ -113,7 +139,20 @@ const threadItemUserMessagesV1 = defineTable("thread_item_user_messages", {
     }),
   ],
 }));
-const threadItemUserMessagesHistory = initialHistory(threadItemUserMessagesV1);
+const threadItemUserMessagesV2 = evolveTable(threadItemUserMessagesV1, {
+  add: { input_kind: enumText("initial", "steer").notNull().default("initial") },
+});
+const threadItemUserMessagesHistory = defineTableHistory({
+  current: threadItemUserMessagesV2,
+  versions: [
+    tableVersion({ schemaVersion: 1, table: threadItemUserMessagesV1, migration: createTable(threadItemUserMessagesV1) }),
+    tableVersion({
+      schemaVersion: 19,
+      table: threadItemUserMessagesV2,
+      migration: addColumns({ from: threadItemUserMessagesV1, to: threadItemUserMessagesV2, columns: ["input_kind"] }),
+    }),
+  ],
+});
 export const threadItemUserMessages = threadItemUserMessagesHistory.current;
 
 const threadUserMessagePartsV1 = defineTable("thread_user_message_parts", {

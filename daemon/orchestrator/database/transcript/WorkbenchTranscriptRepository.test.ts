@@ -7,13 +7,20 @@ import { test } from "node:test";
 import Database from "better-sqlite3";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
+import { withWorkbenchThreadItemIdentity } from "workbench-shared/workbench/thread/thread-item-identity";
 import { projectWorkbenchTranscriptItems } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";
+import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
+import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
-import { createSyntheticSteerHistoryItemId } from "workbench-shared/workbench/thread/thread-steer-history";
+import { resolveSteerHistoryItemId } from "workbench-shared/workbench/thread/thread-steer-history";
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
+import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
+import WorkbenchTranscriptIdentityRepository from "./WorkbenchTranscriptIdentityRepository.ts";
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
@@ -123,10 +130,213 @@ function providerTurnScope(
   return {
     completeTurnIds,
     kind: "providerTurnScope",
-    observations,
+    observations: observations.map((observation) => observation.kind === "item"
+      ? { ...observation, item: withWorkbenchThreadItemIdentity(observation.item, getCodexItemIdentityKind(observation.item)) }
+      : observation),
     threadId,
   };
 }
+
+test("canonical reads convert only selected retained bodies and preserve old references across reopen", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([canonicalWindow([
+      threadObservation(),
+      turnObservation("older", 0),
+      turnObservation("newer", 1),
+      ...["older", "newer"].map((turnId): WorkbenchTranscriptAtomicObservation => ({
+        kind: "item", threadId: "thread", turnId, lifecycle: "completed", observedAt: 4,
+        item: { type: "reasoning", id: `${turnId}-reasoning`, summary: ["preserve"], content: [] },
+        timeline: { itemId: `${turnId}-reasoning`, aliases: [`${turnId}-alias`],
+          firstSeenAt: 3, lastSeenAt: 4, startedAt: 3, completedAt: 4 },
+      })),
+      {
+        kind: "questionnaire", observedAt: 5, entry: {
+          threadId: "thread", turnId: "newer", itemId: "questionnaire", requestKey: "question",
+          insertAfterItemId: null, insertAfterItemIndex: null,
+          request: { id: "question", title: "", summary: "", submitLabel: "", questions: [{
+            id: "choice", header: "", question: "Choose", allowOther: false, isSecret: false, options: [],
+          }] },
+          response: { answers: { choice: { answers: ["retained answer"] } } }, resolvedAt: 5,
+        },
+      },
+    ], ["older", "newer"])]);
+    const before = repository.read({ threadId: "thread", turnLimit: 2 })!;
+    const identities = new WorkbenchThreadIdentityRepository(database);
+    const thread = identities.resolve({ threadId: "native-thread" })!;
+    const snapshot = repository.read({ threadId: thread.threadId, turnIds: ["newer"], turnLimit: 1 })!;
+    assert.ok(snapshot);
+    assert.equal(snapshot.loadedTurnIds.length, 1);
+    assert.notEqual(snapshot.loadedTurnIds[0], "newer");
+    assert.ok(snapshot.turns.every(({ identity_origin }) => identity_origin === "workbench"));
+    assert.ok(snapshot.rows.threadItems.every(({ public_id }) => public_id !== null));
+    assert.deepEqual(snapshot.rows.threadItems.map(({ id, item_position }) => [id, item_position]),
+      before.rows.threadItems.filter(({ turn_id }) => turn_id === "newer").map(({ id, item_position }) => [id, item_position]));
+    assert.deepEqual(snapshot.rows.threadInteractionAnswers, before.rows.threadInteractionAnswers);
+    const untouched = database.prepare("SELECT public_id FROM thread_items WHERE source_id = 'older-reasoning'").get() as { public_id: string | null };
+    assert.equal(untouched.public_id, null);
+    const items = new WorkbenchTranscriptIdentityRepository(database);
+    const reasoningId = snapshot.rows.threadItems.find(({ source_id }) => source_id === "newer-reasoning")!.public_id;
+    assert.equal(items.resolve({ threadId: thread.threadId, itemId: "newer-alias" })?.itemId, reasoningId);
+    const questionnaireId = snapshot.rows.threadItems.find(({ type }) => type === "questionnaire")!.public_id;
+    assert.equal(items.resolve({ threadId: thread.threadId, itemId: "workbench:questionnaire-history:questionnaire" })?.itemId, questionnaireId);
+    const reopened = new WorkbenchTranscriptRepository(database);
+    assert.deepEqual(reopened.read({ threadId: "thread", turnIds: ["newer"], turnLimit: 1 }), snapshot);
+    assert.deepEqual(reopened.read({ threadId: thread.threadId, turnIds: snapshot.loadedTurnIds, turnLimit: 1 }), snapshot);
+    assert.deepEqual(reopened.readMaterializedTurnIds("thread", ["newer", "absent"]), ["newer"]);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally {
+    database.close();
+  }
+});
+
+test("failed retained item conversion rolls back turn identities and earlier item links", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([canonicalWindow([
+      threadObservation(), turnObservation("turn", 0),
+      ...["first", "second"].map((id): WorkbenchTranscriptAtomicObservation => ({
+        kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 4,
+        item: { id, type: "reasoning", summary: [id], content: [] },
+        timeline: { itemId: id, aliases: ["conflicting-alias"], firstSeenAt: 3, lastSeenAt: 4, startedAt: 3, completedAt: 4 },
+      })),
+    ], ["turn"])]);
+    const thread = new WorkbenchThreadIdentityRepository(database).resolve({ threadId: "native-thread" })!;
+    assert.throws(() => repository.read({ threadId: thread.threadId, turnLimit: 1 }),
+      /UNIQUE constraint|conflicting aliases/iu);
+    assert.deepEqual(database.prepare("SELECT id, identity_origin FROM thread_turns").all(),
+      [{ id: "turn", identity_origin: "legacy" }]);
+    assert.deepEqual(database.prepare("SELECT public_id FROM thread_items").all(), [{ public_id: null }, { public_id: null }]);
+    assert.deepEqual(database.prepare("SELECT id FROM workbench_transcript_item_identities").all(), []);
+    assert.deepEqual(database.prepare("SELECT alias FROM workbench_turn_legacy_aliases").all(), []);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally {
+    database.close();
+  }
+});
+
+test("metadata-only catalogs transfer native identity without claiming a turn body is materialized", () => {
+  const { database, repository } = createRepository();
+  try {
+    const identity = new WorkbenchThreadIdentityRepository(database);
+    const native = { harness: "codex", nativeLocation: "C:/project", nativeThreadId: "native-thread" };
+    const thread = identity.observe({
+      native, projectId: "project", projectRoot: "C:/project", title: "Thread",
+      createdAt: 1, updatedAt: 1, activityAt: 1,
+    });
+    const catalog = {
+      kind: "turnCatalog", threadId: thread.threadId,
+      catalog: [threadObservation(thread.threadId), turnObservation("known-turn", 0, thread.threadId)],
+    } as const;
+    repository.settle([catalog]);
+    assert.equal(identity.resolveNative(native)?.threadId, thread.threadId);
+    assert.equal(identity.resolveNative(native)?.bindings[0]?.pending, false);
+    assert.deepEqual(repository.readMaterializedTurnIds(thread.threadId, ["known-turn"]), []);
+    assert.equal(repository.read({ threadId: thread.threadId, turnLimit: 1 }), null);
+    repository.settle([{
+      kind: "canonicalWindow", threadId: thread.threadId, contentVersion: 3,
+      materializedTurnIds: ["known-turn"],
+      observations: [
+        ...catalog.catalog,
+        {
+          kind: "item", threadId: thread.threadId, turnId: "known-turn", lifecycle: "completed", observedAt: 3,
+          item: {
+            id: "message", type: "agentMessage", phase: "commentary", text: "Loaded later",
+            memoryCitation: null, delivery: null, questions: null,
+          },
+        },
+      ],
+    }]);
+    const materialized = repository.read({ threadId: thread.threadId, turnLimit: 1 });
+    assert.equal(materialized?.rows.threadItemAssistantMessages[0]?.text, "Loaded later");
+    repository.settle([catalog]);
+    assert.deepEqual(repository.read({ threadId: thread.threadId, turnLimit: 1 }), materialized);
+  } finally {
+    database.close();
+  }
+});
+
+test("body recording reuses admitted identities and keeps provisional source reuse isolated by turn", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), turnObservation("first", 0), turnObservation("second", 1)]);
+    const identities = new WorkbenchTranscriptIdentityRepository(database);
+    const observations = ["first", "second"].map((turnId): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => {
+      const identity = identities.admit({
+        threadId: "thread",
+        sources: [{ turnId, sourceId: "item-1", kind: "provisional" }],
+        legacyAliases: [],
+      });
+      return {
+        kind: "item", threadId: "thread", turnId, publicItemId: identity.itemId,
+        lifecycle: "completed", observedAt: 5,
+        item: withWorkbenchThreadItemIdentity({
+          id: "item-1", type: "agentMessage", text: turnId, phase: "commentary",
+          memoryCitation: null, delivery: null, questions: null,
+        }, "provisional"),
+      };
+    });
+    repository.settle(observations);
+    const before = repository.read({ threadId: "thread", turnLimit: 2 })!;
+    assert.deepEqual(before.rows.threadItems.map(({ public_id, turn_id }) => [public_id, turn_id]), observations.map(({ publicItemId, turnId }) => [publicItemId, turnId]));
+    assert.deepEqual(before.rows.threadItemAssistantMessages.map(({ text }) => text), ["first", "second"]);
+    const projected = projectWorkbenchTranscript(before);
+    assert.equal(projected.success, true);
+    if (!projected.success) throw new Error("Admitted item projection failed.");
+    assert.deepEqual(projected.data.turns.flatMap(({ items }) => items.map(({ id }) => id)), observations.map(({ publicItemId }) => publicItemId));
+    assert.deepEqual(projected.data.turns.flatMap(({ items }) => items.map((item) => getWorkbenchThreadItemIdentityKind(item as ThreadItem))), ["provisional", "provisional"]);
+    repository.settle(observations);
+    assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 2 }), before);
+    const reread = providerTurnScope([
+      turnObservation("first", 0),
+      turnObservation("second", 1),
+      ...observations.map((observation) => ({
+        ...observation,
+        item: { ...observation.item, text: `${observation.turnId} updated` },
+      })),
+    ], ["first", "second"]);
+    repository.settle([reread]);
+    repository.settle([reread]);
+    const afterReread = repository.read({ threadId: "thread", turnLimit: 2 })!;
+    assert.deepEqual(afterReread.rows.threadItems, before.rows.threadItems);
+    assert.deepEqual(afterReread.rows.threadItemAssistantMessages.map(({ text }) => text), ["first updated", "second updated"]);
+
+    const failedIdentity = identities.admit({
+      threadId: "thread", sources: [{ turnId: "second", sourceId: "bad", kind: "stable" }], legacyAliases: [],
+    });
+    assert.throws(() => repository.settle([{
+      ...observations[1]!, publicItemId: failedIdentity.itemId, itemPosition: -1,
+      item: { ...observations[1]!.item, id: "bad" },
+    }]));
+    assert.equal(identities.resolve({ threadId: "thread", itemId: failedIdentity.itemId })?.itemId, failedIdentity.itemId);
+    assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 2 }), afterReread);
+  } finally {
+    database.close();
+  }
+});
+
+test("body recording rejects unadmitted identity and mismatched source ownership without leftover bodies", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), turnObservation("turn", 0)]);
+    const identity = new WorkbenchTranscriptIdentityRepository(database).admit({
+      threadId: "thread", sources: [{ turnId: "turn", sourceId: "source", kind: "stable" }], legacyAliases: [],
+    });
+    const observation: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> = {
+      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 5,
+      item: { id: "source", type: "contextCompaction" },
+    };
+    assert.throws(() => repository.settle([{
+      ...observation, publicItemId: "d3a73029-f4c9-4e60-894a-3dc7e4918405",
+    }]), /identity.*admitted/iu);
+    assert.throws(() => repository.settle([{
+      ...observation, publicItemId: identity.itemId, item: { ...observation.item, id: "unrelated" },
+    }]), /source.*identity/iu);
+    assert.equal(repository.read({ threadId: "thread", turnLimit: 1 })?.rows.threadItems.length, 0);
+  } finally {
+    database.close();
+  }
+});
 
 test("a delayed compatibility window cannot replace a directly materialized live turn", () => {
   const { database, repository } = createRepository();
@@ -752,10 +962,74 @@ test("source replacement keeps canonical identity and Browse enrichment while re
       ...browseObservation,
       asset: { ...browseAsset, byteLength: browseAsset.byteLength + 1 },
     }]), /changed content-addressed metadata/u);
+    const identity = new WorkbenchThreadIdentityRepository(database).resolve({ threadId: "thread" });
+    assert.ok(identity);
+    const converted = repository.read({ threadId: identity.threadId, turnLimit: 10 });
+    assert.ok(converted);
+    const canonicalAssetUrl = `/api/transcript-assets/codex/${identity.threadId}/${browseAsset.digest}.png`;
+    repository.settle([{
+      ...browseObservation,
+      asset: { ...browseAsset, storageKey: canonicalAssetUrl },
+      entry: { ...browseObservation.entry, threadId: identity.threadId, turnId: converted.turns[0]!.id, assetUrl: canonicalAssetUrl },
+    }]);
+    const repeated = repository.read({ threadId: identity.threadId, turnLimit: 10 });
+    assert.ok(repeated);
+    assert.deepEqual(repeated.rows.transcriptAssets, converted.rows.transcriptAssets);
+    const projection = projectWorkbenchTranscript(repeated);
+    assert.equal(projection.success, true);
+    if (projection.success) assert.deepEqual(projection.data.browseResultEntries.map((entry) => entry.assetUrl), [canonicalAssetUrl]);
   } finally {
     database.close();
   }
 });
+
+for (const windowed of [false, true]) {
+  test(`Browse enrichment resolves public and legacy item references within the owning turn (window ${windowed})`, () => {
+    const { database, repository } = createRepository();
+    try {
+      const turns = [turnObservation("first", 0), turnObservation("second", 1)];
+      repository.settle([{ kind: "turnCatalog", threadId: "thread", catalog: [threadObservation(), ...turns] }]);
+      const identity = new WorkbenchTranscriptIdentityRepository(database).admit({
+        threadId: "thread",
+        sources: [{ turnId: "first", sourceId: "command", kind: "stable" }],
+        legacyAliases: [{ turnId: "first", alias: "old-command-reference" }],
+      });
+      const command = {
+        kind: "item", threadId: "thread", turnId: "first", publicItemId: identity.itemId,
+        lifecycle: "completed", observedAt: 3,
+        item: {
+          type: "commandExecution", id: "command", command: "inspect", cwd: "C:/project",
+          pluginId: null, scriptPath: null, processId: null, source: "agent", status: "completed",
+          commandActions: [], aggregatedOutput: "done", exitCode: 0, durationMs: 1,
+        },
+      } satisfies WorkbenchTranscriptAtomicObservation;
+      const browse = (commandItemId: string, actionIndex: number, turnId = "first"): WorkbenchTranscriptAtomicObservation => ({
+          kind: "browse", entry: {
+            action: "snapshot", actionIndex, assetUrl: null, commandItemId, durationMs: 1,
+            entryKey: `${turnId}-${commandItemId}`, recordedAt: 4, session: "research",
+            state: "completed", threadId: "thread", turnId, detailText: "result",
+          },
+      });
+      const observations = [
+        ...[identity.itemId, "old-command-reference", "command"].map((reference, index) => browse(reference, index)),
+        browse(identity.itemId, 3, "second"),
+      ];
+      repository.settle([canonicalWindow([
+        threadObservation(), ...turns, command, ...(windowed ? observations : []),
+      ], ["first", "second"])]);
+      if (!windowed) repository.settle(observations);
+      const snapshot = repository.read({ threadId: "thread", turnLimit: 2 })!;
+      const root = snapshot.rows.threadItems[0]!;
+      const rows = snapshot.rows.threadBrowseEntries;
+      assert.equal(rows.length, 3);
+      assert.ok(rows.every((entry) => entry.item_id === root.id));
+      assert.equal((database.prepare("SELECT COUNT(*) AS count FROM transcript_native_records WHERE turn_id = 'second'")
+        .get() as { count: number }).count, 1);
+    } finally {
+      database.close();
+    }
+  });
+}
 
 test("failed and interrupted steers keep the renderer's synthetic item identity", () => {
   const { database, repository } = createRepository();
@@ -801,7 +1075,7 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
     assert.ok(snapshot);
     assert.deepEqual(
       snapshot.rows.threadItems.map(({ source_id }) => source_id),
-      entries.map(createSyntheticSteerHistoryItemId),
+      entries.map(resolveSteerHistoryItemId),
     );
     assert.deepEqual(snapshot.rows.threadItemUserMessages.map((row) => ({
       deliveryState: row.delivery_state,
@@ -810,6 +1084,53 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
       { deliveryState: "failed", error: "delivery failed" },
       { deliveryState: "interrupted", error: null },
     ]);
+  } finally {
+    database.close();
+  }
+});
+
+test("interaction bodies reuse admitted identities and positions through steer settlement changes", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), turnObservation("turn", 0)]);
+    const identities = new WorkbenchTranscriptIdentityRepository(database);
+    const steer: WorkbenchSteerHistoryEntry = {
+      attemptedAt: 3, canonicalItemId: null, clientUserMessageId: "client", entryKey: "request",
+      error: "delivery failed", input: [{ type: "text", text: "keep this", text_elements: [] }],
+      requestId: "1", resolvedAt: 4, status: "failed", threadId: "thread", turnId: "turn",
+    };
+    const interrupted = { ...steer, status: "interrupted" as const, error: null, resolvedAt: 5 };
+    const steerIdentity = identities.admit({
+      threadId: "thread", sources: [], legacyAliases: [steer, interrupted].map((entry) => ({
+        turnId: "turn", alias: resolveSteerHistoryItemId(entry),
+      })),
+    });
+    const questionnaireIdentity = identities.admit({
+      threadId: "thread", sources: [],
+      legacyAliases: [{ turnId: "turn", alias: "native-questionnaire" }],
+    });
+    const questionnaire = {
+      kind: "questionnaire" as const, observedAt: 4, publicItemId: questionnaireIdentity.itemId,
+      entry: {
+        threadId: "thread", turnId: "turn", itemId: "native-questionnaire", requestKey: "request",
+        insertAfterItemId: null, insertAfterItemIndex: null, resolvedAt: 4,
+        request: { id: "1", title: "", summary: "", submitLabel: "", questions: [] },
+        response: { answers: {} },
+      },
+    };
+    repository.settle([{ kind: "steer", entry: steer, observedAt: 4, publicItemId: steerIdentity.itemId }, questionnaire]);
+    const roots = database.prepare("SELECT id, public_id, item_position FROM thread_items ORDER BY item_position").all();
+    assert.deepEqual(roots.map((row) => (row as { public_id: string }).public_id),
+      [steerIdentity.itemId, questionnaireIdentity.itemId]);
+    repository.settle([{ kind: "steer", entry: interrupted, observedAt: 5, publicItemId: steerIdentity.itemId }, questionnaire]);
+    assert.deepEqual(database.prepare("SELECT id, public_id, item_position FROM thread_items ORDER BY item_position").all(), roots);
+    const projected = projectWorkbenchTranscriptItems(repository.read({ threadId: "thread", turnLimit: 1 })!.rows);
+    assert.equal(projected.success, true);
+    if (!projected.success) throw new Error("Interaction projection failed");
+    const item = projected.data.find(({ item }) => item.id === steerIdentity.itemId)!.item;
+    assert.equal(item.type, "userMessage");
+    if (item.type !== "userMessage") throw new Error("Steer projection has the wrong kind");
+    assert.deepEqual(getWorkbenchInputState(item), { kind: "steer", status: "interrupted" });
   } finally {
     database.close();
   }
@@ -934,6 +1255,108 @@ test("provider scopes preserve directly recorded items omitted by later snapshot
     database.close();
   }
 });
+
+for (const targetHasBody of [false, true]) {
+  test(`same-fact reconciliation preserves public aliases and body evidence (target body ${targetHasBody})`, () => {
+    const { database, repository } = createRepository();
+    try {
+      const turn = turnObservation("turn", 0);
+      repository.settle([threadObservation(), turn]);
+      const identities = new WorkbenchTranscriptIdentityRepository(database);
+      const source = identities.admit({
+        threadId: "thread", sources: [{ turnId: "turn", sourceId: "item-1", kind: "provisional" }], legacyAliases: [],
+      });
+      const target = identities.admit({
+        threadId: "thread", sources: [{ turnId: "turn", sourceId: "message", kind: "stable" }], legacyAliases: [],
+      });
+      const observation = (publicItemId: string, id: string): WorkbenchTranscriptAtomicObservation => ({
+        kind: "item", threadId: "thread", turnId: "turn", publicItemId,
+        lifecycle: "completed", observedAt: 3,
+        item: withWorkbenchThreadItemIdentity({
+          id, type: "agentMessage", text: "one fact", phase: "commentary",
+          memoryCitation: null, delivery: null, questions: null,
+        }, id === "item-1" ? "provisional" : "stable"),
+      });
+      repository.settle([observation(source.itemId, "item-1")]);
+      const sourceRoot = repository.read({ threadId: "thread", turnLimit: 1 })!.rows.threadItems[0]!;
+      repository.settle([{
+        kind: "nativeEvidence", threadId: "thread", turnId: "turn", itemId: source.itemId,
+        harnessId: "codex", nativeLocation: "C:/project", nativeThreadId: "native-thread",
+        nativeTurnId: "turn", nativeItemId: "item-1", nativeEventId: null, clientId: null,
+        nativeSequence: null, recordKind: "event", payloadJson: '{"fact":"retained"}', recordedAt: 3,
+      }]);
+      if (targetHasBody) repository.settle([observation(target.itemId, "message")]);
+      const before = repository.read({ threadId: "thread", turnLimit: 1 })!;
+      const expectedRootId = targetHasBody
+        ? before.rows.threadItems.find(({ public_id }) => public_id === target.itemId)!.id
+        : sourceRoot.id;
+      const recovery = providerTurnScope([turn, observation(target.itemId, "message")], ["turn"]);
+      repository.settle([recovery]);
+      repository.settle([recovery]);
+      repository.settle([providerTurnScope([
+        turn, observation(source.itemId, "item-1"), observation(target.itemId, "message"),
+      ], ["turn"])]);
+      const snapshot = repository.read({ threadId: "thread", turnLimit: 1 })!;
+      assert.deepEqual(snapshot.rows.threadItems.map(({ id, public_id }) => [id, public_id]), [[expectedRootId, target.itemId]]);
+      assert.equal(snapshot.rows.threadItemAssistantMessages[0]?.text, "one fact");
+      const reloadedIdentities = new WorkbenchTranscriptIdentityRepository(database);
+      for (const itemId of [source.itemId, target.itemId, "item-1", "message"]) {
+        assert.equal(reloadedIdentities.resolve({ threadId: "thread", turnId: "turn", itemId })?.itemId, target.itemId);
+      }
+      assert.deepEqual(database.prepare("SELECT item_id, payload_json FROM transcript_native_records").all(), [
+        { item_id: expectedRootId, payload_json: '{"fact":"retained"}' },
+      ]);
+      const oldReference = observation(source.itemId, "item-1");
+      if (oldReference.kind !== "item" || oldReference.item.type !== "agentMessage") throw new Error("Invalid message fixture");
+      repository.settle([providerTurnScope([turn, {
+        ...oldReference,
+        item: { ...oldReference.item, text: "updated through old identity" },
+      }], ["turn"])]);
+      const updated = repository.read({ threadId: "thread", turnLimit: 1 })!;
+      assert.deepEqual(updated.rows.threadItems.map(({ public_id }) => public_id), [target.itemId]);
+      assert.equal(updated.rows.threadItemAssistantMessages[0]?.text, "updated through old identity");
+      repository.settle([{
+        ...oldReference,
+        item: { ...oldReference.item, text: "live settlement through old identity" },
+      }]);
+      const live = repository.read({ threadId: "thread", turnLimit: 1 })!;
+      assert.deepEqual(live.rows.threadItems.map(({ id, public_id }) => [id, public_id]), [[expectedRootId, target.itemId]]);
+      assert.equal(live.rows.threadItemAssistantMessages[0]?.text, "live settlement through old identity");
+    } finally {
+      database.close();
+    }
+  });
+}
+
+for (const scenario of [
+  { current: ["before", "after"], expected: ["before", "missing", "after"] },
+  { current: ["before", "local", "after"], expected: ["before", "local", "after", "missing"] },
+]) {
+  test(`recovery inserts missing items only into a confirmed canonical gap (${scenario.current.join(", ")})`, () => {
+    const { database, repository } = createRepository();
+    const observedTurn = turnObservation("turn", 0);
+    const message = (id: string): WorkbenchTranscriptAtomicObservation => ({
+      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 3,
+      item: {
+        id, type: "agentMessage", text: id, phase: "commentary",
+        memoryCitation: null, delivery: null, questions: null,
+      },
+    });
+    try {
+      repository.settle([threadObservation(), observedTurn, ...scenario.current.map(message)]);
+      const recovery = providerTurnScope([
+        observedTurn, ...["before", "missing", "after"].map(message),
+      ], ["turn"]);
+      repository.settle([recovery]);
+      repository.settle([recovery]);
+      const items = repository.read({ threadId: "thread", turnLimit: 1 })!.rows.threadItems;
+      assert.deepEqual(items.map(({ source_id }) => source_id), scenario.expected);
+      assert.deepEqual(items.map(({ item_position }) => item_position), scenario.expected.map((_, index) => index));
+    } finally {
+      database.close();
+    }
+  });
+}
 
 test("complete provider scopes collapse proven aliases while preserving admitted facts and placement", () => {
   const { database, repository } = createRepository();
@@ -1092,6 +1515,7 @@ test("complete provider scopes collapse proven aliases while preserving admitted
         item: { ...user.item, id: "item-1" },
       },
       reasoningA,
+      command,
       reasoningB,
       {
         ...reasoningA,
@@ -1103,7 +1527,6 @@ test("complete provider scopes collapse proven aliases while preserving admitted
           type: "reasoning",
         },
       },
-      command,
       questionnaire,
       { kind: "steer", entry: failedSteer, observedAt: 9 },
       {
@@ -1140,6 +1563,12 @@ test("complete provider scopes collapse proven aliases while preserving admitted
       browse,
     ], ["turn"])]);
 
+    repository.settle([{
+      kind: "nativeEvidence", threadId: "thread", turnId: "turn", itemId: "item-2",
+      harnessId: "codex", nativeLocation: "C:/project", nativeThreadId: "native-thread",
+      nativeTurnId: "turn", nativeItemId: "item-2", nativeEventId: null, clientId: null,
+      nativeSequence: null, recordKind: "snapshot", payloadJson: '{"aggregate":true}', recordedAt: 19,
+    }]);
     const replacement = providerTurnScope([
       turnObservation("turn", 0),
       {
@@ -1175,10 +1604,10 @@ test("complete provider scopes collapse proven aliases while preserving admitted
       [
         ["user", 0],
         ["rs-a", 1],
-        ["rs-b", 2],
-        ["command", 3],
+        ["command", 2],
+        ["rs-b", 3],
         ["questionnaire", 4],
-        [createSyntheticSteerHistoryItemId(failedSteer), 5],
+        [resolveSteerHistoryItemId(failedSteer), 5],
         ["workbench-file-failure", 6],
         ["stale", 7],
         ["answer", 8],
@@ -1188,6 +1617,11 @@ test("complete provider scopes collapse proven aliases while preserving admitted
     assert.equal(snapshot.rows.transcriptAssets.length, 1);
     assert.equal(snapshot.rows.threadItemInteractions.length, 1);
     assert.equal(snapshot.rows.threadItemFileChanges[0]?.workbench_failure_kind, "unclaimed");
+    assert.deepEqual(database.prepare(`
+      SELECT link_kind, turn_id, item_id, native_item_id, payload_json FROM transcript_native_records
+    `).all(), [{
+      link_kind: "turn", turn_id: "turn", item_id: null, native_item_id: "item-2", payload_json: '{"aggregate":true}',
+    }]);
     const sourceIdsByItemId = new Map(snapshot.rows.threadItems.map(({ id, source_id }) => [id, source_id]));
     assert.deepEqual(snapshot.rows.threadItemTimelines.map((timeline) => ({
       completedAt: timeline.completed_at,

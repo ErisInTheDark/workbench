@@ -36,6 +36,7 @@ import {
     getWorkbenchThreadTargetRootId,
     getWorkbenchThreadTargetSelectedId,
     isWorkbenchRouteOwnerOfThread,
+    isSameWorkbenchRoute,
     type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import FileDraftStore from "./workbench/state/FileDraftStore";
@@ -57,6 +58,7 @@ import WorkbenchThreadRuntimeStoreController from "./workbench/WorkbenchThreadRu
 import WorkbenchConnectionRecoveryController, { type WorkbenchConnectionContinuity } from "./workbench/WorkbenchConnectionRecoveryController";
 import WorkbenchOrchestratorRuntimeClient from "./workbench/WorkbenchOrchestratorRuntimeClient";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import ThreadIdentityController from "./workbench/thread/ThreadIdentityController";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
 import conformWorkbenchThreadStateOpenResult, {
@@ -110,7 +112,6 @@ function areThreadSummariesEquivalent(left: ThreadSummary, right: ThreadSummary)
     && left.cwd === right.cwd
     && left.source === right.source
     && left.path === right.path
-    && left.forkedFromId === right.forkedFromId
     && left.agentNickname === right.agentNickname
     && left.agentRole === right.agentRole;
 }
@@ -308,12 +309,13 @@ export async function WorkbenchClient(
     throw new Error("The thread sidebar coordinator is not ready.");
   };
   const threadClient = WorkbenchThreadClient({
+    resolveThreadIdentity: (request) => threadIdentity.resolve(request),
     clientStateController: workbenchBindings.clientStateController,
     onStatusMessage: (message) => {
       reportStatusMessage(message);
     },
     onThreadStarted: (thread) => {
-      if (!isWorkbenchRouteOwnerOfThread(activeRoute, thread.id)) {
+      if (!isWorkbenchRouteOwnerOfThread(activeRoute, thread.id, thread.isDraft)) {
         return;
       }
       emitExplorerStateChange();
@@ -326,6 +328,12 @@ export async function WorkbenchClient(
     onReconnect: (listener) => threadClient.onReconnect(listener),
     request: async (method, params) => await threadClient.requestWorkbench(method, params),
   });
+  const threadIdentity = new ThreadIdentityController(async (request) => {
+    const { data } = await daemon.request("thread/identity/resolve", request);
+    if (data) workbenchBindings.clientStateController?.rememberThreadIdentityAlias(data.projectId, request.threadId, data.threadId);
+    return data;
+  });
+  coordinatorLifecycle.addUnsubscribe(() => threadIdentity.dispose());
   const orchestratorRuntime = new WorkbenchOrchestratorRuntimeClient({
     request: async (method, params) => await threadClient.requestWorkbench(method, params),
   });
@@ -500,7 +508,7 @@ export async function WorkbenchClient(
       || lastSnapshot.currentThreadId !== snapshot.currentThreadId
     ) {
       const nextThreadId = snapshot.currentThread?.id ?? snapshot.currentThreadId;
-      if (isWorkbenchRouteOwnerOfThread(activeRoute, nextThreadId)) {
+      if (isWorkbenchRouteOwnerOfThread(activeRoute, nextThreadId, snapshot.currentThread?.isDraft)) {
         applyCurrentThreadSelection(snapshot.currentThread);
       }
     }
@@ -555,7 +563,10 @@ export async function WorkbenchClient(
     },
     recover: recoverConnection,
   });
-  coordinatorLifecycle.addUnsubscribe(threadClient.onReconnect(() => connectionRecovery.recoverAfterConnectionLoss()));
+  coordinatorLifecycle.addUnsubscribe(threadClient.onReconnect(() => {
+    threadIdentity.reset();
+    return connectionRecovery.recoverAfterConnectionLoss();
+  }));
   coordinatorLifecycle.addUnsubscribe(() => connectionRecovery.dispose());
 
   document.execCommand?.("defaultParagraphSeparator", false, "p");
@@ -718,7 +729,6 @@ export async function WorkbenchClient(
       && left.cwd === right.cwd
       && left.source === right.source
       && left.path === right.path
-      && left.forkedFromId === right.forkedFromId
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
       && areDeeplyEqual(left.browseResultEntries ?? [], right.browseResultEntries ?? [])
@@ -753,7 +763,7 @@ export async function WorkbenchClient(
     options: { entries?: readonly WorkbenchThreadSidebarEntry[]; project?: WorkbenchProjectOption } = {},
   ) {
     const draft = {
-      ...threadClient.createThread(entry.draft.composerSettings.harness, `draft:${entry.draft.draftId}`, options),
+      ...threadClient.createThread(entry.draft.composerSettings.harness, entry.draft.draftId, options),
       agentPath: entry.draft.composerSettings.agentPath,
       model: entry.draft.composerSettings.model || null,
       reasoningEffort: entry.draft.composerSettings.reasoningEffort,
@@ -1018,6 +1028,24 @@ export async function WorkbenchClient(
     if (!isRouteGenerationActive(route, routeGeneration)) {
       return { ok: false };
     }
+    try {
+      const canonicalRoute = await threadIdentity.resolveRoute(route);
+      if (!isRouteGenerationActive(route, routeGeneration)) return { ok: false };
+      if (route.view === "thread") {
+        const projectId = route.threadOwnerProjectId || route.projectId;
+        const references = new Set(workbenchBindings.clientStateController?.getSnapshot().records.flatMap((record) => (
+          (record.kind === "composerDraft" || record.kind === "questionnaireDraft") && record.projectId === projectId ? [record.threadId] : []
+        )));
+        const resolvedDrafts = await Promise.allSettled([...references].map((threadId) => threadIdentity.resolve({ threadId, projectId })));
+        if (!isRouteGenerationActive(route, routeGeneration)) return { ok: false };
+        if (resolvedDrafts.some((result) => result.status === "rejected")) {
+          reportStatusMessage("Some saved draft identities could not be resolved. Their stored drafts remain unchanged.");
+        }
+      }
+      if (!isSameWorkbenchRoute(route, canonicalRoute)) return { ok: true, canonicalRoute };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Unable to resolve thread identity." };
+    }
 
     if (route.view === "home" || route.view === "project" || route.view === "settings" || route.view === "mosaic") {
       activeFilePath = "";
@@ -1071,7 +1099,7 @@ export async function WorkbenchClient(
         if (isForeignPin) {
           return { error: "Pinned routes cannot open a new thread.", ok: false };
         }
-        const draft = threadClient.createThread("codex", `draft:${crypto.randomUUID()}`, {
+        const draft = threadClient.createThread("codex", crypto.randomUUID(), {
           entries: ownerEntries,
           project: ownerProject,
         });

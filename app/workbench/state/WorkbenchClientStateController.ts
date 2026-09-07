@@ -77,6 +77,7 @@ export default class WorkbenchClientStateController {
   readonly #optimistic = new Map<string, { generation: number; mutation: WorkbenchClientStateMutation }>();
   readonly #pollDelayMs: number;
   readonly #records = new Map<string, WorkbenchClientStateRecord>();
+  readonly #threadAliases = new Map<string, string>();
   readonly #schedule: (callback: () => void, delayMs: number) => number;
   readonly #visibility: NonNullable<WorkbenchClientStateControllerOptions["visibility"]>;
   #daemonRegistrationId = "memory";
@@ -139,11 +140,36 @@ export default class WorkbenchClientStateController {
   }
 
   async put(record: WorkbenchClientStateRecord) {
-    return await this.#mutate({ action: "put", record });
+    return await this.#mutate({ action: "put", record: this.#storageIdentity(record) });
   }
 
   async delete(identity: WorkbenchClientStateIdentity) {
-    return await this.#mutate({ action: "delete", identity });
+    return await this.#mutate({ action: "delete", identity: this.#storageIdentity(identity) });
+  }
+
+  rememberThreadIdentityAlias(projectId: string, storedThreadId: string, threadId: string) {
+    if (storedThreadId === threadId) return;
+    const key = JSON.stringify([projectId, storedThreadId]);
+    if (this.#threadAliases.get(key) === threadId) return;
+    this.#threadAliases.set(key, threadId);
+    this.#publish();
+  }
+
+  #projectIdentity<T extends WorkbenchClientStateIdentity | WorkbenchClientStateRecord>(identity: T): T {
+    if (identity.kind !== "composerDraft" && identity.kind !== "questionnaireDraft") return identity;
+    const threadId = this.#threadAliases.get(JSON.stringify([identity.projectId, identity.threadId]));
+    return threadId ? { ...identity, threadId } : identity;
+  }
+
+  #storageIdentity<T extends WorkbenchClientStateIdentity | WorkbenchClientStateRecord>(identity: T): T {
+    if (identity.kind !== "composerDraft" && identity.kind !== "questionnaireDraft") return identity;
+    const address: Extract<WorkbenchClientStateIdentity, { kind: "composerDraft" | "questionnaireDraft" }> = identity;
+    const key = identityKey(this.#projectIdentity(address));
+    for (const record of this.#records.values()) {
+      if ((record.kind === "composerDraft" || record.kind === "questionnaireDraft")
+        && identityKey(this.#projectIdentity(record)) === key) return { ...identity, threadId: record.threadId };
+    }
+    return identity;
   }
 
   dispose() {
@@ -152,6 +178,7 @@ export default class WorkbenchClientStateController {
     this.#unsubscribeVisibility?.();
     this.#unsubscribeVisibility = null;
     this.#listeners.clear();
+    this.#threadAliases.clear();
   }
 
   async #mutate(mutation: WorkbenchClientStateMutation) {
@@ -309,7 +336,7 @@ export default class WorkbenchClientStateController {
     this.#snapshot = {
       daemonRegistrationId: this.#daemonRegistrationId,
       error: this.#error,
-      records: [...projectedRecords.values()],
+      records: [...projectedRecords.values()].map((record) => this.#projectIdentity(record)),
       revision: this.#revision,
       schemaVersion: this.#schemaVersion,
     };

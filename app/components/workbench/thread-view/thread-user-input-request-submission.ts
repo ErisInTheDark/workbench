@@ -10,6 +10,7 @@ import type {
   WorkbenchSubmitUserInputRequestOptions,
 } from "workbench-shared/types";
 import { isSyntheticQuestionnaireHistoryItem } from "workbench-shared/workbench/thread/thread-questionnaire-history";
+import { isWorkbenchMcpQuestionnaireRequestKey } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { isWorkbenchSyntheticSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 
 function isQuestionnaireFallbackAnchorItem(item: ThreadPayload["turns"][number]["items"][number]) {
@@ -46,7 +47,9 @@ export function buildPendingUserInputRequestSubmissionOptions(
   thread: ThreadPayload | null,
   pendingUserInputRequest: WorkbenchPendingUserInputRequest,
 ): WorkbenchSubmitUserInputRequestOptions {
-  const insertAfterItemId = pendingUserInputRequest.itemId?.trim() || null;
+  const insertAfterItemId = isWorkbenchMcpQuestionnaireRequestKey(pendingUserInputRequest.requestKey)
+    ? null
+    : pendingUserInputRequest.itemId?.trim() || null;
   if (!thread) {
     return {
       insertAfterItemId,

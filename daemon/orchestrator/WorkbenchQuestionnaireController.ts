@@ -20,7 +20,11 @@ export interface WorkbenchQuestionnaireControllerOptions {
   createRequestKey?: () => string;
   logError?: (message: string) => void;
   publishPending(threadId: string, questionnaire: WorkbenchDurableQuestionnaire): Promise<void>;
-  resolveThread(cwd: string, threadId: string): Promise<{ projectId: string; turnId: string }>;
+  resolveThread(cwd: string, threadId: string): Promise<{
+    projectId: string;
+    turnId: string;
+    pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null;
+  }>;
   subscribePending(listener: (state: { projectId: string; requestKey: string | null; threadId: string }) => void): () => void;
 }
 
@@ -104,7 +108,7 @@ export default class WorkbenchQuestionnaireController {
       throw new Error("This thread already has a pending questionnaire.");
     }
 
-    const { projectId, turnId } = await this.options.resolveThread(input.cwd, input.callerThreadId);
+    const { projectId, turnId, pendingQuestionnaire } = await this.options.resolveThread(input.cwd, input.callerThreadId);
     this.assertActive();
     signal.throwIfAborted();
     if (this.pendingByThreadId.has(input.callerThreadId)) {
@@ -113,8 +117,9 @@ export default class WorkbenchQuestionnaireController {
 
     const requestKey = input.requestKey
       ?? (this.options.createRequestKey ?? (() => `${WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX}${randomUUID()}`))();
+    const restored = pendingQuestionnaire?.requestKey === requestKey ? pendingQuestionnaire : null;
     const questionnaire: WorkbenchDurableQuestionnaire = {
-      itemId: null,
+      itemId: restored?.itemId ?? randomUUID(),
       request: {
         id: requestKey,
         questions: input.questions.map((question) => ({
@@ -130,7 +135,7 @@ export default class WorkbenchQuestionnaireController {
         title: getQuestionnaireTitle({ title: "Questionnaire", questions: input.questions }),
       },
       requestKey,
-      turnId,
+      turnId: restored?.turnId ?? turnId,
     };
     let resolve!: PendingQuestionnaire["resolve"];
     let reject!: PendingQuestionnaire["reject"];

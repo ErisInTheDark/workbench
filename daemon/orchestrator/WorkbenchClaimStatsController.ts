@@ -46,9 +46,11 @@ export default class WorkbenchClaimStatsController {
       lines.push("Threads  File");
       for (const row of result.rows) lines.push(`${String(row.threadCount).padStart(7)}  ${oneLine(formatWorkspaceQualifiedPath(row.rootId, row.path))}`);
     } else {
+      if (result.rows.some((row) => row.identity !== "managed")) {
+        return new Response("This claim report contains historical threads whose Workbench identity has not been observed. Their claim evidence is retained.\n", { status: 409 });
+      }
       for (const row of result.rows) {
-        const identity = row.identity === "managed" ? row.threadId : `[provider:${row.harness}] ${row.threadId}`;
-        lines.push(`${oneLine(identity)}  ${row.title ? oneLine(row.title) : "[title unavailable]"}`);
+        lines.push(`${oneLine(row.threadId)}  ${row.title ? oneLine(row.title) : "[title unavailable]"}`);
       }
     }
     if (!result.rows.length) lines.push("No results.");

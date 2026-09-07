@@ -15,9 +15,7 @@ export default function resolveThreadComposerProfileSlot(
     return { draftId: target.draftId, harness: thread.harness, kind: "draft", projectId };
   }
   if (!target && thread.isDraft) {
-    return thread.id.startsWith("draft:")
-      ? { draftId: thread.id.slice("draft:".length), harness: thread.harness, kind: "draft", projectId }
-      : { kind: "new-thread", projectId };
+    return { draftId: thread.id, harness: thread.harness, kind: "draft", projectId };
   }
   return { harness: thread.harness, kind: "thread", projectId, threadId: thread.id };
 }

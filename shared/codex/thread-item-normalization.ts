@@ -11,9 +11,16 @@ import type { UserInput } from "./generated/app-server/v2/UserInput.ts";
 import { compactCommandOutput } from "./thread-command-output.ts";
 import { mergeWorkbenchToolOutput } from "../workbench/thread/thread-tool-output.ts";
 import { mergeWorkbenchFileChange } from "../workbench/thread/workbench-file-change.ts";
+import { getWorkbenchInputState } from "../workbench/thread/thread-input-item.ts";
+import {
+  getWorkbenchThreadItemIdentityKind,
+  withWorkbenchThreadItemIdentity,
+  type WorkbenchThreadItemIdentityKind,
+} from "../workbench/thread/thread-item-identity.ts";
 
 interface NormalizeThreadItemsOptions {
   mergeDuplicateItems?: (existingItem: ThreadItem, incomingItem: ThreadItem) => ThreadItem;
+  classifyItem?: (item: ThreadItem) => WorkbenchThreadItemIdentityKind;
 }
 
 export interface ReconciledCompleteThreadItem {
@@ -245,14 +252,14 @@ function areUserMessagesEquivalentForDedupe(
     return false;
   }
 
-  const leftIsGeneric = isGenericSnapshotItemId(left.id);
-  const rightIsGeneric = isGenericSnapshotItemId(right.id);
+  const leftIsGeneric = isProvisionalItem(left);
+  const rightIsGeneric = isProvisionalItem(right);
   if (leftIsGeneric !== rightIsGeneric) {
     return true;
   }
 
-  const leftIsOptimistic = left.id.startsWith("optimistic-user-message:");
-  const rightIsOptimistic = right.id.startsWith("optimistic-user-message:");
+  const leftIsOptimistic = getWorkbenchInputState(left)?.kind === "optimistic";
+  const rightIsOptimistic = getWorkbenchInputState(right)?.kind === "optimistic";
   return leftIsOptimistic !== rightIsOptimistic;
 }
 
@@ -275,8 +282,8 @@ function getTurnItemDedupeKey(item: ThreadItem) {
   }
 }
 
-function isGenericSnapshotItemId(itemId: string) {
-  return /^item-\d+$/u.test(itemId);
+function isProvisionalItem(item: ThreadItem) {
+  return getWorkbenchThreadItemIdentityKind(item) === "provisional";
 }
 
 function nonEmptyReasoningSegments(item: Extract<ThreadItem, { type: "reasoning" }>) {
@@ -298,7 +305,7 @@ function hasReasoningContent(item: Extract<ThreadItem, { type: "reasoning" }>) {
 }
 
 function preferCanonicalEquivalentItem(currentItem: ThreadItem, incomingItem: ThreadItem) {
-  if (isGenericSnapshotItemId(currentItem.id) && !isGenericSnapshotItemId(incomingItem.id)) {
+  if (isProvisionalItem(currentItem) && !isProvisionalItem(incomingItem)) {
     return incomingItem;
   }
   return currentItem;
@@ -370,23 +377,14 @@ export function reconcileCompleteThreadItems(
       continue;
     }
 
-    if (incomingItem.type === "reasoning" && isGenericSnapshotItemId(incomingItem.id)) {
+    if (incomingItem.type === "reasoning" && isProvisionalItem(incomingItem)) {
       const representedCurrentItems = current.filter((
         currentItem,
       ): currentItem is Extract<ThreadItem, { type: "reasoning" }> => (
         currentItem.type === "reasoning"
-        && !isGenericSnapshotItemId(currentItem.id)
+        && !isProvisionalItem(currentItem)
         && reasoningItemsOverlap(currentItem, incomingItem)
       ));
-      for (const currentItem of representedCurrentItems) {
-        if (usedCurrentItemIds.has(currentItem.id)) continue;
-        usedCurrentItemIds.add(currentItem.id);
-        emit(
-          currentItem,
-          incomingItem.id,
-          representedCurrentItems.length === 1 ? [incomingItem.id] : [],
-        );
-      }
       const reasoningOwners = new Map<string, Extract<ThreadItem, { type: "reasoning" }>>();
       for (const segment of nonEmptyReasoningSegments(incomingItem)) {
         reasoningOwners.set(segment, incomingItem);
@@ -397,7 +395,17 @@ export function reconcileCompleteThreadItems(
         }
       }
       const residualItem = removeDuplicateReasoningSegments(incomingItem, reasoningOwners);
-      if (hasReasoningContent(residualItem)) {
+      const hasResidual = hasReasoningContent(residualItem);
+      for (const currentItem of representedCurrentItems) {
+        if (usedCurrentItemIds.has(currentItem.id)) continue;
+        usedCurrentItemIds.add(currentItem.id);
+        emit(
+          currentItem,
+          incomingItem.id,
+          representedCurrentItems.length === 1 && !hasResidual ? [incomingItem.id] : [],
+        );
+      }
+      if (hasResidual) {
         emit(residualItem, incomingItem.id);
       }
       continue;
@@ -434,7 +442,7 @@ function mergeContextCompactionDedupeItem(
   existingItem: Extract<ThreadItem, { type: "contextCompaction" }>,
   incomingItem: Extract<ThreadItem, { type: "contextCompaction" }>,
 ) {
-  return !isGenericSnapshotItemId(incomingItem.id) || isGenericSnapshotItemId(existingItem.id)
+  return !isProvisionalItem(incomingItem) || isProvisionalItem(existingItem)
     ? incomingItem
     : existingItem;
 }
@@ -445,14 +453,14 @@ function findContextCompactionDedupeIndex(items: ThreadItem[], incomingItem: Ext
     return items.length - 1;
   }
 
-  const incomingIdIsGeneric = isGenericSnapshotItemId(incomingItem.id);
+  const incomingIdIsGeneric = isProvisionalItem(incomingItem);
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item?.type !== "contextCompaction") {
       continue;
     }
 
-    if (isGenericSnapshotItemId(item.id) !== incomingIdIsGeneric) {
+    if (isProvisionalItem(item) !== incomingIdIsGeneric) {
       return index;
     }
   }
@@ -464,8 +472,8 @@ function shouldPreferReasoningOwner(
   currentOwner: Extract<ThreadItem, { type: "reasoning" }>,
   candidateOwner: Extract<ThreadItem, { type: "reasoning" }>,
 ) {
-  const currentIsGeneric = isGenericSnapshotItemId(currentOwner.id);
-  const candidateIsGeneric = isGenericSnapshotItemId(candidateOwner.id);
+  const currentIsGeneric = isProvisionalItem(currentOwner);
+  const candidateIsGeneric = isProvisionalItem(candidateOwner);
   if (currentIsGeneric !== candidateIsGeneric) {
     return currentIsGeneric && !candidateIsGeneric;
   }
@@ -483,7 +491,7 @@ function shouldRemoveReasoningSegmentFromItem(
     return false;
   }
 
-  return isGenericSnapshotItemId(item.id)
+  return isProvisionalItem(item)
     && ownersBySegment.get(normalizedSegment)?.id !== item.id;
 }
 
@@ -513,6 +521,10 @@ function removeDuplicateReasoningSegments(
 }
 
 export function normalizeThreadItems(items: ThreadItem[], options: NormalizeThreadItemsOptions = {}): ThreadItem[] {
+  const classifyItem = options.classifyItem;
+  if (classifyItem) {
+    items = items.map((item) => withWorkbenchThreadItemIdentity(item, classifyItem(item)));
+  }
   const dedupedItems: ThreadItem[] = [];
   const dedupedIndexesByKey = new Map<string, number>();
   const reasoningSegmentOwners = new Map<string, Extract<ThreadItem, { type: "reasoning" }>>();

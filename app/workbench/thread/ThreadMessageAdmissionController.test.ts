@@ -8,6 +8,7 @@ import { test } from "node:test";
 
 import type { CodexJsonRpcResponse } from "workbench-shared/codex/protocol";
 import type { ThreadPayload } from "workbench-shared/types";
+import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import ThreadDocumentStore from "../state/ThreadDocumentStore.ts";
 import ThreadSourceStore from "../state/ThreadSourceStore.ts";
 import ThreadOptimisticInputStore from "./ThreadOptimisticInputStore.ts";
@@ -19,7 +20,7 @@ type AdmissionRequest = { method: string; params?: unknown } & Record<string, un
 function thread(): ThreadPayload {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    forkedFromId: null, harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
+    harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
     reasoningEffort: null, serviceTier: null, source: "codex", status: "active", tokenUsage: null, turnHistory: [],
     turns: [{ completedAt: null, durationMs: null, error: null, id: "turn", items: [], itemsView: "full", startedAt: 1, status: "inProgress" }], updatedAt: 1,
   };
@@ -373,7 +374,9 @@ test("malformed successful acknowledgement fails the exact optimistic entry", as
     /empty turn id/u,
   );
   const projected = setupResult.optimisticInputs.apply(thread(), []);
-  assert.match(projected.turns[0]?.items[0]?.id ?? "", /:failed:/u);
+  const item = projected.turns[0]?.items[0];
+  assert.ok(item);
+  assert.equal(getWorkbenchInputState(item)?.status, "failed");
 });
 
 test("every lifecycle and exact-selection drift rejects before dispatch", async () => {

@@ -3,6 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { z } from "zod";
 
 import type { WorkbenchDurableQuestionnaire } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchQuestionnaireController, {
@@ -34,6 +35,7 @@ function createHarness(options: {
   beforeClear?: () => Promise<void>;
   beforePublish?: () => Promise<void>;
   publishUnrelatedStateFirst?: boolean;
+  restoredQuestionnaire?: WorkbenchDurableQuestionnaire;
 } = {}) {
   const listeners = new Set<Parameters<WorkbenchQuestionnaireControllerOptions["subscribePending"]>[0]>();
   const published = deferred<WorkbenchDurableQuestionnaire>();
@@ -59,7 +61,9 @@ function createHarness(options: {
       published.resolve(questionnaire);
       notify();
     },
-    resolveThread: async () => ({ projectId: "project-one", turnId: "turn-one" }),
+    resolveThread: async () => ({
+      projectId: "project-one", turnId: "turn-one", pendingQuestionnaire: options.restoredQuestionnaire,
+    }),
     subscribePending: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -81,11 +85,12 @@ test("freeform request publishes one durable question and returns its correlated
   const harness = createHarness();
   const waiting = harness.controller.request(freeformInput, new AbortController().signal);
   const questionnaire = await harness.published;
+  assert.equal(z.uuid().safeParse(questionnaire.itemId).success, true);
   assert.equal(questionnaire.request.questions[0]?.options.length, 0);
   assert.equal(questionnaire.request.title, freeformInput.questions[0].question);
   assert.equal(questionnaire.request.questions[0]?.header, freeformInput.questions[0].header);
   assert.deepEqual(harness.controller.list().data, [{
-    itemId: null,
+    itemId: questionnaire.itemId,
     request: questionnaire.request,
     requestKey: questionnaire.requestKey,
     threadId: "thread-one",
@@ -101,6 +106,13 @@ test("freeform request publishes one durable question and returns its correlated
   assert.deepEqual(consumed, { ...questionnaire, response, threadId: "thread-one" });
   assert.deepEqual(await waiting, response);
   assert.deepEqual(harness.controller.list().data, []);
+  const next = createHarness();
+  const nextWaiting = next.controller.request(freeformInput, new AbortController().signal);
+  const nextQuestionnaire = await next.published;
+  assert.equal(nextQuestionnaire.requestKey, questionnaire.requestKey);
+  assert.notEqual(nextQuestionnaire.itemId, questionnaire.itemId);
+  await next.controller.respond({ requestKey: nextQuestionnaire.requestKey, response, threadId: "thread-one" });
+  await nextWaiting;
 });
 
 test("one thread cannot open concurrent questionnaires or consume a stale answer", async () => {
@@ -119,6 +131,28 @@ test("one thread cannot open concurrent questionnaires or consume a stale answer
   }), null);
   cancellation.abort(new Error("caller cancelled"));
   await assert.rejects(waiting, /caller cancelled/u);
+});
+
+test("a resumed wait keeps the durable questionnaire identity and original turn", async () => {
+  const original = createHarness();
+  const cancellation = new AbortController();
+  const waiting = original.controller.request(freeformInput, cancellation.signal);
+  const questionnaire = await original.published;
+  const reload = new Error("reload");
+  Reflect.set(reload, Symbol.for("workbench.agentMcpRuntimeReloadInterruption.v1"), true);
+  cancellation.abort(reload);
+  await assert.rejects(waiting, /reload/u);
+  const restored = { ...questionnaire, itemId: "984090b6-1d94-44cc-ab26-e6470965597e", turnId: "original-turn" };
+  const resumed = createHarness({ restoredQuestionnaire: restored });
+  const resumedWaiting = resumed.controller.request({ ...freeformInput, requestKey: restored.requestKey }, new AbortController().signal);
+  const published = await resumed.published;
+  const response = { answers: { details: { answers: ["Proceed."] } } };
+  const answered = await resumed.controller.respond({ requestKey: restored.requestKey, threadId: "thread-one", response });
+  await resumedWaiting;
+  assert.equal(published.itemId, restored.itemId);
+  assert.equal(published.turnId, restored.turnId);
+  assert.equal(answered?.itemId, restored.itemId);
+  assert.equal(answered?.turnId, restored.turnId);
 });
 
 test("caller cancellation and durable dismissal both clear the invisible waiter", async () => {
@@ -156,6 +190,7 @@ test("reload interruption releases the waiter without clearing its durable proje
   await assert.rejects(waiting, /generation was replaced/u);
   assert.equal(harness.clearCount(), 0);
   assert.equal(harness.readPending()?.requestKey, requestKey);
+  assert.equal(harness.readPending()?.itemId, questionnaire.itemId);
   assert.deepEqual(harness.controller.list().data, []);
 });
 

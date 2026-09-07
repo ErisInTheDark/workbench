@@ -538,8 +538,8 @@ export default memo(function ThreadView ({
     input: UserInput[],
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
-  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission", reservedDraftId?: string, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
-  onThreadComposerDraftClear: (projectId: string, threadId: string, reservedDraftId?: string) => Promise<void> | void;
+  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
+  onThreadComposerDraftClear: (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => Promise<void> | void;
   onThreadQuestionnaireDraftChange: (projectId: string, threadId: string, requestKey: string, update: DraftUpdate<WorkbenchQuestionnaireDraft>) => Promise<WorkbenchQuestionnaireDraft> | WorkbenchQuestionnaireDraft;
   onThreadQuestionnaireDraftClear: (projectId: string, threadId: string, requestKey: string) => Promise<void> | void;
   onThreadSettingsChange: (threadId: string, settings: WorkbenchComposerSettings) => void;
@@ -1367,6 +1367,7 @@ export default memo(function ThreadView ({
         : null}
       knownSkills={workbenchSkills}
       thread={resolvedActiveThread!}
+      threadTarget={threadTarget}
       threadLifecycle={activeGitArcSelection?.lifecycle ?? null}
     >
       {isDraftThreadView ? ({ isProfilePickerOpen }) => (

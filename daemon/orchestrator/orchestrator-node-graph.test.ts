@@ -64,11 +64,11 @@ test("the root knows only direct roots and parents declare every dependant", () 
   ]);
   assert.deepEqual([...parents.get("server:core")!].sort(), ["server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:commands")!].sort(), ["server:core", "server:database", "server:turns"]);
-  assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:commands", "server:core", "server:topology", "server:turns"]);
+  assert.deepEqual([...parents.get("server:mcp")!].sort(), ["server:commands", "server:core", "server:database", "server:topology", "server:turns"]);
   assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:codex/instructions", "server:core", "server:database", "server:turns"]);
   assert.equal(parents.has("server:codex/instructions"), false);
-  assert.deepEqual([...parents.get("server:opencode")!].sort(), ["harness:opencode", "server:core", "server:turns"]);
-  assert.deepEqual([...parents.get("server:browse")!], ["server:core"]);
+  assert.deepEqual([...parents.get("server:opencode")!].sort(), ["harness:opencode", "server:core", "server:database", "server:turns"]);
+  assert.deepEqual([...parents.get("server:browse")!].sort(), ["server:core", "server:database"]);
   assert.deepEqual([...parents.get("server:websocket")!].sort(), ["server:core", "server:database", "server:turns"]);
   assert.equal(nodes.get("server:websocket")!.requires.includes("stats"), true);
   assert.equal(parents.has("harness:codex"), false);
@@ -85,7 +85,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
     provides: nodes.get("server:database")!.provides,
   }, {
     lifecycle: "handoff",
-    provides: ["codexSandboxNetwork", "database", "transcript", "transcriptShadowLog"],
+    provides: ["codexSandboxNetwork", "database", "threadIdentity", "transcriptIdentity", "transcript", "transcriptShadowLog"],
   });
   assert.deepEqual({
     lifecycle: nodes.get("server:codex/instructions")!.lifecycle,

@@ -12,7 +12,7 @@ import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchComposerProfileStorePayload, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { GitArcActiveClaim, GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
-import { WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
@@ -23,6 +23,9 @@ import WorkbenchThreadStateStore, {
 } from "./WorkbenchThreadStateStore";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { WorkbenchGitArcLifecycleState as GitArcLifecycleState, WorkbenchGitArcPlanState as GitArcPlanState } from "./WorkbenchGitArcFeature";
+import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
+import { mapNativeProviderResponse } from "./thread-identity-workbench-mapping";
+import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 
 interface ProjectRecord { id: string; rootPath: string }
 interface ProjectResolution { cwd: string; project: ProjectRecord }
@@ -51,6 +54,7 @@ function legacyGitArc(claim: GitArcActiveClaim): RepoGitArcLifecycleState {
 }
 
 export interface WorkbenchThreadStateFeatureContext {
+  identities?: NativeTranscriptIdentityOwners;
   readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
   database: WorkbenchThreadStateStoreDatabase;
   gitArcs: {
@@ -301,10 +305,29 @@ export default class WorkbenchThreadStateFeature {
   }
 
   async handleManagedThreadRequest(request: JsonRpcRequest): Promise<JsonRpcResponse> {
+    try {
+      const response = await this.handleNativeManagedThreadRequest(request);
+      if (response.error || !this.context.identities) return response;
+      const result = asRecord(response.result);
+      if (typeof result?.threadId !== "string") return response;
+      const identity = await this.context.identities.threads.resolve({ threadId: result.threadId });
+      const binding = identity?.bindings[0];
+      if (!binding) return { id: request.id ?? null, error: { code: -32000, message: "Managed thread result has no admitted identity." } };
+      return await mapNativeProviderResponse(this.context.identities, WorkbenchHarnessSchema.parse(binding.harness), {
+        ...request, params: { threadId: binding.nativeThreadId },
+      }, response);
+    } catch (error) {
+      return { id: request.id ?? null, error: { code: -32000, message: error instanceof Error ? error.message : "Managed thread identity projection failed." } };
+    }
+  }
+
+  private async handleNativeManagedThreadRequest(request: JsonRpcRequest): Promise<JsonRpcResponse> {
     const id = request.id ?? null;
     try {
       const params = asRecord(request.params) ?? {};
       const resolved = await this.resolveManagedThread(params);
+      const needsTurn = request.method === "workbench/thread/status" || request.method === "workbench/thread/resume";
+      const turnId = needsTurn ? await this.resolveManagedTurn(resolved) : null;
       const providerEntry = normalizeProviderSidebarEntry(resolved.harness, resolved.thread);
       if (!providerEntry || providerEntry.entryKind === "draft") throw new Error("The managed provider thread could not be normalized.");
       await this.controller.ensureProviderEntry(resolved.projectId, providerEntry);
@@ -344,18 +367,16 @@ export default class WorkbenchThreadStateFeature {
       if (request.method === "workbench/thread/status") {
         const status = params.status === "completed" || params.status === "blocked" ? params.status : null;
         if (!status) throw new Error("--status must be completed or blocked.");
-        const turn = getCurrentTurn(resolved.thread);
-        if (!turn?.id) throw new Error("The managed thread has no current turn to label.");
-        const entry = await this.controller.applyLifecycle(resolved.projectId, resolved.harness, resolved.thread.id, { kind: "agentStatus", status, turnId: turn.id }, providerEntry ?? undefined);
+        if (!turnId) throw new Error("The managed thread has no current turn to label.");
+        const entry = await this.controller.applyLifecycle(resolved.projectId, resolved.harness, resolved.thread.id, { kind: "agentStatus", status, turnId }, providerEntry ?? undefined);
         if (!entry || entry.entryKind !== "thread") throw new Error("The current managed lifecycle could not be updated.");
         const snapshot = await this.controller.getSnapshot(resolved.projectId);
-        return { id, result: { agentStatus: status, revision: snapshot.revision, threadId: resolved.thread.id, turnId: turn.id, userStatus: entry.lifecycle.kind } };
+        return { id, result: { agentStatus: status, revision: snapshot.revision, threadId: resolved.thread.id, turnId, userStatus: entry.lifecycle.kind } };
       }
       if (request.method === "workbench/thread/resume") {
-        const turn = getCurrentTurn(resolved.thread);
-        if (!turn?.id) throw new Error("The managed thread has no current turn to resume.");
+        if (!turnId) throw new Error("The managed thread has no current turn to resume.");
         await this.context.harnesses.resumeThread(resolved.harness, resolved.thread.id);
-        return { id, result: { accepted: true, threadId: resolved.thread.id, turnId: turn.id } };
+        return { id, result: { accepted: true, threadId: resolved.thread.id, turnId } };
       }
       throw new Error("Unsupported managed thread command.");
     } catch (error) {
@@ -555,20 +576,49 @@ export default class WorkbenchThreadStateFeature {
     })];
   }
 
+  private async resolveManagedTurn(resolved: { cwd: string; harness: WorkbenchHarness; projectId: string; thread: ThreadReadResponse["thread"] }) {
+    if (resolved.harness === "codex") {
+      const response = await this.context.harnesses.request("codex", {
+        id: 0, method: "thread/turns/list",
+        params: { cwd: resolved.cwd, threadId: resolved.thread.id, itemsView: "notLoaded", limit: 1, sortDirection: "desc" },
+      });
+      if (response.error) throw new Error(response.error.message);
+      const data = asRecord(response.result)?.data;
+      const turn = Array.isArray(data) ? asRecord(data[0]) : null;
+      return typeof turn?.id === "string" ? turn.id : null;
+    }
+    const turn = getCurrentTurn(resolved.thread);
+    if (turn) return turn.id;
+    const context = await this.controller.getThreadClaimContext(resolved.projectId, resolved.harness, resolved.thread.id);
+    return getWorkbenchLifecycleTurnId(context?.lifecycle ?? null);
+  }
+
   private async resolveManagedThread(params: Record<string, unknown>) {
     const callerThreadId = typeof params.callerThreadId === "string" ? params.callerThreadId.trim() : "";
     const cwd = typeof params.cwd === "string" ? params.cwd.trim() : "";
     if (!callerThreadId || !cwd) throw new Error("A managed Workbench thread identity and cwd are required.");
     const requestedProject = await this.context.resolveProjectFromCwd(cwd, { endpointName: "Workbench managed thread" });
-    for (const harness of this.context.harnesses.listHarnesses()) {
+    const identity = await this.context.identities?.threads.resolve({ threadId: callerThreadId, projectId: requestedProject.project.id });
+    const destinations = identity?.bindings.length
+      ? [identity.bindings[0]!]
+      : this.context.harnesses.listHarnesses().map((harness) => ({ harness, nativeThreadId: callerThreadId }));
+    for (const destination of destinations) {
+      const harness = WorkbenchHarnessSchema.parse(destination.harness);
+      const threadId = destination.nativeThreadId;
       try {
-        const response = await this.context.harnesses.request(harness, { id: 0, method: "thread/read", params: { cwd, includeTurns: true, threadId: callerThreadId } });
-        if (response.error) continue;
+        const response = await this.context.harnesses.request(harness, { id: 0, method: "thread/read", params: { cwd, includeTurns: false, threadId } });
+        if (response.error) {
+          if (identity) throw new Error(response.error.message);
+          continue;
+        }
         const thread = (response.result as ThreadReadResponse | undefined)?.thread;
-        if (!thread || thread.id !== callerThreadId) continue;
+        if (!thread || thread.id !== threadId) continue;
         const actualProject = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Workbench managed thread" });
         if (actualProject.project.id === requestedProject.project.id) return { cwd, harness, projectId: requestedProject.project.id, thread };
-      } catch { /* Try the next validated provider identity. */ }
+      } catch (error) {
+        if (identity) throw error;
+        this.context.log?.(`Managed thread metadata lookup failed for ${harness}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     throw new Error("The managed thread does not belong to this cwd project.");
   }

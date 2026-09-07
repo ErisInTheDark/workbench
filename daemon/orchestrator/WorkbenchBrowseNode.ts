@@ -3,10 +3,11 @@
  * - default WorkbenchBrowseNode: own warm Browse execution while preserving browser sessions across code replacement. Keywords: browse, drain, reload.
  */
 import WorkbenchBrowseRuntime from "../lib/workbench/browse/WorkbenchBrowseRuntime";
+import WorkbenchBrowseRequestHandler from "../lib/workbench/browse/WorkbenchBrowseRequestHandler";
 import type { OrchestratorProcessContext } from "./orchestrator-process-context";
 import type { OrchestratorBrowseExecution, OrchestratorProviderNotification, OrchestratorRuntimeObjects } from "./orchestrator-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
-import WorkbenchBrowseController from "./WorkbenchBrowseController";
+import WorkbenchBrowseController, { type WorkbenchBrowseIdentityPort } from "./WorkbenchBrowseController";
 import WorkbenchBrowseResultController from "./WorkbenchBrowseResultController";
 import type { WorkbenchBrowseResultCallbacks } from "./WorkbenchBrowseResultController";
 import { WORKBENCH_TOOL_CONTEXT_METHOD, WorkbenchToolContextResponseSchema } from "workbench-shared/workbench/thread/thread-tool-output";
@@ -17,7 +18,9 @@ class BrowseExecution implements OrchestratorBrowseExecution {
 
   constructor(
     context: OrchestratorProcessContext,
-    private readonly resultCallbacks: WorkbenchBrowseResultCallbacks,
+    private resultCallbacks: WorkbenchBrowseResultCallbacks,
+    private identity: WorkbenchBrowseIdentityPort,
+    private publicTurnId: (threadId: string, turnId: string) => Promise<string>,
   ) {
     this.runtime = new WorkbenchBrowseRuntime(context.browseProjectResolvers);
   }
@@ -73,8 +76,33 @@ class BrowseExecution implements OrchestratorBrowseExecution {
     this.controller?.beginDrain();
   }
 
+  restoreDependencies(
+    callbacks: WorkbenchBrowseResultCallbacks,
+    identity: WorkbenchBrowseIdentityPort,
+    publicTurnId: (threadId: string, turnId: string) => Promise<string>,
+  ) {
+    // The old controller has drained. Keep browser sessions, not disposed database/bridge ports.
+    this.controller = null;
+    this.resultCallbacks = callbacks;
+    this.identity = identity;
+    this.publicTurnId = publicTurnId;
+  }
+
   private getController() {
-    this.controller ??= new WorkbenchBrowseController(new WorkbenchBrowseResultController(this.resultCallbacks), this.runtime);
+    if (!this.controller) {
+      const nativeResults = new WorkbenchBrowseResultController(this.resultCallbacks);
+      const results = {
+        record: nativeResults.record.bind(nativeResults),
+        waitForIdle: nativeResults.waitForIdle.bind(nativeResults),
+        deliverScreenshot: async (threadId: string, imageUrl: string) => {
+          const result = await nativeResults.deliverScreenshot(threadId, imageUrl);
+          return { ...result, turnId: await this.publicTurnId(threadId, result.turnId) };
+        },
+      };
+      this.controller = new WorkbenchBrowseController(results, this.runtime,
+        new WorkbenchBrowseRequestHandler(results, this.runtime, (threadId) => this.identity.publicThreadId(threadId)),
+        this.identity);
+    }
     return this.controller;
   }
 }
@@ -84,16 +112,44 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   children: [],
   create: (context, build) => {
     const harnesses = build.get("harnesses");
+    const threads = build.get("threadIdentity");
+    const projects = build.get("projectCatalog");
+    const identity: WorkbenchBrowseIdentityPort = {
+      nativeTarget: async (request) => {
+        const project = request.cwd
+          ? await projects.resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Browse" }) : null;
+        const thread = await harnesses.resolveThreadIdentity({
+          threadId: request.threadId,
+          ...(project ? { projectId: project.project.id } : request.projectId ? { projectId: request.projectId } : {}),
+        });
+        const binding = thread?.bindings[0];
+        if (!binding) throw new Error("Browse target has no native execution.");
+        return { threadId: binding.nativeThreadId, projectId: thread.projectId, cwd: request.cwd ?? binding.nativeLocation };
+      },
+      publicThreadId: async (threadId, projectId) => {
+        const thread = await threads.resolve({ threadId, ...(projectId ? { projectId } : {}) });
+        if (!thread) throw new Error("Browse session has no observed Workbench thread identity.");
+        return thread.threadId;
+      },
+    };
+    const publicTurnId = async (threadId: string, turnId: string) => {
+      const canonicalThreadId = await identity.publicThreadId(threadId);
+      const turn = await threads.resolveTurn({ threadId: canonicalThreadId, turnId });
+      if (!turn) throw new Error("Browse result has no observed Workbench turn identity.");
+      return turn.turnId;
+    };
+    const callbacks: WorkbenchBrowseResultCallbacks = {
+      ...context.browseResultCallbacks,
+      injectToolContext: async (params) => {
+        const response = await harnesses.request("codex", { method: WORKBENCH_TOOL_CONTEXT_METHOD, params });
+        if (response.error) throw new Error(response.error.message);
+        return WorkbenchToolContextResponseSchema.parse(response.result);
+      },
+    };
     const execution = build.mode === "restore"
       ? (build.handoffState as { execution: BrowseExecution }).execution
-      : new BrowseExecution(context, {
-        ...context.browseResultCallbacks,
-        injectToolContext: async (params) => {
-          const response = await harnesses.request("codex", { method: WORKBENCH_TOOL_CONTEXT_METHOD, params });
-          if (response.error) throw new Error(response.error.message);
-          return WorkbenchToolContextResponseSchema.parse(response.result);
-        },
-      });
+      : new BrowseExecution(context, callbacks, identity, publicTurnId);
+    if (build.mode === "restore") execution.restoreDependencies(callbacks, identity, publicTurnId);
     let detached = false;
     const unregisterBrowse = build.get("daemonRequests").registerBrowse({
       controlSession: async (request) => await execution.controlSession(request),
@@ -120,7 +176,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload orchestrator-owned Browse execution without restarting browser sessions.",
   lifecycle: "handoff",
   provides: ["browseExecution"],
-  requires: ["daemonRequests", "harnesses"],
+  requires: ["daemonRequests", "harnesses", "projectCatalog", "threadIdentity"],
   safeAll: true,
   scope: "server:browse",
   sources: [

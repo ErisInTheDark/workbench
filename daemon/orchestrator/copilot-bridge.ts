@@ -30,6 +30,7 @@ import {
   type WorkbenchThreadPageResponse,
 } from "workbench-shared/workbench/thread/workbench-thread-page";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import type { CopilotThreadState } from "./copilot-thread-state";
 import { appendCopilotEventLog, log, logError } from "./process-helpers";
 import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
@@ -43,6 +44,8 @@ type CopilotBridgeOptions = {
   getReloadableModules: () => OrchestratorReloadableModules;
   onNotification: (notification: JsonRpcNotification) => void;
   projectRoot: string;
+  admitThreads?: (threads: readonly ThreadReadResponse["thread"][]) => Promise<void>;
+  admitNotifications?: (threadId: string, notifications: readonly JsonRpcNotification[]) => Promise<void>;
 };
 
 type CopilotReasoningEffort = "low" | "medium" | "high" | "xhigh";
@@ -321,23 +324,31 @@ export class CopilotBridge {
   private readonly getReloadableModules: CopilotBridgeOptions["getReloadableModules"];
   private readonly onNotification: CopilotBridgeOptions["onNotification"];
   private readonly projectRoot: string;
+  private readonly admitThreads: NonNullable<CopilotBridgeOptions["admitThreads"]>;
+  private readonly admitNotifications: NonNullable<CopilotBridgeOptions["admitNotifications"]>;
   private client: CopilotClient | null = null;
   private cachedRateLimits: RateLimitSnapshot | null = null;
   private readonly sessionNameMisses = new Set<string>();
   private readonly sessionNames = new Map<string, string>();
   private readonly sessions = new Map<string, CopilotSession>();
   private readonly threadStates = new Map<string, CopilotThreadState>();
-  private readonly unsubscribers = new Map<string, () => void>();
+  private readonly unsubscribers = new Map<string, { unsubscribe: () => void; drain: () => Promise<void> }>();
   private readonly pendingQuestionnaires = new Map<string, PendingQuestionnaireRequest>();
 
-  constructor({ getReloadableModules, onNotification, projectRoot }: CopilotBridgeOptions) {
+  constructor({ getReloadableModules, onNotification, projectRoot, admitThreads, admitNotifications }: CopilotBridgeOptions) {
     this.getReloadableModules = getReloadableModules;
     this.onNotification = onNotification;
     this.projectRoot = projectRoot;
+    this.admitThreads = admitThreads ?? (async () => {});
+    this.admitNotifications = admitNotifications ?? (async () => {});
   }
 
   getInitializeResult() {
     return this.getReloadableModules().copilotThreadState.INITIALIZE_RESULT;
+  }
+
+  readLoadedThreads() {
+    return [...this.threadStates.values()].map(({ thread }) => this.getReloadableModules().copilotThreadState.cloneThread(thread));
   }
 
   async stop() {
@@ -345,9 +356,10 @@ export class CopilotBridge {
       pending.reject(new Error("Copilot bridge stopped before the questionnaire was answered."));
     }
     this.pendingQuestionnaires.clear();
-    for (const unsubscribe of this.unsubscribers.values()) {
-      unsubscribe();
+    for (const subscription of this.unsubscribers.values()) {
+      subscription.unsubscribe();
     }
+    await Promise.all([...this.unsubscribers.values()].map((subscription) => subscription.drain()));
     this.unsubscribers.clear();
     this.sessionNames.clear();
     this.sessionNameMisses.clear();
@@ -401,6 +413,19 @@ export class CopilotBridge {
           const workbenchOrigin = this.readWorkbenchOrigin(message.params);
           if (!threadId) {
             return this.errorResponse(requestId, -32602, "Missing thread id.");
+          }
+
+          if (method === "thread/read" && asRecord(message.params)?.includeTurns === false) {
+            const client = await this.ensureClient();
+            const metadata = await client.getSessionMetadata(threadId);
+            if (!metadata) return this.errorResponse(requestId, -32000, "Copilot thread metadata was not found.");
+            const existing = this.threadStates.get(threadId)?.thread;
+            const header = existing ? { ...existing, turns: existing.turns.map((turn) => ({
+              ...turn, items: [], itemsView: "notLoaded" as const,
+            })) } : null;
+            const thread = this.getReloadableModules().copilotThreadState.metadataToThread(metadata, header, this.projectRoot);
+            await this.admitThreads([thread]);
+            return { id: requestId, result: { thread, model: thread.model, modelProvider: "copilot", reasoningEffort: effort } };
           }
 
           return {
@@ -526,8 +551,7 @@ export class CopilotBridge {
     const sessions = await client.listSessions();
     await this.hydrateListedThreadNames(sessions);
     const { cloneThread, metadataToThread } = this.getReloadableModules().copilotThreadState;
-    return {
-      data: sessions
+    const data = sessions
         .map((metadata) => {
           const existingThread = this.threadStates.get(metadata.sessionId)?.thread ?? null;
           const thread = metadataToThread(metadata, existingThread ? cloneThread(existingThread) : null, this.projectRoot);
@@ -543,8 +567,9 @@ export class CopilotBridge {
           }
 
           return left.id.localeCompare(right.id);
-        }),
-    };
+        });
+    await this.admitThreads(data);
+    return { data };
   }
 
   private selectPremiumQuota(quotaResult: CopilotAccountGetQuotaResult): CopilotAccountQuotaSnapshot | null {
@@ -878,10 +903,12 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
 
     const { createThreadState } = this.getReloadableModules().copilotThreadState;
     const state = createThreadState(sessionId, null, selectedCwd);
+    await this.admitThreads([state.thread]);
     this.threadStates.set(sessionId, state);
     this.sessions.set(sessionId, session);
-    this.bindSessionEvents(sessionId, session, state);
+    await this.bindSessionEvents(sessionId, session, state);
     await this.syncThreadNameFromSession(state, session, false);
+    await this.admitThreads([state.thread]);
     return {
       model: await this.readSessionModel(session, model),
       modelProvider: "copilot",
@@ -925,11 +952,13 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
   ) {
     const { session, state } = await this.ensureThreadState(threadId, model, reasoningEffort, agentPath, workbenchOrigin, projectId, null, promptContext);
     const { cloneThread } = this.getReloadableModules().copilotThreadState;
+    const thread = cloneThread(state.thread);
+    await this.admitThreads([thread]);
     return {
       model: await this.readSessionModel(session, model),
       modelProvider: "copilot",
       reasoningEffort,
-      thread: cloneThread(state.thread),
+      thread,
     };
   }
 
@@ -963,6 +992,7 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
     const state = existingState ?? createThreadState(threadId, metadata ?? null, this.projectRoot);
     state.metadata = metadata ?? null;
     state.thread = metadataToThread(metadata ?? null, state.thread, this.projectRoot);
+    await this.admitThreads([state.thread]);
 
     const selectedCwd = metadata?.context?.cwd ?? await this.resolveSelectedCwd(projectId, cwd);
     const session = await client.resumeSession(threadId, {
@@ -979,7 +1009,7 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
 
     this.threadStates.set(threadId, state);
     this.sessions.set(threadId, session);
-    this.bindSessionEvents(threadId, session, state);
+    await this.bindSessionEvents(threadId, session, state);
 
     const history = (await session.getMessages())
       .map((event, index) => ({ event, index }))
@@ -1007,19 +1037,35 @@ Treat the Workbench instructions below as active for this session. If Copilot-pr
       applyCopilotEvent(state, event, false, this.onNotification);
     }
     await this.syncThreadNameFromSession(state, session, false);
+    await this.admitThreads([state.thread]);
     return { session, state };
   }
 
-  private bindSessionEvents(threadId: string, session: CopilotSession, state: CopilotThreadState) {
-    this.unsubscribers.get(threadId)?.();
+  private async bindSessionEvents(threadId: string, session: CopilotSession, state: CopilotThreadState) {
+    const previous = this.unsubscribers.get(threadId);
+    previous?.unsubscribe();
+    await previous?.drain();
+    let pending = Promise.resolve();
     const unsubscribe = session.on((event: SessionEvent) => {
       void appendCopilotEventLog(this.projectRoot, threadId, "live", event);
-      this.getReloadableModules().copilotThreadState.applyCopilotEvent(state, event, true, this.onNotification);
+      const notifications: JsonRpcNotification[] = [];
+      this.getReloadableModules().copilotThreadState.applyCopilotEvent(state, event, true, (notification) => notifications.push(structuredClone(notification)));
+      // The SDK does not await callbacks. This subscription owns admission/publication order
+      // and drains it after unsubscribing, without delaying native state application.
+      pending = pending.then(async () => {
+        if (notifications.some((notification) => ["turn/started", "turn/completed", "item/started", "item/completed"].includes(notification.method))) {
+          await this.admitNotifications(threadId, notifications);
+        }
+        for (const notification of notifications) this.onNotification(notification);
+        }).catch((error) => {
+          logError("copilot-bridge", `event admission failed: ${error instanceof Error ? error.message : String(error)}`);
+          this.onNotification({ method: "thread/status/changed", params: { threadId, status: { type: "systemError" } } });
+        });
       if (event.type === "user.message" || event.type === "assistant.turn_end" || event.type === "session.idle") {
         void this.syncThreadNameFromSession(state, session, true);
       }
     });
-    this.unsubscribers.set(threadId, unsubscribe);
+    this.unsubscribers.set(threadId, { unsubscribe, drain: () => pending });
   }
 
   private async sendToSession(

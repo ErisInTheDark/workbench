@@ -32,7 +32,6 @@ import {
 import { readWorkbenchAgentMessageInput, readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread/thread-agent-message";
 import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
-import { SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX } from "workbench-shared/workbench/thread/thread-steer-history";
 import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 const SEARCH_SNIPPET_CHARACTERS = 500;
@@ -369,12 +368,12 @@ export function buildSqliteWorkbenchThreadRecallRecords(
       const displayInput = unwrapWorkbenchSteerDisplayInput(item.content);
       if (!displayInput.length) continue;
       const agentMessage = readWorkbenchAgentMessageInput(item.content);
-      const isSteer = item.id.startsWith(SYNTHETIC_STEER_HISTORY_ITEM_ID_PREFIX)
-        || firstVisibleUserMessageByTurn.get(root.turn_id) !== item.id;
       const owner = userMessageRowsByItemId.get(root.id);
       if (!owner) {
         throw new Error(`SQLite Thread Recall user message ${item.id} has no durable payload row.`);
       }
+      const isSteer = owner.input_kind === "steer"
+        || firstVisibleUserMessageByTurn.get(root.turn_id) !== item.id;
       const piece: WorkbenchThreadContextPiece = isSteer
         ? {
           displayInput,

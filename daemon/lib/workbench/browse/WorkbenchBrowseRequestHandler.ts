@@ -73,6 +73,7 @@ const BROWSE_MARKDOWN_VARIABLE_REFERENCE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*
 export type WorkbenchBrowseSerializedRunner = <TValue>(task: () => Promise<TValue>) => Promise<TValue>;
 
 interface WorkbenchBrowseExecutionContext {
+  publicThreadId: (nativeThreadId: string) => Promise<string>;
   rawCli: WorkbenchBrowseRawCli;
   results: WorkbenchBrowseResultSink;
   runtime: WorkbenchBrowseRuntime;
@@ -857,7 +858,7 @@ function extensionForScreenshotMimeType(mimeType: string) {
   }
 }
 
-async function writeScreenshotTranscriptAsset(threadId: string, image: ScreenshotImagePayload) {
+async function writeScreenshotTranscriptAsset(threadId: string, image: ScreenshotImagePayload, publicThreadId: string) {
   const extension = extensionForScreenshotMimeType(image.mimeType);
   if (!extension) {
     throw new Error(`Unsupported screenshot image type: ${image.mimeType}.`);
@@ -879,7 +880,7 @@ async function writeScreenshotTranscriptAsset(threadId: string, image: Screensho
     }
   });
 
-  return `/api/transcript-assets/codex/${encodeURIComponent(threadId)}/${encodeURIComponent(fileName)}`;
+  return `/api/transcript-assets/codex/${encodeURIComponent(publicThreadId)}/${encodeURIComponent(fileName)}`;
 }
 
 async function captureBrowseSessionScreenshotAsset(
@@ -918,7 +919,7 @@ async function captureBrowseSessionScreenshotAsset(
 
   const image = parseScreenshotBase64(screenshotResult.stdout);
   return {
-    assetUrl: await writeScreenshotTranscriptAsset(request.threadId, image),
+    assetUrl: await writeScreenshotTranscriptAsset(request.threadId, image, await execution.publicThreadId(request.threadId)),
   };
 }
 
@@ -938,7 +939,7 @@ async function runBrowseCommandAndMaybeDeliverScreenshot(
   }
 
   const image = parseScreenshotBase64(result.stdout);
-  await writeScreenshotTranscriptAsset(payload.threadId, image);
+  await writeScreenshotTranscriptAsset(payload.threadId, image, await execution.publicThreadId(payload.threadId));
   const delivery = await execution.results.deliverScreenshot(payload.threadId, createScreenshotDataUrl(image));
   const deliveryFields = delivery.kind === "injected"
     ? { injected: true, injectionAcceptedAt: delivery.acceptedAt, injectionTurnId: delivery.turnId }
@@ -1225,7 +1226,11 @@ export default class WorkbenchBrowseRequestHandler {
   private readonly runtime: WorkbenchBrowseRuntime;
   private readonly sessions: WorkbenchBrowseSessionController;
 
-  constructor(results: WorkbenchBrowseResultSink, runtime = new WorkbenchBrowseRuntime()) {
+  constructor(
+    results: WorkbenchBrowseResultSink,
+    runtime = new WorkbenchBrowseRuntime(),
+    private readonly publicThreadId: (nativeThreadId: string) => Promise<string> = async (threadId) => threadId,
+  ) {
     this.results = results;
     this.runtime = runtime;
     this.rawCli = new WorkbenchBrowseRawCli(runtime);
@@ -1235,6 +1240,7 @@ export default class WorkbenchBrowseRequestHandler {
   async handle(body: Buffer, signal: AbortSignal, runSerialized: WorkbenchBrowseSerializedRunner) {
     const startedAt = Date.now();
     const execution: WorkbenchBrowseExecutionContext = {
+      publicThreadId: this.publicThreadId,
       rawCli: this.rawCli,
       results: this.results,
       runtime: this.runtime,

@@ -5,10 +5,10 @@
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import { toThreadPayload } from "workbench-shared/codex/thread-adapter";
 import { applyQuestionnaireHistoryToThread } from "workbench-shared/workbench/thread/thread-questionnaire-history";
-import { createSyntheticQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import {
   applySteerHistoryToThread,
-  createSyntheticSteerHistoryItemId,
+  resolveSteerHistoryItemId,
 } from "workbench-shared/workbench/thread/thread-steer-history";
 import { findWorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type {
@@ -67,10 +67,10 @@ export function createCodexTranscriptSqliteImport({
     steerEntries,
   );
   const questionnaireBySyntheticId = new Map(questionnaireEntries.map((entry) => [
-    createSyntheticQuestionnaireHistoryItemId(entry),
+    resolveQuestionnaireHistoryItemId(entry),
     entry,
   ]));
-  const steerBySyntheticId = new Map(steerEntries.map((entry) => [createSyntheticSteerHistoryItemId(entry), entry]));
+  const steerBySyntheticId = new Map(steerEntries.map((entry) => [resolveSteerHistoryItemId(entry), entry]));
   const observations: WorkbenchTranscriptAtomicObservation[] = [{
     kind: "thread",
     threadId: thread.id,

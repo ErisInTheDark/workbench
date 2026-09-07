@@ -1,7 +1,9 @@
 /*
+ * Keywords: thread state, questionnaire, identity.
  * Exports:
- * - projectThreadStateQuestionnaires: project durable questionnaire records into constrained relational rows. Keywords: thread state, questionnaire.
+ * - projectThreadStateQuestionnaires: project questionnaires using admitted item identities.
  */
+import type { WorkbenchDurableQuestionnaire } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record.ts";
 import {
   ANSWER_TABLE,
@@ -9,11 +11,15 @@ import {
   QUESTIONNAIRE_TABLE,
   QUESTION_TABLE,
   addRow,
-  questionnaireId,
   type RowSets,
 } from "./workbench-thread-state-relational-tables.ts";
 
-export function projectThreadStateQuestionnaires(rows: RowSets, threadId: string, record: WorkbenchThreadStateRecord) {
+export function projectThreadStateQuestionnaires(
+  rows: RowSets,
+  threadId: string,
+  record: WorkbenchThreadStateRecord,
+  resolveIdentity: (entry: WorkbenchDurableQuestionnaire) => { id: string; legacyId: string | null },
+) {
   const entries = [
     ...(record.pendingQuestionnaire ? [{
       entry: record.pendingQuestionnaire,
@@ -36,9 +42,10 @@ export function projectThreadStateQuestionnaires(rows: RowSets, threadId: string
     const request = value.entry.request;
     const providerTurnId = value.entry.turnId;
     const providerItemId = value.entry.itemId;
-    const id = questionnaireId(threadId, providerItemId, providerTurnId, value.entry.requestKey);
+    const { id, legacyId } = resolveIdentity(value.entry);
     addRow(rows, QUESTIONNAIRE_TABLE, {
       id,
+      legacy_id: legacyId,
       thread_id: threadId,
       state: value.state,
       provider_turn_id: providerTurnId,

@@ -10,6 +10,7 @@ import type {
   WorkbenchTranscriptSnapshot,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { getWorkbenchTurnAdmission, type WorkbenchAdmissionTurn } from "workbench-shared/workbench/thread/thread-admission";
 import {
   compareWorkbenchTranscriptParity,
   createWorkbenchTranscriptProjectionFailureDiagnostic,
@@ -33,16 +34,16 @@ export type ThreadTranscriptProjectionState =
   | { status: "failed"; threadId: string; message: string };
 
 function durableTurnIds(
-  turns: readonly { id: string }[] | null | undefined,
+  turns: readonly Pick<WorkbenchAdmissionTurn, "id" | "workbenchAdmission">[] | null | undefined,
 ) {
   return (turns ?? [])
-    .map(({ id }) => id)
-    .filter((turnId) => !turnId.startsWith("workbench:connecting:"));
+    .filter((turn) => getWorkbenchTurnAdmission(turn) !== "connecting")
+    .map(({ id }) => id);
 }
 
 function sameDurableTurnIds(
-  left: readonly { id: string }[] | null | undefined,
-  right: readonly { id: string }[] | null | undefined,
+  left: readonly Pick<WorkbenchAdmissionTurn, "id" | "workbenchAdmission">[] | null | undefined,
+  right: readonly Pick<WorkbenchAdmissionTurn, "id" | "workbenchAdmission">[] | null | undefined,
 ) {
   const leftIds = durableTurnIds(left);
   const rightIds = durableTurnIds(right);

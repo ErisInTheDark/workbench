@@ -6,6 +6,7 @@ import test from "node:test";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import {
   getCurrentThreadReasoningActivity,
   getThreadReasoningSteps,
@@ -89,12 +90,12 @@ test("title-only reasoning becomes one bodyless step and exact omission removes 
 });
 
 test("pending steers do not replace the newest reasoning activity", () => {
-  const pendingSteer: Extract<ThreadItem, { type: "userMessage" }> = {
+  const pendingSteer = withWorkbenchInputState({
     clientId: null,
-    content: [{ text: "queued", text_elements: [], type: "text" }],
-    id: "optimistic-user-message:steer:pending:one",
-    type: "userMessage",
-  };
+    content: [{ text: "queued", text_elements: [], type: "text" as const }],
+    id: "cced43f7-5a5a-4168-9b34-81ce28e5bc36",
+    type: "userMessage" as const,
+  }, { kind: "optimistic", placement: "steer", status: "pending" });
   assert.equal(getCurrentThreadReasoningActivity(turn([
     reasoning(["Still thinking\nwith detail"]),
     pendingSteer,

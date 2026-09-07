@@ -9,12 +9,14 @@ import Database from "better-sqlite3";
 import { WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS } from "workbench-shared/types";
 import { installWorkbenchDatabaseSchema } from "../../../orchestrator/database/workbench-database-schema.ts";
 import WorkbenchTranscriptRepository from "../../../orchestrator/database/transcript/WorkbenchTranscriptRepository.ts";
+import WorkbenchThreadIdentityRepository from "../../../orchestrator/database/thread-identity/WorkbenchThreadIdentityRepository.ts";
+import WorkbenchTranscriptIdentityRepository from "../../../orchestrator/database/transcript/WorkbenchTranscriptIdentityRepository.ts";
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
 } from "../../../orchestrator/database/transcript/workbench-transcript-types.ts";
 import WorkbenchThreadRecallController from "./WorkbenchThreadRecallController";
-import { createSqliteWorkbenchThreadRecallRef } from "./thread-context-recall.ts";
+import { createSqliteWorkbenchThreadRecallRef, createWorkbenchThreadRecallCursor } from "./thread-context-recall.ts";
 
 function thread(): WorkbenchTranscriptAtomicObservation {
   return {
@@ -92,7 +94,10 @@ function window(
   };
 }
 
-function createHarness({ seeded = true }: { seeded?: boolean } = {}) {
+function createHarness({
+  seeded = true,
+  latestText = `LATEST_HEAD_${"N".repeat(WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS + 2_000)}_LATEST_TAIL`,
+}: { seeded?: boolean; latestText?: string } = {}) {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
@@ -106,7 +111,7 @@ function createHarness({ seeded = true }: { seeded?: boolean } = {}) {
     item(
       "turn-new",
       "agent-new",
-      `LATEST_HEAD_${"N".repeat(WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS + 2_000)}_LATEST_TAIL`,
+      latestText,
       "agent",
     ),
   ], ["turn-new"]);
@@ -139,6 +144,7 @@ function createHarness({ seeded = true }: { seeded?: boolean } = {}) {
   });
   return {
     close: () => database.close(),
+    database,
     controller,
     materializations,
     projects,
@@ -164,6 +170,54 @@ test("warm history stops after the newest SQLite turn fills the response", async
   } finally {
     harness.close();
   }
+});
+
+test("retained Recall references and cursor offsets survive identity conversion and database reopen", async () => {
+  const latestText = Array.from({ length: 8_000 }, (_, index) => `record ${index}\n`).join("");
+  const harness = createHarness({ latestText });
+  const oldRef = createSqliteWorkbenchThreadRecallRef({ turnId: "turn-new", itemId: "agent-new" });
+  const cursor = createWorkbenchThreadRecallCursor(oldRef, 100);
+  const request = {
+    body: { action: "expand", ref: oldRef, cursor },
+    method: "POST" as const, searchParams: new URLSearchParams(), threadId: "thread-one",
+  };
+  const oldResponse = await harness.controller.execute(request, new AbortController().signal);
+  const oldText = await oldResponse.text();
+  const identity = new WorkbenchThreadIdentityRepository(harness.database).resolve({ threadId: "thread-one" });
+  assert.ok(identity);
+  const reopened = new Database(harness.database.serialize());
+  reopened.pragma("foreign_keys = ON");
+  harness.close();
+  const repository = new WorkbenchTranscriptRepository(reopened);
+  const threads = new WorkbenchThreadIdentityRepository(reopened);
+  const items = new WorkbenchTranscriptIdentityRepository(reopened);
+  const controller = new WorkbenchThreadRecallController({
+    materializeTurn: async () => { throw new Error("Converted warm Recall must not read provider history"); },
+    readTranscript: async (input) => repository.read(input),
+    resolveProjectFromCwd: async () => {},
+    resolveReference: async (threadId, reference) => {
+      const turn = threads.resolveTurn({ threadId, turnId: reference.turnId });
+      assert.ok(turn);
+      repository.read({ threadId, turnIds: [turn.turnId], turnLimit: 1 });
+      const item = items.resolve({ threadId, turnId: turn.turnId, itemId: reference.itemId });
+      assert.ok(item);
+      return { ...reference, turnId: turn.turnId, itemId: item.itemId };
+    },
+  });
+  try {
+    const response = await controller.execute({ ...request, threadId: identity.threadId }, new AbortController().signal);
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /start="100"/u);
+    const body = (markdown: string) => markdown.match(/start="100"[^>]*>\n([\s\S]*?)\n<\/commentary>/u)?.[1];
+    for (const markdown of [oldText, text]) {
+      const content = body(markdown);
+      assert.ok(content);
+      assert.equal(content, latestText.slice(100, 100 + content.length));
+    }
+    assert.ok(text.includes(identity.threadId));
+    assert.equal(text.includes(oldRef), false);
+  } finally { reopened.close(); }
 });
 
 test("filtered history and expansion materialize only reached turns", async () => {

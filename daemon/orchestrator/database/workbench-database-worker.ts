@@ -12,6 +12,8 @@ import {
   type WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository.ts";
+import WorkbenchThreadIdentityRepository from "./thread-identity/WorkbenchThreadIdentityRepository.ts";
+import WorkbenchTranscriptIdentityRepository from "./transcript/WorkbenchTranscriptIdentityRepository.ts";
 import WorkbenchThreadStateRelationalRepository from "./thread-state/WorkbenchThreadStateRelationalRepository.ts";
 import WorkbenchSearchRepository from "./search/WorkbenchSearchRepository.ts";
 import WorkbenchStatsRepository from "./stats/WorkbenchStatsRepository.ts";
@@ -23,6 +25,8 @@ if (!parentPort) throw new Error("Workbench database worker requires a parent po
 
 let database: Database.Database | null = null;
 let transcriptRepository: WorkbenchTranscriptRepository | null = null;
+let threadIdentityRepository: WorkbenchThreadIdentityRepository | null = null;
+let transcriptIdentityRepository: WorkbenchTranscriptIdentityRepository | null = null;
 let threadStateShadowRepository: WorkbenchThreadStateRelationalRepository | null = null;
 let searchRepository: WorkbenchSearchRepository | null = null;
 let statsRepository: WorkbenchStatsRepository | null = null;
@@ -61,6 +65,8 @@ function post(response: WorkbenchDatabaseResponse) {
 }
 
 function closeDatabase() {
+  threadIdentityRepository = null;
+  transcriptIdentityRepository = null;
   transcriptRepository = null;
   threadStateShadowRepository = null;
   searchRepository = null;
@@ -115,6 +121,44 @@ function executeTransaction(request: Extract<WorkbenchDatabaseRequest, { type: "
 }
 
 function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { type: "initialize" }>) {
+  if (request.type === "observeTurnIdentities") {
+    if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
+    post({ id: request.id, type: "turnIdentities", identities: threadIdentityRepository.observeTurns(request.inputs) });
+    return;
+  }
+  if (request.type === "resolveTurnIdentity") {
+    if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
+    const identity = threadIdentityRepository.resolveTurn(request.input);
+    post({ id: request.id, type: "turnIdentity", identity });
+    return;
+  }
+  if (request.type === "admitTranscriptItemIdentities" || request.type === "resolveTranscriptItemIdentity") {
+    if (!transcriptIdentityRepository) throw new Error("Workbench transcript identity repository is not initialized");
+    if (request.type === "admitTranscriptItemIdentities") {
+      post({ id: request.id, type: "transcriptItemIdentities", identities: transcriptIdentityRepository.admitMany(request.inputs) });
+    } else {
+      post({ id: request.id, type: "transcriptItemIdentity", identity: transcriptIdentityRepository.resolve(request.input) });
+    }
+    return;
+  }
+  if (request.type === "observeThreadIdentities") {
+    if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
+    post({ id: request.id, type: "threadIdentities", identities: threadIdentityRepository.observeMany(request.inputs) });
+    return;
+  }
+  if (request.type === "resolveThreadIdentity"
+    || request.type === "resolveNativeThreadIdentity" || request.type === "listThreadIdentities") {
+    if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
+    if (request.type === "listThreadIdentities") {
+      post({ id: request.id, type: "threadIdentities", identities: threadIdentityRepository.list() });
+    } else {
+      const identity = request.type === "resolveThreadIdentity"
+          ? threadIdentityRepository.resolve(request.input)
+          : threadIdentityRepository.resolveNative(request.input);
+      post({ id: request.id, type: "threadIdentity", identity });
+    }
+    return;
+  }
   if (request.type === "getInventory") {
     post({ id: request.id, type: "inventory", inventory: inventory() });
     return;
@@ -265,6 +309,8 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   }
   if (!database) throw new Error("Workbench database is not initialized");
   database.close();
+  threadIdentityRepository = null;
+  transcriptIdentityRepository = null;
   transcriptRepository = null;
   threadStateShadowRepository = null;
   searchRepository = null;
@@ -284,8 +330,10 @@ parentPort.on("message", (request: WorkbenchDatabaseRequest) => {
       database.pragma("journal_mode = WAL");
       installWorkbenchDatabaseSchema(database);
       proveReadWrite();
-      transcriptRepository = new WorkbenchTranscriptRepository(database);
-      threadStateShadowRepository = new WorkbenchThreadStateRelationalRepository(database);
+      threadIdentityRepository = new WorkbenchThreadIdentityRepository(database);
+      transcriptIdentityRepository = new WorkbenchTranscriptIdentityRepository(database);
+      transcriptRepository = new WorkbenchTranscriptRepository(database, threadIdentityRepository);
+      threadStateShadowRepository = new WorkbenchThreadStateRelationalRepository(database, threadIdentityRepository, transcriptIdentityRepository);
       searchRepository = new WorkbenchSearchRepository(database);
       statsRepository = new WorkbenchStatsRepository(database);
       statsImportRepository = new WorkbenchStatsImportRepository(database);

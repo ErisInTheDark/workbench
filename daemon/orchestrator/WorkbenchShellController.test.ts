@@ -135,3 +135,30 @@ test("fails closed when Codex omits the effective sandbox state", async () => {
   );
   assert.equal(executionCount, 0);
 });
+
+test("shell environment exposes Workbench identity without changing native sandbox context", async () => {
+  const workspace = path.resolve("C:/workspace");
+  const executions: CodexCommandExecRequest[] = [];
+  const threadId = "97d84a45-0d43-4d20-a996-e6b8bd8ad149";
+  const controller = new WorkbenchShellController({
+    platform: "win32",
+    resolveThreadId: async (nativeId, cwd) => {
+      assert.equal(nativeId, "native-session");
+      assert.equal(cwd, workspace);
+      return threadId;
+    },
+    commandExec: { execute: async (request) => {
+      executions.push(request);
+      return { exitCode: 0, stderr: "", stdout: "" };
+    } },
+  });
+  await controller.execute({ command: "Get-Location", workdir: "child" },
+    { ...sandboxMeta(workspace), threadId: "native-session" }, new AbortController().signal);
+  assert.equal(executions[0]?.env?.WORKBENCH_THREAD_ID, threadId);
+  assert.equal(executions[0]?.env?.WORKBENCH_HARNESS, "codex");
+  assert.ok(executions[0]?.env?.WORKBENCH_CODEX_SANDBOX_ARGS_JSON);
+  assert.equal(executions[0]?.cwd, path.resolve(workspace, "child"));
+  await assert.rejects(controller.execute({ command: "Get-Location" }, sandboxMeta(workspace), new AbortController().signal),
+    /trusted MCP thread identity/u);
+  assert.equal(executions.length, 1);
+});

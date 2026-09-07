@@ -9,24 +9,45 @@ import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts"
 import WorkbenchStatsRepository from "./WorkbenchStatsRepository.ts";
 import WorkbenchClaimStatsRepository from "./WorkbenchClaimStatsRepository.ts";
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository.ts";
+import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
 
 const now = Date.UTC(2026, 8, 4, 12);
 const day = 86_400_000;
+
+test("one Workbench claimant counts once across native providers and pending metadata", () => {
+  const db = new Database(":memory:");
+  try {
+    db.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(db);
+    const identities = new WorkbenchThreadIdentityRepository(db);
+    const identity = identities.observe({
+      native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId: "native" },
+      projectId: "project", projectRoot: "C:/project", title: "one owner", createdAt: now, updatedAt: now, activityAt: now,
+    });
+    const writer = new WorkbenchStatsRepository(db);
+    for (const [harness, threadId] of [["codex", "native"], ["codex", identity.threadId], ["opencode", identity.threadId]] as const) {
+      writer.recordClaimSnapshot({ projectId: "project", threadId, harness, observedAt: now, roots: [{ rootId: "root", paths: ["file"] }] });
+    }
+    const repository = new WorkbenchClaimStatsRepository(db);
+    assert.equal(repository.hotspots("project", now - day, now)[0]?.threadCount, 1);
+    const result = repository.read({ projectId: "project", range: "7d", page: 1, file: { rootId: "root", path: "file" } }, now);
+    assert.equal(result.rows.length, 1);
+    assert.equal(result.kind === "threads" && result.rows[0]?.threadId, identity.threadId);
+  } finally { db.close(); }
+});
 
 test("claim identities coalesce providers and days into managed threads without dropping missing titles", () => {
   const db = new Database(":memory:");
   try {
     db.pragma("foreign_keys = ON");
     installWorkbenchDatabaseSchema(db);
-    db.exec(`
-      INSERT INTO workbench_thread_state_threads VALUES
-        ('managed', 'project', 'topLevel', 'visible', 'Current title', 0, 0, 0, 1, 1, 1, 1, NULL);
-      INSERT INTO workbench_thread_state_provider_identities(thread_id,harness_id,provider_thread_id,project_id)
-        VALUES ('managed','codex','native','project');
-    `);
+    const managed = new WorkbenchThreadIdentityRepository(db).observe({
+      native: { harness: "codex", nativeLocation: "C:/project", nativeThreadId: "native" },
+      projectId: "project", projectRoot: "C:/project", title: "Current title", createdAt: now, updatedAt: now, activityAt: now,
+    }).threadId;
     const writer = new WorkbenchStatsRepository(db);
     for (const [threadId, harness, observedAt] of [
-      ["native", "codex", now - day], ["managed", "codex", now],
+      ["native", "codex", now - day], [managed, "codex", now],
       ["missing", "codex", now],
     ] as const) writer.recordClaimSnapshot({
       projectId: "project", threadId, harness, observedAt, roots: [{ rootId: "root", paths: ["src/file.ts"] }],
@@ -40,10 +61,10 @@ test("claim identities coalesce providers and days into managed threads without 
     assert.equal(threads.kind, "threads");
     if (threads.kind !== "threads") return;
     assert.equal(threads.rows.length, 2);
-    assert.deepEqual(threads.rows.map(({ threadId, title, identity }) => ({ threadId, title, identity })), [
-      { threadId: "managed", title: "Current title", identity: "managed" },
+    assert.deepEqual(threads.rows.map(({ threadId, title, identity }) => ({ threadId, title, identity })).sort((a, b) => a.threadId.localeCompare(b.threadId)), [
+      { threadId: managed, title: "Current title", identity: "managed" },
       { threadId: "missing", title: null, identity: "provider" },
-    ]);
+    ].sort((a, b) => a.threadId.localeCompare(b.threadId)));
     assert.equal(repository.hotspots("project", now - 6 * day, now)[0]?.threadCount, 2);
   } finally { db.close(); }
 });
@@ -107,9 +128,10 @@ test("retained transcript identities supply titles only when native identity is 
     }, now);
     assert.equal(result.kind, "threads");
     if (result.kind !== "threads") return;
+    const canonical = new WorkbenchThreadIdentityRepository(db).resolve({ threadId: "canonical" })!.threadId;
     assert.deepEqual(result.rows.map(({ threadId, title, identity }) => ({ threadId, title, identity })), [
       { threadId: "ambiguous", title: null, identity: "provider" },
-      { threadId: "canonical", title: "Title canonical", identity: "managed" },
+      { threadId: canonical, title: "Title canonical", identity: "managed" },
     ]);
   } finally { db.close(); }
 });

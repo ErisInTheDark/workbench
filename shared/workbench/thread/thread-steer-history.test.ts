@@ -10,6 +10,7 @@ import { test } from "node:test";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "../../types.ts";
 import { applySteerHistoryToThread } from "./thread-steer-history.ts";
 import { findWorkbenchThreadItemTimelineEntry } from "./thread-item-timeline.ts";
+import { getWorkbenchInputState, withWorkbenchInputState } from "./thread-input-item.ts";
 
 function entry(id: string, sequence: number, status: WorkbenchSteerHistoryEntry["status"]): WorkbenchSteerHistoryEntry {
   return {
@@ -22,7 +23,7 @@ function entry(id: string, sequence: number, status: WorkbenchSteerHistoryEntry[
 function thread(): ThreadPayload {
   return {
     agentNickname: null, agentPath: null, agentRole: null, browseResultEntries: [], createdAt: 1, cwd: "C:/repo",
-    forkedFromId: null, harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
+    harness: "codex", id: "thread", isDraft: false, model: null, name: null, path: null, preview: "",
     reasoningEffort: null, serviceTier: null, source: "codex", status: "active", tokenUsage: null, turnHistory: [],
     turns: [{ completedAt: null, durationMs: null, error: null, id: "turn", items: [], itemsView: "full", startedAt: 1, status: "inProgress" }], updatedAt: 1,
   };
@@ -31,6 +32,24 @@ function thread(): ThreadPayload {
 test("native pending history uses dispatch sequence rather than UUID order", () => {
   const projected = applySteerHistoryToThread(thread(), [entry("z", 0, "pending"), entry("a", 1, "pending")]);
   assert.deepEqual(projected.turns[0]?.items.map((item) => item.type === "userMessage" ? item.clientId : null), ["z", "a"]);
+});
+
+test("steer settlement updates the admitted item without losing delivered messages", () => {
+  const saved = { ...entry("steer", 0, "pending"), itemId: "84d686af-f1aa-4353-bf72-672fa6ba3c3b" };
+  const delivered = withWorkbenchInputState({
+    clientId: "delivered", content: entry("delivered", 0, "sent").input, id: "delivered", type: "userMessage" as const,
+  }, { kind: "steer", status: "sent" });
+  let source = thread();
+  source.turns[0]!.items = [delivered];
+  for (const status of ["pending", "failed", "interrupted"] as const) {
+    source = applySteerHistoryToThread(source, [{ ...saved, status }]);
+    assert.deepEqual(source.turns[0]!.items.map(({ id }) => id), [delivered.id, saved.itemId]);
+    assert.deepEqual(getWorkbenchInputState(source.turns[0]!.items[1]!), { kind: "steer", status });
+  }
+  const canonical = { clientId: "steer", content: saved.input, id: saved.itemId, type: "userMessage" as const };
+  source.turns[0]!.items = [delivered, canonical];
+  source = applySteerHistoryToThread(source, [{ ...saved, status: "sent", canonicalItemId: canonical.id }]);
+  assert.deepEqual(source.turns[0]!.items, [delivered, canonical]);
 });
 
 test("steer timestamps preserve attempted time for pending, failed and canonical sent messages", () => {

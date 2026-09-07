@@ -11,6 +11,15 @@ import type { WorkbenchStatsDetailedReadRequest, WorkbenchStatsDetailedResponse 
 import type { WorkbenchClaimStatsRequest, WorkbenchClaimStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
+  WorkbenchNativeThreadIdentity,
+  WorkbenchThreadIdentityLookup,
+  WorkbenchThreadIdentityMetadata,
+  WorkbenchThreadIdentityRecord,
+  WorkbenchTurnIdentityLookup,
+  WorkbenchTurnIdentityMetadata,
+  WorkbenchTurnIdentityRecord,
+} from "./thread-identity/workbench-thread-identity-types.ts";
+import type {
   WorkbenchDatabaseMutation,
   WorkbenchDatabaseQuery,
   WorkbenchDatabaseRow,
@@ -20,6 +29,9 @@ import type {
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptSettlement,
   WorkbenchTranscriptSnapshot,
+  WorkbenchTranscriptItemIdentity,
+  WorkbenchTranscriptItemIdentityAdmission,
+  WorkbenchTranscriptItemIdentityLookup,
 } from "./transcript/workbench-transcript-types.ts";
 import type {
   WorkbenchThreadStateShadowRefresh,
@@ -55,6 +67,14 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "getInventory" }
   | { type: "executeTransaction"; statements: readonly WorkbenchDatabaseMutation[] }
   | { type: "query"; statement: WorkbenchDatabaseQuery }
+  | { type: "observeThreadIdentities"; inputs: readonly WorkbenchThreadIdentityMetadata[] }
+  | { type: "resolveThreadIdentity"; input: WorkbenchThreadIdentityLookup }
+  | { type: "resolveNativeThreadIdentity"; input: WorkbenchNativeThreadIdentity }
+  | { type: "listThreadIdentities" }
+  | { type: "observeTurnIdentities"; inputs: readonly WorkbenchTurnIdentityMetadata[] }
+  | { type: "resolveTurnIdentity"; input: WorkbenchTurnIdentityLookup }
+  | { type: "admitTranscriptItemIdentities"; inputs: readonly WorkbenchTranscriptItemIdentityAdmission[] }
+  | { type: "resolveTranscriptItemIdentity"; input: WorkbenchTranscriptItemIdentityLookup }
   | { type: "rebuildThreadStateShadow"; request: WorkbenchThreadStateShadowRefresh }
   | { type: "readThreadStateShadowStatus" }
   | { type: "settleTranscript"; observations: readonly WorkbenchTranscriptObservation[] }
@@ -85,6 +105,12 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "inventory"; inventory: WorkbenchDatabaseInventory }
   | { id: number; type: "mutationResult"; result: WorkbenchDatabaseMutationResult }
   | { id: number; type: "queryResult"; rows: WorkbenchDatabaseRow[] }
+  | { id: number; type: "threadIdentity"; identity: WorkbenchThreadIdentityRecord | null }
+  | { id: number; type: "turnIdentities"; identities: WorkbenchTurnIdentityRecord[] }
+  | { id: number; type: "threadIdentities"; identities: WorkbenchThreadIdentityRecord[] }
+  | { id: number; type: "turnIdentity"; identity: WorkbenchTurnIdentityRecord | null }
+  | { id: number; type: "transcriptItemIdentities"; identities: WorkbenchTranscriptItemIdentity[] }
+  | { id: number; type: "transcriptItemIdentity"; identity: WorkbenchTranscriptItemIdentity | null }
   | { id: number; type: "threadStateShadowStatus"; status: WorkbenchThreadStateShadowStatus | null }
   | { id: number; type: "transcriptSettlement"; settlement: WorkbenchTranscriptSettlement }
   | { id: number; type: "transcriptSnapshot"; snapshot: WorkbenchTranscriptSnapshot | null }

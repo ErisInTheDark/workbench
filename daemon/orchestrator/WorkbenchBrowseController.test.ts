@@ -7,7 +7,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
-import type { WorkbenchBrowseSessionListRequest } from "workbench-shared/types";
+import type { WorkbenchBrowseSessionListRequest, WorkbenchBrowseSessionSummary } from "workbench-shared/types";
 import type { WorkbenchBrowseResultSink } from "../lib/workbench/browse/browse-result-events";
 import WorkbenchBrowseController from "./WorkbenchBrowseController";
 import WorkbenchBrowseRuntime from "../lib/workbench/browse/WorkbenchBrowseRuntime";
@@ -55,6 +55,40 @@ test("direct Browse request execution uses the same handler and cancellation sig
   assert.deepEqual(await response.json(), { ok: true });
 });
 
+test("Browse translates only declared targets and returns public session identities", async () => {
+  const received: object[] = [];
+  const session = { name: "default", threadId: "native", projectId: "project" } as WorkbenchBrowseSessionSummary;
+  const identity = {
+    nativeTarget: async (request: { threadId: string; cwd?: string | null; projectId?: string | null }) => {
+      assert.equal(request.threadId, "public");
+      return { ...request, threadId: "native" };
+    },
+    publicThreadId: async (threadId: string) => {
+      assert.equal(threadId, "native");
+      return "public";
+    },
+  };
+  const controller = new WorkbenchBrowseController({
+    record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
+  }, new WorkbenchBrowseRuntime(), {
+    handle: async (body) => { received.push(JSON.parse(body.toString())); return Response.json({ ok: true }); },
+    listSessions: async (request) => { received.push(request); return { generatedAt: "", projectId: "project", sessions: [session] }; },
+    controlSession: async (request) => { received.push(request); return { result: null, session, stopped: true }; },
+    findStaleInactiveSessionStops: async () => [], waitForIdle: async () => {},
+  }, identity);
+  const signal = new AbortController().signal;
+  const action = { action: "evaluate", threadId: "public", cwd: "C:/repo", expression: '({threadId:"public"})' };
+  const response = await controller.executeBrowseRequest(Buffer.from(JSON.stringify({ actions: [action] })), signal);
+  assert.equal(response.status, 200);
+  assert.deepEqual(received[0], { actions: [{ ...action, threadId: "native" }] });
+  const list = await controller.listSessions({ threadId: "public", cwd: "C:/repo" }, signal);
+  assert.equal(list.sessions[0]!.threadId, "public");
+  const stopped = await controller.controlSession({ action: "stop", threadId: "public", session: "default", cwd: "C:/repo" }, signal);
+  assert.equal(stopped.session?.threadId, "public");
+  assert.equal((received[1] as { threadId: string }).threadId, "native");
+  assert.equal((received[2] as { threadId: string }).threadId, "native");
+});
+
 test("direct session request execution preserves query adaptation", async () => {
   let receivedRequest: WorkbenchBrowseSessionListRequest | null = null;
   const controller = createController((request) => { receivedRequest = request; });
@@ -68,6 +102,38 @@ test("direct session request execution preserves query adaptation", async () => 
   assert.equal(receivedRequest?.cwd, "C:\\projects\\workbench");
   assert.equal(receivedRequest?.includeRuntime, false);
   assert.equal(receivedRequest?.threadId, "thread-1");
+});
+
+test("Browse reload waits for admitted identity lookups and rejects later commands", async () => {
+  for (const operation of ["browse", "sessions"] as const) {
+    const entered = deferred();
+    const gate = deferred();
+    let settled = false;
+    const controller = new WorkbenchBrowseController({
+      record() {}, deliverScreenshot: async () => ({ kind: "steered", turnId: "turn" }), waitForIdle: async () => {},
+    }, new WorkbenchBrowseRuntime(), {
+      handle: async () => Response.json({ ok: true }),
+      listSessions: async () => ({ generatedAt: "", projectId: null, sessions: [] }),
+      controlSession: async () => ({ result: null, session: null, stopped: false }),
+      findStaleInactiveSessionStops: async () => [], waitForIdle: async () => {},
+    }, {
+      nativeTarget: async () => { entered.resolve(); await gate.promise; return { threadId: "native" }; },
+      publicThreadId: async () => "public",
+    });
+    const active = operation === "browse"
+      ? controller.executeBrowseRequest(Buffer.from('{"threadId":"public"}'), new AbortController().signal)
+      : controller.listSessions({ threadId: "public" });
+    await entered.promise;
+    controller.beginDrain();
+    const drained = controller.waitForIdle().then(() => { settled = true; });
+    await Promise.resolve();
+    assert.equal(settled, false);
+    await assert.rejects(controller.listSessions({ threadId: "public" }), /draining/u);
+    gate.resolve();
+    await active;
+    await drained;
+    assert.equal(settled, true);
+  }
 });
 
 test("HTTP admission releases the graph handler and reload drain cancels its request owner", async () => {

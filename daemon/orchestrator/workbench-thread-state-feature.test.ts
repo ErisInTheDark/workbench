@@ -618,7 +618,7 @@ test("managed title commands use the validated provider title as the mutation pr
   assert.deepEqual(requests[0], {
     harness: "codex",
     method: "thread/read",
-    params: { cwd: "C:/workspace", includeTurns: true, threadId: "thread-one" },
+    params: { cwd: "C:/workspace", includeTurns: false, threadId: "thread-one" },
   });
   await waitFor(() => requests.length === 4, "Provider reconciliation did not run after the managed title read.");
   assert.deepEqual(requests.slice(1).map(({ harness, method }) => ({ harness, method })), [
@@ -917,7 +917,14 @@ test("managed resume validates the provider thread before requesting lifecycle-o
     },
     publish: () => undefined,
     harnesses: createHarnesses(async (harness, request) => {
+      if (request.method === "thread/turns/list") {
+        assert.deepEqual(request.params, {
+          cwd: storageRoot, threadId: "thread-one", itemsView: "notLoaded", limit: 1, sortDirection: "desc",
+        });
+        return { id: request.id ?? null, result: { data: [{ id: "turn-one", status: "inProgress", items: [] }], nextCursor: null } };
+      }
       if (request.method === "thread/read" && harness === "codex") {
+        assert.equal((request.params as { includeTurns: boolean }).includeTurns, false);
         return {
           id: request.id ?? null,
           result: {
@@ -927,7 +934,7 @@ test("managed resume validates the provider thread before requesting lifecycle-o
               name: "Current task",
               preview: "Initial request",
               status: { type: "active" },
-              turns: [{ id: "turn-one", status: "inProgress" }],
+              turns: [],
               updatedAt: 1,
             },
           },

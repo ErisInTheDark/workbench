@@ -106,6 +106,8 @@ const featureHost = new ReloadableNodeHost<OrchestratorProcessContext, Orchestra
 
 const copilotBridge = new CopilotBridge({
   getReloadableModules: () => featureHost.get("modules"),
+  admitThreads: (threads) => featureHost.run("harnesses", (owner) => owner.admitThreads("copilot", threads), "Copilot thread identity"),
+  admitNotifications: (threadId, notifications) => featureHost.run("harnesses", (owner) => owner.admitNotifications("copilot", threadId, notifications), "Copilot event identity"),
   onNotification: (notification) => {
     broadcastToClients("copilot", notification);
   },
@@ -498,6 +500,7 @@ function createHarnessPorts(): Record<WorkbenchHarness, WorkbenchHarnessRuntimeP
         sendJsonToClient(client, await copilotBridge.handleRequest(message));
       },
       readThread: async (threadId) => await readGenericBrowseThread("copilot", threadId),
+      readLoadedThreads: () => copilotBridge.readLoadedThreads(),
       request: async (request) => {
         requireHarnessAdmission();
         return await copilotBridge.handleRequest(request);

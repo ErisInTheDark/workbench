@@ -4,15 +4,19 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import Database from "better-sqlite3";
 
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController.ts";
 import { applyComposerProfileMutation, normalizeComposerProfileMutation } from "workbench-shared/workbench/state/composer-profile-state";
 import type { WorkbenchComposerProfile } from "workbench-shared/types";
+import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema.ts";
+import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository.ts";
 
 function createController(options: {
   gitArcResponse?: Response;
   rejectProjectId?: string;
   profiles?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profiles"];
+  threadIdentity?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["threadIdentity"];
 } = {}) {
   let globalNetworkEnabled = false;
   const projectNetworkOverrides = new Map<string, boolean>();
@@ -25,6 +29,7 @@ function createController(options: {
   const statsRequests: object[] = [];
   let statsRefreshes = 0;
   const controller = new WorkbenchDaemonRequestController({
+    threadIdentity: options.threadIdentity ?? { resolve: async () => null },
     agents: {
       listAgents: async () => ({ data: [] }),
       readAgent: async () => ({ codexGlobalDuplicate: false, data: { description: "", name: "", path: "", prompt: "" } }),
@@ -166,6 +171,46 @@ function createController(options: {
     targetWrites,
   };
 }
+
+test("thread lookup resolves native and WB inputs without publishing native bindings or requiring bodies", async () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    const identities = new WorkbenchThreadIdentityRepository(database);
+    const identity = identities.observe({
+      native: { harness: "codex", nativeLocation: "private-home", nativeThreadId: "native-thread" },
+      projectId: "project", projectRoot: "C:/project", title: "Thread",
+      createdAt: 1, updatedAt: 1, activityAt: 1,
+    });
+    const { controller, targetReads } = createController({
+      threadIdentity: { resolve: async (input) => identities.resolve(input) },
+    });
+    for (const threadId of ["native-thread", identity.threadId]) {
+      assert.deepEqual(await controller.handle({
+        id: 1, method: "thread/identity/resolve", params: { threadId, projectId: "project" },
+      }), {
+        id: 1, result: { data: { threadId: identity.threadId, projectId: "project", harness: "codex" } },
+      });
+      await controller.handle({ id: 4, method: "profiles/target/read", params: {
+        slot: { kind: "thread", threadId, projectId: "project", harness: "codex" },
+      } });
+    }
+    assert.deepEqual(targetReads, [0, 1].map(() => ({
+      kind: "thread", threadId: "native-thread", projectId: "project", harness: "codex",
+    })));
+    const wrongProject = await controller.handle({
+      id: 2, method: "thread/identity/resolve", params: { threadId: identity.threadId, projectId: "elsewhere" },
+    });
+    assert.ok(wrongProject.error);
+    assert.deepEqual(await controller.handle({
+      id: 3, method: "thread/identity/resolve", params: { threadId: "missing" },
+    }), { id: 3, result: { data: null } });
+    assert.deepEqual(database.prepare("SELECT id FROM thread_items").all(), []);
+  } finally {
+    database.close();
+  }
+});
 
 test("dispatch validates semantic parameters without corrupting valid empty file content", async () => {
   const { controller, fileWrites } = createController();

@@ -41,7 +41,7 @@ import {
   createWorkbenchThreadRecoveryInput,
   isWorkbenchThreadRecoveryEligible,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
-import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadLifecycle, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
 import StickyCollapsibleSurface from "../StickyCollapsibleSurface";
 import { PlayIcon, StopIcon } from "../workbench-icons";
@@ -123,6 +123,7 @@ export default function ThreadComposer ({
   knownSkills,
   highlightSources,
   thread,
+  threadTarget,
 }: {
   children?: ReactNode | ((state: { isProfilePickerOpen: boolean }) => ReactNode);
   canToggleHarness?: boolean;
@@ -138,8 +139,8 @@ export default function ThreadComposer ({
     options?: { activatedSkillPaths?: string[] },
   ) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
-  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission", reservedDraftId?: string, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
-  onThreadComposerDraftClear: (projectId: string, threadId: string, reservedDraftId?: string) => Promise<void> | void;
+  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
+  onThreadComposerDraftClear: (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => Promise<void> | void;
   onThreadQuestionnaireDraftChange: (projectId: string, threadId: string, requestKey: string, update: DraftUpdate<WorkbenchQuestionnaireDraft>) => Promise<WorkbenchQuestionnaireDraft> | WorkbenchQuestionnaireDraft;
   onThreadQuestionnaireDraftClear: (projectId: string, threadId: string, requestKey: string) => Promise<void> | void;
   onSubmitUserInputRequest: (
@@ -168,6 +169,7 @@ export default function ThreadComposer ({
   knownSkills: WorkbenchSkillSummary[];
   highlightSources: InlineMentionHighlightSources;
   thread: ThreadPayload;
+  threadTarget?: WorkbenchThreadTarget | null;
   threadLifecycle: WorkbenchThreadLifecycle | null;
 }) {
   const daemon = useWorkbenchDaemonClient();
@@ -176,11 +178,14 @@ export default function ThreadComposer ({
     isWithinBottomDistance,
     reportComposerArmed,
   } = useThreadScrollViewportContext();
-  const [reservedDraftId] = useState(() => thread.id === "new" ? crypto.randomUUID() : undefined);
+  const composerTarget = useMemo<WorkbenchThreadTarget>(() => thread.isDraft
+    ? threadTarget ?? { kind: "draft", draftId: thread.id }
+    : { kind: "provider", harness: thread.harness, threadId: thread.id },
+  [thread.harness, thread.id, thread.isDraft, threadTarget]);
   const emptyDraft = useMemo<WorkbenchComposerInputDraft>(() => ({ attachments: [], text: "", updatedAt: 0 }), []);
   const editing = useDraftSession(threadComposerDraft ?? emptyDraft, {
     empty: () => emptyDraft,
-    save: (update, options) => onThreadComposerDraftChange(projectId, thread.id, update, options.reason, reservedDraftId, options.detached),
+    save: (update, options) => onThreadComposerDraftChange(projectId, thread.id, update, options.reason, composerTarget, options.detached),
   });
   const [availableModels, setAvailableModels] = useState<WorkbenchModelOption[]>([]);
   const [availableAgents, setAvailableAgents] = useState<WorkbenchAgentOption[]>([]);
@@ -556,9 +561,9 @@ export default function ThreadComposer ({
     setError("");
     await editing.session.submit(async (submitted, options) => {
       return await runThreadComposerSubmission({
-        clearDurableDraft: () => onThreadComposerDraftClear(projectId, thread.id, reservedDraftId),
+        clearDurableDraft: () => onThreadComposerDraftClear(projectId, thread.id, composerTarget),
         preserveDurableDraft: async () => {
-          await onThreadComposerDraftChange(projectId, thread.id, () => submitted, "submission", reservedDraftId, options.detached);
+          await onThreadComposerDraftChange(projectId, thread.id, () => submitted, "submission", composerTarget, options.detached);
         },
         send: () => onSendMessage(thread.id, input, {
           ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}),

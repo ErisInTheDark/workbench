@@ -11,36 +11,44 @@ import {
   type WorkbenchClaimStatsRequest,
   type WorkbenchClaimStatsResponse,
 } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
+import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
 
 const CLAIM_IDENTITIES = `
   WITH native AS (
     SELECT t.harness_id, t.native_thread_id, w.project_id, MIN(t.thread_id) thread_id
-    FROM thread_turns t JOIN workbench_threads w ON w.id = t.thread_id
+    FROM (
+      SELECT thread_id, harness_id, native_thread_id FROM thread_turns
+      UNION SELECT thread_id, harness_id, native_thread_id FROM workbench_pending_import_threads
+    ) t JOIN workbench_threads w ON w.id = t.thread_id
     GROUP BY t.harness_id, t.native_thread_id, w.project_id
     HAVING COUNT(DISTINCT t.thread_id) = 1
   ), resolved AS (
     SELECT c.*,
-      COALESCE(s.id, p.thread_id, w.id, n.thread_id) managed_id
+      COALESCE(w.id, a.thread_id, n.thread_id) managed_id
     FROM git_claim_thread_file_days c
-    LEFT JOIN workbench_thread_state_threads s ON s.id = c.thread_id AND s.project_id = c.project_id
-    LEFT JOIN workbench_thread_state_provider_identities p
-      ON p.provider_thread_id = c.thread_id AND p.harness_id = c.harness_id AND p.project_id = c.project_id
+    LEFT JOIN workbench_thread_legacy_aliases a
+      ON a.alias = c.thread_id AND EXISTS (SELECT 1 FROM workbench_threads owner WHERE owner.id = a.thread_id AND owner.project_id = c.project_id)
     LEFT JOIN workbench_threads w ON w.id = c.thread_id AND w.project_id = c.project_id
     LEFT JOIN native n
       ON n.native_thread_id = c.thread_id AND n.harness_id = c.harness_id AND n.project_id = c.project_id
     WHERE c.claimed_day BETWEEN @startedAt AND @endedAt
       AND (@projectId IS NULL OR c.project_id = @projectId)
   ), claims AS (
-    SELECT *, COALESCE(managed_id, thread_id) identity_id FROM resolved
+    SELECT *, COALESCE(managed_id, thread_id) identity_id,
+      COALESCE(managed_id, harness_id || char(0) || thread_id) claimant_key FROM resolved
   )
 `;
 
 export default class WorkbenchClaimStatsRepository {
-  constructor(private readonly database: Database.Database) {}
+  private readonly identities: WorkbenchThreadIdentityRepository;
+
+  constructor(private readonly database: Database.Database) {
+    this.identities = new WorkbenchThreadIdentityRepository(database);
+  }
 
   hotspots(projectId: string | null, startedAt: number, now: number) {
     const rows = this.database.prepare(`${CLAIM_IDENTITIES}
-      SELECT project_id, root_id, claimed_path, COUNT(DISTINCT harness_id || char(0) || identity_id) thread_count
+      SELECT project_id, root_id, claimed_path, COUNT(DISTINCT claimant_key) thread_count
       FROM claims GROUP BY project_id, root_id, claimed_path
       ORDER BY thread_count DESC, claimed_path, project_id, root_id LIMIT 20
     `).all({ projectId, startedAt, endedAt: Math.floor(now / 86_400_000) * 86_400_000 }) as Array<{
@@ -62,9 +70,9 @@ export default class WorkbenchClaimStatsRepository {
     if (request.file) {
       const scoped = { ...params, rootId: request.file.rootId, path: request.file.path };
       const query = `${CLAIM_IDENTITIES}, selected AS (
-        SELECT project_id, harness_id, identity_id, MAX(managed_id) managed_id, MAX(claimed_day) last_day
+        SELECT project_id, MIN(harness_id) harness_id, identity_id, MAX(managed_id) managed_id, MAX(claimed_day) last_day
         FROM claims WHERE root_id = @rootId AND claimed_path = @path
-        GROUP BY project_id, harness_id, identity_id
+        GROUP BY project_id, claimant_key
       )`;
       const count = this.database.prepare(`${query} SELECT COUNT(*) count FROM selected`).get(scoped) as { count: number };
       const rows = this.database.prepare(`${query}
@@ -80,17 +88,32 @@ export default class WorkbenchClaimStatsRepository {
       }>;
       return {
         kind: "threads", page, pages: Math.max(1, Math.ceil(count.count / pageSize)),
-        rows: rows.map((row) => ({
-          threadId: row.identity_id, title: row.title, harness: row.harness_id,
-          identity: row.managed_id ? "managed" : "provider",
-        })),
+        rows: rows.map((row) => {
+          let identity = row.managed_id
+            ? this.identities.resolve({ threadId: row.managed_id, projectId: request.projectId })
+            : null;
+          if (row.managed_id && !identity) {
+            const native = this.database.prepare(`
+              SELECT harness_id harness, native_location nativeLocation, native_thread_id nativeThreadId
+              FROM thread_turns WHERE thread_id = ?
+              UNION SELECT harness_id, native_location, native_thread_id
+              FROM workbench_pending_import_threads WHERE thread_id = ?
+              LIMIT 1
+            `).get(row.managed_id, row.managed_id) as { harness: string; nativeLocation: string; nativeThreadId: string } | undefined;
+            if (native) identity = this.identities.resolveNative(native);
+          }
+          return {
+            threadId: identity?.threadId ?? row.identity_id, title: row.title, harness: row.harness_id,
+            identity: identity ? "managed" as const : "provider" as const,
+          };
+        }),
       };
     }
     const count = this.database.prepare(`${CLAIM_IDENTITIES}
       SELECT COUNT(*) count FROM (SELECT root_id, claimed_path FROM claims GROUP BY root_id, claimed_path)
     `).get(params) as { count: number };
     const rows = this.database.prepare(`${CLAIM_IDENTITIES}
-      SELECT root_id, claimed_path, COUNT(DISTINCT harness_id || char(0) || identity_id) thread_count
+      SELECT root_id, claimed_path, COUNT(DISTINCT claimant_key) thread_count
       FROM claims GROUP BY root_id, claimed_path
       ORDER BY thread_count DESC, root_id, claimed_path
       LIMIT @limit OFFSET @offset

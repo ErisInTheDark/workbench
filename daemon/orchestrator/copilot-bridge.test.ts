@@ -3,12 +3,16 @@
  * - No production exports; tests protect Copilot instruction filtering and harness-neutral thread-page translation. Keywords: copilot, instructions, filter, thread, page.
  */
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { test } from "node:test";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import { CopilotBridge } from "./copilot-bridge";
 import type { OrchestratorReloadableModules } from "./orchestrator-runtime-objects";
+import type { JsonRpcNotification } from "./bridge-types";
+import type { CopilotSession, SessionEvent } from "@github/copilot-sdk";
+import type { CopilotThreadState } from "./copilot-thread-state";
 
 function thread(): Thread {
   return {
@@ -19,6 +23,90 @@ function thread(): Thread {
     source: "appServer", status: { type: "idle" }, threadSource: null, turns: [], updatedAt: 1,
   };
 }
+
+test("Copilot metadata lookup does not resume a session or fetch its messages", async () => {
+  let metadataReads = 0;
+  const bridge = new CopilotBridge({
+    projectRoot: "C:/repo", onNotification() {},
+    getReloadableModules: () => ({ copilotThreadState: { metadataToThread: () => thread() } }) as unknown as OrchestratorReloadableModules,
+  });
+  const owner = bridge as unknown as { ensureClient(): Promise<object>; ensureThreadState(): Promise<never> };
+  owner.ensureClient = async () => ({ getSessionMetadata: async () => { metadataReads++; return { sessionId: "thread" }; } });
+  owner.ensureThreadState = async () => { throw new Error("Metadata lookup resumed a provider session"); };
+  const result = await bridge.handleRequest({ id: 1, method: "thread/read", params: { threadId: "thread", includeTurns: false } });
+  assert.equal(result.error, undefined);
+  assert.equal(metadataReads, 1);
+});
+
+test("session publication waits for structural admission and stop drains queued deltas", async () => {
+  const emitted: JsonRpcNotification[] = [];
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const entered = new Promise<void>((resolve) => { started = resolve; });
+  let listener: (event: SessionEvent) => void = () => { throw new Error("Session listener missing"); };
+  let unsubscribed = false;
+  let admissions = 0;
+  const bridge = new CopilotBridge({
+    getReloadableModules: () => ({
+      copilotThreadState: { applyCopilotEvent(_state: CopilotThreadState, event: SessionEvent, _live: boolean, notify: (event: JsonRpcNotification) => void) {
+        notify({ method: event.type === "assistant.message" ? "item/started" : "item/agentMessage/delta", params: { content: event.data } });
+      } },
+    }) as OrchestratorReloadableModules,
+    admitNotifications: async () => { admissions += 1; started(); await gate; },
+    onNotification: (event) => emitted.push(event),
+    projectRoot: await mkdtemp(path.join(tmpdir(), "workbench-copilot-identity-")),
+  });
+  const session = { on(callback: typeof listener) {
+    listener = callback;
+    return () => { unsubscribed = true; };
+  } } as CopilotSession;
+  const owner = bridge as unknown as { bindSessionEvents(threadId: string, session: CopilotSession, state: CopilotThreadState): Promise<void> };
+  await owner.bindSessionEvents("thread", session, {} as CopilotThreadState);
+  listener({ type: "assistant.message", data: { content: "start" } } as SessionEvent);
+  await entered;
+  listener({ type: "assistant.message_delta", data: { deltaContent: "first" } } as SessionEvent);
+  listener({ type: "assistant.message_delta", data: { deltaContent: "second" } } as SessionEvent);
+  const stopped = bridge.stop();
+  assert.equal(unsubscribed, true);
+  assert.deepEqual(emitted, []);
+  release();
+  await stopped;
+  assert.equal(admissions, 1);
+  assert.deepEqual(emitted.map((event) => event.params), [
+    { content: { content: "start" } },
+    { content: { deltaContent: "first" } },
+    { content: { deltaContent: "second" } },
+  ]);
+});
+
+test("failed session identity publication surfaces the affected thread and does not stall the next batch", async () => {
+  const emitted: JsonRpcNotification[] = [];
+  let listener!: (event: SessionEvent) => void;
+  let rejectAdmission = true;
+  const bridge = new CopilotBridge({
+    projectRoot: await mkdtemp(path.join(tmpdir(), "workbench-copilot-identity-failure-")),
+    getReloadableModules: () => ({ copilotThreadState: {
+      applyCopilotEvent(_state: CopilotThreadState, _event: SessionEvent, _live: boolean, notify: (event: JsonRpcNotification) => void) {
+        notify({ method: "item/started", params: { threadId: "thread" } });
+      },
+    } }) as OrchestratorReloadableModules,
+    admitNotifications: async () => {
+      if (rejectAdmission) { rejectAdmission = false; throw new Error("Identity write failed"); }
+    },
+    onNotification: (event) => emitted.push(event),
+  });
+  const session = { on(callback: typeof listener) { listener = callback; return () => {}; } } as CopilotSession;
+  await (bridge as unknown as { bindSessionEvents(id: string, session: CopilotSession, state: CopilotThreadState): Promise<void> })
+    .bindSessionEvents("thread", session, {} as CopilotThreadState);
+  listener({ type: "assistant.message", data: { content: "one" } } as SessionEvent);
+  listener({ type: "assistant.message", data: { content: "two" } } as SessionEvent);
+  await bridge.stop();
+  assert.deepEqual(emitted, [
+    { method: "thread/status/changed", params: { threadId: "thread", status: { type: "systemError" } } },
+    { method: "item/started", params: { threadId: "thread" } },
+  ]);
+});
 
 test("filters the final joined Copilot system message with bridge-owned selectors", async () => {
   const source = await readFile(path.join(__dirname, "copilot-bridge.ts"), "utf8");

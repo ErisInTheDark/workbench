@@ -1,3 +1,4 @@
+- Do not ferry metadata inside ids. Ids are solely unique identifiers: UUIDs or serial integers.
 - Store each Workbench-owned semantic shape in typed columns and tables.
 - Use JSON only for opaque external values.
 - If Workbench reads stored JSON as a known shape, replace that JSON with typed tables.

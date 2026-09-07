@@ -13,6 +13,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   create: (_context, build) => {
     const controller = new WorkbenchWebSocketRequestController({
       harnesses: build.get("harnesses"),
+      identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
       daemonRequests: build.get("daemonRequests"),
       initialState: build.handoffState as WorkbenchWebSocketRequestControllerState | undefined,
       reload: build.get("reloadController"),
@@ -35,7 +36,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload browser WebSocket routing, request diagnostics, and aggregate event-stream health without restarting sockets.",
   lifecycle: "handoff",
   provides: ["webSocketRequests"],
-  requires: ["daemonRequests", "harnesses", "reloadController", "stats", "threadState", "transcript", "transcriptShadowLog"],
+  requires: ["daemonRequests", "harnesses", "reloadController", "stats", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptShadowLog"],
   safeAll: true,
   scope: "server:websocket",
   sources: [
@@ -44,6 +45,9 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchWebSocketNode.ts",
     "daemon/orchestrator/websocket-log-format.ts",
     "daemon/orchestrator/WorkbenchWebSocketRequestController.ts",
+    "daemon/orchestrator/thread-identity-provider-mapping.ts",
+    "daemon/orchestrator/thread-identity-transcript-mapping.ts",
+    "daemon/orchestrator/thread-identity-workbench-mapping.ts",
     "daemon/orchestrator/WorkbenchWebSocketStreamController.ts",
   ].join("\n"),
 });
