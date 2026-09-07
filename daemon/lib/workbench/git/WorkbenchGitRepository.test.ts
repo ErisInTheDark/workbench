@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards cover index-normalized ref publication, retry safety, object reads, exact combined file-change inspection, direct worktree dirt, and large stdin pathsets. Keywords: git, repository, index, ref, retry, object, diff, dirt, pathspec, stdin, argv, large path set.
+ * No production exports. Regression wards cover index-normalized ref publication, retry safety, object reads, exact combined file-change inspection, direct worktree dirt, and large stdin path and ref-pattern sets. Keywords: git, repository, index, ref, retry, object, diff, dirt, pathspec, stdin, argv, large path set.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -11,6 +11,35 @@ import WorkbenchGitRepository, { GIT_STATE_GENERATION_REF } from "./WorkbenchGit
 import { THREAD_GIT_BASE_FIXTURE } from "./WorkbenchGitTestFixtures";
 
 const fixtureCache = new GitTestFixtureCache();
+
+test("large ref pattern sets preserve filtering, overlap deduplication, and object types", async (context) => {
+  const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const commit = await repository.currentHead();
+  const blob = await repository.writeBlob("ref pattern fixture\n");
+  const prefix = "refs/worktree/ref-pattern-test";
+  const selectedCommit = `${prefix}/selected/commit`;
+  const selectedBlob = `${prefix}/selected/blob`;
+  const unrelated = `${prefix}/unrelated`;
+  await repository.updateRefs([
+    { ref: selectedCommit, newValue: commit },
+    { ref: selectedBlob, newValue: blob },
+    { ref: unrelated, newValue: commit },
+  ]);
+  const patterns = Array.from({ length: 2_000 }, (_, index) => `${prefix}/missing-${index}`);
+  patterns.push(`${prefix}/selected`, selectedCommit, `${prefix}/selected`);
+  const selected = await repository.listRefsWithValues(...patterns);
+  assert.deepEqual(selected, [
+    { objectType: "blob", ref: selectedBlob, value: blob },
+    { objectType: "commit", ref: selectedCommit, value: commit },
+  ]);
+  const all = await repository.listRefsWithValues();
+  assert.deepEqual(all.filter(({ ref }) => ref.startsWith(`${prefix}/`)), [
+    ...selected,
+    { objectType: "commit", ref: unrelated, value: commit },
+  ]);
+});
 
 test("repository containment preserves Windows aliases but rejects differently cased Linux siblings", () => {
   const root = path.resolve("case-parent", "Repo");

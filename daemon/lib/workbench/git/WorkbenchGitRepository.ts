@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, repository, stdin, ref patterns, pathspec, process boundary.
  * Exports:
  * - default WorkbenchGitRepository: own raw Git process, stdin pathspec transport, ignored-path classification and tracked traversal, snapshot, path, tree, ref, worktree timestamps, index-normalized publication, and ancestry mechanics for one repository. Keywords: git, repository, pathspec, ignore, staged deletion, tracked path, stdin, argv, large path set, snapshot, ref, mtime, index, transaction.
  * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitWorktreeSnapshot: typed Git history, ancestry, object-read, worktree-snapshot, and atomic ref-update inputs. Keywords: git, commit, paths, head, object, snapshot, ref, transaction.
@@ -583,7 +584,10 @@ export default class WorkbenchGitRepository {
   }
 
   async listRefsWithValues(...namespaces: string[]) {
-    const output = await this.run(["for-each-ref", "--format=%(refname)%00%(objectname)", ...namespaces]);
+    const output = await this.runWithInput(
+      ["for-each-ref", "--stdin", "--format=%(refname)%00%(objectname)"],
+      namespaces.length ? `${namespaces.join("\n")}\n` : "",
+    );
     const refs = output.split(/\r?\n/u).filter(Boolean).map((line) => {
       const [ref = "", value = ""] = line.split("\0");
       return { ref, value };

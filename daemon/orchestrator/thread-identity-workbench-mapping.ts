@@ -69,11 +69,22 @@ export async function mapNativeSubagentResult(owners: NativeTranscriptIdentityOw
 
 async function resolveNativeReference(owners: NativeThreadStateIdentityOwners, identity: { threadId: string; harness?: WorkbenchHarness }, projectId?: string) {
   const input = { ...identity, ...(projectId ? { projectId } : {}) };
-  const thread = await owners.threads.resolve(input)
-    ?? (identity.harness ? await owners.resolveThreadIdentity?.(input) : null);
-  if (!thread) throw new Error("Thread metadata has not been admitted for public projection.");
-  if (projectId && thread.projectId !== projectId) throw new Error("Thread reference does not belong to the requested project.");
-  return thread;
+  try {
+    const thread = await owners.threads.resolve(input)
+      ?? (identity.harness ? await owners.resolveThreadIdentity?.(input) : null);
+    if (!thread) throw new Error("Thread metadata has not been admitted for public projection.");
+    if (projectId && thread.projectId !== projectId) {
+      throw new Error(`Thread reference belongs to project ${JSON.stringify(thread.projectId)}, not the requested project.`);
+    }
+    return thread;
+  } catch (cause) {
+    const context = Object.fromEntries(Object.entries(input).map(([key, value]) => [
+      key, value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 160),
+    ]));
+    const detail = (cause instanceof Error ? cause.message : "Identity lookup failed")
+      .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 500);
+    throw new Error(`Thread identity projection ${JSON.stringify(context)}: ${detail}`, { cause });
+  }
 }
 
 async function mapNativeTurnReference(owners: NativeThreadStateIdentityOwners, identity: ThreadIdentity, turnId: string) {
@@ -171,17 +182,52 @@ async function mapThreadDisplayKey(
 }
 
 async function mapNativeLayout(owners: NativeTranscriptIdentityOwners, layout: ThreadDisplayLayout, projectId?: string): Promise<ThreadDisplayLayout> {
-  const key = (value: string) => mapThreadDisplayKey(owners, value, projectId, "public");
-  const result: ThreadDisplayLayout = { ...layout };
-  for (const section of ["pinned", "snoozed", "settled", "settledPinned"] as const) {
-    if (!layout[section]) continue;
-    result[section] = Object.fromEntries(await Promise.all(Object.entries(layout[section]).map(async ([id, position]) => [
-      await key(id), { above: await Promise.all(position.above.map(key)), below: await Promise.all(position.below.map(key)) },
-    ])));
+  const sections = ["pinned", "snoozed", "settled", "settledPinned"] as const;
+  const references = new Set<string>();
+  for (const section of sections) {
+    for (const [key, position] of Object.entries(layout[section] ?? {})) {
+      for (const reference of [key, ...position.above, ...position.below]) references.add(reference);
+    }
   }
-  if (layout.folders) result.folders = await Promise.all(layout.folders.map(async (folder) => ({
-    ...folder, threadKeys: await Promise.all(folder.threadKeys.map(key)),
-  })));
+  for (const folder of layout.folders ?? []) {
+    for (const reference of folder.threadKeys) references.add(reference);
+  }
+  // Ordering links repeat references. Admit each once, sequentially, before
+  // projecting either the key or its neighbours.
+  const mapped = new Map<string, string | null>();
+  for (const reference of references) {
+    const qualified = projectId ? null : parseProjectQualifiedThreadDisplayKey(reference);
+    const localKey = qualified?.threadKey ?? reference;
+    const native = /^(codex|copilot|opencode):(.+)$/u.exec(localKey);
+    if (!native) {
+      mapped.set(reference, reference);
+      continue;
+    }
+    const harness = WorkbenchHarnessSchema.parse(native[1]);
+    const thread = await resolveNativeReference(owners, { harness, threadId: native[2]! });
+    const requestedProject = qualified?.projectId ?? projectId;
+    if (requestedProject && thread.projectId !== requestedProject) {
+      mapped.set(reference, null);
+      continue;
+    }
+    const key = `${harness}:${thread.threadId}`;
+    mapped.set(reference, qualified ? getProjectQualifiedThreadDisplayKey(qualified.projectId, key) : key);
+  }
+  const keys = (values: readonly string[]) => values.flatMap((value) => {
+    const key = mapped.get(value);
+    return key ? [key] : [];
+  });
+  const result: ThreadDisplayLayout = { ...layout };
+  for (const section of sections) {
+    if (!layout[section]) continue;
+    result[section] = Object.fromEntries(Object.entries(layout[section]).flatMap(([id, position]) => {
+      const key = mapped.get(id);
+      return key ? [[key, { above: keys(position.above), below: keys(position.below) }]] : [];
+    }));
+  }
+  if (layout.folders) result.folders = layout.folders.map((folder) => ({
+    ...folder, threadKeys: keys(folder.threadKeys),
+  }));
   return result;
 }
 
@@ -214,17 +260,34 @@ async function mapNativeSidebar(owners: NativeTranscriptIdentityOwners, sidebar:
 }
 
 async function mapNativeProjectSummary(owners: NativeTranscriptIdentityOwners, summary: WorkbenchProjectThreadSummary): Promise<WorkbenchProjectThreadSummary> {
+  const unsettledThreads: WorkbenchProjectThreadSummary["unsettledThreads"] = [];
+  const pinnedThreads: WorkbenchProjectThreadSummary["pinnedThreads"] = [];
+  const counts = { ...summary.counts };
+  // Summaries can retain the same foreign provider-list rows as sidebars. Resolve
+  // their actual owner before applying the requested project, on both routes.
+  for (const entry of summary.unsettledThreads) {
+    const thread = await resolveNativeReference(owners, entry.identity);
+    if (thread.projectId !== summary.projectId) {
+      counts[entry.status] = (counts[entry.status] ?? 0) - 1;
+      continue;
+    }
+    unsettledThreads.push({ ...entry, identity: { ...entry.identity, threadId: thread.threadId } });
+  }
+  for (const entry of summary.pinnedThreads) {
+    if (entry.entryKind === "draft") {
+      pinnedThreads.push(entry);
+      continue;
+    }
+    if ((await resolveNativeReference(owners, entry.identity)).projectId !== summary.projectId) continue;
+    const mapped = await mapNativeSidebarEntry(owners, summary.projectId, entry);
+    if (mapped.entryKind !== "thread") throw new Error("Pinned thread projection changed its entry kind.");
+    pinnedThreads.push({ ...entry, identity: mapped.identity, lifecycle: mapped.lifecycle, gitArc: mapped.gitArc });
+  }
   return {
     ...summary,
-    unsettledThreads: await Promise.all(summary.unsettledThreads.map(async (entry) => ({
-      ...entry, identity: { ...entry.identity, threadId: (await resolveNativeReference(owners, entry.identity, summary.projectId)).threadId },
-    }))),
-    pinnedThreads: await Promise.all(summary.pinnedThreads.map(async (entry) => {
-      if (entry.entryKind === "draft") return entry;
-      const mapped = await mapNativeSidebarEntry(owners, summary.projectId, entry);
-      if (mapped.entryKind !== "thread") throw new Error("Pinned thread projection changed its entry kind.");
-      return { ...entry, identity: mapped.identity, lifecycle: mapped.lifecycle, gitArc: mapped.gitArc };
-    })),
+    counts,
+    unsettledThreads,
+    pinnedThreads,
   };
 }
 

@@ -46,7 +46,7 @@ import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbenc
 import WorkbenchWebSocketStreamController, {
   type WorkbenchWebSocketStreamControllerState,
 } from "./WorkbenchWebSocketStreamController";
-import { dimWebSocketDetail } from "./websocket-log-format";
+import { dimWebSocketDetail, webSocketMethodLabel as methodLabel } from "./websocket-log-format";
 import { transcriptSnapshotForProtocol } from "./database/transcript/transcript-wire-compatibility";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
@@ -146,11 +146,6 @@ function completionToken(outcome: CompletionOutcome) {
 
 function pendingToken() {
   return `${ANSI_YELLOW}pending${ANSI_RESET}`;
-}
-
-function methodLabel(harness: WorkbenchHarness | "unknown" | "workbench", method: string) {
-  if (harness !== "workbench") return `${harness}:${method}`;
-  return `wb:${method.startsWith("workbench/") ? method.slice("workbench/".length) : method}`;
 }
 
 function readResponseId(message: unknown): RequestId | undefined {

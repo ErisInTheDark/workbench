@@ -1,4 +1,22 @@
-# paid workbench diagnostic
+# workbench diagnostics
+
+## non-paid retained-data replay
+
+Run only by exact filename:
+
+````powershell
+$env:WORKBENCH_REPLAY_DATABASE = '<absolute preserved database path under .workbench/recovery>'
+$env:WORKBENCH_REPLAY_HISTORY = '<absolute preserved history directory under .workbench/recovery>'
+pnpm test -- diagnostics/thread-state-replay.test.ts
+````
+
+Each input is optional; its check skips when absent. Uses no providers, authentication, sandbox setup or running services. Database replay upgrades a private SQLite backup, verifies identities across reopen and projects materialised content. History replay runs the production JSON reader, identity admission, compatibility import and public/SQLite projection twice.
+
+History input contains `manifest.json` with `threadId`, `turnIds`, `projectId`, `projectRoot`; exact original `thread.json` and selected turn JSON files under `.workbench/transcripts/codex/threads/<base64url-thread-id>/`. Turn filenames use base64url turn IDs. Only those files are copied; no source symlinks may escape the preserved input.
+
+Outputs remain under `.workbench/diagnostics/`, outside runner cleanup. Inputs are never opened writable. Metadata-only threads are counted separately, not treated as verified transcript bodies. This does not prove real provider connectivity, browser rendering or live turn admission.
+
+## paid live diagnostic
 
 Run only by exact filename:
 

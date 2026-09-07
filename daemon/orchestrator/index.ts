@@ -36,6 +36,7 @@ import type { WorkbenchHardReloadNotification } from "./WorkbenchOrchestratorRel
 import WorkbenchOrchestratorControlIngress from "./WorkbenchOrchestratorControlIngress";
 import type { WorkbenchHarnessRuntimePort } from "./WorkbenchHarnessController";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
+import { formatWebSocketSendFailure } from "./websocket-log-format";
 
 const ORCHESTRATOR_ROOT = __dirname;
 const WEBAPP_ROOT = path.resolve(ORCHESTRATOR_ROOT, "..");
@@ -122,7 +123,7 @@ function sendJsonToClient(client: BridgeClient, message: unknown) {
     (controller) => controller.sendJsonToClient(client, message),
     "browser WebSocket send",
   ).catch((error) => {
-    logError("websocket", error instanceof Error ? error.message : String(error));
+    process.stderr.write(`${formatWebSocketSendFailure(message, error)}\n`);
   });
 }
 

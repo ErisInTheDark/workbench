@@ -1,6 +1,6 @@
 /*
- * Keywords: startup, stored sidebar, cold identities, metadata, restart.
- * No exports. Tests open retained thread state with cold database-backed identity owners.
+ * Keywords: startup, stored sidebar, project summaries, cold identities, metadata, restart.
+ * No exports. Tests open the app's composite thread state with cold database-backed identity owners.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -68,7 +68,7 @@ async function fixture(database: Database.Database, failMetadata = false, crossP
     records: [...(foreignThread ? [{
       entryKind: "thread", identity: { harness: "codex", threadId: "foreign-thread" },
       title: "Foreign", activityAt: 1, metadata: { archived: false, pinned: true, snoozed: false },
-      lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
     }] : []), ...(crossProviderChild ? [{
       entryKind: "subagent", identity: { harness: "opencode", threadId: "native-child" },
       parentThreadId: "native-thread", name: "Child", profileId: "profile", profileName: "Profile",
@@ -85,7 +85,12 @@ async function fixture(database: Database.Database, failMetadata = false, crossP
     displayOrder: { pinned: { "codex:native-thread": { above: foreignThread ? ["codex:foreign-thread"] : [], below: [] } } },
   };
   const state = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({ data: [], rootPath: "/repo" }),
+    getProjectCatalog: () => ({
+      data: [{ id: "project", kind: "git", name: "Project", relativePath: "repo", rootPath: "/repo",
+        roots: [{ id: "repo", name: "Repo", relativePath: ".", rootPath: "/repo", isPrimary: true }],
+        lastCommitTimeMs: null }],
+      rootPath: "/",
+    }),
     hasLiveGitArcClaims: async () => false,
     resolveGitArc: async () => null, resolveGitArcPlan: async () => null,
     runGitArcReadTransition: async (_projectId, operation) => await operation(),
@@ -103,7 +108,7 @@ async function fixture(database: Database.Database, failMetadata = false, crossP
   };
   return {
     requests,
-    open: async () => await mapNativeThreadStateResult(owners, await state.open("client", "project")) as WorkbenchThreadStateOpenResult,
+    open: async () => await mapNativeThreadStateResult(owners, await state.open("client", "project", 4)) as WorkbenchThreadStateOpenResult,
     close: async () => { await state.dispose(); threads.dispose(); items.dispose(); },
   };
 }
@@ -173,6 +178,14 @@ test("stale foreign-project sidebar references do not acquire the wrong owner or
     assert.equal(opened.sidebar.entries.length, 1);
     assert.equal(opened.sidebar.entries[0]?.title, "Saved");
     assert.ok(!JSON.stringify(opened.sidebar.displayOrder).includes("foreign-thread"));
+    const summary = opened.projectThreads.projects.find(({ projectId }) => projectId === "project")!;
+    assert.deepEqual(summary.unsettledThreads.map(({ identity }) => identity), opened.sidebar.entries.map((entry) => {
+      assert.ok(entry.entryKind !== "draft");
+      return entry.identity;
+    }));
+    assert.deepEqual(summary.pinnedThreads.map((entry) => entry.entryKind === "thread" ? entry.identity : null),
+      summary.unsettledThreads.map(({ identity }) => identity));
+    assert.equal(summary.counts.completed, summary.unsettledThreads.length);
     const foreign = database.prepare("SELECT t.project_id FROM workbench_threads t JOIN workbench_pending_import_threads p ON p.thread_id = t.id WHERE p.native_thread_id = ?").get("foreign-thread");
     assert.deepEqual(foreign, { project_id: "other" });
   } finally { await current.close(); database.close(); }
