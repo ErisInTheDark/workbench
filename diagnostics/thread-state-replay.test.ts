@@ -20,6 +20,7 @@ import WorkbenchTranscriptIdentityRepository from "../daemon/orchestrator/databa
 import { admitProviderThreads, mapProviderThread } from "../daemon/orchestrator/thread-identity-provider-mapping";
 import { admitNativeTranscriptObservations, mapNativeTranscriptObservation } from "../daemon/orchestrator/thread-identity-transcript-mapping";
 import { createCodexTranscriptSqliteImport } from "../daemon/orchestrator/codex-transcript-sqlite-import";
+import { mapNativeProviderResponse } from "../daemon/orchestrator/thread-identity-workbench-mapping";
 
 const input = process.env.WORKBENCH_REPLAY_DATABASE;
 
@@ -135,7 +136,15 @@ test("retained history imports and projects repeatedly through production identi
       "History replay cannot follow a source link outside its preserved input");
     await fs.copyFile(original, path.join(output, transcriptPath, file));
   }
-  const database = new Database(path.join(output, "candidate.sqlite3"));
+  const target = path.join(output, "candidate.sqlite3");
+  if (input) {
+    const preserved = await fs.realpath(input);
+    const databaseRelative = path.relative(path.join(workspace, ".workbench", "recovery"), preserved);
+    assert.ok(databaseRelative && !databaseRelative.startsWith("..") && !path.isAbsolute(databaseRelative));
+    const sourceDatabase = new Database(preserved, { readonly: true, fileMustExist: true });
+    try { await sourceDatabase.backup(target); } finally { sourceDatabase.close(); }
+  }
+  const database = new Database(target);
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
   const repository = new WorkbenchThreadIdentityRepository(database);
@@ -172,6 +181,16 @@ test("retained history imports and projects repeatedly through production identi
     for (let pass = 0; pass < 2; pass++) {
       report.stage = `provider admission ${pass}`;
       await admitProviderThreads(owners, [{ metadata: { ...context, native }, thread }]);
+      report.stage = `page context admission ${pass}`;
+      await admitNativeTranscriptObservations(owners, [
+        ...entries.questionnaireEntries.map((entry) => ({ kind: "questionnaire" as const, entry, observedAt: entry.resolvedAt })),
+        ...entries.steerEntries.map((entry) => ({ kind: "steer" as const, entry, observedAt: entry.resolvedAt ?? entry.attemptedAt })),
+      ]);
+      report.stage = `full page response ${pass}`;
+      const page = await mapNativeProviderResponse(owners, "codex", {
+        method: "workbench/thread/page/read", params: { threadId: thread.id, cursor: null },
+      }, { id: 1, result: { ...entries, thread, nextCursor: null } });
+      assert.ok(page.result);
       report.stage = `compatibility import ${pass}`;
       const observation = createCodexTranscriptSqliteImport({
         ...entries, context, thread, browseAssets: new Map(),

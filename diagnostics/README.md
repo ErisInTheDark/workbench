@@ -10,7 +10,7 @@ $env:WORKBENCH_REPLAY_HISTORY = '<absolute preserved history directory under .wo
 pnpm test -- diagnostics/thread-state-replay.test.ts
 ````
 
-Each input is optional; its check skips when absent. Uses no providers, authentication, sandbox setup or running services. Database replay upgrades a private SQLite backup, verifies identities across reopen and projects materialised content. History replay runs the production JSON reader, identity admission, compatibility import and public/SQLite projection twice.
+Each input is optional; its check skips when absent. Uses no providers, authentication, sandbox setup or running services. Database replay upgrades a private SQLite backup, verifies identities across reopen and projects materialised content. History replay runs the production JSON reader, thread and page-context identity admission, full page-response mapping, compatibility import and SQLite projection twice. When both inputs are supplied, history replay seeds its private database from the preserved snapshot, exercising existing identities rather than only empty storage.
 
 History input contains `manifest.json` with `threadId`, `turnIds`, `projectId`, `projectRoot`; exact original `thread.json` and selected turn JSON files under `.workbench/transcripts/codex/threads/<base64url-thread-id>/`. Turn filenames use base64url turn IDs. Only those files are copied; no source symlinks may escape the preserved input.
 

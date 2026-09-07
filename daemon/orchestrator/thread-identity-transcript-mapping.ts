@@ -1,5 +1,5 @@
 /*
- * Keywords: transcript, native boundary, identity, recording.
+ * Keywords: transcript, native boundary, identity, recording, steer, client correlation.
  * Exports:
  * - mapNativeTranscriptObservation: translate admitted native references for canonical recording.
  * - admitNativeTranscriptObservations: admit missing structural identities before publication or body recording.
@@ -9,8 +9,9 @@ import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/th
 import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
 import { z } from "zod";
 import { resolveSteerTranscriptSourceId } from "workbench-shared/workbench/thread/thread-steer-history";
+import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { WorkbenchNativeThreadIdentity } from "./database/thread-identity/workbench-thread-identity-types";
-import type { WorkbenchTranscriptAtomicObservation, WorkbenchTranscriptObservation, WorkbenchTranscriptItemIdentityAdmission } from "./database/transcript/workbench-transcript-types";
+import type { WorkbenchTranscriptAtomicObservation, WorkbenchTranscriptObservation, WorkbenchTranscriptItemIdentityAdmission, WorkbenchTranscriptItemSource } from "./database/transcript/workbench-transcript-types";
 import { mapProviderThreadItem, type WorkbenchProviderIdentityOwners } from "./thread-identity-provider-mapping";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
@@ -28,6 +29,20 @@ type ObservationMappers = {
   [Kind in WorkbenchTranscriptObservation["kind"]]:
     (input: Extract<WorkbenchTranscriptObservation, { kind: Kind }>) => Extract<WorkbenchTranscriptObservation, { kind: Kind }>;
 };
+
+function steerSources(entry: WorkbenchSteerHistoryEntry, turnId: string): WorkbenchTranscriptItemSource[] {
+  if (entry.status === "sent") {
+    const sources: WorkbenchTranscriptItemSource[] = [];
+    if (entry.canonicalItemId) {
+      sources.push({ turnId, sourceId: entry.canonicalItemId, kind: getCodexItemIdentityKind({ id: entry.canonicalItemId }) });
+    }
+    if (entry.clientUserMessageId) {
+      sources.push({ turnId, sourceId: entry.clientUserMessageId, kind: "client" });
+    }
+    if (sources.length) return sources;
+  }
+  return [{ turnId, sourceId: resolveSteerTranscriptSourceId(entry), kind: "stable" }];
+}
 
 export async function admitNativeTranscriptObservations(
   owners: NativeTranscriptIdentityOwners,
@@ -64,14 +79,19 @@ export async function admitNativeTranscriptObservations(
     const sourceId = fact.kind === "item" ? fact.item.id
       : fact.kind === "questionnaire" ? resolveQuestionnaireHistoryItemId(fact.entry)
         : resolveSteerTranscriptSourceId(fact.entry);
-    const source = { turnId, sourceId, kind: fact.kind === "item" ? getCodexItemIdentityKind(fact.item) : "stable" as const };
-    if (owners.items.findItemIdForSource(threadId, source)) continue;
+    const sources: WorkbenchTranscriptItemSource[] = fact.kind === "steer" ? steerSources(fact.entry, turnId) : [
+      { turnId, sourceId, kind: fact.kind === "item" ? getCodexItemIdentityKind(fact.item) : "stable" },
+      ...(fact.kind === "item" && fact.item.type === "userMessage" && fact.item.clientId
+        ? [{ turnId, kind: "client" as const, sourceId: fact.item.clientId }] : []),
+    ];
     const reference = fact.kind === "item" ? fact.publicItemId : fact.publicItemId ?? fact.entry.itemId ?? undefined;
     const itemId = z.uuid().safeParse(reference).success ? reference : undefined;
+    const known = owners.items.findItemIdForSource(threadId, sources[0]!);
+    if (known && (!itemId || itemId === known)
+      && sources.every((source) => owners.items.findItemIdForSource(threadId, source) === known)) continue;
     items.push({
       threadId, ...(itemId ? { itemId } : {}),
-      sources: [source, ...(fact.kind === "item" && fact.item.type === "userMessage" && fact.item.clientId
-        ? [{ turnId, kind: "client" as const, sourceId: fact.item.clientId }] : [])],
+      sources,
       legacyAliases: fact.kind === "item"
         ? (fact.timeline?.aliases ?? []).map((alias) => ({ turnId, alias })) : [],
     });
@@ -136,12 +156,19 @@ export function mapNativeTranscriptObservation(
     },
     steer: (input) => {
       const entry = input.entry;
-      const id = itemId(entry.threadId, entry.turnId, input.publicItemId ?? entry.itemId ?? resolveSteerTranscriptSourceId(entry));
+      const ownerThreadId = threadId(entry.threadId);
+      const ownerTurnId = turnId(entry.threadId, entry.turnId);
+      const reference = input.publicItemId ?? entry.itemId;
+      const id = reference
+        ? itemId(entry.threadId, entry.turnId, reference)
+        : owners.items.itemIdForSource(ownerThreadId, steerSources(entry, ownerTurnId)[0]!);
       return {
         ...input, publicItemId: id,
         entry: {
-          ...entry, threadId: threadId(entry.threadId), turnId: turnId(entry.threadId, entry.turnId), itemId: id,
-          canonicalItemId: entry.canonicalItemId === null ? null : itemId(entry.threadId, entry.turnId, entry.canonicalItemId),
+          ...entry, threadId: ownerThreadId, turnId: ownerTurnId, itemId: id,
+          canonicalItemId: entry.canonicalItemId === null ? null : owners.items.itemIdForSource(ownerThreadId, {
+            turnId: ownerTurnId, sourceId: entry.canonicalItemId, kind: getCodexItemIdentityKind({ id: entry.canonicalItemId }),
+          }),
         },
       };
     },

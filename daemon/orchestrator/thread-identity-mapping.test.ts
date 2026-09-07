@@ -19,7 +19,7 @@ import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityControll
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import { admitProviderThreads, admitProviderThreadItems, admitProviderNotifications, mapProviderThread, mapProviderThreadItem, mapProviderTurn, mapProviderNotification } from "./thread-identity-provider-mapping";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
-import { mapNativeTranscriptObservation } from "./thread-identity-transcript-mapping";
+import { admitNativeTranscriptObservations, mapNativeTranscriptObservation } from "./thread-identity-transcript-mapping";
 import { mapNativeProviderResponse, mapWorkbenchProviderRequest } from "./thread-identity-workbench-mapping";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import WorkbenchHarnessController from "./WorkbenchHarnessController";
@@ -645,6 +645,93 @@ test("public request routing resolves thread and turn aliases without touching i
     fixture.owners.threads.dispose();
     fixture.database.close();
   }
+});
+
+for (const evidence of ["provisional", "retained-collision", "client-only"] as const) {
+  test(`sent steer page context reuses its admitted message (${evidence})`, async () => {
+    const { database, owners, native, parent, turn } = await setup();
+    try {
+      const source: ThreadItem = {
+        type: "userMessage", id: evidence === "client-only" ? "native-message" : "item-42",
+        clientId: "submitted-client", content: [{ type: "text", text: "submitted", text_elements: [] }],
+      };
+      const [message] = await admitProviderThreadItems(owners, native, [source]);
+      let retainedWrongId: string | undefined;
+      if (evidence === "retained-collision") {
+        const [wrong] = await owners.items.admit([{
+          threadId: parent.threadId,
+          sources: [{ turnId: turn.turnId, kind: "stable", sourceId: source.id }],
+          legacyAliases: [],
+        }]);
+        retainedWrongId = wrong!.itemId;
+        assert.notEqual(retainedWrongId, message!.id);
+      }
+      const entry = {
+        threadId: native.nativeThreadId, turnId: native.nativeTurnId,
+        entryKey: "submitted-steer", input: source.content, status: "sent" as const,
+        attemptedAt: 1, resolvedAt: 2, requestId: "request",
+        clientUserMessageId: source.clientId,
+        canonicalItemId: evidence === "client-only" ? null : source.id,
+        error: null,
+      };
+      const failed = { ...entry, entryKey: "interrupted-steer", status: "interrupted" as const, canonicalItemId: null };
+      await admitNativeTranscriptObservations(owners, [entry, failed].map((entry) => ({
+        kind: "steer", entry, observedAt: 2,
+      })));
+      const providerThread: Thread & { workbenchTurnHistory: WorkbenchThreadTurnHistoryEntry[] } = {
+        id: native.nativeThreadId, cwd: native.nativeLocation, createdAt: 1, updatedAt: 2,
+        extra: null, sessionId: "native-session", forkedFromId: null, preview: "", ephemeral: false,
+        section: null, sectionEnteredAt: null, projectId: null, historyMode: "paginated",
+        modelProvider: "openai", model: null, reasoningEffort: null, recencyAt: null,
+        status: { type: "idle" }, path: null, cliVersion: "test", canAcceptDirectInput: null,
+        threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null,
+        source: "cli", parentThreadId: null,
+        turns: [{
+          id: native.nativeTurnId, items: [source], itemsView: "full", status: "completed",
+          error: null, startedAt: 1, completedAt: 2, durationMs: 1,
+        }],
+        workbenchTurnHistory: [{
+          turnId: native.nativeTurnId, loadState: "loaded", status: "completed",
+          startedAt: 1, completedAt: 2, durationMs: 1, itemCount: 1, itemIds: [source.id],
+          itemTimeline: [{ itemId: source.id, firstSeenAt: 1, lastSeenAt: 2, startedAt: 1, completedAt: 2 }],
+        }],
+      };
+      const response = await mapNativeProviderResponse(owners, "codex", {
+        method: "workbench/thread/page/read", params: { threadId: native.nativeThreadId, cursor: null },
+      }, { id: 1, result: { thread: providerThread, steerEntries: [entry, failed], questionnaireEntries: [], browseResultEntries: [] } });
+      const result = response.result as { thread: Thread; steerEntries: Array<{ itemId: string; canonicalItemId: string | null }> };
+      assert.equal(result.steerEntries[0]!.itemId, message!.id);
+      assert.deepEqual(readWorkbenchTurnHistory(result.thread)![0]!.itemIds, [message!.id]);
+      assert.equal(result.steerEntries[0]!.canonicalItemId, entry.canonicalItemId === null ? null : message!.id);
+      assert.notEqual(result.steerEntries[1]!.itemId, message!.id, "Unsent history remains a separate durable fact");
+      if (retainedWrongId) {
+        assert.ok(database.prepare("SELECT id FROM workbench_transcript_item_identities WHERE id = ?").get(retainedWrongId),
+          "Projection must not delete unrelated identity rows to hide the collision");
+      }
+      await admitNativeTranscriptObservations(owners, [{ kind: "steer", entry, observedAt: 2 }]);
+      assert.equal(mapNativeTranscriptObservation(owners, native, { kind: "steer", entry, observedAt: 2 }).kind, "steer");
+      assert.deepEqual(new Set((database.prepare("SELECT id FROM workbench_transcript_item_identities").all() as Array<{ id: string }>).map(({ id }) => id)),
+        new Set([message!.id, result.steerEntries[1]!.itemId, ...(retainedWrongId ? [retainedWrongId] : [])]));
+    } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
+  });
+}
+
+test("live provisional references retain their source kind when another identity shares the spelling", async () => {
+  const { database, owners, native, parent, turn } = await setup();
+  try {
+    const item: ThreadItem = { type: "reasoning", id: "item-1", summary: [], content: [] };
+    const [message] = await admitProviderThreadItems(owners, native, [item]);
+    await owners.items.admit([{
+      threadId: parent.threadId, sources: [{ turnId: turn.turnId, kind: "stable", sourceId: item.id }], legacyAliases: [],
+    }]);
+    const event = mapProviderNotification(owners, native, {
+      method: "item/reasoning/summaryTextDelta",
+      params: { threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: item.id, summaryIndex: 0, delta: "live" },
+    });
+    assert.equal(event.method, "item/reasoning/summaryTextDelta");
+    if (event.method !== "item/reasoning/summaryTextDelta") throw new Error("Unexpected notification kind");
+    assert.equal(event.params.itemId, message!.id);
+  } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
 });
 
 test("canonical recording maps structural references without changing evidence, positions or content", async () => {

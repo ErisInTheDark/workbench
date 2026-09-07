@@ -28,7 +28,7 @@ import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIde
 
 export interface WorkbenchProviderIdentityOwners {
   threads: Pick<WorkbenchThreadIdentityController, "workbenchIdForNative" | "workbenchTurnIdForNative" | "knownNativeBinding">;
-  items: Pick<WorkbenchTranscriptIdentityController, "admit" | "itemIdForSource" | "itemIdForReference">;
+  items: Pick<WorkbenchTranscriptIdentityController, "admit" | "findItemIdForSource" | "itemIdForSource" | "itemIdForReference">;
 }
 
 export interface WorkbenchNativeTurnIdentity extends WorkbenchNativeThreadIdentity {
@@ -160,7 +160,8 @@ export function mapProviderThread(
   const pending = new Set(thread.turns.filter((turn) => getWorkbenchTurnAdmission(turn) !== "admitted").map((turn) => turn.id));
   const history = readWorkbenchTurnHistory(thread)?.filter((entry) => !pending.has(entry.turnId)).map((entry) => {
     const turnId = owners.threads.workbenchTurnIdForNative({ ...identity, nativeTurnId: entry.turnId });
-    const itemId = (reference: string) => owners.items.itemIdForReference(threadId, turnId, reference);
+    const loaded = new Map(thread.turns.find((turn) => turn.id === entry.turnId)?.items.map((item) => [item.id, item]));
+    const itemId = (reference: string) => providerReferenceId(owners, identity.harness, threadId, turnId, reference, loaded.get(reference));
     return {
       ...entry, turnId,
       ...(entry.itemIds ? { itemIds: entry.itemIds.map(itemId) } : {}),
@@ -218,7 +219,7 @@ export function mapProviderNotification(
     ? owners.threads.workbenchTurnIdForNative({ ...identity, nativeTurnId: params.turnId })
     : null;
   const itemId = turnId !== null && "itemId" in params && typeof params.itemId === "string"
-    ? owners.items.itemIdForReference(threadId, turnId, params.itemId)
+    ? providerReferenceId(owners, native.harness, threadId, turnId, params.itemId)
     : null;
   // Only declared top-level thread/turn/item references change. Nested payloads and correlation IDs remain native.
   return { ...notification, params: { ...params, threadId,
@@ -282,6 +283,21 @@ export function mapProviderThreadItem(
     };
   }
   return mapped;
+}
+
+function providerReferenceId(
+  owners: WorkbenchProviderIdentityOwners,
+  harness: string,
+  threadId: string,
+  turnId: string,
+  reference: string,
+  item?: ThreadItem,
+) {
+  const source = { turnId, sourceId: reference,
+    kind: harness === "codex" ? getCodexItemIdentityKind(item ?? { id: reference }) : "stable" as const };
+  // Native references retain their namespace. Only old aliases lack typed source evidence.
+  return owners.items.findItemIdForSource(threadId, source)
+    ?? owners.items.itemIdForReference(threadId, turnId, reference);
 }
 
 function providerItemSource(
