@@ -21,7 +21,18 @@ interface IdentityRow {
 }
 
 export default class WorkbenchTranscriptIdentityRepository {
+  private readonly statements = new Map<string, Database.Statement>();
+
   constructor(private readonly database: Database.Database) {}
+
+  private prepare(sql: string) {
+    let statement = this.statements.get(sql);
+    if (!statement) {
+      statement = this.database.prepare(sql);
+      this.statements.set(sql, statement);
+    }
+    return statement;
+  }
 
   admit(input: WorkbenchTranscriptItemIdentityAdmission): WorkbenchTranscriptItemIdentity {
     return this.database.transaction(() => this.admitInTransaction(input))();
@@ -40,39 +51,39 @@ export default class WorkbenchTranscriptIdentityRepository {
       throw new Error("Item identity reconciliation changed the owning thread.");
     }
     if (source.id === target.id) return this.read(target);
-    if (this.database.prepare("SELECT id FROM thread_items WHERE public_id = ?").get(source.id)) {
+    if (this.prepare("SELECT id FROM thread_items WHERE public_id = ?").get(source.id)) {
       throw new Error("Transfer the transcript body before reconciling its item identity.");
     }
     const evidence = this.read(source);
     const turns = new Set([input.turnId, ...evidence.sources.map(({ turnId }) => turnId),
       ...evidence.legacyAliases.map(({ turnId }) => turnId)]);
-    this.database.prepare(`
+    this.prepare(`
       UPDATE workbench_transcript_item_source_aliases SET item_identity_id = ? WHERE item_identity_id = ?
     `).run(target.id, source.id);
-    this.database.prepare(`
+    this.prepare(`
       UPDATE workbench_transcript_item_legacy_aliases SET item_identity_id = ? WHERE item_identity_id = ?
     `).run(target.id, source.id);
     for (const turnId of turns) {
-      const existing = this.database.prepare(`
+      const existing = this.prepare(`
         SELECT item_identity_id FROM workbench_transcript_item_legacy_aliases
         WHERE thread_id = ? AND turn_id = ? AND alias = ?
       `).get(input.threadId, turnId, source.id) as { item_identity_id: string } | undefined;
       if (existing && existing.item_identity_id !== target.id) {
         throw new Error("Item identity reconciliation has a conflicting legacy reference.");
       }
-      this.database.prepare(`
+      this.prepare(`
         INSERT INTO workbench_transcript_item_legacy_aliases(thread_id, turn_id, alias, item_identity_id)
         VALUES (?, ?, ?, ?) ON CONFLICT(thread_id, turn_id, alias) DO NOTHING
       `).run(input.threadId, turnId, source.id, target.id);
     }
-    this.database.prepare("DELETE FROM workbench_transcript_item_identities WHERE id = ?").run(source.id);
+    this.prepare("DELETE FROM workbench_transcript_item_identities WHERE id = ?").run(source.id);
     return this.read(target);
   }
 
   resolve(input: WorkbenchTranscriptItemIdentityLookup): WorkbenchTranscriptItemIdentity | null {
     const direct = this.row(input.itemId);
     if (direct) return direct.thread_id === input.threadId ? this.read(direct) : null;
-    const candidates = this.database.prepare(`
+    const candidates = this.prepare(`
       SELECT item_identity_id FROM workbench_transcript_item_legacy_aliases
       WHERE thread_id = @threadId AND alias = @itemId AND (@turnId IS NULL OR turn_id = @turnId)
       UNION
@@ -97,26 +108,26 @@ export default class WorkbenchTranscriptIdentityRepository {
     }
     for (const legacy of input.legacyAliases) {
       this.assertTurnOwner(input.threadId, legacy.turnId);
-      const existing = this.database.prepare(`
+      const existing = this.prepare(`
         SELECT item_identity_id FROM workbench_transcript_item_legacy_aliases
         WHERE thread_id = ? AND turn_id = ? AND alias = ?
       `).get(input.threadId, legacy.turnId, legacy.alias) as { item_identity_id: string } | undefined;
       if (existing) candidates.push(existing.item_identity_id);
     }
     const itemId = this.singleOwner(candidates) ?? randomUUID();
-    this.database.prepare(`
+    this.prepare(`
       INSERT INTO workbench_transcript_item_identities(id, thread_id) VALUES (?, ?)
       ON CONFLICT(id) DO NOTHING
     `).run(itemId, input.threadId);
     for (const source of input.sources) {
-      this.database.prepare(`
+      this.prepare(`
         INSERT INTO workbench_transcript_item_source_aliases
           (turn_id, source_kind, source_id, thread_id, item_identity_id) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(turn_id, source_kind, source_id) DO NOTHING
       `).run(source.turnId, source.kind, source.sourceId, input.threadId, itemId);
     }
     for (const legacy of input.legacyAliases) {
-      this.database.prepare(`
+      this.prepare(`
         INSERT INTO workbench_transcript_item_legacy_aliases
           (thread_id, turn_id, alias, item_identity_id) VALUES (?, ?, ?, ?)
         ON CONFLICT(thread_id, turn_id, alias) DO NOTHING
@@ -126,7 +137,7 @@ export default class WorkbenchTranscriptIdentityRepository {
   }
 
   private sourceOwners(threadId: string, source: WorkbenchTranscriptItemSource) {
-    const rows = this.database.prepare(`
+    const rows = this.prepare(`
       SELECT DISTINCT a.item_identity_id FROM workbench_transcript_item_source_aliases a
       JOIN thread_turns recorded ON recorded.id = a.turn_id
       JOIN thread_turns incoming ON incoming.id = @turnId AND incoming.thread_id = @threadId
@@ -146,7 +157,7 @@ export default class WorkbenchTranscriptIdentityRepository {
   }
 
   private assertTurnOwner(threadId: string, turnId: string) {
-    if (!this.database.prepare("SELECT id FROM thread_turns WHERE id = ? AND thread_id = ?").get(turnId, threadId)) {
+    if (!this.prepare("SELECT id FROM thread_turns WHERE id = ? AND thread_id = ?").get(turnId, threadId)) {
       throw new Error("Transcript item identity evidence has no turn in the owning thread.");
     }
   }
@@ -158,7 +169,7 @@ export default class WorkbenchTranscriptIdentityRepository {
   }
 
   private row(itemId: string) {
-    return this.database.prepare("SELECT id, thread_id FROM workbench_transcript_item_identities WHERE id = ?")
+    return this.prepare("SELECT id, thread_id FROM workbench_transcript_item_identities WHERE id = ?")
       .get(itemId) as IdentityRow | undefined;
   }
 
@@ -166,12 +177,12 @@ export default class WorkbenchTranscriptIdentityRepository {
     return {
       itemId: row.id,
       threadId: row.thread_id,
-      sources: this.database.prepare(`
+      sources: this.prepare(`
         SELECT turn_id AS turnId, source_kind AS kind, source_id AS sourceId
         FROM workbench_transcript_item_source_aliases WHERE item_identity_id = ?
         ORDER BY turn_id, source_kind, source_id
       `).all(row.id) as WorkbenchTranscriptItemIdentity["sources"],
-      legacyAliases: this.database.prepare(`
+      legacyAliases: this.prepare(`
         SELECT turn_id AS turnId, alias FROM workbench_transcript_item_legacy_aliases
         WHERE item_identity_id = ? ORDER BY turn_id, alias
       `).all(row.id) as WorkbenchTranscriptItemIdentity["legacyAliases"],

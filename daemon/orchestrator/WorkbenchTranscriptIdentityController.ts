@@ -31,6 +31,18 @@ export default class WorkbenchTranscriptIdentityController {
     return identity ? this.remember(identity) : null;
   }
 
+  hasAdmitted(input: WorkbenchTranscriptItemIdentityAdmission): boolean {
+    this.assertActive();
+    const references = this.referencesByThread.get(input.threadId);
+    if (!references) return false;
+    const keys = [
+      ...input.sources.map((source) => this.sourceKey(source)),
+      ...input.legacyAliases.map(({ turnId, alias }) => this.sourceKey({ turnId, kind: "legacy", sourceId: alias })),
+    ];
+    const itemId = input.itemId ?? references.get(keys[0]!);
+    return itemId !== undefined && keys.length > 0 && keys.every((key) => references.get(key) === itemId);
+  }
+
   itemIdForSource(threadId: string, source: WorkbenchTranscriptItemSource): string {
     const itemId = this.findItemIdForSource(threadId, source);
     if (!itemId) throw new Error("Transcript source identity has not been admitted for live projection.");

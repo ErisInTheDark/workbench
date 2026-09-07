@@ -28,7 +28,7 @@ import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIde
 
 export interface WorkbenchProviderIdentityOwners {
   threads: Pick<WorkbenchThreadIdentityController, "workbenchIdForNative" | "workbenchTurnIdForNative" | "knownNativeBinding">;
-  items: Pick<WorkbenchTranscriptIdentityController, "admit" | "findItemIdForSource" | "itemIdForSource" | "itemIdForReference">;
+  items: Pick<WorkbenchTranscriptIdentityController, "admit" | "hasAdmitted" | "findItemIdForSource" | "itemIdForSource" | "itemIdForReference">;
 }
 
 export interface WorkbenchNativeTurnIdentity extends WorkbenchNativeThreadIdentity {
@@ -131,7 +131,7 @@ export async function admitProviderThreads(
         legacyAliases: (timelines.get(sourceId)?.aliases ?? []).map((alias) => ({ turnId, alias })),
       };
     });
-  }));
+  })).filter((input) => !owners.items.hasAdmitted(input));
   if (admissions.length) await owners.items.admit(admissions);
   return identities;
 }

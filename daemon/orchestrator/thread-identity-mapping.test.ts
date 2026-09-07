@@ -253,6 +253,61 @@ test("OpenCode identity failure reports the affected thread without publishing a
   }
 });
 
+test("repeated provider catalogues admit only new identity evidence without hiding conflicts", async () => {
+  const fixture = await setup();
+  const { database, owners, native, parent, turn } = fixture;
+  try {
+    const message: ThreadItem = { type: "userMessage", id: "native-message", content: [], clientId: null };
+    const thread: Thread & { workbenchTurnHistory: WorkbenchThreadTurnHistoryEntry[] } = {
+      id: native.nativeThreadId, cwd: native.nativeLocation, createdAt: 1, updatedAt: 2,
+      extra: null, sessionId: "native-session", forkedFromId: null, preview: "", ephemeral: false,
+      section: null, sectionEnteredAt: null, projectId: null, historyMode: "paginated",
+      modelProvider: "openai", model: null, reasoningEffort: null, recencyAt: null,
+      status: { type: "idle" }, path: null, cliVersion: "test", canAcceptDirectInput: null,
+      threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null,
+      source: "cli", parentThreadId: null,
+      turns: [{
+        id: native.nativeTurnId, items: [message], itemsView: "full", status: "completed",
+        error: null, startedAt: 1, completedAt: 2, durationMs: 1,
+      }],
+      workbenchTurnHistory: [{
+        turnId: native.nativeTurnId, loadState: "loaded", status: "completed",
+        startedAt: 1, completedAt: 2, durationMs: 1, itemCount: 1, itemIds: [message.id],
+      }],
+    };
+    const admit = () => admitProviderThreads(owners, [{
+      metadata: { native, projectId: "project", projectRoot: "C:/repo", title: "Parent",
+        createdAt: 1, updatedAt: 2, activityAt: 2 },
+      thread,
+    }]);
+    await admit();
+    const itemId = mapProviderThread(owners, native, thread).turns[0]!.items[0]!.id;
+    const initialAdmissions = fixture.admissions();
+    await admit();
+    assert.equal(fixture.admissions(), initialAdmissions, "Unchanged catalogues must not queue database admission");
+
+    message.clientId = "new-client";
+    thread.workbenchTurnHistory[0]!.itemTimeline = [{
+      itemId: message.id, aliases: ["retained-message"], firstSeenAt: 1, lastSeenAt: 2, startedAt: 1, completedAt: 2,
+    }];
+    await admit();
+    const repository = new WorkbenchTranscriptIdentityRepository(database);
+    for (const reference of ["new-client", "retained-message"]) {
+      assert.equal(repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: reference })?.itemId, itemId);
+    }
+    assert.equal(fixture.admissions(), initialAdmissions + 1);
+    await admit();
+    assert.equal(fixture.admissions(), initialAdmissions + 1);
+
+    await owners.items.admit([{
+      threadId: parent.threadId, sources: [{ turnId: turn.turnId, kind: "client", sourceId: "other-client" }],
+      legacyAliases: [],
+    }]);
+    message.clientId = "other-client";
+    await assert.rejects(admit(), /conflicting aliases/);
+  } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
+});
+
 test("provider event batches admit starts before deltas without storing pending turns", async () => {
   const { database, owners, native, parent } = await setup();
   try {

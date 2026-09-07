@@ -149,23 +149,32 @@ test("retained history imports and projects repeatedly through production identi
   installWorkbenchDatabaseSchema(database);
   const repository = new WorkbenchThreadIdentityRepository(database);
   const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
+  const timings: Record<string, { calls: number; milliseconds: number }> = {};
+  const measure = async <T>(name: string, operation: () => T | Promise<T>): Promise<T> => {
+    const start = performance.now();
+    try { return await operation(); } finally {
+      const timing = timings[name] ??= { calls: 0, milliseconds: 0 };
+      timing.calls++;
+      timing.milliseconds += performance.now() - start;
+    }
+  };
   const threads = new WorkbenchThreadIdentityController({
     listThreadIdentities: async () => repository.list(),
-    observeThreadIdentities: async (rows) => repository.observeMany(rows),
+    observeThreadIdentities: (rows) => measure("thread identity", () => repository.observeMany(rows)),
     resolveThreadIdentity: async (row) => repository.resolve(row),
     resolveNativeThreadIdentity: async (row) => repository.resolveNative(row),
-    observeTurnIdentities: async (rows) => repository.observeTurns(rows),
+    observeTurnIdentities: (rows) => measure("turn identity", () => repository.observeTurns(rows)),
     resolveTurnIdentity: async (row) => repository.resolveTurn(row),
   });
   const items = new WorkbenchTranscriptIdentityController({
-    admitTranscriptItemIdentities: async (rows) => itemRepository.admitMany(rows),
+    admitTranscriptItemIdentities: (rows) => measure("item identity", () => itemRepository.admitMany(rows)),
     resolveTranscriptItemIdentity: async (row) => itemRepository.resolve(row),
   });
   const store = new CodexTranscriptStore(output, () => [manifest.threadId]);
-  const report: { stage: string; items?: number; error?: string } = { stage: "hydrate copied history" };
+  const report: { stage: string; timings: typeof timings; items?: number; error?: string } = { stage: "hydrate copied history", timings };
   try {
     await threads.start();
-    const thread = await store.readStoredThreadWindow(manifest.threadId, manifest.turnIds);
+    const thread = await measure("stored window", () => store.readStoredThreadWindow(manifest.threadId, manifest.turnIds));
     assert.ok(thread);
     assert.deepEqual(new Set(thread.turns.map(({ id }) => id)), new Set(manifest.turnIds));
     const native = { harness: "codex", nativeLocation: thread.cwd, nativeThreadId: thread.id };
@@ -180,16 +189,16 @@ test("retained history imports and projects repeatedly through production identi
     let priorItemIds: string[] | null = null;
     for (let pass = 0; pass < 2; pass++) {
       report.stage = `provider admission ${pass}`;
-      await admitProviderThreads(owners, [{ metadata: { ...context, native }, thread }]);
+      await measure(`provider admission ${pass}`, () => admitProviderThreads(owners, [{ metadata: { ...context, native }, thread }]));
       report.stage = `page context admission ${pass}`;
       await admitNativeTranscriptObservations(owners, [
         ...entries.questionnaireEntries.map((entry) => ({ kind: "questionnaire" as const, entry, observedAt: entry.resolvedAt })),
         ...entries.steerEntries.map((entry) => ({ kind: "steer" as const, entry, observedAt: entry.resolvedAt ?? entry.attemptedAt })),
       ]);
       report.stage = `full page response ${pass}`;
-      const page = await mapNativeProviderResponse(owners, "codex", {
+      const page = await measure(`page response ${pass}`, () => mapNativeProviderResponse(owners, "codex", {
         method: "workbench/thread/page/read", params: { threadId: thread.id, cursor: null },
-      }, { id: 1, result: { ...entries, thread, nextCursor: null } });
+      }, { id: 1, result: { ...entries, thread, nextCursor: null } }));
       assert.ok(page.result);
       report.stage = `compatibility import ${pass}`;
       const observation = createCodexTranscriptSqliteImport({
@@ -197,7 +206,7 @@ test("retained history imports and projects repeatedly through production identi
       });
       await admitNativeTranscriptObservations(owners, [observation]);
       const mapped = mapNativeTranscriptObservation(owners, native, observation);
-      transcript.settle([mapped]);
+      await measure(`body settlement ${pass}`, () => transcript.settle([mapped]));
       report.stage = `public projection ${pass}`;
       const publicThread = mapProviderThread(owners, native, thread);
       const snapshot = transcript.read({ threadId: publicThread.id, turnLimit: manifest.turnIds.length,
