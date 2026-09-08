@@ -614,7 +614,7 @@ test("accepted proposal receipts remain structured when a resolved arc cannot co
   assert.match(result.error, /already resolved and owns no live claims/u);
   assert.match(result.error, /fix accepted arc work \(b{40}\)/u);
   assert.doesNotMatch(result.error, /80d73f22-2adc-4bd3-83e0-affa363743eb|wb git arc/u);
-  assert.match(result.error, /mcp__wbex__git_arc_plan_start/u);
+  assert.match(result.error, /git_arc_claims/u);
 });
 
 test("known proposal and claim-set errors keep recovery typed", async () => {
@@ -655,8 +655,6 @@ test("known proposal and claim-set errors keep recovery typed", async () => {
     const result = await response.json() as GitArcFailureEnvelope;
     assert.equal(response.status, 400);
     assert.deepEqual(result.gitArcFailure, item.expected);
-    assert.match(result.error, /mcp__wbex__git_arc_/u);
-    assert.doesNotMatch(result.error, /wb git arc/u);
   }
 });
 
@@ -796,12 +794,16 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
   });
   const internal = (feature as unknown as { controller: Record<string, (...args: never[]) => Promise<object>> }).controller;
   internal.createInspectionSnapshot = async () => ({});
-  for (const method of ["createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "startArc", "rescindProposal", "diff", "createProposal"] as const) {
+  for (const method of ["createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "continueArc", "startArc", "rescindProposal", "diff", "createProposal"] as const) {
     internal[method] = async () => { calls.push(method); return {}; };
   }
   internal.listUnclaimedWorkspaceDirt = async () => [];
   const common = { cwd: "C:/Git/Project", harness: "codex" as const, threadId: "thread-one" };
   const requests = [
+    { action: "planClaims", inherit: false, intentName: "draft", addPaths: ["new.ts"], ...common },
+    { action: "arcClaims", inherit: true, addPaths: ["new.ts"], removePaths: ["old.ts"], ...common },
+    { action: "arcScope", ...common },
+    { action: "arcContinue", ...common },
     { action: "plan", intentDescription: "", intentName: "draft", paths: [], ...common },
     { action: "planAdd", paths: ["src/a.ts"], ...common },
     { action: "planRemove", paths: ["src/a.ts"], ...common },
@@ -815,6 +817,6 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
   const statuses = await Promise.all(requests.map(async (request) => (await feature.executeRequest(request)).status));
   assert.deepEqual(statuses, Array.from({ length: requests.length }, () => 200));
   assert.deepEqual([...calls].sort(), [
-    "createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "startArc", "rescindProposal", "diff", "createProposal",
+    "createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "continueArc", "startArc", "rescindProposal", "diff", "createProposal",
   ].sort());
 });

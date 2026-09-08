@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, activation, drift, collision, recovery.
  * Exports:
  * - default createGitArcStartDiagnosticError: build a bounded causal arc-start failure from plan, Git, claim, and worktree truth. Keywords: git, arc, start, diagnostics, commits, claims, dirt.
  * - GitArcStartDiagnosticError/GitArcStartDiagnosticDetails: preserve structured plan drift facts for transport and integrated rendering. Keywords: git, arc, start, drift, error.
@@ -122,8 +123,9 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     && !liveClaimedPaths.some((claimedPath) => pathIsCoveredBy(dirtyPath, claimedPath) || pathIsCoveredBy(claimedPath, dirtyPath))
   ));
 
+  const hasDrift = snapshotDrift.length > 0 || movement.kind === "incompatible";
   const lines = [
-    "Arc start blocked because the stored plan no longer matches the current workspace.",
+    hasDrift ? "Arc start blocked because the stored plan no longer matches the current workspace." : "Arc start blocked by sibling claims.",
     "",
     "New commits affecting planned files:",
   ];
@@ -151,14 +153,13 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     if (dirtyUnclaimed.length > MAX_PATHS) lines.push(`- ... ${dirtyUnclaimed.length - MAX_PATHS} more`);
   }
   const diagnosticPaths = snapshotDrift.slice(0, MAX_PATHS).map((filePath) => boundedText(filePath));
-  lines.push(
+  if (hasDrift) lines.push(
     "",
-    "Only dirty unclaimed files can potentially use --adopt. Committed files belong in ordinary plan scope.",
-    "Snapshot drift alone does not invalidate approval. Inspect the stored plan diff before deciding whether the plan changed:",
-    "",
-    `Call tools.mcp__wb__git_arc_diff with ${code(JSON.stringify({ paths: diagnosticPaths, ref: planCheckpointCommit }), 2_000)}.`,
-    "If the approved plan is unchanged, follow the planned-path drift workflow with mcp__wbex__git_arc_plan_start.",
+    "Only intentional dirty unclaimed paths can be adopted. Committed paths remain ordinary scope.",
+    `Inspect git_arc_diff ${JSON.stringify({ paths: diagnosticPaths, ref: planCheckpointCommit })}.`,
+    "Keep approval if still applicable. Republish with git_plan_claims before activation.",
   );
+  if (collisions.length) lines.push("Use git_arc_wait to wait for sibling claims and activate the inactive plan. Waiting does not refresh baselines.");
   if (snapshotDrift.length > MAX_PATHS) {
     lines.push(`${snapshotDrift.length - MAX_PATHS} more affected paths were omitted. Run the scoped diff again for those paths if needed.`);
   }

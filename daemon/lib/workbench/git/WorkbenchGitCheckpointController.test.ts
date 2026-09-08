@@ -11,7 +11,6 @@ import { promisify } from "node:util";
 
 import GitArcPublishState from "./GitArcPublishState";
 import { GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
-import { GitArcAcceptedProposalsError } from "./GitArcProposalController";
 import createGitArcStartDiagnosticError, { GitArcStartDiagnosticError } from "./git-arc-start-diagnostics";
 import { GitCheckpointDirtyPathsError } from "./GitArcPlanController";
 import GitArcRegistry, { GitArcCollisionError } from "./GitArcRegistry";
@@ -393,7 +392,7 @@ isolatedControllerTest("arc start requires fresh v3 plans but adopts dirty legac
     intentName: "clean adoption",
     paths: [],
     threadId: "clean-thread",
-  }), /clean against current HEAD[\s\S]*belong after -- as ordinary plan paths/u);
+  }), /clean against current HEAD/u);
   const original = await controller.createPlan({
     cwd: source,
     harness: "codex",
@@ -401,11 +400,6 @@ isolatedControllerTest("arc start requires fresh v3 plans but adopts dirty legac
     paths: ["one.txt"],
     threadId: "preserved-plan-thread",
   });
-  const originalCheckpoint = await new GitCheckpointStore(repository).readCheckpoint(
-    "codex",
-    "preserved-plan-thread",
-    original.checkpointCommit,
-  );
   await fs.rm(path.join(source, "one.txt"));
   await git(source, ["add", "-A"]);
   await git(source, ["commit", "--quiet", "-m", "delete planned one"]);
@@ -417,20 +411,22 @@ isolatedControllerTest("arc start requires fresh v3 plans but adopts dirty legac
     paths: ["one.txt"],
     threadId: "preserved-plan-thread",
   });
-  assert.deepEqual(replacement.preservedDriftPaths, ["one.txt"]);
-  assert.equal(replacement.preservedDriftPathCount, 1);
+  assert.deepEqual(replacement.planningDrift?.paths, ["one.txt"]);
+  assert.equal(replacement.planningDrift?.previousRef, original.checkpointCommit);
   const replacementCheckpoint = await new GitCheckpointStore(repository).readCheckpoint(
     "codex",
     "preserved-plan-thread",
     replacement.checkpointCommit,
   );
-  assert.equal(replacementCheckpoint.parent, originalCheckpoint.parent);
-  await assert.rejects(controller.startArc({
-    checkpointCommit: replacement.checkpointCommit,
+  assert.equal(replacementCheckpoint.parent, causalCommit);
+  const historical = await controller.diff({
     cwd: source,
     harness: "codex",
+    paths: ["one.txt"],
+    ref: original.checkpointCommit,
     threadId: "preserved-plan-thread",
-  }), new RegExp(`${causalCommit.slice(0, 8)}[^\\n]*delete planned one[\\s\\S]*one\\.txt`, "u"));
+  });
+  assert.match(historical.diff, /deleted file/u);
   const refreshed = await controller.addToPlan({
     cwd: source,
     harness: "codex",
@@ -438,8 +434,7 @@ isolatedControllerTest("arc start requires fresh v3 plans but adopts dirty legac
     threadId: "preserved-plan-thread",
   });
   assert.deepEqual(refreshed.scopePaths, ["one.txt"]);
-  assert.deepEqual(refreshed.preservedDriftPaths, []);
-  assert.equal(refreshed.preservedDriftPathCount, 0);
+  assert.deepEqual(refreshed.planningDrift?.paths, []);
   await controller.startArc({
     checkpointCommit: refreshed.checkpointCommit,
     cwd: source,
@@ -511,11 +506,9 @@ isolatedControllerTest("arc start reports only causal commits, sibling claims, a
   assert.match(error.message, /Planned paths claimed by other arcs:[\s\S]*opencode\/sibling-thread[\s\S]*claim sibling paths/u);
   assert.match(error.message, /claims `two\.txt` through planned path `two\.txt`/u);
   assert.match(error.message, /claims `claimed-dirty\.txt` through planned path `claimed-dirty\.txt`/u);
-  const dirtySection = error.message.split("Dirty unclaimed planned files:")[1]?.split("Only dirty unclaimed files")[0] ?? "";
-  assert.match(dirtySection, /three\.txt/u);
-  assert.doesNotMatch(dirtySection, /two\.txt|claimed-dirty\.txt/u);
-  assert.match(error.message, new RegExp(`tools\\.mcp__wb__git_arc_diff.*${planHead}`, "u"));
-  assert.match(error.message, /mcp__wbex__git_arc_plan_start/u);
+  assert.deepEqual(error.details.dirtyUnclaimedPaths, ["three.txt"]);
+  assert.match(error.message, new RegExp(`git_arc_diff.*${planHead}`, "u"));
+  assert.match(error.message, /git_plan_claims/u);
 
   const controller = new WorkbenchGitCheckpointController();
   const claimedPlan = await controller.createPlan({
@@ -621,13 +614,13 @@ isolatedControllerTest("arc adopt keeps staged ignored deletions claimable and p
     harness: "codex",
     paths: ["one.txt"],
     threadId: "adopt-thread",
-  }), /already covered by the claimed set/u);
+  }), /Adoption requires unclaimed paths/u);
   await assert.rejects(controller.adoptIntoArc({
     cwd: source,
     harness: "codex",
     paths: ["clean-missing.txt"],
     threadId: "adopt-thread",
-  }), /Arc adopt paths must contain working-tree changes: clean-missing\.txt/u);
+  }), /Adoption requires dirty unclaimed paths: clean-missing\.txt/u);
 
   const ignoredDeletionProposal = await controller.createProposal({
     cwd: source,
@@ -788,6 +781,13 @@ isolatedControllerTest("accepted proposals narrow claims, continue through succe
     threadId: "partial-thread",
     title: "commit two",
   });
+  const refsBeforeScope = await repository.listRefsWithValues("refs/worktree");
+  const recoveredScope = await controller.readScope({ cwd: source, harness: "codex", threadId: "partial-thread" });
+  assert.deepEqual(recoveredScope?.proposals, [
+    { proposalId: firstProposal.proposalId, status: "proposed" },
+    { proposalId: secondProposal.proposalId, status: "proposed" },
+  ]);
+  assert.deepEqual(await repository.listRefsWithValues("refs/worktree"), refsBeforeScope);
   await fs.writeFile(path.join(source, "one.txt"), "newer one\n");
   const headBeforeLock = await repository.currentHead();
   const lockPath = path.resolve(source, (await git(source, ["rev-parse", "--git-path", "index.lock"])).trim());
@@ -849,19 +849,27 @@ isolatedControllerTest("accepted proposals narrow claims, continue through succe
   const resolved = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
   assert.equal(resolved?.phase, "resolved");
   assert.deepEqual(resolved?.claimedPaths, []);
-  await assert.rejects(controller.continueArc({
+  const completed = await controller.continueArc({
     checkpointCommit: started!.checkpointCommit,
     cwd: source,
     harness: "codex",
     threadId: "partial-thread",
-  }), (error) => {
-    assert.ok(error instanceof GitArcAcceptedProposalsError);
-    assert.deepEqual(error.claimedPaths, []);
-    assert.deepEqual(error.receipts.map(({ proposalId }) => proposalId), [firstProposal.proposalId, secondProposal.proposalId]);
-    error.receipts.forEach(({ commitSha }) => assert.match(commitSha, /^[a-f0-9]{40}$/u));
-    assert.match(error.message, /resolved and owns no live claims/u);
-    return true;
   });
+  assert.equal(completed.phase, "resolved");
+  assert.deepEqual(completed.scopePaths, []);
+  assert.deepEqual(completed.acceptedProposals.map(({ proposalId }) => proposalId), [firstProposal.proposalId, secondProposal.proposalId]);
+  completed.acceptedProposals.forEach(({ commitSha }) => assert.match(commitSha, /^[a-f0-9]{40}$/u));
+  const resolvedComparison = await controller.compare({ cwd: source, harness: "codex", threadId: "partial-thread" });
+  assert.deepEqual(resolvedComparison.scopePaths, []);
+  assert.deepEqual(resolvedComparison.changes, []);
+  const followUp = await controller.editArcClaims({
+    cwd: source, harness: "codex", threadId: "partial-thread", inherit: true, addPaths: ["planned.txt"],
+  });
+  assert.equal(followUp.phase, "active");
+  assert.deepEqual(followUp.scopePaths, ["planned.txt"]);
+  assert.equal(followUp.intentName, completed.intentName);
+  const inventory = await controller.readScope({ cwd: source, harness: "codex", threadId: "partial-thread" });
+  assert.deepEqual(inventory?.claimedPaths, ["planned.txt"]);
 });
 
 isolatedControllerTest("proposal reads derive rebases and materialize newer content only when requested", async (context) => {
@@ -1168,6 +1176,30 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
   }), /Checkpoint proposal not found/u);
 });
 
+isolatedControllerTest("combined claims validate the final set without releasing dirty retained coverage", async (context) => {
+  const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
+  const controller = new WorkbenchGitCheckpointController();
+  await fs.writeFile(path.join(source, "one.txt"), "keep this work\n");
+  const before = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  await assert.rejects(controller.editArcClaims({
+    cwd: source, harness: "codex", threadId: "partial-thread", inherit: true,
+    removePaths: ["one.txt"], addPaths: ["planned.txt"],
+  }), /dirty|clean/i);
+  assert.deepEqual(await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" }), before);
+  const edited = await controller.editArcClaims({
+    cwd: source, harness: "codex", threadId: "partial-thread", inherit: true,
+    removePaths: ["two.txt"], addPaths: ["planned.txt"],
+  });
+  assert.deepEqual(edited.scopePaths, ["one.txt", "planned.txt"]);
+  assert.equal(await fs.readFile(path.join(source, "one.txt"), "utf8"), "keep this work\n");
+  const current = await controller.continueArc({ cwd: source, harness: "codex", threadId: "partial-thread" });
+  assert.equal(current.checkpointCommit, edited.checkpointCommit);
+  const historical = await controller.diff({
+    cwd: source, harness: "codex", threadId: "partial-thread", ref: before!.checkpointCommit, paths: ["one.txt"],
+  });
+  assert.match(historical.diff, /\+keep this work/u);
+});
+
 isolatedControllerTest("active plan add publishes an inactive successor without claiming new paths", async (context) => {
   const { repository, source } = await copyRepository(context, CONTROLLER_PARTIAL_READY_FIXTURE);
   const controller = new WorkbenchGitCheckpointController();
@@ -1175,10 +1207,10 @@ isolatedControllerTest("active plan add publishes an inactive successor without 
 
   await assert.rejects(controller.removeFromPlan({
     cwd: source, harness: "codex", paths: ["two.txt"], threadId: "partial-thread",
-  }), /Only arc plan add can create an inactive plan from an active Git arc/u);
+  }), /legacy operation/u);
   await assert.rejects(controller.adoptIntoPlan({
     cwd: source, harness: "codex", paths: ["planned.txt"], threadId: "partial-thread",
-  }), /Only arc plan add can create an inactive plan from an active Git arc/u);
+  }), /legacy operation/u);
   await fs.writeFile(path.join(source, ".gitignore"), "ignored/\n", "utf8");
   const activeBeforeIgnoredPlanAdd = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
   const ignoredPlanAdd = await controller.addToPlan({

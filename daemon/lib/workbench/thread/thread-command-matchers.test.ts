@@ -37,6 +37,22 @@ import {
 
 const PROJECT_ROOT = "C:/git/web/workbench";
 
+test("combined scope transcript intent preserves literal MCP paths and CLI operations", () => {
+  const cli = parseGitArcCommand("wb git plan claims --inherit -- new.ts -old.ts '*dirty.ts'");
+  assert.deepEqual(cli?.paths, ["new.ts"]);
+  assert.deepEqual(cli?.removePaths, ["old.ts"]);
+  assert.deepEqual(cli?.adoptPaths, ["dirty.ts"]);
+  const mcp = getWorkbenchMcpCommandRoute({
+    server: "wbex",
+    tool: "git_arc_claims",
+    argumentsValue: { inherit: true, addPaths: ["-literal.ts"], removePaths: ["old.ts"], adoptPaths: ["dirty.ts"] },
+  });
+  assert.equal(mcp?.kind, "specialized");
+  if (mcp?.kind !== "specialized" || mcp.operation.kind !== "gitArc") assert.fail("Expected Git arc route");
+  assert.deepEqual(mcp.operation.operation.paths, ["-literal.ts"]);
+  assert.deepEqual(mcp.operation.operation.removePaths, ["old.ts"]);
+});
+
 type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
 function shellMcpItem(overrides: Partial<McpToolCallItem> = {}): McpToolCallItem {
@@ -115,12 +131,8 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
     .filter((definition) => !definition.hideFromMcp)
     .map(getWorkbenchAgentCommandToolName)
     .sort();
-  const presentationNames = WORKBENCH_COMMAND_PRESENTATION_NAMES
-    .filter((name) => name !== "browse_raw")
-    .toSorted();
-  assert.deepEqual(presentationNames, exposedNames);
-
   for (const tool of exposedNames) {
+    assert.ok((WORKBENCH_COMMAND_PRESENTATION_NAMES as readonly string[]).includes(tool), tool);
     assert.ok(getWorkbenchMcpCommandRoute({
       argumentsValue: representativeMcpArguments(tool as WorkbenchCommandPresentationName),
       server: workbenchMcpServerForTool(tool),

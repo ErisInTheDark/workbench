@@ -1,6 +1,30 @@
 /*
+ * Keywords: git, fixtures, graph, lifecycle, test allocation, cleanup.
  * Exports:
- * - Workbench Git fixture specs: immutable real-Git base graphs and prepared lifecycle scenarios used by amendment/controller tests. Keywords: git, fixture, amend, arc, proposal, remote.
+ * - THREAD_GIT_BASE_FIXTURE: basic thread repository.
+ * - CHECKPOINT_OPERATIONS_BASE_FIXTURE: checkpoint operation base.
+ * - CHECKPOINT_ADDITIONS_READY_FIXTURE: active addition scenario.
+ * - CHECKPOINT_RELEASE_READY_FIXTURE: releasable claim scenario.
+ * - CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE: dirty owned work.
+ * - CHECKPOINT_PROPOSAL_READY_FIXTURE: proposal-ready changes.
+ * - CHECKPOINT_REBASE_READY_FIXTURE: proposal rebase graph.
+ * - PATH_MOVER_BASE_FIXTURE: source paths for move tests.
+ * - PATH_MOVER_ARC_READY_FIXTURE: claimed move sources.
+ * - THREAD_GIT_LINEAR_FIXTURE: linear thread commit graph.
+ * - CONTROLLER_BASE_FIXTURE: controller test base.
+ * - HISTORY_LINEAR_FIXTURE: linear rewrite history.
+ * - HISTORY_ARC_READY_FIXTURE: active arc rewrite scenario.
+ * - HISTORY_CONFLICT_READY_FIXTURE: conflicting rewrite scenario.
+ * - HISTORY_GLOBAL_REMAP_READY_FIXTURE: sibling rewrite state.
+ * - HISTORY_PUSHED_READY_FIXTURE: published history.
+ * - HISTORY_MERGE_READY_FIXTURE: nonlinear history.
+ * - HISTORY_SIGNED_READY_FIXTURE: signed history.
+ * - CONTROLLER_START_READY_FIXTURE: activation scenario.
+ * - CONTROLLER_ADOPT_READY_FIXTURE: adoption scenario.
+ * - CONTROLLER_FAILED_ADOPT_READY_FIXTURE: rejected adoption scenario.
+ * - CONTROLLER_PARTIAL_READY_FIXTURE: partial acceptance scenario.
+ * - CONTROLLER_REPLACEMENT_READY_FIXTURE: replacement scenario.
+ * - CONTROLLER_PUSHED_AMEND_READY_FIXTURE: published amend scenario.
  * - partitionWorkbenchGitTestFiles: separate nested Git, ordinary Git, and non-Git suites while preserving stable group order. Keywords: test runner, scheduling, git, fixture.
  * - prepareWorkbenchGitTestFixtures/WorkbenchPreparedTestFixtures: create every selected disposable repository before tests and clean them after all pools finish. Keywords: test runner, setup, cleanup, manifest.
  */
@@ -867,7 +891,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(CONTROLLER_PARTIAL_READY_FIXTURE, 1),
   ], nested: false }],
   ["git-checkpoints.test.ts", { fixtures: [
-    demand(CHECKPOINT_OPERATIONS_BASE_FIXTURE, 3),
+    demand(CHECKPOINT_OPERATIONS_BASE_FIXTURE, 4),
     demand(CHECKPOINT_ADDITIONS_READY_FIXTURE, 1),
     demand(CHECKPOINT_DIRTY_CLAIM_READY_FIXTURE, 1),
     demand(CHECKPOINT_PROPOSAL_READY_FIXTURE, 1),
@@ -875,7 +899,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(CHECKPOINT_RELEASE_READY_FIXTURE, 1),
   ], nested: true }],
   ["WorkbenchGitRepository.test.ts", { fixtures: [
-    demand(THREAD_GIT_BASE_FIXTURE, 3),
+    demand(THREAD_GIT_BASE_FIXTURE, 5),
   ], nested: false }],
   ["WorkbenchGitHistoryRewriter.test.ts", { fixtures: [
     demand(HISTORY_LINEAR_FIXTURE, 3),
@@ -893,9 +917,9 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
   ["WorkbenchGitCheckpointController.test.ts", { fixtures: [
     demand(CONTROLLER_BASE_FIXTURE, 3),
     demand(CONTROLLER_START_READY_FIXTURE, 1),
-    demand(CONTROLLER_ADOPT_READY_FIXTURE, 1),
+    demand(CONTROLLER_ADOPT_READY_FIXTURE, 3),
     demand(CONTROLLER_FAILED_ADOPT_READY_FIXTURE, 1),
-    demand(CONTROLLER_PARTIAL_READY_FIXTURE, 3),
+    demand(CONTROLLER_PARTIAL_READY_FIXTURE, 5),
     demand(CONTROLLER_REPLACEMENT_READY_FIXTURE, 3),
     demand(CONTROLLER_PUSHED_AMEND_READY_FIXTURE, 2),
   ], nested: true }],

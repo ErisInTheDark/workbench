@@ -1,5 +1,10 @@
 /*
+ * Keywords: transcript, MCP, commands, routing, presentation.
  * Exports:
+ * - WorkbenchGitArcOperation: Git operation intent and scope deltas.
+ * - WorkbenchSubagentOperation: subagent operation intent.
+ * - WorkbenchCommandRendering: shared renderer result.
+ * - isWorkbenchCommandPresentationName: recognise current and historical presentation names.
  * - WorkbenchCommandPresentationName/WORKBENCH_COMMAND_PRESENTATION_NAMES: canonical wb tool inventory shared by CLI and MCP adapters. Keywords: workbench, command, inventory, questionnaire.
  * - WorkbenchCommandRoute/WorkbenchSpecializedOperation/WorkbenchCommandPresentationContext: route one wb operation with optional path context to a dedicated or simple renderer. Keywords: workbench, command, route, renderer, questionnaire.
  * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay/getWorkbenchCommandRouteSummaryDisplay: resolve structured arguments and routes into shared rendering metadata. Keywords: workbench, CLI, MCP, rendering, questionnaire.
@@ -46,6 +51,11 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_add",
   "git_unstage",
   "git_commit",
+  "git_plan_claims",
+  "git_plan_start",
+  "git_arc_claims",
+  "git_arc_scope",
+  "git_arc_reword",
   "git_arc_plan",
   "git_arc_plan_add",
   "git_arc_plan_remove",
@@ -74,8 +84,9 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
 export type WorkbenchCommandPresentationName = typeof WORKBENCH_COMMAND_PRESENTATION_NAMES[number];
 
 export type WorkbenchGitArcOperation = {
-  action: "add" | "adopt" | "compare" | "continue" | "diff" | "mv" | "plan" | "planAdd" | "planAdopt" | "planRemove" | "planStart" | "propose" | "release" | "remove" | "rescind" | "restore" | "start";
+  action: "add" | "adopt" | "claims" | "scope" | "compare" | "continue" | "diff" | "mv" | "plan" | "planAdd" | "planAdopt" | "planRemove" | "planStart" | "propose" | "release" | "remove" | "rescind" | "restore" | "start";
   adoptPaths?: string[];
+  removePaths?: string[];
   disown?: boolean;
   intentName: string | null;
   move?: GitArcMoveArguments;
@@ -146,7 +157,7 @@ function readStringArray(value: JsonValue | undefined) {
     : [];
 }
 
-function readRootPaths(value: JsonValue | undefined, field: "adoptPaths" | "paths") {
+function readRootPaths(value: JsonValue | undefined, field: "adoptPaths" | "paths" | "addPaths" | "removePaths") {
   if (!Array.isArray(value)) return [];
   return value.flatMap((candidate) => {
     const entry = asRecord(candidate);
@@ -353,6 +364,11 @@ function renderBrowse(name: WorkbenchCommandPresentationName, args: { [key: stri
 
 function gitArcAction(name: WorkbenchCommandPresentationName): WorkbenchGitArcOperation["action"] | null {
   const actions: Partial<Record<WorkbenchCommandPresentationName, WorkbenchGitArcOperation["action"]>> = {
+    git_plan_claims: "plan",
+    git_plan_start: "planStart",
+    git_arc_claims: "claims",
+    git_arc_scope: "scope",
+    git_arc_reword: "propose",
     git_arc_add: "add",
     git_arc_adopt: "adopt",
     git_arc_compare: "compare",
@@ -401,15 +417,19 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
         }
         : undefined;
   const messages = [readString(args.title), readString(args.description)].filter((value): value is string => value !== null);
-  const paths = [...readStringArray(args.paths), ...readRootPaths(args.roots, "paths")];
+  const combined = name === "git_plan_claims" || name === "git_plan_start" || name === "git_arc_claims";
+  const pathField = combined ? "addPaths" : "paths";
+  const paths = [...readStringArray(args[pathField]), ...readRootPaths(args.roots, pathField)];
+  const removePaths = [...readStringArray(args.removePaths), ...readRootPaths(args.roots, "removePaths")];
   const adoptPaths = [...readStringArray(args.adoptPaths), ...readRootPaths(args.roots, "adoptPaths")];
   const intentName = readString(args.intentName);
   const freshDescription = readString(args.freshDescription);
   const freshTitle = readString(args.freshTitle);
-  const proposalId = readString(args.proposalId) ?? readString(args.amendProposalId) ?? readString(args.replaceProposalId);
+  const proposalId = readString(args.proposalId) ?? readString(args.amend) ?? readString(args.replace) ?? readString(args.amendProposalId) ?? readString(args.replaceProposalId);
   const operation: WorkbenchGitArcOperation = {
     action,
     ...(adoptPaths.length ? { adoptPaths } : {}),
+    ...(removePaths.length ? { removePaths } : {}),
     ...(action === "release" ? { disown: readBoolean(args.disown) } : {}),
     intentName,
     ...(parsedMove ? { move: parsedMove } : {}),
@@ -418,7 +438,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ...(action === "propose"
       ? {
         proposalIntent: {
-          amend: readBoolean(args.amend),
+          amend: readBoolean(args.amend) || typeof args.amend === "string" || Boolean(args.amendProposalId && paths.length),
           description: messages[1] ?? readString(args.description) ?? "",
           ...(freshDescription !== null ? { freshDescription } : {}),
           ...(freshTitle ? { freshTitle } : {}),
@@ -431,6 +451,8 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ref: readString(args.ref),
   };
   const matcherIds: Record<WorkbenchGitArcOperation["action"], string> = {
+    claims: "git-arc.claims",
+    scope: "git-arc.scope",
     add: "git-arc.add",
     adopt: "git-arc.adopt",
     compare: "git-arc.compare",
@@ -453,7 +475,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ? { gitCheckpointDiffs: 1 }
     : action === "restore"
       ? { gitCheckpointRestores: 1 }
-      : action === "propose" || action === "rescind" ? undefined : { gitCheckpointCreates: 1 };
+      : action === "propose" || action === "rescind" || action === "scope" ? undefined : { gitCheckpointCreates: 1 };
   return specialized(matcherIds[action], { kind: "gitArc", operation }, stats);
 }
 

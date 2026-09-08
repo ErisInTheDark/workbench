@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, workspace, roots, scope, partial outcomes, inspection.
  * Exports:
  * - default WorkbenchWorkspaceGitArcController: aggregate repo-local Git arc members, globally page inspection diffs, report workspace dirt, route proposal-owned amendments, and prune thread history. Keywords: git, arc, workspace, multi-root, diff, dirt, proposal, retention.
  * - WorkspaceGitArcMemberState: active repo-local member plus root identity. Keywords: git, arc, active, member.
@@ -339,6 +340,15 @@ export default class WorkbenchWorkspaceGitArcController {
   ) {
     const members = await this.resolveRepoMembers(project);
     switch (request.action) {
+      case "planClaims":
+      case "arcClaims": return await this.executeClaimChanges(project, members, request);
+      case "arcScope": {
+        const values = await this.runMembers(members, async (member) => await this.local.readScope({
+          cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
+        }), undefined, "read");
+        const present = values.flatMap(({ member, result }) => result ? [{ member, result }] : []);
+        return present.length ? this.aggregateResults(project, present) : null;
+      }
       case "plan":
       case "planStart": return await this.executePlan(project, members, request);
       case "planAdd":
@@ -567,6 +577,12 @@ export default class WorkbenchWorkspaceGitArcController {
     }) : [];
     return {
       ...value,
+      ...(value.planningDrift && typeof value.planningDrift === "object" ? {
+        planningDrift: {
+          ...value.planningDrift,
+          paths: qualifyPaths((value.planningDrift as { paths?: string[] }).paths),
+        },
+      } : {}),
       ...(Array.isArray(value.acquiredClaims) ? { acquiredClaims: qualifyPaths(value.acquiredClaims) } : {}),
       changes,
       ...(Array.isArray(value.releasedClaims) ? { releasedClaims: qualifyPaths(value.releasedClaims) } : {}),
@@ -574,6 +590,11 @@ export default class WorkbenchWorkspaceGitArcController {
       rootId: member.roots[0]!.id,
       rootIds: member.roots.map(({ id }) => id),
       scopePaths: qualifyPaths(value.scopePaths),
+      ...(Array.isArray(value.claimedPaths) ? { claimedPaths: qualifyPaths(value.claimedPaths) } : {}),
+      ...(Array.isArray(value.plannedPaths) ? { plannedPaths: qualifyPaths(value.plannedPaths) } : {}),
+      ...(Array.isArray(value.adoptedPaths) ? { adoptedPaths: qualifyPaths(value.adoptedPaths) } : {}),
+      ...(Array.isArray(value.addedClaims) ? { addedClaims: qualifyPaths(value.addedClaims) } : {}),
+      ...(Array.isArray(value.removedClaims) ? { removedClaims: qualifyPaths(value.removedClaims) } : {}),
       ...(Array.isArray(value.skippedIgnoredPaths) ? { skippedIgnoredPaths: qualifyPaths(value.skippedIgnoredPaths) } : {}),
       ...(Array.isArray(value.restoredPaths) ? { restoredPaths: qualifyPaths(value.restoredPaths) } : {}),
     };
@@ -587,6 +608,10 @@ export default class WorkbenchWorkspaceGitArcController {
     const arrays = (name: string) => members.flatMap((member) => Array.isArray(member[name]) ? member[name] as unknown[] : []);
     return {
       ...first,
+      ...(members.some((member) => typeof member.phase === "string") ? {
+        phase: members.some((member) => member.phase === "plan") ? "plan" : members.some((member) => member.phase === "active") ? "active" : "resolved",
+      } : {}),
+      ...(members.every((member) => typeof member.unchanged === "boolean") ? { unchanged: members.every((member) => member.unchanged === true) } : {}),
       acquiredClaims: arrays("acquiredClaims"),
       changes: arrays("changes"),
       ...(members.every((member) => typeof member.hasUncommittedChanges === "boolean") ? {
@@ -597,11 +622,56 @@ export default class WorkbenchWorkspaceGitArcController {
       releasedClaims: arrays("releasedClaims"),
       restoredPaths: arrays("restoredPaths"),
       scopePaths: arrays("scopePaths"),
+      claimedPaths: arrays("claimedPaths"),
+      plannedPaths: arrays("plannedPaths"),
+      adoptedPaths: arrays("adoptedPaths"),
+      addedClaims: arrays("addedClaims"),
+      removedClaims: arrays("removedClaims"),
       skippedIgnoredPaths: arrays("skippedIgnoredPaths"),
       ...(members.some((member) => typeof member.diff === "string") ? {
         diff: members.map((member) => `### ${member.rootId}\n${String(member.diff ?? "")}`).join("\n\n"),
       } : {}),
     };
+  }
+
+  private async executeClaimChanges(
+    project: AgentEndpointProjectResolution,
+    members: readonly RepoMember[],
+    request: Extract<GitCheckpointRequest, { action: "planClaims" | "arcClaims" }>,
+  ) {
+    const additions = this.groupRootPaths(project, members, request.addPaths, request.roots.map((root) => ({
+      rootId: root.rootId, paths: root.addPaths, adoptPaths: root.adoptPaths,
+    })), request.adoptPaths);
+    const removals = this.groupRootPaths(project, members, request.removePaths, request.roots.map((root) => ({
+      rootId: root.rootId, paths: root.removePaths,
+    })));
+    const inventories = await Promise.all(members.map(async (member) => ({
+      member, scope: await this.local.readScope({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId }),
+    })));
+    const inheritedIntent = inventories.find(({ scope }) => scope)?.scope?.intentName;
+    const selected = members.filter((member) => inventories.some((entry) => entry.member === member && entry.scope)
+      || additions.some((group) => group.member === member) || removals.some((group) => group.member === member));
+    if (!selected.length) selected.push(this.memberForRoot(members, project.root));
+    const values = await this.runMembers(selected, async (member) => {
+      const scope = inventories.find((entry) => entry.member === member)?.scope;
+      const addition = additions.find((group) => group.member === member);
+      const removePaths = removals.find((group) => group.member === member)?.paths ?? [];
+      const input = {
+        cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
+        addPaths: addition?.paths ?? [], adoptPaths: addition?.adoptPaths ?? [], removePaths,
+        inherit: request.inherit,
+      };
+      if (request.action === "arcClaims" && scope) return await this.local.editArcClaims(input);
+      if (!scope && removePaths.length) throw new Error("Removed paths must exactly match inherited entries.");
+      return await this.local.editPlanClaims({
+        ...input,
+        inherit: Boolean(scope) && request.inherit,
+        intentName: request.action === "planClaims" ? request.intentName ?? (!scope ? inheritedIntent : undefined) : inheritedIntent,
+        ...(request.action === "planClaims" ? { intentDescription: request.intentDescription } : {}),
+        start: request.action === "arcClaims" || request.start,
+      });
+    }, undefined, "write", { harness: request.harness, project, threadId: request.threadId });
+    return this.aggregateResults(project, values);
   }
 
   private async executePlan(
@@ -682,9 +752,16 @@ export default class WorkbenchWorkspaceGitArcController {
     const refs = this.refsByRepo(project, members, request.refs);
     if (request.checkpointCommit) refs.set(this.memberForRoot(members, project.root).repoRoot, request.checkpointCommit);
     if (!refs.size) {
-      const plans = await this.listPlanStates(project);
-      for (const plan of plans.filter((state) => state.harness === request.harness && state.threadId === request.threadId)) {
-        for (const member of plan.members) refs.set(member.repoRoot, member.checkpointCommit);
+      if (request.action === "arcContinue") {
+        for (const member of members) {
+          const scope = await this.local.readScope({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId });
+          if (scope && scope.phase !== "plan") refs.set(member.repoRoot, scope.checkpointCommit);
+        }
+      } else {
+        const plans = await this.listPlanStates(project);
+        for (const plan of plans.filter((state) => state.harness === request.harness && state.threadId === request.threadId)) {
+          for (const member of plan.members) refs.set(member.repoRoot, member.checkpointCommit);
+        }
       }
     }
     const selected = members.filter((member) => refs.has(member.repoRoot));

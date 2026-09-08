@@ -1,147 +1,19 @@
 /*
+ * Keywords: CLI, response, output, transport, errors.
  * Exports:
  * - WorkbenchAgentCliAdaptedResponse: semantic stdout, stderr, and exit status for one Workbench response. Keywords: workbench, cli, response, output.
  * - adaptWorkbenchAgentCliResponse: convert known server envelopes into command-oriented output. Keywords: workbench, cli, json, stdout, errors.
  */
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands.ts";
+import { renderGitArcOutput } from "./git-arc-output";
 import { renderSubagentListOutput, renderSubagentSettleOutput } from "../subagent/subagent-output";
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 import { formatGitArcFailureReceipt, GitArcFailureEnvelopeSchema } from "workbench-shared/workbench/git/git-arc-failures";
-import {
-  GIT_ARC_DIFF_PAGE_CHARACTER_LIMIT,
-  GIT_ARC_DIFF_TRAILER_PREFIX,
-} from "workbench-shared/workbench/git/git-arc-diff-pages";
-import { formatGitArcReceipt, type GitArcAction } from "workbench-shared/workbench/git/git-arc-receipts";
-import { normalizeOrchestratorReloadScopes } from "workbench-shared/workbench/orchestrator-reload";
 
 export interface WorkbenchAgentCliAdaptedResponse {
   exitCode: number;
   stderr: string;
   stdout: string;
-}
-
-function createArcReceipt(
-  action: GitArcAction,
-  payload: Record<string, unknown> | null,
-  request: WorkbenchAgentCliRequest,
-) {
-  const inspectsProposal = (action === "compare" || action === "diff") && (
-    Boolean(readString(payload, "proposalId"))
-    || (Array.isArray(payload?.members) && payload.members.filter(isRecord).some((member) => Boolean(readString(member, "proposalId"))))
-  );
-  if (inspectsProposal) return null;
-  const ref = readString(payload, action === "propose" ? "sourceCheckpoint" : "checkpointCommit");
-  if (!ref) return null;
-  const selectedPaths = action === "propose"
-    ? readStringArray(payload, "paths")
-    : action === "release"
-      ? readStringArray(payload, "releasedClaims")
-    : readStringArray(request.body ?? null, "paths");
-  const reloadScopes = normalizeOrchestratorReloadScopes(readStringArray(payload, "reloadScopes"));
-  const memberRefs = Array.isArray(payload?.members) ? payload.members.filter(isRecord).flatMap((member) => {
-    const memberRef = readString(member, action === "propose" ? "sourceCheckpoint" : "checkpointCommit");
-    const rootId = readString(member, "rootId");
-    return memberRef && rootId ? [{ ref: memberRef, rootId }] : [];
-  }) : [];
-  return formatGitArcReceipt({
-    action,
-    ...(action === "mv" ? {
-      additionalClaims: readStringArray(payload, "additionalClaims"),
-      matchedPathCount: readNumber(payload, "matchedPathCount"),
-      mappings: readMappings(payload),
-      mode: readString(payload, "mode") === "preview" ? "preview" as const : "applied" as const,
-      remainingMatchCount: readNumber(payload, "remainingMatchCount"),
-    } : {}),
-    claimedPaths: readStringArray(payload, "scopePaths"),
-    intentName: readString(payload, "intentName") || null,
-    ...(memberRefs.length ? { memberRefs } : {}),
-    ...(action === "propose" && readString(payload, "proposalId")
-      ? { proposalId: readString(payload, "proposalId") }
-      : {}),
-    ...(readString(payload, "rootId") ? { rootId: readString(payload, "rootId") } : {}),
-    ref,
-    ...(reloadScopes.length ? { reloadScopes } : {}),
-    ...(selectedPaths.length ? { selectedPaths } : {}),
-    version: 1,
-  });
-}
-
-function appendArcReceipt(lines: string[], receipt: string | null) {
-  return receipt ? [...lines, receipt] : lines;
-}
-
-function memberRefLines(payload: Record<string, unknown> | null) {
-  if (!Array.isArray(payload?.members) || payload.members.length < 2) return [];
-  return [
-    "Workspace arc members:",
-    ...payload.members.filter(isRecord).flatMap((member) => {
-      const ref = readString(member, "checkpointCommit");
-      const rootId = readString(member, "rootId");
-      return ref && rootId ? [`- ${rootId}: ${ref}`] : [];
-    }),
-  ];
-}
-
-function preservedPlanDriftLines(payload: Record<string, unknown> | null) {
-  const paths = readStringArray(payload, "preservedDriftPaths");
-  const count = readNumber(payload, "preservedDriftPathCount") ?? paths.length;
-  const ref = readString(payload, "checkpointCommit");
-  if (!count || !paths.length || !ref) return [];
-  const diffArgs = JSON.stringify({ paths, ref });
-  const refreshArgs = JSON.stringify({ paths });
-  return [
-    "",
-    "WARNING: These paths still use older plan baselines:",
-    ...paths.map((filePath) => `- ${filePath}`),
-    ...(count > paths.length ? [`- ... ${count - paths.length} more`] : []),
-    "",
-    "Inspect this drift first:",
-    `Call tools.mcp__wb__git_arc_diff with ${diffArgs}.`,
-    "",
-    "If the approved plan still applies, re-snapshot only the inspected paths:",
-    `Call mcp__wbex__git_arc_plan_add with ${refreshArgs}.`,
-    "",
-    "Otherwise, revise the plan. arc start will reject preserved drift.",
-  ];
-}
-
-function joinPathList(paths: string[]) {
-  if (paths.length < 2) return paths[0] ?? "";
-  if (paths.length === 2) return `${paths[0]} and ${paths[1]}`;
-  return `${paths.slice(0, -1).join(", ")}, and ${paths.at(-1)}`;
-}
-
-function skippedIgnoredPathLines(payload: Record<string, unknown> | null) {
-  const paths = readStringArray(payload, "skippedIgnoredPaths");
-  if (!paths.length) return [];
-  const subject = paths.length === 1 ? `File ${paths[0]}` : `Files ${joinPathList(paths)}`;
-  return [`${subject} ${paths.length === 1 ? "was" : "were"} skipped because ${paths.length === 1 ? "it does" : "they do"} not need to be claimed: ${paths.length === 1 ? "it is" : "they are"} gitignored.`];
-}
-
-function unclaimedDirtLines(payload: Record<string, unknown> | null) {
-  const paths = readStringArray(payload, "unclaimedDirtPaths");
-  return [
-    "Unclaimed workspace dirt modified since this thread was created:",
-    ...(paths.length ? paths.map((filePath) => `- ${filePath}`) : ["- none"]),
-  ];
-}
-
-function gitArcDiffTrailerLines(payload: Record<string, unknown> | null) {
-  const oversizedPaths = readStringArray(payload, "oversizedDiffPaths");
-  const nextPage = readNumber(payload, "nextPage");
-  return [
-    GIT_ARC_DIFF_TRAILER_PREFIX,
-    ...unclaimedDirtLines(payload),
-    ...oversizedPaths.flatMap((filePath) => [
-      "",
-      `${filePath} was not included because its diff exceeds the ${GIT_ARC_DIFF_PAGE_CHARACTER_LIMIT.toLocaleString("en-US")}-character paged change limit.`,
-      `Inspect it directly with \`wb git arc diff -- ${JSON.stringify(filePath)}\` if needed.`,
-    ]),
-    ...(nextPage === undefined ? [] : [
-      "",
-      `More diff files remain. Repeat this command with \`--page ${nextPage}\`.`,
-    ]),
-  ];
 }
 
 export function adaptWorkbenchAgentCliResponse({
@@ -158,13 +30,10 @@ export function adaptWorkbenchAgentCliResponse({
     const failureEnvelope = GitArcFailureEnvelopeSchema.safeParse(payload);
     const message = readError(payload) || text || "Workbench request failed.";
     return failed(failureEnvelope.success
-      ? `${message}\n${formatGitArcFailureReceipt(failureEnvelope.data.gitArcFailure)}`
+      ? formatGitArcFailureReceipt(failureEnvelope.data.gitArcFailure)
       : message);
   }
-  const skippedIgnoredPaths = skippedIgnoredPathLines(payload);
-  if (payload?.noOp === true && skippedIgnoredPaths.length) {
-    return succeeded(skippedIgnoredPaths.join("\n"));
-  }
+  if (request.responseKind.startsWith("git-arc-")) return succeeded(renderGitArcOutput(request, payload));
 
   switch (request.responseKind) {
     case "reload-dirt": {
@@ -197,117 +66,6 @@ export function adaptWorkbenchAgentCliResponse({
         return name && threadId ? [{ name, threadId }] : [];
       }) : [];
       return succeeded(renderSubagentSettleOutput(settled));
-    }
-    case "git-arc-plan":
-    case "git-arc-add":
-    case "git-arc-adopt":
-    case "git-arc-continue":
-    case "git-arc-release":
-    case "git-arc-remove": {
-      const action = request.responseKind === "git-arc-plan"
-        ? "plan"
-        : request.responseKind === "git-arc-add"
-          ? "add"
-          : request.responseKind === "git-arc-adopt"
-            ? "adopt"
-          : request.responseKind === "git-arc-continue" ? "continue"
-            : request.responseKind === "git-arc-release" ? "release" : "remove";
-      const label = action === "plan"
-        ? request.body?.action === "planAdd" ? "Extended Git plan"
-          : request.body?.action === "planRemove" ? "Reduced Git plan"
-            : request.body?.action === "planAdopt" ? "Adopted changes into Git plan"
-              : "Created Git plan"
-        : action === "adopt" ? "Adopted workspace changes"
-        : action === "continue" ? "Continued Git arc"
-          : action === "release" ? "Released Git arc" : "Created successor arc ref";
-      return succeeded(appendArcReceipt([
-        `${label} ${readString(payload, "checkpointCommit") || "(unknown commit)"}`,
-        ...memberRefLines(payload),
-        ...preservedPlanDriftLines(payload),
-        ...skippedIgnoredPaths,
-      ], createArcReceipt(action, payload, request)).join("\n"));
-    }
-    case "git-arc-start":
-    case "git-arc-wait":
-    case "git-arc-compare": {
-      const action = request.responseKind === "git-arc-compare" ? "compare" : "start";
-      const waited = request.responseKind === "git-arc-wait";
-      const changes = Array.isArray(payload?.changes) ? payload.changes.filter(isRecord) : [];
-      const releasedClaims = readStringArray(payload, "releasedClaims");
-      const acquiredClaims = readStringArray(payload, "acquiredClaims");
-      return succeeded(appendArcReceipt([
-        waited ? "Waited for claims and started Git arc" : "Workbench arc comparison",
-        ...memberRefLines(payload),
-        ...(action === "start" ? [
-          `Released claims: ${releasedClaims.length ? releasedClaims.join(", ") : "none"}`,
-          `Acquired claims: ${acquiredClaims.length ? acquiredClaims.join(", ") : "none"}`,
-        ] : []),
-        ...skippedIgnoredPaths,
-        ...changes.map((change) => {
-          const kind = isRecord(change.kind) ? readString(change.kind, "type").slice(0, 1).toUpperCase() : "M";
-          const additions = typeof change.additions === "number" ? change.additions : 0;
-          const deletions = typeof change.deletions === "number" ? change.deletions : 0;
-          return `${kind || "M"}\t+${additions}\t-${deletions}\t${readString(change, "path")}`;
-        }),
-        ...(action === "compare" ? ["", ...unclaimedDirtLines(payload)] : []),
-      ], createArcReceipt(action, payload, request)).join("\n"));
-    }
-    case "git-arc-mv": {
-      const mappings = readMappings(payload);
-      const additionalClaims = readStringArray(payload, "additionalClaims");
-      const matchedPathCount = readNumber(payload, "matchedPathCount") ?? mappings.length;
-      const remainingMatchCount = readNumber(payload, "remainingMatchCount") ?? 0;
-      const preview = readString(payload, "mode") === "preview";
-      const lines = preview
-        ? [
-          "This command will rename the following files:",
-          ...mappings.map(({ destination, source }) => `${source} -> ${destination}`),
-          ...(remainingMatchCount > 0 ? [
-            `${mappings.length} of ${matchedPathCount} matching paths are included in this batch. ${remainingMatchCount} matching paths remain.`,
-          ] : []),
-          ...(additionalClaims.length ? ["This command will additionally claim:", ...additionalClaims] : []),
-          "Use the command again with --confirm to complete this batch if it looks correct."
-            + (remainingMatchCount > 0 ? " Then preview again to map the remaining paths." : ""),
-        ]
-        : [
-          `Moved ${mappings.length} ${mappings.length === 1 ? "path" : "paths"}.`,
-          ...mappings.map(({ destination, source }) => `${source} -> ${destination}`),
-          ...(remainingMatchCount > 0 ? [
-            `${remainingMatchCount} matching paths remained when this batch ran. Preview again for the next batch.`,
-          ] : []),
-          ...(additionalClaims.length ? ["Additionally claimed:", ...additionalClaims] : []),
-        ];
-      return succeeded(appendArcReceipt(lines, createArcReceipt("mv", payload, request)).join("\n"));
-    }
-    case "git-arc-diff":
-      return succeeded(appendArcReceipt([
-        readString(payload, "diff"),
-        ...gitArcDiffTrailerLines(payload),
-      ].filter(Boolean), createArcReceipt("diff", payload, request)).join("\n"));
-    case "git-arc-propose": {
-      const proposalId = readString(payload, "proposalId");
-      const rescinded = request.body?.action === "proposalRescind";
-      return succeeded(appendArcReceipt([
-        rescinded
-          ? `Rescinded arc proposal: ${proposalId || "(unknown proposal)"}`
-          : `Workbench arc proposal: ${proposalId || "(unknown proposal)"}`,
-      ], createArcReceipt("propose", payload, request)).join("\n"));
-    }
-    case "git-arc-restore": {
-      const checkpointCommit = readString(payload, "checkpointCommit") || "(unknown commit)";
-      const receipt = createArcReceipt("restore", payload, request);
-      if (!Array.isArray(request.body?.paths)) {
-        return succeeded(appendArcReceipt([`Restored arc ${checkpointCommit}`], receipt).join("\n"));
-      }
-
-      const restoredPaths = readStringArray(payload, "restoredPaths");
-      if (!restoredPaths.length) {
-        return succeeded(appendArcReceipt([`Selected paths already matched arc ${checkpointCommit}`], receipt).join("\n"));
-      }
-      return succeeded(appendArcReceipt([
-        `Restored ${restoredPaths.length} ${restoredPaths.length === 1 ? "path" : "paths"} from arc ${checkpointCommit}:`,
-        ...restoredPaths,
-      ], receipt).join("\n"));
     }
     case "browse-command":
       return adaptBrowseCommand(payload, text);
@@ -381,22 +139,6 @@ function readString(record: Record<string, unknown> | null | undefined, key: str
 function readStringArray(record: Record<string, unknown> | null | undefined, key: string) {
   const value = record?.[key];
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
-}
-
-function readNumber(record: Record<string, unknown> | null | undefined, key: string) {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : undefined;
-}
-
-function readMappings(record: Record<string, unknown> | null | undefined) {
-  const value = record?.mappings;
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((mapping) => {
-    if (!isRecord(mapping)) return [];
-    const source = readString(mapping, "source");
-    const destination = readString(mapping, "destination");
-    return source && destination ? [{ destination, source }] : [];
-  });
 }
 
 function parseRecord(value: string) {

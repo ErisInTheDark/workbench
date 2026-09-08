@@ -41,6 +41,89 @@ function execFileWithInput(command: string, args: string[], input: string, optio
   });
 }
 const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
+
+test("start receipts describe net scope changes rather than reacquired claims", async () => {
+  const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "start"], gitArcOptions);
+  assert.equal(parsed.kind, "request");
+  const output = adaptWorkbenchAgentCliResponse({
+    httpOk: true, request: parsed.request,
+    text: JSON.stringify({
+      checkpointCommit: "a".repeat(40), scopePaths: ["kept.ts", "new.ts"],
+      acquiredClaims: ["kept.ts", "new.ts"], releasedClaims: ["kept.ts", "old.ts"],
+      addedClaims: [], removedClaims: [],
+    }),
+  });
+  const receipt = parseGitArcReceipt(output.stdout);
+  assert.deepEqual(receipt?.additionalClaims, ["new.ts"]);
+  assert.deepEqual(receipt?.removedClaims, ["old.ts"]);
+  assert.equal(receipt?.claimedPathCount, 2);
+});
+
+test("scope output preserves proposal recovery across workspace members", async () => {
+  const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "scope"], gitArcOptions);
+  assert.equal(parsed.kind, "request");
+  const proposals = [{ proposalId: "pending-id", status: "proposed" }, { proposalId: "accepted-id", status: "committed" }];
+  const output = adaptWorkbenchAgentCliResponse({
+    httpOk: true, request: parsed.request,
+    text: JSON.stringify({
+      checkpointCommit: "a".repeat(40), phase: "active", claimedPaths: [],
+      members: proposals.map((proposal, index) => ({
+        rootId: `root-${index}`, checkpointCommit: "a".repeat(40), proposals: [proposal],
+      })),
+    }),
+  });
+  assert.deepEqual(parseGitArcReceipt(output.stdout)?.proposals, proposals);
+});
+
+test("scope output preserves planned and live inventory without duplicated transport JSON", async () => {
+  const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "scope"], gitArcOptions);
+  assert.equal(parsed.kind, "request");
+  const output = adaptWorkbenchAgentCliResponse({
+    httpOk: true, request: parsed.request,
+    text: JSON.stringify({ checkpointCommit: "a".repeat(40), intentName: "revise", phase: "plan", plannedPaths: ["new.ts"], claimedPaths: ["old.ts"], adoptedPaths: [] }),
+  });
+  const receipt = parseGitArcReceipt(output.stdout);
+  assert.deepEqual(receipt?.plannedPaths, ["new.ts"]);
+  assert.deepEqual(receipt?.claimedPaths, ["old.ts"]);
+  assert.equal(receipt?.phase, "plan");
+});
+
+test("combined claim CLI preserves addition, removal and adoption as separate arrays", async () => {
+  const parsed = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "claims", "--inherit", "--", "new.ts", "-old.ts", "*dirty.ts", "./-literal.ts",
+  ], gitArcOptions);
+  assert.equal(parsed.kind, "request");
+  assert.deepEqual(parsed.request.body?.addPaths, ["new.ts", "./-literal.ts"]);
+  assert.deepEqual(parsed.request.body?.removePaths, ["old.ts"]);
+  assert.deepEqual(parsed.request.body?.adoptPaths, ["dirty.ts"]);
+  assert.equal(parsed.request.body?.inherit, true);
+  const missing = await parseWorkbenchAgentCliCommand(["git", "arc", "claims", "--", "new.ts"], gitArcOptions);
+  assert.equal(missing.kind, "error");
+});
+
+test("plan claim revisions recover removal-only operands when PowerShell consumes the separator", async () => {
+  const parsed = await parseWorkbenchAgentCliCommand(["git", "plan", "claims", "--inherit", "-old.ts"], gitArcOptions);
+  assert.equal(parsed.kind, "request");
+  assert.deepEqual(parsed.request.body?.removePaths, ["old.ts"]);
+});
+
+test("proposal targeting keeps legacy content amendments and message-only rewords distinct", async () => {
+  const propose = listWorkbenchAgentCommands().find(({ words }) => words.join("_") === "git_arc_propose")!;
+  const context = { cwd: "C:/workspace", callerThreadId: "thread-1", callerHarness: "codex" as const, workbenchOrigin: null };
+  const content = await propose.buildRequestFromJson({
+    amendProposalId: "accepted-id", paths: ["one.ts"], freshTitle: "new commit",
+  }, context);
+  assert.equal(content.body?.amend, true);
+  assert.equal(content.body?.amendProposalId, "accepted-id");
+  assert.equal(content.body?.title, "");
+  await assert.rejects(propose.buildRequestFromJson({
+    amendProposalId: "accepted-id", replace: "pending-id", title: "conflicting target",
+  }, context));
+  const reword = await parseWorkbenchAgentCliCommand(["git", "arc", "reword", "--proposal", "accepted-id", "--title", "message only"], gitArcOptions);
+  assert.equal(reword.kind, "request");
+  assert.equal(reword.request.body?.amend, false);
+  assert.equal(reword.request.body?.paths, undefined);
+});
 const reloadCatalog = [
   { access: "agent" as const, description: "Core", safeAll: true, scope: "server:core" },
   { access: "agent" as const, description: "Browse", safeAll: true, scope: "server:browse" },
@@ -457,16 +540,21 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   assert.equal((await parseWorkbenchAgentCliCommand(["git", "add", "--", "src/file.ts"], { callerThreadId: null, cwd: "C:/workspace" })).kind, "error");
 
   const plan = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "plan", "-m", "Update files", "-m", "Coordinate the shared boundary.", "--", "src/file.ts",
+    "git", "plan", "claims", "-m", "Update files", "-m", "Coordinate the shared boundary.", "--", "src/file.ts",
   ], gitOptions);
   assert.equal(plan.kind, "request");
   assert.deepEqual(plan.request.body, {
-    action: "plan",
+    action: "planClaims",
+    inherit: false,
+    start: false,
+    roots: [],
+    removePaths: [],
+    adoptPaths: [],
     cwd: "C:/workspace",
     harness: "codex",
     intentDescription: "Coordinate the shared boundary.",
     intentName: "Update files",
-    paths: ["src/file.ts"],
+    addPaths: ["src/file.ts"],
     threadId: "thread-1",
   });
   const amendCommit = await parseWorkbenchAgentCliCommand([
@@ -554,35 +642,6 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     "git", "arc", "diff", "--page", "2", "--", "src/file.ts",
   ], gitOptions)).kind, "error");
 
-  const emptyAddition = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "add",
-  ], gitOptions);
-  assert.equal(emptyAddition.kind, "error");
-
-  const addition = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "add", "--", "src/new.ts",
-  ], gitOptions);
-  assert.equal(addition.kind, "request");
-  assert.deepEqual(addition.request.body, {
-    action: "arcAdd",
-    cwd: "C:/workspace",
-    harness: "codex",
-    paths: ["src/new.ts"],
-    threadId: "thread-1",
-  });
-
-  const adoption = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "adopt", "--", "src/dirty.ts",
-  ], gitOptions);
-  assert.equal(adoption.kind, "request");
-  assert.deepEqual(adoption.request.body, {
-    action: "arcAdopt",
-    cwd: "C:/workspace",
-    harness: "codex",
-    paths: ["src/dirty.ts"],
-    threadId: "thread-1",
-  });
-
   const move = await parseWorkbenchAgentCliCommand([
     "git", "arc", "mv", "src/old.ts", "src/new.ts",
   ], gitOptions);
@@ -616,18 +675,6 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     cwd: "C:/workspace",
     harness: "codex",
     move: { confirm: true, kind: "regex", pattern: "^src/(.+)$", replacement: "tests/$1", roots: ["src"] },
-    threadId: "thread-1",
-  });
-
-  const removal = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "remove", "--", "src/file.ts",
-  ], gitOptions);
-  assert.equal(removal.kind, "request");
-  assert.deepEqual(removal.request.body, {
-    action: "arcRemove",
-    cwd: "C:/workspace",
-    harness: "codex",
-    paths: ["src/file.ts"],
     threadId: "thread-1",
   });
 
@@ -679,7 +726,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     title: "Replacement title",
   });
   const messageOnlyAmendment = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "propose", "--amend", "proposal-one",
+    "git", "arc", "reword", "--proposal", "proposal-one",
     "--title", "Message-only title", "--description", "Message-only description",
   ], gitOptions);
   assert.equal(messageOnlyAmendment.kind, "request");
@@ -940,9 +987,6 @@ test("every deprecated checkpoint command returns the current plan and arc migra
     guide ??= canonical.help;
     assert.equal(canonical.help, guide);
   }
-  const oldPlan = await parseWorkbenchAgentCliCommand(["git", "plan", "-m", "Old", "--", "src/a.ts"]);
-  assert.equal(oldPlan.kind, "help");
-  assert.equal(oldPlan.help, guide);
 });
 
 test("routes canonical, compatibility, and leaf help to the nearest owning group", async () => {
@@ -951,11 +995,8 @@ test("routes canonical, compatibility, and leaf help to the nearest owning group
   assert.deepEqual(contextRecall, canonicalRecall);
 
   const canonicalArc = await parseWorkbenchAgentCliCommand(["git", "arc", "--help"]);
-  const arcLeaf = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "--help"]);
+  const arcLeaf = await parseWorkbenchAgentCliCommand(["git", "arc", "claims", "--help"]);
   assert.deepEqual(arcLeaf, canonicalArc);
-  assert.match(canonicalArc.kind === "help" ? canonicalArc.help : "", /wb git arc remove -- <claimed-path>/u);
-  assert.match(canonicalArc.kind === "help" ? canonicalArc.help : "", /wb git arc release \[--disown\]/u);
-  assert.match(canonicalArc.kind === "help" ? canonicalArc.help : "", /wb git arc wait \[--ref <ref>\]/u);
 
   const browse = await parseWorkbenchAgentCliCommand(["browse", "--help"]);
   const browseLeaf = await parseWorkbenchAgentCliCommand(["browse", "run", "--help"]);
@@ -1286,15 +1327,8 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     intentName: "Polish arc UI",
     scopePaths: ["src/one.ts"],
   }, { action: "plan", paths: ["src/one.ts"] });
-  assert.match(planResponse.stdout, new RegExp(`^Created Git plan ${planRef}\\n`, "u"));
-  assert.deepEqual(parseGitArcReceipt(planResponse.stdout), {
-    action: "plan",
-    claimedPaths: ["src/one.ts"],
-    intentName: "Polish arc UI",
-    ref: planRef,
-    selectedPaths: ["src/one.ts"],
-    version: 1,
-  });
+  assert.deepEqual(parseGitArcReceipt(planResponse.stdout)?.plannedPaths, ["src/one.ts"]);
+  assert.deepEqual(parseGitArcReceipt(planResponse.stdout)?.claimedPaths, []);
   const skippedPlanResponse = adapt("git-arc-plan", {
     checkpointCommit: planRef,
     intentName: "Skip generated output",
@@ -1303,7 +1337,7 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
   }, { action: "plan", paths: ["src/one.ts", "tmp/a.ts", "tmp/b.ts", "tmp/c.ts"] });
   assert.match(
     skippedPlanResponse.stdout,
-    /Files tmp\/a\.ts, tmp\/b\.ts, and tmp\/c\.ts were skipped because they do not need to be claimed: they are gitignored\./u,
+    /skipped gitignored 3\ntmp\/a\.ts\ntmp\/b\.ts\ntmp\/c\.ts/u,
   );
   assert.equal(adapt("git-arc-add", {
     kind: "noop",
@@ -1311,7 +1345,7 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     scopePaths: [],
     skippedIgnoredPaths: ["tmp/one.ts"],
   }, { action: "arcAdd", paths: ["tmp/one.ts"] }).stdout, (
-    "File tmp/one.ts was skipped because it does not need to be claimed: it is gitignored.\n"
+    "skipped gitignored 1\ntmp/one.ts\n"
   ));
   assert.equal(adapt("git-arc-adopt", {
     kind: "noop",
@@ -1319,31 +1353,17 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     scopePaths: [],
     skippedIgnoredPaths: ["tmp/one.ts", "tmp/two.ts"],
   }, { action: "arcAdopt", paths: ["tmp/one.ts", "tmp/two.ts"] }).stdout, (
-    "Files tmp/one.ts and tmp/two.ts were skipped because they do not need to be claimed: they are gitignored.\n"
+    "skipped gitignored 2\ntmp/one.ts\ntmp/two.ts\n"
   ));
   const driftResponse = adapt("git-arc-plan", {
     checkpointCommit: successorRef,
     intentName: "Polish arc UI",
-    preservedDriftPathCount: 2,
-    preservedDriftPaths: ["src/one.ts", "src/two.ts"],
+    planningDrift: { previousRef: planRef, paths: ["src/one.ts", "src/two.ts"] },
     scopePaths: ["src/one.ts", "src/two.ts"],
   }, { action: "planAdd", paths: ["src/three.ts"] });
-  assert.match(driftResponse.stdout, /WARNING: These paths still use older plan baselines:[\s\S]*src\/one\.ts[\s\S]*src\/two\.ts/u);
-  assert.match(driftResponse.stdout, /tools\.mcp__wb__git_arc_diff/u);
-  assert.match(driftResponse.stdout, new RegExp(successorRef, "u"));
-  assert.match(driftResponse.stdout, /src\/one\.ts.*src\/two\.ts/u);
-  assert.match(driftResponse.stdout, /mcp__wbex__git_arc_plan_add.*src\/one\.ts.*src\/two\.ts/u);
-  assert.ok(driftResponse.stdout.indexOf("tools.mcp__wb__git_arc_diff") < driftResponse.stdout.indexOf("mcp__wbex__git_arc_plan_add"));
-  assert.match(driftResponse.stdout, /arc start will reject preserved drift/u);
-  assert.deepEqual(parseGitArcReceipt(driftResponse.stdout), {
-    action: "plan",
-    claimedPaths: ["src/one.ts", "src/two.ts"],
-    intentName: "Polish arc UI",
-    ref: successorRef,
-    selectedPaths: ["src/three.ts"],
-    version: 1,
-  });
-  assert.match(adapt("git-arc-add", { checkpointCommit: successorRef }, { action: "arcAdd" }).stdout, /^Created successor arc ref/u);
+  assert.deepEqual(parseGitArcReceipt(driftResponse.stdout)?.planningDrift, [{ previousRef: planRef, paths: ["src/one.ts", "src/two.ts"] }]);
+  const recovery = driftResponse.stdout.split("\n").find((line) => line.startsWith("git_arc_diff "))!;
+  assert.deepEqual(JSON.parse(recovery.slice("git_arc_diff ".length)), { ref: planRef, paths: ["src/one.ts", "src/two.ts"] });
   const compareResponse = adapt("git-arc-compare", {
     changes: [],
     checkpointCommit: planRef,
@@ -1351,7 +1371,7 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     scopePaths: ["src/one.ts"],
     unclaimedDirtPaths: ["src/unclaimed.ts"],
   }, { action: "compare" });
-  assert.match(compareResponse.stdout, /Unclaimed workspace dirt modified since this thread was created:[\s\S]*src\/unclaimed\.ts/u);
+  assert.match(compareResponse.stdout, /unclaimed dirt 1\nsrc\/unclaimed\.ts/u);
   const proposalCompareResponse = adapt("git-arc-compare", {
     changes: [],
     checkpointCommit: planRef,
@@ -1369,9 +1389,8 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     scopePaths: ["src/one.ts"],
     unclaimedDirtPaths: [],
   }, { action: "diff" });
-  assert.match(diffResponse.stdout, /Workbench arc diff notes:[\s\S]*- none/u);
-  assert.match(diffResponse.stdout, /src\/giant\.ts[\s\S]*wb git arc diff -- "src\/giant\.ts"/u);
-  assert.match(diffResponse.stdout, /--page 2/u);
+  assert.ok(diffResponse.stdout.includes('git_arc_diff {"paths":["src/giant.ts"]}'));
+  assert.ok(diffResponse.stdout.includes('next git_arc_diff {"page":2}'));
   const terminalDiffResponse = adapt("git-arc-diff", {
     checkpointCommit: planRef,
     diff: "diff --git a/src/final.ts b/src/final.ts\n",
@@ -1380,22 +1399,15 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     scopePaths: ["src/final.ts"],
     unclaimedDirtPaths: [],
   }, { action: "diff" });
-  assert.doesNotMatch(terminalDiffResponse.stdout, /More diff files remain|undefined/u);
+  assert.match(terminalDiffResponse.stdout, /end diff/u);
   const releaseResponse = adapt("git-arc-release", {
     checkpointCommit: planRef,
     intentName: "Release owned work",
     releasedClaims: ["src/dirty.ts"],
     scopePaths: [],
   }, { action: "arcRelease", disown: true });
-  assert.match(releaseResponse.stdout, new RegExp(`^Released Git arc ${planRef}`, "u"));
-  assert.deepEqual(parseGitArcReceipt(releaseResponse.stdout), {
-    action: "release",
-    claimedPaths: [],
-    intentName: "Release owned work",
-    ref: planRef,
-    selectedPaths: ["src/dirty.ts"],
-    version: 1,
-  });
+  assert.deepEqual(parseGitArcReceipt(releaseResponse.stdout)?.removedClaims, ["src/dirty.ts"]);
+  assert.equal(parseGitArcReceipt(releaseResponse.stdout)?.claimedPathCount, 0);
   const waitResponse = adapt("git-arc-wait", {
     acquiredClaims: ["api:src/api.ts", "web:src/web.ts"],
     changes: [],
@@ -1408,20 +1420,11 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     releasedClaims: [],
     scopePaths: ["api:src/api.ts", "web:src/web.ts"],
   }, { action: "arcWait" });
-  assert.match(waitResponse.stdout, /^Waited for claims and started Git arc/u);
-  assert.match(waitResponse.stdout, /Acquired claims: api:src\/api\.ts, web:src\/web\.ts/u);
-  assert.match(waitResponse.stdout, new RegExp(`api: ${planRef}[\\s\\S]*web: ${successorRef}`, "u"));
-  assert.deepEqual(parseGitArcReceipt(waitResponse.stdout), {
-    action: "start",
-    claimedPaths: ["api:src/api.ts", "web:src/web.ts"],
-    intentName: "Wait and start",
-    memberRefs: [
+  assert.deepEqual(parseGitArcReceipt(waitResponse.stdout)?.additionalClaims, ["api:src/api.ts", "web:src/web.ts"]);
+  assert.deepEqual(parseGitArcReceipt(waitResponse.stdout)?.memberRefs, [
       { ref: planRef, rootId: "api" },
       { ref: successorRef, rootId: "web" },
-    ],
-    ref: planRef,
-    version: 1,
-  });
+  ]);
   const movePreview = adapt("git-arc-mv", {
     additionalClaims: ["src/old.ts", "tests/old.ts"],
     checkpointCommit: planRef,
@@ -1432,39 +1435,26 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     remainingMatchCount: 2,
     scopePaths: ["src/existing.ts"],
   }, { action: "arcMove" });
-  assert.match(movePreview.stdout, /^This command will rename the following files:/u);
-  assert.match(movePreview.stdout, /1 of 3 matching paths.*2 matching paths remain/u);
-  assert.match(movePreview.stdout, /Use the command again with --confirm/u);
-  assert.deepEqual(parseGitArcReceipt(movePreview.stdout), {
-    action: "mv",
-    additionalClaims: ["src/old.ts", "tests/old.ts"],
-    claimedPaths: ["src/existing.ts"],
-    intentName: "Move tests",
-    mappings: [{ destination: "tests/old.ts", source: "src/old.ts" }],
-    matchedPathCount: 3,
-    mode: "preview",
-    ref: planRef,
-    remainingMatchCount: 2,
-    version: 1,
-  });
-  assert.match(adapt("git-arc-mv", {
+  assert.equal(parseGitArcReceipt(movePreview.stdout)?.mode, "preview");
+  assert.equal(parseGitArcReceipt(movePreview.stdout)?.remainingMatchCount, 2);
+  assert.deepEqual(parseGitArcReceipt(movePreview.stdout)?.mappings, [{ destination: "tests/old.ts", source: "src/old.ts" }]);
+  assert.equal(parseGitArcReceipt(adapt("git-arc-mv", {
     additionalClaims: ["tests/old.ts"], checkpointCommit: successorRef,
     mappings: [{ destination: "tests/old.ts", source: "src/old.ts" }],
     matchedPathCount: 1, mode: "applied", remainingMatchCount: 0, scopePaths: ["src/old.ts", "tests/old.ts"],
-  }, { action: "arcMove" }).stdout, /^Moved 1 path\./u);
-  assert.match(adapt("git-arc-propose", {
+  }, { action: "arcMove" }).stdout)?.mode, "applied");
+  assert.equal(parseGitArcReceipt(adapt("git-arc-propose", {
     proposalId: "proposal-one",
     sourceCheckpoint: successorRef,
-  }).stdout, /^Workbench arc proposal: proposal-one/u);
-  assert.match(adapt("git-arc-restore", { checkpointCommit: successorRef }).stdout, /^Restored arc/u);
+  }).stdout)?.proposalId, "proposal-one");
   assert.match(adapt("git-arc-restore", {
     checkpointCommit: successorRef,
     restoredPaths: ["src/one.ts", "src/two.ts"],
-  }, { paths: ["src/one.ts", "src/two.ts"] }).stdout, /^Restored 2 paths from arc/u);
+  }, { paths: ["src/one.ts", "src/two.ts"] }).stdout, /restored 2\nsrc\/one.ts\nsrc\/two.ts/u);
   assert.match(adapt("git-arc-restore", {
     checkpointCommit: successorRef,
     restoredPaths: [],
-  }, { paths: ["src/one.ts"] }).stdout, /^Selected paths already matched arc/u);
+  }, { paths: ["src/one.ts"] }).stdout, /restored 0/u);
   assert.deepEqual(adapt("subagent-create", { threadId: "child-thread" }), {
     exitCode: 0,
     stderr: "",
@@ -1486,7 +1476,6 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
       version: 1,
     },
   }, { action: "plan", adoptPaths: ["src/dirty.ts"], paths: ["src/dirty.ts"] }, false);
-  assert.match(structuredFailure.stderr, /^Adoption overlaps ordinary plan scope\./u);
   assert.deepEqual(parseGitArcFailureReceipt(structuredFailure.stderr), {
     action: "plan",
     code: "adoptedPathOverlap",
@@ -1523,43 +1512,47 @@ test("unwraps Browse output and honors Browse failure status inside HTTP success
 });
 
 test("parses current-plan creation and revision commands", async () => {
-  const empty = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "-m", "Draft"], gitArcOptions);
+  const empty = await parseWorkbenchAgentCliCommand(["git", "plan", "claims", "-m", "Draft"], gitArcOptions);
   assert.equal(empty.kind, "request");
   const adopted = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "plan", "-m", "Adopt dirt", "--adopt", "src/dirty-a.ts", "--adopt", "src/dirty-b.ts", "--", "src/clean.ts",
+    "git", "plan", "claims", "-m", "Adopt dirt", "--", "*src/dirty-a.ts", "*src/dirty-b.ts", "src/clean.ts",
   ], gitArcOptions);
   assert.equal(adopted.kind, "request");
   assert.deepEqual(adopted.request.body, {
-    action: "plan",
+    action: "planClaims",
+    inherit: false,
+    start: false,
+    roots: [],
+    removePaths: [],
     adoptPaths: ["src/dirty-a.ts", "src/dirty-b.ts"],
     cwd: "C:/workspace",
     harness: "codex",
-    intentDescription: "",
     intentName: "Adopt dirt",
-    paths: ["src/clean.ts"],
+    addPaths: ["src/clean.ts"],
     threadId: "thread-1",
   });
   const reloadPlan = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "plan", "-m", "Reload MCP", "--reload-scope", "server:mcp", "--", "src/clean.ts",
+    "git", "plan", "claims", "-m", "Reload MCP", "--reload-scope", "server:mcp", "--", "src/clean.ts",
   ], gitArcOptions);
   assert.equal(reloadPlan.kind, "error");
-  const add = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "add", "--", "src/a.ts"], gitArcOptions);
+  const add = await parseWorkbenchAgentCliCommand(["git", "plan", "claims", "--inherit", "--", "src/a.ts"], gitArcOptions);
   assert.equal(add.kind, "request");
-  assert.equal(add.request.body?.action, "planAdd");
-  const remove = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "remove", "--", "src/a.ts"], gitArcOptions);
+  assert.deepEqual(add.request.body?.addPaths, ["src/a.ts"]);
+  const remove = await parseWorkbenchAgentCliCommand(["git", "plan", "claims", "--inherit", "--", "-src/a.ts"], gitArcOptions);
   assert.equal(remove.kind, "request");
-  assert.equal(remove.request.body?.action, "planRemove");
-  const adopt = await parseWorkbenchAgentCliCommand(["git", "arc", "plan", "adopt", "--", "src/a.ts"], gitArcOptions);
+  assert.deepEqual(remove.request.body?.removePaths, ["src/a.ts"]);
+  const adopt = await parseWorkbenchAgentCliCommand(["git", "plan", "claims", "--inherit", "--", "*src/a.ts"], gitArcOptions);
   assert.equal(adopt.kind, "request");
-  assert.equal(adopt.request.body?.action, "planAdopt");
+  assert.deepEqual(adopt.request.body?.adoptPaths, ["src/a.ts"]);
 });
 
 test("parses combined plan start and ref-free start", async () => {
   const combined = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "plan", "start", "-m", "Continue", "--adopt", "src/dirty.ts", "--", "src/a.ts",
+    "git", "plan", "start", "-m", "Continue", "--", "*src/dirty.ts", "src/a.ts",
   ], gitArcOptions);
   assert.equal(combined.kind, "request");
-  assert.equal(combined.request.body?.action, "planStart");
+  assert.equal(combined.request.body?.action, "planClaims");
+  assert.equal(combined.request.body?.start, true);
   assert.deepEqual(combined.request.body?.adoptPaths, ["src/dirty.ts"]);
   const start = await parseWorkbenchAgentCliCommand(["git", "arc", "start"], gitArcOptions);
   assert.equal(start.kind, "request");

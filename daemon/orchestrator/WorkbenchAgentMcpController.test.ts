@@ -109,18 +109,19 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_project"), true);
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_instructions"), false);
     assert.equal((await projectClient.listTools()).tools.some(({ name }) => name === "tokens_instructions"), true);
-    const plan = inventory.tools.find(({ name }) => name === "git_arc_plan");
+    const plan = inventory.tools.find(({ name }) => name === "git_plan_claims");
     assert.ok(plan);
-    assert.deepEqual(Object.keys(plan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths", "roots"]);
-    assert.equal("args" in (plan.inputSchema.properties ?? {}), false);
-    const capablePlan = (await capableClient.listTools()).tools.find(({ name }) => name === "git_arc_plan");
+    const capablePlan = (await capableClient.listTools()).tools.find(({ name }) => name === "git_plan_claims");
     assert.ok(capablePlan);
-    assert.deepEqual(Object.keys(capablePlan.inputSchema.properties ?? {}).sort(), ["adoptPaths", "intentDescription", "intentName", "paths", "roots"]);
-    const planProperties = plan.inputSchema.properties as Record<string, { description?: string }>;
-    assert.match(plan.description ?? "", /sibling-claimed files in paths/u);
-    assert.match(planProperties.paths?.description ?? "", /sibling-claimed files.*does not claim/u);
-    assert.match(planProperties.adoptPaths?.description ?? "", /dirty unclaimed work.*Never use for sibling-owned changes/u);
-    assert.match(planProperties.adoptPaths?.description ?? "", /may overlap ordinary scope.*minimal claim/u);
+    assert.deepEqual(capablePlan.inputSchema, plan.inputSchema);
+    const claims = eligible.find(({ words }) => words.join("_") === "git_arc_claims")!;
+    const claimRequest = await claims.buildRequestFromJson({
+      inherit: true, addPaths: ["-literal.ts"], removePaths: ["old.ts"], adoptPaths: ["dirty.ts"],
+    }, { callerHarness: "codex", callerThreadId: "thread-1", cwd: "C:/authoritative", workbenchOrigin: null });
+    assert.deepEqual(claimRequest.body, {
+      action: "arcClaims", inherit: true, addPaths: ["-literal.ts"], removePaths: ["old.ts"], adoptPaths: ["dirty.ts"], roots: [],
+      cwd: "C:/authoritative", harness: "codex", threadId: "thread-1",
+    });
     const commit = inventory.tools.find(({ name }) => name === "git_commit");
     assert.ok(commit);
     assert.deepEqual(Object.keys(commit.inputSchema.properties ?? {}).sort(), ["amendTarget", "description", "targetWorktree", "title"]);
@@ -129,7 +130,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const proposal = inventory.tools.find(({ name }) => name === "git_arc_propose");
     assert.ok(proposal);
     assert.deepEqual(Object.keys(proposal.inputSchema.properties ?? {}).sort(), [
-      "amend", "amendProposalId", "description", "freshDescription", "freshTitle", "paths", "replaceProposalId", "rootId", "title",
+      "amend", "amendProposalId", "description", "freshDescription", "freshTitle", "paths", "replace", "replaceProposalId", "rootId", "title",
     ]);
     assert.equal(inventory.tools.some(({ name }) => name === "orchestrator_reload" || name === "reload" || name === "dirt"), false);
     const refresh = inventory.tools.find(({ name }) => name === "thread_refresh");

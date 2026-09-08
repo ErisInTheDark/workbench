@@ -13,10 +13,36 @@ import { WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema } f
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcController";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
+import { applyGitClaimChanges, type GitArcClaimChanges } from "workbench-shared/workbench/git/git-arc-state";
 
 const execFileAsync = promisify(execFile);
 
+test("inherited scope revisions retain unmentioned repositories and qualify exact removals", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(local as unknown as WorkbenchGitCheckpointController, new WorkbenchThreadTransitionCoordinator(), async (root) => root);
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "thread-one" };
+  await controller.execute(project, {
+    ...identity, action: "planClaims", inherit: false, start: false, intentName: "shared change",
+    addPaths: [], removePaths: [], adoptPaths: [],
+    roots: [
+      { rootId: "api", addPaths: ["old.ts"], removePaths: [], adoptPaths: [] },
+      { rootId: "web", addPaths: ["kept.ts"], removePaths: [], adoptPaths: [] },
+    ],
+  });
+  await controller.execute(project, {
+    ...identity, action: "planClaims", inherit: true, start: false,
+    addPaths: ["api:new.ts"], removePaths: ["api:old.ts"], adoptPaths: [], roots: [],
+  });
+  const scope = await controller.execute(project, { ...identity, action: "arcScope" }) as { plannedPaths: string[]; claimedPaths: string[] };
+  assert.deepEqual([...scope.plannedPaths].sort(), ["api:new.ts", "web:kept.ts"]);
+  assert.deepEqual(scope.claimedPaths, []);
+  assert.deepEqual(local.snapshotCalls, []);
+  assert.deepEqual(local.claimEditCalls.at(-2)?.removePaths, [path.resolve("C:/repo/api/old.ts")]);
+});
+
 class FakeLocalGitArcController {
+  readonly claimEditCalls: Array<GitArcClaimChanges & { cwd: string }> = [];
   readonly blockedRoots = new Set<string>();
   readonly claimPresenceCalls: string[] = [];
   readonly collisionCalls: Array<{ checkpointCommit?: string; cwd: string }> = [];
@@ -39,6 +65,33 @@ class FakeLocalGitArcController {
     checkpointCommit: string; claimedPaths: string[]; harness: string; intentDescription: string; intentName: string;
     phase: "active"; proposals: Array<{ proposalId: string; status: "proposed" }>; threadId: string; updatedAt: string;
   }>();
+
+  async readScope(input: { cwd: string }) {
+    const active = this.states.get(input.cwd);
+    const plan = this.plans.get(input.cwd);
+    if (!active && !plan) return null;
+    return {
+      checkpointCommit: (active ?? plan)!.checkpointCommit,
+      intentName: (active ?? plan)!.intentName,
+      phase: active ? "active" as const : "plan" as const,
+      claimedPaths: active?.claimedPaths ?? [], plannedPaths: active ? [] : plan!.scopePaths,
+      adoptedPaths: [], repoRoot: input.cwd,
+    };
+  }
+
+  async editPlanClaims(input: GitArcClaimChanges & { cwd: string; harness: string; threadId: string; intentName?: string; start?: boolean }) {
+    this.claimEditCalls.push(input);
+    const current = await this.readScope(input);
+    const normalize = (values: string[] | undefined) => (values ?? []).map((value) => path.relative(input.cwd, value).replace(/\\/gu, "/"));
+    const final = applyGitClaimChanges(current?.plannedPaths ?? [], {
+      ...input, addPaths: normalize(input.addPaths), removePaths: normalize(input.removePaths), adoptPaths: normalize(input.adoptPaths),
+    });
+    const result = await this.createPlan({
+      ...input, intentDescription: "", intentName: input.intentName ?? current?.intentName ?? "",
+      paths: final.map((value) => path.join(input.cwd, value)),
+    });
+    return input.start ? await this.startArc(input) : result;
+  }
 
   async createPlan(input: { cwd: string; harness: string; intentDescription: string; intentName: string; paths: string[]; threadId: string }) {
     const relativePaths = input.paths.map((filePath) => path.relative(input.cwd, filePath).replace(/\\/gu, "/")).sort();

@@ -1,0 +1,40 @@
+/*
+ * Keywords: git, failures, recovery, transcript, escaping.
+ * Exports: none. Protect failure facts and independent recovery obligations.
+ */
+import assert from "node:assert/strict";
+import test from "node:test";
+import { describeGitArcFailure, formatGitArcFailureReceipt, parseGitArcFailureReceipt, type GitArcFailure } from "./git-arc-failures";
+
+const ref = "a".repeat(40);
+const conflict = {
+  owner: { checkpointCommit: ref, harness: "codex", intentName: "fix\ncounts", lifecycle: "active", threadId: "thread", title: "a title" },
+  overlaps: [{ claimedPath: "line\nbreak.ts", requestedPath: "line\nbreak.ts" }],
+};
+
+test("plain failures preserve collision facts without a duplicate JSON envelope", () => {
+  const failure: GitArcFailure = { action: "arcStart", code: "siblingClaimCollision", conflicts: [conflict], version: 1 };
+  const output = formatGitArcFailureReceipt(failure);
+  assert.ok(output.startsWith("arc failure "));
+  assert.deepEqual(parseGitArcFailureReceipt(output), failure);
+  assert.match(describeGitArcFailure(failure).agentRecovery!, /git_arc_wait/u);
+  const activeRecovery = describeGitArcFailure({ ...failure, action: "arcClaims" }).agentRecovery!;
+  assert.match(activeRecovery, /git_plan_claims/u);
+});
+
+test("mixed drift and collision recovery requires inspection and waiting", () => {
+  const failure: GitArcFailure = {
+    action: "arcStart", code: "planDrift", commits: [], conflicts: [conflict], dirtyPaths: [],
+    headMovement: "same", planRef: ref, snapshotPaths: ["one.ts"], version: 1,
+  };
+  assert.deepEqual(parseGitArcFailureReceipt(formatGitArcFailureReceipt(failure)), failure);
+  const recovery = describeGitArcFailure(failure).agentRecovery!;
+  assert.match(recovery, /git_arc_diff/u);
+  assert.match(recovery, /git_arc_wait/u);
+});
+
+test("historical failures remain readable and truncated facts reject", () => {
+  const failure: GitArcFailure = { action: "arcContinue", code: "acceptedProposals", claimedPaths: [], proposals: [{ proposalId: "accepted", commitSha: ref }], version: 1 };
+  assert.deepEqual(parseGitArcFailureReceipt(`Workbench arc failure: ${JSON.stringify(failure)}`), failure);
+  assert.equal(parseGitArcFailureReceipt(formatGitArcFailureReceipt(failure).split("\nend failure")[0]!), null);
+});

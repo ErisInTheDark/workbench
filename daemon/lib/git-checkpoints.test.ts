@@ -165,11 +165,13 @@ checkpointTest("restores only selected checkpoint paths while preserving the ord
   assert.equal(await fs.readFile(path.join(repoRoot, "unrelated.txt"), "utf8"), "unrelated worktree\n");
   assert.equal(await git(repoRoot, ["show", ":unrelated.txt"]), "unrelated staged\n");
   assert.equal(await controller.findActiveClaim({ cwd: repoRoot, threadId: "thread-one" }), null);
-  await assert.rejects(controller.continueArc({
+  const resolved = await controller.continueArc({
     checkpointCommit: checkpoint.checkpointCommit,
     cwd: repoRoot,
     threadId: "thread-one",
-  }), /restored or unclaimed without a commit/u);
+  });
+  assert.equal(resolved.phase, "resolved");
+  assert.deepEqual(resolved.scopePaths, []);
 
   await write(repoRoot, "literal[1].txt", "literal changed\n");
   await write(repoRoot, "literal1.txt", "neighbor changed\n");
@@ -250,20 +252,14 @@ checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snaps
     paths: ["selected.txt"],
     threadId: "thread-one",
   });
-  assert.deepEqual(checkpoint.preservedDriftPaths, ["selected.txt"]);
-  assert.equal(checkpoint.preservedDriftPathCount, 1);
-  await assert.rejects(startGitArc({
-    checkpointCommit: checkpoint.checkpointCommit,
-    cwd: repoRoot,
-    threadId: "thread-one",
-  }), /stored plan no longer matches[\s\S]*selected\.txt/u);
+  assert.deepEqual(checkpoint.planningDrift?.paths, ["selected.txt"]);
+  assert.equal(checkpoint.planningDrift?.previousRef, future.checkpointCommit);
   const refreshedCheckpoint = await addToGitPlan({
     cwd: repoRoot,
     paths: ["selected.txt"],
     threadId: "thread-one",
   });
-  assert.deepEqual(refreshedCheckpoint.preservedDriftPaths, []);
-  assert.equal(refreshedCheckpoint.preservedDriftPathCount, 0);
+  assert.deepEqual(refreshedCheckpoint.planningDrift?.paths, []);
   const started = await startGitArc({
     checkpointCommit: refreshedCheckpoint.checkpointCommit,
     cwd: repoRoot,
@@ -293,11 +289,12 @@ checkpointTest("plans accept dirty claimed paths, reject mystery dirt, and snaps
   });
   assert.equal(explicitPlanComparison.checkpointCommit, refreshedCheckpoint.checkpointCommit);
   assert.deepEqual(explicitPlanComparison.changes.map((change) => change.path), ["selected.txt"]);
-  await assert.rejects(compareGitCheckpoint({
+  const historicalArcComparison = await compareGitCheckpoint({
     cwd: repoRoot,
     ref: started.checkpointCommit,
     threadId: "thread-one",
-  }));
+  });
+  assert.deepEqual(historicalArcComparison.changes.map((change) => change.path), ["selected.txt"]);
   const comparison = await compareGitCheckpoint({
     cwd: repoRoot,
     paths: ["selected.txt", "unrelated.txt"],
@@ -543,7 +540,7 @@ checkpointTest("arc additions preserve claimed baselines while advancing unclaim
     cwd: repoRoot,
     paths: ["unrelated.txt"],
     threadId: "thread-one",
-  }), /Arc remove paths must be clean against HEAD: unrelated\.txt/u);
+  }), /must be clean against HEAD: unrelated\.txt/u);
   await git(repoRoot, ["restore", "--", "unrelated.txt"]);
   const reduced = await removeFromGitArc({
     cwd: repoRoot,
@@ -558,7 +555,7 @@ checkpointTest("arc additions preserve claimed baselines while advancing unclaim
     cwd: repoRoot,
     paths: ["literal1.txt"],
     threadId: "thread-one",
-  }), /must exactly match claimed entries: literal1\.txt/u);
+  }), /must exactly match inherited entries: literal1\.txt/u);
 
   await assert.rejects(addToGitArc({
     cwd: repoRoot,
@@ -571,7 +568,7 @@ checkpointTest("arc additions preserve claimed baselines while advancing unclaim
     cwd: repoRoot,
     paths: ["deleted.txt"],
     threadId: "thread-one",
-  }), /Plan paths must be clean against HEAD: deleted\.txt/u);
+  }), /must be clean against HEAD: deleted\.txt/u);
   await git(repoRoot, ["restore", "--", "deleted.txt"]);
 
   await write(repoRoot, "literal1.txt", "committed after checkpoint\n");
@@ -590,7 +587,7 @@ checkpointTest("arc additions preserve claimed baselines while advancing unclaim
     checkpointCommit: laterBaseline.checkpointCommit,
     cwd: repoRoot,
     threadId: "thread-one",
-  }), /Claimed paths no longer match the arc baseline.*selected\.txt/u);
+  }), /paths no longer match the arc baseline.*selected\.txt/u);
   await assert.rejects(removeFromGitArc({
     cwd: repoRoot,
     paths: ["literal[1].txt"],

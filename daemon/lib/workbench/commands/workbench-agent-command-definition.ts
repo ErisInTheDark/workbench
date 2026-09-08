@@ -1,5 +1,9 @@
 /*
+ * Keywords: commands, transport, schema, MCP, identity, lifecycle.
  * Exports:
+ * - JsonPrimitive: scalar JSON transport value.
+ * - WorkbenchAgentCommandEffects: write-effect declarations.
+ * - managedWorkbenchAgentCommandBody: validated managed identity for command requests.
  * - JsonValue/WorkbenchAgentCommandRequest/WorkbenchAgentCommandResponseKind/WorkbenchAgentMcpRuntimeDrainPolicy: structured command transport and MCP lifecycle contracts. Keywords: workbench, command, request, response, drain.
  * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: trusted invocation context, MCP exposure, and erased registry definition. Keywords: workbench, command, context, registry, Code Mode.
  * - defineWorkbenchAgentCommand: preserve command-specific Zod inference while exposing one uniform registry boundary. Keywords: workbench, command, zod, schema.
@@ -18,6 +22,8 @@ export type WorkbenchAgentCommandResponseKind =
   | "browse-session-control"
   | "git-arc-add"
   | "git-arc-adopt"
+  | "git-arc-claims"
+  | "git-arc-scope"
   | "git-arc-compare"
   | "git-arc-continue"
   | "git-arc-diff"
@@ -75,6 +81,14 @@ export function createWorkbenchAgentMcpRuntimeReloadInterruption() {
   const error = new Error("Workbench command generation was replaced.");
   Reflect.set(error, MCP_RUNTIME_RELOAD_INTERRUPTION_KEY, true);
   return error;
+}
+
+export function managedWorkbenchAgentCommandBody({ callerHarness, callerThreadId, cwd }: Pick<WorkbenchAgentCommandContext, "callerHarness" | "callerThreadId" | "cwd">) {
+  if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
+  if (callerHarness !== "codex" && callerHarness !== "copilot" && callerHarness !== "opencode") {
+    throw new Error("A managed Workbench harness identity is required.");
+  }
+  return { cwd, harness: callerHarness, threadId: callerThreadId };
 }
 
 export function isWorkbenchAgentMcpRuntimeReloadInterruption(error: unknown) {

@@ -19,9 +19,9 @@ Workbench stores workflow baselines as local Git objects under hidden per-worktr
 
 A multi-root workspace still gives one managed thread one logical Git arc. The logical arc contains one repo-local member for each participating Git repository. Each member keeps its own ref because unrelated Git object databases cannot share one checkpoint SHA.
 
-Create the full plan in one `mcp__wbex__git_arc_plan` call. Put each project edit set in `roots` as `{ rootId, paths, adoptPaths? }`. Use the root ids from Workbench Workspace Roots. Do not create unrelated per-project arcs.
+Create the full plan in one `git_plan_claims` call. Put each project scope in `roots` as `{ rootId, addPaths, removePaths?, adoptPaths? }`. Use Workbench Workspace Roots ids, not unrelated per-project arcs.
 
-Read and preserve the complete `members` or root/ref set returned by start, continuation, compare, and diff. Pass `refs` back for exact multi-root continuation, inspection, and restore. A successful member can remain visible when another repository fails. Re-run the same logical operation to complete unfinished members. Do not roll back a successful repository automatically.
+Ordinary operations resolve registered members. Preserve root/ref pairs only for historical inspection, restoration or deliberate baseline selection. Partial failures report successful members. Inspect the partial outcome and retry only unfinished edits; do not repeat successful removals or roll back successful repositories.
 
 In Review, inspect the whole logical arc. Then call `mcp__wbex__git_arc_propose` once per workspace root and pass that proposal's `rootId`. A proposal cannot cross root boundaries. Omit `paths` to select that root's changed claims, or pass a narrower subset from that root. Never combine files from different roots into one proposed commit.
 
@@ -37,56 +37,49 @@ Call required arc tools directly. Do not preflight or supplement them with raw `
 
 ### create or revise an inactive plan
 
-Use `mcp__wbex__git_arc_plan` after entering Brief mode when the exact edit paths are known. Provide `intentName`, optional `intentDescription`, `paths`, and only intentional dirty unclaimed `adoptPaths`.
+Use `git_plan_claims` in Brief when exact paths are known. Provide short `intentName` and `addPaths`. Without `inherit`, supplied scope replaces the plan. With `inherit: true`, reuse scope and intent, applying `addPaths`, exact `removePaths`, and explicit dirty unclaimed `adoptPaths` together.
 
 The plan snapshots the Git-visible worktree through shared objects. Its paths select arc operations, not snapshot storage.
 
 Dirty active-claimed paths can remain ordinary plan paths. A replacement plan must cover every dirty path retained from this thread's previous claim set. Dirty unclaimed paths require explicit adoption.
 
-Use these successor tools to revise the current inactive plan without publishing an unrelated replacement:
+<!-- Failure: agents erase planning drift by repeating already-planned paths. -->
+Publishing a plan refreshes its baselines and reports changes since the previous plan. **Inspect reported changes against the supplied previous ref before presenting the revised plan.** Repeating paths only includes them; no separate acceptance step exists.
 
-- `mcp__wbex__git_arc_plan_add`
-- `mcp__wbex__git_arc_plan_remove`
-- `mcp__wbex__git_arc_plan_adopt`
+<!-- Failure: agents release active work before revising scope. -->
+Inherited planning can publish an inactive successor from an active arc. It retains covered dirty claims, releases clean claims, and leaves additions unclaimed. Removing dirty coverage rejects.
 
-<!-- Failure: agents release active arcs before scope recovery. -->
-`mcp__wbex__git_arc_plan_add` also accepts active arcs. It publishes an inactive successor, retains dirty work and claims, releases clean claims, and leaves additions unclaimed.
-
-Adding paths re-snapshots every requested path, including already covered paths. Removing a path that would uncover retained dirty work rejects. Old refs remain available for diagnostics.
-
-If a plan operation reports preserved baseline drift, run the printed scoped `tools.mcp__wb__git_arc_diff` request. Re-add only paths whose current versions are the intended baselines.
+CLI: `wb git plan claims -m "intent" -- new.ts`, then `wb git plan claims --inherit -- added.ts -removed.ts '*adopted.ts'`. Quote adoption operands. `./-literal.ts` and `'./*literal.ts'` add literal filenames. MCP arrays always contain literal paths.
 
 ### start implementation
 
 For an inactive plan's first Implement pass, call `mcp__wbex__git_arc_start`. Pass `ref` only to select an exact historical plan. Successful start creates the active baseline and reports released and acquired claims.
 
-If start reports planned-path drift, run its exact scoped diagnostic. Drift alone does not invalidate approval. When paths, behavior, ownership, mechanics, and validation remain unchanged, use `mcp__wbex__git_arc_plan_start` with the same approved paths. Return to Brief only when the plan changed.
+If start reports drift since publication, inspect its exact historical diff. Keep approval when paths, behavior, ownership, mechanics and validation still fit; republish with `git_plan_claims` and activate. `git_plan_start` combines publication and activation when no collision remains. Return to Brief only if the plan changed.
 
-`tools.mcp__wb__git_arc_wait` waits until the current or selected plan can start, then acquires its claims. Treat it as a Workbench Long Wait.
+`git_arc_wait` waits for sibling claims, then activates the inactive plan. Do not republish that plan for collisions alone. If requested scope has no inactive plan, publish it first. Mixed failures require drift inspection/publication and waiting. Waiting never refreshes baselines. Treat it as a Workbench Long Wait.
 
 ### continue or extend an active arc
 
-Before follow-up work on the same claimed files, call `mcp__wbex__git_arc_continue` with the remembered ref.
+Before another implementation pass without scope changes, call `git_arc_continue` with no ref. Unchanged continuation need not publish a successor.
 
-Proposal acceptance releases clean claims. When dirty work remains, continuation returns the narrowed successor. When no dirty claims remain, continuation reports every accepted proposal ID and commit SHA and resolves the arc.
+Acceptance releases clean claims. Continuation uses the narrowed live set and reports accepted proposal IDs/commit SHAs. Resolved continuation succeeds without acquiring anything.
 
-After continuation:
+Edit active claims with `git_arc_claims({ inherit: true, addPaths, removePaths, adoptPaths })`. **Continuation checks and accepted-outcome reconciliation are included; do not continue first.** Omit unused arrays. CLI uses `wb git arc claims --inherit -- added.ts -removed.ts '*adopted.ts'`.
 
-- `mcp__wbex__git_arc_add` claims omitted clean paths still within the approved plan. No extra approval.
-- `mcp__wbex__git_arc_adopt` claims intentional relevant dirt.
-- `mcp__wbex__git_arc_remove` releases exact clean claims.
+After resolution, explicit approved additions/adoptions begin follow-up scope with stored intent, never old claims. Scope changes still require the workflow's approval boundary. Exact removals cannot expose dirty owned work; directory claims are not exclusion patterns.
 
 Never use claim expansion to excuse vague planning. Never restore, release, unclaim, or discard only to change scope.
 
 Use `mcp__wbex__git_arc_release` to release every live claim without changing workspace or Git content. It rejects dirty claims by default. Set `disown: true` only after explicit user direction to release dirty ownership. Releasing retained claims keeps the current inactive plan.
 
-Never use these active-arc tools during Brief or Decision mode. Remember every returned successor ref.
+Never mutate active arcs in Brief or Decision. `git_arc_scope` reads scope and current proposal IDs/statuses. Use for inventory or a lost proposal response before retrying, never as a preflight. Scope edits report full inventory; routine output reports phase, outcome and net deltas.
 
 Use `mcp__wbex__git_arc_mv` for approved path moves. Its `move` value accepts explicit operands, explicit source/destination mappings, or regex preview/confirmation. Regex mode previews at most 200 sorted mappings. Confirm the preview, then preview again when more matches remain.
 
 ### compare or diff an arc
 
-Use `tools.mcp__wb__git_arc_compare` for paths and counts. Use `tools.mcp__wb__git_arc_diff` for unified details. Omit `paths` for the claimed set. Omit `ref` for the current active arc. An explicit `ref` accepts a thread-owned arc SHA or proposal ID. Never use a superseded arc SHA.
+Use `git_arc_compare` for counts or `git_arc_diff` for unified details. Omit paths and refs for the caller's registered scope. Explicit refs select historical snapshots/proposals, never a guessed "latest" ref. Explicit paths return complete unpaged data; page 1 is redundant, higher pages reject. Unscoped results report next page or end. Follow returned cursors with the same target.
 
 In Review, choose one initial arc-scoped inspection. Do not run compare first when unified details are already required. At least one compare or diff is required before proposal creation.
 
@@ -95,10 +88,10 @@ In Review, choose one initial arc-scoped inspection. Do not run compare first wh
 <!-- Failure: long arcs forget outcomes; titles hide changes; descriptions hide work. -->
 Track all arc outcomes. Reconcile the list with the full selected diff. New proposals call `mcp__wbex__git_arc_propose` with `title`, optional `description`, and no `paths` for all changed claims. It opens the UI without committing. Make `title` a simple symptom or outcome encompassing the full changeset. Use `description` for concrete work beyond that summary. Identify every distinct or unrelated bundled item, why included, and its additional technical changes. Do not repeat `title` or present expected constituent work as an unrelated "also."
 
-Set `replaceProposalId` to replace exactly one pending proposal. Use `mcp__wbex__git_arc_rescind` to rescind exactly one pending proposal.
+Set `replace: proposalId` to replace one pending proposal. Use `git_arc_rescind` to rescind one. Do not combine replacement and amendment.
 
 <!-- Failure: corrective amends rewrite history; additive amends hide scope. -->
-Compare amend against the target commit. Update `title` and `description` for added functionality, scope, or bundled fixes; omit both only to inherit target message. Set `amend: true` and optional `amendProposalId`. Content amends must provide `freshTitle` and optional `freshDescription` for the same changes as a new commit; allows user to decide amend or fresh. Targeted amend supports linear unpushed history and atomically remaps proposal metadata and arc refs.
+Compare amendments against their target. Set `amend: proposalId` for a committed proposal or `amend: true` for HEAD. Update title/description for changed scope; omit both to inherit. Content amendments require `freshTitle` and optional `freshDescription` for the separate fresh-commit choice. Targets must be linear and unpushed. Use `git_arc_reword({ proposalId, title, description? })` for a message-only proposal, not an immediate commit.
 
 Proposal acceptance atomically changes branch history, proposal metadata, the accepted receipt ledger, and live claims. It preserves excluded newer work.
 
@@ -106,7 +99,7 @@ Proposal acceptance atomically changes branch history, proposal metadata, the ac
 
 - Use `mcp__wbex__git_arc_restore` with exact ref and path list to restore to pre-patch state
 - Do not restore more than required
-- After restore, unclaim unneeded paths with `mcp__wbex__git_arc_remove`
+- After restore, remove unneeded clean claims with `git_arc_claims({ inherit: true, removePaths })`
 
 ### restore full arc
 

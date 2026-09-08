@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, glyph, claims, scope, lifecycle.
  * Exports:
  * - default GitArcIcon: render the matching square action glyph for one Git arc command. Keywords: git, arc, icon, plan, start, continue, add, remove, release, compare, restore.
  * - GitArcClaimIcon: render the flag marker used by claimed-file rows. Keywords: git, arc, icon, claim, file.
@@ -62,7 +63,7 @@ export function GitArcWaitIcon({ className = "size-4" }: { className?: string })
 }
 
 export default function GitArcIcon({ action, className = "size-4" }: { action: GitArcAction; className?: string }) {
-  if (action === "plan") {
+  if (action === "plan" || action === "scope") {
     return (
       <SvgFrame className={className}>
         <path d="M14 21h1" /><path d="M14 3h1" /><path d="M19 3a2 2 0 0 1 2 2" /><path d="M21 14v1" /><path d="M21 19a2 2 0 0 1-2 2" /><path d="M21 9v1" /><path d="M3 14v1" /><path d="M3 9v1" /><path d="M5 21a2 2 0 0 1-2-2" /><path d="M5 3a2 2 0 0 0-2 2" /><path d="M7 12h10" /><path d="M7 16h6" /><path d="M7 8h8" /><path d="M9 21h1" /><path d="M9 3h1" />
@@ -77,12 +78,12 @@ export default function GitArcIcon({ action, className = "size-4" }: { action: G
       </SvgFrame>
     );
   }
-  if (action === "add" || action === "adopt" || action === "remove" || action === "release") {
+  if (action === "add" || action === "adopt" || action === "claims" || action === "remove" || action === "release") {
     return (
       <SvgFrame className={className}>
         <rect width="18" height="18" x="3" y="3" rx="2" />
         <path d="M8 12h8" />
-        {action === "add" || action === "adopt" ? <path d="M12 8v8" /> : null}
+        {action === "add" || action === "adopt" || action === "claims" ? <path d="M12 8v8" /> : null}
       </SvgFrame>
     );
   }

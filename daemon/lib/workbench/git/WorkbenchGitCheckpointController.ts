@@ -1,6 +1,11 @@
 /*
+ * Keywords: git, arc, facade, inspection, move, restore.
  * Exports:
- * - default WorkbenchGitCheckpointController: route plan and proposal owners while owning active claim mutation, compare, paged diff, unclaimed workspace dirt, and restore orchestration. Keywords: git, checkpoint, arc, claims, diff, mtime, restore.
+ * - default WorkbenchGitCheckpointController: route plan, lifecycle and proposal owners; orchestrate inspection, moves and restoration.
+ * - GitArcNoopResult: ignored-path no-op result.
+ * - GitArcLifecycleState: registered lifecycle projection.
+ * - GitArcPlanClaimCollisionResult: inactive-plan collision facts.
+ * - GitArcReleaseResult: released ownership result.
  * - GitArcActiveClaim/GitArcPlanState/GitArcProposalStatus: expose active-claim, inactive-plan, and proposal lifecycle for thread-state projection. Keywords: git, arc, claim, plan, proposal, status.
  * - GitArcInspectionSnapshot: one repository, HEAD, worktree tree, and registry view shared by one inspection request. Keywords: git, arc, inspection, snapshot, registry.
  * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: identify paths rejected before an arc operation that cannot skip them. Keywords: git, checkpoint, dirty paths, ignored paths.
@@ -16,6 +21,8 @@ import type {
   GitCheckpointProposal,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcMissingClaimSetError } from "workbench-shared/workbench/git/git-arc-failures";
+import type { GitArcClaimChanges, GitArcPlanningDrift } from "workbench-shared/workbench/git/git-arc-state";
+import GitArcLifecycleController from "./GitArcLifecycleController";
 import GitArcRegistry, {
   findGitArcCollisions,
   getGitArcLiveClaimPaths,
@@ -98,12 +105,12 @@ interface ScopedCheckpointInput extends CheckpointInput {
 }
 
 export interface GitCheckpointCreateResult {
+  phase?: "plan" | "active" | "resolved";
   checkpointCommit: string;
   checkpointRef: string;
   intentName: string | null;
   kind: CheckpointKind;
-  preservedDriftPathCount?: number;
-  preservedDriftPaths?: string[];
+  planningDrift?: GitArcPlanningDrift;
   repoRoot: string;
   scopePaths: string[];
   skippedIgnoredPaths?: string[];
@@ -116,6 +123,7 @@ export interface GitArcReleaseResult extends GitCheckpointCreateResult {
 type GitArcContinuationResult = GitCheckpointCreateResult;
 
 export interface GitCheckpointCompareResult {
+  phase?: "plan" | "active" | "resolved";
   changes: GitCheckpointFileChange[];
   checkpointCommit: string;
   checkpointRef: string;
@@ -217,6 +225,7 @@ function diffArtifactPath(threadId: string, artifactId: string) {
 export default class WorkbenchGitCheckpointController {
   private readonly plans = new GitArcPlanController();
   private readonly proposals = new GitArcProposalController();
+  private readonly lifecycle = new GitArcLifecycleController();
 
   async createInspectionSnapshot(cwd: string): Promise<GitArcInspectionSnapshot> {
     const repository = await WorkbenchGitRepository.open(cwd);
@@ -362,6 +371,7 @@ export default class WorkbenchGitCheckpointController {
       intentName: lifecycle.intentName ?? null,
       kind: "arc",
       releasedClaims: [...lifecycle.claimedPaths],
+      phase: releasedEntry.phase ?? "resolved",
       repoRoot: repository.root,
       scopePaths: [],
     };
@@ -568,289 +578,36 @@ export default class WorkbenchGitCheckpointController {
     return await this.plans.startArc({ checkpointCommit, cwd, harness: rawHarness, threadId });
   }
 
-  async continueArc({ checkpointCommit: observedCheckpoint, cwd, harness: rawHarness, threadId }: CheckpointInput): Promise<GitArcContinuationResult> {
-    const repoRoot = await resolveRepoRoot(cwd);
-    const harness = normalizeHarness(rawHarness);
-    const repository = new WorkbenchGitRepository(repoRoot);
-    const registry = new GitArcRegistry(repository);
-    const registered = await registry.find({ harness, threadId });
-    let checkpointCommit = observedCheckpoint;
-    let resolvedForward = false;
-    if (registered?.phase !== "plan" && registered?.checkpointCommit !== observedCheckpoint) {
-      let cursor = registered.checkpointCommit;
-      for (let depth = 0; depth < 100; depth += 1) {
-        const candidate = await readCheckpoint(repoRoot, harness, threadId, cursor);
-        if (candidate.metadata?.amendedFrom === observedCheckpoint) {
-          checkpointCommit = registered.checkpointCommit;
-          resolvedForward = true;
-          break;
-        }
-        if (!candidate.metadata?.amendedFrom) break;
-        cursor = candidate.metadata.amendedFrom;
-      }
-    }
-    const source = await readCheckpoint(repoRoot, harness, threadId, checkpointCommit);
-    const metadata = requireArcMetadata(source);
-    const outcome = await readArcOutcome(repository, harness, threadId, source.checkpointCommit);
-    if (outcome?.acceptedProposals?.length) {
-      await this.proposals.requireNoAcceptedReceipts({ checkpointCommit: source.checkpointCommit, cwd: repoRoot, harness, threadId });
-    }
-    if (outcome?.status === "proposed") {
-      throw new Error("This pending proposal no longer belongs to the thread's active Git arc.");
-    }
-    if (outcome?.status === "released") {
-      throw new Error("This arc was restored or unclaimed without a commit. Create a new plan before continuing.");
-    }
-    const active = await registry.find({ harness, threadId });
-    if (resolvedForward && active?.phase === "active" && active.checkpointCommit === source.checkpointCommit) {
-      return {
-        checkpointCommit: source.checkpointCommit,
-        checkpointRef: source.checkpointRef,
-        intentName: metadata.intentName ?? null,
-        kind: "arc",
-        repoRoot,
-        scopePaths: metadata.scopePaths,
-      };
-    }
-    if (active?.phase === "active" && active.checkpointCommit === source.checkpointCommit) {
-      if (
-        metadata.scopePaths.length !== active.claimedPaths.length
-        || metadata.scopePaths.some((scopePath, index) => scopePath !== active.claimedPaths[index])
-      ) {
-        throw new Error("The active Git arc registry does not match its checkpoint claim set.");
-      }
-      const headMovement = await repository.classifyHeadMovement(source.parent, metadata.scopePaths, source.checkpointCommit);
-      if (headMovement.kind === "incompatible") {
-        throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
-      }
-      if (headMovement.changedPaths.length) {
-        throw new Error(`Claimed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
-      }
-      const tree = await repository.writeTreeWithPathsFromSource(
-        headMovement.currentHead,
-        source.checkpointCommit,
-        metadata.scopePaths,
-      );
-      return await this.createActiveSuccessor({
-        active,
-        harness,
-        metadata,
-        parent: headMovement.currentHead,
-        registry,
-        repository,
-        scopePaths: metadata.scopePaths,
-        threadId,
-        tree,
-      });
-    }
-    if ((outcome?.status === "continued" || outcome?.status === "partial") && outcome.successorCheckpoint) {
-      const successor = await readCheckpoint(repoRoot, harness, threadId, outcome.successorCheckpoint);
-      const successorMetadata = requireArcMetadata(successor);
-      await new GitArcRegistry(repository).claim({
-        checkpointCommit: successor.checkpointCommit,
-        claimedPaths: successorMetadata.scopePaths,
-        harness,
-        intentDescription: successorMetadata.intentDescription ?? "",
-        intentName: successorMetadata.intentName ?? "Continued arc",
-        proposalId: null,
-        threadId,
-      });
-      return {
-        checkpointCommit: successor.checkpointCommit,
-        checkpointRef: successor.checkpointRef,
-        intentName: successorMetadata.intentName ?? null,
-        kind: "arc",
-        repoRoot,
-        scopePaths: successorMetadata.scopePaths,
-      };
-    }
-
-    const currentHead = await repository.currentHead();
-    const headMovement = await repository.classifyHeadMovement(source.parent, metadata.scopePaths, source.checkpointCommit, currentHead);
-    if (!outcome && (headMovement.kind !== "fast-forward" || !headMovement.changedPaths.length)) {
-      throw new Error("This arc has no completed commit outcome to continue from.");
-    }
-    if (outcome?.committedSha && currentHead !== outcome.committedSha) {
-      const compatible = await repository.classifyHeadMovement(outcome.committedSha, metadata.scopePaths, outcome.committedSha, currentHead);
-      if (compatible.kind === "incompatible" || compatible.changedPaths.length) {
-        throw new Error("Repository HEAD no longer matches this arc's committed outcome.");
-      }
-    }
-
-    const scopedWorktree = await repository.writeScopedWorktreeTree(metadata.scopePaths, currentHead);
-    const dirtyPaths = await repository.listChangedPaths(currentHead, scopedWorktree, metadata.scopePaths);
-    const scopePaths = dirtyPaths.length ? dirtyPaths : metadata.scopePaths;
-    const fullWorktree = await repository.writeWorktreeTree();
-    const baselineTree = await repository.writeTreeWithPathsFromSource(fullWorktree, currentHead, scopePaths);
-    const nextMetadata: CheckpointMetadata = {
-      amendedFrom: source.checkpointCommit,
-      ...(metadata.intentDescription ? { intentDescription: metadata.intentDescription } : {}),
-      ...(metadata.intentName ? { intentName: metadata.intentName } : {}),
-      kind: "arc",
-      ...(outcome?.proposalId ? { priorProposalId: outcome.proposalId } : {}),
-      registryLifecycle: true,
-      scopePaths,
-      version: 3,
-    };
-    const nextCommit = await repository.createCommitFromTree(baselineTree, currentHead, checkpointMessage(nextMetadata));
-    const checkpointRef = await checkpointRefName(repoRoot, harness, threadId, nextCommit);
-    const registryMutation = await new GitArcRegistry(repository).prepareClaim({
-      checkpointCommit: nextCommit,
-      claimedPaths: scopePaths,
-      harness,
-      intentDescription: nextMetadata.intentDescription ?? "",
-      intentName: nextMetadata.intentName ?? "Continued arc",
-      proposalId: null,
-      threadId,
-    });
-    const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
-      committedSha: outcome?.committedSha ?? currentHead,
-      proposalId: outcome?.proposalId ?? null,
-      sourceCheckpoint: source.checkpointCommit,
-      status: "partial",
-      successorCheckpoint: nextCommit,
-      version: 1,
-    });
-    await repository.updateRefs([
-      { newValue: nextCommit, oldValue: "0".repeat(40), ref: checkpointRef },
-      outcomeUpdate,
-      ...(registryMutation.update ? [registryMutation.update] : []),
-    ]);
-    return {
-      checkpointCommit: nextCommit,
-      checkpointRef,
-      intentName: nextMetadata.intentName ?? null,
-      kind: "arc",
-      repoRoot,
-      scopePaths,
-    };
+  async continueArc(input: ControllerInput & { checkpointCommit?: string }) {
+    return await this.lifecycle.continue(input);
   }
 
-  async addToArc({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths: string[] }): Promise<GitCheckpointCreateResult | GitArcNoopResult> {
-    const { active, checkpoint, harness, metadata, registry, repository } = await this.requireMutableActiveArc({ cwd, harness: rawHarness, threadId });
-    if (!rawPaths.length) throw new Error("Arc add requires at least one additional clean path.");
-    const { paths, skippedIgnoredPaths } = await partitionIgnoredGitArcPaths(repository, rawPaths);
-    if (!paths.length && skippedIgnoredPaths.length) {
-      return createGitArcNoopResult(repository, skippedIgnoredPaths);
-    }
-    const headMovement = await repository.classifyHeadMovement(checkpoint.parent, metadata.scopePaths, checkpoint.checkpointCommit);
-    if (headMovement.kind === "incompatible") {
-      throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
-    }
-    if (headMovement.changedPaths.length) {
-      throw new Error(`Claimed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
-    }
+  async editPlanClaims(input: ControllerInput & GitArcClaimChanges & { intentName?: string; intentDescription?: string; start?: boolean }) {
+    return await this.plans.editClaims(input);
+  }
 
-    const overlapping = paths.filter((candidate) => metadata.scopePaths.some((scopePath) => (
-      pathIsCoveredBy(candidate, scopePath) || pathIsCoveredBy(scopePath, candidate)
-    )));
+  async editArcClaims(input: ControllerInput & GitArcClaimChanges) {
+    return await this.lifecycle.claims(input);
+  }
+
+  async readScope(input: ControllerInput) {
+    return await this.lifecycle.scope(input);
+  }
+
+  async addToArc(input: ControllerInput & { paths: string[] }) {
+    if (!input.paths.length) throw new Error("Arc add requires at least one additional clean path.");
+    const scope = await this.lifecycle.scope(input);
+    const overlapping = input.paths.filter((candidate) => scope?.claimedPaths.some((claim) => gitArcPathsOverlap(claim, candidate)));
     if (overlapping.length) throw new Error(`Arc paths are already covered by the claimed set: ${overlapping.join(", ")}`);
-
-    const collisions = findGitArcCollisions(await registry.list(), { harness, threadId }, paths);
-    if (collisions.length) throw new GitArcCollisionError(collisions);
-
-    if (paths.length) {
-      const currentTree = await repository.writeScopedWorktreeTree(paths);
-      const dirtyPaths = await repository.listChangedPaths("HEAD", currentTree, paths);
-      if (dirtyPaths.length) throw new GitCheckpointDirtyPathsError(dirtyPaths);
-    }
-
-    const scopePaths = [...metadata.scopePaths, ...paths].sort((left, right) => left.localeCompare(right));
-    const tree = await repository.writeTreeWithPathsFromSource(
-      headMovement.currentHead,
-      checkpoint.checkpointCommit,
-      metadata.scopePaths,
-    );
-    return {
-      ...(await this.createActiveSuccessor({
-        active, harness, metadata, parent: headMovement.currentHead, registry, repository, scopePaths, threadId, tree,
-      })),
-      skippedIgnoredPaths,
-    };
+    return await this.lifecycle.claims({ ...input, inherit: true, addPaths: input.paths });
   }
 
-  async adoptIntoArc({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths: string[] }): Promise<GitCheckpointCreateResult | GitArcNoopResult> {
-    const { active, checkpoint, harness, metadata, registry, repository } = await this.requireMutableActiveArc({ cwd, harness: rawHarness, threadId });
-    const { paths, skippedIgnoredPaths } = await partitionIgnoredGitArcPaths(repository, rawPaths);
-    if (!paths.length && skippedIgnoredPaths.length) {
-      return createGitArcNoopResult(repository, skippedIgnoredPaths);
-    }
-    const overlapping = paths.filter((candidate) => metadata.scopePaths.some((scopePath) => (
-      pathIsCoveredBy(candidate, scopePath) || pathIsCoveredBy(scopePath, candidate)
-    )));
-    if (overlapping.length) throw new Error(`Arc paths are already covered by the claimed set: ${overlapping.join(", ")}`);
-
-    const headMovement = await repository.classifyHeadMovement(checkpoint.parent, metadata.scopePaths, checkpoint.checkpointCommit);
-    if (headMovement.kind === "incompatible") {
-      throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
-    }
-    if (headMovement.changedPaths.length) {
-      throw new Error(`Claimed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
-    }
-
-    const currentTree = await repository.writeScopedWorktreeTree(paths);
-    const changedPaths = await repository.listChangedPaths(headMovement.currentHead, currentTree, paths);
-    const cleanSelections = paths.filter((candidate) => !changedPaths.some((changedPath) => pathIsCoveredBy(changedPath, candidate)));
-    if (cleanSelections.length) {
-      throw new Error(`Arc adopt paths must contain working-tree changes: ${cleanSelections.join(", ")}`);
-    }
-
-    const scopePaths = [...metadata.scopePaths, ...paths].sort((left, right) => left.localeCompare(right));
-    const tree = await repository.writeTreeWithPathsFromSource(
-      headMovement.currentHead,
-      checkpoint.checkpointCommit,
-      metadata.scopePaths,
-    );
-    return {
-      ...(await this.createActiveSuccessor({
-        active, harness, metadata, parent: headMovement.currentHead, registry, repository, scopePaths, threadId, tree,
-      })),
-      skippedIgnoredPaths,
-    };
+  async adoptIntoArc(input: ControllerInput & { paths: string[] }) {
+    return await this.lifecycle.claims({ ...input, inherit: true, adoptPaths: input.paths });
   }
 
-  async removeFromArc({ cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths: string[] }): Promise<GitCheckpointCreateResult> {
-    const activeArc = await this.requireMutableActiveArc({ cwd, harness: rawHarness, threadId });
-    const { active, checkpoint, harness, metadata, registry, repository } = activeArc;
-    const paths = repository.normalizePaths(rawPaths);
-    const unknownPaths = paths.filter((candidate) => !metadata.scopePaths.includes(candidate));
-    if (unknownPaths.length) {
-      throw new Error(`Arc remove paths must exactly match claimed entries: ${unknownPaths.join(", ")}`);
-    }
-
-    const currentTree = await repository.writeScopedWorktreeTree(paths);
-    const dirtyPaths = await repository.listChangedPaths("HEAD", currentTree, paths);
-    if (dirtyPaths.length) throw new GitCheckpointDirtyPathsError(dirtyPaths, "Arc remove");
-
-    const removedPaths = new Set(paths);
-    const scopePaths = metadata.scopePaths.filter((candidate) => !removedPaths.has(candidate));
-    if (!scopePaths.length) {
-      return await this.finishArcRelease({ active, checkpoint, harness, lifecycle: {
-        checkpointCommit: active.checkpointCommit,
-        claimedPaths: active.claimedPaths,
-        intentDescription: active.intentDescription,
-        intentName: active.intentName,
-        phase: "active",
-        proposalIds: active.proposalIds ?? [],
-      }, registry, repository, threadId });
-    }
-
-    const headMovement = await repository.classifyHeadMovement(checkpoint.parent, scopePaths, checkpoint.checkpointCommit);
-    if (headMovement.kind === "incompatible") {
-      throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
-    }
-    if (headMovement.changedPaths.length) {
-      throw new Error(`Retained paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
-    }
-
-    const tree = await repository.writeTreeWithPathsFromSource(
-      headMovement.currentHead,
-      checkpoint.checkpointCommit,
-      scopePaths,
-    );
-    return await this.createActiveSuccessor({
-      active, harness, metadata, parent: headMovement.currentHead, registry, repository, scopePaths, threadId, tree,
-    });
+  async removeFromArc(input: ControllerInput & { paths: string[] }) {
+    return await this.lifecycle.claims({ ...input, inherit: true, removePaths: input.paths });
   }
 
   async moveInArc({ cwd, harness: rawHarness, move, threadId }: ControllerInput & { move: GitArcMoveRequest }): Promise<GitArcMoveResult> {
@@ -945,6 +702,23 @@ export default class WorkbenchGitCheckpointController {
   ): Promise<GitCheckpointCompareResult> {
     const inspection = existingInspection ?? await this.createInspectionSnapshot(input.cwd);
     const repository = inspection.repository;
+    if (!input.ref) {
+      const current = inspection.entries.find((entry) => entry.harness === normalizeHarness(input.harness)
+        && entry.threadId === normalizeThreadId(input.threadId));
+      if (current?.phase === "plan") input = { ...input, ref: current.checkpointCommit };
+      if (current?.phase === "resolved") {
+        if (input.paths?.length) {
+          input = { ...input, ref: current.checkpointCommit };
+        } else {
+          const checkpoint = await readCheckpoint(repository.root, normalizeHarness(input.harness), input.threadId, current.checkpointCommit);
+          return {
+            checkpointCommit: checkpoint.checkpointCommit, checkpointRef: checkpoint.checkpointRef,
+            phase: "resolved", changes: [], scopePaths: [], hasUncommittedChanges: false,
+            intentName: current.intentName, repoRoot: repository.root,
+          };
+        }
+      }
+    }
     if (input.ref && !/^[a-f0-9]{7,64}$/iu.test(input.ref)) {
       const harness = normalizeHarness(input.harness);
       const proposal = await new GitCheckpointStore(repository).readProposal(harness, input.threadId, input.ref);
@@ -968,18 +742,16 @@ export default class WorkbenchGitCheckpointController {
         const active = inspection.entries.find((entry) => (
           entry.harness === harness && entry.threadId === normalizeThreadId(input.threadId)
         ));
-        if (!active || active.phase !== "active" || active.checkpointCommit !== checkpoint.checkpointCommit) {
-          throw new Error("Explicit arc inspection refs must identify this thread's current active arc or an inactive or historical plan.");
-        }
-        return await this.compareActiveArc(input, inspection);
+        if (active?.phase === "active" && active.checkpointCommit === checkpoint.checkpointCommit) return await this.compareActiveArc(input, inspection);
       }
-      if (!metadata || metadata.kind !== "plan") {
-        throw new Error("Explicit arc inspection refs must identify this thread's current active arc or an inactive or historical plan.");
+      if (!metadata || (metadata.kind !== "plan" && metadata.kind !== "arc" && metadata.kind !== "implement")) {
+        throw new Error("Explicit inspection refs must identify this thread's plan, arc or proposal.");
       }
       const paths = input.paths?.length ? repository.normalizePaths(input.paths) : metadata.scopePaths;
       const changes = await repository.buildFileChanges(checkpoint.checkpointCommit, inspection.tree, paths);
       return {
         changes,
+        phase: metadata.kind === "plan" ? "plan" : "active",
         checkpointCommit: checkpoint.checkpointCommit,
         checkpointRef: checkpoint.checkpointRef,
         intentName: metadata.intentName ?? null,

@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, proposals, acceptance, outcomes, amendments.
  * Exports:
  * - default GitArcProposalController: own proposal creation, replacement, rescission, acceptance, receipts, and lifecycle projection. Keywords: git, arc, proposal, acceptance, lifecycle, rebase, branch replacement.
  * - GitArcLifecycleState: durable active or resolved arc projection with ordered visible proposal summaries. Keywords: git, arc, lifecycle, sidebar, proposals.
@@ -517,6 +518,19 @@ export default class GitArcProposalController {
       lifecycle.proposalIds,
     );
     return projectLifecycleState(entry, lifecycle, summaries);
+  }
+
+  async readAcceptedOutcomes(input: ArcIdentityInput & { checkpointCommit: string }) {
+    const repository = await WorkbenchGitRepository.open(input.cwd);
+    const harness = normalizeHarness(input.harness);
+    const store = new GitCheckpointStore(repository);
+    let checkpoint = await store.readCheckpoint(harness, input.threadId, input.checkpointCommit);
+    while (true) {
+      const outcome = await store.readOutcome(harness, input.threadId, checkpoint.checkpointCommit);
+      if (outcome?.acceptedProposals?.length) return outcome.acceptedProposals;
+      if (!checkpoint.metadata?.amendedFrom || checkpoint.metadata.kind === "plan") return [];
+      checkpoint = await store.readCheckpoint(harness, input.threadId, checkpoint.metadata.amendedFrom);
+    }
   }
 
   async requireNoAcceptedReceipts(input: ArcIdentityInput & { checkpointCommit: string }) {

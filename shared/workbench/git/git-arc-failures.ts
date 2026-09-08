@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, failures, text protocol, historical receipts, recovery.
  * Exports:
  * - GitArcFailureAction/GitArcFailure/GitArcFailureEnvelope: describe typed Git arc rejection identity, structured facts, and HTTP transport. Keywords: git, arc, failure, contract, transport.
  * - GitArcFailureSchema/GitArcFailureEnvelopeSchema/parseGitArcFailureEnvelope: validate failure payloads at server, CLI, transcript, and browser boundaries. Keywords: git, arc, failure, Zod, boundary.
@@ -7,6 +8,7 @@
  * - formatGitArcFailureReceipt/parseGitArcFailureReceipt: encode and decode stable persisted failure metadata. Keywords: git, arc, failure, receipt, transcript.
  */
 import { z } from "zod";
+import { escapeGitArcValue, readGitArcValue } from "./git-arc-receipts";
 
 const FAILURE_RECEIPT_PREFIX = "Workbench arc failure: ";
 const nonEmptyString = z.string().trim().min(1);
@@ -14,6 +16,7 @@ const boundedPath = nonEmptyString.max(2_000);
 const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
 
 const GitArcFailureActionSchema = z.enum([
+  "planClaims", "arcClaims", "arcScope",
   "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "arcContinue", "arcStart", "arcWait", "arcAdd", "arcAdopt", "arcRemove", "arcRelease", "arcMove",
   "compare", "diff", "proposalCreate", "proposalRescind", "proposalState", "proposalCommit",
@@ -75,7 +78,7 @@ export const GitArcFailureSchema = z.discriminatedUnion("code", [
     dirtyPaths: z.array(boundedPath).max(20),
     headMovement: z.enum(["fastForward", "incompatible", "same"]),
     planRef: checkpointSha,
-    snapshotPaths: z.array(boundedPath).min(1).max(20),
+    snapshotPaths: z.array(boundedPath).max(20),
   }).strict(),
   GitArcFailureBaseSchema.extend({
     code: z.literal("missingArcRef"),
@@ -172,12 +175,12 @@ export function describeGitArcFailure(failure: GitArcFailure) {
     case "siblingClaimCollision":
       return isAdoptionAction(failure.action)
         ? {
-          agentRecovery: "Do not adopt sibling-owned work. Keep it in ordinary plan scope and wait for the owning thread to release its claim.",
+          agentRecovery: "Do not adopt sibling-owned work. Keep ordinary plan scope and call git_arc_wait to wait and activate it.",
           message: "Another thread owns the selected changes.",
           userHint: "Wait for the owning thread to release its claim.",
         }
         : {
-          agentRecovery: "Wait for the sibling claims to be released. Do not adopt, restore, or overwrite sibling-owned work.",
+          agentRecovery: `${failure.action === "arcStart" || failure.action === "arcWait" ? "" : "If the intended scope has no inactive plan, publish it with git_plan_claims first. "}Call git_arc_wait to activate the inactive plan once claims clear. Do not republish an existing plan for collisions alone, or adopt, restore, or overwrite sibling-owned work.`,
           message: "Another thread owns the requested path.",
           userHint: "Wait for the owning thread to release its claim.",
         };
@@ -199,7 +202,7 @@ export function describeGitArcFailure(failure: GitArcFailure) {
     }
     case "planDrift":
       return {
-        agentRecovery: `Call tools.mcp__wb__git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. If the approved plan is unchanged, follow the planned-path drift workflow with mcp__wbex__git_arc_plan_start.`,
+        agentRecovery: `Call git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. Inspect before revising the plan. If approval still applies, republish with git_plan_claims using inherit: true.${failure.conflicts.length ? " Then call git_arc_wait to wait and activate it. Waiting does not refresh the baseline." : " Then activate with git_arc_start."}`,
         message: "The plan baseline changed.",
         userHint: "Inspect the changed plan paths. Revise the plan only if the approved work changed.",
       };
@@ -212,24 +215,24 @@ export function describeGitArcFailure(failure: GitArcFailure) {
     case "acceptedProposals":
       return failure.claimedPaths.length
         ? {
-          agentRecovery: "Accepted proposals changed this arc's baseline. If the approved plan is unchanged, call mcp__wbex__git_arc_plan_start with the explicit next paths. If the plan changed, return to Brief mode and create a new Git plan.",
+          agentRecovery: "Read accepted receipts. Continue the registered lifecycle, or use git_arc_claims with inherit: true and explicit approved scope changes. Changed approval boundaries require a new brief.",
           message: `This Git arc has accepted commits and still owns ${failure.claimedPaths.length} live claim${failure.claimedPaths.length === 1 ? "" : "s"}.`,
           userHint: "Create a new plan for the remaining approved paths.",
         }
         : {
-          agentRecovery: "This Git arc is resolved. If approved work remains unchanged, call mcp__wbex__git_arc_plan_start with the explicit next paths. If the plan changed, return to Brief mode and create a new Git plan.",
+          agentRecovery: "Resolved continuation acquires nothing. Approved follow-up uses git_arc_claims with inherit: true and explicit additions/adoptions. Changed approval boundaries require a new brief.",
           message: "This Git arc is already resolved and owns no live claims.",
           userHint: "Start a new plan for any remaining approved work.",
         };
     case "missingClaimSet":
       return {
-        agentRecovery: "Return to Brief mode. Create a new plan with mcp__wbex__git_arc_plan after the exact approved paths are known.",
+        agentRecovery: "Return to Brief mode. Use git_plan_claims once exact paths are known.",
         message: "This Git arc checkpoint does not contain any claimed paths.",
         userHint: "Create a new plan for the intended files.",
       };
     case "proposalAlreadyCommitted":
       return {
-        agentRecovery: `Call mcp__wbex__git_arc_propose with ${JSON.stringify({ amend: true, amendProposalId: failure.proposalId })} to amend this commit. Otherwise create a separate proposal without replaceProposalId or amendProposalId.`,
+        agentRecovery: `Use git_arc_propose with amend: ${JSON.stringify(failure.proposalId)} and freshTitle for content changes, or git_arc_reword for message-only changes. Otherwise omit targets for a separate proposal.`,
         message: `Commit ${failure.proposalTitle} already exists at ${failure.commitSha}.`,
         userHint: "Create a separate proposal, or amend the accepted commit.",
       };
@@ -288,13 +291,119 @@ export function formatGitArcFailureText(failure: GitArcFailure) {
 }
 
 export function formatGitArcFailureReceipt(failure: GitArcFailure) {
-  return `${FAILURE_RECEIPT_PREFIX}${JSON.stringify(GitArcFailureSchema.parse(failure))}`;
+  const facts = GitArcFailureSchema.parse(failure);
+  const lines = [`arc failure ${facts.action} ${facts.code}`];
+  const row = (...values: string[]) => lines.push(values.map(escapeGitArcValue).join("\t"));
+  const list = (name: string, values: string[]) => {
+    lines.push(`${name} ${values.length}`);
+    values.forEach((value) => row(value));
+  };
+  if ("paths" in facts) list("paths", facts.paths);
+  if ("ref" in facts) lines.push(`ref ${facts.ref}`);
+  if ("message" in facts) lines.push(`message ${escapeGitArcValue(facts.message)}`);
+  if (facts.code === "adoptedPathOverlap") {
+    lines.push(`overlaps ${facts.overlaps.length}`);
+    facts.overlaps.forEach(({ adoptedPath, ordinaryPath }) => row(adoptedPath, ordinaryPath));
+  }
+  if ("conflicts" in facts) {
+    lines.push(`conflicts ${facts.conflicts.length}`);
+    for (const { owner, overlaps } of facts.conflicts) {
+      row(owner.checkpointCommit, owner.harness, owner.intentName, owner.lifecycle, owner.threadId, owner.title, String(overlaps.length));
+      overlaps.forEach(({ claimedPath, requestedPath }) => row(claimedPath, requestedPath));
+    }
+  }
+  if (facts.code === "planDrift") {
+    lines.push(`plan-ref ${facts.planRef}`, `head ${facts.headMovement}`);
+    list("snapshot", facts.snapshotPaths);
+    list("dirty", facts.dirtyPaths);
+    lines.push(`commits ${facts.commits.length}`);
+    for (const commit of facts.commits) {
+      row(commit.commit, commit.subject, String(commit.paths.length));
+      commit.paths.forEach((path) => row(path));
+    }
+  }
+  if (facts.code === "acceptedProposals") {
+    list("claimed", facts.claimedPaths);
+    lines.push(`accepted ${facts.proposals.length}`);
+    facts.proposals.forEach(({ proposalId, commitSha, title }) => row(proposalId, commitSha, ...(title === undefined ? [] : [title])));
+  }
+  if (facts.code === "proposalAlreadyCommitted") {
+    lines.push("committed");
+    row(facts.proposalId, facts.commitSha, facts.proposalTitle);
+  }
+  lines.push("end failure");
+  const recovery = describeGitArcFailure(facts).agentRecovery;
+  if (recovery) lines.push(recovery);
+  return lines.join("\n");
+}
+
+function parseTextFailure(output: string) {
+  const lines = output.split(/\r?\n/u);
+  const start = lines.findIndex((line) => /^arc failure \S+ \S+$/u.test(line));
+  if (start < 0) return null;
+  const [, , action, code] = lines[start]!.split(" ");
+  const result: Record<string, string | number | object | undefined> = { action, code, version: 1 };
+  let index = start + 1;
+  const count = (value: string) => {
+    if (!/^\d+$/u.test(value) || Number(value) > lines.length) throw new Error("Invalid failure section count.");
+    return Number(value);
+  };
+  const row = (min: number, max = min) => {
+    if (index >= lines.length) throw new Error("Truncated failure facts.");
+    const values = lines[index++]!.split("\t").map(readGitArcValue);
+    if (values.length < min || values.length > max) throw new Error("Invalid failure row.");
+    return values;
+  };
+  const list = (length: number) => Array.from({ length }, () => row(1)[0]!);
+  const seen = new Set<string>();
+  while (index < lines.length) {
+    const line = lines[index++]!;
+    if (line === "end failure") return GitArcFailureSchema.parse(result);
+    const space = line.indexOf(" ");
+    const key = space < 0 ? line : line.slice(0, space);
+    const value = space < 0 ? "" : line.slice(space + 1);
+    if (seen.has(key)) throw new Error("Duplicate failure section.");
+    seen.add(key);
+    if (["paths", "snapshot", "dirty", "claimed"].includes(key)) {
+      result[key === "snapshot" ? "snapshotPaths" : key === "dirty" ? "dirtyPaths" : key === "claimed" ? "claimedPaths" : key] = list(count(value));
+    } else if (["ref", "message", "plan-ref", "head"].includes(key)) {
+      result[key === "plan-ref" ? "planRef" : key === "head" ? "headMovement" : key] = readGitArcValue(value);
+    } else if (key === "overlaps") {
+      result.overlaps = Array.from({ length: count(value) }, () => {
+        const [adoptedPath, ordinaryPath] = row(2);
+        return { adoptedPath, ordinaryPath };
+      });
+    } else if (key === "conflicts") {
+      result.conflicts = Array.from({ length: count(value) }, () => {
+        const [checkpointCommit, harness, intentName, lifecycle, threadId, title, length] = row(7);
+        const overlaps = Array.from({ length: count(length!) }, () => {
+          const [claimedPath, requestedPath] = row(2);
+          return { claimedPath, requestedPath };
+        });
+        return { owner: { checkpointCommit, harness, intentName, lifecycle, threadId, title }, overlaps };
+      });
+    } else if (key === "commits") {
+      result.commits = Array.from({ length: count(value) }, () => {
+        const [commit, subject, length] = row(3);
+        return { commit, subject, paths: list(count(length!)) };
+      });
+    } else if (key === "accepted") {
+      result.proposals = Array.from({ length: count(value) }, () => {
+        const [proposalId, commitSha, title] = row(2, 3);
+        return { proposalId, commitSha, ...(title === undefined ? {} : { title }) };
+      });
+    } else if (key === "committed") {
+      const [proposalId, commitSha, proposalTitle] = row(3);
+      Object.assign(result, { proposalId, commitSha, proposalTitle });
+    } else throw new Error("Unknown failure section.");
+  }
+  return null;
 }
 
 export function parseGitArcFailureReceipt(output: string) {
   const line = String(output ?? "").split(/\r?\n/u).find((candidate) => candidate.startsWith(FAILURE_RECEIPT_PREFIX));
-  if (!line) return null;
   try {
+    if (!line) return parseTextFailure(output);
     const parsed = GitArcFailureSchema.safeParse(JSON.parse(line.slice(FAILURE_RECEIPT_PREFIX.length)));
     return parsed.success ? parsed.data : null;
   } catch {

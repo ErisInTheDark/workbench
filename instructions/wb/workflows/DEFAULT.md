@@ -140,11 +140,11 @@ In Brief mode:
 Before presenting a plan that edits files:
 
 <available:multi-root>
-- For a multi-root workspace, the exact edit set must name each root and file. Create one logical plan containing every root scope. Keep the complete member-ref set after start and continuation. In Review, propose one commit per workspace root rather than one cross-project commit.
+- For multi-root work, name every root/file in one logical plan. Ordinary operations resolve registered members; preserve explicit refs only for historical inspection/restoration. Propose one commit per root.
 </available:multi-root>
 
 - Name the exact files you intend to edit.
-- Create the named plan ref before asking for approval. If plan/arc instructions are unavailable, stop and report degraded arc safety instead of silently substituting ad hoc file checks.
+- Publish named scope with `git_plan_claims` before approval. Publication reports changes since the previous plan and refreshes baselines. Inspect the supplied historical diff **before presenting the revised plan**. If arc safety is unavailable, stop rather than substitute ad hoc checks.
 - Do not include arc-ref details in the plan unless the user asks or a file-state problem needs to be explained.
 - If the exact edit set is still unknown, the plan must be for further inspection or diagnostics, not implementation.
 - If the exact edit set is known but the implementation mechanics, ownership, or chosen route are still unknown, the plan must also be for further inspection or diagnostics instead of implementation approval.
@@ -171,7 +171,7 @@ Approval applies to the exact visible plan. Required omitted paths remain within
 
 Classify approval details and later steers under **Steers And Recovery**. An exact user-authored addendum can extend the current plan without another brief when it fully states the action, affected scope, and relevant behavior or structure choices. Combine the plan and addendum as the approval boundary, then enter Implement mode. Do not render the user's own addendum back for ceremonial approval.
 
-When an exact steer changes an inactive Git plan's paths without requiring a new brief, make the plan ref match with `mcp__wbex__git_arc_plan_add`, `mcp__wbex__git_arc_plan_remove`, or `mcp__wbex__git_arc_plan_adopt`. Never use the active-arc add tool during Brief or Decision. Continue without arc protection only if the user explicitly approves degraded arc safety.
+When an exact steer changes inactive scope, apply additions/removals/adoptions together with `git_plan_claims` and `inherit: true`. Inspect reported drift before briefing. Never use active claim edits in Brief or Decision. Degraded safety requires explicit approval.
 
 If the user asks for more investigation, return to Inspect mode.
 
@@ -199,21 +199,21 @@ Before the first file edit in Implement mode:
 
 - Run the required arc command directly without preceding it with raw `git status`, raw `git diff`, `arc compare`, or `arc diff`; the operation owns its safety checks and its rejection is the stop signal.
 - For an inactive plan's first Implement pass, call `mcp__wbex__git_arc_start`, optionally with an exact historical `ref`. Successful start creates a new active baseline and reports released and acquired claims.
-- When the same implementation arc is already active, do not start it again. Call `mcp__wbex__git_arc_continue` with the current ref before another implementation pass.
-- If the required arc command succeeds, remember the returned active ref and continue without a supplementary workspace-state inspection.
+- If already active, use ref-free `git_arc_continue` before another pass, or `git_arc_claims` for scope edits. Claims includes continuation checks; do not call both.
+- Read the successful phase/outcome and continue without supplementary preflights.
 - If `arc start` reports planned-path drift, run its exact scoped diagnostic.
-- Drift alone does not invalidate approval. If the approved edit set, behavior, structure, ownership, mechanics, and validation still apply, stay in Implement mode. Call `mcp__wbex__git_arc_plan_start` with the same approved intent and paths. Do not repeat Brief or Decision.
+- Drift alone does not invalidate approval. If approved scope, behavior, structure, ownership, mechanics and validation still apply, stay in Implement. Republish with `git_plan_claims`, then start or wait. `git_plan_start` combines publication/start without collisions.
 - Return to Brief only if the plan changed.
-- Proposal acceptance releases clean claims immediately. If dirty work remains, continuation returns the narrowed successor. If it reports accepted commit proposals, read every proposal ID and SHA. When the approval boundary is unchanged or an exact user steer fully specifies the next paths, call `mcp__wbex__git_arc_plan_start` with those paths. Otherwise, return to Brief and call `mcp__wbex__git_arc_plan` for the revised path set.
-- A replacement plan must cover every still-dirty file claimed by this thread. Publishing it releases clean previous claims and retains only covered dirt through approval. Dirty unclaimed paths require explicit `--adopt <dirty-path>` intent. Do not ask the user to clean another agent's claimed work.
+- Acceptance narrows live scope. Read every accepted proposal ID/SHA. Resolved continuation succeeds without acquiring claims; approved follow-up requires explicit additions/adoptions through `git_arc_claims`. Changed approval boundaries return to Brief and `git_plan_claims`.
+- Replacement plans must cover every dirty owned file. Publication releases clean claims, retaining covered dirt through approval. Dirty unclaimed adoption stays explicit. Never ask the user to clean another agent's work.
 <!-- Failure: agents erase valid work, ask permission for forgotten paths, or plan vague scope. -->
 Unexpected omitted paths:
 
 - Report each path and reason.
-- No material change: continue arc; add or adopt; resume. No Decision.
-- Material or uncertain change: keep work; use `plan add` for clean paths; return to Brief.
+- No material change: edit with `git_arc_claims` and `inherit: true`; continuation is included. No Decision.
+- Material or uncertain change: keep work; use inherited `git_plan_claims`; return to Brief.
 - Never restore, release, unclaim, or discard only to change scope.
-- For claim overlap, use `mcp__wb__git_arc_wait`. Continue only after the plan owns its claims.
+- For collisions, wait on the inactive plan with `git_arc_wait`, without republishing it. If requested scope has no inactive plan, publish it first. Mixed drift/collision needs drift recovery and waiting. Edit only after claims are acquired.
 - For incompatible HEAD movement, unexplained dirt, or another unsafe rejection, stop before editing and inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief when safe recovery changes the approved plan.
 - If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded arc safety. Continue without it only after explicit user approval.
 
@@ -323,7 +323,7 @@ Restore current request, approval boundary, and file state before risky work.
 - After other resume or delay, verify newest request and file state
 - If exact approval boundary known, keep approval; stale or missing arc ref alone does not invalidate it
 - If approval boundary missing or ambiguous, return to Brief
-- If only arc ref stale, use unchanged-plan recovery
+- Use registered lifecycle defaults rather than copied refs; `git_arc_scope` recovers inventory when needed
 - Require explicit approval for degraded arc safety
 
 ### Report rollbacks

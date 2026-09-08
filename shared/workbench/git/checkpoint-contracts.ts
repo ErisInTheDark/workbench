@@ -1,5 +1,9 @@
 /*
+ * Keywords: git, arc, contracts, claims, roots, proposals, inspection.
  * Exports:
+ * - GitArcClaimRootSchema: root-qualified literal claim edits.
+ * - GitArcClaimsSchema: inherited active scope edits.
+ * - GitArcPlanClaimsSchema: replacement or inherited planning scope.
  * - GitArcRootPathsSchema/GitArcRootPaths and GitArcPlanRootSchema/GitArcPlanRoot: validate root-qualified path selections. Keywords: git, arc, root, paths, plan.
  * - GitArcMemberRefSchema/GitArcMemberRef and GitArcInspectionMemberRefSchema/GitArcInspectionMemberRef: validate lifecycle SHA refs and broader inspection refs. Keywords: git, arc, ref, proposal, workspace.
  * - GitArcMoveMappingSchema/GitArcMoveRequestSchema: validate bounded explicit and regex arc move requests. Keywords: git, arc, move, mapping.
@@ -16,6 +20,31 @@ const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
 const checkpointPaths = z.array(nonEmptyString).min(1);
 const optionalCheckpointPaths = z.array(nonEmptyString);
 const rootId = nonEmptyString;
+
+const claimPaths = {
+  addPaths: optionalCheckpointPaths.default([]),
+  removePaths: optionalCheckpointPaths.default([]),
+  adoptPaths: optionalCheckpointPaths.default([]),
+};
+export const GitArcClaimRootSchema = z.object({ ...claimPaths, rootId }).strict();
+const claimChanges = {
+  ...claimPaths,
+  roots: z.array(GitArcClaimRootSchema).default([]),
+};
+export const GitArcClaimsSchema = z.object({ ...claimChanges, inherit: z.literal(true) }).strict();
+export const GitArcPlanClaimsSchema = z.object({
+  ...claimChanges,
+  inherit: z.boolean().default(false),
+  intentName: nonEmptyString.optional(),
+  intentDescription: z.string().optional(),
+}).strict().superRefine((input, context) => {
+  if (!input.inherit && !input.intentName) {
+    context.addIssue({ code: "custom", message: "An initial or replacement plan requires intentName.", path: ["intentName"] });
+  }
+  if (!input.inherit && (input.removePaths.length || input.roots.some((root) => root.removePaths.length))) {
+    context.addIssue({ code: "custom", message: "Removing planned entries requires inheritance.", path: ["inherit"] });
+  }
+});
 
 export const GitArcRootPathsSchema = z.object({
   paths: optionalCheckpointPaths.default([]),
@@ -68,6 +97,9 @@ const checkpointBaseRequest = {
 };
 
 export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
+  GitArcPlanClaimsSchema.safeExtend({ action: z.literal("planClaims"), start: z.boolean().default(false), ...checkpointBaseRequest }),
+  GitArcClaimsSchema.extend({ action: z.literal("arcClaims"), ...checkpointBaseRequest }),
+  z.object({ action: z.literal("arcScope"), ...checkpointBaseRequest }).strict(),
   z.object({
     action: z.literal("plan"),
     adoptPaths: optionalCheckpointPaths.default([]),
@@ -218,10 +250,10 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   }
   if (
     input.action === "diff"
-    && input.page !== undefined
+    && input.page !== undefined && input.page !== 1
     && (Boolean(input.paths?.length) || input.roots.some(({ paths }) => paths.length > 0))
   ) {
-    context.addIssue({ code: "custom", message: "Git arc diff page cannot be combined with selected paths." });
+    context.addIssue({ code: "custom", message: "Selected paths return one complete diff. Only page 1 is valid." });
   }
 });
 
@@ -242,6 +274,7 @@ export const GitCheckpointFileChangeSchema = z.object({
 export type GitCheckpointFileChange = z.infer<typeof GitCheckpointFileChangeSchema>;
 
 const GitCheckpointCompareMemberSchema = z.object({
+  phase: z.enum(["plan", "active", "resolved"]).optional(),
   changes: z.array(GitCheckpointFileChangeSchema),
   checkpointCommit: checkpointSha,
   checkpointRef: nonEmptyString,
@@ -249,10 +282,11 @@ const GitCheckpointCompareMemberSchema = z.object({
   proposalId: nonEmptyString.optional(),
   repoRoot: nonEmptyString,
   rootId,
-  scopePaths: checkpointPaths,
+  scopePaths: optionalCheckpointPaths,
 });
 
 export const GitCheckpointCompareResultSchema = z.object({
+  phase: z.enum(["plan", "active", "resolved"]).optional(),
   changes: z.array(GitCheckpointFileChangeSchema),
   checkpointCommit: checkpointSha,
   checkpointRef: nonEmptyString,
@@ -261,7 +295,7 @@ export const GitCheckpointCompareResultSchema = z.object({
   members: z.array(GitCheckpointCompareMemberSchema).optional(),
   proposalId: nonEmptyString.optional(),
   repoRoot: nonEmptyString,
-  scopePaths: checkpointPaths,
+  scopePaths: optionalCheckpointPaths,
 });
 export type GitCheckpointCompareResult = z.infer<typeof GitCheckpointCompareResultSchema>;
 

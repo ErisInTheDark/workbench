@@ -113,15 +113,15 @@ Use these rules for non-trivial Workbench file edits.
 <!-- Failure: agents ask permission to edit ignored files after arc tools correctly skip them. -->
 Claim files before editing them; edit gitignored files without extra approval; adopt command-caused workspace dirt (ie `package-lock.json` via `npm install`) to include in proposed commits.
 
-Always inspect the specific arc ref you mean. Never use “latest”, “newest”, or another moving reference, because another operation may have created an unrelated successor.
+Ordinary arc operations use the caller's registered lifecycle; omit refs. Explicit refs select historical inspection, restoration or deliberate baselines. Never guess "latest" or copy an unrelated ref.
 
 <!-- Failure: agents use raw Git when arc tools already cover the job. -->
 When an arc command is the required workflow step, run it directly and let it accept or reject the current state. Do not preflight or supplement it with raw `git status`, raw `git diff`, or equivalent commands; the arc operation owns its safety checks and its rejection is the stop signal. Before using raw Git, state why no arc tool can do that job. Use `arc compare` or `arc diff` whenever arc-scoped inspection helps, including Review and plan, drift, or claim diagnostics.
 
 #### Plan and arc names
 
-* **Plan ref**: an immutable full Git-visible worktree snapshot. The registry points to the thread's current plan, so empty plans and plan add/remove/adopt revisions do not require transcript reconstruction.
-* **Remembered arc ref**: the active ref returned by start or later active-arc mutations. Record it for continuation and restore. Partial proposal acceptance creates a narrowed successor that `arc continue` resolves from the remembered ref; complete acceptance resolves the arc with no live claims.
+* **Plan ref**: immutable full Git-visible worktree snapshot. The registry owns current scope, including empty plans and inherited revisions.
+* **Arc ref**: immutable snapshot for historical inspection or restoration. Ordinary operations resolve the caller's current registry, including narrowed or resolved acceptance outcomes.
 * **Arc**: the approved changeset whose registry phase is plan, active, or resolved. A missing phase reads as active without migration.
 
 #### Before asking for approval in Brief mode
@@ -130,10 +130,9 @@ For any plan that would edit files:
 
 1. Identify the exact existing files you plan to edit.
 2. Confirm that Workbench Git plan/arc instructions are available.
-3. Create the named plan through `mcp__wbex__git_arc_plan` with the exact paths and a short intent. Dirty active-claimed paths can be ordinary plan paths. Use `adoptPaths` only for intentional dirty unclaimed paths.
-4. Treat the returned SHA as the current arc ref.
-5. Keep that exact ref privately available for later drift checks.
-6. In the user-facing plan, name the planned edit files, but do not print arc-ref details unless they are needed to explain a problem.
+3. Publish with `git_plan_claims`, short `intentName` and exact `addPaths`. Use `inherit: true` with additions/removals/adoptions for revisions. Dirty owned paths remain ordinary scope; adoption is only intentional dirty unclaimed work.
+4. Publication refreshes baselines. **Inspect reported changes against the supplied previous ref before presenting the revised plan.** Repeated paths cannot hide this notice.
+5. Name planned files in the brief; omit ref details unless needed to explain a problem.
 
 If plan/arc instructions are missing, plan creation fails, or the repo has no usable HEAD, stop before presenting an implementation plan. Tell the user arc safety is degraded. Continue without arc protection only if the user explicitly approves degraded safety for this work.
 
@@ -141,12 +140,12 @@ If the exact edit set is still unknown, do not present an implementation plan. P
 
 Unexpected omitted paths during Implement:
 
-- No material change: report path and reason; continue arc; add or adopt; continue.
-- Material or uncertain change: keep work; use `mcp__wbex__git_arc_plan_add` for clean paths; return to Brief.
+- No material change: report path and reason; use `git_arc_claims` to add/adopt atomically; no separate continuation.
+- Material or uncertain change: keep work; revise inactive scope with `git_plan_claims` and `inherit: true`; return to Brief.
 - Never restore, release, unclaim, or discard only to change scope.
 - Exact user steer updates plan or arc; continue without restating.
 
-After the revised plan names its exact edit set, make the inactive Git plan ref match with `mcp__wbex__git_arc_plan_add`, `mcp__wbex__git_arc_plan_remove`, or `mcp__wbex__git_arc_plan_adopt`. Revising the user-visible plan does not by itself require replacing the Git plan ref. Use the active-arc add tool only after approval in Implement mode.
+Keep inactive scope aligned through one `git_plan_claims` revision with `inherit: true`, `addPaths`, exact `removePaths` and explicit `adoptPaths`. Omit unused arrays. Prose-only revisions need no publication. Active edits require approval and Implement mode.
 
 #### Before the first edit in Implement mode
 
@@ -154,16 +153,17 @@ After the user explicitly approves the current plan:
 
 1. Enter Implement mode.
 2. If this is the inactive plan's first Implement pass, call `mcp__wbex__git_arc_start`, optionally with an exact `ref`. Record the returned active ref and its released/acquired claims.
-3. If the same implementation arc is already active, do not start it again. Call `mcp__wbex__git_arc_continue` with the current ref before another implementation pass. Continuation owns the committed-baseline and claimed-path checks.
+3. If already active, use `git_arc_continue` without a ref before another pass, or `git_arc_claims` when scope changes. Claims includes continuation and accepted-outcome checks; never call both for one edit.
 4. Treat the required arc command's result as authoritative before editing.
 
 Use this table:
 
 | Arc result | Action |
 | --- | --- |
-| Success | Record the returned active ref and proceed. Do not run a supplementary workspace-state inspection. |
-| Planned paths changed after approval | Stop. Run the reported scoped diagnostic. If the plan still fits, stay in Implement mode. Call `mcp__wbex__git_arc_plan_start` with the same intent and approved paths. Keep approval. Return to Brief only if the plan changed. |
-| Claim overlap, incompatible HEAD movement, unexplained dirt, or another unsafe rejection | Stop. Inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief if safe recovery changes the plan. |
+| Success | Read phase/outcome and proceed. No supplementary preflight. Resolved continuation acquires nothing; approved follow-up requires explicit additions/adoptions. |
+| Planned paths changed after approval | Inspect the reported historical diff. Keep approval if still applicable. Republish approved scope with `git_plan_claims`, then start or wait. `git_plan_start` combines publication/start without collisions. Return to Brief only if the plan changed. |
+| Claim overlap only | Wait on the inactive plan with `git_arc_wait`; do not republish it. If requested scope has no inactive plan, publish it first. Mixed drift/collision requires drift recovery and waiting. |
+| Incompatible HEAD, unexplained dirt or another unsafe rejection | Stop and inspect. Never steal, clean, restore or overwrite work. Return to Brief if recovery changes the plan. |
 | Command cannot run, or its result cannot be confidently interpreted | Stop before editing. Report degraded arc safety. Continue only if the user explicitly approves degraded safety. |
 
 A better or simpler implementation can proceed without re-briefing only when it stays inside the approved paths, behavior, structure, ownership, contracts, lifecycle, dependencies, and validation. Otherwise, stop and return to Brief before making the agent-chosen change. Never hide scope inside an improvement.
@@ -174,27 +174,19 @@ Plan creation permits dirt already owned by this thread's active arc only when t
 
 Preserve unrelated user or agent changes.
 
-Keep the current arc ref for explicit start, post-commit continuation, and restore. Active-registry commands resolve the caller's current arc without a ref.
+Use `git_arc_scope` only when the complete planned/live/adopted inventory is needed. Scope edits already return it; routine commands report phase, outcome and counts.
 
-Before follow-up work on the same claimed files, call `mcp__wbex__git_arc_continue` with the current ref. Proposal acceptance releases clean claims immediately. When dirty work remains, continuation returns the already-created narrowed successor. If it reports accepted commit proposals, read every proposal ID and commit SHA. If the approval boundary is unchanged or an exact user steer fully specifies the next paths, call `mcp__wbex__git_arc_plan_start` with those paths. Otherwise, return to Brief and create an ordinary plan that includes every still-dirty claimed file.
+Acceptance releases clean claims and narrows the live set. Read every returned accepted proposal ID and commit SHA. Resolved continuation succeeds without claims. Approved follow-up can use `git_arc_claims` with explicit additions/adoptions and inherited intent; changed approval boundaries return to Brief.
 
 When approved work moves paths, use `mcp__wbex__git_arc_mv`. It keeps source and destination claimed without changing the ordinary Git index. Its `move` input accepts operands, source/destination mappings, or regex preview and confirmation. Record the returned successor ref.
 
-After continuation, use `mcp__wbex__git_arc_add` for omitted clean paths still within approval and `mcp__wbex__git_arc_adopt` for intentional relevant dirt. Never call these active-arc tools during Brief or Decision, and never repeat claimed paths. Each call checks the claimed baseline and returns a successor. Remember the newest ref.
-
-When approved work no longer owns exact claimed entries, call `mcp__wbex__git_arc_remove`. Workbench rejects dirty removals, non-exact claims, or drift under retained claims. Removing the final clean claim creates a zero-claim resolved lifecycle summary that does not block settlement.
+Use `git_arc_claims({ inherit: true, addPaths, removePaths, adoptPaths })` for one atomic active edit. Omit unused arrays. It validates final scope, retained baselines and explicit dirty unclaimed adoption. Removals must match exact entries and preserve dirty coverage. Removing final clean scope resolves the lifecycle. Never mutate active scope in Brief or Decision.
 
 #### Completion inspection and review
 
 Before summarizing, inspect the current arc. Use `tools.mcp__wb__git_arc_compare` for paths and counts or `tools.mcp__wb__git_arc_diff` for unified details. Do not compare first when you need a diff. The active workflow decides whether inspection precedes or occurs during Review. Inspection is required before proposal creation.
 
-Do not diff against:
-
-* the newest unrelated ref
-* the oldest ref
-* a superseded predecessor ref after `arc add` or `arc remove`
-
-If the current arc ref is missing or ambiguous, report degraded arc safety instead of guessing.
+Omit refs for current inspection. Use previous refs only for deliberate historical comparisons, including planning-drift notices. If lifecycle ownership is unclear, inspect `git_arc_scope` rather than guessing refs.
 
 Review must cover:
 

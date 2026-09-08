@@ -8,8 +8,20 @@ import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import getThreadGitArcProposalIntents, {
   proposalIntentOwnsMessage,
 } from "./thread-git-arc-proposal-intents";
+import { formatGitArcTextReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
+
+test("plain reword receipts preserve message-only intent without content amendment", () => {
+  const intents = getThreadGitArcProposalIntents({
+    turns: [turn("reword", [commandItem("reword", 'wb git arc reword --proposal old-id --title "correct message"', formatGitArcTextReceipt({
+      action: "propose", claimedPaths: [], intentName: null, ref: "a".repeat(40), proposalId: "new-id", version: 1,
+    }))])],
+  });
+  assert.equal(intents.get("new-id")?.amend, false);
+  assert.deepEqual(intents.get("new-id")?.paths, []);
+  assert.equal(intents.get("new-id")?.title, "correct message");
+});
 
 function commandItem(id: string, command: string, aggregatedOutput: string | null): CommandItem {
   return {

@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, routes, lifecycle, identity, transitions, recovery.
  * Exports:
  * - WorkbenchGitArcFeatureOptions: project resolution, thread creation time, and stable transition ports for reloadable Git arc work. Keywords: git, arc, feature, orchestrator, timestamp.
  * - WorkbenchGitArcLifecycleState: active logical lifecycle plus derived reload scopes. Keywords: git, arc, lifecycle, reload.
@@ -52,6 +53,7 @@ export type WorkbenchGitArcLifecycleState = WorkspaceGitArcLifecycleState;
 export type WorkbenchGitArcPlanState = WorkspaceGitArcPlanState;
 
 const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
+  "planClaims", "arcClaims",
   "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRelease", "arcRemove", "arcStart", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "proposalCommit", "proposalCreate", "proposalRescind", "restore",
 ]);
@@ -516,7 +518,8 @@ export default class WorkbenchGitArcFeature {
         },
       };
     }));
-    if (error instanceof GitArcCollisionError) {
+    if (error instanceof GitArcCollisionError || (error instanceof GitArcStartDiagnosticError
+      && !error.details.snapshotDrift.length && error.details.headMovement !== "incompatible" && conflicts.length)) {
       return {
         action: request.action,
         code: "siblingClaimCollision",
@@ -604,6 +607,9 @@ export default class WorkbenchGitArcFeature {
   private async dispatch(input: GitCheckpointRequest, modifiedSince?: number) {
     const common = { cwd: input.cwd, harness: input.harness, threadId: input.threadId };
     switch (input.action) {
+      case "planClaims": return Response.json(await this.controller.editPlanClaims({ ...common, ...input }));
+      case "arcClaims": return Response.json(await this.controller.editArcClaims({ ...common, ...input }));
+      case "arcScope": return Response.json(await this.controller.readScope(common));
       case "plan": return Response.json(await this.controller.createPlan({
         ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
       }));

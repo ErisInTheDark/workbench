@@ -22,6 +22,21 @@ function registryFromState(entries: object[]) {
   } as never);
 }
 
+test("combined active claims require explicit inheritance and preserve literal MCP paths", () => {
+  const input = { action: "arcClaims", cwd: "C:/repo", threadId: "thread-one", addPaths: ["-literal.ts"] };
+  assert.equal(GitCheckpointRequestSchema.safeParse(input).success, false);
+  assert.equal(GitCheckpointRequestSchema.safeParse({ ...input, inherit: false }).success, false);
+  const parsed = GitCheckpointRequestSchema.parse({ ...input, inherit: true, removePaths: ["old.ts"], adoptPaths: ["dirty.ts"] });
+  assert.equal(parsed.action, "arcClaims");
+  if (parsed.action === "arcClaims") assert.deepEqual(parsed.addPaths, ["-literal.ts"]);
+});
+
+test("selected diff paths accept redundant page one but never a later page", () => {
+  const input = { action: "diff", cwd: "C:/repo", threadId: "thread-one", paths: ["one.ts"] };
+  assert.equal(GitCheckpointRequestSchema.safeParse({ ...input, page: 1 }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({ ...input, page: 2 }).success, false);
+});
+
 test("plan and arc requests encode claimed-path defaults and successor refs", () => {
   const obsoleteReloadPlan = GitCheckpointRequestSchema.safeParse({
     action: "plan",

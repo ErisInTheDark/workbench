@@ -1,27 +1,26 @@
 /*
+ * Keywords: git, arc, commands, lifecycle, claims, inspection.
  * Exports:
  * - WORKBENCH_GIT_ARC_COMMANDS: typed Git plan, arc, proposal, and restore definitions shared by CLI and MCP. Keywords: workbench, git, arc, plan, commands.
  */
 import { z } from "zod";
+import { GitArcClaimsSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
+import { parseGitClaimArguments } from "workbench-shared/workbench/git/git-claim-arguments";
+import { WORKBENCH_GIT_PLAN_COMMANDS } from "./git-plan-command-definitions";
+import { WORKBENCH_GIT_ARC_PROPOSAL_COMMANDS } from "./git-arc-proposal-commands";
 
 import { parseGitArcMoveArguments, type GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
 import { preservePowerShellTrailingPaths, WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import {
   defineWorkbenchAgentCommand,
   postWorkbenchAgentCommand,
-  type WorkbenchAgentCommandResponseKind,
 } from "./workbench-agent-command-definition";
 
 const requiredText = z.string().trim().min(1);
 const paths = z.array(requiredText);
 const requiredPaths = paths.min(1);
 const rootPathsSchema = z.object({ paths: requiredPaths, rootId: requiredText }).strict();
-const planRootSchema = z.object({ adoptPaths: paths.default([]), paths: paths.default([]), rootId: requiredText }).strict();
 const memberRefSchema = z.object({ ref: requiredText, rootId: requiredText }).strict();
-const scopedPathsSchema = z.object({ paths: paths.default([]), roots: z.array(rootPathsSchema).default([]) }).strict()
-  .superRefine((input, context) => {
-    if (!input.paths.length && !input.roots.length) context.addIssue({ code: "custom", message: "At least one path or root scope is required." });
-  });
 
 function requireCallerThreadId(callerThreadId: string | null) {
   if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
@@ -37,92 +36,8 @@ function baseBody(callerHarness: string, callerThreadId: string | null, cwd: str
   return { cwd, harness: requireCallerHarness(callerHarness), threadId: requireCallerThreadId(callerThreadId) };
 }
 
-const ordinaryPlanSchema = z.object({
-  adoptPaths: paths.default([]).describe("Intentional dirty unclaimed work to adopt into this plan. Adopted paths may overlap ordinary scope; nested scope collapses to one minimal claim. Never use for sibling-owned changes or merely because raw Git output shows dirt."),
-  intentDescription: z.string().default("").describe("Optional detail explaining the plan's approved intent."),
-  intentName: requiredText.describe("Short name for the approved implementation intent."),
-  paths: paths.default([]).describe("Ordinary inactive plan scope. Use for clean files and sibling-claimed files; planning these paths does not claim them."),
-  roots: z.array(planRootSchema).default([]).describe("Workspace-root plan scopes for a multi-root workspace."),
-}).strict();
-function parsePlanArgs(args: string[], commandName: "Arc plan" | "Arc plan start") {
-  const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values: ["-m", "--adopt"] }), {
-    repeatable: ["-m", "--adopt"], trailing: true,
-  });
-  const messages = flags.repeated("-m").map((message) => message.trim());
-  if (messages.length > 2) throw new Error(`${commandName} accepts at most two -m values.`);
-  if (!messages[0]) throw new Error("-m is required.");
-  return {
-    adoptPaths: flags.repeated("--adopt"),
-    intentDescription: messages[1] ?? "",
-    intentName: messages[0],
-    paths: flags.trailing,
-    roots: [],
-  };
-}
-
-const plan = defineWorkbenchAgentCommand({
-  description: "Create or replace this thread's inactive Git plan without claiming ordinary paths. Put clean and sibling-claimed files in paths; use adoptPaths only for intentional dirty unclaimed work, including nested work within ordinary scope.",
-  helpGroups: ["git-arc"],
-  words: ["git", "arc", "plan"],
-  usage: "wb git arc plan -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
-  inputSchema: ordinaryPlanSchema,
-  parseCliArgs: (args) => parsePlanArgs(args, "Arc plan"),
-  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
-    return postWorkbenchAgentCommand("/api/git-checkpoint", {
-      action: "plan",
-      ...(input.adoptPaths.length ? { adoptPaths: input.adoptPaths } : {}),
-      ...baseBody(callerHarness, callerThreadId, cwd),
-      intentDescription: input.intentDescription,
-      intentName: input.intentName,
-      paths: input.paths,
-      ...(input.roots.length ? { roots: input.roots } : {}),
-    }, "git-arc-plan");
-  },
-});
-
-function planMutation(operation: "add" | "adopt" | "remove") {
-  return defineWorkbenchAgentCommand({
-    description: operation === "add"
-      ? "Add clean paths to current inactive plan. On active arc, publish inactive successor retaining dirty work and claims. Additions remain unclaimed."
-      : `${operation === "adopt" ? "Adopt intentional dirty unclaimed paths into" : "Remove paths from"} the current inactive plan.`,
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", "plan", operation],
-    usage: `wb git arc plan ${operation} -- <path> [<path>...]`,
-    inputSchema: scopedPathsSchema,
-    parseCliArgs(args) {
-      const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values: [] }), { trailing: true });
-      if (!flags.trailing.length) throw new Error("At least one path is required.");
-      return { paths: flags.trailing, roots: [] };
-    },
-    buildRequest(input, { callerHarness, callerThreadId, cwd }) {
-      return postWorkbenchAgentCommand("/api/git-checkpoint", {
-        action: operation === "add" ? "planAdd" : operation === "adopt" ? "planAdopt" : "planRemove",
-        ...baseBody(callerHarness, callerThreadId, cwd), paths: input.paths,
-        ...(input.roots.length ? { roots: input.roots } : {}),
-      }, "git-arc-plan");
-    },
-  });
-}
-
-const planStart = defineWorkbenchAgentCommand({
-  description: "Create and activate a plan atomically. Put clean files in paths; use adoptPaths only for intentional dirty unclaimed work, including nested work within ordinary scope, that this thread may claim now.",
-  helpGroups: ["git-arc"],
-  words: ["git", "arc", "plan", "start"],
-  usage: "wb git arc plan start -m <short-intent> [-m <optional-description>] [--adopt <dirty-path>]... [-- <path>...]",
-  inputSchema: ordinaryPlanSchema,
-  parseCliArgs: (args) => parsePlanArgs(args, "Arc plan start"),
-  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
-    return postWorkbenchAgentCommand("/api/git-checkpoint", {
-      action: "planStart", adoptPaths: input.adoptPaths,
-      ...baseBody(callerHarness, callerThreadId, cwd),
-      intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
-      ...(input.roots.length ? { roots: input.roots } : {}),
-    }, "git-arc-start");
-  },
-});
-
 const start = defineWorkbenchAgentCommand({
-  description: "Activate and compare a plan's files before implementation without creating another ref.",
+  description: "Activate the caller's plan and claim its files after checking for changes.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "start"],
   usage: "wb git arc start [--ref <ref>]",
@@ -164,11 +79,11 @@ const continueArc = defineWorkbenchAgentCommand({
   description: "Continue an active arc or resume it after its proposal was committed.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "continue"],
-  usage: "wb git arc continue --ref <last-known-ref>",
+  usage: "wb git arc continue [--ref <ref>]",
   inputSchema: z.object({ ref: requiredText.optional(), refs: z.array(memberRefSchema).default([]) }).strict(),
   parseCliArgs(args) {
     const flags = new WorkbenchAgentCommandFlags(args, { values: ["--ref"] });
-    return { ref: flags.required("--ref"), refs: [] };
+    return { ref: flags.optional("--ref") ?? undefined, refs: [] };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
@@ -177,33 +92,6 @@ const continueArc = defineWorkbenchAgentCommand({
     }, "git-arc-continue");
   },
 });
-
-function activePathCommand(action: "add" | "adopt" | "remove", description: string) {
-  const responseKind: WorkbenchAgentCommandResponseKind = action === "add"
-    ? "git-arc-add"
-    : action === "adopt"
-      ? "git-arc-adopt"
-      : "git-arc-remove";
-  return defineWorkbenchAgentCommand({
-    description,
-    helpGroups: ["git-arc"],
-    words: ["git", "arc", action],
-    usage: `wb git arc ${action} -- <${action === "add" ? "additional" : action === "adopt" ? "dirty" : "claimed"}-path> [<path>...]`,
-    inputSchema: scopedPathsSchema,
-    parseCliArgs(args) {
-      const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values: [] }), { trailing: true });
-      if (!flags.trailing.length) throw new Error("At least one path is required.");
-      return { paths: flags.trailing, roots: [] };
-    },
-    buildRequest(input, { callerHarness, callerThreadId, cwd }) {
-      return postWorkbenchAgentCommand("/api/git-checkpoint", {
-        action: action === "add" ? "arcAdd" : action === "adopt" ? "arcAdopt" : "arcRemove",
-        ...baseBody(callerHarness, callerThreadId, cwd), paths: input.paths,
-        ...(input.roots.length ? { roots: input.roots } : {}),
-      }, responseKind);
-    },
-  });
-}
 
 const moveSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("operands"), operands: z.array(requiredText).min(2) }).strict(),
@@ -280,10 +168,10 @@ function inspectionCommand(action: "compare" | "diff") {
       if (
         action === "diff"
         && "page" in input
-        && input.page !== undefined
+        && input.page !== undefined && input.page !== 1
         && (input.paths.length || input.roots.some(({ paths: rootPaths }) => rootPaths.length > 0))
       ) {
-        context.addIssue({ code: "custom", message: "Git arc diff page cannot be combined with selected paths." });
+        context.addIssue({ code: "custom", message: "Selected paths return one complete diff. Only page 1 is valid." });
       }
     }),
     parseCliArgs(args) {
@@ -309,82 +197,6 @@ function inspectionCommand(action: "compare" | "diff") {
     },
   });
 }
-
-const propose = defineWorkbenchAgentCommand({
-  description: "Create a durable editable commit proposal from claimed changes, including amend and fresh choices, or change an accepted proposal's message by exact id.",
-  helpGroups: ["git-arc"],
-  words: ["git", "arc", "propose"],
-  usage: "wb git arc propose [--root <root-id>] [--amend [<proposal-id>] --fresh-title <title> [--fresh-description <description>]] [--replace <proposal-id>] [--title <title>] [--description <description>] [-- <claimed-path>...]",
-  inputSchema: z.object({
-    amend: z.boolean().default(false),
-    amendProposalId: requiredText.optional(),
-    description: z.string().default(""),
-    freshDescription: z.string().optional().describe("Description to use if the content amendment is committed fresh."),
-    freshTitle: requiredText.optional().describe("Required title to use if the content amendment is committed fresh."),
-    paths: paths.default([]),
-    replaceProposalId: requiredText.optional(),
-    rootId: requiredText.optional(),
-    title: z.string().default(""),
-  }).strict().superRefine((input, context) => {
-    if (input.amend && input.replaceProposalId) context.addIssue({ code: "custom", message: "amend and replaceProposalId cannot be combined." });
-    if (!input.amend && !input.title.trim()) context.addIssue({ code: "custom", message: "title is required unless amend is true." });
-    if (input.amend && !input.freshTitle) context.addIssue({ code: "custom", message: "freshTitle is required when amend is true.", path: ["freshTitle"] });
-    if (!input.amend && (input.freshTitle !== undefined || input.freshDescription !== undefined)) {
-      context.addIssue({ code: "custom", message: "freshTitle and freshDescription require amend.", path: ["freshTitle"] });
-    }
-  }),
-  parseCliArgs(args) {
-    const normalizedArgs = [...args];
-    const amendIndex = normalizedArgs.indexOf("--amend");
-    let amendProposalId: string | undefined;
-    if (amendIndex >= 0 && normalizedArgs[amendIndex + 1] && !normalizedArgs[amendIndex + 1].startsWith("-")) {
-      amendProposalId = normalizedArgs[amendIndex + 1];
-      normalizedArgs.splice(amendIndex + 1, 1);
-    }
-    const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(normalizedArgs, {
-      boolean: ["--amend"],
-      values: ["--description", "--fresh-description", "--fresh-title", "--replace", "--root", "--title"],
-    }), {
-      boolean: ["--amend"],
-      leadingDashValues: ["--description", "--fresh-description", "--fresh-title", "--title"],
-      values: ["--description", "--fresh-description", "--fresh-title", "--replace", "--root", "--title"],
-      trailing: true,
-    });
-    const freshDescription = flags.optional("--fresh-description") ?? undefined;
-    const freshTitle = flags.optional("--fresh-title") ?? undefined;
-    const targetedMessageOnly = Boolean(
-      amendProposalId
-      && !flags.trailing.length
-      && freshDescription === undefined
-      && freshTitle === undefined
-    );
-    return {
-      amend: flags.has("--amend") && !targetedMessageOnly,
-      amendProposalId,
-      description: flags.optional("--description") ?? "",
-      freshDescription,
-      freshTitle,
-      paths: flags.trailing,
-      replaceProposalId: flags.optional("--replace") ?? undefined,
-      rootId: flags.optional("--root") ?? undefined,
-      title: flags.optional("--title") ?? "",
-    };
-  },
-  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
-    return postWorkbenchAgentCommand("/api/git-checkpoint", {
-      action: "proposalCreate", amend: input.amend,
-      ...(input.amendProposalId ? { amendProposalId: input.amendProposalId } : {}),
-      ...baseBody(callerHarness, callerThreadId, cwd),
-      description: input.description,
-      ...(input.freshDescription !== undefined ? { freshDescription: input.freshDescription } : {}),
-      ...(input.freshTitle ? { freshTitle: input.freshTitle } : {}),
-      ...(input.paths.length ? { paths: input.paths } : {}),
-      ...(input.replaceProposalId ? { replaceProposalId: input.replaceProposalId } : {}),
-      ...(input.rootId ? { rootId: input.rootId } : {}),
-      title: input.title,
-    }, "git-arc-propose");
-  },
-});
 
 const rescind = defineWorkbenchAgentCommand({
   description: "Rescind one pending proposal without changing the arc.",
@@ -431,23 +243,47 @@ const restore = defineWorkbenchAgentCommand({
   },
 });
 
+const claims = defineWorkbenchAgentCommand({
+  description: "Edit active claims atomically, including continuation checks. Inheritance is required. Adopt only intentional dirty unclaimed work.",
+  helpGroups: ["git-arc"], words: ["git", "arc", "claims"],
+  usage: "wb git arc claims --inherit [-- <add-path> -<remove-path> '*<adopt-path>'...]",
+  inputSchema: GitArcClaimsSchema,
+  parseCliArgs: (args) => ({ ...parseGitClaimArguments(args), inherit: true as const }),
+  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      ...baseBody(callerHarness, callerThreadId, cwd), action: "arcClaims", ...input,
+    }, "git-arc-claims");
+  },
+});
+
+const scope = defineWorkbenchAgentCommand({
+  description: "Read scope and current proposal IDs/statuses without changing Git. Recover a lost proposal response here before retrying.",
+  effects: { readOnly: true, idempotent: true }, helpGroups: ["git-arc"],
+  words: ["git", "arc", "scope"], usage: "wb git arc scope",
+  inputSchema: z.object({}).strict(),
+  parseCliArgs(args) {
+    if (args.length) throw new Error("Scope reads the caller's lifecycle and accepts no parameters.");
+    return {};
+  },
+  buildRequest(_input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      ...baseBody(callerHarness, callerThreadId, cwd), action: "arcScope",
+    }, "git-arc-scope");
+  },
+});
+
 export const WORKBENCH_GIT_ARC_COMMANDS = [
-  plan,
-  planMutation("add"),
-  planMutation("remove"),
-  planMutation("adopt"),
-  planStart,
+  ...WORKBENCH_GIT_PLAN_COMMANDS,
   start,
   wait,
   continueArc,
-  activePathCommand("add", "Continue an arc while claiming additional clean paths."),
-  activePathCommand("adopt", "Adopt intentional dirty unclaimed workspace paths into this thread's active arc."),
+  claims,
+  scope,
   move,
-  activePathCommand("remove", "Relinquish exact clean claims without changing working-tree files."),
   release,
   inspectionCommand("compare"),
   inspectionCommand("diff"),
-  propose,
+  ...WORKBENCH_GIT_ARC_PROPOSAL_COMMANDS,
   rescind,
   restore,
 ] as const;

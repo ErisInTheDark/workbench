@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, card, scope, lifecycle, planning drift, receipts.
  * Exports:
  * - default ThreadGitArcItem: render one compact dedicated Git arc lifecycle card with claims, operation details, and failures. Keywords: thread, git, arc, card, lifecycle.
  */
@@ -21,6 +22,8 @@ import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
 
 const ACTION_LABELS = {
+  claims: { completed: "Updated claims", failed: "Failed to update claims", inProgress: "Updating claims", timedOut: "Timed out updating claims" },
+  scope: { completed: "Read scope", failed: "Failed to read scope", inProgress: "Reading scope", timedOut: "Timed out reading scope" },
   add: { completed: "Extended", failed: "Failed to extend", inProgress: "Extending", timedOut: "Timed out extending" },
   adopt: { completed: "Adopted workspace changes", failed: "Failed to adopt workspace changes", inProgress: "Adopting workspace changes", timedOut: "Timed out adopting workspace changes" },
   compare: { completed: "Compared", failed: "Failed to compare", inProgress: "Comparing", timedOut: "Timed out comparing" },
@@ -54,6 +57,8 @@ function failureAction(action: GitArcCommandAction): GitArcFailureAction {
   const actions: Record<GitArcCommandAction, GitArcFailureAction> = {
     add: "arcAdd",
     adopt: "arcAdopt",
+    claims: "arcClaims",
+    scope: "arcScope",
     compare: "compare",
     continue: "arcContinue",
     diff: "diff",
@@ -151,6 +156,12 @@ export default function ThreadGitArcItem({
   const ref = receipt?.ref ?? commandIntent.ref;
   const memberRefs = receipt?.memberRefs ?? [];
   const claimedPaths = receipt?.claimedPaths ?? [];
+  const fullInventory = receipt?.fullScope === true;
+  const inventory = fullInventory ? [
+    { label: "Planned", marker: "planned" as const, paths: receipt.plannedPaths ?? [] },
+    { label: "Claimed", marker: "claimed" as const, paths: claimedPaths },
+    { label: "Adopted", marker: "claimed" as const, paths: receipt.adoptedPaths ?? [] },
+  ] : [];
   const selectedPaths = receipt?.selectedPaths ?? commandIntent.paths;
   const ordinarySelectedPaths = selectedPaths.filter((candidate) => !adoptPathSet.has(candidate));
   const labels = movePreview
@@ -235,7 +246,7 @@ export default function ThreadGitArcItem({
     || commandIntent.action === "planRemove"
     ? "planned"
     : "claimed";
-  const showNestedClaims = commandIntent.action !== "plan" && commandIntent.action !== "planStart" && claimedPaths.length > 0;
+  const showNestedClaims = receipt?.fullScope === undefined && commandIntent.action !== "plan" && commandIntent.action !== "planStart" && claimedPaths.length > 0;
 
   return (
     <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-2.5 py-1.5" data-thread-git-arc-card={commandIntent.action}>
@@ -259,6 +270,9 @@ export default function ThreadGitArcItem({
             ) : null}
             {ref ? <span className="font-mono text-[0.86em] text-muted">{ref.slice(0, 8)}</span> : null}
             {memberRefs.length > 1 ? <span className="text-[0.86em] text-muted">{memberRefs.length} roots</span> : null}
+            {receipt?.phase ? <span>{receipt.phase}</span> : null}
+            {receipt?.claimedPathCount !== undefined ? <span>{receipt.claimedPathCount} claimed</span> : null}
+            {receipt?.unchanged ? <span>unchanged</span> : null}
             {durationMs !== null ? durationPresentation === "waited" ? (
               <span className="text-muted" data-thread-git-arc-duration="waited">
                 (waited <ThreadDurationText className="inline" durationMs={durationMs} />)
@@ -287,7 +301,35 @@ export default function ThreadGitArcItem({
             ))}
           </div>
         ) : null}
-        {primaryPaths.length ? (
+        {inventory.filter((entry) => entry.paths.length).map((entry) => (
+          <ThreadClaimedFileList
+            key={entry.label}
+            label={entry.label}
+            marker={entry.marker}
+            paths={entry.paths}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            workspaceRoots={workspaceRoots}
+          />
+        ))}
+        {receipt?.acceptedProposals?.map((accepted) => (
+          <div key={`${accepted.proposalId}:${accepted.commitSha}`}>Accepted {accepted.proposalId} at {accepted.commitSha}</div>
+        ))}
+        {receipt?.planningDrift?.map((drift) => (
+          <div key={drift.previousRef}>
+            <div>Changed since previous plan {drift.previousRef}. Baselines refreshed.</div>
+            <ThreadClaimedFileList
+              label="Changed since planning"
+              paths={drift.paths}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
+              projectRootPath={projectRootPath}
+              workspaceRoots={workspaceRoots}
+            />
+          </div>
+        ))}
+        {!fullInventory && primaryPaths.length ? (
           <ThreadClaimedFileList
             label={primaryPathLabel}
             marker={primaryPathMarker}
@@ -299,7 +341,7 @@ export default function ThreadGitArcItem({
             workspaceRoots={workspaceRoots}
           />
         ) : null}
-        {adoptPaths.length && !ignoredFailure ? (
+        {!fullInventory && adoptPaths.length && !ignoredFailure ? (
           <ThreadClaimedFileList
             label={state === "failed" ? "Failed to adopt" : state === "timedOut" ? "Timed out adopting" : state === "inProgress" ? "Adopting" : commandIntent.action === "planStart" ? "Adopted and claimed" : "Adopted into plan"}
             marker={commandIntent.action === "plan" ? "planned" : "claimed"}

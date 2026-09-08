@@ -1,4 +1,5 @@
 /*
+ * Keywords: CLI, commands, help, migration, parsing.
  * Exports:
  * - WorkbenchAgentCliRequest/WorkbenchAgentCliResponseKind/WorkbenchAgentCliParseResult: compatibility names for normalized CLI request and parse contracts. Keywords: workbench, cli, request, parse.
  * - WorkbenchAgentCliCommandDescriptor/listWorkbenchAgentCliCommandDescriptors: expose immutable canonical command metadata. Keywords: workbench, cli, metadata, tools.
@@ -44,33 +45,24 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "wb git checkpoint commands have been replaced by the named plan and arc workflow.",
   "",
   "Use these commands:",
-  "1. In Brief mode, create one inactive clean plan: wb git arc plan -m <short-intent> [-m <optional-description>] -- <path> [<path>...]",
-  "2. After approval, activate and inspect it without creating another ref: wb git arc start --ref <plan-ref>",
-  "3. Wait for sibling claims blocking an inactive plan: wb git arc wait [--ref <plan-ref>]",
-  "4. Active mutation commands resolve this thread's registered arc. Do not pass --ref to add, adopt, remove, or propose.",
-  "5. Before a later pass on the same files, continue from the remembered ref: wb git arc continue --ref <current-ref>",
-  "6. Continue while adding genuinely new clean paths: wb git arc add -- <additional-path> [<additional-path>...]",
-  "7. Adopt existing dirty workspace paths: wb git arc adopt -- <dirty-path> [<dirty-path>...]",
-  "8. Move paths and claim both sides: wb git arc mv <source>... <destination> / wb git arc mv --map <source> <destination> [...].",
-  "9. Preview up to 200 regex moves, then repeat with --confirm: wb git arc mv --regex <pattern> --replace <replacement> -- <root> [...].",
-  "10. Relinquish exact clean claims: wb git arc remove -- <claimed-path> [<claimed-path>...]",
-  "11. Release every clean claim without changing files: wb git arc release. Use --disown only to release dirty ownership explicitly.",
-  "12. Record successors returned by add, adopt, mv, remove, or continue for later continuation. Final clean removal releases the arc without an active successor.",
-  "13. Summarize or inspect an arc or proposal: wb git arc compare [--ref <arc-sha|proposal-id>] [-- <path> [<path>...]] / wb git arc diff [--ref <arc-sha|proposal-id>] [--page <page>] [-- <path> [<path>...]]",
-  "14. Propose a normal commit: wb git arc propose [--root <root-id>] --title <fresh-title> [--description <optional-description>] [-- <claimed-path> [<claimed-path>...]]",
-  "15. Propose title and description changes to an exact accepted commit without an active arc: wb git arc propose --amend <proposal-id> --title <replacement-title> [--description <replacement-description>]",
-  "16. Amend current unpushed HEAD content from the active arc: wb git arc propose --amend [--title <replacement-title>] [--description <replacement-description>] --fresh-title <fresh-title> [--fresh-description <fresh-description>] -- <claimed-path> [...]",
-  "17. Use the same arc continue command after a proposal is committed and before follow-up work.",
-  "18. Restore selected paths: wb git arc restore --ref <ref> -- <path> [<path>...]",
-  "19. Restore the full arc only after explicit user direction: wb git arc restore --ref <ref> --confirm",
+  "Plan: wb git plan claims -m <intent> -- <path>...",
+  "Revise scope: wb git plan claims --inherit -- <add-path> -<remove-path> '*<adopt-path>'",
+  "Activate approved scope: wb git arc start. Wait for sibling collisions: wb git arc wait.",
+  "Edit active scope: wb git arc claims --inherit -- <add-path> -<remove-path> '*<adopt-path>'. Continuation checks are included.",
+  "Resume unchanged scope: wb git arc continue. Recover inventory only when needed: wb git arc scope.",
+  "Inspect: wb git arc compare / wb git arc diff. Explicit paths return a complete unpaged diff.",
+  "Propose: wb git arc propose --title <title>. Replace pending proposals with --replace <id>.",
+  "Content amend: wb git arc propose --amend [<proposal-id>] --fresh-title <title>.",
+  "Message-only proposal: wb git arc reword --proposal <id> --title <title>.",
+  "Move approved paths: wb git arc mv. Release clean claims: wb git arc release.",
+  "Restore selected paths: wb git arc restore --ref <ref> -- <path>...",
+  "Full restore requires explicit user direction and --confirm. Dirty release requires explicit --disown.",
   "",
-  "Plan and arc add paths must be clean against HEAD. Arc adopt is only for paths that already contain workspace changes.",
-  "If Review finds more work while a proposal is pending, arc continue retires that stale proposal and continues the active arc. Use arc add only when that pass also claims new clean paths.",
-  "Starting checks sibling claim collisions. Active claims prevent thread settlement until they are committed, cleanly unclaimed, or explicitly restored.",
-  "A partial commit advances the baseline and keeps the full active set claimed. Use arc remove to release clean paths intentionally. Arc continue returns that successor instead of creating another baseline.",
-  "If Workbench rejects a claim or continuation, stop and inspect the reported owner or drift. Do not clean or restore paths automatically.",
-  "Omit explicit compare, diff, or proposal paths to use the arc's claimed set. Proposal subsets must stay inside that set.",
-  "In a multi-root workspace, qualify CLI paths as <root-id>:<path>. Create one logical arc across roots and propose each root as a separate commit. Typed MCP callers should use roots and refs instead.",
+  "Planning refreshes baselines and reports drift against the previous plan. Inspect that drift before briefing.",
+  "Adoption is only for intentional dirty unclaimed work. Never overwrite sibling work to clear a collision.",
+  "Resolved continuation acquires nothing. Approved follow-up needs explicit new scope.",
+  "Ordinary operations use the caller's lifecycle. Explicit refs select historical inspection or restoration.",
+  "Qualify multi-root CLI paths as <root-id>:<path>; MCP uses root-qualified arrays. Propose each root separately.",
   "",
 ].join("\n");
 
@@ -94,8 +86,8 @@ const ROOT_HELP_COMMAND_ORDER = [
   "stats claims",
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop", "subagent message",
   "thread title", "thread title get", "thread recall", "thread recall search", "thread recall expand",
-  "git add", "git unstage", "git commit", "git arc plan", "git arc start", "git arc wait", "git arc continue", "git arc add",
-  "git arc mv", "git arc remove", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc restore",
+  "git add", "git unstage", "git commit", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
+  "git arc scope", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
   "browse run", "browse raw", "browse sessions", "browse stop", "browse forget",
 ] as const;
 
@@ -160,7 +152,8 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "git", usage: "wb git <command> [options]", words: ["git"],
   },
   {
-    commandOrder: ["git arc plan", "git arc start", "git arc wait", "git arc continue", "git arc add", "git arc mv", "git arc remove", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc restore"],
+    aliases: [["git", "plan"]],
+    commandOrder: ["git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims", "git arc scope", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore"],
     footer: [
       "Pass paths after -- to restore only those files or directories from the arc snapshot.",
       "Use --confirm without paths only when the user explicitly requested a full arc restore.",
@@ -274,7 +267,7 @@ export async function parseWorkbenchAgentCliCommand(
   const commands = listWorkbenchAgentCommands(reloadCatalog, "cli").filter((command) => (
     !command.managedThreadRootOnly || callerThreadId === null || isWorkbenchRoot
   ));
-  const isLegacyCheckpointCommand = (argv[0] === "git" && argv[1] === "checkpoint") || argv[0] === "checkpoint" || (argv[0] === "git" && argv[1] === "plan");
+  const isLegacyCheckpointCommand = (argv[0] === "git" && argv[1] === "checkpoint") || argv[0] === "checkpoint";
   if (isLegacyCheckpointCommand) return { help: LEGACY_CHECKPOINT_MIGRATION_GUIDE, kind: "help" };
   const workbenchArgs = argsBeforeTrailingSeparator(argv);
   if (!argv.length || workbenchArgs.includes("--help") || argv[0] === "help") {
@@ -284,7 +277,11 @@ export async function parseWorkbenchAgentCliCommand(
   const matched = commands.flatMap((definition) => (
     [definition.words, ...(definition.aliases ?? [])].map((words) => ({ definition, words }))
   )).filter((candidate) => matchesWords(argv, candidate.words)).sort((left, right) => right.words.length - left.words.length)[0];
-  if (!matched) return { error: `Unsupported wb command: ${argv.join(" ")}\n\n${renderRootHelp(commands)}`, kind: "error" };
+  if (!matched) {
+    const group = matchHelpGroup(workbenchArgs);
+    const help = group ? `wb ${group.words.join(" ")} --help` : "wb --help";
+    return { error: `Unsupported wb command: ${workbenchArgs.join(" ")}\nRun ${help} for available commands.`, kind: "error" };
+  }
   try {
     return {
       kind: "request",

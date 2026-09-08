@@ -1,4 +1,5 @@
 /*
+ * Keywords: transcript, git, commands, intent, compatibility, diff.
  * Exports:
  * - GIT_CHECKPOINT_COMMAND_MATCHERS: distinct command summaries for named arc plan and lifecycle operations. Keywords: thread, command, matcher, git arc.
  * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect specialized arc renderers. Keywords: git, arc, matcher, renderer.
@@ -12,10 +13,12 @@
 import type { FileUpdateChange } from "workbench-shared/codex/generated/app-server/v2/FileUpdateChange";
 import {
   parseGitArcReceipt,
+  readGitArcValue,
   type GitArcAction,
 } from "workbench-shared/workbench/git/git-arc-receipts";
 import { GIT_ARC_DIFF_TRAILER_PREFIX } from "workbench-shared/workbench/git/git-arc-diff-pages";
 import { parseGitArcMoveArguments, type GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
+import { parseGitClaimArguments } from "workbench-shared/workbench/git/git-claim-arguments";
 import { parseUnifiedDiffFileChanges } from "workbench-shared/workbench/thread/unified-diff";
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
@@ -28,6 +31,8 @@ export type GitArcCommandAction = GitArcAction | "planAdd" | "planAdopt" | "plan
 const ARC_MATCHER_IDS = {
   add: "git-arc.add",
   adopt: "git-arc.adopt",
+  claims: "git-arc.claims",
+  scope: "git-arc.scope",
   compare: "git-arc.compare",
   continue: "git-arc.continue",
   diff: "git-arc.diff",
@@ -61,6 +66,7 @@ export interface GitCheckpointCommitCommandIntent {
 export interface GitArcCommandIntent {
   action: GitArcCommandAction;
   adoptPaths?: string[];
+  removePaths?: string[];
   disown?: boolean;
   intentName: string | null;
   move?: GitArcMoveArguments;
@@ -88,6 +94,11 @@ function createMatcher({
 }
 
 export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
+  createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+plan\s+claims(?:\s|$)/iu, id: ARC_MATCHER_IDS.plan, presentationName: "git_plan_claims" }),
+  createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+plan\s+start(?:\s|$)/iu, id: ARC_MATCHER_IDS.planStart, presentationName: "git_plan_start" }),
+  createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+claims(?:\s|$)/iu, id: ARC_MATCHER_IDS.claims, presentationName: "git_arc_claims" }),
+  createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+scope(?:\s|$)/iu, id: ARC_MATCHER_IDS.scope, presentationName: "git_arc_scope" }),
+  createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+reword(?:\s|$)/iu, id: ARC_MATCHER_IDS.propose, presentationName: "git_arc_reword" }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+add(?:\s|$)/iu,
     id: "git-arc.plan-add",
@@ -216,6 +227,19 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   const tokens = tokenizeCommand(String(command ?? "").trim());
   if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "")) return null;
   let cursor = tokens[1] === "git" ? 2 : 1;
+  const planning = tokens[cursor] === "plan";
+  if ((planning && ["claims", "start"].includes(tokens[cursor + 1] ?? "")) || (tokens[cursor] === "arc" && tokens[cursor + 1] === "claims")) {
+    try {
+      const claims = parseGitClaimArguments(tokens.slice(cursor + 2), planning);
+      return {
+        action: planning ? tokens[cursor + 1] === "start" ? "planStart" : "plan" : "claims",
+        paths: claims.addPaths, removePaths: claims.removePaths, adoptPaths: claims.adoptPaths,
+        intentName: claims.intentName ?? null, ref: null,
+      };
+    } catch {
+      return null;
+    }
+  }
   if (tokens[cursor] !== "arc") return null;
   const rootAction = tokens[cursor + 1];
   const nestedPlanAction = rootAction === "plan"
@@ -283,8 +307,7 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
       : null;
   }
   if (proposalId) return null;
-  const refRequired = action === "continue" || action === "restore";
-  if (refRequired !== Boolean(ref)) return null;
+  if (action === "restore" && !ref) return null;
   return { action, ...(action === "release" ? { disown } : {}), intentName: null, paths, ref };
 }
 
@@ -292,17 +315,23 @@ export function parseGitCheckpointCompareOutput(output: string) {
   return String(output ?? "").split(/\r?\n/u).flatMap((line) => {
     const match = CHECKPOINT_COMPARE_LINE_PATTERN.exec(line);
     if (!match) return [];
+    let path: string;
+    try {
+      path = readGitArcValue(match[4]!);
+    } catch {
+      return [];
+    }
     return [{
       additions: Number(match[2]),
       deletions: Number(match[3]),
-      path: match[4],
+      path,
       status: match[1] as "A" | "D" | "M" | "U",
     }];
   });
 }
 
 export function parseGitCheckpointProposalId(output: string) {
-  return CHECKPOINT_PROPOSAL_PATTERN.exec(String(output ?? ""))?.[1] ?? null;
+  return parseGitArcReceipt(output)?.proposalId ?? CHECKPOINT_PROPOSAL_PATTERN.exec(String(output ?? ""))?.[1] ?? null;
 }
 
 export function parseGitCheckpointCommitCommand(command: string): GitCheckpointCommitCommandIntent | null {
@@ -311,7 +340,8 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
   if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "")) return null;
   let cursor = 1;
   if (tokens[cursor] === "git") cursor += 1;
-  if (tokens[cursor] !== "arc" || tokens[cursor + 1] !== "propose") return null;
+  if (tokens[cursor] !== "arc" || !["propose", "reword"].includes(tokens[cursor + 1] ?? "")) return null;
+  const reword = tokens[cursor + 1] === "reword";
   cursor += 2;
 
   let amend = false;
@@ -336,6 +366,12 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
       continue;
     }
     const value = tokens[cursor + 1];
+    if (reword && flag === "--proposal") {
+      if (replacementProposalId || !value) return null;
+      replacementProposalId = value;
+      cursor += 1;
+      continue;
+    }
     if (flag === "--replace") {
       if (replacementProposalId || !value) return null;
       replacementProposalId = value;
