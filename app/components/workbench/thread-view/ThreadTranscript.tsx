@@ -1,10 +1,11 @@
 /*
+ * Keywords: transcript, history, pagination, sentinel.
  * Exports:
  * - default ThreadTranscript: render the normal settled thread history while preserving one external pagination lifecycle. Keywords: transcript, thread, history, pagination.
  */
 "use client";
 
-import { useMemo, type RefObject } from "react";
+import { useMemo, type Ref } from "react";
 
 import type {
   ThreadPayload,
@@ -68,7 +69,7 @@ export default function ThreadTranscript({
   hideTerminalReasoning: boolean;
   hideWorkbenchControlAgentMessages: boolean;
   hideWorkbenchControlUserMessages: boolean;
-  historySentinelRef: RefObject<HTMLDivElement | null>;
+  historySentinelRef: Ref<HTMLDivElement>;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills: WorkbenchSkillSummary[];
   onRetryPreviousTurn: () => void;

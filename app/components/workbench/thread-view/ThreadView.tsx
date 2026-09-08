@@ -71,6 +71,7 @@ import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { useWorkbenchThread, useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import previousTurnLoadReducer from "./previous-turn-load-state";
+import { ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 import projectThreadRenderTurns from "./thread-render-turns";
 import getThreadGitArcProposalIntents from "./thread-git-arc-proposal-intents";
 import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
@@ -595,7 +596,7 @@ export default memo(function ThreadView ({
   }, [clientStateController, isLiveActivityOpen]);
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
-  const historySentinelRef = useRef<HTMLDivElement>(null);
+  const [historySentinel, setHistorySentinel] = useState<HTMLDivElement | null>(null);
   const triggeredHistoryBoundaryRef = useRef<string | null>(null);
   const pendingPreviousTurnScrollRestoreRef = useRef<PendingPreviousTurnScrollRestore | null>(null);
   const codeBlockCopyResetTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map());
@@ -968,7 +969,7 @@ export default memo(function ThreadView ({
   }, [loadSubthread, pollingThreadId, subagents, thread.harness]);
 
   useEffect(() => {
-    const sentinel = historySentinelRef.current;
+    const sentinel = historySentinel;
     const scrollTarget = scrollViewportRef.current;
     if (!sentinel || !scrollTarget || !canLoadPreviousTurn || !previousTurnLoadKey || previousTurnLoadStatus) {
       return;
@@ -998,7 +999,7 @@ export default memo(function ThreadView ({
     return () => {
       observer.disconnect();
     };
-  }, [canLoadPreviousTurn, loadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus, scrollViewportRef]);
+  }, [canLoadPreviousTurn, historySentinel, loadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus, scrollViewportRef]);
 
   useLayoutEffect(() => {
     const pendingRestore = pendingPreviousTurnScrollRestoreRef.current;
@@ -1477,13 +1478,23 @@ export default memo(function ThreadView ({
         ) : null}
 
         <div hidden={isDraftThreadView}>
+          {activeThread && transcriptMode !== "json" && renderActiveThread && previousTurnEntry ? (
+            previousTurnLoadStatus === "loading" ? (
+              <ThreadTurnLoadingSkeleton entry={previousTurnEntry} isLoading />
+            ) : previousTurnLoadStatus === "failed" ? (
+              <ThreadTurnLoadFailure
+                entry={previousTurnEntry}
+                onRetry={() => void loadPreviousTurn({ retry: true })}
+              />
+            ) : null
+          ) : null}
           {activeThread ? (
             transcriptMode !== "json" && renderActiveThread ? (
               activeTranscriptProjection ? (
                 transcriptMode === "compare" ? (
                   <>
                     {canLoadPreviousTurn ? (
-                      <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
+                      <div ref={setHistorySentinel} className="h-px" aria-hidden="true" />
                     ) : null}
                     <ThreadTranscriptComparison
                       hiddenReasoningStep={liveActivity?.kind === "reasoning" ? liveActivity.hiddenStep : null}
@@ -1505,7 +1516,7 @@ export default memo(function ThreadView ({
                   <ThreadTranscriptProjection
                     canLoadPreviousTurn={canLoadPreviousTurn}
                     hiddenReasoningStep={liveActivity?.kind === "reasoning" ? liveActivity.hiddenStep : null}
-                    historySentinelRef={historySentinelRef}
+                    historySentinelRef={setHistorySentinel}
                     inlineMentionSources={inlineMentionSources}
                     knownSkills={workbenchSkills}
                     projectFilePaths={projectFilePaths}
@@ -1542,7 +1553,7 @@ export default memo(function ThreadView ({
                 hideTerminalReasoning={activeGitArcSelection?.lifecycle.kind === "completed"}
                 hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
                 hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
-                historySentinelRef={historySentinelRef}
+                historySentinelRef={setHistorySentinel}
                 inlineMentionSources={inlineMentionSources}
                 knownSkills={workbenchSkills}
                 onRetryPreviousTurn={() => void loadPreviousTurn({ retry: true })}

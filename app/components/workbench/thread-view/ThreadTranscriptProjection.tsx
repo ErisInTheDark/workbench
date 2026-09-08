@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { Fragment, useMemo, type RefObject } from "react";
+import { Fragment, useMemo, type Ref } from "react";
 
 import type {
   ThreadPayload,
@@ -69,7 +69,7 @@ export default function ThreadTranscriptProjection({
 }: {
   canLoadPreviousTurn: boolean;
   hiddenReasoningStep?: ThreadReasoningStepReference | null;
-  historySentinelRef: RefObject<HTMLDivElement | null>;
+  historySentinelRef: Ref<HTMLDivElement>;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills: WorkbenchSkillSummary[];
   projectFilePaths: readonly string[];
@@ -91,18 +91,15 @@ export default function ThreadTranscriptProjection({
     [projection.display.segments],
   );
 
-  if (!renderSegments.length) {
-    return (
-      <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4 text-[0.92em] leading-[1.6] text-muted">
-        No turns were returned for this thread yet.
-      </p>
-    );
-  }
-
   return (
     <>
       {canLoadPreviousTurn ? (
         <div ref={historySentinelRef} className="h-px" aria-hidden="true" />
+      ) : null}
+      {!renderSegments.length ? (
+        <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4 text-[0.92em] leading-[1.6] text-muted">
+          No turns were returned for this thread yet.
+        </p>
       ) : null}
       {renderSegments.map((segment) => {
         const turn = turnsById.get(segment.turnId);
