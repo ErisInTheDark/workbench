@@ -29,6 +29,7 @@ import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/
 import type { CoreSchemaRows } from "workbench-shared/workbench/database/schema/core-schema";
 import type { EvidenceSchemaRows } from "workbench-shared/workbench/database/schema/evidence-schema";
 import type { WorkbenchCumulativeTokenUsage } from "workbench-shared/workbench/stats/workbench-stats-usage";
+import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 export type {
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptSnapshot,
@@ -107,6 +108,12 @@ export type WorkbenchTranscriptAtomicObservation =
     serviceTier: string | null;
     threadId: string;
     turnId: string;
+  }
+  | {
+    kind: "threadContextUsage";
+    threadId: string;
+    snapshot: ThreadContextUsageSnapshot;
+    initialise: boolean;
   }
   | {
     kind: "turnTokenUsage";

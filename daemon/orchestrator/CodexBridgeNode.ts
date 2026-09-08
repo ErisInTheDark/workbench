@@ -176,6 +176,11 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
       },
       prepareTurnStart,
       questionnaires,
+      readSqliteContextUsage: (threadId) => build.get("database").readThreadContextUsage(
+        build.get("threadIdentity").workbenchIdForNative(
+          build.get("threadIdentity").knownNativeBinding("codex", threadId),
+        ),
+      ),
       readSqliteTranscriptMaterializedTurnIds: (threadId, turnIds) => (
         transcript.readMaterializedTurnIds(threadId, turnIds)
       ),
@@ -221,7 +226,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge"],
-  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "harnesses", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptShadowLog", "turnRecovery"],
+  requires: ["codexAppServer", "codexHealth", "codexInstructions", "codexMcpGeneration", "codexSandboxNetwork", "database", "harnesses", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptShadowLog", "turnRecovery"],
   safeAll: true,
   scope: "server:codex",
   sources: [

@@ -1,4 +1,5 @@
 /*
+ * Keywords: thread, context, last-reported usage, compact.
  * Exports:
  * - default ThreadContextStatus: render context-window usage and Codex compact action beside composer quota stats. Keywords: thread, context, compact, usage.
  */
@@ -6,33 +7,8 @@
 
 import { useState } from "react";
 
-import type { ThreadTokenUsage } from "workbench-shared/codex/generated/app-server/v2/ThreadTokenUsage";
 import type { ThreadPayload } from "workbench-shared/types";
 import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
-
-const visibleTokenUsageByThreadKey = new Map<string, ThreadTokenUsage>();
-
-function getThreadKey(thread: ThreadPayload) {
-  return `${thread.harness}:${thread.id}`;
-}
-
-function resolveVisibleTokenUsage(thread: ThreadPayload) {
-  const threadKey = getThreadKey(thread);
-  if (thread.tokenUsage) {
-    visibleTokenUsageByThreadKey.set(threadKey, thread.tokenUsage);
-    return thread.tokenUsage;
-  }
-
-  const cachedTokenUsage = visibleTokenUsageByThreadKey.get(threadKey);
-  if (cachedTokenUsage) {
-    visibleTokenUsageByThreadKey.set(threadKey, cachedTokenUsage);
-  }
-  return cachedTokenUsage ?? null;
-}
-
-function clearVisibleTokenUsage(thread: ThreadPayload) {
-  visibleTokenUsageByThreadKey.delete(getThreadKey(thread));
-}
 
 function formatTokenCount (value: number) {
   return new Intl.NumberFormat([], {
@@ -57,7 +33,7 @@ function formatContextStatusTitle ({
     return "Context window usage unavailable";
   }
 
-  return `${formatTokenCount(remainingTokens)} context tokens left of ${formatTokenCount(contextWindow)}. ${formatTokenCount(contextTokens)} used.`;
+  return `Last reported context usage: ${formatTokenCount(remainingTokens)} tokens left of ${formatTokenCount(contextWindow)}. ${formatTokenCount(contextTokens)} used.`;
 }
 
 function isThreadActive (thread: ThreadPayload) {
@@ -82,7 +58,8 @@ export default function ThreadContextStatus ({
 }) {
   const [isCompacting, setIsCompacting] = useState(false);
   const [error, setError] = useState("");
-  const tokenUsage = resolveVisibleTokenUsage(thread);
+  if (thread.isDraft) return null;
+  const tokenUsage = thread.tokenUsage;
   const contextTokens = tokenUsage?.last.inputTokens ?? null;
   const contextWindow = tokenUsage?.modelContextWindow ?? null;
   const remainingTokens = contextTokens !== null && contextWindow !== null
@@ -130,7 +107,6 @@ export default function ThreadContextStatus ({
               }
 
               setError("");
-              clearVisibleTokenUsage(thread);
               setIsCompacting(true);
               void onCompactThread(thread)
                 .catch((compactError) => {

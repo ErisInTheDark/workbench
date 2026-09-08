@@ -24,6 +24,8 @@ import type { RequestPermissionProfile } from "workbench-shared/codex/generated/
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
+import { readCodexContextUsage, recoverCodexContextUsage } from "./codex-thread-context-usage";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import type { ThreadResumeResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeResponse";
 import { getCurrentInProgressTurn, isThreadStatusActive } from "workbench-shared/codex/thread-state";
@@ -188,6 +190,7 @@ export type CodexStdioBridgeOptions = {
     threadId: string,
     turnIds: readonly string[],
   ) => Promise<readonly string[]>;
+  readSqliteContextUsage?: (threadId: string) => Promise<ThreadContextUsageSnapshot | null>;
   restartingAppServer?: boolean;
   resolveProjectFromCwd: typeof resolveAgentEndpointProjectFromCwd;
   sendToClient: (client: BridgeClient, message: unknown) => void;
@@ -934,6 +937,7 @@ export default class CodexStdioBridge {
   private readonly sendToClient: CodexStdioBridgeOptions["sendToClient"];
   private readonly storageRoot: string;
   private readonly threadPageReads = new CodexThreadPageReadController();
+  private readonly readSqliteContextUsage: CodexStdioBridgeOptions["readSqliteContextUsage"];
   private readonly threadWindowLoader: CodexThreadWindowLoader;
   private threadPageReadsPreparedForReload = false;
   private transcriptStore: CodexTranscriptStoreInstance | null = null;
@@ -969,7 +973,7 @@ export default class CodexStdioBridge {
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onInitialized = () => undefined, onNotification, prepareThreadConfiguration, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
+  constructor({ appServer, bridgeUrl, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, onAcceptedTurnSteer = (threadId) => { getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId); }, onInitialized = () => undefined, onNotification, prepareThreadConfiguration, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, sendToClient, storageRoot, transcriptShadowLog }: CodexStdioBridgeOptions) {
     this.appServer = appServer;
     this.bridgeUrl = bridgeUrl;
     this.onAcceptedTurnSteer = onAcceptedTurnSteer;
@@ -980,6 +984,7 @@ export default class CodexStdioBridge {
     this.questionnaires = questionnaires;
     this.sqliteTranscriptEnabled = Boolean(recordSqliteTranscript);
     this.readSqliteTranscriptMaterializedTurnIds = readSqliteTranscriptMaterializedTurnIds;
+    this.readSqliteContextUsage = readSqliteContextUsage;
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.handleWorkbenchRequest = handleWorkbenchRequest;
     this.instructions = instructions;
@@ -2940,11 +2945,39 @@ export default class CodexStdioBridge {
       [WORKBENCH_THREAD_CONTEXT_ENTRIES_FIELD]: { mode: "hydratedTurns" },
       [WORKBENCH_THREAD_HYDRATION_FIELD]: hydration,
     });
+    const usage = params.cursor === null && params.readScope !== "subagentBackground"
+      ? await this.readThreadContextUsage(context.thread.id)
+      : undefined;
 
     return {
       ...context,
+      ...(usage ? { tokenUsage: usage.tokenUsage } : {}),
       nextCursor: readWorkbenchThreadPageNextCursor(context.thread),
     };
+  }
+
+  private async readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | undefined> {
+    if (!this.readSqliteContextUsage) return undefined;
+    try {
+      const stored = await this.readSqliteContextUsage(threadId);
+      if (stored) return stored;
+      if (!this.sqliteTranscriptEnabled) return undefined;
+      const evidence = await this.ensureTranscriptStore().readStoredUsageEvidence(threadId);
+      if (evidence && evidence.thread.id !== threadId) throw new Error("Context evidence changed thread owner.");
+      let invalidEvidence = false;
+      const tokenUsage = recoverCodexContextUsage(threadId, evidence?.events ?? [], () => { invalidEvidence = true; });
+      if (invalidEvidence) logError("codex-context-usage", "Ignored malformed or foreign retained context measurements.");
+      await this.captureTranscript("context-usage-initialisation", () => (
+        this.transcriptRecording.importCompatibilityWindow(async () => [{
+          kind: "threadContextUsage", threadId, snapshot: { tokenUsage }, initialise: true,
+        }])
+      ), { requireSqlite: true });
+      // Read back the winner: a live event may have arrived while historical evidence was being read.
+      return await this.readSqliteContextUsage(threadId) ?? undefined;
+    } catch {
+      logError("codex-context-usage", "Unable to restore context usage; thread content remains available.");
+      return undefined;
+    }
   }
 
   private async recordBrowseResultEntry(params: unknown) {
@@ -3571,7 +3604,16 @@ export default class CodexStdioBridge {
     }
     if (notification.method === "thread/tokenUsage/updated") {
       const observation = createCodexTurnTokenUsageObservationFromNotification(notification, Date.now());
-      return observation ? [observation] : [];
+      if (!observation) return [];
+      try {
+        return [observation, {
+          kind: "threadContextUsage", threadId: observation.threadId,
+          snapshot: { tokenUsage: readCodexContextUsage(observation.threadId, notification) }, initialise: false,
+        }];
+      } catch {
+        logError("codex-context-usage", "Rejected malformed context measurement; accounting observation retained.");
+        return [observation];
+      }
     }
     if (!["turn/started", "turn/completed", "item/started", "item/completed"].includes(notification.method ?? "")) {
       return [];

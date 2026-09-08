@@ -1,4 +1,5 @@
 /*
+ * Keywords: orchestrator, registrations, lifecycle, typed ports.
  * Exports:
  * - OrchestratorReloadableModules: helper modules consumed dynamically by persistent provider bridges. Keywords: bridge, module, reload.
  * - OrchestratorProviderNotification: provider event routed into the core node. Keywords: provider, notification, thread state.
@@ -39,6 +40,7 @@ import type {
 } from "./database/stats/WorkbenchStatsImportRepository";
 import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchHarness } from "workbench-shared/types";
+import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 import type {
   WorkbenchThreadStateShadowRefresh,
   WorkbenchThreadStateShadowStatus,
@@ -114,6 +116,7 @@ export interface OrchestratorBrowseExecution {
 }
 
 export interface OrchestratorDatabaseRegistration extends WorkbenchThreadIdentityDatabase, WorkbenchTranscriptIdentityDatabase {
+  readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
   assertReady(): void;
   close(): Promise<void>;
   executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult>;

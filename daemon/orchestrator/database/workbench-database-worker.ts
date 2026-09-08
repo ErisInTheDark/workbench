@@ -211,6 +211,11 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     });
     return;
   }
+  if (request.type === "readThreadContextUsage") {
+    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
+    post({ id: request.id, type: "threadContextUsage", snapshot: transcriptRepository.readContextUsage(request.threadId) });
+    return;
+  }
   if (request.type === "readTranscriptMaterializedTurnIds") {
     if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
     post({

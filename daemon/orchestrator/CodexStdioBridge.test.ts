@@ -1771,6 +1771,55 @@ for (const interruption of ["none", "recorder failure", "cancellation"] as const
   });
 }
 
+test("ordinary page reads restore context without activity and isolate context read failures", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-context-page-"));
+  const usage = {
+    last: { inputTokens: 10, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 12 },
+    total: { inputTokens: 100, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 20, reasoningOutputTokens: 0, totalTokens: 120 },
+    modelContextWindow: 1000,
+  };
+  const requests: string[] = [];
+  let fails = false;
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  bridge = new CodexStdioBridge({
+    appServer: { send(request: JsonRpcRequest) {
+      requests.push(request.method!);
+      const result = request.method === "thread/read"
+        ? { thread: { ...bridgeThread(), status: { type: "idle" }, turns: [] } }
+        : { data: [], nextCursor: null };
+      queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result }));
+    } } as unknown as CodexAppServer,
+    initialState: {
+      upstreamInitialized: true, initializeResult: {}, requestIdAllocator: { next: 100 },
+      pendingResponses: new Map(), pendingUserInputRequests: new Map(),
+    },
+    ...{ readSqliteContextUsage: async () => {
+      if (fails) throw new Error("context read unavailable");
+      return { tokenUsage: usage };
+    } },
+    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {}, resolveProjectFromCwd: async () => null, sendToClient() {}, storageRoot: root,
+  });
+  try {
+    const read = () => bridge.handleBridgeRequest({
+      id: 1, method: "workbench/thread/page/read", params: { threadId: "thread", cursor: null },
+    });
+    const response = await read();
+    assert.equal(response?.error, undefined);
+    assert.deepEqual((response?.result as { tokenUsage?: typeof usage })?.tokenUsage, usage);
+    fails = true;
+    const failedUsage = await read();
+    assert.equal(failedUsage?.error, undefined);
+    assert.equal((failedUsage?.result as { thread: Thread })?.thread.id, "thread");
+    assert.equal((failedUsage?.result as { tokenUsage?: typeof usage })?.tokenUsage, undefined);
+    assert.ok(requests.every((method) => method === "thread/read" || method === "thread/turns/list"));
+  } finally {
+    await bridge.waitForIdle();
+    await bridge.disposeImmediately();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Workbench questionnaires share native listing, response, and transcript history routes", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-owned-questionnaire-"));
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];

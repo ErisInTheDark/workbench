@@ -1730,7 +1730,7 @@ test("live compaction notifications preserve distinct markers and complete one o
   assert.equal(current?.turnHistory[0]?.itemTimeline?.[0]?.completedAt, 300);
 }));
 
-test("status and token owners survive canonical updates, authoritative nulls, and compact clears", async () => withClient(async (client, socket) => {
+test("status and token owners survive canonical updates, authoritative nulls, and compact acknowledgement", async () => withClient(async (client, socket) => {
   const usage = (totalTokens: number) => ({
     last: { cacheWriteInputTokens: 0, cachedInputTokens: 0, inputTokens: totalTokens, outputTokens: 0, reasoningOutputTokens: 0, totalTokens },
     modelContextWindow: 100,
@@ -1766,7 +1766,47 @@ test("status and token owners survive canonical updates, authoritative nulls, an
   assert.equal(client.getSnapshot().currentThread?.tokenUsage?.total.totalTokens, 20);
 
   await client.compactThread(client.getSnapshot().currentThread!);
-  assert.equal(client.getSnapshot().currentThread?.tokenUsage, null);
+  assert.equal(client.getSnapshot().currentThread?.tokenUsage?.total.totalTokens, 20);
+}));
+
+test("opening a thread restores reported context usage without provider activity", async () => withClient(async (client) => {
+  const usage = {
+    last: { cacheWriteInputTokens: 0, cachedInputTokens: 3, inputTokens: 12, outputTokens: 4, reasoningOutputTokens: 0, totalTokens: 16 },
+    modelContextWindow: 100,
+    total: { cacheWriteInputTokens: 0, cachedInputTokens: 30, inputTokens: 120, outputTokens: 40, reasoningOutputTokens: 0, totalTokens: 160 },
+  };
+  FakeWebSocket.intercept = (socket, request) => {
+    if (request.method !== "workbench/thread/page/read") return false;
+    queueMicrotask(() => socket.respond(request.id, {
+      browseResultEntries: [], nextCursor: null, questionnaireEntries: [], steerEntries: [],
+      thread: wireThread("thread", "turn", "completed"), tokenUsage: usage,
+    }));
+    return true;
+  };
+  const thread = await client.readThread("thread", "codex");
+  assert.deepEqual(thread?.tokenUsage, usage);
+}));
+
+test("a live context measurement wins over an older in-flight page response", async () => withClient(async (client) => {
+  client.selectThreadPayload(activeThread());
+  const usage = {
+    last: { cacheWriteInputTokens: 0, cachedInputTokens: 3, inputTokens: 12, outputTokens: 4, reasoningOutputTokens: 0, totalTokens: 16 },
+    modelContextWindow: 100,
+    total: { cacheWriteInputTokens: 0, cachedInputTokens: 30, inputTokens: 120, outputTokens: 40, reasoningOutputTokens: 0, totalTokens: 160 },
+  };
+  FakeWebSocket.intercept = (socket, request) => {
+    if (request.method !== "workbench/thread/page/read") return false;
+    queueMicrotask(() => {
+      socket.notify("thread/tokenUsage/updated", { threadId: "thread", turnId: "turn", tokenUsage: usage });
+      socket.respond(request.id, {
+        browseResultEntries: [], nextCursor: null, questionnaireEntries: [], steerEntries: [],
+        thread: wireThread("thread", "turn"), tokenUsage: { ...usage, modelContextWindow: 50 },
+      });
+    });
+    return true;
+  };
+  await client.readThread("thread", "codex");
+  assert.deepEqual(client.getSnapshot().currentThread?.tokenUsage, usage);
 }));
 
 test("known non-selected and unknown canonical notifications do not retarget or materialize public documents", async () => withClient(async (client, socket) => {

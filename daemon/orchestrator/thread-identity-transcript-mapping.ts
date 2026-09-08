@@ -124,6 +124,7 @@ export function mapNativeTranscriptObservation(
   const mapAtomic = (input: WorkbenchTranscriptAtomicObservation) => mappings[input.kind](input as never);
   const mapCatalog = (input: CatalogObservation) => mappings[input.kind](input as never);
   const mappings: ObservationMappers = {
+    threadContextUsage: (input) => ({ ...input, threadId: threadId(input.threadId) }),
     thread: (input) => ({ ...input, threadId: threadId(input.threadId) }),
     turn: (input) => {
       const id = input.nativeTurnId === null ? input.turnId : turnId(input.threadId, input.nativeTurnId);

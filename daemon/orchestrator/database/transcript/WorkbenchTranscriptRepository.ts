@@ -7,6 +7,7 @@
 import type Database from "better-sqlite3";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
 import WorkbenchTranscriptIdentityRepository from "./WorkbenchTranscriptIdentityRepository.ts";
+import WorkbenchThreadContextUsageRepository from "./WorkbenchThreadContextUsageRepository.ts";
 import { usageTables } from "workbench-shared/workbench/database/schema/usage-schema";
 import { transcriptIdentityTables } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 
@@ -112,11 +113,17 @@ export default class WorkbenchTranscriptRepository {
   readonly #database: Database.Database;
   readonly #identity: WorkbenchThreadIdentityRepository;
   readonly #itemIdentity: WorkbenchTranscriptIdentityRepository;
+  readonly #contextUsage: WorkbenchThreadContextUsageRepository;
 
   constructor(database: Database.Database, identity = new WorkbenchThreadIdentityRepository(database)) {
     this.#database = database;
     this.#identity = identity;
     this.#itemIdentity = new WorkbenchTranscriptIdentityRepository(database);
+    this.#contextUsage = new WorkbenchThreadContextUsageRepository(database);
+  }
+
+  readContextUsage(threadId: string) {
+    return this.#contextUsage.read(threadId);
   }
 
   settle(observations: readonly WorkbenchTranscriptObservation[]): WorkbenchTranscriptSettlement {
@@ -867,6 +874,10 @@ export default class WorkbenchTranscriptRepository {
     insideCanonicalWindow = false,
     canonicalIndex?: CanonicalSettlementIndex,
   ) {
+    if (observation.kind === "threadContextUsage") {
+      this.#contextUsage.write(observation.threadId, observation.snapshot, observation.initialise);
+      return observation.threadId;
+    }
     if (observation.kind === "thread") {
       this.#run(upsertRow(coreTables.workbenchThreads, {
         id: observation.threadId,

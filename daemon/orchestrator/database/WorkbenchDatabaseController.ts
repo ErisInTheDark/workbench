@@ -257,6 +257,15 @@ export default class WorkbenchDatabaseController {
     return response.snapshot;
   }
 
+  async readThreadContextUsage(threadId: string) {
+    await this.start();
+    const response = await this.#request({ type: "readThreadContextUsage", threadId });
+    if (response.type !== "threadContextUsage") {
+      throw new WorkbenchDatabaseFailure(`Unexpected context usage response: ${response.type}`);
+    }
+    return response.snapshot;
+  }
+
   async readTranscriptMaterializedTurnIds(threadId: string, turnIds: readonly string[]) {
     await this.start();
     if (turnIds.length === 0) return [];

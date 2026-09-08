@@ -2,6 +2,7 @@
  * Keywords: database, schema, stats, usage.
  * Exports:
  * - threadTurnUsage: observed model context and cumulative turn counters.
+ * - threadContextUsage: latest reported context measurement, independent of cumulative accounting.
  * - threadUsageModelAttributions: inferred model attribution.
  * - accountRateLimitSamples: dated account quota samples.
  * - accountRateLimitWindows: quota windows belonging to samples.
@@ -112,6 +113,45 @@ const threadTurnUsageHistory = defineTableHistory({
   ],
 });
 export const threadTurnUsage = threadTurnUsageHistory.current;
+
+const threadContextUsageV1 = defineTable("thread_context_usage", {
+  thread_id: text().primaryKey().references("workbench_threads", "id", { onDelete: "CASCADE" }),
+  state: enumText("reported", "unavailable").notNull(),
+  model_context_window: integer().nonNegative(),
+  last_input_tokens: integer().nonNegative(),
+  last_cached_input_tokens: integer().nonNegative(),
+  last_cache_write_input_tokens: integer().nonNegative(),
+  last_output_tokens: integer().nonNegative(),
+  last_reasoning_output_tokens: integer().nonNegative(),
+  last_total_tokens: integer().nonNegative(),
+  total_input_tokens: integer().nonNegative(),
+  total_cached_input_tokens: integer().nonNegative(),
+  total_cache_write_input_tokens: integer().nonNegative(),
+  total_output_tokens: integer().nonNegative(),
+  total_reasoning_output_tokens: integer().nonNegative(),
+  total_tokens: integer().nonNegative(),
+}, (table) => ({
+  constraints: [
+    check(sql`${table.model_context_window} IS NULL OR ${table.model_context_window} > 0`),
+    check(sql`(${table.state} = ${literal("unavailable")}
+      AND ${table.model_context_window} IS NULL AND ${table.last_input_tokens} IS NULL
+      AND ${table.last_cached_input_tokens} IS NULL AND ${table.last_cache_write_input_tokens} IS NULL
+      AND ${table.last_output_tokens} IS NULL AND ${table.last_reasoning_output_tokens} IS NULL
+      AND ${table.last_total_tokens} IS NULL AND ${table.total_input_tokens} IS NULL
+      AND ${table.total_cached_input_tokens} IS NULL AND ${table.total_cache_write_input_tokens} IS NULL
+      AND ${table.total_output_tokens} IS NULL AND ${table.total_reasoning_output_tokens} IS NULL
+      AND ${table.total_tokens} IS NULL)
+      OR (${table.state} = ${literal("reported")} AND ${table.last_input_tokens} IS NOT NULL
+      AND ${table.last_cached_input_tokens} IS NOT NULL AND ${table.last_cache_write_input_tokens} IS NOT NULL
+      AND ${table.last_output_tokens} IS NOT NULL AND ${table.last_reasoning_output_tokens} IS NOT NULL
+      AND ${table.last_total_tokens} IS NOT NULL AND ${table.total_input_tokens} IS NOT NULL
+      AND ${table.total_cached_input_tokens} IS NOT NULL AND ${table.total_cache_write_input_tokens} IS NOT NULL
+      AND ${table.total_output_tokens} IS NOT NULL AND ${table.total_reasoning_output_tokens} IS NOT NULL
+      AND ${table.total_tokens} IS NOT NULL)`),
+  ],
+}));
+const threadContextUsageHistory = initialHistory(threadContextUsageV1, 21);
+export const threadContextUsage = threadContextUsageHistory.current;
 
 const threadUsageModelAttributionsV1 = defineTable("thread_usage_model_attributions", {
   turn_id: text().primaryKey().references("thread_turn_usage", "turn_id", { onDelete: "CASCADE" }),
@@ -275,6 +315,7 @@ const threadUsageImportsHistory = defineTableHistory({
 export const threadUsageImports = threadUsageImportsHistory.current;
 
 export const usageTables = Object.freeze({
+  threadContextUsage,
   accountRateLimitSamples,
   accountRateLimitWindows,
   gitClaimImports,
@@ -288,6 +329,7 @@ export type UsageSchemaRows = {
   [Name in keyof typeof usageTables]: SelectRow<(typeof usageTables)[Name]>;
 };
 export const usageSchemaHistory = defineSubsystemHistory([
+  threadContextUsageHistory,
   threadTurnUsageHistory,
   threadUsageModelAttributionsHistory,
   accountRateLimitSamplesHistory,

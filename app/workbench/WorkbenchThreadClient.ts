@@ -17,6 +17,8 @@ import type { ModelListResponse } from "workbench-shared/codex/generated/app-ser
 import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
 import type { SandboxPolicy } from "workbench-shared/codex/generated/app-server/v2/SandboxPolicy";
 import type { ThreadActiveFlag } from "workbench-shared/codex/generated/app-server/v2/ThreadActiveFlag";
+import { ThreadTokenUsageSchema } from "workbench-shared/workbench/thread/thread-context-usage";
+import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type { ThreadCompactStartResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadCompactStartResponse";
 import type { ThreadGoalClearResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalClearResponse";
 import type { ThreadGoalGetResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadGoalGetResponse";
@@ -1353,7 +1355,7 @@ function WorkbenchThreadClient(
   function projectStableThreadMetadata(thread: ThreadPayload) {
     const record = stablePreferencesByKey.get(getThreadSourceKey(thread));
     if (!record) {
-      return applyStoredThreadTokenUsage(thread);
+      return thread;
     }
 
     const nextThread = {
@@ -1910,14 +1912,6 @@ function WorkbenchThreadClient(
       && areCurrentTurnsEquivalent(left, right);
   }
 
-  function applyStoredThreadTokenUsage(thread: ThreadPayload) {
-    if (thread.tokenUsage) {
-      return thread;
-    }
-
-    return thread;
-  }
-
   function isWorkbenchSyntheticUserMessageItem(item: ThreadItem) {
     return isOptimisticUserMessageItem(item) || isSyntheticSteerHistoryItem(item);
   }
@@ -2408,7 +2402,7 @@ function WorkbenchThreadClient(
     threadId: string,
     harness: WorkbenchHarness,
     options: WorkbenchReadThreadOptions = {},
-  ) {
+  ): Promise<WorkbenchThreadPageResponse> {
     const cwd = options.cwd?.trim();
     const cursor = options.cursor ?? null;
     const shouldResumeManagedCodexThread = harness === "codex"
@@ -2417,7 +2411,7 @@ function WorkbenchThreadClient(
     const selectedAgentPath = state.currentThread?.harness === harness && state.currentThread.id === threadId
       ? state.currentThread.agentPath
       : null;
-    return await sendBridgeRequest<WorkbenchThreadPageResponse>(harness, {
+    const page = await sendBridgeRequest<WorkbenchThreadPageResponse>(harness, {
       method: WORKBENCH_THREAD_PAGE_READ_METHOD,
       ...(shouldResumeManagedCodexThread
         ? {
@@ -2436,6 +2430,13 @@ function WorkbenchThreadClient(
         threadId,
       },
     });
+    const usage = ThreadTokenUsageSchema.nullable().optional().safeParse(page.tokenUsage);
+    if (!usage.success) {
+      reportClientSchemaError("Rejected thread-page context usage", usage.error);
+      const { tokenUsage: _rejectedUsage, ...content } = page;
+      return content;
+    }
+    return { ...page, ...(usage.data !== undefined ? { tokenUsage: usage.data } : {}) };
   }
 
   function upsertPendingUserInputRequest(
@@ -3168,7 +3169,7 @@ function WorkbenchThreadClient(
             : pageResponse.reasoningEffort ?? null,
           nextServiceTier,
           selectedAgentPath,
-          null,
+          pageResponse.tokenUsage ?? null,
           pageResponse.nextCursor,
         ),
       };
@@ -3245,7 +3246,7 @@ function WorkbenchThreadClient(
           nextReasoningEffort,
           nextServiceTier,
           selectedAgentPath,
-          null,
+          pageResponse.tokenUsage ?? null,
           pageResponse.nextCursor,
         ),
       };
@@ -5699,23 +5700,12 @@ function WorkbenchThreadClient(
     }
 
     messageAdmissionIntentRevision += 1;
-    const projectIdentity = captureProjectOperationIdentity();
     await sendBridgeRequest<ThreadCompactStartResponse>(thread.harness, {
       method: "thread/compact/start",
       params: {
         threadId: thread.id,
       },
     });
-    if (!isProjectOperationIdentityCurrent(projectIdentity)) {
-      return thread;
-    }
-    if (state.currentThread?.id === thread.id && state.currentThread.harness === thread.harness) {
-      updateStablePreferenceSource(state.currentThread, (record) => {
-        record.tokenUsage = null;
-      });
-      updateCurrentThreadFields({ tokenUsage: null });
-    }
-
     return thread;
   }
 

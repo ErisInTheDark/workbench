@@ -1,4 +1,5 @@
 /*
+ * Keywords: database, worker, requests, responses, context usage.
  * WorkbenchDatabaseControllerState: complete database-controller lifecycle state. Keywords: database, worker, lifecycle.
  * WorkbenchDatabaseRequestPayload: typed request payloads admitted by the database worker. Keywords: database, worker, protocol.
  * WorkbenchDatabaseRequest: correlated requests admitted by the database worker. Keywords: database, worker, protocol.
@@ -10,6 +11,7 @@ import type { WorkbenchStatsImportProgress, WorkbenchStatsReadRequest, Workbench
 import type { WorkbenchStatsDetailedReadRequest, WorkbenchStatsDetailedResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import type { WorkbenchClaimStatsRequest, WorkbenchClaimStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 import type { WorkbenchHarness } from "workbench-shared/types";
+import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 import type {
   WorkbenchNativeThreadIdentity,
   WorkbenchThreadIdentityLookup,
@@ -79,6 +81,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "readThreadStateShadowStatus" }
   | { type: "settleTranscript"; observations: readonly WorkbenchTranscriptObservation[] }
   | { type: "readTranscript"; request: WorkbenchTranscriptReadRequest }
+  | { type: "readThreadContextUsage"; threadId: string }
   | { type: "readTranscriptMaterializedTurnIds"; threadId: string; turnIds: readonly string[] }
   | { type: "replaceSearchProjects"; projects: readonly { id: string; name: string; rootPath: string }[] }
   | { type: "replaceSearchProjectFiles"; projectId: string; paths: readonly string[] }
@@ -114,6 +117,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadStateShadowStatus"; status: WorkbenchThreadStateShadowStatus | null }
   | { id: number; type: "transcriptSettlement"; settlement: WorkbenchTranscriptSettlement }
   | { id: number; type: "transcriptSnapshot"; snapshot: WorkbenchTranscriptSnapshot | null }
+  | { id: number; type: "threadContextUsage"; snapshot: ThreadContextUsageSnapshot | null }
   | { id: number; type: "transcriptMaterializedTurnIds"; turnIds: string[] }
   | { id: number; type: "searchResult"; result: WorkbenchSearchResponse }
   | { id: number; type: "statsResult"; result: WorkbenchStatsResponse }

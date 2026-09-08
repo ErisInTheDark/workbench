@@ -91,6 +91,7 @@ function requestsSubscriptionRefresh(
       case "turnCatalog":
       case "turnUsageContext":
       case "turnTokenUsage":
+      case "threadContextUsage":
         return false;
     }
   });
