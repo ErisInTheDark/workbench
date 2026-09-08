@@ -1318,6 +1318,45 @@ test("provider settlement converts retained bodies before reconciliation without
   }
 });
 
+for (const repeatedSource of [false, true]) {
+  test(`provider repetition preserves one admitted body and its neighbours (same source ${repeatedSource})`, () => {
+    const { database, repository } = createRepository();
+    try {
+      const turn = turnObservation("turn", 0);
+      repository.settle([threadObservation(), turn]);
+      const identities = new WorkbenchTranscriptIdentityRepository(database);
+      const observation = (id: string, text: string): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => ({
+        kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 3,
+        publicItemId: identities.admit({
+          threadId: "thread", sources: [{ turnId: "turn", sourceId: id, kind: getCodexItemIdentityKind({ id }) }],
+          legacyAliases: [],
+        }).itemId,
+        item: withWorkbenchThreadItemIdentity({ id, type: "plan", text }, getCodexItemIdentityKind({ id })),
+      });
+      const before = observation("before", "before");
+      const stored = observation("canonical", "first step");
+      const after = observation("after", "after");
+      repository.settle([before, stored, after]);
+      const originalRows = repository.read({ threadId: "thread", turnLimit: 1 })!.rows.threadItems;
+      const alias = repeatedSource ? stored : observation("item-1", "first step");
+      const updated = observation("canonical", "first step, then second step");
+      const scope = providerTurnScope([turn, before, alias, updated, after], ["turn"]);
+      for (let pass = 0; pass < 2; pass++) {
+        repository.settle([scope]);
+        const snapshot = repository.read({ threadId: "thread", turnLimit: 1 })!;
+        assert.deepEqual(snapshot.rows.threadItems.map(({ id, public_id, item_position }) => ({ id, public_id, item_position })),
+          originalRows.map(({ id, public_id, item_position }) => ({ id, public_id, item_position })));
+        const projection = projectWorkbenchTranscript(snapshot);
+        assert.ok("data" in projection);
+        assert.deepEqual(projection.data.turns[0]!.items.map((item) => item.type === "plan" ? item.text : null),
+          ["before", "first step, then second step", "after"]);
+        assert.equal(identities.resolve({ threadId: "thread", itemId: alias.item.id })?.itemId, stored.publicItemId);
+        assert.deepEqual(database.pragma("foreign_key_check"), []);
+      }
+    } finally { database.close(); }
+  });
+}
+
 for (const residual of [false, true]) {
   for (const aggregateHasBody of [false, true]) {
     test(`reasoning aggregate preserves admitted canonical sources (residual ${residual}, stored aggregate ${aggregateHasBody})`, () => {

@@ -226,6 +226,25 @@ test("repeat reasoning aggregates do not reintroduce content already owned by gr
   }
 });
 
+test("repeated reasoning observations combine richer content under one identity", () => {
+  const started: ThreadItem = { id: "reasoning", type: "reasoning", summary: ["checking"], content: [] };
+  const completed: ThreadItem = { ...started, summary: ["checking the result"], content: ["details"] };
+  const result = reconcileCompleteThreadItems([], [started, completed, started], { mergeDuplicateItems: mergeThreadItem });
+  assert.deepEqual(result.map(({ item }) => item), [completed]);
+});
+
+test("an alias followed by its own richer observation retains one item and all identity evidence", () => {
+  const stored: ThreadItem = { id: "canonical", type: "plan", text: "first step" };
+  const alias = withWorkbenchThreadItemIdentity({ ...stored, id: "alias" }, "provisional");
+  const updated = { ...stored, text: "first step, then second step" };
+  for (const incoming of [[alias, updated], [updated, alias]]) {
+    const result = reconcileCompleteThreadItems([stored], incoming, { mergeDuplicateItems: mergeThreadItem });
+    assert.deepEqual(result.map(({ item }) => item), [updated]);
+    assert.equal(result[0]!.incomingItemId, stored.id);
+    assert.deepEqual(result[0]!.aliases, [alias.id]);
+  }
+});
+
 test("partial reasoning coverage never aliases a snapshot with surviving new content to its earlier item", () => {
   const reconciled = reconcileCompleteThreadItems(
     [{ id: "reasoning", type: "reasoning", summary: ["earlier"], content: [] }],

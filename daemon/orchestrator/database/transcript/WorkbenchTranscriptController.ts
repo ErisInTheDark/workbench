@@ -172,12 +172,6 @@ export default class WorkbenchTranscriptController {
     if (observations.length === 0) return { changedThreadIds: [] };
     await this.#captureGaps.prepareReferences();
     const identity = observationIdentity(observations);
-    if (context.source === "compatibility" && observations.some(({ kind }) => kind !== "usageWindow" && kind !== "turnCatalog")
-      && this.#captureGaps.hasGap(identity.threadId)) {
-      throw new Error(
-        `SQLite transcript compatibility import is disabled for gapped thread ${identity.threadId}.`,
-      );
-    }
     if (context.recoveryBoundary) {
       if (context.source !== "provider") {
         throw new Error("SQLite transcript recovery must use provider-owned observations.");

@@ -21,6 +21,7 @@ import {
 interface NormalizeThreadItemsOptions {
   mergeDuplicateItems?: (existingItem: ThreadItem, incomingItem: ThreadItem) => ThreadItem;
   classifyItem?: (item: ThreadItem) => WorkbenchThreadItemIdentityKind;
+  onRepeatedIdentity?: () => void;
 }
 
 export interface ReconciledCompleteThreadItem {
@@ -323,9 +324,11 @@ function findEquivalentCurrentItem(
   currentItems: readonly ThreadItem[],
   incomingItem: ThreadItem,
   usedCurrentItemIds: ReadonlySet<string>,
+  incomingItemIds: ReadonlySet<string>,
 ) {
   return currentItems.find((currentItem) => {
-    if (usedCurrentItemIds.has(currentItem.id) || currentItem.type !== incomingItem.type) {
+    if ((usedCurrentItemIds.has(currentItem.id) && !incomingItemIds.has(currentItem.id))
+      || currentItem.type !== incomingItem.type) {
       return false;
     }
     if (currentItem.id === incomingItem.id) {
@@ -353,18 +356,22 @@ export function reconcileCompleteThreadItems(
   const current = normalizeThreadItems([...currentItems], options);
   const incoming = normalizeThreadItems([...incomingItems], options);
   const currentById = new Map(current.map((item) => [item.id, item]));
+  const incomingItemIds = new Set(incoming.map(({ id }) => id));
   const usedCurrentItemIds = new Set<string>();
-  const results: ReconciledCompleteThreadItem[] = [];
+  const results = new Map<string, ReconciledCompleteThreadItem>();
   const currentCompactions = current.filter((
     item,
   ): item is Extract<ThreadItem, { type: "contextCompaction" }> => item.type === "contextCompaction");
   let incomingCompactionIndex = 0;
 
   const emit = (item: ThreadItem, incomingItemId: string, aliases: string[] = []) => {
-    results.push({
-      aliases: aliases.filter((alias) => alias !== item.id),
-      incomingItemId,
-      item,
+    const previous = results.get(item.id);
+    if (previous) options.onRepeatedIdentity?.();
+    results.set(item.id, {
+      aliases: [...new Set([...(previous?.aliases ?? []), ...aliases])].filter((alias) => alias !== item.id),
+      // A direct observation owns its body; an aggregate only represents it.
+      incomingItemId: previous && incomingItemId !== item.id ? previous.incomingItemId : incomingItemId,
+      item: previous ? (options.mergeDuplicateItems ?? mergeThreadItem)(item, previous.item) : item,
     });
   };
 
@@ -406,7 +413,7 @@ export function reconcileCompleteThreadItems(
     }
 
     const exactCurrentItem = currentById.get(incomingItem.id);
-    if (exactCurrentItem && !usedCurrentItemIds.has(exactCurrentItem.id)) {
+    if (exactCurrentItem) {
       usedCurrentItemIds.add(exactCurrentItem.id);
       emit(mergeSameIdItem(exactCurrentItem, incomingItem, options), incomingItem.id);
       if (incomingItem.type === "contextCompaction") incomingCompactionIndex += 1;
@@ -428,7 +435,7 @@ export function reconcileCompleteThreadItems(
       }
     }
 
-    const equivalentCurrentItem = findEquivalentCurrentItem(current, incomingItem, usedCurrentItemIds);
+    const equivalentCurrentItem = findEquivalentCurrentItem(current, incomingItem, usedCurrentItemIds, incomingItemIds);
     if (equivalentCurrentItem) {
       usedCurrentItemIds.add(equivalentCurrentItem.id);
       const item = preferCanonicalEquivalentItem(equivalentCurrentItem, incomingItem);
@@ -441,7 +448,7 @@ export function reconcileCompleteThreadItems(
     emit(incomingItem, incomingItem.id);
   }
 
-  return results;
+  return [...results.values()];
 }
 
 function mergeContextCompactionDedupeItem(

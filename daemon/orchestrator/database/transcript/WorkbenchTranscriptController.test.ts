@@ -355,7 +355,7 @@ test("durable item facts refresh subscriptions only at complete projection bound
   }
 });
 
-test("capture gaps block only per-thread compatibility and cutover while direct recording continues", async () => {
+test("capture gaps retain cutover evidence without blocking historical imports, subscriptions or live recording", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-transcript-controller-gap-"));
   const databasePath = join(directory, "workbench.sqlite3");
   const markerPath = join(directory, "capture-gap.json");
@@ -415,10 +415,37 @@ test("capture gaps block only per-thread compatibility and cutover while direct 
       (await failed.read({ threadId: "workbench-thread", turnLimit: 1 }))?.thread.id,
       "workbench-thread",
     );
-    await assert.rejects(
-      failed.record(observationsFor("provider-thread"), { source: "compatibility" }),
-      /compatibility import is disabled for gapped thread/u,
-    );
+    const liveItem: WorkbenchTranscriptAtomicObservation = {
+      kind: "item", threadId: "provider-thread", turnId: "turn-provider-thread", lifecycle: "completed", observedAt: 6,
+      item: { id: "live", type: "plan", text: "fresh live content" },
+    };
+    await failed.record([liveItem], { source: "provider" });
+    const historicalTurn = {
+      ...observationsFor("provider-thread")[1]!,
+      kind: "turn" as const, turnId: "historical", turnIndex: 1, nativeTurnId: "historical",
+    } as Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }>;
+    await failed.record([{
+      kind: "canonicalWindow", threadId: "provider-thread", contentVersion: 3,
+      materializedTurnIds: ["turn-provider-thread", "historical"],
+      observations: [
+        ...observationsFor("provider-thread"), historicalTurn,
+        { ...liveItem, item: { id: "live", type: "plan", text: "stale compatibility content" } },
+        { ...liveItem, turnId: "historical", item: { id: "history", type: "plan", text: "retained history" } },
+      ],
+    }], { source: "compatibility" });
+    let published = false;
+    await failed.subscribe({
+      id: "gapped", request: { threadId: "provider-thread", turnLimit: 2 },
+      publish: (snapshot) => {
+        assert.ok(snapshot);
+        assert.deepEqual(snapshot.rows.threadItemPlans.map(({ text }) => text).sort(), ["fresh live content", "retained history"]);
+        published = true;
+      },
+    });
+    assert.ok(published);
+    failed.unsubscribe("gapped");
+    assert.deepEqual(failed.pendingRecoveryThreadIds, ["provider-thread"]);
+    assert.throws(() => failed.assertCutoverReady(), /capture gaps for 2 thread/u);
     await failed.record(observationsFor("clean-thread"), { source: "compatibility" });
 
     failed.dispose();

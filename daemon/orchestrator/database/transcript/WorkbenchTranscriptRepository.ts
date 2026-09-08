@@ -521,9 +521,7 @@ export default class WorkbenchTranscriptRepository {
           : { ...observation, publicItemId: identity.itemId };
       });
       const incomingSourceIds = itemObservations.map(({ item }) => item.id);
-      if (new Set(incomingSourceIds).size !== incomingSourceIds.length) {
-        throw new Error(`Complete provider turn ${turnId} contains duplicate source item ids`);
-      }
+      const repeatedSourceCount = incomingSourceIds.length - new Set(incomingSourceIds).size;
       const existingItems = [...(index.itemsByTurnId.get(turnId)?.values() ?? [])]
         .sort((left, right) => left.item_position - right.item_position);
       if (index.thread.identity_origin === "workbench" && existingItems.some((item) => item.public_id === null)) {
@@ -554,10 +552,11 @@ export default class WorkbenchTranscriptRepository {
         observation.publicItemId ?? observation.item.id,
         observation,
       ]));
+      let repeatedIdentityCount = 0;
       const reconciledItems = reconcileCompleteThreadItems(
         currentProviderItems,
         itemObservations.map(({ item, publicItemId }) => publicItemId ? { ...item, id: publicItemId } : item),
-        { mergeDuplicateItems: mergeThreadItem },
+        { mergeDuplicateItems: mergeThreadItem, onRepeatedIdentity: () => { repeatedIdentityCount++; } },
       ).map((entry) => {
         const existingRoot = index.itemsByPublicId.get(entry.item.id) ?? index.legacyItemsBySourceId.get(entry.item.id);
         if (!existingRoot || !enrichedItemIds.has(existingRoot.id)) return entry;
@@ -589,8 +588,8 @@ export default class WorkbenchTranscriptRepository {
         return entry;
       });
       const desiredItemIds = reconciledItems.map(({ item }) => item.id);
-      if (new Set(desiredItemIds).size !== desiredItemIds.length) {
-        throw new Error(`Complete provider turn ${turnId} reconciled duplicate item ids`);
+      if (repeatedSourceCount || repeatedIdentityCount) {
+        console.warn(`[workbench-transcript] combined repeated provider observations thread=${JSON.stringify(scope.threadId.slice(0, 100))} turn=${JSON.stringify(turnId.slice(0, 100))} sources=${repeatedSourceCount} identities=${repeatedIdentityCount}`);
       }
       const desiredItemIdSet = new Set(desiredItemIds);
       for (const entry of reconciledItems) {

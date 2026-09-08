@@ -1,0 +1,2 @@
+- Handle imperfect data with the best usable result. Warn about recoverable inconsistencies instead of rejecting the surrounding operation.
+- Reject only when continuing risks data loss, violates ownership or security, or cannot produce a meaningful result. Keep failure scoped to the affected fact or operation.
