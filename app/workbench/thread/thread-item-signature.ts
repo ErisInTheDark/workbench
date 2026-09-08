@@ -1,5 +1,5 @@
 /*
- * Keywords: transcript rendering, structural signature, native output.
+ * Keywords: transcript rendering, structural signature, native output, provider compatibility.
  * Exports:
  * - getThreadItemRenderSignature: bounded signature for rendered thread item content. Keywords: thread, render, equality.
  * - getThreadItemsRenderChunkSignature: bounded signature for a render chunk made from one or more thread items. Keywords: thread, render, chunk, equality.
@@ -94,6 +94,7 @@ function fileChangeSignature(item: Extract<ThreadItem, { type: "fileChange" }>) 
 
 export function getThreadItemRenderSignature(item: ThreadItem) {
   return cachedSignature(item, () => {
+    const identity = `${item.id}:${item.type}`;
     switch (item.type) {
       case "functionCallOutput": {
         const output = readWorkbenchToolOutput(item);
@@ -144,6 +145,8 @@ export function getThreadItemRenderSignature(item: ThreadItem) {
         return `${item.id}:${item.type}:${item.query}:${stableStringify(item.action)}`;
       case "imageView":
         return `${item.id}:${item.type}:${item.path}`;
+      case "sleep":
+        return `${identity}:${item.durationMs}`;
       case "imageGeneration":
         return `${item.id}:${item.type}:${item.status}:${item.revisedPrompt ?? ""}:${item.result}:${item.savedPath ?? ""}`;
       case "enteredReviewMode":
@@ -152,7 +155,8 @@ export function getThreadItemRenderSignature(item: ThreadItem) {
       case "contextCompaction":
         return `${item.id}:${item.type}`;
     }
-    throw new Error("Unsupported thread item signature.");
+    console.warn("Unrecognised transcript item uses a generic render signature.");
+    return `${identity}:${stableStringify(item)}`;
   });
 }
 
