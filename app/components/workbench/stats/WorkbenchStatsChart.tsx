@@ -1,9 +1,9 @@
 "use client";
 
 /*
+ * Keywords: stats, chart, SVG, keyboard, percentage scale.
  * Exports:
  * - default WorkbenchStatsChart: render one focusable, inspectable nullable multi-series graph. Keywords: stats, chart, SVG, keyboard.
- * ChartSeries: labelled nullable samples with optional shared category icons. Keywords: chart, series.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { chartMaximum, chartPointerIndex, chartSegments as segments, chartX as xAt, chartY as yAt } from "./stats-chart-geometry";
@@ -23,17 +23,19 @@ export default function WorkbenchStatsChart ({
   series,
   title,
   scale = "shared",
+  fixedMaximum,
 }: {
   buckets: readonly number[];
   formatValue: (value: number) => string;
   series: readonly ChartSeries[];
   title: string;
   scale?: "shared" | "independent";
+  fixedMaximum?: number;
 }) {
   const svg = useRef<SVGSVGElement>(null);
   const [selection, setSelectedIndex] = useState<number | null>(null);
   const selectedIndex = selection ?? Math.max(0, buckets.length - 1);
-  const maximum = chartMaximum(series.flatMap(({ values }) => values));
+  const maximum = fixedMaximum ?? chartMaximum(series.flatMap(({ values }) => values));
   const availableSeries = useMemo(
     () => series.filter(({ values }) => values.some((value) => value !== null)).map((entry) => ({ ...entry, maximum: chartMaximum(entry.values) })),
     [series],
@@ -105,7 +107,7 @@ export default function WorkbenchStatsChart ({
           ) : null}
           {availableSeries.map(({ colour, colourClassName, label, values, maximum: seriesMaximum }) => (
             <g className={`${colourClassName} font-bold`} style={{ color: colour }} key={label}>
-              {segments(values, scale === "independent" ? seriesMaximum : maximum).map((pathPoints, segmentIndex) => (
+              {segments(values, fixedMaximum ?? (scale === "independent" ? seriesMaximum : maximum)).map((pathPoints, segmentIndex) => (
                 <polyline
                   fill="none"
                   key={segmentIndex}
@@ -121,8 +123,8 @@ export default function WorkbenchStatsChart ({
                 <line
                   x1={xAt(index, values.length)}
                   x2={xAt(index, values.length)}
-                  y1={yAt(value, scale === "independent" ? seriesMaximum : maximum)}
-                  y2={yAt(value, scale === "independent" ? seriesMaximum : maximum)}
+                  y1={yAt(value, fixedMaximum ?? (scale === "independent" ? seriesMaximum : maximum))}
+                  y2={yAt(value, fixedMaximum ?? (scale === "independent" ? seriesMaximum : maximum))}
                   stroke="currentColor"
                   strokeLinecap="round"
                   strokeWidth={index === selectedIndex ? "6" : "3"}

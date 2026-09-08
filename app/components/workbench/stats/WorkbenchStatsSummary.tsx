@@ -1,17 +1,20 @@
 /*
+ * Keywords: stats, summary, tokens, cost, input cache.
  * Exports:
  * - default WorkbenchStatsSummary: render compact headline usage metrics. Keywords: stats, summary, tokens, cost.
  */
 import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { hasStatsCategoryCosts } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import { compactNumber, formatMoney } from "./stats-formatters";
 
 export default function WorkbenchStatsSummary({ stats }: { stats: WorkbenchStatsResponse | null }) {
+  const cachePercent = stats && hasStatsCategoryCosts(stats) ? stats.cacheEfficiency?.totals.cacheHitPercent : null;
   const items = [
     ["Total tokens", stats ? compactNumber(stats.tokens.totals.all) : "-"],
     ["API-equivalent cost", stats ? formatMoney(stats.cost.totalUsd) : "-"],
     ["Threads", stats ? compactNumber(stats.summary.threadCount) : "-"],
     ["Turns", stats ? compactNumber(stats.summary.turnCount) : "-"],
-    ["Cache hit", stats?.tokens.totals.input ? `${stats.summary.cacheHitPercent.toFixed(1)}%` : "-"],
+    ["Input cache %", cachePercent === null || cachePercent === undefined ? "-" : `${cachePercent.toFixed(1)}%`],
   ];
   return (
     <dl className="m-0 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-5">

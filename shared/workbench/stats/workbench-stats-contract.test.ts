@@ -86,6 +86,31 @@ test("v2 responses admit all ninety daily buckets with non-overlapping token cat
   assert.equal(WorkbenchStatsDetailedResponseSchema.safeParse({
     ...detailed, cost: { ...detailed.cost, byTokenType: { input: 0, cache: -1, output: 0 } },
   }).success, false);
+  const cacheEfficiency = {
+    totals: { inputTokens: 1_000, cachedInputTokens: 940, cacheHitPercent: 94 },
+    buckets: [{ startedAt: 0, inputTokens: 0, cachedInputTokens: 0, cacheHitPercent: null }],
+    worstThreads: [{ projectId: "project", threadId: "thread", title: "Thread",
+      inputTokens: 1_000, cachedInputTokens: 940, cacheWriteInputTokens: 10, cacheHitPercent: 94 }],
+  };
+  const enriched = WorkbenchStatsDetailedResponseSchema.safeParse({ ...detailed, cacheEfficiency });
+  assert.ok(enriched.success, "Complete cache efficiency must survive response validation");
+  assert.deepEqual(WorkbenchStatsResponseSchema.parse(legacyStatsResponse(enriched.data)), WorkbenchStatsResponseSchema.parse(response));
+  assert.equal(WorkbenchStatsDetailedResponseSchema.safeParse({
+    ...detailed, cacheEfficiency: { ...cacheEfficiency, totals: { ...cacheEfficiency.totals, cacheHitPercent: 101 } },
+  }).success, false);
+  assert.equal(WorkbenchStatsDetailedResponseSchema.safeParse({
+    ...detailed, cacheEfficiency: { ...cacheEfficiency, totals: { ...cacheEfficiency.totals, cachedInputTokens: -1 } },
+  }).success, false);
+  const older = WorkbenchStatsDetailedResponseSchema.safeParse({
+    ...detailed,
+    cacheEfficiency: { ...cacheEfficiency, worstThreads: cacheEfficiency.worstThreads.map(({ cacheWriteInputTokens: _writes, ...thread }) => thread) },
+  });
+  assert.ok(older.success, "Older cache responses remain usable without invented cache-write counts");
+  assert.equal(older.data.cacheEfficiency?.worstThreads[0]?.cacheWriteInputTokens, undefined);
+  assert.equal(WorkbenchStatsDetailedResponseSchema.safeParse({
+    ...detailed,
+    cacheEfficiency: { ...cacheEfficiency, worstThreads: [{ ...cacheEfficiency.worstThreads[0], cacheWriteInputTokens: -1 }] },
+  }).success, false);
 });
 
 test("legacy stats responses normalise without losing bucket timestamps", () => {

@@ -1,4 +1,5 @@
 /*
+ * Keywords: daemon, rpc, stats, dispatch, ownership.
  * Exports:
  * - WorkbenchBrowseSessionPort: replaceable Browse session request boundary. Keywords: browse, reload, port.
  * - default WorkbenchDaemonRequestController: dispatch semantic browser daemon requests to their real owners. Keywords: daemon, rpc, registry.
@@ -22,7 +23,7 @@ import {
 import type WorkbenchSearchController from "./WorkbenchSearchController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import { WorkbenchStatsReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import { WorkbenchStatsDetailedReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+import { cacheStatsResponse, detailedStatsResponse, WorkbenchStatsDetailedReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import {
   GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
@@ -59,7 +60,7 @@ const METHODS = new Set([
   "project/catalog/read",
   "project/file/read", "project/file/reset", "project/file/save",
   "search/query",
-  "stats/import/start", "stats/rate-limits/refresh", "stats/read", "stats/read/detailed",
+  "stats/import/start", "stats/rate-limits/refresh", "stats/read", "stats/read/detailed", "stats/read/efficiency", "stats/read/efficiency/v2",
   "skills/read",
   "thread/identity/resolve",
 ]);
@@ -241,8 +242,10 @@ export default class WorkbenchDaemonRequestController {
           break;
         }
         case "stats/read":
-        case "stats/read/detailed": {
-          const parsed = (request.method === "stats/read/detailed" ? WorkbenchStatsDetailedReadRequestSchema : WorkbenchStatsReadRequestSchema).safeParse(params);
+        case "stats/read/detailed":
+        case "stats/read/efficiency":
+        case "stats/read/efficiency/v2": {
+          const parsed = (request.method === "stats/read" ? WorkbenchStatsReadRequestSchema : WorkbenchStatsDetailedReadRequestSchema).safeParse(params);
           if (!parsed.success) throw new InvalidParamsError("Invalid stats request.");
           if (parsed.data.projectId) {
             try {
@@ -251,9 +254,12 @@ export default class WorkbenchDaemonRequestController {
               throw new InvalidParamsError(error instanceof Error ? error.message : "Unknown project.");
             }
           }
-          result = request.method === "stats/read/detailed"
-            ? await this.owners.stats.readDetailed(parsed.data)
-            : await this.owners.stats.read(parsed.data);
+          if (request.method === "stats/read") result = await this.owners.stats.read(parsed.data);
+          else {
+            const detailed = await this.owners.stats.readDetailed(parsed.data);
+            result = request.method === "stats/read/detailed" ? detailedStatsResponse(detailed)
+              : request.method === "stats/read/efficiency" ? cacheStatsResponse(detailed) : detailed;
+          }
           break;
         }
         case "stats/import/start":

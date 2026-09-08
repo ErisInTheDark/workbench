@@ -1,6 +1,7 @@
 "use client";
 
 /*
+ * Keywords: stats, usage, input cache, claims, rate limits.
  * Exports:
  * - default WorkbenchStatsView: compose stats controls, import state, usage, limits, and claim traffic. Keywords: stats, usage, claims, rate limits.
  */
@@ -25,6 +26,7 @@ import WorkbenchStatsLoadController from "../../../workbench/WorkbenchStatsLoadC
 import WorkbenchStatsClient from "../../../workbench/WorkbenchStatsClient";
 import WorkbenchDaemonClientContext from "../WorkbenchDaemonClientContext";
 import WorkbenchClaimHotspots from "./WorkbenchClaimHotspots";
+import WorkbenchCacheEfficiency from "./WorkbenchCacheEfficiency";
 import WorkbenchCostUsage from "./WorkbenchCostUsage";
 import WorkbenchRateLimitUsage from "./WorkbenchRateLimitUsage";
 import WorkbenchStatsFilters from "./WorkbenchStatsFilters";
@@ -175,6 +177,12 @@ export default function WorkbenchStatsView({
             <WorkbenchTokenUsage stats={stats} selected={shownTypes} />
             <WorkbenchCostUsage stats={stats} selected={shownTypes} />
           </section>
+          <WorkbenchCacheEfficiency
+            global={projectId === null}
+            onNavigateThread={onNavigateThread}
+            projectNamesById={projectNamesById}
+            stats={stats}
+          />
           <WorkbenchUsageDrivers
             global={projectId === null}
             onNavigateThread={onNavigateThread}

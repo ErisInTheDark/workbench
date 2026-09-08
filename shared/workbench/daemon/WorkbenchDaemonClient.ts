@@ -1,4 +1,5 @@
 /*
+ * Keywords: daemon, websocket, validation, rpc, stats.
  * Exports:
  * - WorkbenchDaemonTransport: existing socket request port used by the daemon client. Keywords: daemon, websocket, transport.
  * - WorkbenchDaemonRequestError: typed JSON-RPC failure with bounded domain data. Keywords: daemon, rpc, error.
@@ -74,7 +75,9 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "project/file/save": return fileWriteSchema;
     case "search/query": return WorkbenchSearchResponseSchema;
     case "stats/read": return WorkbenchStatsResponseSchema;
-    case "stats/read/detailed": return WorkbenchStatsDetailedResponseSchema;
+    case "stats/read/detailed":
+    case "stats/read/efficiency":
+    case "stats/read/efficiency/v2": return WorkbenchStatsDetailedResponseSchema;
     case "stats/import/start": return WorkbenchStatsImportProgressSchema;
     case "stats/rate-limits/refresh": return z.object({ ok: z.literal(true) }).strict();
     case "local-capabilities/read":

@@ -1,9 +1,13 @@
 /*
+ * Keywords: daemon, websocket, rpc, contracts, stats.
  * Exports:
  * - WorkbenchDaemonMethod/WorkbenchDaemonRequestMap: typed semantic browser-to-daemon request contract. Keywords: daemon, websocket, rpc, contract.
  * - WorkbenchAgentDefinitionResponse/WorkbenchSkillCatalogResponse: agent and skill catalog result contracts. Keywords: agent, skill, catalog.
  * - WorkbenchGitArcSuccess: exact acknowledgement for browser Git arc mutations. Keywords: git, arc, acknowledgement.
  * - WORKBENCH_GIT_ARC_ACTION_BY_METHOD/WorkbenchDaemonGitArcMethod: map semantic browser methods to existing Git actions. Keywords: git, arc, method, registry.
+ * - WorkbenchInstructionPack: emitted instruction pack metadata and content.
+ * - WorkbenchFileWriteResult: successful save or optimistic-write conflict.
+ * - WorkbenchDaemonParams/WorkbenchDaemonResult: method-indexed request and response types.
  */
 import type {
   FilePayload,
@@ -126,6 +130,14 @@ export interface WorkbenchDaemonRequestMap {
   "stats/rate-limits/refresh": { params: object; result: { ok: true } };
   "stats/read": { params: WorkbenchStatsReadRequest; result: WorkbenchStatsResponse };
   "stats/read/detailed": {
+    params: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedReadRequest;
+    result: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedResponse;
+  };
+  "stats/read/efficiency": {
+    params: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedReadRequest;
+    result: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedResponse;
+  };
+  "stats/read/efficiency/v2": {
     params: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedReadRequest;
     result: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedResponse;
   };

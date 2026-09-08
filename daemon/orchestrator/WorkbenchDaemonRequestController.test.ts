@@ -1,4 +1,5 @@
 /*
+ * Keywords: daemon, rpc, dispatch, stats, compatibility, tests.
  * Exports:
  * - No production exports; tests protect semantic dispatch, parameter errors, and replaceable Browse ownership. Keywords: daemon, rpc, dispatch, browse, test.
  */
@@ -11,12 +12,14 @@ import { applyComposerProfileMutation, normalizeComposerProfileMutation } from "
 import type { WorkbenchComposerProfile } from "workbench-shared/types";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema.ts";
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository.ts";
+import { WorkbenchStatsResponseSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
 
 function createController(options: {
   gitArcResponse?: Response;
   rejectProjectId?: string;
   profiles?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profiles"];
   threadIdentity?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["threadIdentity"];
+  readDetailed?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["stats"]["readDetailed"];
 } = {}) {
   let globalNetworkEnabled = false;
   const projectNetworkOverrides = new Map<string, boolean>();
@@ -103,6 +106,7 @@ function createController(options: {
     stats: {
       readDetailed: async (request) => {
         statsRequests.push(request);
+        if (options.readDetailed) return options.readDetailed(request);
         throw new Error("Detailed database read failed");
       },
       read: async (request) => {
@@ -343,21 +347,49 @@ test("stats dispatch validates project scope and keeps rate refresh account-wide
 });
 
 test("detailed stats validate selection and project before invoking the owner, preserving read failures", async () => {
-  const { controller, statsRequests } = createController({ rejectProjectId: "missing" });
-  for (const params of [
-    { projectId: "missing", range: "7d", tokenTypes: ["output"] },
-    { projectId: "project", range: "7d", tokenTypes: ["all"] },
-  ]) {
-    const response = await controller.handle({ id: 1, method: "stats/read/detailed", params });
-    assert.equal(response.error?.code, -32602);
+  for (const method of ["stats/read/detailed", "stats/read/efficiency", "stats/read/efficiency/v2"]) {
+    const { controller, statsRequests } = createController({ rejectProjectId: "missing" });
+    for (const params of [
+      { projectId: "missing", range: "7d", tokenTypes: ["output"] },
+      { projectId: "project", range: "7d", tokenTypes: ["all"] },
+    ]) {
+      const response = await controller.handle({ id: 1, method, params });
+      assert.equal(response.error?.code, -32602);
+    }
+    assert.deepEqual(statsRequests, []);
+    const response = await controller.handle({
+      id: 2, method,
+      params: { projectId: "project", range: "90d", tokenTypes: [] },
+    });
+    assert.ok(response.error);
+    assert.deepEqual(statsRequests, [{ projectId: "project", range: "90d", tokenTypes: [], model: null, provider: null }]);
   }
-  assert.deepEqual(statsRequests, []);
-  const response = await controller.handle({
-    id: 2, method: "stats/read/detailed",
-    params: { projectId: "project", range: "90d", tokenTypes: [] },
+});
+
+test("cache efficiency uses the detailed owner while older routes keep their exact wire shapes", async () => {
+  const legacy = WorkbenchStatsResponseSchema.parse({
+    bucketUnit: "day", claimHotspots: [], cost: { buckets: [], pricedTokens: 0, totalUsd: 0, unpricedTokens: 0 },
+    failures: [], generatedAt: 1, pricingCatalogDate: "2026-09-05", projectId: null, rateLimits: [],
+    range: "7d", recordingStartedAt: null, startedAt: 0,
+    tokens: { buckets: [], totals: { all: 0, cachedInput: 0, input: 0, output: 0 } },
   });
-  assert.ok(response.error);
-  assert.deepEqual(statsRequests, [{ projectId: "project", range: "90d", tokenTypes: [], model: null, provider: null }]);
+  const detailed = { ...legacy, cost: { ...legacy.cost, buckets: [], byTokenType: { input: 0, cache: 0, output: 0 } } };
+  const enriched = { ...detailed, cacheEfficiency: {
+    totals: { inputTokens: 1_000, cachedInputTokens: 940, cacheHitPercent: 94 }, buckets: [],
+    worstThreads: [{ projectId: "project", threadId: "thread", title: "Thread",
+      inputTokens: 1_000, cachedInputTokens: 940, cacheHitPercent: 94 }],
+  } };
+  const current = { ...enriched, cacheEfficiency: { ...enriched.cacheEfficiency,
+    worstThreads: enriched.cacheEfficiency.worstThreads.map((thread) => ({ ...thread, cacheWriteInputTokens: 10 })),
+  } };
+  const { controller, statsRequests } = createController({ readDetailed: async () => current });
+  const params = { projectId: "project", provider: "codex", model: "gpt-5.4", range: "7d", tokenTypes: ["output"] };
+  assert.equal(controller.accepts("stats/read/efficiency"), true);
+  assert.deepEqual((await controller.handle({ id: 1, method: "stats/read/efficiency", params })).result, enriched);
+  assert.deepEqual((await controller.handle({ id: 2, method: "stats/read/detailed", params })).result, detailed);
+  assert.equal(controller.accepts("stats/read/efficiency/v2"), true);
+  assert.deepEqual((await controller.handle({ id: 3, method: "stats/read/efficiency/v2", params })).result, current);
+  assert.deepEqual(statsRequests, [params, params, params]);
 });
 
 test("Codex sandbox network requests validate project ownership and preserve explicit override intent", async () => {

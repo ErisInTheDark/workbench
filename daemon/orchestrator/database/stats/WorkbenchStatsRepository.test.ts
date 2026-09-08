@@ -113,6 +113,71 @@ test("selected output applies to totals, pricing basis, and usage drivers", () =
   }
 });
 
+test("cache efficiency weighs full input, preserves empty buckets, and ignores category selection", () => {
+  const database = createDatabase();
+  try {
+    const now = Date.UTC(2026, 8, 4, 12);
+    seedTurn(database, now - 60_000);
+    const repository = new WorkbenchStatsRepository(database);
+    const base = { projectId: "project", range: "7d" as const };
+    const full = repository.readDetailed(base, now);
+    assert.ok("cacheEfficiency" in full && full.cacheEfficiency, "Cache facts must be returned independently of category totals");
+    assert.deepEqual(full.cacheEfficiency.totals, { inputTokens: 1_000, cachedInputTokens: 200, cacheHitPercent: 20 });
+    assert.deepEqual(full.cacheEfficiency.buckets.at(-1), { ...full.cacheEfficiency.totals,
+      startedAt: Date.UTC(2026, 8, 4) });
+    assert.ok(full.cacheEfficiency.buckets.slice(0, -1).every((bucket) => bucket.cacheHitPercent === null));
+    assert.deepEqual(full.cacheEfficiency.worstThreads, [{
+      ...full.cacheEfficiency.totals, cacheWriteInputTokens: 100,
+      projectId: "project", threadId: "thread", title: "Stats thread",
+    }]);
+    for (const tokenTypes of [[], ["cache"], ["output"], ["input"]] as const) {
+      assert.deepEqual(repository.readDetailed({ ...base, tokenTypes: [...tokenTypes] }, now).cacheEfficiency, full.cacheEfficiency);
+    }
+    for (const filter of [{ projectId: "other" }, { provider: "copilot" as const }, { model: "other" }]) {
+      const result = repository.readDetailed({ ...base, ...filter }, now).cacheEfficiency;
+      assert.ok(result);
+      assert.deepEqual(result.totals, { inputTokens: 0, cachedInputTokens: 0, cacheHitPercent: null });
+      assert.deepEqual(result.worstThreads, []);
+    }
+  } finally { database.close(); }
+});
+
+test("cache leaderboard ranks all positive-input threads by percentage, then input volume, before limiting", () => {
+  const database = createDatabase();
+  try {
+    const now = Date.UTC(2026, 8, 4, 12);
+    const transcript = new WorkbenchTranscriptRepository(database);
+    let totalInput = 0;
+    let totalCached = 0;
+    for (let index = 0; index < 16; index++) {
+      const id = `cache-${index}`;
+      const input = index === 15 ? 0 : index === 14 ? 100 : 10_000 + index;
+      const cached = index >= 13 ? 0 : 9_000;
+      totalInput += input;
+      totalCached += cached;
+      transcript.settle([{
+        activityAt: now, createdAt: now, kind: "thread", projectId: "project", projectRoot: "C:/project",
+        threadId: id, title: id, updatedAt: now,
+      }, {
+        createdAt: now, durationMs: 1, endedAt: now + 1, harnessId: "codex", kind: "turn",
+        nativeLocation: "C:/project", nativeThreadId: id, nativeTurnId: id, startedAt: now,
+        state: "completed", threadId: id, turnId: id, turnIndex: 0,
+      }, {
+        cumulative: { inputTokens: input, cachedInputTokens: cached, cacheWriteInputTokens: 0,
+          outputTokens: 1, reasoningOutputTokens: 0, totalTokens: input + 1 },
+        kind: "turnTokenUsage", observedAt: now, threadId: id, turnId: id, usageDataVersion: 2,
+      }]);
+    }
+    const result = new WorkbenchStatsRepository(database).readDetailed({ projectId: null, range: "7d" }, now);
+    assert.ok(result.cacheEfficiency);
+    assert.equal(result.cacheEfficiency.totals.cacheHitPercent, totalCached / totalInput * 100);
+    assert.equal(result.cacheEfficiency.worstThreads.length, 12);
+    assert.deepEqual(result.cacheEfficiency.worstThreads.slice(0, 3).map((row) => row.threadId), ["cache-13", "cache-14", "cache-12"]);
+    assert.ok(result.cacheEfficiency.worstThreads.every((row) => row.inputTokens > 0));
+    assert.equal(result.topThreads.some((row) => row.threadId === "cache-14"), false);
+  } finally { database.close(); }
+});
+
 test("category selection reconciles costs, includes cache writes, and excludes non-contributing usage", () => {
   const database = createDatabase();
   try {
@@ -311,6 +376,16 @@ test("cumulative usage keeps pre-filter baselines, ignores repeats, and counts r
       output: 25,
       uncachedInput: 110,
     });
+    const cache = new WorkbenchStatsRepository(database).readDetailed({
+      model: "gpt-5.4", projectId: "project", range: "7d", tokenTypes: [],
+    }, now).cacheEfficiency;
+    assert.ok(cache);
+    assert.equal(cache.totals.inputTokens, 250);
+    assert.equal(cache.totals.cachedInputTokens, 140);
+    assert.ok(cache.totals.cacheHitPercent !== null && Math.abs(cache.totals.cacheHitPercent - 56) < 1e-10);
+    assert.equal(cache.buckets.find((bucket) => bucket.startedAt === Date.UTC(2026, 8, 1))?.cacheHitPercent, 60);
+    assert.equal(cache.buckets.find((bucket) => bucket.startedAt === Date.UTC(2026, 8, 2))?.cacheHitPercent, null);
+    assert.equal(cache.buckets.find((bucket) => bucket.startedAt === Date.UTC(2026, 8, 3))?.cacheHitPercent, 40);
   } finally {
     database.close();
   }
@@ -351,6 +426,9 @@ test("token reads omit stale snapshots and first snapshots without a retained ba
       projectId: "project",
       range: "7d",
     }, now).tokens.totals.all, 0);
+    assert.equal(new WorkbenchStatsRepository(database).readDetailed({
+      projectId: "project", range: "7d",
+    }, now).cacheEfficiency?.totals.cacheHitPercent, null);
   } finally {
     database.close();
   }

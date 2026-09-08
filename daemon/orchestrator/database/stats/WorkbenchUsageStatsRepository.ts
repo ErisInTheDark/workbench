@@ -1,5 +1,5 @@
 /*
- * Keywords: sqlite, usage, cumulative tokens, selection, pricing, ranking.
+ * Keywords: sqlite, usage, cumulative tokens, selection, pricing, ranking, input cache.
  * Exports:
  * - default WorkbenchUsageStatsRepository: derive selected usage and spend from ordered cumulative facts.
  */
@@ -12,6 +12,7 @@ import {
   type WorkbenchStatsDetailedResponse,
 } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import { WORKBENCH_STATS_USAGE_DATA_VERSION, type WorkbenchCumulativeTokenUsage } from "workbench-shared/workbench/stats/workbench-stats-usage";
+import type { StatsCacheEfficiency } from "workbench-shared/workbench/stats/workbench-stats-cache-contract";
 import { defaultApiPricingModel, estimateApiTokenCost } from "../../stats/api-pricing.ts";
 
 interface TokenRow {
@@ -37,6 +38,10 @@ interface TokenRow {
 const emptyTotals = () => ({ all: 0, cachedInput: 0, cacheWriteInput: 0, input: 0, output: 0, uncachedInput: 0 });
 const emptyCosts = () => ({ input: 0, cache: 0, output: 0 });
 const money = (value: number) => Number(value.toFixed(8));
+
+function cacheTotals(inputTokens: number, cachedInputTokens: number) {
+  return { inputTokens, cachedInputTokens, cacheHitPercent: inputTokens ? cachedInputTokens / inputTokens * 100 : null };
+}
 
 function cumulativeUsage(row: TokenRow): WorkbenchCumulativeTokenUsage {
   return {
@@ -71,6 +76,7 @@ export default class WorkbenchUsageStatsRepository {
     }));
     const costBuckets = tokenBuckets.map(({ startedAt }) => ({ startedAt, totalUsd: 0, byTokenType: emptyCosts() }));
     const totals = emptyTotals();
+    const cacheBuckets = tokenBuckets.map(({ startedAt }) => ({ startedAt, inputTokens: 0, cachedInputTokens: 0 }));
     const costs = emptyCosts();
     const basis = { defaultModelTokens: 0, exactModelTokens: 0, projectInferredModelTokens: 0, threadInferredModelTokens: 0 };
     const providers = new Set<WorkbenchHarness>();
@@ -80,6 +86,7 @@ export default class WorkbenchUsageStatsRepository {
     const modelRows = new Map<string, WorkbenchStatsDetailedResponse["models"][number] & { threads: Set<string> }>();
     const threadRows = new Map<string, Omit<WorkbenchStatsDetailedResponse["topThreads"][number], "models" | "providers"> & {
       models: Set<string>; providers: Set<WorkbenchHarness>;
+      inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens: number;
     }>();
     const previousUsage = new Map<string, WorkbenchCumulativeTokenUsage>();
     const rows = this.database.prepare(`
@@ -107,6 +114,18 @@ export default class WorkbenchUsageStatsRepository {
       const cached = Math.min(usage.inputTokens, usage.cachedInputTokens);
       const written = Math.min(Math.max(0, usage.inputTokens - cached), usage.cacheWriteInputTokens);
       const fresh = Math.max(0, usage.inputTokens - cached - written);
+      const position = Math.min(shape.count - 1, Math.floor((row.occurred_at - shape.startedAt) / shape.bucketMs));
+      cacheBuckets[position]!.inputTokens += usage.inputTokens;
+      cacheBuckets[position]!.cachedInputTokens += cached;
+      const threadRow = threadRows.get(row.thread_id) ?? {
+        costUsd: 0, models: new Set<string>(), projectId: row.project_id, providers: new Set<WorkbenchHarness>(),
+        threadId: row.thread_id, title: row.title, tokens: 0, sharePercent: 0,
+        inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0,
+      };
+      threadRow.inputTokens += usage.inputTokens;
+      threadRow.cachedInputTokens += cached;
+      threadRow.cacheWriteInputTokens += written;
+      threadRows.set(row.thread_id, threadRow);
       const values = {
         ...emptyTotals(),
         cachedInput: selected.has("cache") ? cached : 0,
@@ -118,7 +137,6 @@ export default class WorkbenchUsageStatsRepository {
       values.all = values.input + values.output;
       // Keep the legacy count of recorded turns, including zero deltas.
       if (values.all === 0 && request.tokenTypes !== undefined) continue;
-      const position = Math.min(shape.count - 1, Math.floor((row.occurred_at - shape.startedAt) / shape.bucketMs));
       for (const key of Object.keys(totals) as Array<keyof typeof totals>) {
         totals[key] += values[key];
         tokenBuckets[position]![key] += values[key];
@@ -155,18 +173,30 @@ export default class WorkbenchUsageStatsRepository {
       if (estimate.source === "default") modelRow.defaultModelTokens += values.all;
       if (estimate.source === "inferred") modelRow.inferredModelTokens += values.all;
       modelRows.set(modelKey, modelRow);
-      const threadRow = threadRows.get(row.thread_id) ?? {
-        costUsd: 0, models: new Set<string>(), projectId: row.project_id, providers: new Set<WorkbenchHarness>(),
-        threadId: row.thread_id, title: row.title, tokens: 0, sharePercent: 0,
-      };
       threadRow.costUsd += costUsd;
       threadRow.models.add(model);
       threadRow.providers.add(row.harness_id);
       threadRow.tokens += values.all;
-      threadRows.set(row.thread_id, threadRow);
     }
+    const cacheEfficiency: StatsCacheEfficiency = {
+      totals: cacheTotals(
+        cacheBuckets.reduce((sum, bucket) => sum + bucket.inputTokens, 0),
+        cacheBuckets.reduce((sum, bucket) => sum + bucket.cachedInputTokens, 0),
+      ),
+      buckets: cacheBuckets.map(({ startedAt, inputTokens, cachedInputTokens }) => ({
+        startedAt, ...cacheTotals(inputTokens, cachedInputTokens),
+      })),
+      worstThreads: [...threadRows.values()].filter((row) => row.inputTokens > 0)
+        .map(({ projectId, threadId, title, inputTokens, cachedInputTokens, cacheWriteInputTokens }) => ({
+          projectId, threadId, title, inputTokens, cachedInputTokens, cacheWriteInputTokens,
+          cacheHitPercent: cachedInputTokens / inputTokens * 100,
+        }))
+        .sort((a, b) => a.cacheHitPercent - b.cacheHitPercent || b.inputTokens - a.inputTokens || a.threadId.localeCompare(b.threadId))
+        .slice(0, 12),
+    };
     return {
       bucketUnit: shape.bucketUnit,
+      cacheEfficiency,
       startedAt: shape.startedAt,
       cost: {
         basis, byTokenType: { input: money(costs.input), cache: money(costs.cache), output: money(costs.output) },
@@ -180,8 +210,9 @@ export default class WorkbenchUsageStatsRepository {
         .slice(0, 100).map(({ threads: modelThreads, ...row }) => ({ ...row, costUsd: money(row.costUsd), threadCount: modelThreads.size })),
       summary: { cacheHitPercent: totals.input ? totals.cachedInput / totals.input * 100 : 0, threadCount: threads.size, turnCount },
       tokens: { buckets: tokenBuckets, totals },
-      topThreads: [...threadRows.values()].sort((a, b) => b.tokens - a.tokens || a.title.localeCompare(b.title) || a.threadId.localeCompare(b.threadId))
-        .slice(0, 12).map((row) => ({
+      topThreads: [...threadRows.values()].filter((row) => request.tokenTypes === undefined || row.tokens > 0)
+        .sort((a, b) => b.tokens - a.tokens || a.title.localeCompare(b.title) || a.threadId.localeCompare(b.threadId))
+        .slice(0, 12).map(({ inputTokens: _inputTokens, cachedInputTokens: _cachedInputTokens, cacheWriteInputTokens: _writes, ...row }) => ({
           ...row, costUsd: money(row.costUsd), models: [...row.models].sort().slice(0, 20), providers: [...row.providers].sort(),
           sharePercent: totals.all ? Math.min(100, row.tokens / totals.all * 100) : 0,
         })),

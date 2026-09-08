@@ -1,4 +1,5 @@
 /*
+ * Keywords: daemon, rpc, validation, stats, sanitised diagnostics, tests.
  * Exports:
  * - No production exports; tests protect daemon transport failure and domain result boundaries. Keywords: daemon, rpc, failure, test.
  */
@@ -134,6 +135,33 @@ test("detailed stats retain category costs and reject malformed remote values wi
   await assert.rejects(malformed.request("stats/read/detailed", { projectId: null, range: "7d" }), /response was invalid/);
   assert.ok(logged.length > 0);
   assert.ok(logged.every((message) => message.length < 1_200 && !message.includes("private-payload-marker")));
+  const cacheEfficiency = {
+    totals: { inputTokens: 1_000, cachedInputTokens: 940, cacheHitPercent: 94 }, buckets: [], worstThreads: [],
+  };
+  const enriched = { ...detailed, cacheEfficiency };
+  const cacheClient = new WorkbenchDaemonClient({ request: async <TResponse>() => enriched as TResponse });
+  assert.deepEqual(await cacheClient.request("stats/read/efficiency", { projectId: null, range: "7d" }), enriched);
+  const badCache = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
+    ...enriched, cacheEfficiency: { ...cacheEfficiency, totals: { ...cacheEfficiency.totals, cacheHitPercent: "private-cache-marker" } },
+  }) as TResponse });
+  const previousLogs = logged.length;
+  await assert.rejects(badCache.request("stats/read/efficiency", { projectId: null, range: "7d" }), /response was invalid/);
+  assert.ok(logged.length > previousLogs);
+  assert.ok(logged.every((message) => message.length < 1_200 && !message.includes("private-cache-marker")));
+  const current = { ...enriched, cacheEfficiency: { ...cacheEfficiency,
+    worstThreads: [{ ...cacheEfficiency.totals, projectId: "project", threadId: "thread", title: "Thread", cacheWriteInputTokens: 10 }],
+  } };
+  const currentClient = new WorkbenchDaemonClient({ request: async <TResponse>() => current as TResponse });
+  assert.deepEqual(await currentClient.request("stats/read/efficiency/v2", { projectId: null, range: "7d" }), current);
+  const badWrites = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
+    ...current, cacheEfficiency: { ...current.cacheEfficiency,
+      worstThreads: [{ ...current.cacheEfficiency.worstThreads[0], cacheWriteInputTokens: "private-write-marker" }],
+    },
+  }) as TResponse });
+  const beforeWriteLogs = logged.length;
+  await assert.rejects(badWrites.request("stats/read/efficiency/v2", { projectId: null, range: "7d" }), /response was invalid/);
+  assert.ok(logged.length > beforeWriteLogs);
+  assert.ok(logged.every((message) => message.length < 1_200 && !message.includes("private-write-marker")));
 });
 
 test("search responses require the complete discriminated result contract", async () => {
