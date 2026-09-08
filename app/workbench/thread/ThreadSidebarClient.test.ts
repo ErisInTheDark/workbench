@@ -35,6 +35,55 @@ const projectSummary = (
   unsettledThreads: [],
 });
 
+for (const mode of ["project", "global"] as const) {
+  test(`${mode} reopen keeps pushes that overtake bootstrap and keeps project state isolated`, async () => {
+    const makeSidebar = (revision: number, title: string): WorkbenchThreadSidebarSnapshot => ({
+      ...snapshot(revision),
+      entries: [{
+        entryKind: "thread", identity: { harness: "codex", threadId: "thread" },
+        activityAt: 1, title, metadata: { archived: false, pinned: false, snoozed: false },
+        lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      }],
+    });
+    const reopened = Promise.withResolvers<WorkbenchThreadSidebarSnapshot>();
+    let opens = 0;
+    const read = async () => ++opens === 1 ? makeSidebar(100, "before reconnect") : await reopened.promise;
+    const client = new ThreadSidebarClient({
+      onChange() {},
+      transport: {
+        close: async () => {}, deleteDraft: async () => {}, upsertDraft: async () => {},
+        open: read,
+        openGlobal: async () => {
+          const current = await read();
+          return {
+            homeThreadDisplayOrder: null, pinnedThreadLayout,
+            projectSidebars: { projects: opens === 1 ? [current, { ...current, projectId: "retired" }] : [current] },
+          };
+        },
+      },
+    });
+    if (mode === "global") await client.openGlobal();
+    else await client.open("project");
+    const pending = client.reopen();
+    const pushed = makeSidebar(2, "pushed after reconnect");
+    if (mode === "global") client.acceptProjectThreadSidebar({ updateKind: "projectThreadSidebar", sidebar: pushed });
+    else client.accept(pushed);
+    client.acceptActivity({ activityAt: 30, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 3, updateKind: "activity" });
+    reopened.resolve(makeSidebar(1, "stale bootstrap"));
+    await pending;
+    const current = client.getProjectSnapshot("project")!;
+    assert.equal(current.entries[0]!.title, "pushed after reconnect");
+    assert.equal(current.entries[0]!.activityAt, 30);
+    assert.equal(client.getProjectThreadSidebars().projects[0], current);
+    assert.equal(client.getProjectSnapshot("retired"), null);
+    if (mode === "project") assert.equal(client.getSnapshot(), current);
+    else assert.equal(client.getSnapshot(), null);
+    client.acceptActivity({ activityAt: 99, identity: { harness: "codex", threadId: "thread" }, projectId: "foreign", revision: 99, updateKind: "activity" });
+    assert.equal(client.getProjectSnapshot("project"), current);
+    assert.equal(client.getProjectThreadSummaries().projects.find((value) => value.projectId === "project")!.unsettledThreads[0]!.title, "pushed after reconnect");
+  });
+}
+
 test("project summaries bootstrap together, merge by revision, and follow selected optimistic status", async () => {
   const stoppedEntry: WorkbenchThreadSidebarSnapshot["entries"][number] = {
     activityAt: 1,
@@ -452,6 +501,8 @@ test("external-store subscribers receive each installed snapshot and can unsubsc
   assert.equal(notifications, 1);
   assert.equal(client.getSnapshot()?.revision, 2);
   assert.equal(client.getSnapshot()?.entries[0]?.activityAt, 50);
+  assert.equal(client.getProjectSnapshot("project"), client.getSnapshot());
+  assert.equal(client.getProjectThreadSidebars().projects[0], client.getSnapshot());
 
   unsubscribe();
   client.acceptActivity({ activityAt: 60, identity: { harness: "codex", threadId: "thread" }, projectId: "project", revision: 3, updateKind: "activity" });

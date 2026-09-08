@@ -1,5 +1,5 @@
 /*
- * Keywords: sidebar, project, pinned, drafts, debounce, flush, observation.
+ * Keywords: sidebar, project, admission, pinned, drafts, debounce, flush, observation.
  * Exports:
  * - ThreadSidebarOpenResult: project observation bootstrap.
  * - ThreadSidebarGlobalOpenResult: global observation bootstrap.
@@ -9,9 +9,9 @@
  * - default ThreadSidebarClient: project/global sidebar state and project-qualified draft save queues.
  */
 import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
-import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { findWorkbenchThreadFolder, moveWorkbenchThreadDisplayItem, replaceWorkbenchThreadFolderMember, resolveWorkbenchThreadDisplayOrder, sortThreadSidebarEntries } from "workbench-shared/workbench/thread/thread-display-order";
-import { createDraftTitle, createWorkbenchProjectThreadSummary, type WorkbenchHarnessId, type WorkbenchHomeThreadDisplayOrderSnapshot, type WorkbenchPinnedThreadLayoutSnapshot, type WorkbenchProjectThreadSidebars, type WorkbenchProjectThreadSidebarUpdate, type WorkbenchProjectThreadSummaries, type WorkbenchProjectThreadSummary, type WorkbenchProjectThreadSummaryUpdate, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { createDraftTitle, type WorkbenchHarnessId, type WorkbenchHomeThreadDisplayOrderSnapshot, type WorkbenchPinnedThreadLayoutSnapshot, type WorkbenchProjectThreadSidebars, type WorkbenchProjectThreadSidebarUpdate, type WorkbenchProjectThreadSummaries, type WorkbenchProjectThreadSummary, type WorkbenchProjectThreadSummaryUpdate, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import ThreadSidebarProjectState from "./ThreadSidebarProjectState";
 
 export interface ThreadSidebarOpenResult {
   pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshot;
@@ -67,13 +67,12 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   private projectId: string | null = null;
   private projectThreadSidebars: WorkbenchProjectThreadSidebars = { projects: [] };
   private projectThreadSummaries: WorkbenchProjectThreadSummaries = { projects: [] };
-  private revision = -1;
-  private snapshot: WorkbenchThreadSidebarSnapshot | null = null;
+  private readonly projects = new Map<string, ThreadSidebarProjectState>();
   private readonly listeners = new Set<() => void>();
   private readonly queues = new Map<string, DraftQueue>();
   constructor(private readonly options: ThreadSidebarClientOptions) {}
 
-  readonly getSnapshot = () => this.snapshot;
+  readonly getSnapshot = () => this.projectId ? this.getProjectSnapshot(this.projectId) : null;
   readonly getHomeThreadDisplayOrder = () => this.homeThreadDisplayOrder;
   readonly getHomeThreadDisplayOrderSupported = () => this.homeThreadDisplayOrderSupported;
   readonly getPinnedThreadLayout = () => this.pinnedThreadLayout;
@@ -94,13 +93,12 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   };
 
   async open(projectId: string) {
-    if (this.mode === "project" && this.projectId === projectId && this.snapshot && this.isOpen) return true;
+    if (this.mode === "project" && this.projectId === projectId && this.getSnapshot() && this.isOpen) return true;
     if (this.mode !== "closed") await this.close();
     this.mode = "project";
     this.projectId = projectId;
     this.isOpen = false;
-    this.revision = -1;
-    this.projectThreadSummaries = { projects: [] };
+    this.clearProjects();
     this.publish();
     try {
       this.installOpenResult(await this.options.transport.open(projectId));
@@ -117,10 +115,8 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     if (this.mode !== "closed") await this.close();
     this.mode = "global";
     this.projectId = null;
-    this.snapshot = null;
     this.homeThreadDisplayOrderSupported = false;
-    this.revision = -1;
-    this.projectThreadSidebars = { projects: [] };
+    this.clearProjects();
     this.publish();
     try {
       if (!this.options.transport.openGlobal) throw new Error("Global thread observation is unavailable.");
@@ -136,8 +132,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       this.mode = "closed";
       this.isOpen = false;
       this.homeThreadDisplayOrderSupported = false;
-      this.projectThreadSidebars = { projects: [] };
-      this.projectThreadSummaries = { projects: [] };
+      this.clearProjects();
       this.publish();
       throw error;
     }
@@ -147,7 +142,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       if (this.installProjectSidebar(snapshot)) this.publish();
       return;
     }
-    if (snapshot.projectId === this.projectId && snapshot.revision > this.revision) this.install(snapshot);
+    if (snapshot.projectId === this.projectId) this.install(snapshot);
   }
   acceptProjectThreadSidebar(update: WorkbenchProjectThreadSidebarUpdate) {
     if (this.mode === "global" && this.installProjectSidebar(update.sidebar)) this.publish();
@@ -171,23 +166,9 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.publish();
   }
   acceptActivity(update: WorkbenchThreadActivityUpdate) {
-    const current = this.mode === "global"
-      ? this.projectThreadSidebars.projects.find(({ projectId }) => projectId === update.projectId) ?? null
-      : update.projectId === this.projectId ? this.snapshot : null;
-    if (!current || update.revision <= current.revision) return;
-    const entries = current.entries.map((entry) => entry.entryKind !== "draft" && entry.identity.harness === update.identity.harness && entry.identity.threadId === update.identity.threadId
-      ? entry.entryKind === "thread" && update.orderAt !== undefined
-        ? { ...entry, activityAt: update.activityAt, orderAt: update.orderAt }
-        : { ...entry, activityAt: update.activityAt }
-      : entry);
-    const resolved = resolveWorkbenchThreadDisplayOrder(entries, update.displayOrder ?? current.displayOrder);
-    const next = { ...current, ...resolved, revision: update.revision };
-    if (this.mode === "global") this.replaceProjectSidebar(next);
-    else {
-      this.revision = update.revision;
-      this.snapshot = next;
-    }
-    this.syncProjectThreadSummary(next);
+    if (this.mode !== "global" && (this.mode !== "project" || update.projectId !== this.projectId)) return;
+    if (!this.projectState(update.projectId).acceptActivity(update)) return;
+    this.syncProjectViews();
     this.publish();
   }
   receiveDraft(draft: WorkbenchThreadDraft) {
@@ -339,17 +320,23 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   async reopen() {
     if (this.mode === "global") {
       if (!this.options.transport.openGlobal) throw new Error("Global thread observation is unavailable.");
+      for (const state of this.projects.values()) state.resetAdmission();
       const result = await this.options.transport.openGlobal();
+      for (const [projectId, state] of this.projects) {
+        if (!state.hasAdmission() && !result.projectSidebars.projects.some((sidebar) => sidebar.projectId === projectId)) {
+          this.projects.delete(projectId);
+        }
+      }
       this.homeThreadDisplayOrder = result.homeThreadDisplayOrder ?? { displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder" };
       this.homeThreadDisplayOrderSupported = Boolean(result.homeThreadDisplayOrder);
       this.pinnedThreadLayout = result.pinnedThreadLayout;
-      this.projectThreadSidebars = { projects: [] };
       for (const sidebar of result.projectSidebars.projects) this.installProjectSidebar(sidebar);
+      this.syncProjectViews();
       this.publish();
       return;
     }
     if (this.mode === "project" && this.projectId) {
-      this.revision = -1;
+      for (const state of this.projects.values()) state.resetAdmission();
       this.installOpenResult(await this.options.transport.open(this.projectId));
     }
   }
@@ -361,9 +348,8 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.mode = "closed";
     this.projectId = null;
     this.isOpen = false;
-    this.snapshot = null;
     this.homeThreadDisplayOrderSupported = false;
-    this.projectThreadSidebars = { projects: [] };
+    this.clearProjects();
     this.publish();
     const close = mode === "global"
       ? this.options.transport.closeGlobal?.() ?? Promise.resolve()
@@ -373,61 +359,69 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     });
   }
   private install(snapshot: WorkbenchThreadSidebarSnapshot) {
-    if (snapshot.revision <= this.revision) return;
-    this.revision = snapshot.revision;
-    this.snapshot = { ...snapshot, ...resolveWorkbenchThreadDisplayOrder(snapshot.entries, snapshot.displayOrder) };
-    this.replaceProjectSidebar(this.snapshot);
-    this.syncSelectedProjectThreadSummary();
-    this.publish();
+    if (this.installProjectSidebar(snapshot)) this.publish();
   }
   private installOpenResult(result: ThreadSidebarOpenResult | WorkbenchThreadSidebarSnapshot) {
+    let changed = false;
     if ("sidebar" in result) {
-      if (result.pinnedThreadLayout.revision > this.pinnedThreadLayout.revision) this.pinnedThreadLayout = result.pinnedThreadLayout;
-      for (const summary of result.projectThreads.projects) this.setProjectThreadSummary(summary);
+      if (result.pinnedThreadLayout.revision > this.pinnedThreadLayout.revision) {
+        this.pinnedThreadLayout = result.pinnedThreadLayout;
+        changed = true;
+      }
+      for (const summary of result.projectThreads.projects) changed = this.setProjectThreadSummary(summary) || changed;
     }
-    this.install("sidebar" in result ? result.sidebar : result);
+    changed = this.installProjectSidebar("sidebar" in result ? result.sidebar : result) || changed;
+    if (changed) this.publish();
   }
   private setProjectThreadSummary(summary: WorkbenchProjectThreadSummary) {
-    const existingIndex = this.projectThreadSummaries.projects.findIndex(({ projectId }) => projectId === summary.projectId);
-    const existing = this.projectThreadSummaries.projects[existingIndex];
-    if (existing && existing.revision > summary.revision) return false;
-    if (existing && areProjectThreadSummariesEqual(existing, summary)) return false;
-    const projects = [...this.projectThreadSummaries.projects];
-    if (existingIndex === -1) projects.push(summary);
-    else projects[existingIndex] = summary;
-    this.projectThreadSummaries = { projects };
-    return true;
-  }
-  private syncSelectedProjectThreadSummary() {
-    if (!this.snapshot) return;
-    this.syncProjectThreadSummary(this.snapshot);
+    const changed = this.projectState(summary.projectId).acceptSummary(summary);
+    if (changed) this.syncProjectViews();
+    return changed;
   }
   private syncProjectThreadSummary(snapshot: WorkbenchThreadSidebarSnapshot) {
-    this.setProjectThreadSummary(createWorkbenchProjectThreadSummary(
-      snapshot.projectId,
-      snapshot.entries,
-      snapshot.revision,
-      snapshot.displayOrder,
-    ));
+    this.projectState(snapshot.projectId).syncSummary();
+    this.syncProjectViews();
   }
   private installProjectSidebar(snapshot: WorkbenchThreadSidebarSnapshot) {
-    const current = this.projectThreadSidebars.projects.find(({ projectId }) => projectId === snapshot.projectId);
-    if (current && current.revision >= snapshot.revision) return false;
-    const resolved = { ...snapshot, ...resolveWorkbenchThreadDisplayOrder(snapshot.entries, snapshot.displayOrder) };
-    this.replaceProjectSidebar(resolved);
-    this.syncProjectThreadSummary(resolved);
+    const state = this.projectState(snapshot.projectId);
+    if (!state.acceptSidebar(snapshot)) return false;
+    for (const entry of state.getSnapshot()!.entries) {
+      if (entry.entryKind === "draft") this.receiveDraft(entry.draft);
+    }
+    this.syncProjectViews();
     return true;
   }
   private replaceProjectSidebar(snapshot: WorkbenchThreadSidebarSnapshot) {
     for (const entry of snapshot.entries) {
       if (entry.entryKind === "draft") this.receiveDraft(entry.draft);
     }
-    const index = this.projectThreadSidebars.projects.findIndex(({ projectId }) => projectId === snapshot.projectId);
-    const projects = [...this.projectThreadSidebars.projects];
-    if (index === -1) projects.push(snapshot);
-    else projects[index] = snapshot;
-    this.projectThreadSidebars = { projects };
-    if (this.mode === "project" && this.projectId === snapshot.projectId) this.snapshot = snapshot;
+    this.projectState(snapshot.projectId).replaceLocalSidebar(snapshot);
+    this.syncProjectViews();
+  }
+  private projectState(projectId: string) {
+    let state = this.projects.get(projectId);
+    if (!state) {
+      state = new ThreadSidebarProjectState();
+      this.projects.set(projectId, state);
+    }
+    return state;
+  }
+  private clearProjects() {
+    this.projects.clear();
+    this.projectThreadSidebars = { projects: [] };
+    this.projectThreadSummaries = { projects: [] };
+  }
+  private syncProjectViews() {
+    const sidebars = [...this.projects.values()].flatMap((state) => state.getSnapshot() ?? []);
+    const summaries = [...this.projects.values()].flatMap((state) => state.getSummary() ?? []);
+    if (sidebars.length !== this.projectThreadSidebars.projects.length
+      || sidebars.some((sidebar, index) => sidebar !== this.projectThreadSidebars.projects[index])) {
+      this.projectThreadSidebars = { projects: sidebars };
+    }
+    if (summaries.length !== this.projectThreadSummaries.projects.length
+      || summaries.some((summary, index) => summary !== this.projectThreadSummaries.projects[index])) {
+      this.projectThreadSummaries = { projects: summaries };
+    }
   }
   private getProjectSidebar(projectId: string) {
     return this.getProjectSnapshot(projectId);
@@ -504,11 +498,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     if (queue.draft !== queue.savedDraft) await this.flushQueue(id, queue);
   }
   private publish() {
-    this.options.onChange(this.snapshot);
+    this.options.onChange(this.getSnapshot());
     for (const listener of this.listeners) listener();
   }
-}
-
-function areProjectThreadSummariesEqual(left: WorkbenchProjectThreadSummary, right: WorkbenchProjectThreadSummary) {
-  return areDeeplyEqual(left, right);
 }
