@@ -1,4 +1,5 @@
 /*
+ * Keywords: Codex, identity, recording, recovery, admission, lifecycle tests.
  * Exports:
  * - No production exports; Node tests cover app-server handoff, Workbench/provider questionnaires, transcript routing, usage hydration, reload recovery, approvals, turn-start preflight, context reads, and MCP config. Keywords: codex, bridge, questionnaire, reload, transcript, stats, recovery, approval, MCP, test.
  */
@@ -26,12 +27,16 @@ import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-typ
 import { WORKBENCH_TOOL_CONTEXT_METHOD, readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
+import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
+import WorkbenchTranscriptController from "./database/transcript/WorkbenchTranscriptController";
+import WorkbenchTranscriptCaptureGapController from "./database/transcript/WorkbenchTranscriptCaptureGapController";
 import type { WorkbenchTranscriptObservation } from "./database/transcript/workbench-transcript-types";
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import { mapProviderNotification } from "./thread-identity-provider-mapping";
+import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 
 const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
@@ -1198,11 +1203,13 @@ test("live provider observations and active baselines stay ordered across a brid
   ) => new CodexStdioBridge({
     appServer: {
       send(message: JsonRpcRequest) {
-        if (message.method !== "thread/read") return;
+        if (message.method !== "thread/read" && message.method !== "thread/turns/list") return;
         queueMicrotask(() => {
           void bridge.handleUpstreamMessage({
             id: message.id ?? null,
-            result: { thread: bridgeThread() },
+            result: message.method === "thread/turns/list"
+              ? { data: bridgeThread().turns, nextCursor: null }
+              : { thread: { ...bridgeThread(), turns: [] } },
           });
         });
       },
@@ -1465,7 +1472,9 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
       queueMicrotask(() => {
         void bridge.handleUpstreamMessage({
           id: message.id ?? null,
-          result: { thread: bridgeThread() },
+          result: message.method === "thread/turns/list"
+            ? { data: bridgeThread().turns, nextCursor: null }
+            : { thread: { ...bridgeThread(), turns: [] } },
         });
       });
     },
@@ -1505,10 +1514,12 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
       params: { includeTurns: true, threadId: "thread" },
     });
     await bridge.waitForIdle();
-    assert.equal(upstreamMessages.length, 2);
+    assert.equal(upstreamMessages.length, 4);
     assert.equal(upstreamMessages[0]?.method, "thread/read");
-    assert.deepEqual(upstreamMessages[0]?.params, { includeTurns: true, threadId: "thread" });
+    assert.deepEqual(upstreamMessages[0]?.params, { includeTurns: false, threadId: "thread" });
     assert.deepEqual(contexts, [
+      { source: "provider" },
+      { source: "provider" },
       { recoveryBoundary: true, source: "provider" },
     ]);
   } finally {
@@ -1517,6 +1528,128 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
     await fs.rm(root, { force: true, recursive: true });
   }
 });
+
+test("SQLite recovery rejects unknown WB identity before contacting the provider", async () => {
+  const upstream: JsonRpcRequest[] = [];
+  const bridge = new CodexStdioBridge({
+    appServer: { send: (request: JsonRpcRequest) => {
+      upstream.push(request);
+      queueMicrotask(() => void bridge.handleUpstreamMessage({
+        id: request.id, error: { code: -32000, message: "thread not loaded" },
+      }));
+    } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    identities: { threads: { resolve: async () => null } } as unknown as NonNullable<ConstructorParameters<typeof CodexStdioBridge>[0]["identities"]>,
+    onNotification() {}, sendToClient() {}, resolveProjectFromCwd: async () => null, storageRoot: ".",
+  });
+  try {
+    await assert.rejects(bridge.recoverSqliteTranscriptThread("missing-wb-id"), /binding|identity/);
+    assert.deepEqual(upstream, []);
+  } finally {
+    await bridge.disposeImmediately();
+  }
+});
+
+for (const interruption of ["none", "recorder failure", "cancellation"] as const) {
+  test(`paged recovery settles real WB identities and preserves the marker after ${interruption}`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-real-recovery-"));
+    const database = new WorkbenchDatabaseController({ databasePath: path.join(root, "database.sqlite3") });
+    const gaps = new WorkbenchTranscriptCaptureGapController({ markerPath: path.join(root, "gap.json") });
+    const transcript = new WorkbenchTranscriptController(database, gaps);
+    const identities = {
+      threads: new WorkbenchThreadIdentityController(database),
+      items: new WorkbenchTranscriptIdentityController(database),
+    };
+    const requests: JsonRpcRequest[] = [];
+    const cancellation = new AbortController();
+    const turns = ["old", "new"].map((id, index) => ({
+      ...bridgeThread([{
+        type: "agentMessage", id: `${id}-message`, text: id, phase: "commentary",
+        memoryCitation: null, delivery: null, questions: null,
+      }]).turns[0]!,
+      id, startedAt: index + 1,
+    }));
+    let pages = 0;
+    let interrupt = interruption;
+    const bridge = new CodexStdioBridge({
+      appServer: { send(request: JsonRpcRequest) {
+        requests.push(request);
+        const params = request.params as { threadId: string; cursor?: string; itemsView?: string };
+        assert.equal(params.threadId, "thread", "only the native binding goes upstream");
+        queueMicrotask(() => void bridge.handleUpstreamMessage({
+          id: request.id,
+          result: request.method === "thread/read"
+            ? { thread: { ...bridgeThread(), turns: [] } }
+            : params.itemsView === "notLoaded"
+              ? { data: [...turns].reverse().map((turn) => ({ ...turn, items: [], itemsView: "notLoaded" })), nextCursor: null }
+              : { data: [params.cursor ? turns[0] : turns[1]], nextCursor: params.cursor ? null : "older" },
+        }));
+      } } as unknown as CodexAppServer,
+      bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+      identities, onNotification() {}, sendToClient() {}, storageRoot: root,
+      resolveProjectFromCwd: async () => ({
+        cwd: "C:/repo", project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+        root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+      }),
+      recordSqliteTranscript: async (observations, context) => {
+        const fullPage = observations.some((entry) => entry.kind === "providerTurnScope" && entry.completeTurnIds.length > 0);
+        if (context.recoveryBoundary) {
+          assert.equal(pages, 2, "no gap closure before both full pages settle");
+        } else if (fullPage) {
+          pages++;
+          assert.equal(gaps.pendingRecoveryThreadIds.length, 1);
+          if (interrupt === "recorder failure") throw new Error("page recording failed");
+        }
+        await transcript.record(observations, context);
+        if (fullPage && interrupt === "cancellation") cancellation.abort(new Error("retiring"));
+      },
+    });
+    try {
+      await transcript.start();
+      await identities.threads.start();
+      const identity = await identities.threads.observe({
+        native: { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: "thread" },
+        projectId: "project", projectRoot: "C:/repo", title: "recovery",
+        createdAt: 1, updatedAt: 2, activityAt: 2,
+      });
+      await gaps.captureFailure({
+        error: new Error("retained gap"), recoverability: "provider", threadId: identity.threadId, turnId: null,
+      });
+      const store = (bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore }).ensureTranscriptStore();
+      store.readStoredThreadWindow = async () => { throw new Error("recovery must not read legacy history"); };
+      store.readThreadContextEntries = async () => { throw new Error("recovery must not read legacy context"); };
+      if (interruption !== "none") {
+        await assert.rejects(bridge.recoverSqliteTranscriptThread(identity.threadId, cancellation.signal));
+        assert.deepEqual(gaps.pendingRecoveryThreadIds, [identity.threadId]);
+        assert.equal(requests.filter(({ method }) => method === "thread/turns/list").length, 2);
+        interrupt = "none";
+        pages = 0;
+      }
+      await bridge.recoverSqliteTranscriptThread(identity.threadId);
+      assert.deepEqual(gaps.pendingRecoveryThreadIds, []);
+      const snapshot = await transcript.read({ threadId: identity.threadId, turnLimit: 10 });
+      assert.equal(snapshot?.thread.id, identity.threadId);
+      assert.ok(snapshot);
+      const projection = projectWorkbenchTranscript(snapshot);
+      assert.ok(projection.success);
+      assert.deepEqual(projection.data.turns.flatMap(({ items }) => items.map((item) => (
+        item.type === "agentMessage" ? item.text : item.type
+      ))), ["old", "new"]);
+      assert.ok(projection.data.turns.every((turn) => turn.id !== "old" && turn.id !== "new"));
+      assert.ok(requests.every(({ method, params }) => (
+        method !== "thread/read" || (params as { includeTurns: boolean }).includeTurns === false
+      )));
+    } finally {
+      await bridge.disposeImmediately();
+      transcript.dispose();
+      identities.threads.dispose();
+      identities.items.dispose();
+      await database.close();
+      await fs.rm(root, { force: true, recursive: true });
+    }
+  });
+}
 
 test("Workbench questionnaires share native listing, response, and transcript history routes", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-owned-questionnaire-"));

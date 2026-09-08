@@ -1,4 +1,5 @@
 /*
+ * Keywords: Codex, pagination, recovery, chronology, incomplete history.
  * Exports:
  * - No production exports; Node tests protect bounded Codex catalog import and exact previous-turn paging. Keywords: codex, thread, pagination, window, test.
  */
@@ -82,6 +83,63 @@ function withHistory(turns: Turn[], entries: WorkbenchThreadTurnHistoryEntry[]) 
 function response(result: unknown): JsonRpcResponse {
   return { id: 1, result };
 }
+
+test("recovery settles each full page before fetching another and retains only chronological metadata", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const recorded: string[] = [];
+  const loader = new CodexThreadWindowLoader(async (request) => {
+    requests.push(request);
+    if ((request.params as { itemsView: string }).itemsView === "notLoaded") {
+      return response({ data: [turn("new"), turn("old")], nextCursor: null });
+    }
+    assert.equal(requests.length, recorded.length + 2);
+    return response(requests.length === 2
+      ? { data: [turn("new", ["new-item"])], nextCursor: "older" }
+      : { data: [turn("old", ["old-item"])], nextCursor: null });
+  });
+  const catalog = await loader.recoverThread(thread(), async (page) => {
+    recorded.push(page.turn.id);
+  });
+  assert.deepEqual(recorded, ["new", "old"]);
+  assert.deepEqual(catalog.map(({ id, items }) => ({ id, items })), [
+    { id: "old", items: [] }, { id: "new", items: [] },
+  ]);
+  assert.deepEqual(requests.map(({ params }) => params), [
+    { threadId: "thread", sortDirection: "desc", itemsView: "notLoaded", limit: 100 },
+    { threadId: "thread", sortDirection: "desc", itemsView: "full", limit: 1 },
+    { threadId: "thread", sortDirection: "desc", itemsView: "full", limit: 1, cursor: "older" },
+  ]);
+});
+
+for (const failure of ["recording", "repeated cursor", "repeated turn", "incomplete turn"] as const) {
+  test(`recovery cannot complete after ${failure}`, async () => {
+    let reads = 0;
+    const loader = new CodexThreadWindowLoader(async (request) => {
+      if ((request.params as { itemsView: string }).itemsView === "notLoaded") {
+        return response({ data: [turn("one")], nextCursor: null });
+      }
+      reads++;
+      return response({
+        data: [failure === "incomplete turn" ? turn("one") : turn(
+          failure === "repeated turn" ? "one" : String(reads), ["item"],
+        )],
+        nextCursor: "again",
+      });
+    });
+    await assert.rejects(loader.recoverThread(thread(), async () => {
+      if (failure === "recording") throw new Error("recorder failed");
+    }));
+    assert.ok(reads <= 2);
+  });
+}
+
+test("recovery cannot close over a catalogued turn omitted by full paging", async () => {
+  const loader = new CodexThreadWindowLoader(async (request) => response({
+    data: (request.params as { itemsView: string }).itemsView === "notLoaded" ? [turn("missing")] : [],
+    nextCursor: null,
+  }));
+  await assert.rejects(loader.recoverThread(thread(), async () => {}), /every catalogued turn/);
+});
 
 function fakeStore(previousCursors: Record<string, string | null | undefined> = {}) {
   const catalogs: Array<{ boundary?: { cursor: string | null; turnId: string }; turns: Turn[] }> = [];

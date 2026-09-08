@@ -1,4 +1,5 @@
 /*
+ * Keywords: Codex, provider pagination, recovery, bounded history.
  * Exports:
  * - CodexThreadWindowLoad: fetched provider projection plus its ordered recording input. Keywords: codex, thread, window, load.
  * - CodexThreadWindowRecord: one fetched provider catalog and materialized page admitted for ordered recording. Keywords: codex, thread, window, record.
@@ -113,6 +114,57 @@ export default class CodexThreadWindowLoader {
   constructor(
     private readonly request: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
   ) {}
+
+  async recoverThread(
+    thread: Thread,
+    settlePage: (page: { turn: Turn; previousCursor: string | null }) => Promise<void>,
+    settleCatalog: (turns: Turn[]) => Promise<void> = async () => undefined,
+  ): Promise<Turn[]> {
+    const catalog: Turn[] = [];
+    for await (const page of this.recoveryPages(thread.id, "notLoaded")) {
+      catalog.push(...page.data.map((turn) => ({ ...turn, items: [], itemsView: "notLoaded" as const })));
+    }
+    await settleCatalog(catalog.reverse());
+    const turns: Turn[] = [];
+    for await (const page of this.recoveryPages(thread.id, "full")) {
+      const turn = page.data[0];
+      if (!turn) continue;
+      await settlePage({ turn, previousCursor: page.nextCursor });
+      turns.push({ ...turn, items: [], itemsView: "notLoaded" });
+    }
+    const recovered = new Set(turns.map(({ id }) => id));
+    if (catalog.some(({ id }) => !recovered.has(id))) {
+      throw new Error("Codex recovery did not return every catalogued turn.");
+    }
+    return turns.reverse();
+  }
+
+  private async *recoveryPages(threadId: string, itemsView: "full" | "notLoaded") {
+    const turnIds = new Set<string>();
+    const cursors = new Set<string>();
+    let cursor: string | null = null;
+    do {
+      const page = await this.requestTurns({
+        threadId, itemsView, limit: itemsView === "full" ? 1 : 100, sortDirection: "desc",
+        ...(cursor === null ? {} : { cursor }),
+      });
+      if ((itemsView === "full" && page.data.length > 1) || (!page.data.length && page.nextCursor !== null)) {
+        throw new Error("Codex recovery returned an invalid turn page.");
+      }
+      if (page.nextCursor !== null && cursors.has(page.nextCursor)) {
+        throw new Error("Codex repeated a recovery turn cursor.");
+      }
+      if (page.nextCursor !== null) cursors.add(page.nextCursor);
+      for (const turn of page.data) {
+        if (turnIds.has(turn.id) || (itemsView === "full" && turn.itemsView !== "full")) {
+          throw new Error("Codex recovery returned a repeated or incomplete turn.");
+        }
+        turnIds.add(turn.id);
+      }
+      yield page;
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+  }
 
   async ensureWindow(
     store: CodexThreadWindowStore,

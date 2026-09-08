@@ -1,7 +1,7 @@
 /*
  * Keywords: Codex bridge, patch controller, reload handoff, transcript readiness.
  * Exports:
- * - recoverCodexSqliteTranscriptBeforeAvailability: settle marked recovery and active provider baselines before reopening Codex. Keywords: codex, transcript, recovery, baseline.
+ * - recoverCodexSqliteTranscripts: repair marked recovery and active baselines independently of harness availability.
  * - default CodexBridgeNode: own reloadable Codex bridge code and questionnaire routing while preserving the parent app-server process. Keywords: codex, bridge, questionnaire, handoff.
  */
 import CodexStdioBridge from "./CodexStdioBridge";
@@ -16,36 +16,43 @@ function record(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-export async function recoverCodexSqliteTranscriptBeforeAvailability(
+export async function recoverCodexSqliteTranscripts(
   bridge: Pick<CodexStdioBridge, "recoverSqliteTranscriptThread">,
   transcript: Pick<OrchestratorRuntimeObjects["transcript"], "cutoverFailure" | "pendingRecoveryThreadIds">,
   reportFailure: (threadId: string | null, error: unknown) => void,
   recoverAvailable: () => Promise<void>,
   activeBaseline?: {
     captureGap(threadId: string, error: unknown): Promise<Error>;
-    readThread(threadId: string): Promise<void>;
+    readThread(threadId: string, signal?: AbortSignal): Promise<void>;
     threadIds: readonly string[];
   },
+  signal?: AbortSignal,
 ) {
+  await recoverAvailable();
   let reportedRecoveryFailure = false;
   const recoveryThreadIds = [...transcript.pendingRecoveryThreadIds];
   const attemptedThreadIds = new Set(recoveryThreadIds);
   for (const threadId of recoveryThreadIds) {
+    if (signal?.aborted) return;
     try {
-      await bridge.recoverSqliteTranscriptThread(threadId);
+      await bridge.recoverSqliteTranscriptThread(threadId, signal);
+      if (signal?.aborted) return;
       if (transcript.pendingRecoveryThreadIds.includes(threadId)) {
         throw new Error(`SQLite transcript recovery did not settle thread ${threadId}.`);
       }
     } catch (error) {
+      if (signal?.aborted) return;
       reportedRecoveryFailure = true;
       reportFailure(threadId, error);
     }
   }
   for (const threadId of new Set(activeBaseline?.threadIds ?? [])) {
+    if (signal?.aborted) return;
     if (attemptedThreadIds.has(threadId)) continue;
     try {
-      await activeBaseline!.readThread(threadId);
+      await activeBaseline!.readThread(threadId, signal);
     } catch (error) {
+      if (signal?.aborted) return;
       reportedRecoveryFailure = true;
       try {
         reportFailure(threadId, await activeBaseline!.captureGap(threadId, error));
@@ -60,7 +67,6 @@ export async function recoverCodexSqliteTranscriptBeforeAvailability(
   if (!reportedRecoveryFailure && transcript.cutoverFailure) {
     reportFailure(null, transcript.cutoverFailure);
   }
-  await recoverAvailable();
 }
 
 export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntimeObjects, OrchestratorProviderNotification>({
@@ -82,6 +88,41 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     const threadState = build.get("threadState");
     const turnRecovery = build.get("turnRecovery");
     let bridge!: CodexStdioBridge;
+    let recovery: { controller: AbortController; completion: Promise<void> } | null = null;
+    const reportRecoveryFailure = (threadId: string | null, error: unknown) => {
+      build.get("transcriptShadowLog").write({
+        event: "capture-recovery-failed",
+        fields: {
+          ...(threadId ? { threadId } : {}),
+          message: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+        },
+        level: "error", source: "codex-transcript",
+      });
+    };
+    const startRecovery = () => {
+      if (recovery) return;
+      const controller = new AbortController();
+      const completion = (async () => {
+        await recoverCodexSqliteTranscripts(
+          bridge, transcript, reportRecoveryFailure,
+          // Process startup already owns persisted turn recovery. Replacement has no such callback.
+          build.mode === "initial" ? async () => undefined : () => harnesses.recoverAvailable("codex"),
+          build.isReplacing("server:database") ? {
+            captureGap: (threadId, error) => transcript.captureProviderGap(threadId, error),
+            readThread: (threadId, signal) => bridge.baselineSqliteTranscriptThread(threadId, signal),
+            threadIds: bridge.activeSqliteTranscriptThreadIds,
+          } : undefined,
+          controller.signal,
+        );
+      })().catch((error) => {
+        if (!controller.signal.aborted) reportRecoveryFailure(null, error);
+      });
+      recovery = { controller, completion };
+    };
+    const stopRecovery = async () => {
+      recovery?.controller.abort(new Error("Codex transcript recovery retired with its bridge."));
+      await recovery?.completion;
+    };
     const prepareTurnStart = async (
       request: JsonRpcRequest,
       requestProvider: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
@@ -111,6 +152,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     bridge = new CodexStdioBridge({
       ...context.createCodexBridgeOptions(parent.appServer, build.handoffState as CodexStdioBridgeReloadState | undefined),
       identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
+      onInitialized: build.mode === "initial" ? startRecovery : undefined,
       instructions: codexInstructions,
       prepareThreadConfiguration: async (thread, requests) => {
         const profile = await threadState.prepareCodexProfile(thread);
@@ -147,35 +189,13 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     let activated = build.mode === "initial";
     let detached = false;
     return {
-      activate: async () => {
+      activate: () => {
         if (build.mode === "replacement") codexMcpGeneration.bump();
         activated = true;
-        await recoverCodexSqliteTranscriptBeforeAvailability(
-          bridge,
-          transcript,
-          (threadId, error) => {
-            const message = error instanceof Error ? error.message : String(error);
-            build.get("transcriptShadowLog").write({
-              event: "capture-recovery-failed",
-              fields: {
-                ...(threadId ? { threadId } : {}),
-                message: message.slice(0, 500),
-              },
-              level: "error",
-              source: "codex-transcript",
-            });
-          },
-          () => harnesses.recoverAvailable("codex"),
-          build.isReplacing("server:database")
-            ? {
-                captureGap: (threadId, error) => transcript.captureProviderGap(threadId, error),
-                readThread: (threadId) => bridge.baselineSqliteTranscriptThread(threadId),
-                threadIds: bridge.activeSqliteTranscriptThreadIds,
-              }
-            : undefined,
-        );
+        startRecovery();
       },
       detachForReload: async (replacement) => {
+        await stopRecovery();
         const restartingAppServer = replacement.isReplacing("harness:codex");
         if (restartingAppServer) turnRecovery.captureForReload(["codex"]);
         context.onCodexBridgeUnavailable(restartingAppServer);
@@ -184,6 +204,7 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
         return state;
       },
       dispose: async () => {
+        await stopRecovery();
         if (detached) return;
         if (activated) await bridge.dispose();
         else await bridge.detachForReload();
