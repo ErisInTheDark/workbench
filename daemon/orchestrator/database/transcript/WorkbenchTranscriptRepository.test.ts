@@ -370,6 +370,46 @@ test("a delayed compatibility window cannot replace a directly materialized live
   }
 });
 
+test("first historical bodies complete missing timing without changing retained or live facts", () => {
+  const { database, repository } = createRepository();
+  try {
+    const missing = { ...turnObservation("missing", 0), startedAt: null, endedAt: null, durationMs: null };
+    const known = turnObservation("known", 1);
+    const unloaded = { ...turnObservation("unloaded", 2), durationMs: null };
+    const live = { ...turnObservation("live", 3), durationMs: null };
+    repository.settle([{
+      kind: "usageWindow", threadId: "thread",
+      catalog: [threadObservation(), missing, known, unloaded, live],
+      observations: [],
+    }]);
+    repository.settle([live]);
+    const before = database.prepare("SELECT * FROM thread_turns ORDER BY turn_index").all();
+    const window = canonicalWindow([
+      threadObservation(),
+      turnObservation("missing", 0),
+      { ...known, startedAt: 100, endedAt: 200, durationMs: 100, state: "inProgress" },
+      turnObservation("unloaded", 2),
+      turnObservation("live", 3),
+    ], ["missing", "known", "live"]);
+    repository.settle([window]);
+    const snapshot = repository.read({ threadId: "thread", turnIds: ["missing", "known", "live"], turnLimit: 3 })!;
+    assert.deepEqual(snapshot.turns.map(({ started_at, ended_at, duration_ms }) => ({
+      started_at, ended_at, duration_ms,
+    })), [
+      { started_at: 2, ended_at: 3, duration_ms: 1_000 },
+      { started_at: 3, ended_at: 4, duration_ms: 1_000 },
+      { started_at: 4, ended_at: 5, duration_ms: null },
+      { started_at: 5, ended_at: 6, duration_ms: null },
+    ]);
+    assert.deepEqual(snapshot.turns.slice(1), before.slice(1));
+    assert.equal(repository.read({ threadId: "thread", turnIds: ["unloaded"], turnLimit: 1 }), null);
+    repository.settle([window]);
+    assert.deepEqual(repository.read({ threadId: "thread", turnIds: ["missing", "known", "live"], turnLimit: 3 }), snapshot);
+  } finally {
+    database.close();
+  }
+});
+
 test("usage-only import seeds catalog parents but never materializes transcript bodies", () => {
   const { database, repository } = createRepository();
   try {

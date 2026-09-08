@@ -809,6 +809,19 @@ export default class WorkbenchTranscriptRepository {
       for (const [itemPosition, { observation }] of identifiedItems.entries()) {
         this.#settleObservation(this.#withItemPosition(observation, itemPosition), true, index);
       }
+      const retainedTurn = index.turnsById.get(turnId)!;
+      const observedTurn = turnsById.get(turnId)!;
+      const timing = {
+        started_at: retainedTurn.started_at ?? observedTurn.startedAt,
+        ended_at: retainedTurn.ended_at ?? observedTurn.endedAt,
+        duration_ms: retainedTurn.duration_ms ?? observedTurn.durationMs,
+      };
+      if (timing.started_at !== retainedTurn.started_at
+        || timing.ended_at !== retainedTurn.ended_at
+        || timing.duration_ms !== retainedTurn.duration_ms) {
+        this.#run(updateRows(coreTables.threadTurns, timing, { id: turnId }));
+        index.turnsById.set(turnId, { ...retainedTurn, ...timing });
+      }
       this.#materializeTurn(window.threadId, turnId, index);
     }
 
