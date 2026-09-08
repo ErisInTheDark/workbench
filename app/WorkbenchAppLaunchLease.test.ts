@@ -23,3 +23,23 @@ test("allows one app lease and releases it for the next process owner", async (c
   assert.ok(next);
   await next.dispose();
 });
+
+test("installation roots isolate app leases without changing within-installation exclusion", async context => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-installation-leases-"));
+  const firstRoot = path.join(root, "first");
+  const secondRoot = path.join(root, "second");
+  const firstOptions = { repositoryRootPath: firstRoot, workbenchLibraryRoot: path.join(root, "legacy-library") };
+  const secondOptions = { ...firstOptions, repositoryRootPath: secondRoot };
+  let first: Awaited<ReturnType<typeof WorkbenchAppLaunchLease.acquire>> = null;
+  let second: Awaited<ReturnType<typeof WorkbenchAppLaunchLease.acquire>> = null;
+  context.after(async () => {
+    await second?.dispose();
+    await first?.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  first = await WorkbenchAppLaunchLease.acquire(firstOptions);
+  assert.ok(first);
+  second = await WorkbenchAppLaunchLease.acquire(secondOptions);
+  assert.ok(second);
+  assert.equal(await WorkbenchAppLaunchLease.acquire(firstOptions), null);
+});

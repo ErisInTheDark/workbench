@@ -25,12 +25,14 @@ import {
     appStateTableInventory,
     appStateTables,
 } from "workbench-shared/state/workbench-app-state-schema";
-import resolveWorkbenchLibraryRoot from "../workbench-library-root.ts";
+import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/schema-release-manifest";
+import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
+import resolveWorkbenchRuntimeRoot from "../workbench-runtime-root.ts";
 
 export interface WorkbenchAppStateRepositoryOptions {
   databasePath?: string;
   now?: () => number;
-  workbenchLibraryRoot?: string;
+  repositoryRootPath?: string;
 }
 
 export default class WorkbenchAppStateRepository {
@@ -41,8 +43,8 @@ export default class WorkbenchAppStateRepository {
   #opening: Promise<string> | null = null;
 
   constructor(options: WorkbenchAppStateRepositoryOptions = {}) {
-    const libraryRoot = resolveWorkbenchLibraryRoot(options.workbenchLibraryRoot);
-    this.databasePath = path.resolve(options.databasePath ?? path.join(libraryRoot, "runtime", "app-state.sqlite3"));
+    const runtimeRoot = resolveWorkbenchRuntimeRoot(options.repositoryRootPath);
+    this.databasePath = path.resolve(options.databasePath ?? path.join(runtimeRoot, "app-state.sqlite3"));
     this.#now = options.now ?? Date.now;
   }
 
@@ -60,6 +62,7 @@ export default class WorkbenchAppStateRepository {
   }
 
   async #open() {
+    assertSchemaReleaseManifest(appStateSchema, appStateReleases, "app");
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true });
     const database = new Database(this.databasePath);
     try {

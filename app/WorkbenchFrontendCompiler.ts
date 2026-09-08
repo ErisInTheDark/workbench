@@ -1,4 +1,5 @@
 /*
+ * Keywords: frontend, installation, compilation, watch, output.
  * Exports:
  * - WorkbenchFrontendCompilerOptions: repository, output, environment, and diagnostic seams. Keywords: frontend, compiler, configuration.
  * - default WorkbenchFrontendCompiler: own frontend output, generation identity, and esbuild/Tailwind watch lifecycles. Keywords: frontend, compiler, watch, generation, controller.
@@ -18,7 +19,7 @@ import {
   type WorkbenchFrontendGeneration,
   WORKBENCH_STYLESHEET_GENERATION_PROPERTY,
 } from "workbench-shared/frontend-generation";
-import resolveWorkbenchLibraryRoot from "./workbench-library-root.ts";
+import resolveWorkbenchRuntimeRoot from "./workbench-runtime-root.ts";
 
 export interface WorkbenchFrontendCompilerOptions {
   environment?: NodeJS.ProcessEnv;
@@ -78,9 +79,8 @@ export default class WorkbenchFrontendCompiler {
     this.appDirectoryPath = path.join(this.repositoryRootPath, "app");
     this.staticDirectoryPath = path.join(this.repositoryRootPath, "static");
     this.environment = { ...process.env, ...options.environment };
-    const workbenchLibraryRoot = resolveWorkbenchLibraryRoot(this.environment.WORKBENCH_LIBRARY_ROOT);
     this.outputDirectoryPath = path.resolve(
-      options.outputDirectoryPath ?? path.join(workbenchLibraryRoot, "runtime", "app"),
+      options.outputDirectoryPath ?? path.join(resolveWorkbenchRuntimeRoot(this.repositoryRootPath), "frontend"),
     );
     this.readReactDevelopmentMode = options.readReactDevelopmentMode ?? (() => false);
     this.logger = options.logger ?? new WorkbenchProcessLogger();

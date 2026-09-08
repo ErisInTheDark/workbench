@@ -145,6 +145,7 @@ export default class WorkbenchAppRuntime {
           "package.json",
           "app/WorkbenchApp.ts",
           "app/WorkbenchAppLaunchLease.ts",
+          "app/workbench-runtime-root.ts",
           "app/WorkbenchAppProcessProtocol.ts",
           "app/WorkbenchFrontendServer.ts",
           "app/runtime/WorkbenchAppRuntime.ts",

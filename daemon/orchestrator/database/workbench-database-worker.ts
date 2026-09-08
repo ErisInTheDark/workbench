@@ -6,7 +6,7 @@ import { parentPort } from "node:worker_threads";
 import Database from "better-sqlite3";
 
 import type { WorkbenchDatabaseInventory, WorkbenchDatabaseRequest, WorkbenchDatabaseResponse } from "./workbench-database-protocol.ts";
-import { workbenchDatabaseSchema, workbenchDatabaseTables } from "./workbench-database-schema.ts";
+import { validateWorkbenchDatabaseReleases, workbenchDatabaseSchema, workbenchDatabaseTables } from "./workbench-database-schema.ts";
 import migrateWorkbenchDatabase from "workbench-shared/database/workbench-database-migration";
 import {
   compileWorkbenchDatabaseStatement,
@@ -331,6 +331,7 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
   if (request.type === "initialize") {
     try {
       if (database) throw new Error("Workbench database is already initialized");
+      validateWorkbenchDatabaseReleases();
       database = new Database(request.databasePath);
       database.pragma("foreign_keys = ON");
       database.pragma("journal_mode = WAL");

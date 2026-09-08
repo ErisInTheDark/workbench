@@ -5,6 +5,7 @@
  * - composerProfileImports: durable legacy-import completion.
  * - composerProfileTables/composerProfileSchemaHistory: current catalogue inventory and schema history.
  */
+import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { check, defineTable, enumText, integer, literal, sql, text } from "workbench-shared/database/schema/schema-definition";
 import { createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "workbench-shared/database/schema/schema-history";
 
@@ -35,11 +36,11 @@ const imports = defineTable("workbench_composer_profile_imports", {
 });
 const profileHistory = defineTableHistory({
   current: profiles,
-  versions: [tableVersion({ schemaVersion: 11, table: profiles, migration: createTable(profiles) })],
+  versions: [tableVersion({ schemaVersion: databaseReleases.composerProfiles.version, table: profiles, migration: createTable(profiles) })],
 });
 const importHistory = defineTableHistory({
   current: imports,
-  versions: [tableVersion({ schemaVersion: 11, table: imports, migration: createTable(imports) })],
+  versions: [tableVersion({ schemaVersion: databaseReleases.composerProfiles.version, table: imports, migration: createTable(imports) })],
 });
 export const composerProfiles = profileHistory.current;
 export const composerProfileImports = importHistory.current;

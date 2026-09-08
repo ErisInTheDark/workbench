@@ -22,7 +22,7 @@ function quietLogger() {
   });
 }
 
-test("keeps generated output outside the repository source watch root", () => {
+test("installation roots isolate generated output from shared library configuration", () => {
   const repositoryRootPath = path.join(os.tmpdir(), "workbench-source-root");
   const workbenchLibraryRoot = path.join(os.tmpdir(), "workbench-library-root");
   const compiler = new WorkbenchFrontendCompiler({
@@ -31,11 +31,18 @@ test("keeps generated output outside the repository source watch root", () => {
     repositoryRootPath,
   });
 
-  assert.equal(
-    compiler.outputDirectoryPath,
-    path.join(workbenchLibraryRoot, "runtime", "app"),
-  );
-  assert.equal(path.relative(repositoryRootPath, compiler.outputDirectoryPath).startsWith(".."), true);
+  const other = new WorkbenchFrontendCompiler({
+    environment: { WORKBENCH_LIBRARY_ROOT: workbenchLibraryRoot },
+    logger: quietLogger(),
+    repositoryRootPath: `${repositoryRootPath}-other`,
+  });
+  assert.notEqual(compiler.outputDirectoryPath, other.outputDirectoryPath);
+  const relative = path.relative(repositoryRootPath, compiler.outputDirectoryPath);
+  assert.equal(relative.startsWith("..") || path.isAbsolute(relative), false);
+  const explicit = new WorkbenchFrontendCompiler({
+    logger: quietLogger(), repositoryRootPath, outputDirectoryPath: workbenchLibraryRoot,
+  });
+  assert.equal(explicit.outputDirectoryPath, workbenchLibraryRoot);
 });
 
 test("watches the real browser app into static output without Next runtime imports", async (context) => {

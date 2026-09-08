@@ -18,6 +18,7 @@
  * ItemSchemaRows: selected row types for current item tables. Keywords: database, schema, types.
  * itemSchemaHistory: private item table histories. Keywords: database, schema, history.
  */
+import databaseReleases from "./releases.ts";
 import {
   check,
   defineTable,
@@ -37,7 +38,7 @@ import {
 } from "../../../database/schema/schema-definition.ts";
 import { addColumns, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion } from "../../../database/schema/schema-history.ts";
 
-function initialHistory<Table extends TableDefinition>(table: Table, schemaVersion = 1) {
+function initialHistory<Table extends TableDefinition>(table: Table, schemaVersion: number = databaseReleases.initialTranscript.version) {
   return defineTableHistory({
     versions: [tableVersion({ schemaVersion, table, migration: createTable(table) })],
     current: table,
@@ -113,9 +114,9 @@ const threadItemsV3 = evolveTable(threadItemsV2, {
 const threadItemsHistory = defineTableHistory({
   current: threadItemsV3,
   versions: [
-    tableVersion({ schemaVersion: 1, table: threadItemsV1, migration: createTable(threadItemsV1) }),
-    tableVersion({ schemaVersion: 13, table: threadItemsV2, migration: rebuildTable({ from: threadItemsV1, to: threadItemsV2 }) }),
-    tableVersion({ schemaVersion: 19, table: threadItemsV3, migration: rebuildTable({ from: threadItemsV2, to: threadItemsV3 }) }),
+    tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadItemsV1, migration: createTable(threadItemsV1) }),
+    tableVersion({ schemaVersion: databaseReleases.toolOutputParts.version, table: threadItemsV2, migration: rebuildTable({ from: threadItemsV1, to: threadItemsV2 }) }),
+    tableVersion({ schemaVersion: databaseReleases.userInputKinds.version, table: threadItemsV3, migration: rebuildTable({ from: threadItemsV2, to: threadItemsV3 }) }),
   ],
 });
 export const threadItems = threadItemsHistory.current;
@@ -145,9 +146,9 @@ const threadItemUserMessagesV2 = evolveTable(threadItemUserMessagesV1, {
 const threadItemUserMessagesHistory = defineTableHistory({
   current: threadItemUserMessagesV2,
   versions: [
-    tableVersion({ schemaVersion: 1, table: threadItemUserMessagesV1, migration: createTable(threadItemUserMessagesV1) }),
+    tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadItemUserMessagesV1, migration: createTable(threadItemUserMessagesV1) }),
     tableVersion({
-      schemaVersion: 19,
+      schemaVersion: databaseReleases.userInputKinds.version,
       table: threadItemUserMessagesV2,
       migration: addColumns({ from: threadItemUserMessagesV1, to: threadItemUserMessagesV2, columns: ["input_kind"] }),
     }),
@@ -258,8 +259,8 @@ const threadItemFileChangesV2 = evolveTable(threadItemFileChangesV1, {
 const threadItemFileChangesHistory = defineTableHistory({
   current: threadItemFileChangesV2,
   versions: [
-    tableVersion({ schemaVersion: 1, table: threadItemFileChangesV1, migration: createTable(threadItemFileChangesV1) }),
-    tableVersion({ schemaVersion: 14, table: threadItemFileChangesV2, migration: addColumns({
+    tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadItemFileChangesV1, migration: createTable(threadItemFileChangesV1) }),
+    tableVersion({ schemaVersion: databaseReleases.fileChangeDetails.version, table: threadItemFileChangesV2, migration: addColumns({
       from: threadItemFileChangesV1, to: threadItemFileChangesV2, columns: ["workbench_policy", "recovery_state", "recovery_detail"],
     }) }),
   ],
@@ -296,8 +297,8 @@ const threadFileChangesV2 = evolveTable(threadFileChangesV1, {
 const threadFileChangesHistory = defineTableHistory({
   current: threadFileChangesV2,
   versions: [
-    tableVersion({ schemaVersion: 1, table: threadFileChangesV1, migration: createTable(threadFileChangesV1) }),
-    tableVersion({ schemaVersion: 14, table: threadFileChangesV2, migration: addColumns({
+    tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadFileChangesV1, migration: createTable(threadFileChangesV1) }),
+    tableVersion({ schemaVersion: databaseReleases.fileChangeDetails.version, table: threadFileChangesV2, migration: addColumns({
       from: threadFileChangesV1, to: threadFileChangesV2, columns: ["analysis_outcome", "analysis_detail", "analysis_additions", "analysis_deletions"],
     }) }),
   ],
@@ -322,7 +323,7 @@ const threadFileChangeHunksV1 = defineTable("thread_file_change_hunks", {
     foreignKey([table.item_id, table.change_index], { table: "thread_file_changes", columns: ["item_id", "change_index"], onDelete: "CASCADE" }),
   ],
 }));
-const threadFileChangeHunksHistory = initialHistory(threadFileChangeHunksV1, 14);
+const threadFileChangeHunksHistory = initialHistory(threadFileChangeHunksV1, databaseReleases.fileChangeDetails.version);
 export const threadFileChangeHunks = threadFileChangeHunksHistory.current;
 
 const threadFileChangeCandidatesV1 = defineTable("thread_file_change_candidates", {
@@ -339,7 +340,7 @@ const threadFileChangeCandidatesV1 = defineTable("thread_file_change_candidates"
     }),
   ],
 }));
-const threadFileChangeCandidatesHistory = initialHistory(threadFileChangeCandidatesV1, 14);
+const threadFileChangeCandidatesHistory = initialHistory(threadFileChangeCandidatesV1, databaseReleases.fileChangeDetails.version);
 export const threadFileChangeCandidates = threadFileChangeCandidatesHistory.current;
 
 const threadItemContextCompactionsV1 = defineTable("thread_item_context_compactions", {
@@ -392,7 +393,7 @@ const threadItemToolOutputsV1 = defineTable("thread_item_tool_outputs", {
     `),
   ],
 }));
-const threadItemToolOutputsHistory = initialHistory(threadItemToolOutputsV1, 13);
+const threadItemToolOutputsHistory = initialHistory(threadItemToolOutputsV1, databaseReleases.toolOutputParts.version);
 export const threadItemToolOutputs = threadItemToolOutputsHistory.current;
 
 const threadToolOutputPartsV1 = defineTable("thread_tool_output_parts", {
@@ -411,7 +412,7 @@ const threadToolOutputPartsV1 = defineTable("thread_tool_output_parts", {
     `),
   ],
 }));
-const threadToolOutputPartsHistory = initialHistory(threadToolOutputPartsV1, 13);
+const threadToolOutputPartsHistory = initialHistory(threadToolOutputPartsV1, databaseReleases.toolOutputParts.version);
 export const threadToolOutputParts = threadToolOutputPartsHistory.current;
 
 const threadItemTimelinesV1 = defineTable("thread_item_timelines", {

@@ -14,6 +14,8 @@
  * defineWorkbenchDatabaseSchema: assemble and validate all subsystem histories. Keywords: database, schema, assembly.
  * applyWorkbenchDatabaseSchema: apply missing versions through an explicit target or latest, without downgrades. Keywords: database, schema, migration.
  * readWorkbenchDatabaseMigrationRange: validate a schema target and read its installed version without writes.
+ * TableMigration: typed operation belonging to one ordered release.
+ * readWorkbenchDatabaseSchemaHistory: expose immutable ordered releases for independent validation.
  */
 import type Database from "better-sqlite3";
 
@@ -72,7 +74,7 @@ interface RebuildTableMigration {
   readonly copy: readonly RebuildCopy[];
 }
 
-type TableMigration = CreateTableMigration | AddColumnsMigration | CreateIndexesMigration | RebuildTableMigration;
+export type TableMigration = CreateTableMigration | AddColumnsMigration | CreateIndexesMigration | RebuildTableMigration;
 
 export interface TableVersion<Table extends TableDefinition = TableDefinition> {
   readonly schemaVersion: number;
@@ -452,6 +454,14 @@ export function readWorkbenchDatabaseMigrationRange(
     throw new Error(`Workbench database schema ${installedVersion} is newer than target schema ${targetVersion}`);
   }
   return { installedVersion, targetVersion };
+}
+
+export function readWorkbenchDatabaseSchemaHistory(schema: WorkbenchDatabaseSchema) {
+  const versions = databaseSchemaVersionData.get(schema);
+  if (!versions) throw new Error("Unknown Workbench database schema token");
+  return Object.freeze([...versions]
+    .sort(([left], [right]) => left - right)
+    .map(([version, operations]) => Object.freeze({ version, operations })));
 }
 
 export function applyWorkbenchDatabaseSchema(

@@ -1,4 +1,5 @@
 /*
+ * Keywords: database, transcript, threads, turns, history.
  * workbenchHarnesses: current harness identity table. Keywords: database, schema, harness.
  * workbenchThreads: current Workbench thread table. Keywords: database, schema, thread.
  * workbenchPendingImportThreads: current temporary native import mapping table. Keywords: database, schema, import.
@@ -9,6 +10,7 @@
  * CoreSchemaRows: selected row types for current core tables. Keywords: database, schema, types.
  * coreSchemaHistory: private core table histories. Keywords: database, schema, history.
  */
+import databaseReleases from "./releases.ts";
 import {
   booleanInteger,
   check,
@@ -35,7 +37,7 @@ import {
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
-    versions: [tableVersion({ schemaVersion: 1, table, migration: createTable(table) })],
+    versions: [tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table, migration: createTable(table) })],
     current: table,
   });
 }
@@ -70,9 +72,9 @@ const workbenchThreadsV2 = evolveTable(workbenchThreadsV1, {
 const workbenchThreadsHistory = defineTableHistory({
   current: workbenchThreadsV2,
   versions: [
-    tableVersion({ schemaVersion: 1, table: workbenchThreadsV1, migration: createTable(workbenchThreadsV1) }),
+    tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: workbenchThreadsV1, migration: createTable(workbenchThreadsV1) }),
     tableVersion({
-      schemaVersion: 17,
+      schemaVersion: databaseReleases.threadIdentityOrigin.version,
       table: workbenchThreadsV2,
       migration: addColumns({ from: workbenchThreadsV1, to: workbenchThreadsV2, columns: ["identity_origin"] }),
     }),
@@ -126,9 +128,9 @@ const threadTurnsV2 = evolveTable(threadTurnsV1, {
 const threadTurnsHistory = defineTableHistory({
   current: threadTurnsV2,
   versions: [
-    tableVersion({ schemaVersion: 1, table: threadTurnsV1, migration: createTable(threadTurnsV1) }),
+    tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadTurnsV1, migration: createTable(threadTurnsV1) }),
     tableVersion({
-      schemaVersion: 18,
+      schemaVersion: databaseReleases.transcriptIdentity.version,
       table: threadTurnsV2,
       migration: addColumns({ from: threadTurnsV1, to: threadTurnsV2, columns: ["identity_origin"] }),
     }),

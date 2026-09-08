@@ -1,4 +1,5 @@
 /*
+ * Keywords: app state, preferences, drafts, database, history.
  * Exports:
  * - appStateClientTables: current app-state tables admitted to the browser wire boundary. Keywords: app, browser, SQLite, state.
  * - appStateTables: complete typed table inventory for app-owned preferences and recoverable drafts. Keywords: app, SQLite, state, schema.
@@ -6,6 +7,7 @@
  * - appStateSchema: versioned app-state schema installed by the repository. Keywords: app, SQLite, schema, history.
  * - AppStateRows: inferred selected row types for app-state tables. Keywords: app, SQLite, rows, types.
  */
+import appStateReleases from "./workbench-app-state-releases.ts";
 import {
   booleanInteger,
   check,
@@ -34,7 +36,7 @@ import {
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
     current: table,
-    versions: [tableVersion({ migration: createTable(table), schemaVersion: 1, table })],
+    versions: [tableVersion({ migration: createTable(table), schemaVersion: appStateReleases.initialAppState.version, table })],
   });
 }
 
@@ -284,30 +286,30 @@ const globalPreferencesV6 = defineTable("global_preferences", {
 
 const globalPreferencesHistory = defineTableHistory({
   versions: [
-    tableVersion({ migration: createTable(globalPreferencesV1), schemaVersion: 1, table: globalPreferencesV1 }),
+    tableVersion({ migration: createTable(globalPreferencesV1), schemaVersion: appStateReleases.initialAppState.version, table: globalPreferencesV1 }),
     tableVersion({
       migration: rebuildTable({ from: globalPreferencesV1, to: globalPreferencesV2 }),
-      schemaVersion: 2,
+      schemaVersion: appStateReleases.globalPreferencesV2.version,
       table: globalPreferencesV2,
     }),
     tableVersion({
       migration: rebuildTable({ from: globalPreferencesV2, to: globalPreferencesV3 }),
-      schemaVersion: 3,
+      schemaVersion: appStateReleases.projectAndGlobalPreferences.version,
       table: globalPreferencesV3,
     }),
     tableVersion({
       migration: rebuildTable({ from: globalPreferencesV3, to: globalPreferencesV4 }),
-      schemaVersion: 4,
+      schemaVersion: appStateReleases.globalPreferencesV4.version,
       table: globalPreferencesV4,
     }),
     tableVersion({
       migration: rebuildTable({ from: globalPreferencesV4, to: globalPreferencesV5 }),
-      schemaVersion: 5,
+      schemaVersion: appStateReleases.globalPreferencesV5.version,
       table: globalPreferencesV5,
     }),
     tableVersion({
       migration: rebuildTable({ from: globalPreferencesV5, to: globalPreferencesV6 }),
-      schemaVersion: 6,
+      schemaVersion: appStateReleases.globalPreferencesV6.version,
       table: globalPreferencesV6,
     }),
   ],
@@ -381,10 +383,10 @@ const projectPreferencesV2 = defineTable("project_preferences", {
 
 const projectPreferencesHistory = defineTableHistory({
   versions: [
-    tableVersion({ migration: createTable(projectPreferencesV1), schemaVersion: 1, table: projectPreferencesV1 }),
+    tableVersion({ migration: createTable(projectPreferencesV1), schemaVersion: appStateReleases.initialAppState.version, table: projectPreferencesV1 }),
     tableVersion({
       migration: rebuildTable({ from: projectPreferencesV1, to: projectPreferencesV2 }),
-      schemaVersion: 3,
+      schemaVersion: appStateReleases.projectAndGlobalPreferences.version,
       table: projectPreferencesV2,
     }),
   ],

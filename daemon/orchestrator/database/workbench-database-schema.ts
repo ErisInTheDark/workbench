@@ -22,11 +22,12 @@
  * transcriptIdentityTables/TranscriptIdentitySchemaRows: permanent identity and compatibility aliases.
  * workbenchDatabaseTables: every current table keyed by its SQLite name. Keywords: database, schema, statements.
  * workbenchDatabaseSchema: assembled history used by protected production migration.
+ * validateWorkbenchDatabaseReleases: reject rewritten or unsealed releases before opening SQLite.
  */
 import type Database from "better-sqlite3";
 
 import { codexSandboxNetworkSchemaHistory } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
-import { composerProfileSchemaHistory, composerProfileTables } from "../../lib/workbench/database/schema/composer-profile-schema.ts";
+import { composerProfileSchemaHistory } from "../../lib/workbench/database/schema/composer-profile-schema.ts";
 import { coreSchemaHistory } from "workbench-shared/workbench/database/schema/core-schema";
 import { evidenceSchemaHistory } from "workbench-shared/workbench/database/schema/evidence-schema";
 import { interactionSchemaHistory } from "workbench-shared/workbench/database/schema/interaction-schema";
@@ -34,20 +35,13 @@ import { itemSchemaHistory } from "workbench-shared/workbench/database/schema/it
 import { operationSourceSchemaHistory } from "workbench-shared/workbench/database/schema/operation-source-schema";
 import { searchSchemaHistory } from "workbench-shared/workbench/database/schema/search-schema";
 import { usageSchemaHistory } from "workbench-shared/workbench/database/schema/usage-schema";
-import { transcriptIdentitySchemaHistory, transcriptIdentityTables } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
+import { transcriptIdentitySchemaHistory } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 import { threadStateSchemaHistory } from "../../lib/workbench/database/schema/thread-state-schema.ts";
-import { threadTitleHistorySchemaHistory, threadTitleHistoryTables } from "../../lib/workbench/database/schema/thread-title-history-schema.ts";
+import { threadTitleHistorySchemaHistory } from "../../lib/workbench/database/schema/thread-title-history-schema.ts";
 import type { CurrentTableDefinition } from "workbench-shared/database/schema/schema-definition";
 import { applyWorkbenchDatabaseSchema, defineWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
-import { codexSandboxNetworkTables } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
-import { coreTables } from "workbench-shared/workbench/database/schema/core-schema";
-import { evidenceTables } from "workbench-shared/workbench/database/schema/evidence-schema";
-import { interactionTables } from "workbench-shared/workbench/database/schema/interaction-schema";
-import { itemTables } from "workbench-shared/workbench/database/schema/item-schema";
-import { operationSourceTables } from "workbench-shared/workbench/database/schema/operation-source-schema";
-import { searchTables } from "workbench-shared/workbench/database/schema/search-schema";
-import { usageTables } from "workbench-shared/workbench/database/schema/usage-schema";
-import { threadStateTables } from "../../lib/workbench/database/schema/thread-state-schema.ts";
+import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/schema-release-manifest";
+import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 
 export { codexSandboxNetworkTables } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
 export type { CodexSandboxNetworkSchemaRows } from "../../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
@@ -87,23 +81,8 @@ export const workbenchDatabaseSchema = defineWorkbenchDatabaseSchema({
   ],
 });
 
-const currentTables = {
-  ...composerProfileTables,
-  ...codexSandboxNetworkTables,
-  ...coreTables,
-  ...transcriptIdentityTables,
-  ...itemTables,
-  ...operationSourceTables,
-  ...interactionTables,
-  ...evidenceTables,
-  ...threadStateTables,
-  ...threadTitleHistoryTables,
-  ...searchTables,
-  ...usageTables,
-};
-
 export const workbenchDatabaseTables = Object.freeze(Object.fromEntries(
-  Object.values(currentTables).map((table) => [table.name, table]),
+  workbenchDatabaseSchema.currentTables.map((table) => [table.name, table]),
 )) as Readonly<Record<string, CurrentTableDefinition>>;
 
 export const WORKBENCH_DATABASE_TABLE_NAMES = Object.freeze(
@@ -112,6 +91,11 @@ export const WORKBENCH_DATABASE_TABLE_NAMES = Object.freeze(
 
 export const WORKBENCH_DATABASE_SCHEMA_VERSION = workbenchDatabaseSchema.currentVersion;
 
+export function validateWorkbenchDatabaseReleases() {
+  assertSchemaReleaseManifest(workbenchDatabaseSchema, databaseReleases, "orchestrator");
+}
+
 export function installWorkbenchDatabaseSchema(database: Database.Database, options: { targetVersion?: number } = {}) {
+  validateWorkbenchDatabaseReleases();
   applyWorkbenchDatabaseSchema(database, workbenchDatabaseSchema, options);
 }

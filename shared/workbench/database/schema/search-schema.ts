@@ -1,8 +1,10 @@
 /*
+ * Keywords: database, search, projections, history.
  * Exports:
  * - workbenchSearchDocuments: SQLite-backed project, file, setting, and action search projection. Keywords: database, search, projection.
  * - searchTables/SearchSchemaRows/searchSchemaHistory: current search table registry, row types, and migration history. Keywords: database, schema, search.
  */
+import databaseReleases from "./releases.ts";
 import {
   check,
   defineTable,
@@ -46,7 +48,7 @@ const workbenchSearchDocumentsHistory = defineTableHistory({
   current: workbenchSearchDocuments,
   versions: [tableVersion({
     migration: createTable(workbenchSearchDocuments),
-    schemaVersion: 6,
+    schemaVersion: databaseReleases.search.version,
     table: workbenchSearchDocuments,
   })],
 });

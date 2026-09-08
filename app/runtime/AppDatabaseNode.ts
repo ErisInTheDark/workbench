@@ -39,8 +39,8 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   sources: [
     "app/runtime/AppDatabaseNode.ts",
     "app/state/WorkbenchAppStateRepository.ts",
-    "app/workbench-library-root.ts",
     "shared/state/workbench-app-state-schema.ts",
+    "shared/state/workbench-app-state-releases.ts",
     "shared/database/**",
   ].join("\n"),
 });

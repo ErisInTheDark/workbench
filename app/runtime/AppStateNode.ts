@@ -1,4 +1,5 @@
 /*
+ * Keywords: app, state, reload, ownership.
  * Default export:
  * - AppStateNode: own typed app-state reads and mutations over the active database node. Keywords: app, state, reload.
  */
@@ -38,6 +39,7 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
     "app/state/WorkbenchBrowserStateRegistry.ts",
     "shared/state/**",
     "!shared/state/workbench-app-state-schema.ts",
+    "!shared/state/workbench-app-state-releases.ts",
     "shared/database/**",
   ].join("\n"),
 });

@@ -5,6 +5,7 @@
  * - TranscriptIdentitySchemaRows: current identity storage rows.
  * - transcriptIdentitySchemaHistory: identity table creation history.
  */
+import databaseReleases from "./releases.ts";
 import {
   defineTable,
   enumText,
@@ -25,7 +26,7 @@ import {
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
-    versions: [tableVersion({ schemaVersion: 18, table, migration: createTable(table) })],
+    versions: [tableVersion({ schemaVersion: databaseReleases.transcriptIdentity.version, table, migration: createTable(table) })],
     current: table,
   });
 }

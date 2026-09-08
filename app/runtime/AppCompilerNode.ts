@@ -1,4 +1,5 @@
 /*
+ * Keywords: app, compiler, reload, lifecycle.
  * Default export:
  * - AppCompilerNode: own reloadable esbuild and Tailwind watch lifecycles. Keywords: app, compiler, handoff.
  */
@@ -41,7 +42,6 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   sources: [
     "app/runtime/AppCompilerNode.ts",
     "app/WorkbenchFrontendCompiler.ts",
-    "app/workbench-library-root.ts",
     "shared/frontend-generation.ts",
     "static/**",
   ].join("\n"),

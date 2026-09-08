@@ -65,6 +65,30 @@ test("the local daemon registration remains stable across app restarts", async (
   assert.equal(secondId, firstId);
 });
 
+test("installation roots keep app state independent and durable", async context => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-installation-state-"));
+  const firstOptions = { repositoryRootPath: path.join(directory, "first"), workbenchLibraryRoot: path.join(directory, "legacy-library") };
+  const secondOptions = { ...firstOptions, repositoryRootPath: path.join(directory, "second") };
+  const first = new WorkbenchAppStateRepository(firstOptions);
+  const second = new WorkbenchAppStateRepository(secondOptions);
+  const reopened = new WorkbenchAppStateRepository(firstOptions);
+  try {
+    const firstId = await first.start();
+    const secondId = await second.start();
+    assert.notEqual(firstId, secondId);
+    first.executeTransaction([insertRow(appStateTables.globalPreferences, {
+      key: "theme", text_value: "dark", deleted: 0, revision: 1,
+    })]);
+    assert.deepEqual(second.query(selectRows(appStateTables.globalPreferences)), []);
+    await first.close();
+    assert.equal(await reopened.start(), firstId);
+    assert.equal(reopened.query(selectRows(appStateTables.globalPreferences))[0]?.text_value, "dark");
+  } finally {
+    await Promise.all([first.close(), second.close(), reopened.close()]);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("daemon-scoped state rejects an unknown app registration", async (context) => {
   const databasePath = await temporaryDatabase(context);
   const repository = new WorkbenchAppStateRepository({ databasePath });

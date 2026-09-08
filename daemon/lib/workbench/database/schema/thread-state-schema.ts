@@ -38,6 +38,7 @@
  * - ThreadStateSchemaRows: current row types.
  * - threadStateSchemaHistory: private table histories.
  */
+import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import {
   booleanInteger,
   check,
@@ -64,7 +65,7 @@ import {
   tableVersion,
 } from "workbench-shared/database/schema/schema-history";
 
-function initialHistory<Table extends TableDefinition>(table: Table, schemaVersion = 4) {
+function initialHistory<Table extends TableDefinition>(table: Table, schemaVersion: number = databaseReleases.threadState.version) {
   return defineTableHistory({
     versions: [tableVersion({ schemaVersion, table, migration: createTable(table) })],
     current: table,
@@ -80,7 +81,7 @@ const workbenchThreadStateProjectsV1 = defineTable("workbench_thread_state_proje
   document_json: jsonText().notNull(),
   updated_at: integer().notNull().nonNegative(),
 });
-const workbenchThreadStateProjectsHistory = initialHistory(workbenchThreadStateProjectsV1, 3);
+const workbenchThreadStateProjectsHistory = initialHistory(workbenchThreadStateProjectsV1, databaseReleases.threadStateGlobals.version);
 export const workbenchThreadStateProjects = workbenchThreadStateProjectsHistory.current;
 
 const workbenchThreadStateGlobalsV1 = defineTable("workbench_thread_state_globals", {
@@ -88,7 +89,7 @@ const workbenchThreadStateGlobalsV1 = defineTable("workbench_thread_state_global
   document_json: jsonText().notNull(),
   updated_at: integer().notNull().nonNegative(),
 });
-const workbenchThreadStateGlobalsHistory = initialHistory(workbenchThreadStateGlobalsV1, 3);
+const workbenchThreadStateGlobalsHistory = initialHistory(workbenchThreadStateGlobalsV1, databaseReleases.threadStateGlobals.version);
 export const workbenchThreadStateGlobals = workbenchThreadStateGlobalsHistory.current;
 
 const workbenchThreadStateProjectionStatusV1 = defineTable("workbench_thread_state_projection_status", {
@@ -133,9 +134,9 @@ const workbenchThreadStateProjectionStatusV2 = evolveTable(workbenchThreadStateP
 });
 const workbenchThreadStateProjectionStatusHistory = defineTableHistory({
   versions: [
-    tableVersion({ schemaVersion: 4, table: workbenchThreadStateProjectionStatusV1, migration: createTable(workbenchThreadStateProjectionStatusV1) }),
+    tableVersion({ schemaVersion: databaseReleases.threadState.version, table: workbenchThreadStateProjectionStatusV1, migration: createTable(workbenchThreadStateProjectionStatusV1) }),
     tableVersion({
-      schemaVersion: 5,
+      schemaVersion: databaseReleases.threadStateRelationships.version,
       table: workbenchThreadStateProjectionStatusV2,
       migration: rebuildTable({
         from: workbenchThreadStateProjectionStatusV1,
@@ -201,8 +202,8 @@ const workbenchThreadStateThreadsV2 = evolveTable(workbenchThreadStateThreadsV1,
 });
 const workbenchThreadStateThreadsHistory = defineTableHistory({
   versions: [
-    tableVersion({ schemaVersion: 4, table: workbenchThreadStateThreadsV1, migration: createTable(workbenchThreadStateThreadsV1) }),
-    tableVersion({ schemaVersion: 5, table: workbenchThreadStateThreadsV2, migration: rebuildTable({ from: workbenchThreadStateThreadsV1, to: workbenchThreadStateThreadsV2 }) }),
+    tableVersion({ schemaVersion: databaseReleases.threadState.version, table: workbenchThreadStateThreadsV1, migration: createTable(workbenchThreadStateThreadsV1) }),
+    tableVersion({ schemaVersion: databaseReleases.threadStateRelationships.version, table: workbenchThreadStateThreadsV2, migration: rebuildTable({ from: workbenchThreadStateThreadsV1, to: workbenchThreadStateThreadsV2 }) }),
   ],
   current: workbenchThreadStateThreadsV2,
 });
@@ -241,9 +242,9 @@ const workbenchThreadStateProviderIdentitiesV3 = defineTable("workbench_thread_s
 }));
 const workbenchThreadStateProviderIdentitiesHistory = defineTableHistory({
   versions: [
-    tableVersion({ schemaVersion: 4, table: workbenchThreadStateProviderIdentitiesV1, migration: createTable(workbenchThreadStateProviderIdentitiesV1) }),
+    tableVersion({ schemaVersion: databaseReleases.threadState.version, table: workbenchThreadStateProviderIdentitiesV1, migration: createTable(workbenchThreadStateProviderIdentitiesV1) }),
     tableVersion({
-      schemaVersion: 5,
+      schemaVersion: databaseReleases.threadStateRelationships.version,
       table: workbenchThreadStateProviderIdentitiesV2,
       migration: rebuildTable({
         from: workbenchThreadStateProviderIdentitiesV1,
@@ -254,7 +255,7 @@ const workbenchThreadStateProviderIdentitiesHistory = defineTableHistory({
       }),
     }),
     tableVersion({
-      schemaVersion: 20, table: workbenchThreadStateProviderIdentitiesV3,
+      schemaVersion: databaseReleases.scopedThreadStateRelationships.version, table: workbenchThreadStateProviderIdentitiesV3,
       migration: rebuildTable({ from: workbenchThreadStateProviderIdentitiesV2, to: workbenchThreadStateProviderIdentitiesV3 }),
     }),
   ],
@@ -374,8 +375,8 @@ const workbenchThreadStateSubagentsV2 = evolveTable(workbenchThreadStateSubagent
 });
 const workbenchThreadStateSubagentsHistory = defineTableHistory({
   versions: [
-    tableVersion({ schemaVersion: 4, table: workbenchThreadStateSubagentsV1, migration: createTable(workbenchThreadStateSubagentsV1) }),
-    tableVersion({ schemaVersion: 5, table: workbenchThreadStateSubagentsV2, migration: rebuildTable({ from: workbenchThreadStateSubagentsV1, to: workbenchThreadStateSubagentsV2 }) }),
+    tableVersion({ schemaVersion: databaseReleases.threadState.version, table: workbenchThreadStateSubagentsV1, migration: createTable(workbenchThreadStateSubagentsV1) }),
+    tableVersion({ schemaVersion: databaseReleases.threadStateRelationships.version, table: workbenchThreadStateSubagentsV2, migration: rebuildTable({ from: workbenchThreadStateSubagentsV1, to: workbenchThreadStateSubagentsV2 }) }),
   ],
   current: workbenchThreadStateSubagentsV2,
 });
@@ -400,9 +401,9 @@ const workbenchThreadStateSubagentParentsV2 = evolveTable(workbenchThreadStateSu
 });
 const workbenchThreadStateSubagentParentsHistory = defineTableHistory({
   versions: [
-    tableVersion({ schemaVersion: 5, table: workbenchThreadStateSubagentParentsV1, migration: createTable(workbenchThreadStateSubagentParentsV1) }),
+    tableVersion({ schemaVersion: databaseReleases.threadStateRelationships.version, table: workbenchThreadStateSubagentParentsV1, migration: createTable(workbenchThreadStateSubagentParentsV1) }),
     tableVersion({
-      schemaVersion: 20, table: workbenchThreadStateSubagentParentsV2,
+      schemaVersion: databaseReleases.scopedThreadStateRelationships.version, table: workbenchThreadStateSubagentParentsV2,
       migration: rebuildTable({ from: workbenchThreadStateSubagentParentsV1, to: workbenchThreadStateSubagentParentsV2 }),
     }),
   ],
@@ -431,9 +432,9 @@ const workbenchThreadStateSubagentRelationshipsV2 = evolveTable(workbenchThreadS
 });
 const workbenchThreadStateSubagentRelationshipsHistory = defineTableHistory({
   versions: [
-    tableVersion({ schemaVersion: 5, table: workbenchThreadStateSubagentRelationshipsV1, migration: createTable(workbenchThreadStateSubagentRelationshipsV1) }),
+    tableVersion({ schemaVersion: databaseReleases.threadStateRelationships.version, table: workbenchThreadStateSubagentRelationshipsV1, migration: createTable(workbenchThreadStateSubagentRelationshipsV1) }),
     tableVersion({
-      schemaVersion: 20, table: workbenchThreadStateSubagentRelationshipsV2,
+      schemaVersion: databaseReleases.scopedThreadStateRelationships.version, table: workbenchThreadStateSubagentRelationshipsV2,
       migration: rebuildTable({ from: workbenchThreadStateSubagentRelationshipsV1, to: workbenchThreadStateSubagentRelationshipsV2 }),
     }),
   ],
@@ -466,9 +467,9 @@ const workbenchThreadStatePendingSubagentRelationshipsV2 = evolveTable(workbench
 });
 const workbenchThreadStatePendingSubagentRelationshipsHistory = defineTableHistory({
   versions: [
-    tableVersion({ schemaVersion: 5, table: workbenchThreadStatePendingSubagentRelationshipsV1, migration: createTable(workbenchThreadStatePendingSubagentRelationshipsV1) }),
+    tableVersion({ schemaVersion: databaseReleases.threadStateRelationships.version, table: workbenchThreadStatePendingSubagentRelationshipsV1, migration: createTable(workbenchThreadStatePendingSubagentRelationshipsV1) }),
     tableVersion({
-      schemaVersion: 20, table: workbenchThreadStatePendingSubagentRelationshipsV2,
+      schemaVersion: databaseReleases.scopedThreadStateRelationships.version, table: workbenchThreadStatePendingSubagentRelationshipsV2,
       migration: rebuildTable({
         from: workbenchThreadStatePendingSubagentRelationshipsV1, to: workbenchThreadStatePendingSubagentRelationshipsV2,
         map: ({ from, expression }) => ({ reservation_id: expression.text`substr(${from.reservation_thread_id}, 9)` }),
@@ -488,7 +489,7 @@ const workbenchThreadStateActiveSubagentRelationshipsV1 = defineTable("workbench
     table: "workbench_thread_state_subagent_relationships", columns: ["id", "relationship_kind"], onDelete: "CASCADE",
   })],
 }));
-const workbenchThreadStateActiveSubagentRelationshipsHistory = initialHistory(workbenchThreadStateActiveSubagentRelationshipsV1, 5);
+const workbenchThreadStateActiveSubagentRelationshipsHistory = initialHistory(workbenchThreadStateActiveSubagentRelationshipsV1, databaseReleases.threadStateRelationships.version);
 export const workbenchThreadStateActiveSubagentRelationships = workbenchThreadStateActiveSubagentRelationshipsHistory.current;
 
 const workbenchThreadStateRetentionV1 = defineTable("workbench_thread_state_retention", {
@@ -606,9 +607,9 @@ const workbenchThreadStateLayoutsV2 = evolveTable(workbenchThreadStateLayoutsV1,
 });
 const workbenchThreadStateLayoutsHistory = defineTableHistory({
   versions: [
-    tableVersion({ schemaVersion: 4, table: workbenchThreadStateLayoutsV1, migration: createTable(workbenchThreadStateLayoutsV1) }),
+    tableVersion({ schemaVersion: databaseReleases.threadState.version, table: workbenchThreadStateLayoutsV1, migration: createTable(workbenchThreadStateLayoutsV1) }),
     tableVersion({
-      schemaVersion: 20, table: workbenchThreadStateLayoutsV2,
+      schemaVersion: databaseReleases.scopedThreadStateRelationships.version, table: workbenchThreadStateLayoutsV2,
       migration: rebuildTable({ from: workbenchThreadStateLayoutsV1, to: workbenchThreadStateLayoutsV2 }),
     }),
   ],
@@ -679,9 +680,9 @@ const workbenchThreadStateLayoutItemsV2 = evolveTable(workbenchThreadStateLayout
 });
 const workbenchThreadStateLayoutItemsHistory = defineTableHistory({
   versions: [
-    tableVersion({ schemaVersion: 4, table: workbenchThreadStateLayoutItemsV1, migration: createTable(workbenchThreadStateLayoutItemsV1) }),
+    tableVersion({ schemaVersion: databaseReleases.threadState.version, table: workbenchThreadStateLayoutItemsV1, migration: createTable(workbenchThreadStateLayoutItemsV1) }),
     tableVersion({
-      schemaVersion: 20, table: workbenchThreadStateLayoutItemsV2,
+      schemaVersion: databaseReleases.scopedThreadStateRelationships.version, table: workbenchThreadStateLayoutItemsV2,
       migration: rebuildTable({ from: workbenchThreadStateLayoutItemsV1, to: workbenchThreadStateLayoutItemsV2 }),
     }),
   ],
@@ -830,9 +831,9 @@ const workbenchThreadStateQuestionnairesV2 = evolveTable(workbenchThreadStateQue
 });
 const workbenchThreadStateQuestionnairesHistory = defineTableHistory({
   versions: [
-    tableVersion({ schemaVersion: 4, table: workbenchThreadStateQuestionnairesV1, migration: createTable(workbenchThreadStateQuestionnairesV1) }),
+    tableVersion({ schemaVersion: databaseReleases.threadState.version, table: workbenchThreadStateQuestionnairesV1, migration: createTable(workbenchThreadStateQuestionnairesV1) }),
     tableVersion({
-      schemaVersion: 20, table: workbenchThreadStateQuestionnairesV2,
+      schemaVersion: databaseReleases.scopedThreadStateRelationships.version, table: workbenchThreadStateQuestionnairesV2,
       migration: rebuildTable({ from: workbenchThreadStateQuestionnairesV1, to: workbenchThreadStateQuestionnairesV2 }),
     }),
   ],

@@ -14,6 +14,7 @@
  * - UsageSchemaRows: usage row types.
  * - usageSchemaHistory: additive and conversion steps.
  */
+import databaseReleases from "./releases.ts";
 import {
   booleanInteger,
   check,
@@ -39,7 +40,7 @@ import {
   tableVersion,
 } from "../../../database/schema/schema-history.ts";
 
-function initialHistory<Table extends TableDefinition>(table: Table, schemaVersion = 7) {
+function initialHistory<Table extends TableDefinition>(table: Table, schemaVersion: number = databaseReleases.usage.version) {
   return defineTableHistory({
     current: table,
     versions: [tableVersion({ migration: createTable(table), schemaVersion, table })],
@@ -95,19 +96,19 @@ const threadTurnUsageV3 = evolveTable(threadTurnUsageV2, {
 const threadTurnUsageHistory = defineTableHistory({
   current: threadTurnUsageV3,
   versions: [
-    tableVersion({ migration: createTable(threadTurnUsageV1), schemaVersion: 7, table: threadTurnUsageV1 }),
+    tableVersion({ migration: createTable(threadTurnUsageV1), schemaVersion: databaseReleases.usage.version, table: threadTurnUsageV1 }),
     tableVersion({
       migration: rebuildTable({
         from: threadTurnUsageV1,
         map: ({ expression }) => ({ usage_observed_at: expression.integer`NULL` }),
         to: threadTurnUsageV2,
       }),
-      schemaVersion: 10,
+      schemaVersion: databaseReleases.usageImportDetails.version,
       table: threadTurnUsageV2,
     }),
     tableVersion({
       migration: addColumns({ from: threadTurnUsageV2, to: threadTurnUsageV3, columns: ["model_is_mixed"] }),
-      schemaVersion: 15,
+      schemaVersion: databaseReleases.mixedModelUsage.version,
       table: threadTurnUsageV3,
     }),
   ],
@@ -150,7 +151,7 @@ const threadContextUsageV1 = defineTable("thread_context_usage", {
       AND ${table.total_tokens} IS NOT NULL)`),
   ],
 }));
-const threadContextUsageHistory = initialHistory(threadContextUsageV1, 21);
+const threadContextUsageHistory = initialHistory(threadContextUsageV1, databaseReleases.threadContextUsage.version);
 export const threadContextUsage = threadContextUsageHistory.current;
 
 const threadUsageModelAttributionsV1 = defineTable("thread_usage_model_attributions", {
@@ -160,7 +161,7 @@ const threadUsageModelAttributionsV1 = defineTable("thread_usage_model_attributi
   policy_version: integer().notNull().nonNegative(),
   updated_at: integer().notNull().nonNegative(),
 });
-const threadUsageModelAttributionsHistory = initialHistory(threadUsageModelAttributionsV1, 9);
+const threadUsageModelAttributionsHistory = initialHistory(threadUsageModelAttributionsV1, databaseReleases.usageAttribution.version);
 export const threadUsageModelAttributions = threadUsageModelAttributionsHistory.current;
 
 const accountRateLimitSamplesV1 = defineTable("account_rate_limit_samples", {
@@ -225,7 +226,7 @@ const gitClaimThreadFileDaysV1 = defineTable("git_claim_thread_file_days", {
   ])],
   indexes: [index("git_claim_thread_file_days_range_idx", [table.project_id, table.claimed_day, table.claimed_path])],
 }));
-const gitClaimThreadFileDaysHistory = initialHistory(gitClaimThreadFileDaysV1, 9);
+const gitClaimThreadFileDaysHistory = initialHistory(gitClaimThreadFileDaysV1, databaseReleases.usageAttribution.version);
 export const gitClaimThreadFileDays = gitClaimThreadFileDaysHistory.current;
 
 const gitClaimImportsV1 = defineTable("git_claim_imports", {
@@ -251,7 +252,7 @@ const gitClaimImportsV1 = defineTable("git_claim_imports", {
   ],
   indexes: [index("git_claim_imports_queue_idx", [table.state, table.observed_at])],
 }));
-const gitClaimImportsHistory = initialHistory(gitClaimImportsV1, 9);
+const gitClaimImportsHistory = initialHistory(gitClaimImportsV1, databaseReleases.usageAttribution.version);
 export const gitClaimImports = gitClaimImportsHistory.current;
 
 const threadUsageImportsV1 = defineTable("thread_usage_imports", {
@@ -300,14 +301,14 @@ const threadUsageImportsV2 = defineTable("thread_usage_imports", {
 const threadUsageImportsHistory = defineTableHistory({
   current: threadUsageImportsV2,
   versions: [
-    tableVersion({ migration: createTable(threadUsageImportsV1), schemaVersion: 8, table: threadUsageImportsV1 }),
+    tableVersion({ migration: createTable(threadUsageImportsV1), schemaVersion: databaseReleases.usageImports.version, table: threadUsageImportsV1 }),
     tableVersion({
       migration: addColumns({
         columns: ["completed_data_version"],
         from: threadUsageImportsV1,
         to: threadUsageImportsV2,
       }),
-      schemaVersion: 10,
+      schemaVersion: databaseReleases.usageImportDetails.version,
       table: threadUsageImportsV2,
     }),
   ],

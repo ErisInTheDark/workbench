@@ -1,4 +1,5 @@
 /*
+ * Keywords: database, operation sources, callable tools, history.
  * threadItemOperations: current operation source root table. Keywords: database, schema, operation.
  * threadOperationProcessSources: current process operation source table. Keywords: database, schema, process.
  * threadProcessCommandActions: current ordered process command action table. Keywords: database, schema, command.
@@ -14,6 +15,7 @@
  * OperationSourceSchemaRows: selected row types for current operation source tables. Keywords: database, schema, types.
  * operationSourceSchemaHistory: private operation source table histories. Keywords: database, schema, history.
  */
+import databaseReleases from "./releases.ts";
 import {
   booleanInteger,
   check,
@@ -35,7 +37,7 @@ import { createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, 
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
-    versions: [tableVersion({ schemaVersion: 1, table, migration: createTable(table) })],
+    versions: [tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table, migration: createTable(table) })],
     current: table,
   });
 }
@@ -132,9 +134,9 @@ const threadOperationToolSourcesV2 = evolveTable(threadOperationToolSourcesV1, {
 const threadOperationToolSourcesHistory = defineTableHistory({
   current: threadOperationToolSourcesV2,
   versions: [
-    tableVersion({ schemaVersion: 1, table: threadOperationToolSourcesV1, migration: createTable(threadOperationToolSourcesV1) }),
+    tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadOperationToolSourcesV1, migration: createTable(threadOperationToolSourcesV1) }),
     tableVersion({
-      schemaVersion: 12,
+      schemaVersion: databaseReleases.callableTools.version,
       table: threadOperationToolSourcesV2,
       migration: rebuildTable({ from: threadOperationToolSourcesV1, to: threadOperationToolSourcesV2 }),
     }),
@@ -276,9 +278,9 @@ const threadOperationCollaborationToolSourcesV2 = evolveTable(threadOperationCol
 const threadOperationCollaborationToolSourcesHistory = defineTableHistory({
   current: threadOperationCollaborationToolSourcesV2,
   versions: [
-    tableVersion({ schemaVersion: 1, table: threadOperationCollaborationToolSourcesV1, migration: createTable(threadOperationCollaborationToolSourcesV1) }),
+    tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadOperationCollaborationToolSourcesV1, migration: createTable(threadOperationCollaborationToolSourcesV1) }),
     tableVersion({
-      schemaVersion: 12,
+      schemaVersion: databaseReleases.callableTools.version,
       table: threadOperationCollaborationToolSourcesV2,
       migration: rebuildTable({ from: threadOperationCollaborationToolSourcesV1, to: threadOperationCollaborationToolSourcesV2 }),
     }),

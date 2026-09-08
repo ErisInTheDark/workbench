@@ -1,4 +1,5 @@
 /*
+ * Keywords: database, interaction, questions, approvals, history.
  * threadItemWebSearches: current web-search item augmentation table. Keywords: database, schema, web-search.
  * threadWebSearchQueries: current ordered web-search query table. Keywords: database, schema, web-search.
  * threadWebSearchResults: current ordered opaque web-search result table. Keywords: database, schema, web-search.
@@ -12,6 +13,7 @@
  * InteractionSchemaRows: selected row types for current interaction tables. Keywords: database, schema, types.
  * interactionSchemaHistory: private interaction table histories. Keywords: database, schema, history.
  */
+import databaseReleases from "./releases.ts";
 import {
   booleanInteger,
   check,
@@ -32,7 +34,7 @@ import { createTable, defineSubsystemHistory, defineTableHistory, tableVersion }
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
-    versions: [tableVersion({ schemaVersion: 1, table, migration: createTable(table) })],
+    versions: [tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table, migration: createTable(table) })],
     current: table,
   });
 }

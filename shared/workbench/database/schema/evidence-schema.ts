@@ -1,4 +1,5 @@
 /*
+ * Keywords: database, evidence, assets, capture, history.
  * transcriptNativeRecords: current provider-native evidence table. Keywords: database, schema, evidence.
  * transcriptAssets: current content-addressed asset table. Keywords: database, schema, asset.
  * threadBrowseEntries: current durable Browse fact table. Keywords: database, schema, browse.
@@ -8,6 +9,7 @@
  * EvidenceSchemaRows: selected row types for current evidence tables. Keywords: database, schema, types.
  * evidenceSchemaHistory: private evidence table histories. Keywords: database, schema, history.
  */
+import databaseReleases from "./releases.ts";
 import {
   check,
   defineTable,
@@ -27,7 +29,7 @@ import { createTable, defineSubsystemHistory, defineTableHistory, tableVersion }
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
-    versions: [tableVersion({ schemaVersion: 1, table, migration: createTable(table) })],
+    versions: [tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table, migration: createTable(table) })],
     current: table,
   });
 }

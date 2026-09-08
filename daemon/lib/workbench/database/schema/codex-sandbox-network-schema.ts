@@ -5,6 +5,7 @@
  * CodexSandboxNetworkSchemaRows: selected row types for current Codex sandbox network tables. Keywords: Codex, sandbox, network, types.
  * codexSandboxNetworkSchemaHistory: private Codex sandbox network table histories. Keywords: Codex, sandbox, network, history.
  */
+import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import {
   booleanInteger,
   defineTable,
@@ -25,7 +26,7 @@ const codexSandboxNetworkGlobalSettingsV1 = defineTable("codex_sandbox_network_g
 });
 const codexSandboxNetworkGlobalSettingsHistory = defineTableHistory({
   versions: [tableVersion({
-    schemaVersion: 2,
+    schemaVersion: databaseReleases.codexSandboxNetwork.version,
     table: codexSandboxNetworkGlobalSettingsV1,
     migration: createTable(codexSandboxNetworkGlobalSettingsV1),
   })],
@@ -39,7 +40,7 @@ const codexSandboxNetworkProjectOverridesV1 = defineTable("codex_sandbox_network
 });
 const codexSandboxNetworkProjectOverridesHistory = defineTableHistory({
   versions: [tableVersion({
-    schemaVersion: 2,
+    schemaVersion: databaseReleases.codexSandboxNetwork.version,
     table: codexSandboxNetworkProjectOverridesV1,
     migration: createTable(codexSandboxNetworkProjectOverridesV1),
   })],

@@ -2,6 +2,7 @@
  * Keywords: SQLite, migration, backup, retention.
  * Exports:
  * - WorkbenchDatabaseMigrationOptions: target version and retention clock.
+ * - preserveWorkbenchDatabaseBackup: publish a verified complete snapshot without migrating the source.
  * - default migrateWorkbenchDatabase: verify a complete pre-upgrade backup, run migrations, then prune expired backups.
  */
 import { randomUUID } from "node:crypto";
@@ -24,7 +25,8 @@ function boundedMessage(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/[\r\n]/g, " ").slice(0, 500);
 }
 
-async function preserveBackup(database: Database.Database, directory: string, installedVersion: number) {
+export async function preserveWorkbenchDatabaseBackup(database: Database.Database, directory: string) {
+  const installedVersion = database.pragma("user_version", { simple: true }) as number;
   const id = randomUUID();
   const temporaryPath = path.join(directory, `${id}.partial`);
   const backupPath = path.join(directory, `${id}.sqlite3`);
@@ -59,6 +61,7 @@ async function preserveBackup(database: Database.Database, directory: string, in
       }
     }
     console.info(`[database] preserved schema ${installedVersion} backup ${boundedMessage(backupPath)}`);
+    return backupPath;
   } catch (error) {
     throw new Error(`Database migration backup failed at ${boundedMessage(temporaryPath)}: ${boundedMessage(error)}`, { cause: error });
   }
@@ -102,7 +105,7 @@ export default async function migrateWorkbenchDatabase(
     : path.join(path.dirname(path.resolve(database.name)), "backups", path.basename(database.name));
   if (directory && installedVersion < targetVersion
     && database.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get()) {
-    await preserveBackup(database, directory, installedVersion);
+    await preserveWorkbenchDatabaseBackup(database, directory);
   }
   applyWorkbenchDatabaseSchema(database, schema, options);
   if (directory) await pruneBackups(directory, (options.now ?? Date.now)());

@@ -14,7 +14,7 @@ import {
   applyWorkbenchDatabaseSchema, createTable, defineSubsystemHistory, defineTableHistory,
   defineWorkbenchDatabaseSchema, rebuildTable, tableVersion,
 } from "./schema/schema-history.ts";
-import migrateWorkbenchDatabase from "./workbench-database-migration.ts";
+import migrateWorkbenchDatabase, { preserveWorkbenchDatabaseBackup } from "./workbench-database-migration.ts";
 
 const oldTable = defineTable("records", {
   id: integer().primaryKey(), legacy: text().notNull(), kept: text().notNull(),
@@ -74,6 +74,26 @@ test("backup includes committed WAL data and the schema removed by the upgrade",
   } finally { backup.close(); }
   await migrateWorkbenchDatabase(database, schema);
   assert.deepEqual(await completedBackups(backups), names, "unchanged schema must not create another backup");
+});
+
+test("explicit same-version backups capture WAL data without migrating or changing the source", async context => {
+  const { database, directory } = await fixture(context, 2);
+  database.prepare("INSERT INTO records VALUES (1, 'retained')").run();
+  database.exec("CREATE TABLE extension(payload BLOB); INSERT INTO extension VALUES (x'010203')");
+  const source = new Database(database.name, { readonly: true, fileMustExist: true });
+  try {
+    const backupPath = await preserveWorkbenchDatabaseBackup(source, path.join(directory, "rollout"));
+    const backup = new Database(backupPath, { readonly: true, fileMustExist: true });
+    try {
+      assert.equal(backup.pragma("user_version", { simple: true }), 2);
+      assert.deepEqual(backup.prepare("SELECT * FROM records").all(), [{ id: 1, kept: "retained" }]);
+      assert.deepEqual(backup.prepare("SELECT * FROM extension").all(), [{ payload: Buffer.from([1, 2, 3]) }]);
+      database.prepare("UPDATE records SET kept = 'newer'").run();
+      assert.deepEqual(backup.prepare("SELECT * FROM records").all(), [{ id: 1, kept: "retained" }]);
+      assert.equal(source.pragma("user_version", { simple: true }), 2);
+      assert.deepEqual(source.prepare("SELECT * FROM records").all(), [{ id: 1, kept: "newer" }]);
+    } finally { backup.close(); }
+  } finally { source.close(); }
 });
 
 test("an unwritable backup destination prevents any schema change", async context => {

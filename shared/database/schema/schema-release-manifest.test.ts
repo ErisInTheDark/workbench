@@ -1,0 +1,106 @@
+/*
+ * No production exports. Keywords: releases, immutable history, conversion, indexes, constraints, coordinated changes.
+ */
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { check, defineTable, index, integer, sql, text } from "./schema-definition.ts";
+import {
+  createTable, defineSubsystemHistory, defineTableHistory, defineWorkbenchDatabaseSchema,
+  rebuildTable, tableVersion, type WorkbenchDatabaseSchema,
+} from "./schema-history.ts";
+import {
+  assertSchemaReleaseManifest, fingerprintSchemaReleases, inspectSchemaReleases, type SchemaReleaseRegistry,
+} from "./schema-release-manifest.ts";
+
+function fixture(options: {
+  addition?: number;
+  map?: "original" | "changed";
+  index?: boolean;
+  constraint?: boolean;
+  defaultValue?: number;
+} = {}) {
+  const first = defineTable("records", { id: integer().primaryKey(), value: text().notNull() });
+  const current = defineTable("records", {
+    id: integer().primaryKey(), value: text().notNull(), score: integer().notNull().default(options.defaultValue ?? 0),
+  }, table => ({
+    constraints: options.constraint ? [check(sql`${table.score} >= 0`)] : [],
+    indexes: options.index ? [index("record_values", [table.value], { unique: true })] : [],
+  }));
+  const histories = [defineTableHistory({
+    current,
+    versions: [
+      tableVersion({ schemaVersion: 1, table: first, migration: createTable(first) }),
+      tableVersion({
+        schemaVersion: 2, table: current,
+        migration: rebuildTable({
+          from: first, to: current,
+          map: options.map === "changed" ? () => ({ value: sql.text`'changed'` }) : undefined,
+        }),
+      }),
+    ],
+  })];
+  const extra = defineTable("extra", { id: integer().primaryKey() });
+  return defineWorkbenchDatabaseSchema({
+    subsystems: [defineSubsystemHistory([
+      ...histories,
+      ...(options.addition ? [defineTableHistory({
+        current: extra,
+        versions: [tableVersion({ schemaVersion: options.addition, table: extra, migration: createTable(extra) })],
+      })] : []),
+    ])],
+  });
+}
+
+function seal(schema: WorkbenchDatabaseSchema): SchemaReleaseRegistry {
+  return Object.fromEntries(fingerprintSchemaReleases(schema).map(release => [`release${release.version}`, release]));
+}
+
+test("independently reconstructed declarations retain their release fingerprints", () => {
+  const releases = seal(fixture());
+  assert.doesNotThrow(() => assertSchemaReleaseManifest(fixture(), releases, "fixture"));
+  assert.deepEqual(inspectSchemaReleases(fixture(), releases), []);
+});
+
+for (const change of [
+  { addition: 1 }, { addition: 2 }, { map: "changed" as const },
+  { index: true }, { constraint: true }, { defaultValue: 7 },
+]) {
+  test(`sealed history rejects a retroactive semantic change ${JSON.stringify(change)}`, () => {
+    const releases = seal(fixture());
+    assert.throws(() => inspectSchemaReleases(fixture(change), releases), /sealed.*changed/i);
+  });
+}
+
+test("only the new final release can be fingerprinted and must be sealed before opening", () => {
+  const schema = fixture({ addition: 3 });
+  const releases = { ...seal(fixture()), newFeature: { version: 3, fingerprint: null } };
+  const candidates = inspectSchemaReleases(schema, releases);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]?.version, 3);
+  assert.throws(() => assertSchemaReleaseManifest(schema, releases, "fixture"), /unsealed/i);
+  assert.doesNotThrow(() => assertSchemaReleaseManifest(schema, {
+    ...releases, newFeature: { version: 3, fingerprint: candidates[0]!.fingerprint },
+  }, "fixture"));
+});
+
+test("an old changed release cannot be hidden by adding a new unsealed release", () => {
+  const releases = { ...seal(fixture()), newFeature: { version: 3, fingerprint: null } };
+  assert.throws(() => inspectSchemaReleases(fixture({ addition: 3, map: "changed" }), releases), /sealed.*changed/i);
+});
+
+test("release collisions, gaps, absent declarations, and malformed fingerprints are rejected", () => {
+  const schema = fixture();
+  const releases = seal(schema);
+  assert.throws(() => inspectSchemaReleases(schema, { ...releases, collision: releases.release2! }), /duplicate/i);
+  assert.throws(() => inspectSchemaReleases(schema, { release2: releases.release2! }), /missing/i);
+  assert.throws(() => inspectSchemaReleases(schema, { ...releases, future: { version: 3, fingerprint: null } }), /declaration/i);
+  assert.throws(() => inspectSchemaReleases(schema, { ...releases, release2: { version: 2, fingerprint: "bad" } }), /fingerprint/i);
+  assert.throws(() => inspectSchemaReleases(schema, {
+    release1: { version: 1, fingerprint: null }, release2: { version: 2, fingerprint: null },
+  }), /final/i);
+});
+
+test("several tables can belong to one sealed atomic release", () => {
+  const schema = fixture({ addition: 2 });
+  assert.doesNotThrow(() => assertSchemaReleaseManifest(schema, seal(schema), "fixture"));
+});
