@@ -1,5 +1,5 @@
 /*
- * Keywords: transcript, identity, admission, client correlation, aliases, SQLite.
+ * Keywords: transcript, identity, admission, same-fact correlation, aliases, SQLite.
  * Exports:
  * - default WorkbenchTranscriptIdentityRepository: own structural item identity independently of body recording.
  */
@@ -113,10 +113,14 @@ export default class WorkbenchTranscriptIdentityRepository {
       const existing = this.prepare(`
         SELECT item_identity_id FROM workbench_transcript_item_legacy_aliases
         WHERE thread_id = ? AND turn_id = ? AND alias = ?
-      `).get(input.threadId, legacy.turnId, legacy.alias) as { item_identity_id: string } | undefined;
-      if (existing) candidates.push(existing.item_identity_id);
+        UNION
+        SELECT item_identity_id FROM workbench_transcript_item_source_aliases
+        WHERE thread_id = ? AND turn_id = ? AND source_id = ? AND source_kind <> 'client'
+      `).all(input.threadId, legacy.turnId, legacy.alias,
+        input.threadId, legacy.turnId, legacy.alias) as Array<{ item_identity_id: string }>;
+      candidates.push(...existing.map((row) => row.item_identity_id));
     }
-    const itemId = this.reconcileCorrelatedUserMessage(input, candidates)
+    const itemId = this.reconcileBodylessAlias(input, candidates)
       ?? this.selectOwner(input.threadId, candidates) ?? randomUUID();
     this.prepare(`
       INSERT INTO workbench_transcript_item_identities(id, thread_id) VALUES (?, ?)
@@ -139,37 +143,48 @@ export default class WorkbenchTranscriptIdentityRepository {
     return this.read(this.row(itemId)!);
   }
 
-  private reconcileCorrelatedUserMessage(input: WorkbenchTranscriptItemIdentityAdmission, candidates: readonly string[]) {
+  private reconcileBodylessAlias(input: WorkbenchTranscriptItemIdentityAdmission, candidates: readonly string[]) {
     const owners = [...new Set(candidates)];
     if (owners.length !== 2) return null;
-    const clients = input.sources.filter((source) => source.kind === "client");
-    const client = clients[0];
-    if (clients.length !== 1 || !client || input.sources.some((source) => source.turnId !== client.turnId)) return null;
     const bodies = this.prepare(`
       SELECT i.public_id, i.turn_id, i.type, u.client_id
       FROM thread_items i LEFT JOIN thread_item_user_messages u ON u.item_id = i.id
       WHERE i.public_id IN (?, ?)
     `).all(...owners) as Array<{ public_id: string; turn_id: string; type: string; client_id: string | null }>;
     const body = bodies[0];
-    if (bodies.length !== 1 || !body || body.type !== "userMessage"
-      || body.turn_id !== client.turnId || body.client_id !== client.sourceId) return null;
+    if (bodies.length !== 1 || !body) return null;
+    const turnId = body.turn_id;
+    if (input.sources.some((source) => source.turnId !== turnId)
+      || input.legacyAliases.some((alias) => alias.turnId !== turnId)) return null;
     const identities = owners.map((id) => this.row(id)).map((row) => row ? this.read(row) : null);
     if (identities.some((identity) => !identity || identity.threadId !== input.threadId
-      || identity.sources.some((source) => source.turnId !== client.turnId
-        || (source.kind === "client" && source.sourceId !== client.sourceId))
-      || identity.legacyAliases.some((alias) => alias.turnId !== client.turnId))) return null;
-    const target = identities.find((identity) => identity?.itemId === body.public_id)!;
-    const source = identities.find((identity) => identity?.itemId !== body.public_id)!;
-    if (!target?.sources.some((entry) => entry.kind === "client" && entry.sourceId === client.sourceId)
-      || !source || !input.sources.some((entry) => entry.kind === "stable"
-        && source.sources.some((known) => known.kind === entry.kind && known.sourceId === entry.sourceId))) return null;
+      || identity.sources.some((source) => source.turnId !== turnId)
+      || identity.legacyAliases.some((alias) => alias.turnId !== turnId))) return null;
+    const target = identities.find((identity) => identity?.itemId === body.public_id);
+    const source = identities.find((identity) => identity?.itemId !== body.public_id);
+    if (!source || !target) return null;
+    const evidence = [...input.sources, ...source.sources, ...target.sources];
+    if (evidence.some((entry) => entry.kind === "client"
+      && (body.type !== "userMessage" || entry.sourceId !== body.client_id))) return null;
+    const suppliedSource = (identity: WorkbenchTranscriptItemIdentity) => identity.sources.some((known) => (
+      input.sources.some((entry) => entry.kind === known.kind && entry.sourceId === known.sourceId)
+    ));
+    const clientMatch = body.client_id !== null
+      && input.sources.some((entry) => entry.kind === "client" && entry.sourceId === body.client_id)
+      && suppliedSource(source) && suppliedSource(target);
+    const aliasLinks = (from: WorkbenchTranscriptItemIdentity, to: WorkbenchTranscriptItemIdentity) => (
+      [...from.legacyAliases, ...(suppliedSource(from) ? input.legacyAliases : [])].some(({ alias }) => (
+        alias === to.itemId || to.sources.some((entry) => entry.kind !== "client" && entry.sourceId === alias)
+      ))
+    );
+    if (!clientMatch && !aliasLinks(source, target) && !aliasLinks(target, source)) return null;
     const priorReference = this.prepare(`
       SELECT item_identity_id FROM workbench_transcript_item_legacy_aliases
       WHERE thread_id = ? AND turn_id = ? AND alias = ?
-    `).get(input.threadId, client.turnId, source.itemId) as { item_identity_id: string } | undefined;
-    if (priorReference && priorReference.item_identity_id !== target.itemId) return null;
-    // The client-owned body stays untouched. Only its proven bodyless provider alias moves.
-    this.merge({ threadId: input.threadId, turnId: client.turnId, fromItemId: source.itemId, toItemId: target.itemId });
+    `).get(input.threadId, turnId, source.itemId) as { item_identity_id: string } | undefined;
+    if (priorReference && !owners.includes(priorReference.item_identity_id)) return null;
+    // The recorded body stays untouched. Only its proven bodyless alias moves.
+    this.merge({ threadId: input.threadId, turnId, fromItemId: source.itemId, toItemId: target.itemId });
     return target.itemId;
   }
 

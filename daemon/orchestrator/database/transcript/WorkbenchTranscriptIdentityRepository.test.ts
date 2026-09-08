@@ -150,14 +150,14 @@ test("conflicting aliases warn without losing either identity or blocking struct
   } finally { database.close(); }
 });
 
-function splitUserMessage() {
+function splitUserMessage(clientOnStructural = false) {
   const fixture = setup();
   const { database, identity, threadId } = fixture;
   const provider = { turnId: "first", kind: "stable" as const, sourceId: "native-message" };
   const client = { turnId: "first", kind: "client" as const, sourceId: "submitted-message" };
-  const structural = identity.admit({ threadId, sources: [provider], legacyAliases: [] });
+  const structural = identity.admit({ threadId, sources: [provider, ...(clientOnStructural ? [client] : [])], legacyAliases: [] });
   const recorded = identity.admit({
-    threadId, sources: [{ turnId: "first", kind: "provisional", sourceId: "item-1" }, client],
+    threadId, sources: [{ turnId: "first", kind: "provisional", sourceId: "item-1" }, ...(!clientOnStructural ? [client] : [])],
     legacyAliases: [{ turnId: "first", alias: "retained-message" }],
   });
   const repository = new WorkbenchTranscriptRepository(database);
@@ -174,28 +174,74 @@ function splitUserMessage() {
   return { ...fixture, provider, client, structural, recorded, repository };
 }
 
-test("client correlation joins a bodyless provider identity without changing the recorded message", (context) => {
-  const { database, identity, threadId, provider, client, structural, recorded } = splitUserMessage();
-  const warnings = context.mock.method(console, "warn", () => undefined);
-  try {
-    const before = database.prepare("SELECT * FROM thread_items").all();
-    const bodies = database.prepare("SELECT * FROM thread_item_user_messages").all();
-    for (const sources of [[provider, client], [client, provider]]) {
-      assert.equal(identity.admit({ threadId, sources, legacyAliases: [] }).itemId, recorded.itemId);
-    }
-    const reloaded = new WorkbenchTranscriptIdentityRepository(database);
-    for (const reference of [structural.itemId, recorded.itemId, provider.sourceId, client.sourceId, "item-1", "retained-message"]) {
-      assert.equal(reloaded.resolve({ threadId, turnId: "first", itemId: reference })?.itemId, recorded.itemId);
-    }
-    assert.equal(reloaded.admit({
-      threadId, itemId: structural.itemId, sources: [provider, client], legacyAliases: [],
-    }).itemId, recorded.itemId, "An old public reference must not recreate the merged identity.");
-    assert.deepEqual(database.prepare("SELECT * FROM thread_items").all(), before);
-    assert.deepEqual(database.prepare("SELECT * FROM thread_item_user_messages").all(), bodies);
-    assert.deepEqual(database.pragma("foreign_key_check"), []);
-    assert.equal(warnings.mock.callCount(), 0);
-  } finally { database.close(); }
-});
+for (const clientOnStructural of [false, true]) {
+  test(`client correlation joins a bodyless provider identity without changing the recorded message (client on structural ${clientOnStructural})`, (context) => {
+    const { database, identity, threadId, provider, client, structural, recorded } = splitUserMessage(clientOnStructural);
+    const warnings = context.mock.method(console, "warn", () => undefined);
+    try {
+      const before = database.prepare("SELECT * FROM thread_items").all();
+      const bodies = database.prepare("SELECT * FROM thread_item_user_messages").all();
+      const incoming = clientOnStructural ? { ...provider, kind: "provisional" as const, sourceId: "item-1" } : provider;
+      for (const sources of [[incoming, client], [client, provider]]) {
+        assert.equal(identity.admit({ threadId, sources, legacyAliases: [] }).itemId, recorded.itemId);
+      }
+      const reloaded = new WorkbenchTranscriptIdentityRepository(database);
+      for (const reference of [structural.itemId, recorded.itemId, provider.sourceId, client.sourceId, "item-1", "retained-message"]) {
+        assert.equal(reloaded.resolve({ threadId, turnId: "first", itemId: reference })?.itemId, recorded.itemId);
+      }
+      assert.equal(reloaded.admit({
+        threadId, itemId: structural.itemId, sources: [provider, client], legacyAliases: [],
+      }).itemId, recorded.itemId, "An old public reference must not recreate the merged identity.");
+      assert.deepEqual(database.prepare("SELECT * FROM thread_items").all(), before);
+      assert.deepEqual(database.prepare("SELECT * FROM thread_item_user_messages").all(), bodies);
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+      assert.equal(warnings.mock.callCount(), 0);
+    } finally { database.close(); }
+  });
+}
+
+for (const retained of [false, true]) {
+  test(`explicit compaction alias joins the bodyless identity (previously retained ${retained})`, (context) => {
+    const { database, identity, threadId } = setup();
+    const warnings = context.mock.method(console, "warn", () => undefined);
+    try {
+      const stable = { turnId: "first", sourceId: "native-compaction", kind: "stable" as const };
+      const provisional = { ...stable, sourceId: "item-1", kind: "provisional" as const };
+      const structural = identity.admit({ threadId, sources: [stable], legacyAliases: [] });
+      const recorded = identity.admit({ threadId, sources: [provisional], legacyAliases: [] });
+      new WorkbenchTranscriptRepository(database).settle([{
+        kind: "turn", threadId, turnId: "first", harnessId: "codex",
+        nativeLocation: "C:/project", nativeThreadId: "native-thread", nativeTurnId: "first",
+        state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1,
+      }, {
+        kind: "item", threadId, turnId: "first", publicItemId: recorded.itemId,
+        lifecycle: "completed", observedAt: 3, item: { type: "contextCompaction", id: provisional.sourceId },
+      }]);
+      const before = database.prepare("SELECT * FROM thread_items").all();
+      identity.admit({ threadId, sources: [stable, provisional], legacyAliases: [] });
+      assert.equal(identity.resolve({ threadId, itemId: stable.sourceId })?.itemId, structural.itemId);
+      assert.equal(identity.resolve({ threadId, itemId: provisional.sourceId })?.itemId, recorded.itemId);
+      assert.ok(warnings.mock.callCount() > 0, "Source spelling alone must not merge identities.");
+      warnings.mock.resetCalls();
+      if (retained) database.prepare(`
+        INSERT INTO workbench_transcript_item_legacy_aliases(thread_id, turn_id, alias, item_identity_id) VALUES (?, ?, ?, ?)
+      `).run(threadId, "first", provisional.sourceId, structural.itemId);
+      const admission = retained
+        ? { threadId, sources: [provisional], legacyAliases: [] }
+        : { threadId, sources: [stable], legacyAliases: [{ turnId: "first", alias: provisional.sourceId }] };
+      for (let pass = 0; pass < 2; pass++) {
+        assert.equal(identity.admit(admission).itemId, recorded.itemId);
+      }
+      const reloaded = new WorkbenchTranscriptIdentityRepository(database);
+      for (const reference of [stable.sourceId, provisional.sourceId, structural.itemId, recorded.itemId]) {
+        assert.equal(reloaded.resolve({ threadId, turnId: "first", itemId: reference })?.itemId, recorded.itemId);
+      }
+      assert.deepEqual(database.prepare("SELECT * FROM thread_items").all(), before);
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+      assert.equal(warnings.mock.callCount(), 0);
+    } finally { database.close(); }
+  });
+}
 
 test("correlated identity admission rolls back aliases with the surrounding transaction", () => {
   const { database, identity, threadId, provider, client, structural, recorded } = splitUserMessage();

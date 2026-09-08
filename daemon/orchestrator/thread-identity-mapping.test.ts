@@ -1,6 +1,6 @@
 /*
  * Keywords: identity, provider boundary, opaque content, structural admission.
- * No exports. Tests protect canonical references without rewriting provider content or reading bodies.
+ * No exports. Tests protect canonical references, durable alias convergence and body-free live projection.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -367,20 +367,30 @@ test("repeated provider catalogues admit only new identity evidence without hidi
 });
 
 for (const route of ["catalogue", "event", "recorder"] as const) {
-  test(`correlated user identity refreshes warm projection references through ${route} admission`, async (context) => {
+  for (const evidence of ["recorded-client", "structural-client", "retained-alias"] as const) {
+  test(`correlated identity refreshes warm projection references through ${route} admission (${evidence})`, async (context) => {
     const fixture = await setup();
     const { database, owners, native, parent, turn } = fixture;
     const warnings = context.mock.method(console, "warn", () => undefined);
     try {
-      const message: ThreadItem = { type: "userMessage", id: "native-message", clientId: "submitted",
-        content: [{ type: "text", text: "preserve my input", text_elements: [] }] };
-      const [structural, recorded] = await owners.items.admit([
-        { threadId: parent.threadId, sources: [{ turnId: turn.turnId, kind: "stable", sourceId: message.id }], legacyAliases: [] },
+      const sourceId = evidence === "recorded-client" ? "native-message" : "item-1";
+      const message: ThreadItem = evidence === "retained-alias"
+        ? { type: "contextCompaction", id: sourceId }
+        : { type: "userMessage", id: sourceId, clientId: "submitted",
+          content: [{ type: "text", text: "preserve my input", text_elements: [] }] };
+      const clientSource = { turnId: turn.turnId, kind: "client" as const, sourceId: "submitted" };
+      const [structural] = await owners.items.admit([
         { threadId: parent.threadId, sources: [
-          { turnId: turn.turnId, kind: "provisional", sourceId: "item-1" },
-          { turnId: turn.turnId, kind: "client", sourceId: message.clientId! },
+          { turnId: turn.turnId, kind: "stable", sourceId: "native-message" },
+          ...(evidence === "structural-client" ? [clientSource] : []),
         ], legacyAliases: [] },
       ]);
+      const recorded = new WorkbenchTranscriptIdentityRepository(database).admit(
+        { threadId: parent.threadId, sources: [
+          { turnId: turn.turnId, kind: "provisional", sourceId: "item-1" },
+          ...(evidence === "recorded-client" ? [clientSource] : []),
+        ], legacyAliases: [] },
+      );
       const repository = new WorkbenchTranscriptRepository(database);
       repository.settle([{
         kind: "turn", threadId: parent.threadId, turnId: turn.turnId, harnessId: native.harness,
@@ -390,6 +400,9 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
         kind: "item", threadId: parent.threadId, turnId: turn.turnId, publicItemId: recorded!.itemId,
         lifecycle: "completed", observedAt: 3, item: { ...message, id: "item-1" },
       }]);
+      if (evidence === "retained-alias") database.prepare(`
+        INSERT INTO workbench_transcript_item_legacy_aliases(thread_id, turn_id, alias, item_identity_id) VALUES (?, ?, ?, ?)
+      `).run(parent.threadId, turn.turnId, "item-1", structural!.itemId);
       const before = database.prepare("SELECT * FROM thread_items").all();
       const event = { method: "item/completed" as const, params: {
         threadId: native.nativeThreadId, turnId: native.nativeTurnId, item: message, completedAtMs: 2_000,
@@ -420,7 +433,8 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
       const admissions = fixture.admissions();
       await admit();
       assert.equal(fixture.admissions(), admissions, "The repaired evidence must stop scheduling duplicate admission.");
-      for (const reference of [structural!.itemId, recorded!.itemId, message.id, message.clientId!, "item-1"]) {
+      for (const reference of [structural!.itemId, recorded!.itemId, "native-message", "item-1",
+        ...(evidence === "retained-alias" ? [] : ["submitted"])]) {
         assert.equal(owners.items.itemIdForReference(parent.threadId, turn.turnId, reference), recorded!.itemId);
       }
       assert.equal(mapProviderThread(owners, native, thread).turns[0]!.items[0]!.id, recorded!.itemId);
@@ -435,6 +449,7 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
       assert.equal(warnings.mock.callCount(), 0);
     } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
   });
+  }
 }
 
 test("provider event batches admit starts before deltas without storing pending turns", async () => {
