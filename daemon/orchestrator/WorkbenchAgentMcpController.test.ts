@@ -1,4 +1,5 @@
 /*
+ * Keywords: MCP, caller identity, shell, dispatch, cancellation, tests.
  * Exports:
  * - No production exports; Node tests cover typed MCP inventory, paged Git diff input, trusted identity, structured dispatch, bounded errors, questionnaire waits, and steer cancellation. Keywords: workbench, MCP, HTTP, git, tools, questionnaire, steer, cancellation, test.
  */
@@ -15,6 +16,47 @@ import type { WorkbenchAgentCommandRequest } from "../lib/workbench/commands/wor
 import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import { WORKBENCH_SHELL_SANDBOX_CAPABILITY } from "./WorkbenchShellController";
+
+for (const failResolution of [false, true]) test(`shell resolves caller identity from thread cwd with resolution failure=${failResolution}`, async () => {
+  const identities: object[] = [];
+  const controller = new WorkbenchAgentMcpController({
+    executeCommand: async () => Response.json({}),
+    orchestratorOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    lifecycleLogError: () => {},
+    requestCodex: async (request) => {
+      assert.equal(request.method, "thread/read");
+      assert.deepEqual(request.params, { includeTurns: false, threadId: "native-session" });
+      return { id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } };
+    },
+    resolveThreadId: async (nativeThreadId, cwd) => {
+      assert.equal(nativeThreadId, "native-session");
+      assert.equal(cwd, "C:/authoritative");
+      if (failResolution) throw new Error("identity unavailable");
+      return "workbench-thread";
+    },
+    shell: {
+      execute: async (_input, _meta, _signal, identity) => {
+        identities.push(identity);
+        return { cwd: "C:/other", exitCode: 0, shell: "pwsh", stderr: "", stdout: "" };
+      },
+    },
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  try {
+    const call = () => client.callTool({
+      name: "shell",
+      _meta: { threadId: "native-session" },
+      arguments: { command: "Get-Location", workdir: "C:/other" },
+    });
+    assert.equal((await call()).isError, failResolution);
+    assert.deepEqual(identities, failResolution ? [] : [{ nativeThreadId: "native-session", workbenchThreadId: "workbench-thread" }]);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
 
 const reloadCatalog = [
   { access: "agent" as const, description: "MCP", safeAll: true, scope: "server:mcp" },
@@ -324,6 +366,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
 
 test("fails closed without trusted identity and sanitizes boundary failures", async () => {
   let codexReadCount = 0;
+  let failThreadRead = false;
   const logged: string[] = [];
   const controller = new WorkbenchAgentMcpController({
     executeCommand: async () => { throw new Error("unexpected execution"); },
@@ -332,6 +375,7 @@ test("fails closed without trusted identity and sanitizes boundary failures", as
     requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
     requestCodex: async () => {
       codexReadCount += 1;
+      if (!failThreadRead) return { id: 0, result: { thread: { cwd: "C:/authoritative" } } };
       throw new Error("token=super-secret C:/Users/chiri/private.txt");
     },
   });
@@ -354,6 +398,7 @@ test("fails closed without trusted identity and sanitizes boundary failures", as
     assert.equal(missingSandboxState.isError, true);
     assert.match(responseText(missingSandboxState), /valid MCP sandbox state/u);
 
+    failThreadRead = true;
     const sanitized = await client.callTool({
       _meta: { threadId: "thread-1" },
       arguments: {},

@@ -1,4 +1,7 @@
-/* No production exports. Tests protect exact sandbox forwarding, platform launch transport, and fail-closed state handling. */
+/*
+ * Keywords: shell, identity, environment, sandbox, platform transport.
+ * No exports. Tests protect caller isolation, sandbox forwarding, launch transport, and fail-closed state handling.
+ */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
@@ -6,6 +9,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { CodexCommandExecRequest } from "./CodexCommandExecController";
 import WorkbenchShellController from "./WorkbenchShellController";
+
+const caller = { nativeThreadId: "native-session", workbenchThreadId: "workbench-thread" };
 
 function sandboxMeta(cwd: string, permissionProfile: Record<string, unknown> = {
   fileSystem: { entries: [], type: "restricted" },
@@ -49,7 +54,7 @@ test("carries the exact sandbox state through Windows without cmd.exe argument l
     login: false,
     timeout_ms: 4321,
     workdir: "child",
-  }, sandboxMeta(workspace, permissionProfile), new AbortController().signal);
+  }, sandboxMeta(workspace, permissionProfile), new AbortController().signal, caller);
 
   assert.deepEqual(result, {
     cwd: path.resolve(workspace, "child"),
@@ -102,7 +107,7 @@ test("launches Codex directly outside Windows", async () => {
   const result = await controller.execute({
     command: "printf '%s' 'quoted value'",
     login: false,
-  }, sandboxMeta(workspace), new AbortController().signal);
+  }, sandboxMeta(workspace), new AbortController().signal, caller);
 
   assert.equal(result.shell, "bash");
   const execution = executions[0]!;
@@ -113,7 +118,8 @@ test("launches Codex directly outside Windows", async () => {
     "-c",
     "printf '%s' 'quoted value'",
   ]);
-  assert.equal(execution.env, undefined);
+  assert.equal(execution.env?.CODEX_THREAD_ID, caller.nativeThreadId);
+  assert.equal(execution.env?.WORKBENCH_THREAD_ID, caller.workbenchThreadId);
   assert.deepEqual(execution.sandboxPolicy, { type: "dangerFullAccess" });
   assert.equal(fileURLToPath(JSON.parse(execution.command[3]!).sandboxCwd), workspace);
 });
@@ -130,35 +136,41 @@ test("fails closed when Codex omits the effective sandbox state", async () => {
   });
 
   await assert.rejects(
-    controller.execute({ command: "echo safe" }, { threadId: "thread-1" }, new AbortController().signal),
+    controller.execute({ command: "echo safe" }, { threadId: "thread-1" }, new AbortController().signal, caller),
     /valid MCP sandbox state/u,
   );
   assert.equal(executionCount, 0);
 });
 
-test("shell environment exposes Workbench identity without changing native sandbox context", async () => {
+for (const platform of ["win32", "linux"] as const) test(`shell installs distinct caller identities without leaking between calls on ${platform}`, async () => {
   const workspace = path.resolve("C:/workspace");
   const executions: CodexCommandExecRequest[] = [];
-  const threadId = "97d84a45-0d43-4d20-a996-e6b8bd8ad149";
+  const environment = Object.freeze({ WORKBENCH_THREAD_ID: "stale-workbench", CODEX_THREAD_ID: "stale-native", WORKBENCH_HARNESS: "opencode" });
   const controller = new WorkbenchShellController({
-    platform: "win32",
-    resolveThreadId: async (nativeId, cwd) => {
-      assert.equal(nativeId, "native-session");
-      assert.equal(cwd, workspace);
-      return threadId;
-    },
+    platform,
+    shellEnvironment: environment,
     commandExec: { execute: async (request) => {
       executions.push(request);
       return { exitCode: 0, stderr: "", stdout: "" };
     } },
   });
-  await controller.execute({ command: "Get-Location", workdir: "child" },
-    { ...sandboxMeta(workspace), threadId: "native-session" }, new AbortController().signal);
-  assert.equal(executions[0]?.env?.WORKBENCH_THREAD_ID, threadId);
-  assert.equal(executions[0]?.env?.WORKBENCH_HARNESS, "codex");
-  assert.ok(executions[0]?.env?.WORKBENCH_CODEX_SANDBOX_ARGS_JSON);
-  assert.equal(executions[0]?.cwd, path.resolve(workspace, "child"));
-  await assert.rejects(controller.execute({ command: "Get-Location" }, sandboxMeta(workspace), new AbortController().signal),
-    /trusted MCP thread identity/u);
-  assert.equal(executions.length, 1);
+  const callers = [
+    { nativeThreadId: "native-first", workbenchThreadId: "workbench-first" },
+    { nativeThreadId: "native-second", workbenchThreadId: "workbench-second" },
+  ];
+  for (const caller of callers) {
+    await controller.execute({ command: "echo safe", workdir: "child" },
+      sandboxMeta(workspace), new AbortController().signal, caller);
+  }
+  for (const [index, caller] of callers.entries()) {
+    const execution = executions[index]!;
+    const effectiveEnvironment = { ...environment, ...execution.env };
+    assert.equal(effectiveEnvironment.WORKBENCH_THREAD_ID, caller.workbenchThreadId);
+    assert.equal(effectiveEnvironment.CODEX_THREAD_ID, caller.nativeThreadId);
+    assert.equal(effectiveEnvironment.WORKBENCH_HARNESS, "codex");
+    if (platform === "win32") assert.ok(execution.env?.WORKBENCH_CODEX_SANDBOX_ARGS_JSON);
+    assert.equal(execution.cwd, path.resolve(workspace, "child"));
+  }
+  assert.equal(environment.WORKBENCH_THREAD_ID, "stale-workbench");
+  assert.equal(environment.CODEX_THREAD_ID, "stale-native");
 });

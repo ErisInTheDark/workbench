@@ -1,4 +1,5 @@
 /*
+ * Keywords: MCP, caller identity, shell, cancellation, lifecycle.
  * Exports:
  * - WorkbenchAgentMcpControllerOptions: inject trusted Codex identity resolution, cancellation, and structured command execution ports. Keywords: workbench, MCP, options, identity.
  * - default WorkbenchAgentMcpController: serve typed wb tools with client identity, request cancellation, and generation-scoped drain policy. Keywords: workbench, MCP, HTTP, tools, lifecycle, drain.
@@ -151,7 +152,7 @@ export default class WorkbenchAgentMcpController {
     this.requestCodex = requestCodex;
     this.runLoggedCommand = runLoggedCommand;
     this.resolveThreadId = resolveThreadId;
-    this.shell = shell ?? new WorkbenchShellController({ requestCodex, resolveThreadId });
+    this.shell = shell ?? new WorkbenchShellController({ requestCodex });
   }
 
   beginRuntimeDrain() {
@@ -306,7 +307,20 @@ export default class WorkbenchAgentMcpController {
       const result = await this.runLoggedCommand(
         "wb shell",
         signal,
-        async () => await this.shell.execute(input, meta, signal),
+        async () => {
+          const threadResponse = await this.requestCodex({
+            id: 0,
+            method: "thread/read",
+            params: { includeTurns: false, threadId: callerThreadId },
+          });
+          if (signal.aborted) throw signal.reason;
+          const workbenchThreadId = await this.resolveThreadId(callerThreadId, readThreadCwd(threadResponse));
+          if (signal.aborted) throw signal.reason;
+          return await this.shell.execute(input, meta, signal, {
+            nativeThreadId: callerThreadId,
+            workbenchThreadId,
+          });
+        },
         (value) => value.exitCode === 0,
       );
       if (signal.aborted) throw signal.reason;
