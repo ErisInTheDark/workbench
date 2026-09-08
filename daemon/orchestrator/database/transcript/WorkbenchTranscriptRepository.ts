@@ -695,6 +695,16 @@ export default class WorkbenchTranscriptRepository {
       }
       for (const [itemPosition, entry] of finalEntries.entries()) {
         if (entry.kind === "provider") {
+          if (entry.observation.publicItemId
+            && entry.entry.item.id !== entry.entry.incomingItemId
+            && !entry.entry.aliases.includes(entry.entry.incomingItemId)) {
+            // An aggregate represents these existing facts; it does not own their bodies or source IDs.
+            const retained = index.itemsByPublicId.get(entry.entry.item.id);
+            if (!retained) throw new Error("Represented canonical item has no retained body.");
+            this.#run(updateRows(itemTables.threadItems, { item_position: itemPosition }, { id: retained.id }));
+            this.#replaceCanonicalItem(index, retained, { item_position: itemPosition });
+            continue;
+          }
           const timeline = this.#providerReplacementTimeline(
             index,
             entry.entry.item.id,
@@ -1163,7 +1173,7 @@ export default class WorkbenchTranscriptRepository {
       if (sourceId !== identity.itemId
         && !identity.sources.some((source) => source.turnId === turnId && source.sourceId === sourceId)
         && !identity.legacyAliases.some((alias) => alias.turnId === turnId && alias.alias === sourceId)) {
-        throw new Error("Transcript item source does not belong to its admitted identity.");
+        throw new Error(`Transcript item source does not belong to its admitted identity. thread=${JSON.stringify(threadId.slice(0, 160))} turn=${JSON.stringify(turnId.slice(0, 160))} item=${JSON.stringify(identity.itemId.slice(0, 160))} source=${JSON.stringify(sourceId.slice(0, 160))}`);
       }
       publicItemId = identity.itemId;
     }

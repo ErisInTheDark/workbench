@@ -1318,6 +1318,54 @@ test("provider settlement converts retained bodies before reconciliation without
   }
 });
 
+for (const residual of [false, true]) {
+  for (const aggregateHasBody of [false, true]) {
+    test(`reasoning aggregate preserves admitted canonical sources (residual ${residual}, stored aggregate ${aggregateHasBody})`, () => {
+      const { database, repository } = createRepository();
+      try {
+        const turn = turnObservation("turn", 0);
+        repository.settle([threadObservation(), turn]);
+        const identities = new WorkbenchTranscriptIdentityRepository(database);
+        const reasoning = (id: string, summary: string[]): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => {
+          const identity = identities.admit({
+            threadId: "thread", sources: [{ turnId: "turn", sourceId: id, kind: getCodexItemIdentityKind({ id }) }],
+            legacyAliases: [],
+          });
+          return {
+            kind: "item", threadId: "thread", turnId: "turn", publicItemId: identity.itemId,
+            lifecycle: "completed", observedAt: 3,
+            item: withWorkbenchThreadItemIdentity({ id, type: "reasoning", summary, content: [] }, getCodexItemIdentityKind({ id })),
+          };
+        };
+        const alpha = reasoning("rs-alpha", ["alpha"]);
+        const beta = reasoning("rs-beta", ["beta"]);
+        repository.settle([alpha, beta]);
+        const before = repository.read({ threadId: "thread", turnLimit: 1 })!.rows.threadItems;
+        const aggregate = reasoning("item-1", ["alpha", "beta", ...(residual ? ["new thought"] : [])]);
+        if (aggregateHasBody) repository.settle([aggregate]);
+        const replacement = providerTurnScope([turn, aggregate], ["turn"]);
+        repository.settle([replacement]);
+        repository.settle([replacement]);
+        const snapshot = repository.read({ threadId: "thread", turnLimit: 1 })!;
+        assert.deepEqual(snapshot.rows.threadItems.slice(0, 2).map(({ id, public_id, source_id, item_position }) => (
+          { id, public_id, source_id, item_position }
+        )), before.map(({ id, public_id, source_id, item_position }) => ({ id, public_id, source_id, item_position })));
+        const projection = projectWorkbenchTranscript(snapshot);
+        assert.ok("data" in projection);
+        const items = projection.data.turns[0]!.items;
+        assert.deepEqual(items.map(({ id }) => id), [
+          alpha.publicItemId, beta.publicItemId, ...(residual ? [aggregate.publicItemId] : []),
+        ]);
+        assert.deepEqual(items.flatMap((item) => item.type === "reasoning" ? item.summary.filter(Boolean) : []),
+          ["alpha", "beta", ...(residual ? ["new thought"] : [])]);
+        assert.equal(identities.resolve({ threadId: "thread", itemId: "item-1" })?.itemId, aggregate.publicItemId,
+          "One aggregate cannot become an alias of multiple canonical items.");
+        assert.deepEqual(database.pragma("foreign_key_check"), []);
+      } finally { database.close(); }
+    });
+  }
+}
+
 for (const targetHasBody of [false, true]) {
   test(`same-fact reconciliation preserves public aliases and body evidence (target body ${targetHasBody})`, () => {
     const { database, repository } = createRepository();

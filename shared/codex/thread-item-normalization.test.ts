@@ -209,6 +209,23 @@ test("complete provider reconciliation preserves conflicting user identities", (
   assert.deepEqual(reconciled.map(({ item }) => item.id), ["item-1"]);
 });
 
+test("repeat reasoning aggregates do not reintroduce content already owned by granular items", () => {
+  const granular: ThreadItem[] = [
+    { id: "rs-a", type: "reasoning", summary: ["alpha"], content: [] },
+    { id: "rs-b", type: "reasoning", summary: [], content: ["beta"] },
+  ];
+  const aggregate: ThreadItem = { id: "item-1", type: "reasoning", summary: ["alpha"], content: ["beta", "gamma"] };
+  let current = [...granular, aggregate];
+  for (let pass = 0; pass < 2; pass += 1) {
+    const result = reconcileCompleteThreadItems(current, [aggregate], { classifyItem: getCodexItemIdentityKind });
+    assert.deepEqual(result.map(({ item }) => item.id), ["rs-a", "rs-b", "item-1"]);
+    assert.deepEqual(result.flatMap(({ item }) => item.type === "reasoning"
+      ? [...item.summary, ...item.content].filter(Boolean) : []), ["alpha", "beta", "gamma"]);
+    assert.ok(result.every(({ aliases }) => aliases.length === 0), "Partial representation is not an identity alias.");
+    current = result.map(({ item }) => item);
+  }
+});
+
 test("partial reasoning coverage never aliases a snapshot with surviving new content to its earlier item", () => {
   const reconciled = reconcileCompleteThreadItems(
     [{ id: "reasoning", type: "reasoning", summary: ["earlier"], content: [] }],

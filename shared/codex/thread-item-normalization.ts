@@ -369,14 +369,6 @@ export function reconcileCompleteThreadItems(
   };
 
   for (const incomingItem of incoming) {
-    const exactCurrentItem = currentById.get(incomingItem.id);
-    if (exactCurrentItem && !usedCurrentItemIds.has(exactCurrentItem.id)) {
-      usedCurrentItemIds.add(exactCurrentItem.id);
-      emit(mergeSameIdItem(exactCurrentItem, incomingItem, options), incomingItem.id);
-      if (incomingItem.type === "contextCompaction") incomingCompactionIndex += 1;
-      continue;
-    }
-
     if (incomingItem.type === "reasoning" && isProvisionalItem(incomingItem)) {
       const representedCurrentItems = current.filter((
         currentItem,
@@ -385,29 +377,43 @@ export function reconcileCompleteThreadItems(
         && !isProvisionalItem(currentItem)
         && reasoningItemsOverlap(currentItem, incomingItem)
       ));
-      const reasoningOwners = new Map<string, Extract<ThreadItem, { type: "reasoning" }>>();
-      for (const segment of nonEmptyReasoningSegments(incomingItem)) {
-        reasoningOwners.set(segment, incomingItem);
-      }
-      for (const currentItem of representedCurrentItems) {
-        for (const segment of nonEmptyReasoningSegments(currentItem)) {
-          reasoningOwners.set(segment, currentItem);
+      if (representedCurrentItems.length) {
+        const reasoningOwners = new Map<string, Extract<ThreadItem, { type: "reasoning" }>>();
+        for (const segment of nonEmptyReasoningSegments(incomingItem)) {
+          reasoningOwners.set(segment, incomingItem);
         }
+        for (const currentItem of representedCurrentItems) {
+          for (const segment of nonEmptyReasoningSegments(currentItem)) {
+            reasoningOwners.set(segment, currentItem);
+          }
+        }
+        const residualItem = removeDuplicateReasoningSegments(incomingItem, reasoningOwners);
+        const hasResidual = hasReasoningContent(residualItem);
+        for (const currentItem of representedCurrentItems) {
+          if (usedCurrentItemIds.has(currentItem.id)) continue;
+          usedCurrentItemIds.add(currentItem.id);
+          emit(
+            currentItem,
+            incomingItem.id,
+            representedCurrentItems.length === 1 && !hasResidual ? [incomingItem.id] : [],
+          );
+        }
+        if (hasResidual) {
+          emit(residualItem, incomingItem.id);
+        }
+        continue;
       }
-      const residualItem = removeDuplicateReasoningSegments(incomingItem, reasoningOwners);
-      const hasResidual = hasReasoningContent(residualItem);
-      for (const currentItem of representedCurrentItems) {
-        if (usedCurrentItemIds.has(currentItem.id)) continue;
-        usedCurrentItemIds.add(currentItem.id);
-        emit(
-          currentItem,
-          incomingItem.id,
-          representedCurrentItems.length === 1 && !hasResidual ? [incomingItem.id] : [],
-        );
-      }
-      if (hasResidual) {
-        emit(residualItem, incomingItem.id);
-      }
+    }
+
+    const exactCurrentItem = currentById.get(incomingItem.id);
+    if (exactCurrentItem && !usedCurrentItemIds.has(exactCurrentItem.id)) {
+      usedCurrentItemIds.add(exactCurrentItem.id);
+      emit(mergeSameIdItem(exactCurrentItem, incomingItem, options), incomingItem.id);
+      if (incomingItem.type === "contextCompaction") incomingCompactionIndex += 1;
+      continue;
+    }
+
+    if (incomingItem.type === "reasoning" && isProvisionalItem(incomingItem) && !hasReasoningContent(incomingItem)) {
       continue;
     }
 
