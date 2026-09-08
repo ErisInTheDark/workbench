@@ -6,8 +6,8 @@
 - Use item positions to order items within one turn.
 - Use item ids, not reusable request keys, as transcript item identity.
 - Do not give augmentation tables a second history order.
-- Store supported Workbench item shapes in typed tables.
-- Store unsupported provider items as opaque unknown items.
+- Store Workbench-owned domain state in typed tables.
+- Store other provider items as generic payloads; presentation matching needs no dedicated table.
 - Keep provider-native evidence separate from Workbench items.
 - Provider-native evidence does not render or order history.
 - Treat command presentation as derived and replaceable.

@@ -2,7 +2,7 @@
  * Keywords: transcript, projection, item, database, validation.
  * Exports:
  * - WorkbenchProjectedInteractionItem: reconstructed questionnaire or approval.
- * - WorkbenchProjectedUnknownItem: preserved opaque provider item.
+ * - WorkbenchProjectedGenericItem: preserved provider payload available for presentation matching.
  * - WorkbenchProjectedTranscriptItem: canonical projected item union.
  * - WorkbenchTranscriptItemProjectionRow: projected item with its durable root.
  * - WorkbenchTranscriptProjectionIssue: bounded relational integrity failure.
@@ -34,18 +34,18 @@ export interface WorkbenchProjectedInteractionItem {
   type: "approval" | "questionnaire";
 }
 
-export interface WorkbenchProjectedUnknownItem {
+export interface WorkbenchProjectedGenericItem {
   id: string;
   nativeType: string;
   safeValue: JsonValue;
-  type: "unknown";
+  type: "generic";
 }
 
 export type WorkbenchProjectedTranscriptItem =
   | ThreadItem
   | WorkbenchFileChangeItem
   | WorkbenchProjectedInteractionItem
-  | WorkbenchProjectedUnknownItem;
+  | WorkbenchProjectedGenericItem;
 
 export interface WorkbenchTranscriptItemProjectionRow {
   item: WorkbenchProjectedTranscriptItem;
@@ -564,7 +564,7 @@ function projectItem(
         id: itemId,
         nativeType: item.native_type,
         safeValue: parseJson(item.safe_json, "threadItemUnknown", itemId),
-        type: "unknown",
+        type: "generic",
       };
     }
   }

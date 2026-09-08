@@ -106,7 +106,7 @@ function latestTimestamp(left: number | null, right: number | null) {
 }
 
 function isProviderProjectionItem(item: WorkbenchProjectedTranscriptItem): item is ThreadItem | WorkbenchFileChangeItem {
-  return item.type !== "approval" && item.type !== "questionnaire" && item.type !== "unknown";
+  return item.type !== "approval" && item.type !== "questionnaire" && item.type !== "generic";
 }
 
 export default class WorkbenchTranscriptRepository {

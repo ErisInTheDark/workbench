@@ -1,7 +1,7 @@
 - Do not ferry metadata inside ids. Ids are solely unique identifiers: UUIDs or serial integers.
-- Store each Workbench-owned semantic shape in typed columns and tables.
-- Use JSON only for opaque external values.
-- If Workbench reads stored JSON as a known shape, replace that JSON with typed tables.
+- Store Workbench-owned domain state in typed columns and tables.
+- Generic provider payloads may stay JSON when interpretation only derives presentation.
+- Promote payload fields to typed storage when they become Workbench-owned domain state.
 - Keep base tables small.
 - Put type-specific fields in augmentation tables.
 - Use one discriminator for each union.

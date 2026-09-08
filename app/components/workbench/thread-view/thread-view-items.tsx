@@ -1,5 +1,5 @@
 /*
- * Keywords: transcript rendering, grouping, incoming agent, native output, hidden skill transport.
+ * Keywords: transcript rendering, grouping, generic item matching, incoming agent, native output, hidden skill transport.
  * Exports:
  * - ThreadTranscriptItemDetails: render one provider or relational transcript item with the established item UI. Keywords: workbench, transcript, comparison, item.
  * - ThreadTranscriptItemsDetails: render adjacent provider or relational items through shared command and reasoning grouping. Keywords: workbench, transcript, grouping, items.
@@ -31,7 +31,7 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import type {
   WorkbenchProjectedInteractionItem,
   WorkbenchProjectedTranscriptItem,
-  WorkbenchProjectedUnknownItem,
+  WorkbenchProjectedGenericItem,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
@@ -104,6 +104,7 @@ import ThreadCommandDetails from "./ThreadCommandDetails";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
 import ThreadContextCommandItem from "./ThreadContextCommandItem";
 import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import ThreadGenericItem from "./ThreadGenericItem";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
@@ -2515,22 +2516,6 @@ function ThreadCommandSequence ({
   );
 }
 
-function ThreadFallbackItem ({ item }: { item: NonGroupedItem | WorkbenchProjectedUnknownItem }) {
-  const isUnknownProjection = item.type === "unknown";
-  return (
-    <ThreadDisclosure
-      className="py-2"
-      contentClassName="mt-2 pl-6"
-      summary={<ThreadSummaryText text={isUnknownProjection ? "Unknown thread item" : item.type} />}
-      summaryClassName="text-[0.92em] leading-[1.6] text-muted"
-    >
-      <pre className="m-0 max-w-full overflow-x-auto whitespace-pre rounded-[0.9rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] px-4 py-3 font-mono text-[0.78em] leading-[1.6] text-text">
-        {JSON.stringify(isUnknownProjection ? item.safeValue : item, null, 2)}
-      </pre>
-    </ThreadDisclosure>
-  );
-}
-
 function ThreadRenderableBlockViewComponent ({
   block,
   browseResultEntries,
@@ -2609,7 +2594,7 @@ function ThreadRenderableBlockViewComponent ({
   switch (block.item.type) {
     case "functionCallOutput": {
       const item = readWorkbenchToolOutput(block.item);
-      if (!item) return <ThreadFallbackItem item={block.item} />;
+      if (!item) return <ThreadGenericItem item={block.item} />;
       const timeline = findWorkbenchThreadItemTimelineEntry(item.id, itemTimeline);
       const timestamp = timeline?.firstSeenAt ?? item.workbenchInjectionAcceptedAt;
       return (
@@ -2769,7 +2754,7 @@ function ThreadRenderableBlockViewComponent ({
     case "collabAgentToolCall":
       return null;
     default:
-      return <ThreadFallbackItem item={block.item} />;
+      return <ThreadGenericItem item={block.item} timeline={findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline)} turnStatus={turnStatus} />;
   }
 }
 
@@ -2845,7 +2830,7 @@ export function ThreadTranscriptItemsDetails ({
 }: ThreadTranscriptItemsDetailsProps) {
   type RenderEntry =
     | { block: ThreadRenderableBlock; kind: "block" }
-    | { item: Extract<WorkbenchProjectedTranscriptItem, { type: "unknown" }>; kind: "unknown" };
+    | { item: WorkbenchProjectedGenericItem; kind: "generic" };
   const entries: RenderEntry[] = [];
   const renderItemTimeline = useMemo(() => {
     let timeline = itemTimeline ?? [];
@@ -2872,9 +2857,9 @@ export function ThreadTranscriptItemsDetails ({
     pendingItems = [];
   };
   for (const item of items) {
-    if (item.type === "unknown") {
+    if (item.type === "generic") {
       flushItems();
-      entries.push({ item, kind: "unknown" });
+      entries.push({ item, kind: "generic" });
     } else {
       pendingItems.push(isProjectedInteractionItem(item)
         ? adaptProjectedInteractionItem(item)
@@ -2894,8 +2879,8 @@ export function ThreadTranscriptItemsDetails ({
 
   return (
     <div className="space-y-2">
-      {entries.map((entry, index) => entry.kind === "unknown" ? (
-        <ThreadFallbackItem key={`unknown:${entry.item.id}`} item={entry.item} />
+      {entries.map((entry, index) => entry.kind === "generic" ? (
+        <ThreadGenericItem key={`generic:${entry.item.id}`} item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
       ) : (
         <ThreadRenderableBlockView
           key={`${getRenderableBlockKey(entry.block)}:${index}`}

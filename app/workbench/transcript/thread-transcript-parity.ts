@@ -24,7 +24,7 @@ import {
 import type {
   WorkbenchProjectedInteractionItem,
   WorkbenchProjectedTranscriptItem,
-  WorkbenchProjectedUnknownItem,
+  WorkbenchProjectedGenericItem,
   WorkbenchTranscriptProjection,
   WorkbenchTranscriptProjectionIssue,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
@@ -237,7 +237,7 @@ function normalizeJsonItem(item: ThreadItem): SemanticItem {
   return supported ?? {
     id: item.id,
     payload: { nativeType: item.type, safeValue: item },
-    type: "unknown",
+    type: "generic",
   };
 }
 
@@ -254,7 +254,7 @@ function normalizeInteraction(item: WorkbenchProjectedInteractionItem): Semantic
   };
 }
 
-function normalizeUnknown(item: WorkbenchProjectedUnknownItem): SemanticItem {
+function normalizeGeneric(item: WorkbenchProjectedGenericItem): SemanticItem {
   return {
     id: item.id,
     payload: { nativeType: item.nativeType, safeValue: item.safeValue },
@@ -268,11 +268,11 @@ function isProjectedInteraction(item: WorkbenchProjectedTranscriptItem): item is
 
 function normalizeProjectedItem(item: WorkbenchProjectedTranscriptItem): SemanticItem {
   if (isProjectedInteraction(item)) return normalizeInteraction(item);
-  if (item.type === "unknown") return normalizeUnknown(item);
+  if (item.type === "generic") return normalizeGeneric(item);
   return normalizeSupportedItem(item) ?? {
     id: item.id,
     payload: { nativeType: item.type, safeValue: item },
-    type: "unknown",
+    type: "generic",
   };
 }
 

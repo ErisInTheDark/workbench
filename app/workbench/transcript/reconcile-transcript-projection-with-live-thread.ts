@@ -14,7 +14,7 @@ import type {
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 
 function isProjectedProviderItem(item: WorkbenchProjectedTranscriptItem): item is ThreadItem {
-  return item.type !== "questionnaire" && item.type !== "approval" && item.type !== "unknown";
+  return item.type !== "questionnaire" && item.type !== "approval" && item.type !== "generic";
 }
 
 function liveTurnHistoryEntry(

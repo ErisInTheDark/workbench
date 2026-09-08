@@ -77,7 +77,7 @@ function thread(items: ThreadItem[]): ThreadPayload {
 
 function projection(items: WorkbenchProjectedTranscriptItem[]): WorkbenchTranscriptProjection {
   const projectedTurn: WorkbenchProjectedTranscriptTurn = {
-    ...turn(items.filter((item): item is ThreadItem => item.type !== "questionnaire" && item.type !== "approval" && item.type !== "unknown")),
+    ...turn(items.filter((item): item is ThreadItem => item.type !== "questionnaire" && item.type !== "approval" && item.type !== "generic")),
     itemTimeline: items.map(({ id }) => ({
       completedAt: 3_000,
       firstSeenAt: 1_000,
@@ -148,7 +148,7 @@ test("opaque function output parity preserves payload differences", () => {
     jsonBrowseResultEntries: [],
     jsonThread: thread([item]),
     sqliteProjection: projection([{
-      id: item.id, type: "unknown", nativeType: item.type, safeValue: { ...item, output },
+      id: item.id, type: "generic", nativeType: item.type, safeValue: { ...item, output },
     }]),
   });
   assert.equal(compare("result").equal, true);

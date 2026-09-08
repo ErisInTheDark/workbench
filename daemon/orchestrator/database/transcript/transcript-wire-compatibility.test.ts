@@ -41,8 +41,8 @@ test("old-client projection preserves the same item as opaque context without ch
   const projected = projectWorkbenchTranscriptItems(conformed.data.rows);
   assert.ok(projected.success);
   const item = projected.data[0]?.item;
-  assert.equal(item?.type, "unknown");
-  if (item?.type === "unknown") assert.deepEqual(item.safeValue, {
+  assert.equal(item?.type, "generic");
+  if (item?.type === "generic") assert.deepEqual(item.safeValue, {
     id: "fco_one", type: "functionCallOutput", name: "context", namespace: "workbench",
     output: "retained content", workbenchInjectionAcceptedAt: 2,
   });

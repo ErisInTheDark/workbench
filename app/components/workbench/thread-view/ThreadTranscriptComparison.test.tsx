@@ -14,6 +14,26 @@ import type {
   WorkbenchTranscriptProjection,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import ThreadTranscriptComparison from "./ThreadTranscriptComparison";
+import { ThreadTranscriptItemDetails } from "./thread-view-items";
+
+test("native and projected sleep items share presentation without exposing their transport payload", () => {
+  const native: ThreadItem = { id: "sleep", type: "sleep", durationMs: 60_000 };
+  const projected: WorkbenchProjectedTranscriptItem = {
+    id: native.id, type: "generic", nativeType: native.type, safeValue: native,
+  };
+  const render = (item: WorkbenchProjectedTranscriptItem) => renderToStaticMarkup(
+    <ThreadTranscriptItemDetails
+      item={item}
+      threadId="thread"
+      turnId="turn"
+      turnStartedAt={1}
+      turnCompletedAt={61}
+      turnStatus="completed"
+    />,
+  );
+  assert.equal(render(native), render(projected));
+  assert.doesNotMatch(render(projected), /durationMs/u);
+});
 
 function createThread(items: ThreadItem[]): ThreadPayload {
   const turn = {
@@ -161,7 +181,7 @@ test("comparison renders both sources and explicit gaps without losing later ali
   assert.match(html, /tail SQLite/u);
 });
 
-test("comparison renders projected questionnaires and unknown items through bounded item UI", () => {
+test("comparison renders projected questionnaires and generic items through bounded item UI", () => {
   const html = renderComparison(
     [],
     [{
@@ -190,13 +210,13 @@ test("comparison renders projected questionnaires and unknown items through boun
       id: "unknown",
       nativeType: "futureItem",
       safeValue: { safe: true },
-      type: "unknown",
+      type: "generic",
     }],
   );
 
   assert.match(html, /Which option\?/u);
   assert.match(html, /one/u);
-  assert.match(html, /Unknown thread item/u);
+  assert.match(html, /generic thread item/u);
 });
 
 test("comparison includes SQLite-only turns outside the JSON visible turn set", () => {

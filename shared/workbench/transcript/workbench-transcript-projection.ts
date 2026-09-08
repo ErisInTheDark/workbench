@@ -25,7 +25,7 @@ export {
   projectWorkbenchTranscriptItems,
   type WorkbenchProjectedInteractionItem,
   type WorkbenchProjectedTranscriptItem,
-  type WorkbenchProjectedUnknownItem,
+  type WorkbenchProjectedGenericItem,
   type WorkbenchTranscriptItemProjectionResult,
   type WorkbenchTranscriptItemProjectionRow,
   type WorkbenchTranscriptProjectionIssue,

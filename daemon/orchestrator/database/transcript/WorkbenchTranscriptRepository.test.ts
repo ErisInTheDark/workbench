@@ -542,7 +542,7 @@ test("selected legacy opaque outputs become supported without losing identity or
     const projected = projectWorkbenchTranscriptItems(after.rows);
     assert.ok(projected.success);
     assert.deepEqual(projected.data[0]?.item, supported);
-    assert.equal(projected.data[1]?.item.type, "unknown");
+    assert.equal(projected.data[1]?.item.type, "generic");
   } finally {
     database.close();
   }

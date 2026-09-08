@@ -306,7 +306,7 @@ test("real SQLite rows project the renderer facts used by current command, file,
       id: "opaque",
       nativeType: "imageView",
       safeValue: { id: "opaque", path: "C:/project/image.png", type: "imageView" },
-      type: "unknown",
+      type: "generic",
     });
     const interaction = projected.find(({ type }) => type === "questionnaire");
     assert.ok(interaction?.type === "questionnaire");
