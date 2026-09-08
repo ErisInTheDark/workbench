@@ -264,6 +264,94 @@ test("bridge admits public identity before structural publication and records th
   }
 });
 
+test("database replacement preserves ordered live events and usage without replaying provider starts", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-cold-live-identity-"));
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  const repository = new WorkbenchThreadIdentityRepository(database);
+  const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
+  const transcripts = new WorkbenchTranscriptRepository(database);
+  const createOwners = () => ({
+    threads: new WorkbenchThreadIdentityController({
+      listThreadIdentities: async () => repository.list(),
+      observeThreadIdentities: async (inputs) => repository.observeMany(inputs),
+      observeTurnIdentities: async (inputs) => repository.observeTurns(inputs),
+      resolveThreadIdentity: async (input) => repository.resolve(input),
+      resolveNativeThreadIdentity: async (input) => repository.resolveNative(input),
+      resolveTurnIdentity: async (input) => repository.resolveTurn(input),
+    }),
+    items: new WorkbenchTranscriptIdentityController({
+      admitTranscriptItemIdentities: async (inputs) => itemRepository.admitMany(inputs),
+      resolveTranscriptItemIdentity: async (input) => itemRepository.resolve(input),
+    }),
+  });
+  let identities = createOwners();
+  const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: "thread" };
+  const published: ServerNotification[] = [];
+  const message: ThreadItem = { type: "agentMessage", id: "cold-message", text: "first", phase: "commentary", memoryCitation: null, delivery: null, questions: null };
+  const reasoning: ThreadItem = { type: "reasoning", id: "cold-reasoning", summary: ["title"], content: [] };
+  const createBridge = (initialState?: ConstructorParameters<typeof CodexStdioBridge>[0]["initialState"]) => new CodexStdioBridge({
+    appServer: { send() { throw new Error("Cold identity lookup must not request provider history"); } } as unknown as CodexAppServer,
+    initialState, identities,
+    bridgeUrl: "ws://127.0.0.1:1", handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification(event) { published.push(mapProviderNotification(identities, native, event as ServerNotification)); },
+    recordSqliteTranscript: async (batch) => { transcripts.settle(batch); },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo", project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {}, storageRoot: root,
+  });
+  let bridge = createBridge();
+  try {
+    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: { ...bridgeThread(), turns: [] } } });
+    await bridge.handleUpstreamMessage({ method: "turn/started", params: { threadId: "thread", turn: bridgeThread().turns[0] } });
+    for (const item of [message, reasoning]) {
+      await bridge.handleUpstreamMessage({ method: "item/started", params: { threadId: "thread", turnId: "turn", item } });
+    }
+    const threadId = identities.threads.workbenchIdForNative(native);
+    const turnId = identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: "turn" });
+    const messageId = identities.items.itemIdForReference(threadId, turnId, message.id);
+    const reasoningId = identities.items.itemIdForReference(threadId, turnId, reasoning.id);
+    const tokens = { inputTokens: 100, outputTokens: 40, cachedInputTokens: 20, cacheWriteInputTokens: 5, reasoningOutputTokens: 10, totalTokens: 140 };
+    const events: ServerNotification[] = [
+      { method: "item/agentMessage/delta", params: { threadId: "thread", turnId: "turn", itemId: message.id, delta: "continued" } },
+      { method: "item/reasoning/summaryTextDelta", params: { threadId: "thread", turnId: "turn", itemId: reasoning.id, summaryIndex: 0, delta: "continued thought" } },
+      { method: "thread/tokenUsage/updated", params: { threadId: "thread", turnId: "turn", tokenUsage: { last: tokens, total: tokens, modelContextWindow: null } } },
+      { method: "item/completed", params: { threadId: "thread", turnId: "turn", item: { ...message, text: "firstcontinued" }, completedAtMs: 2000 } },
+    ];
+    for (const event of events) {
+      const state = await bridge.detachForReload();
+      identities.items.dispose();
+      identities.threads.dispose();
+      identities = createOwners();
+      await identities.threads.start();
+      bridge = createBridge(state);
+      const before = published.length;
+      await bridge.handleUpstreamMessage(event);
+      await bridge.handleUpstreamMessage(event);
+      assert.equal(published.length, before + 2, "Every event must reach publication without replayed start events");
+      const expected = mapProviderNotification(identities, native, event);
+      assert.deepEqual(published.slice(before), [expected, expected]);
+      assert.equal(identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: "turn" }), turnId);
+      if ("itemId" in event.params) {
+        assert.equal(identities.items.itemIdForReference(threadId, turnId, event.params.itemId),
+          event.params.itemId === message.id ? messageId : reasoningId);
+      }
+    }
+    await bridge.detachForReload();
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM thread_turn_usage WHERE turn_id = ?").get(turnId) as { count: number }).count, 1);
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM thread_items WHERE turn_id = ?").get(turnId) as { count: number }).count, 2);
+  } finally {
+    await bridge.disposeImmediately();
+    identities.items.dispose();
+    identities.threads.dispose();
+    database.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("stats usage hydration reads Workbench journals without requesting provider history", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-stats-hydration-"));
   const TranscriptStore = (await import("./CodexTranscriptStore.js")).default as unknown as typeof CodexTranscriptStore;
@@ -298,6 +386,26 @@ test("stats usage hydration reads Workbench journals without requesting provider
     },
   });
   await transcriptStore.dispose();
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  const repository = new WorkbenchThreadIdentityRepository(database);
+  const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
+  const transcripts = new WorkbenchTranscriptRepository(database);
+  const identities = {
+    threads: new WorkbenchThreadIdentityController({
+      listThreadIdentities: async () => repository.list(),
+      observeThreadIdentities: async (inputs) => repository.observeMany(inputs),
+      observeTurnIdentities: async (inputs) => repository.observeTurns(inputs),
+      resolveThreadIdentity: async (input) => repository.resolve(input),
+      resolveNativeThreadIdentity: async (input) => repository.resolveNative(input),
+      resolveTurnIdentity: async (input) => repository.resolveTurn(input),
+    }),
+    items: new WorkbenchTranscriptIdentityController({
+      admitTranscriptItemIdentities: async (inputs) => itemRepository.admitMany(inputs),
+      resolveTranscriptItemIdentity: async (input) => itemRepository.resolve(input),
+    }),
+  };
   const observations: WorkbenchTranscriptObservation[] = [];
   let rejectUsage = false;
   const bridge = new CodexStdioBridge({
@@ -305,10 +413,12 @@ test("stats usage hydration reads Workbench journals without requesting provider
       send() { throw new Error("Stats hydration must not request provider history."); },
     } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
+    identities,
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async (batch) => {
       if (rejectUsage) throw new Error("usage settlement rejected");
+      transcripts.settle(batch);
       observations.push(...batch);
     },
     resolveProjectFromCwd: async () => ({
@@ -335,6 +445,11 @@ test("stats usage hydration reads Workbench journals without requesting provider
       ? window.observations.find(({ kind }) => kind === "turnTokenUsage") : undefined;
     assert.equal(usage?.kind, "turnTokenUsage");
     if (usage?.kind !== "turnTokenUsage") throw new Error("Expected a hydrated token-usage observation.");
+    const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: "thread" };
+    const threadId = identities.threads.workbenchIdForNative(native);
+    const turnId = identities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: "turn" });
+    assert.notEqual(threadId, "thread");
+    assert.notEqual(turnId, "turn");
     assert.equal(typeof usage.observedAt, "number");
     assert.deepEqual({ ...usage, observedAt: 0 }, {
       cumulative: {
@@ -347,10 +462,12 @@ test("stats usage hydration reads Workbench journals without requesting provider
       },
       kind: "turnTokenUsage",
       observedAt: 0,
-      threadId: "thread",
-      turnId: "turn",
+      threadId,
+      turnId,
       usageDataVersion: 2,
     });
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM thread_items").get() as { count: number }).count, 0);
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM thread_turn_usage WHERE turn_id = ?").get(turnId) as { count: number }).count, 1);
     rejectUsage = true;
     const failed = await bridge.handleBridgeRequest({
       id: 2, method: "workbench/stats/usage/hydrate", params: { threadId: "thread" },
@@ -359,6 +476,9 @@ test("stats usage hydration reads Workbench journals without requesting provider
     assert.match(failed?.error?.message ?? "", /usage settlement rejected/);
   } finally {
     await bridge.disposeImmediately();
+    identities.items.dispose();
+    identities.threads.dispose();
+    database.close();
     await fs.rm(root, { force: true, recursive: true });
   }
 });

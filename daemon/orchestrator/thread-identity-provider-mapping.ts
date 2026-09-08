@@ -9,7 +9,7 @@
  * - mapProviderThread: project supplied thread metadata and turns without provider rereads.
  * - mapProviderNotification: map typed notification references without rewriting provider payloads.
  * - admitProviderThreads: batch supplied metadata, ordered catalogs and loaded item identities.
- * - admitProviderNotifications: admit a provider event's structural facts before ordered publication.
+ * - admitProviderNotifications: restore retained references and admit structural facts before ordered publication.
  * - WorkbenchProviderIdentityAdmissionOwners: durable admission ports at the provider boundary.
  */
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
@@ -37,7 +37,9 @@ export interface WorkbenchNativeTurnIdentity extends WorkbenchNativeThreadIdenti
 
 export interface WorkbenchProviderIdentityAdmissionOwners extends WorkbenchProviderIdentityOwners {
   threads: WorkbenchProviderIdentityOwners["threads"]
-    & Pick<WorkbenchThreadIdentityController, "observeMany" | "observeTurns">;
+    & Pick<WorkbenchThreadIdentityController, "observeMany" | "observeTurns" | "findNativeTurn" | "resolveTurn">;
+  items: WorkbenchProviderIdentityOwners["items"]
+    & Pick<WorkbenchTranscriptIdentityController, "findItemIdForReference" | "resolve">;
 }
 
 export async function admitProviderNotifications(
@@ -59,6 +61,16 @@ export async function admitProviderNotifications(
       endedAt: turn.completedAt === null ? null : Math.round(turn.completedAt * 1_000),
       durationMs: turn.durationMs,
     })));
+  }
+  // A replacement controller has no warm turn/item index. Resolve only referenced
+  // identities, before structural admission or synchronous live projection.
+  for (const { params } of notifications) {
+    if (!("turnId" in params) || typeof params.turnId !== "string") continue;
+    if (!owners.threads.findNativeTurn({ ...native, nativeTurnId: params.turnId })) {
+      await owners.threads.resolveTurn({
+        threadId: owners.threads.workbenchIdForNative(native), turnId: params.turnId,
+      });
+    }
   }
   const items = notifications.flatMap((event) => {
     if (event.method === "item/started" || event.method === "item/completed") {
@@ -89,6 +101,18 @@ export async function admitProviderNotifications(
       };
     }).filter((input) => !owners.items.hasAdmitted(input));
     if (admissions.length) await owners.items.admit(admissions);
+  }
+  for (const { params } of notifications) {
+    if (!("turnId" in params) || typeof params.turnId !== "string"
+      || !("itemId" in params) || typeof params.itemId !== "string") continue;
+    const threadId = owners.threads.workbenchIdForNative(native);
+    const turnId = owners.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: params.turnId });
+    const source = { turnId, sourceId: params.itemId,
+      kind: native.harness === "codex" ? getCodexItemIdentityKind({ id: params.itemId }) : "stable" as const };
+    if (!owners.items.findItemIdForSource(threadId, source)
+      && !owners.items.findItemIdForReference(threadId, turnId, params.itemId)) {
+      await owners.items.resolve({ threadId, turnId, itemId: params.itemId });
+    }
   }
 }
 

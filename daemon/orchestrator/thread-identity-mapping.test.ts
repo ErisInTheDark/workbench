@@ -503,6 +503,74 @@ test("provider event batches admit starts before deltas without storing pending 
   }
 });
 
+test("notification admission restores cold durable references without replaying starts or querying warm deltas", async () => {
+  const { database, owners, native, parent, child, turn } = await setup();
+  const repository = new WorkbenchThreadIdentityRepository(database);
+  const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
+  const item: ThreadItem = { type: "reasoning", id: "cold-reasoning", summary: ["title"], content: [] };
+  const [admitted] = await admitProviderThreadItems(owners, native, [item]);
+  owners.threads.dispose();
+  owners.items.dispose();
+  let reads = 0;
+  let writes = 0;
+  const cold = {
+    threads: new WorkbenchThreadIdentityController({
+      listThreadIdentities: async () => repository.list(),
+      observeThreadIdentities: async (inputs) => { writes++; return repository.observeMany(inputs); },
+      observeTurnIdentities: async (inputs) => { writes++; return repository.observeTurns(inputs); },
+      resolveThreadIdentity: async (input) => { reads++; return repository.resolve(input); },
+      resolveNativeThreadIdentity: async (input) => { reads++; return repository.resolveNative(input); },
+      resolveTurnIdentity: async (input) => { reads++; return repository.resolveTurn(input); },
+    }),
+    items: new WorkbenchTranscriptIdentityController({
+      admitTranscriptItemIdentities: async (inputs) => { writes++; return itemRepository.admitMany(inputs); },
+      resolveTranscriptItemIdentity: async (input) => { reads++; return itemRepository.resolve(input); },
+    }),
+  };
+  const event: ServerNotification = {
+    method: "item/reasoning/summaryTextDelta",
+    params: {
+      threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: item.id, summaryIndex: 0, delta: "continued",
+    },
+  };
+  try {
+    await cold.threads.start();
+    assert.equal(cold.threads.findNativeTurn(native), undefined);
+    await admitProviderNotifications(cold, native, [event]);
+    const projected = mapProviderNotification(cold, native, event);
+    assert.deepEqual(projected.params, {
+      ...event.params, threadId: parent.threadId, turnId: turn.turnId, itemId: admitted!.id,
+    });
+    const coldReads = reads;
+    assert.ok(coldReads > 0, "The replacement must resolve retained SQLite identities");
+    for (let index = 0; index < 3; index++) {
+      await admitProviderNotifications(cold, native, [event]);
+      assert.deepEqual(mapProviderNotification(cold, native, event), projected);
+    }
+    assert.equal(reads, coldReads, "Warm deltas remain memory-only");
+    assert.equal(writes, 0, "Identifier-only events must not allocate replacement identities");
+
+    const foreign = { ...native, nativeThreadId: "native-child" };
+    const foreignEvent = { ...event, params: { ...event.params, threadId: foreign.nativeThreadId } };
+    await assert.rejects(async () => {
+      await admitProviderNotifications(cold, foreign, [foreignEvent]);
+      mapProviderNotification(cold, foreign, foreignEvent);
+    }, /turn identity has not been admitted/);
+    assert.equal(cold.threads.findNativeTurn(foreign), undefined);
+    assert.equal(cold.items.findItemIdForReference(child.threadId, turn.turnId, item.id), undefined);
+    const absentItem = { ...event, params: { ...event.params, itemId: "absent-item" } };
+    await assert.rejects(async () => {
+      await admitProviderNotifications(cold, native, [absentItem]);
+      mapProviderNotification(cold, native, absentItem);
+    }, /item reference has not been admitted/);
+    assert.equal(writes, 0);
+  } finally {
+    cold.items.dispose();
+    cold.threads.dispose();
+    database.close();
+  }
+});
+
 test("public socket routing and reload handoff retain native request correlation and canonical live identity", async () => {
   const fixture = await setup();
   const { owners, native, parent, turn } = fixture;

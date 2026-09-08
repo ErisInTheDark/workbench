@@ -1545,6 +1545,12 @@ export default class CodexStdioBridge {
       const window = createCodexUsageImport({ ...evidence, context });
       await this.captureTranscript("usage-compatibility-import", async () => {
         try {
+          if (this.identities) {
+            const native = { harness: "codex", nativeLocation: context.nativeLocation, nativeThreadId: threadId };
+            if (!this.identities.threads.findNativeThread(native)) {
+              await this.identities.threads.observe({ ...context, native });
+            }
+          }
           await this.transcriptRecording.importCompatibilityWindow(async () => [window]);
         } catch (error) {
           // Usage import has its own durable failed-work state, not live shadow failure semantics.
@@ -2181,7 +2187,7 @@ export default class CodexStdioBridge {
     }
 
     if (isJsonRpcNotification(message)) {
-      let syntheticFileChangeNotification: JsonRpcNotification | null = null;
+      let syntheticFileChangeNotification: Extract<ServerNotification, { method: "item/completed" }> | null = null;
       if (message.method === "turn/started") {
         const threadId = asString(asRecord(message.params)?.threadId)?.trim();
         const turnId = asString(asRecord(message.params)?.turnId)
@@ -2239,18 +2245,23 @@ export default class CodexStdioBridge {
           };
         }
       }
+      if (this.identities) {
+        const params = asRecord(message.params);
+        const threadId = asString(params?.threadId);
+        if (threadId && typeof params?.turnId === "string") {
+          const native = this.identities.threads.knownNativeBinding("codex", threadId);
+          await admitProviderNotifications(this.identities, native, [message as ServerNotification]);
+        }
+        if (syntheticFileChangeNotification) {
+          const native = this.identities.threads.knownNativeBinding("codex", syntheticFileChangeNotification.params.threadId);
+          await admitProviderNotifications(this.identities, native, [syntheticFileChangeNotification]);
+        }
+      }
       if (this.identities && ["thread/started", "turn/started", "turn/completed", "item/started", "item/completed"].includes(message.method!)) {
         await admitNativeTranscriptObservations(this.identities, await this.createSqliteProviderNotificationObservations(message));
       }
       if (this.identities && syntheticFileChangeNotification) {
         await admitNativeTranscriptObservations(this.identities, await this.createSqliteProviderNotificationObservations(syntheticFileChangeNotification));
-      }
-      if (this.identities && message.method === "item/fileChange/patchUpdated") {
-        // Codex streams the preview before item/started. Admit only its identity;
-        // cumulative patch bodies remain live presentation until lifecycle settlement.
-        const preview = message as Extract<ServerNotification, { method: "item/fileChange/patchUpdated" }>;
-        const native = this.identities.threads.knownNativeBinding("codex", preview.params.threadId);
-        await admitProviderNotifications(this.identities, native, [preview]);
       }
       this.onNotification(this.fileChanges.present(message));
       if (syntheticFileChangeNotification) this.onNotification(syntheticFileChangeNotification);
