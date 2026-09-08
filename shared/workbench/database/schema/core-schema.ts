@@ -1,14 +1,15 @@
 /*
  * Keywords: database, transcript, threads, turns, history.
- * workbenchHarnesses: current harness identity table. Keywords: database, schema, harness.
- * workbenchThreads: current Workbench thread table. Keywords: database, schema, thread.
- * workbenchPendingImportThreads: current temporary native import mapping table. Keywords: database, schema, import.
- * threadTurns: current harness turn table. Keywords: database, schema, turn.
- * threadTurnMaterializations: current complete transcript-body marker for one turn. Keywords: database, schema, transcript, materialization.
- * workbenchThreadLifecycle: current thread lifecycle table. Keywords: database, schema, lifecycle.
- * coreTables: current core table inventory. Keywords: database, schema, core.
- * CoreSchemaRows: selected row types for current core tables. Keywords: database, schema, types.
- * coreSchemaHistory: private core table histories. Keywords: database, schema, history.
+ * Exports:
+ * - workbenchHarnesses: current harness identity table.
+ * - workbenchThreads: current Workbench thread table.
+ * - workbenchPendingImportThreads: current temporary native import mapping table.
+ * - threadTurns: current harness turn table.
+ * - threadTurnMaterializations: current complete transcript-body marker for one turn.
+ * - workbenchThreadLifecycle: current thread lifecycle table.
+ * - coreTables: current core table inventory.
+ * - CoreSchemaRows: selected row types for current core tables.
+ * - coreSchemaHistory: private core table histories.
  */
 import databaseReleases from "./releases.ts";
 import {
@@ -29,6 +30,7 @@ import {
 } from "../../../database/schema/schema-definition.ts";
 import {
   addColumns,
+  createIndexes,
   createTable,
   defineSubsystemHistory,
   defineTableHistory,
@@ -92,7 +94,34 @@ const workbenchPendingImportThreadsV1 = defineTable("workbench_pending_import_th
 }, (table) => ({
   constraints: [unique([table.harness_id, table.native_location, table.native_thread_id])],
 }));
-const workbenchPendingImportThreadsHistory = initialHistory(workbenchPendingImportThreadsV1);
+const workbenchPendingImportThreadsV2 = evolveTable(workbenchPendingImportThreadsV1, {
+  extras: (table) => ({
+    constraints: [unique([table.harness_id, table.native_location, table.native_thread_id])],
+    indexes: [
+      index("workbench_pending_import_threads_native_reference_idx", [
+        table.native_thread_id, table.harness_id, table.native_location, table.thread_id,
+      ]),
+    ],
+  }),
+});
+const workbenchPendingImportThreadsHistory = defineTableHistory({
+  current: workbenchPendingImportThreadsV2,
+  versions: [
+    tableVersion({
+      schemaVersion: databaseReleases.initialTranscript.version,
+      table: workbenchPendingImportThreadsV1,
+      migration: createTable(workbenchPendingImportThreadsV1),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.nativeIdentityLookupIndexes.version,
+      table: workbenchPendingImportThreadsV2,
+      migration: createIndexes({
+        from: workbenchPendingImportThreadsV1, to: workbenchPendingImportThreadsV2,
+        names: ["workbench_pending_import_threads_native_reference_idx"],
+      }),
+    }),
+  ],
+});
 export const workbenchPendingImportThreads = workbenchPendingImportThreadsHistory.current;
 
 const threadTurnsV1 = defineTable("thread_turns", {
@@ -125,14 +154,40 @@ const threadTurnsV1 = defineTable("thread_turns", {
 const threadTurnsV2 = evolveTable(threadTurnsV1, {
   add: { identity_origin: enumText("legacy", "workbench").notNull().default("legacy") },
 });
+const threadTurnsV3 = evolveTable(threadTurnsV2, {
+  extras: (table) => ({
+    constraints: [
+      unique([table.thread_id, table.turn_index]),
+      unique([table.id, table.thread_id]),
+      unique([table.id, table.thread_id, table.harness_id, table.native_location, table.native_thread_id]),
+    ],
+    indexes: [
+      index("thread_turns_native_thread_idx", [table.harness_id, table.native_location, table.native_thread_id]),
+      index("thread_turns_native_turn_idx", [table.harness_id, table.native_location, table.native_thread_id, table.native_turn_id], {
+        unique: true,
+        where: sql`${table.native_turn_id} IS NOT NULL`,
+      }),
+      index("thread_turns_native_reference_idx", [
+        table.native_thread_id, table.harness_id, table.native_turn_id, table.native_location, table.thread_id,
+      ]),
+    ],
+  }),
+});
 const threadTurnsHistory = defineTableHistory({
-  current: threadTurnsV2,
+  current: threadTurnsV3,
   versions: [
     tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadTurnsV1, migration: createTable(threadTurnsV1) }),
     tableVersion({
       schemaVersion: databaseReleases.transcriptIdentity.version,
       table: threadTurnsV2,
       migration: addColumns({ from: threadTurnsV1, to: threadTurnsV2, columns: ["identity_origin"] }),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.nativeIdentityLookupIndexes.version,
+      table: threadTurnsV3,
+      migration: createIndexes({
+        from: threadTurnsV2, to: threadTurnsV3, names: ["thread_turns_native_reference_idx"],
+      }),
     }),
   ],
 });

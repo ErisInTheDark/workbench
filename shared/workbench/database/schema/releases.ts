@@ -30,6 +30,7 @@ const databaseReleases = Object.freeze({
   userInputKinds: release(19, "586d08df9287fc8c01308a1f5bdf298a226977ae7ca82a56b7584c6da1bd4532"),
   scopedThreadStateRelationships: release(20, "fb49eb5fbd79a16df341ad37d1ef9fa9be677caad02353c49624c112a7327a77"),
   threadContextUsage: release(21, "dfe7da4ce567acdba3107c8490574f10a3ccf06fbf0e37af1e46f8b18f001e87"),
+  nativeIdentityLookupIndexes: release(22, "39f98b5d26a877d9b823641be9385407a0577a282a10744652cc8e7cf68c6bcb"),
 });
 
 export default databaseReleases;

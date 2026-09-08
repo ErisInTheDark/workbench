@@ -118,13 +118,16 @@ export default class WorkbenchThreadIdentityRepository {
     const rows = this.database.prepare(`
       SELECT DISTINCT t.id
       FROM workbench_threads t JOIN (
-        SELECT thread_id, harness_id, native_thread_id FROM thread_turns
-        UNION SELECT thread_id, harness_id, native_thread_id FROM workbench_pending_import_threads
+        SELECT thread_id FROM thread_turns
+        WHERE native_thread_id = ? AND (? IS NULL OR harness_id = ?)
+        UNION ALL
+        SELECT thread_id FROM workbench_pending_import_threads
+        WHERE native_thread_id = ? AND (? IS NULL OR harness_id = ?)
       ) n ON n.thread_id = t.id
-      WHERE n.native_thread_id = ? AND (? IS NULL OR t.project_id = ?)
-        AND (? IS NULL OR n.harness_id = ?)
-    `).all(input.threadId, input.projectId ?? null, input.projectId ?? null,
-      input.harness ?? null, input.harness ?? null) as Array<{ id: string }>;
+      WHERE (? IS NULL OR t.project_id = ?)
+    `).all(input.threadId, input.harness ?? null, input.harness ?? null,
+      input.threadId, input.harness ?? null, input.harness ?? null,
+      input.projectId ?? null, input.projectId ?? null) as Array<{ id: string }>;
     if (rows.length > 1) throw new Error("Native thread identity is ambiguous within the requested scope.");
     if (rows[0]) return this.canonical(rows[0].id);
     if (direct) {
@@ -143,10 +146,14 @@ export default class WorkbenchThreadIdentityRepository {
   private resolveNativeInTransaction(native: WorkbenchNativeThreadIdentity): WorkbenchThreadIdentityRecord | null {
     const rows = this.database.prepare(`
       SELECT DISTINCT thread_id, native_location FROM (
-        SELECT thread_id, harness_id, native_location, native_thread_id FROM thread_turns
-        UNION SELECT thread_id, harness_id, native_location, native_thread_id FROM workbench_pending_import_threads
-      ) WHERE harness_id = ? AND native_thread_id = ?
-    `).all(native.harness, native.nativeThreadId) as Array<{ thread_id: string; native_location: string }>;
+        SELECT thread_id, native_location FROM thread_turns
+        WHERE native_thread_id = ? AND harness_id = ?
+        UNION ALL
+        SELECT thread_id, native_location FROM workbench_pending_import_threads
+        WHERE native_thread_id = ? AND harness_id = ?
+      )
+    `).all(native.nativeThreadId, native.harness,
+      native.nativeThreadId, native.harness) as Array<{ thread_id: string; native_location: string }>;
     const owners = new Set(rows.filter((row) => this.sameLocation(row.native_location, native.nativeLocation)).map((row) => row.thread_id));
     if (owners.size > 1) throw new Error("Native thread identity has conflicting Workbench owners.");
     const owner = owners.values().next().value;
