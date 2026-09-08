@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, amend, history, planning, snapshot, remapping.
  * Exports:
  * - No production exports; bounded concurrent regression wards cover linear plumbing amendments, conflict rollback, scoped checkpoint snapshots, and SHA remapping. Keywords: git, amend, history, arc, scope, snapshot, concurrency, test.
  */
@@ -242,6 +243,9 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
   assert.notEqual(secondStoredAfterFirst.metadata.sourceCheckpoint, secondStoredBefore.metadata.sourceCheckpoint);
   assert.notEqual(secondStoredAfterFirst.proposalCommit, secondStoredBefore.proposalCommit);
 
+  const pendingPlan = await controller.createPlan({
+    cwd: root, harness: "codex", intentName: "next work", paths: ["selected.txt"], threadId: "amend-thread",
+  });
   const secondCommitted = await controller.commitProposal({
     cwd: root,
     description: secondAfterFirst.description,
@@ -252,6 +256,11 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
     title: secondAfterFirst.title,
   });
   assert.ok(secondCommitted.committedSha);
+  const retainedPlan = await controller.findPlanState({ cwd: root, harness: "codex", threadId: "amend-thread" });
+  assert.ok(retainedPlan);
+  assert.equal(retainedPlan.intentName, pendingPlan.intentName);
+  assert.deepEqual(retainedPlan.scopePaths, pendingPlan.scopePaths);
+  assert.deepEqual(await repository.listChangedPaths(pendingPlan.checkpointCommit, retainedPlan.checkpointCommit, pendingPlan.scopePaths), []);
   assert.notEqual(secondCommitted.committedSha, amended.committedSha);
   assert.equal(
     await git(root, ["show", `${secondCommitted.committedSha}:selected.txt`]),

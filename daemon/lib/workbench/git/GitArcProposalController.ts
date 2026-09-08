@@ -88,7 +88,7 @@ function lifecycleEntry(entry: GitArcRegistryEntry) {
     intentDescription: entry.intentDescription,
     intentName: entry.intentName,
     phase: entry.phase === "resolved" ? "resolved" as const : "active" as const,
-    proposalIds: entry.proposalIds ?? [],
+    proposalIds: entry.proposalIds ?? (entry.proposalId ? [entry.proposalId] : []),
   };
 }
 
@@ -208,9 +208,13 @@ async function prepareAcceptedClaimTransition({
   store: GitCheckpointStore;
   threadId: string;
 }) {
-  const currentTree = await repository.writeScopedWorktreeTree(active.claimedPaths, acceptedHead);
-  const changedPaths = await repository.listChangedPaths(acceptedHead, currentTree, active.claimedPaths);
-  const claimedPaths = active.claimedPaths.filter((claimedPath) => (
+  const lifecycle = lifecycleEntry(active);
+  if (!lifecycle) {
+    throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's Git arc.");
+  }
+  const currentTree = await repository.writeScopedWorktreeTree(lifecycle.claimedPaths, acceptedHead);
+  const changedPaths = await repository.listChangedPaths(acceptedHead, currentTree, lifecycle.claimedPaths);
+  const claimedPaths = lifecycle.claimedPaths.filter((claimedPath) => (
     changedPaths.some((changedPath) => pathIsCoveredBy(changedPath, claimedPath))
   ));
   const sourceCheckpoint = commitRemaps?.get(source.checkpointCommit) ?? source.checkpointCommit;
@@ -220,8 +224,8 @@ async function prepareAcceptedClaimTransition({
     requireArcMetadata(source.metadata);
     const metadata: CheckpointMetadata = {
       amendedFrom: sourceCheckpoint,
-      ...(active.intentDescription ? { intentDescription: active.intentDescription } : {}),
-      ...(active.intentName ? { intentName: active.intentName } : {}),
+      ...(lifecycle.intentDescription ? { intentDescription: lifecycle.intentDescription } : {}),
+      ...(lifecycle.intentName ? { intentName: lifecycle.intentName } : {}),
       kind: "arc",
       priorProposalId: proposalId,
       registryLifecycle: true,
@@ -238,17 +242,20 @@ async function prepareAcceptedClaimTransition({
     successorCheckpoint = prepared.checkpointCommit;
     updates.push(prepared.update);
   }
-  const registryMutation = await registry.prepareClaim({
+  const nextLifecycle: NonNullable<ReturnType<typeof lifecycleEntry>> = {
+    ...lifecycle,
     checkpointCommit: successorCheckpoint ?? sourceCheckpoint,
     claimedPaths,
-    harness,
-    intentDescription: active.intentDescription,
-    intentName: active.intentName,
     phase: claimedPaths.length ? "active" : "resolved",
-    proposalId: active.proposalId ?? null,
-    proposalIds: active.proposalIds ?? (active.proposalId ? [active.proposalId] : []),
+  };
+  const registryMutation = await registry.prepareClaim(active.phase === "plan" ? {
+    ...active,
+    checkpointCommit: commitRemaps?.get(active.checkpointCommit) ?? active.checkpointCommit,
+    retainedArc: nextLifecycle,
+  } : {
+    ...active,
+    ...nextLifecycle,
     retainedArc: null,
-    threadId,
   }, { commitRemaps, expectedCheckpointCommit: active.checkpointCommit });
   if (registryMutation.update) updates.push(registryMutation.update);
   return {
@@ -1016,10 +1023,11 @@ export default class GitArcProposalController {
     requireArcMetadata(proposalSource.metadata);
     const registry = new GitArcRegistry(repository);
     const active = await registry.find({ harness, threadId });
-    if (!active || active.phase === "plan") {
+    const lifecycle = active ? lifecycleEntry(active) : null;
+    if (!active || !lifecycle) {
       throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's Git arc.");
     }
-    const activeSource = await store.readCheckpoint(harness, threadId, active.checkpointCommit);
+    const activeSource = await store.readCheckpoint(harness, threadId, lifecycle.checkpointCommit);
     const activeChain = await readArcChain(store, harness, threadId, activeSource, proposalSource.checkpointCommit);
     const previousAcceptedProposals = await readAcceptedReceipts(store, harness, threadId, activeChain);
     if (selectedMode === "amend") {

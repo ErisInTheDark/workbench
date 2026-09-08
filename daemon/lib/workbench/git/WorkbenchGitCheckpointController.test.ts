@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, arc, claims, planning, proposal acceptance, atomicity.
  * Exports:
  * - No production exports; serial shared-state tests and bounded concurrent copied-repository cases cover arc ownership, recent unclaimed dirt, proposals, staged ignored deletion acceptance, and publish state. Keywords: git, arc, registry, mtime, proposal, ignored deletion, concurrency, test.
  */
@@ -1159,6 +1160,9 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
     (await new GitArcRegistry(await WorkbenchGitRepository.open(source)).find({ harness: "codex", threadId: "partial-thread" }))?.proposalIds,
     [continuedReplacement.proposalId, amendment.proposalId],
   );
+  const pendingPlan = await controller.createPlan({
+    cwd: source, harness: "codex", intentName: "next work", paths: successor.scopePaths, threadId: "partial-thread",
+  });
   const committedFresh = await controller.commitProposal({
     cwd: source,
     description: "Preserve the accepted commit.",
@@ -1170,6 +1174,9 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
     title: "add committed target correction",
   });
   assert.equal(committedFresh.mode, "commit");
+  assert.equal((await controller.findPlanState({
+    cwd: source, harness: "codex", threadId: "partial-thread",
+  }))?.checkpointCommit, pendingPlan.checkpointCommit);
   assert.equal(committedFresh.amendTargetSha, null);
   assert.equal((await git(source, ["rev-parse", `${committedFresh.committedSha}^`])).trim(), laterHead);
   assert.equal((await git(source, ["show", "-s", "--format=%s", committedFresh.committedSha!])).trim(), "add committed target correction");
@@ -1298,6 +1305,12 @@ isolatedControllerTest("replacement plans retain every dirty claim and release c
   const proposal = await controller.createProposal({
     cwd: source, description: "", harness: "codex", paths: ["one.txt"], threadId: "partial-thread", title: "commit one",
   });
+  const replacement = await controller.createPlan({
+    cwd: source, harness: "codex", intentName: "carry retained dirt", paths: ["one.txt", "two.txt"], threadId: "partial-thread",
+  });
+  const revised = await controller.addToPlan({
+    cwd: source, harness: "codex", paths: ["planned.txt"], threadId: "partial-thread",
+  });
   await controller.commitProposal({
     cwd: source, description: "", harness: "codex", includeNewer: false, proposalId: proposal.proposalId,
     threadId: "partial-thread", title: "commit one",
@@ -1310,11 +1323,10 @@ isolatedControllerTest("replacement plans retain every dirty claim and release c
     cwd: source, harness: "codex", intentName: "skip retained dirt", paths: ["one.txt"], threadId: "partial-thread",
   }), /must include every dirty claimed file: two\.txt/u);
 
-  const replacement = await controller.createPlan({
-    cwd: source, harness: "codex", intentName: "carry retained dirt", paths: ["one.txt", "two.txt"], threadId: "partial-thread",
-  });
   let registryEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
   assert.equal(registryEntry?.phase, "plan");
+  assert.equal(registryEntry?.checkpointCommit, revised.checkpointCommit);
+  assert.equal(registryEntry?.intentName, replacement.intentName);
   assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, ["two.txt"]);
   await assert.rejects(controller.removeFromPlan({
     cwd: source, harness: "codex", paths: ["two.txt"], threadId: "partial-thread",
