@@ -1319,8 +1319,9 @@ test("provider settlement converts retained bodies before reconciliation without
 });
 
 for (const repeatedSource of [false, true]) {
-  test(`provider repetition preserves one admitted body and its neighbours (same source ${repeatedSource})`, () => {
+  test(`provider repetition preserves one admitted body and its neighbours (same source ${repeatedSource})`, (context) => {
     const { database, repository } = createRepository();
+    const warnings = context.mock.method(console, "warn", () => undefined);
     try {
       const turn = turnObservation("turn", 0);
       repository.settle([threadObservation(), turn]);
@@ -1353,14 +1354,17 @@ for (const repeatedSource of [false, true]) {
         assert.equal(identities.resolve({ threadId: "thread", itemId: alias.item.id })?.itemId, stored.publicItemId);
         assert.deepEqual(database.pragma("foreign_key_check"), []);
       }
+      assert.equal(warnings.mock.callCount(), repeatedSource ? 2 : 0,
+        "Expected same-fact overlap is not malformed provider input.");
     } finally { database.close(); }
   });
 }
 
 for (const residual of [false, true]) {
   for (const aggregateHasBody of [false, true]) {
-    test(`reasoning aggregate preserves admitted canonical sources (residual ${residual}, stored aggregate ${aggregateHasBody})`, () => {
+    test(`reasoning aggregate preserves admitted canonical sources (residual ${residual}, stored aggregate ${aggregateHasBody})`, (context) => {
       const { database, repository } = createRepository();
+      const warnings = context.mock.method(console, "warn", () => undefined);
       try {
         const turn = turnObservation("turn", 0);
         repository.settle([threadObservation(), turn]);
@@ -1400,6 +1404,7 @@ for (const residual of [false, true]) {
         assert.equal(identities.resolve({ threadId: "thread", itemId: "item-1" })?.itemId, aggregate.publicItemId,
           "One aggregate cannot become an alias of multiple canonical items.");
         assert.deepEqual(database.pragma("foreign_key_check"), []);
+        assert.equal(warnings.mock.callCount(), 0, "Aggregate and direct evidence may represent the same reasoning.");
       } finally { database.close(); }
     });
   }

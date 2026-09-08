@@ -150,6 +150,99 @@ test("conflicting aliases warn without losing either identity or blocking struct
   } finally { database.close(); }
 });
 
+function splitUserMessage() {
+  const fixture = setup();
+  const { database, identity, threadId } = fixture;
+  const provider = { turnId: "first", kind: "stable" as const, sourceId: "native-message" };
+  const client = { turnId: "first", kind: "client" as const, sourceId: "submitted-message" };
+  const structural = identity.admit({ threadId, sources: [provider], legacyAliases: [] });
+  const recorded = identity.admit({
+    threadId, sources: [{ turnId: "first", kind: "provisional", sourceId: "item-1" }, client],
+    legacyAliases: [{ turnId: "first", alias: "retained-message" }],
+  });
+  const repository = new WorkbenchTranscriptRepository(database);
+  repository.settle([{
+    kind: "turn", threadId, turnId: "first", harnessId: "codex",
+    nativeLocation: "C:/project", nativeThreadId: "native-thread", nativeTurnId: "first",
+    state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1,
+  }, {
+    kind: "item", threadId, turnId: "first", publicItemId: recorded.itemId,
+    lifecycle: "completed", observedAt: 3,
+    item: { type: "userMessage", id: "item-1", clientId: client.sourceId,
+      content: [{ type: "text", text: "keep this input", text_elements: [] }] },
+  }]);
+  return { ...fixture, provider, client, structural, recorded, repository };
+}
+
+test("client correlation joins a bodyless provider identity without changing the recorded message", (context) => {
+  const { database, identity, threadId, provider, client, structural, recorded } = splitUserMessage();
+  const warnings = context.mock.method(console, "warn", () => undefined);
+  try {
+    const before = database.prepare("SELECT * FROM thread_items").all();
+    const bodies = database.prepare("SELECT * FROM thread_item_user_messages").all();
+    for (const sources of [[provider, client], [client, provider]]) {
+      assert.equal(identity.admit({ threadId, sources, legacyAliases: [] }).itemId, recorded.itemId);
+    }
+    const reloaded = new WorkbenchTranscriptIdentityRepository(database);
+    for (const reference of [structural.itemId, recorded.itemId, provider.sourceId, client.sourceId, "item-1", "retained-message"]) {
+      assert.equal(reloaded.resolve({ threadId, turnId: "first", itemId: reference })?.itemId, recorded.itemId);
+    }
+    assert.equal(reloaded.admit({
+      threadId, itemId: structural.itemId, sources: [provider, client], legacyAliases: [],
+    }).itemId, recorded.itemId, "An old public reference must not recreate the merged identity.");
+    assert.deepEqual(database.prepare("SELECT * FROM thread_items").all(), before);
+    assert.deepEqual(database.prepare("SELECT * FROM thread_item_user_messages").all(), bodies);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    assert.equal(warnings.mock.callCount(), 0);
+  } finally { database.close(); }
+});
+
+test("correlated identity admission rolls back aliases with the surrounding transaction", () => {
+  const { database, identity, threadId, provider, client, structural, recorded } = splitUserMessage();
+  try {
+    assert.throws(() => database.transaction(() => {
+      assert.equal(identity.admit({ threadId, sources: [provider, client], legacyAliases: [] }).itemId, recorded.itemId);
+      throw new Error("later admission failed");
+    })(), /later admission failed/u);
+    assert.equal(identity.resolve({ threadId, itemId: provider.sourceId })?.itemId, structural.itemId);
+    assert.equal(identity.resolve({ threadId, itemId: client.sourceId })?.itemId, recorded.itemId);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
+for (const conflict of ["other-body", "other-client", "other-turn", "body-client", "third-owner"] as const) {
+  test(`client correlation preserves conflicting evidence (${conflict})`, (context) => {
+    const { database, identity, threadId, provider, client, structural, recorded, repository } = splitUserMessage();
+    const warnings = context.mock.method(console, "warn", () => undefined);
+    try {
+      if (conflict === "other-body") repository.settle([{
+        kind: "item", threadId, turnId: "first", publicItemId: structural.itemId,
+        lifecycle: "completed", observedAt: 3,
+        item: { type: "userMessage", id: provider.sourceId, clientId: null, content: [] },
+      }]);
+      if (conflict === "other-client") identity.admit({
+        threadId, itemId: structural.itemId,
+        sources: [{ ...client, sourceId: "different-submission" }], legacyAliases: [],
+      });
+      if (conflict === "other-turn") identity.admit({
+        threadId, itemId: structural.itemId, sources: [{ ...provider, turnId: "second" }], legacyAliases: [],
+      });
+      if (conflict === "body-client") database.prepare("UPDATE thread_item_user_messages SET client_id = ?").run("different-submission");
+      const legacyAliases = conflict === "third-owner" ? [{ turnId: "first", alias: "unrelated" }] : [];
+      if (legacyAliases.length) identity.admit({ threadId, sources: [], legacyAliases });
+      const before = database.prepare("SELECT * FROM thread_items").all();
+      identity.admit({ threadId, sources: [provider, client], legacyAliases });
+      assert.equal(identity.resolve({ threadId, itemId: structural.itemId })?.itemId, structural.itemId);
+      assert.equal(identity.resolve({ threadId, itemId: recorded.itemId })?.itemId, recorded.itemId);
+      assert.equal(identity.resolve({ threadId, itemId: provider.sourceId })?.itemId, structural.itemId);
+      assert.equal(identity.resolve({ threadId, itemId: client.sourceId })?.itemId, recorded.itemId);
+      assert.deepEqual(database.prepare("SELECT * FROM thread_items").all(), before);
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+      assert.ok(warnings.mock.callCount() > 0);
+    } finally { database.close(); }
+  });
+}
+
 test("cross-thread evidence rolls back the entire admission", () => {
   const { database, identity, threadId, otherThreadId } = setup();
   try {

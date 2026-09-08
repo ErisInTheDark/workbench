@@ -1,5 +1,5 @@
 /*
- * Keywords: transcript, identity, admission, aliases, SQLite.
+ * Keywords: transcript, identity, admission, client correlation, aliases, SQLite.
  * Exports:
  * - default WorkbenchTranscriptIdentityRepository: own structural item identity independently of body recording.
  */
@@ -43,7 +43,7 @@ export default class WorkbenchTranscriptIdentityRepository {
   }
 
   merge(input: { threadId: string; turnId: string; fromItemId: string; toItemId: string }) {
-    if (!this.database.inTransaction) throw new Error("Item identity reconciliation requires the body settlement transaction.");
+    if (!this.database.inTransaction) throw new Error("Item identity reconciliation requires a transaction.");
     this.assertTurnOwner(input.threadId, input.turnId);
     const source = this.row(input.fromItemId);
     const target = this.row(input.toItemId);
@@ -101,7 +101,9 @@ export default class WorkbenchTranscriptIdentityRepository {
     if (supplied && supplied.thread_id !== input.threadId) {
       throw new Error("Transcript item identity belongs to another thread.");
     }
-    if (input.itemId) candidates.push(input.itemId);
+    if (input.itemId) candidates.push(supplied?.id
+      ?? this.resolve({ threadId: input.threadId, itemId: input.itemId })?.itemId
+      ?? input.itemId);
     for (const source of input.sources) {
       this.assertTurnOwner(input.threadId, source.turnId);
       candidates.push(...this.sourceOwners(input.threadId, source));
@@ -114,7 +116,8 @@ export default class WorkbenchTranscriptIdentityRepository {
       `).get(input.threadId, legacy.turnId, legacy.alias) as { item_identity_id: string } | undefined;
       if (existing) candidates.push(existing.item_identity_id);
     }
-    const itemId = this.selectOwner(input.threadId, candidates) ?? randomUUID();
+    const itemId = this.reconcileCorrelatedUserMessage(input, candidates)
+      ?? this.selectOwner(input.threadId, candidates) ?? randomUUID();
     this.prepare(`
       INSERT INTO workbench_transcript_item_identities(id, thread_id) VALUES (?, ?)
       ON CONFLICT(id) DO NOTHING
@@ -134,6 +137,40 @@ export default class WorkbenchTranscriptIdentityRepository {
       `).run(input.threadId, legacy.turnId, legacy.alias, itemId);
     }
     return this.read(this.row(itemId)!);
+  }
+
+  private reconcileCorrelatedUserMessage(input: WorkbenchTranscriptItemIdentityAdmission, candidates: readonly string[]) {
+    const owners = [...new Set(candidates)];
+    if (owners.length !== 2) return null;
+    const clients = input.sources.filter((source) => source.kind === "client");
+    const client = clients[0];
+    if (clients.length !== 1 || !client || input.sources.some((source) => source.turnId !== client.turnId)) return null;
+    const bodies = this.prepare(`
+      SELECT i.public_id, i.turn_id, i.type, u.client_id
+      FROM thread_items i LEFT JOIN thread_item_user_messages u ON u.item_id = i.id
+      WHERE i.public_id IN (?, ?)
+    `).all(...owners) as Array<{ public_id: string; turn_id: string; type: string; client_id: string | null }>;
+    const body = bodies[0];
+    if (bodies.length !== 1 || !body || body.type !== "userMessage"
+      || body.turn_id !== client.turnId || body.client_id !== client.sourceId) return null;
+    const identities = owners.map((id) => this.row(id)).map((row) => row ? this.read(row) : null);
+    if (identities.some((identity) => !identity || identity.threadId !== input.threadId
+      || identity.sources.some((source) => source.turnId !== client.turnId
+        || (source.kind === "client" && source.sourceId !== client.sourceId))
+      || identity.legacyAliases.some((alias) => alias.turnId !== client.turnId))) return null;
+    const target = identities.find((identity) => identity?.itemId === body.public_id)!;
+    const source = identities.find((identity) => identity?.itemId !== body.public_id)!;
+    if (!target?.sources.some((entry) => entry.kind === "client" && entry.sourceId === client.sourceId)
+      || !source || !input.sources.some((entry) => entry.kind === "stable"
+        && source.sources.some((known) => known.kind === entry.kind && known.sourceId === entry.sourceId))) return null;
+    const priorReference = this.prepare(`
+      SELECT item_identity_id FROM workbench_transcript_item_legacy_aliases
+      WHERE thread_id = ? AND turn_id = ? AND alias = ?
+    `).get(input.threadId, client.turnId, source.itemId) as { item_identity_id: string } | undefined;
+    if (priorReference && priorReference.item_identity_id !== target.itemId) return null;
+    // The client-owned body stays untouched. Only its proven bodyless provider alias moves.
+    this.merge({ threadId: input.threadId, turnId: client.turnId, fromItemId: source.itemId, toItemId: target.itemId });
+    return target.itemId;
   }
 
   private sourceOwners(threadId: string, source: WorkbenchTranscriptItemSource) {

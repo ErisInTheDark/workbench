@@ -1,4 +1,5 @@
 /*
+ * Keywords: thread, reasoning, compaction, dedupe, transcript, provider reconciliation.
  * Exports:
  * - normalizeThreadItems: dedupe thread items, including cumulative reasoning snapshot segments and context-compaction lifecycle aliases. Keywords: thread, reasoning, compaction, dedupe, transcript.
  * - mergeThreadItem: merge same-id thread items without losing richer stored history. Keywords: thread, item, merge, history.
@@ -21,7 +22,6 @@ import {
 interface NormalizeThreadItemsOptions {
   mergeDuplicateItems?: (existingItem: ThreadItem, incomingItem: ThreadItem) => ThreadItem;
   classifyItem?: (item: ThreadItem) => WorkbenchThreadItemIdentityKind;
-  onRepeatedIdentity?: () => void;
 }
 
 export interface ReconciledCompleteThreadItem {
@@ -366,7 +366,6 @@ export function reconcileCompleteThreadItems(
 
   const emit = (item: ThreadItem, incomingItemId: string, aliases: string[] = []) => {
     const previous = results.get(item.id);
-    if (previous) options.onRepeatedIdentity?.();
     results.set(item.id, {
       aliases: [...new Set([...(previous?.aliases ?? []), ...aliases])].filter((alias) => alias !== item.id),
       // A direct observation owns its body; an aggregate only represents it.

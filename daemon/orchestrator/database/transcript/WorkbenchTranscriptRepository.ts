@@ -1,4 +1,5 @@
 /*
+ * Keywords: transcript, repository, usage, provider reconciliation, transaction.
  * Exports:
  * - default WorkbenchTranscriptRepository: own atomic settlement, cumulative usage facts, provider reconciliation, and bounded reads. Keywords: transcript, repository, usage, provider, transaction.
  * Local helpers: classify timestamps, provider projection items, enrichment, and one transaction-local canonical item index. Keywords: transcript, item, timeline, projection, index.
@@ -552,11 +553,10 @@ export default class WorkbenchTranscriptRepository {
         observation.publicItemId ?? observation.item.id,
         observation,
       ]));
-      let repeatedIdentityCount = 0;
       const reconciledItems = reconcileCompleteThreadItems(
         currentProviderItems,
         itemObservations.map(({ item, publicItemId }) => publicItemId ? { ...item, id: publicItemId } : item),
-        { mergeDuplicateItems: mergeThreadItem, onRepeatedIdentity: () => { repeatedIdentityCount++; } },
+        { mergeDuplicateItems: mergeThreadItem },
       ).map((entry) => {
         const existingRoot = index.itemsByPublicId.get(entry.item.id) ?? index.legacyItemsBySourceId.get(entry.item.id);
         if (!existingRoot || !enrichedItemIds.has(existingRoot.id)) return entry;
@@ -588,8 +588,8 @@ export default class WorkbenchTranscriptRepository {
         return entry;
       });
       const desiredItemIds = reconciledItems.map(({ item }) => item.id);
-      if (repeatedSourceCount || repeatedIdentityCount) {
-        console.warn(`[workbench-transcript] combined repeated provider observations thread=${JSON.stringify(scope.threadId.slice(0, 100))} turn=${JSON.stringify(turnId.slice(0, 100))} sources=${repeatedSourceCount} identities=${repeatedIdentityCount}`);
+      if (repeatedSourceCount) {
+        console.warn(`[workbench-transcript] combined repeated provider observations thread=${JSON.stringify(scope.threadId.slice(0, 100))} turn=${JSON.stringify(turnId.slice(0, 100))} sources=${repeatedSourceCount}`);
       }
       const desiredItemIdSet = new Set(desiredItemIds);
       for (const entry of reconciledItems) {

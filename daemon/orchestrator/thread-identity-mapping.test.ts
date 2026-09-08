@@ -366,6 +366,77 @@ test("repeated provider catalogues admit only new identity evidence without hidi
   } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
 });
 
+for (const route of ["catalogue", "event", "recorder"] as const) {
+  test(`correlated user identity refreshes warm projection references through ${route} admission`, async (context) => {
+    const fixture = await setup();
+    const { database, owners, native, parent, turn } = fixture;
+    const warnings = context.mock.method(console, "warn", () => undefined);
+    try {
+      const message: ThreadItem = { type: "userMessage", id: "native-message", clientId: "submitted",
+        content: [{ type: "text", text: "preserve my input", text_elements: [] }] };
+      const [structural, recorded] = await owners.items.admit([
+        { threadId: parent.threadId, sources: [{ turnId: turn.turnId, kind: "stable", sourceId: message.id }], legacyAliases: [] },
+        { threadId: parent.threadId, sources: [
+          { turnId: turn.turnId, kind: "provisional", sourceId: "item-1" },
+          { turnId: turn.turnId, kind: "client", sourceId: message.clientId! },
+        ], legacyAliases: [] },
+      ]);
+      const repository = new WorkbenchTranscriptRepository(database);
+      repository.settle([{
+        kind: "turn", threadId: parent.threadId, turnId: turn.turnId, harnessId: native.harness,
+        nativeLocation: native.nativeLocation, nativeThreadId: native.nativeThreadId, nativeTurnId: native.nativeTurnId,
+        state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1,
+      }, {
+        kind: "item", threadId: parent.threadId, turnId: turn.turnId, publicItemId: recorded!.itemId,
+        lifecycle: "completed", observedAt: 3, item: { ...message, id: "item-1" },
+      }]);
+      const before = database.prepare("SELECT * FROM thread_items").all();
+      const event = { method: "item/completed" as const, params: {
+        threadId: native.nativeThreadId, turnId: native.nativeTurnId, item: message, completedAtMs: 2_000,
+      } };
+      const observation: WorkbenchTranscriptAtomicObservation = {
+        kind: "item", threadId: native.nativeThreadId, turnId: native.nativeTurnId,
+        lifecycle: "completed", observedAt: 3, item: message,
+      };
+      const thread: Thread = {
+        id: native.nativeThreadId, cwd: native.nativeLocation, createdAt: 1, updatedAt: 2,
+        extra: null, sessionId: "native-session", forkedFromId: null, preview: "", ephemeral: false,
+        section: null, sectionEnteredAt: null, projectId: null, historyMode: "paginated",
+        modelProvider: "openai", model: null, reasoningEffort: null, recencyAt: null,
+        status: { type: "idle" }, path: null, cliVersion: "test", canAcceptDirectInput: null,
+        threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null,
+        source: "cli", parentThreadId: null,
+        turns: [{ id: native.nativeTurnId, items: [message], itemsView: "full", status: "completed",
+          error: null, startedAt: 1, completedAt: 2, durationMs: 1 }],
+      };
+      const admit = () => route === "catalogue"
+        ? admitProviderThreads(owners, [{ thread, metadata: {
+          native, projectId: "project", projectRoot: "C:/repo", title: "Parent",
+          createdAt: 1, updatedAt: 2, activityAt: 2,
+        } }])
+        : route === "event" ? admitProviderNotifications(owners, native, [event])
+          : admitNativeTranscriptObservations(owners, [observation]);
+      await admit();
+      const admissions = fixture.admissions();
+      await admit();
+      assert.equal(fixture.admissions(), admissions, "The repaired evidence must stop scheduling duplicate admission.");
+      for (const reference of [structural!.itemId, recorded!.itemId, message.id, message.clientId!, "item-1"]) {
+        assert.equal(owners.items.itemIdForReference(parent.threadId, turn.turnId, reference), recorded!.itemId);
+      }
+      assert.equal(mapProviderThread(owners, native, thread).turns[0]!.items[0]!.id, recorded!.itemId);
+      const mappedEvent = mapProviderNotification(owners, native, event);
+      assert.equal(mappedEvent.method, "item/completed");
+      if (mappedEvent.method === "item/completed") assert.equal(mappedEvent.params.item.id, recorded!.itemId);
+      const mappedObservation = mapNativeTranscriptObservation(owners, native, observation);
+      assert.equal(mappedObservation.kind, "item");
+      if (mappedObservation.kind === "item") assert.equal(mappedObservation.publicItemId, recorded!.itemId);
+      assert.deepEqual(database.prepare("SELECT * FROM thread_items").all(), before);
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+      assert.equal(warnings.mock.callCount(), 0);
+    } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
+  });
+}
+
 test("provider event batches admit starts before deltas without storing pending turns", async () => {
   const { database, owners, native, parent } = await setup();
   try {
