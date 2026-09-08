@@ -91,6 +91,7 @@ export default new ReloadableNode<
     "shared/workbench/search/**",
     "shared/workbench/settings/**",
     "daemon/orchestrator/database/**",
+    "shared/database/**",
   ].join("\n"),
   children: [WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
   create: (context) => {

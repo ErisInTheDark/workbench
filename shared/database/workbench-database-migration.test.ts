@@ -1,0 +1,181 @@
+/*
+ * No production exports. Keywords: SQLite, WAL, complete backup, failed migration, retention, isolation.
+ */
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { test, type TestContext } from "node:test";
+
+import Database from "better-sqlite3";
+import { defineTable, integer, text } from "./schema/schema-definition.ts";
+import {
+  applyWorkbenchDatabaseSchema, createTable, defineSubsystemHistory, defineTableHistory,
+  defineWorkbenchDatabaseSchema, rebuildTable, tableVersion,
+} from "./schema/schema-history.ts";
+import migrateWorkbenchDatabase from "./workbench-database-migration.ts";
+
+const oldTable = defineTable("records", {
+  id: integer().primaryKey(), legacy: text().notNull(), kept: text().notNull(),
+});
+const newTable = defineTable("records", {
+  id: integer().primaryKey(), kept: text().notNull().unique(),
+});
+const schema = defineWorkbenchDatabaseSchema({
+  subsystems: [defineSubsystemHistory([defineTableHistory({
+    current: newTable,
+    versions: [
+      tableVersion({ schemaVersion: 1, table: oldTable, migration: createTable(oldTable) }),
+      tableVersion({ schemaVersion: 2, table: newTable, migration: rebuildTable({ from: oldTable, to: newTable }) }),
+    ],
+  })])],
+});
+const day = 86_400_000;
+
+async function fixture(context: TestContext, targetVersion = 1) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-migration-backup-"));
+  const database = new Database(path.join(directory, "source.sqlite3"));
+  context.after(async () => {
+    if (database.open) database.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  database.pragma("journal_mode = WAL");
+  database.pragma("wal_autocheckpoint = 0");
+  applyWorkbenchDatabaseSchema(database, schema, { targetVersion });
+  const backups = path.join(directory, "backups", "source.sqlite3");
+  return { database, directory, backups };
+}
+
+async function completedBackups(directory: string) {
+  try {
+    return (await fs.readdir(directory)).filter(name => name.endsWith(".sqlite3"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+test("backup includes committed WAL data and the schema removed by the upgrade", async context => {
+  const { database, backups } = await fixture(context);
+  database.prepare("INSERT INTO records VALUES (1, 'only-in-old-schema', 'retained')").run();
+  database.exec("CREATE TABLE extension(payload BLOB); INSERT INTO extension VALUES (x'010203')");
+  assert.ok((await fs.stat(`${database.name}-wal`)).size > 0);
+  await migrateWorkbenchDatabase(database, schema);
+  const names = await completedBackups(backups);
+  assert.equal(names.length, 1, "upgrade requires one completed backup");
+  const backup = new Database(path.join(backups, names[0]!), { readonly: true, fileMustExist: true });
+  try {
+    assert.equal(backup.pragma("user_version", { simple: true }), 1);
+    assert.deepEqual(backup.prepare("SELECT * FROM records").all(), [{ id: 1, legacy: "only-in-old-schema", kept: "retained" }]);
+    assert.deepEqual(backup.prepare("SELECT payload FROM extension").get(), { payload: Buffer.from([1, 2, 3]) });
+    assert.deepEqual(backup.pragma("quick_check"), [{ quick_check: "ok" }]);
+    assert.deepEqual(database.prepare("SELECT * FROM records").all(), [{ id: 1, kept: "retained" }]);
+  } finally { backup.close(); }
+  await migrateWorkbenchDatabase(database, schema);
+  assert.deepEqual(await completedBackups(backups), names, "unchanged schema must not create another backup");
+});
+
+test("an unwritable backup destination prevents any schema change", async context => {
+  const { database, directory } = await fixture(context);
+  await fs.writeFile(path.join(directory, "backups"), "not a directory");
+  await assert.rejects(migrateWorkbenchDatabase(database, schema), /backup/i);
+  assert.equal(database.pragma("user_version", { simple: true }), 1);
+  assert.deepEqual(database.prepare("SELECT legacy FROM records").all(), []);
+});
+
+test("an invalid backup is not published and cannot permit migration", async context => {
+  const { database, backups } = await fixture(context);
+  context.mock.method(database, "backup", async (destination: string) => {
+    await fs.writeFile(destination, "damaged backup");
+    return { totalPages: 0, remainingPages: 0 };
+  });
+  await assert.rejects(migrateWorkbenchDatabase(database, schema), /backup/i);
+  assert.equal(database.pragma("user_version", { simple: true }), 1);
+  assert.deepEqual(await completedBackups(backups), []);
+});
+
+test("a readable backup with the wrong schema version cannot permit migration", async context => {
+  const { database, backups } = await fixture(context);
+  context.mock.method(database, "backup", async (destination: string) => {
+    const empty = new Database(destination);
+    empty.exec("CREATE TABLE wrong(value TEXT)");
+    empty.close();
+    return { totalPages: 1, remainingPages: 0 };
+  });
+  await assert.rejects(migrateWorkbenchDatabase(database, schema), /backup/i);
+  assert.equal(database.pragma("user_version", { simple: true }), 1);
+  assert.deepEqual(await completedBackups(backups), []);
+});
+
+test("failed migration retains a readable pre-upgrade backup", async context => {
+  const { database, backups } = await fixture(context);
+  database.prepare("INSERT INTO records VALUES (?, ?, 'duplicate')").run(1, "first");
+  database.prepare("INSERT INTO records VALUES (?, ?, 'duplicate')").run(2, "second");
+  await assert.rejects(migrateWorkbenchDatabase(database, schema), /UNIQUE/);
+  assert.equal(database.pragma("user_version", { simple: true }), 1);
+  const names = await completedBackups(backups);
+  assert.equal(names.length, 1, "rollback must not discard its pre-upgrade backup");
+  const backup = new Database(path.join(backups, names[0]!), { readonly: true, fileMustExist: true });
+  try {
+    assert.deepEqual(backup.prepare("SELECT * FROM records ORDER BY id").all(), database.prepare("SELECT * FROM records ORDER BY id").all());
+  } finally { backup.close(); }
+});
+
+for (const ages of [[1, 2, 3, 4, 5, 6, 7], [0.1, 0.2, 0.3, 0.4, 0.5, 1, 2, 3, 4]]) {
+  test(`retention keeps newest five and every backup at most three days old (${ages.length} backups)`, async context => {
+    const { database, directory, backups } = await fixture(context, 2);
+    const now = Date.UTC(2026, 8, 8);
+    await fs.mkdir(backups, { recursive: true });
+    const names = ages.map(() => `${randomUUID()}.sqlite3`);
+    for (const [index, name] of names.entries()) {
+      const file = path.join(backups, name);
+      await fs.writeFile(file, "owned backup fixture");
+      const time = new Date(now - ages[index]! * day);
+      await fs.utimes(file, time, time);
+    }
+    const unrelated = path.join(directory, "backups", "other.sqlite3");
+    await fs.mkdir(unrelated);
+    await fs.writeFile(path.join(unrelated, names[0]!), "other database");
+    await fs.writeFile(path.join(backups, "manual.sqlite3"), "manual backup");
+    await fs.writeFile(path.join(backups, `${randomUUID()}.partial`), "incomplete");
+    const directoryName = `${randomUUID()}.sqlite3`;
+    await fs.mkdir(path.join(backups, directoryName));
+    await migrateWorkbenchDatabase(database, schema, { now: () => now });
+    const remaining = new Set(await fs.readdir(backups));
+    for (const [index, name] of names.entries()) {
+      assert.equal(remaining.has(name), index < 5 || ages[index]! <= 3, "both count and age must permit deletion");
+    }
+    assert.ok(remaining.has("manual.sqlite3"));
+    assert.ok(remaining.has(directoryName));
+    assert.ok([...remaining].some(name => name.endsWith(".partial")));
+    assert.deepEqual(await fs.readdir(unrelated), [names[0]!]);
+  });
+}
+
+test("retention failure warns but leaves the database usable", async context => {
+  const { database, backups } = await fixture(context, 2);
+  await fs.mkdir(backups, { recursive: true });
+  for (let index = 0; index < 6; index++) {
+    const file = path.join(backups, `${randomUUID()}.sqlite3`);
+    await fs.writeFile(file, "owned backup fixture");
+    await fs.utimes(file, new Date(0), new Date(0));
+  }
+  const warnings = context.mock.method(console, "warn", () => {});
+  context.mock.method(fs, "unlink", async () => { throw new Error("cleanup denied"); });
+  await migrateWorkbenchDatabase(database, schema);
+  assert.ok(warnings.mock.calls.length > 0, "cleanup failures must remain visible");
+  assert.equal((await completedBackups(backups)).length, 6);
+  assert.deepEqual(database.prepare("SELECT * FROM records").all(), []);
+});
+
+test("empty first installation creates no backup", async context => {
+  const { database, backups } = await fixture(context);
+  database.close();
+  const fresh = new Database(path.join(path.dirname(database.name), "fresh.sqlite3"));
+  try {
+    await migrateWorkbenchDatabase(fresh, schema);
+    assert.equal(fresh.pragma("user_version", { simple: true }), schema.currentVersion);
+    assert.deepEqual(await completedBackups(path.join(path.dirname(backups), "fresh.sqlite3")), []);
+  } finally { fresh.close(); }
+});

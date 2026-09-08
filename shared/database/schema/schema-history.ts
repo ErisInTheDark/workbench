@@ -1,4 +1,5 @@
 /*
+ * Keywords: SQLite, schema history, migration, version validation, transactions.
  * TableVersion: one immutable table shape and the explicit migration that produces it. Keywords: database, schema, version.
  * TableHistory: private table versions plus the only current branded export. Keywords: database, schema, history.
  * SubsystemSchemaHistory: ordered table histories owned by one schema subsystem. Keywords: database, schema, subsystem.
@@ -12,6 +13,7 @@
  * defineSubsystemHistory: combine table histories under one owner. Keywords: database, schema, subsystem.
  * defineWorkbenchDatabaseSchema: assemble and validate all subsystem histories. Keywords: database, schema, assembly.
  * applyWorkbenchDatabaseSchema: apply missing versions through an explicit target or latest, without downgrades. Keywords: database, schema, migration.
+ * readWorkbenchDatabaseMigrationRange: validate a schema target and read its installed version without writes.
  */
 import type Database from "better-sqlite3";
 
@@ -433,13 +435,12 @@ function executeMigration(database: Database.Database, operation: TableMigration
   executeRebuild(database, operation, schemaVersion);
 }
 
-export function applyWorkbenchDatabaseSchema(
+export function readWorkbenchDatabaseMigrationRange(
   database: Database.Database,
   schema: WorkbenchDatabaseSchema,
   { targetVersion = schema.currentVersion }: { targetVersion?: number } = {},
 ) {
-  const versions = databaseSchemaVersionData.get(schema);
-  if (!versions) throw new Error("Unknown Workbench database schema token");
+  if (!databaseSchemaVersionData.has(schema)) throw new Error("Unknown Workbench database schema token");
   if (!Number.isSafeInteger(targetVersion) || targetVersion < 1 || targetVersion > schema.currentVersion) {
     throw new Error(`Invalid Workbench database schema target: ${targetVersion}`);
   }
@@ -450,6 +451,16 @@ export function applyWorkbenchDatabaseSchema(
   if (installedVersion > targetVersion) {
     throw new Error(`Workbench database schema ${installedVersion} is newer than target schema ${targetVersion}`);
   }
+  return { installedVersion, targetVersion };
+}
+
+export function applyWorkbenchDatabaseSchema(
+  database: Database.Database,
+  schema: WorkbenchDatabaseSchema,
+  options: { targetVersion?: number } = {},
+) {
+  const { installedVersion, targetVersion } = readWorkbenchDatabaseMigrationRange(database, schema, options);
+  const versions = databaseSchemaVersionData.get(schema)!;
   for (let schemaVersion = installedVersion + 1; schemaVersion <= targetVersion; schemaVersion += 1) {
     const operations = versions.get(schemaVersion)!;
     const needsRebuild = operations.some((operation) => operation.kind === "rebuildTable");

@@ -1,4 +1,4 @@
-/* No production exports. Real SQLite wards protect app registration identity and relational validity. */
+/* No production exports. Keywords: app state, SQLite, registration, migration backup, lifecycle. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -22,15 +22,45 @@ async function temporaryDatabase(context: TestContext) {
   return path.join(directory, "state.sqlite3");
 }
 
+test("app startup preserves its pre-upgrade database even when closed during opening", async (context) => {
+  const databasePath = await temporaryDatabase(context);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 1 });
+  old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('theme','retained',0,1)").run();
+  old.close();
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  try {
+    const started = repository.start();
+    const closed = repository.close();
+    await started;
+    await closed;
+    const directory = path.join(path.dirname(databasePath), "backups", path.basename(databasePath));
+    const files = await fs.readdir(directory).catch(error => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    assert.equal(files.length, 1, "startup must preserve one pre-upgrade backup");
+    const backup = new Database(path.join(directory, files[0]!), { readonly: true, fileMustExist: true });
+    try {
+      assert.equal(backup.pragma("user_version", { simple: true }), 1);
+      assert.deepEqual(backup.prepare("SELECT text_value FROM global_preferences WHERE key='theme'").get(), { text_value: "retained" });
+    } finally {
+      backup.close();
+    }
+  } finally {
+    await repository.close();
+  }
+});
+
 test("the local daemon registration remains stable across app restarts", async (context) => {
   const databasePath = await temporaryDatabase(context);
   const first = new WorkbenchAppStateRepository({ databasePath, now: () => 10 });
-  const firstId = first.start();
-  first.close();
+  const firstId = await first.start();
+  await first.close();
 
   const second = new WorkbenchAppStateRepository({ databasePath, now: () => 20 });
-  const secondId = second.start();
-  second.close();
+  const secondId = await second.start();
+  await second.close();
 
   assert.equal(secondId, firstId);
 });
@@ -38,7 +68,7 @@ test("the local daemon registration remains stable across app restarts", async (
 test("daemon-scoped state rejects an unknown app registration", async (context) => {
   const databasePath = await temporaryDatabase(context);
   const repository = new WorkbenchAppStateRepository({ databasePath });
-  repository.start();
+  await repository.start();
   assert.throws(() => repository.executeTransaction([
     insertRow(appStateTables.projectExpandedDirectories, {
       daemon_registration_id: "missing",
@@ -48,7 +78,7 @@ test("daemon-scoped state rejects an unknown app registration", async (context) 
       revision: 1,
     }),
   ]), /FOREIGN KEY constraint failed/u);
-  repository.close();
+  await repository.close();
 });
 
 test("checked scalar families reject value columns that do not match their key", async (context) => {
@@ -66,7 +96,7 @@ test("checked scalar families reject value columns that do not match their key",
 test("selected-project pin placement persists as text at global and project scopes", async (context) => {
   const databasePath = await temporaryDatabase(context);
   const repository = new WorkbenchAppStateRepository({ databasePath });
-  const daemonRegistrationId = repository.start();
+  const daemonRegistrationId = await repository.start();
   assert.throws(() => repository.executeTransaction([
     insertRow(appStateTables.globalPreferences, {
       boolean_value: 1,
@@ -110,14 +140,14 @@ test("selected-project pin placement persists as text at global and project scop
       project_id: "project",
     },
   }))[0]?.text_value, "pinned-section");
-  repository.close();
+  await repository.close();
 });
 
 test("backup creates a complete independent app-state database", async (context) => {
   const sourcePath = await temporaryDatabase(context);
   const backupPath = path.join(path.dirname(sourcePath), "backup.sqlite3");
   const source = new WorkbenchAppStateRepository({ databasePath: sourcePath });
-  source.start();
+  await source.start();
   source.commit((revision) => [
     insertRow(appStateTables.globalPreferences, {
       boolean_value: 1,
@@ -131,7 +161,7 @@ test("backup creates a complete independent app-state database", async (context)
 
   await source.backupTo(backupPath);
   const backup = new WorkbenchAppStateRepository({ databasePath: backupPath });
-  backup.start();
+  await backup.start();
   assert.deepEqual(backup.currentVersion(), source.currentVersion());
   assert.equal(
     backup.query(selectRows(appStateTables.globalPreferences, {
@@ -151,6 +181,6 @@ test("backup creates a complete independent app-state database", async (context)
     }))[0]?.boolean_value,
     1,
   );
-  backup.close();
-  source.close();
+  await backup.close();
+  await source.close();
 });

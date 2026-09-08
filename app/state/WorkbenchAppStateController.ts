@@ -1,4 +1,5 @@
 /*
+ * Keywords: app state, schema capability, revisions, mutations, lifecycle.
  * Exports:
  * - default WorkbenchAppStateController: own app-state bootstrap, schema capability, revision reads, and serialized domain mutations. Keywords: app, state, controller, schema, revision.
  */
@@ -70,7 +71,7 @@ export default class WorkbenchAppStateController {
   }
 
   close() {
-    this.#repository.close();
+    return this.#repository.close();
   }
 
   read(sinceRevision?: number): WorkbenchClientStateResponse {

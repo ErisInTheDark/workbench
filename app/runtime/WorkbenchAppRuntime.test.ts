@@ -60,8 +60,8 @@ function runtime() {
     startWatching: async () => "C:/workbench-output",
   } as WorkbenchFrontendCompiler;
   const database = {
-    close: () => {},
-    start: () => "registration",
+    close: async () => {},
+    start: async () => "registration",
   } as WorkbenchAppStateRepository;
   return new WorkbenchAppRuntime({
     appPort: {
@@ -197,7 +197,7 @@ test("reloads the database with a fresh repository constructor and no process re
       const start = repository.start.bind(repository);
       repository.close = () => {
         databaseEvents.push(`close:${generation}`);
-        close();
+        return close();
       };
       repository.start = () => {
         databaseEvents.push(`start:${generation}`);

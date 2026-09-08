@@ -24,7 +24,7 @@ async function controllerFixture(context: TestContext) {
   const databasePath = path.join(directory, "state.sqlite3");
   const create = () => new WorkbenchAppStateController(new WorkbenchAppStateRepository({ databasePath }));
   const controller = create();
-  const daemonRegistrationId = controller.start();
+  const daemonRegistrationId = await controller.start();
   return { controller, create, daemonRegistrationId };
 }
 
@@ -41,17 +41,17 @@ test("mutations return a revision delta and survive controller restart", async (
   });
   assert.equal(response.kind, "delta");
   assert.deepEqual(response.rows.globalPreferences.map((row) => row.deleted), [0]);
-  fixture.controller.close();
+  await fixture.controller.close();
 
   const restarted = fixture.create();
-  restarted.start();
+  await restarted.start();
   const snapshot = restarted.read();
   assert.ok(snapshot.kind === "snapshot" && projectedRecords(snapshot).some((record) => (
     record.kind === "globalPreference"
     && record.preference.key === "theme"
     && record.preference.value === "winter"
   )));
-  restarted.close();
+  await restarted.close();
 });
 
 test("numeric app port preferences survive through the global state owner", async (context) => {
@@ -65,12 +65,12 @@ test("numeric app port preferences survive through the global state owner", asyn
     },
   });
   assert.equal(fixture.controller.readGlobalPreference("appPort"), 43_210);
-  fixture.controller.close();
+  await fixture.controller.close();
 
   const restarted = fixture.create();
-  restarted.start();
+  await restarted.start();
   assert.equal(restarted.readGlobalPreference("appPort"), 43_210);
-  restarted.close();
+  await restarted.close();
 });
 
 test("global sidebar preferences persist boolean and numeric scalar families", async (context) => {
@@ -90,20 +90,20 @@ test("global sidebar preferences persist boolean and numeric scalar families", a
       preference: { key: "projectTimeGroupCount", value: 4 },
     },
   });
-  fixture.controller.close();
+  await fixture.controller.close();
 
   const restarted = fixture.create();
-  restarted.start();
+  await restarted.start();
   assert.equal(restarted.readGlobalPreference("projectsOpen"), true);
   assert.equal(restarted.readGlobalPreference("projectTimeGroupCount"), 4);
-  restarted.close();
+  await restarted.close();
 });
 
 test("a future revision receives a complete snapshot instead of an invalid delta", async (context) => {
   const { controller } = await controllerFixture(context);
   const response = controller.read(Number.MAX_SAFE_INTEGER);
   assert.equal(response.kind, "snapshot");
-  controller.close();
+  await controller.close();
 });
 
 test("composer and questionnaire draft children hydrate with their owning draft", async (context) => {
@@ -145,5 +145,5 @@ test("composer and questionnaire draft children hydrate with their owning draft"
     && record.value.customValues.question === "custom"
     && record.value.selectedValues.choice?.length === 2
   )));
-  controller.close();
+  await controller.close();
 });

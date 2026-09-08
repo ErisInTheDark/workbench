@@ -2,7 +2,7 @@
  * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, transcript materialization, search, and relational discriminator constraints. Keywords: database, worker, schema, transcript, search, test.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, rename, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -20,6 +20,39 @@ import {
 } from "./workbench-database-schema";
 import { insertRow, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
 import { WorkbenchStatsDetailedResponseSchema, legacyStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+
+test("worker startup retains its old-schema backup even when closed during opening", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-migration-worker-"));
+  const databasePath = join(directory, "workbench.sqlite3");
+  const version = WORKBENCH_DATABASE_SCHEMA_VERSION - 1;
+  const old = new Database(databasePath);
+  installWorkbenchDatabaseSchema(old, { targetVersion: version });
+  old.exec("CREATE TABLE preserved_extension(value TEXT); INSERT INTO preserved_extension VALUES ('retained')");
+  old.close();
+  const controller = new WorkbenchDatabaseController({ databasePath });
+  try {
+    const started = controller.start();
+    const closed = controller.close();
+    await started;
+    await closed;
+    const backups = join(directory, "backups", "workbench.sqlite3");
+    const files = await readdir(backups).catch(error => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    assert.equal(files.length, 1, "worker readiness requires a pre-upgrade backup");
+    const backup = new Database(join(backups, files[0]!), { readonly: true, fileMustExist: true });
+    try {
+      assert.equal(backup.pragma("user_version", { simple: true }), version);
+      assert.deepEqual(backup.prepare("SELECT value FROM preserved_extension").get(), { value: "retained" });
+    } finally {
+      backup.close();
+    }
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("the database worker opens, proves readiness, reports all tables, and closes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-database-"));

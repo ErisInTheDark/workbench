@@ -1,4 +1,5 @@
 /*
+ * Keywords: browser state, SQLite, isolation, cloning, migration backup, disposal.
  * Exports:
  * - WorkbenchBrowserStateRegistryOptions: browser-state storage and diagnostic seams. Keywords: browser, state, SQLite, seed.
  * - default WorkbenchBrowserStateRegistry: own shared and UUID-selected app-state controllers, cloning, seed refresh, and disposal. Keywords: browser, state, registry, lifecycle.
@@ -134,7 +135,7 @@ export default class WorkbenchBrowserStateRegistry {
     await this.#seedQueue;
     for (const controller of this.#controllers.values()) {
       try {
-        controller.close();
+        await controller.close();
       } catch (error) {
         failures.push(error);
       }
@@ -196,9 +197,9 @@ export default class WorkbenchBrowserStateRegistry {
     }
     const repository = new WorkbenchAppStateRepository({ databasePath });
     const controller = new WorkbenchAppStateController(repository);
-    controller.start();
+    await controller.start();
     if (this.#disposed) {
-      controller.close();
+      await controller.close();
       throw new Error("Workbench browser state registry is closed.");
     }
     this.#controllers.set(browserStateId, controller);

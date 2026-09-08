@@ -1,4 +1,5 @@
 /*
+ * Keywords: app, SQLite, migration backup, reload, lifecycle.
  * Default export:
  * - AppDatabaseNode: own the reloadable SQLite connection and durable local registration. Keywords: app, database, handoff.
  */
@@ -15,18 +16,18 @@ export default new ReloadableNode<AppProcessContext, AppRuntimeObjects, never>({
   create: (context) => {
     const database = context.createDatabase(WorkbenchAppStateRepository);
     let detached = false;
-    const close = () => {
-      database.close();
+    const close = async () => {
+      await database.close();
       detached = true;
     };
     return {
-      detachForReload: () => {
-        close();
+      detachForReload: async () => {
+        await close();
         return undefined;
       },
-      dispose: () => { if (!detached) database.close(); },
+      dispose: async () => { if (!detached) await database.close(); },
       registrations: { database },
-      start: () => { database.start(); },
+      start: async () => { await database.start(); },
     };
   },
   description: "Reload the app SQLite repository and schema boundary while preserving the durable database file.",

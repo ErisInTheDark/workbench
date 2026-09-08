@@ -6,7 +6,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
+import Database from "better-sqlite3";
 
+import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
+import { appStateSchema } from "workbench-shared/state/workbench-app-state-schema";
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 
@@ -38,7 +41,7 @@ async function fixture(context: TestContext) {
   const shared = new WorkbenchAppStateRepository({
     databasePath: path.join(directory, "app-state.sqlite3"),
   });
-  shared.start();
+  await shared.start();
   const diagnostics: string[] = [];
   const registry = new WorkbenchBrowserStateRegistry(shared, {
     browserStateDirectoryPath: path.join(directory, "browser-state"),
@@ -47,11 +50,36 @@ async function fixture(context: TestContext) {
   registry.start();
   context.after(async () => {
     await registry.close();
-    shared.close();
+    await shared.close();
     await fs.rm(directory, { force: true, recursive: true });
   });
   return { diagnostics, directory, registry, shared };
 }
+
+test("opening an existing browser database backs it up before upgrading", async (context) => {
+  const { directory, registry } = await fixture(context);
+  const browserDirectory = path.join(directory, "browser-state");
+  await fs.mkdir(browserDirectory);
+  const databasePath = path.join(browserDirectory, `${BROWSER_A}.sqlite3`);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 1 });
+  old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('theme','retained',0,1)").run();
+  old.close();
+  assert.equal(globalPreference(records(await registry.readBrowser(BROWSER_A)), "theme")?.preference.value, "retained");
+  const backups = path.join(browserDirectory, "backups", path.basename(databasePath));
+  const files = await fs.readdir(backups).catch(error => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  assert.equal(files.length, 1, "lazy browser opening must preserve its pre-upgrade database");
+  const backup = new Database(path.join(backups, files[0]!), { readonly: true, fileMustExist: true });
+  try {
+    assert.equal(backup.pragma("user_version", { simple: true }), 1);
+    assert.deepEqual(backup.prepare("SELECT text_value FROM global_preferences WHERE key='theme'").get(), { text_value: "retained" });
+  } finally {
+    backup.close();
+  }
+});
 
 test("UUID databases clone, diverge, reopen, and share one coalesced first open", async (context) => {
   const { directory, registry, shared } = await fixture(context);
@@ -141,7 +169,7 @@ test("missing IDs use shared state and invalid IDs never create browser storage"
 test("seed failures are diagnosed without rolling back browser commits", async (context) => {
   const { diagnostics, registry, shared } = await fixture(context);
   await registry.readBrowser(BROWSER_A);
-  shared.close();
+  await shared.close();
   await registry.mutateBrowser(BROWSER_A, {
     action: "put",
     record: { kind: "globalPreference", preference: { key: "theme", value: "magical-girl" } },
@@ -162,13 +190,13 @@ test("failed clones never promote partial browser databases", async (context) =>
   const shared = new FailingBackupRepository({
     databasePath: path.join(directory, "app-state.sqlite3"),
   });
-  shared.start();
+  await shared.start();
   const browserStateDirectoryPath = path.join(directory, "browser-state");
   const registry = new WorkbenchBrowserStateRegistry(shared, { browserStateDirectoryPath });
   registry.start();
   context.after(async () => {
     await registry.close();
-    shared.close();
+    await shared.close();
     await fs.rm(directory, { force: true, recursive: true });
   });
 

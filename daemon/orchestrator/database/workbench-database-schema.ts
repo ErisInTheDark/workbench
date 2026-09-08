@@ -21,6 +21,7 @@
  * usageTables/UsageSchemaRows: durable token, rate-limit, and claim-session facts. Keywords: database, schema, stats.
  * transcriptIdentityTables/TranscriptIdentitySchemaRows: permanent identity and compatibility aliases.
  * workbenchDatabaseTables: every current table keyed by its SQLite name. Keywords: database, schema, statements.
+ * workbenchDatabaseSchema: assembled history used by protected production migration.
  */
 import type Database from "better-sqlite3";
 
@@ -69,7 +70,7 @@ export type { ThreadStateSchemaRows } from "../../lib/workbench/database/schema/
 export { transcriptIdentityTables } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 export type { TranscriptIdentitySchemaRows } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 
-const workbenchDatabaseSchema = defineWorkbenchDatabaseSchema({
+export const workbenchDatabaseSchema = defineWorkbenchDatabaseSchema({
   subsystems: [
     composerProfileSchemaHistory,
     codexSandboxNetworkSchemaHistory,

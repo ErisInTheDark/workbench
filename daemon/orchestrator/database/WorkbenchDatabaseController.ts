@@ -1,4 +1,5 @@
 /*
+ * Keywords: database, worker, startup, migration backup, readiness, disposal.
  * WorkbenchDatabaseControllerOptions: construction inputs for the database lifecycle owner. Keywords: database, worker, lifecycle.
  * WorkbenchDatabaseRequestFailure: one rolled-back request that leaves the database lifecycle ready. Keywords: database, request, rollback.
  * WorkbenchDatabaseFailure: stable controller failure carrying one bounded cause. Keywords: database, failure, lifecycle.
@@ -391,6 +392,13 @@ export default class WorkbenchDatabaseController {
 
   async close() {
     if (this.#state === "closed") return;
+    if (this.#state === "starting" && this.#startPromise) {
+      try { await this.#startPromise; }
+      catch (error) {
+        if (error !== this.#failure) throw error;
+        // Startup already reported this failure. Close still owns worker cleanup.
+      }
+    }
     if (this.#state === "starting" && this.#startPromise === null) {
       this.#state = "closed";
       await this.#worker.terminate();

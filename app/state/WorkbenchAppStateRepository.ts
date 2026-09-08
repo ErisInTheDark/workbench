@@ -1,4 +1,5 @@
 /*
+ * Keywords: app state, SQLite, migration backup, registration, lifecycle.
  * Exports:
  * - WorkbenchAppStateRepositoryOptions: app-state database path and clock seams. Keywords: app, state, SQLite, test.
  * - default WorkbenchAppStateRepository: own one app-state SQLite connection, schema, transactions, and local registration. Keywords: app, state, repository.
@@ -18,7 +19,7 @@ import {
     type WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
 
-import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
+import migrateWorkbenchDatabase from "workbench-shared/database/workbench-database-migration";
 import {
     appStateSchema,
     appStateTableInventory,
@@ -37,6 +38,7 @@ export default class WorkbenchAppStateRepository {
   readonly #now: () => number;
   #database: Database.Database | null = null;
   #daemonRegistrationId: string | null = null;
+  #opening: Promise<string> | null = null;
 
   constructor(options: WorkbenchAppStateRepositoryOptions = {}) {
     const libraryRoot = resolveWorkbenchLibraryRoot(options.workbenchLibraryRoot);
@@ -49,13 +51,20 @@ export default class WorkbenchAppStateRepository {
     return this.#daemonRegistrationId;
   }
 
-  start() {
-    if (this.#database) throw new Error("Workbench app state repository has already started.");
+  async start() {
+    if (this.#database || this.#opening) throw new Error("Workbench app state repository has already started.");
+    const opening = this.#open();
+    this.#opening = opening;
+    try { return await opening; }
+    finally { this.#opening = null; }
+  }
+
+  async #open() {
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true });
     const database = new Database(this.databasePath);
     try {
       database.pragma("foreign_keys = ON");
-      applyWorkbenchDatabaseSchema(database, appStateSchema);
+      await migrateWorkbenchDatabase(database, appStateSchema);
       this.#database = database;
       this.#ensureMetadataAndRegistration();
       return this.daemonRegistrationId;
@@ -66,11 +75,14 @@ export default class WorkbenchAppStateRepository {
     }
   }
 
-  close() {
-    const database = this.#database;
-    this.#database = null;
-    this.#daemonRegistrationId = null;
-    database?.close();
+  async close() {
+    try { await this.#opening; }
+    finally {
+      const database = this.#database;
+      this.#database = null;
+      this.#daemonRegistrationId = null;
+      database?.close();
+    }
   }
 
   async backupTo(destinationPath: string) {
