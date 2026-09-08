@@ -89,14 +89,6 @@ test("thread views reuse the sidebar's in-app thread navigation owner", async ()
 
 test("thread context actions group priority checkboxes and canonical status radios", async () => {
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
-  const openIndex = sidebarSource.indexOf('id: "open"');
-  const settleIndex = sidebarSource.indexOf('id: "settle"');
-  const copyIndex = sidebarSource.indexOf('id: "copy-id"');
-  const priorityIndex = sidebarSource.indexOf('id: "priority"');
-  const statusIndex = sidebarSource.indexOf('id: "status"');
-  const archiveIndex = sidebarSource.indexOf('id: "archive"');
-  assert.ok(openIndex >= 0 && settleIndex > openIndex && copyIndex > settleIndex);
-  assert.ok(priorityIndex > copyIndex && statusIndex > priorityIndex && archiveIndex > statusIndex);
   assert.match(sidebarSource, /presentation: "independent"/u);
   assert.match(sidebarSource, /presentation: "connected"/u);
   assert.match(sidebarSource, /method: "workbench\/thread-state\/status\/set"/u);
@@ -141,7 +133,6 @@ test("successful settlement leaves the still-selected thread for a fresh draft",
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
   assert.match(sidebarSource, /const accepted = await controls\.updateThreadStateWithAcceptance\(request\);[\s\S]*?method === "settle" && accepted[\s\S]*?onThreadSettled/u);
-  assert.match(sidebarSource, /entry\.lifecycle\.settled \|\| isWorkbenchThreadSettlementAvailable\(entry\)/u);
   assert.match(workbenchSource, /currentRouteRef\.current[\s\S]*?isWorkbenchThreadTargetSelected\(settledTarget, currentRoute\.threadTarget\)[\s\S]*?createThreadRoute\(currentRoute\.projectId, \{ kind: "new" \}\)/u);
   assert.match(workbenchSource, /onThreadSettled=\{handleThreadSettled\}/u);
 });

@@ -1,6 +1,11 @@
 /*
  * Exports:
- * - WorkbenchContextMenuAction/WorkbenchContextMenuControlGroup/WorkbenchContextMenuItem: contracts for context-menu rows, grouped controls, and separators. Keywords: context menu, action, checkbox, radio, separator.
+ * - WorkbenchContextMenuAction: context-menu command row.
+ * - WorkbenchContextMenuControl: grouped icon control.
+ * - WorkbenchContextMenuControlGroup: grouped commands, checkboxes, or radio controls.
+ * - WorkbenchContextMenuSeparator: menu section divider.
+ * - WorkbenchContextMenuItem: supported menu rows.
+ * Keywords: context menu, action, checkbox, radio, separator.
  * - WorkbenchContextMenuDefinition/WorkbenchContextMenuRequest: contracts for document context menu content and placement. Keywords: context menu, definition, request.
  * - WorkbenchContextMenuController: controller exposed to context-menu capabilities. Keywords: context menu, controller, open, close.
  * - useWorkbenchContextMenu: read the canonical document context menu controller. Keywords: context menu, hook, controller.
@@ -37,7 +42,7 @@ export interface WorkbenchContextMenuControlGroup {
   id: string;
   kind: "control-group";
   label: string;
-  presentation: "connected" | "independent";
+  presentation: "connected" | "independent" | "actions";
 }
 
 export interface WorkbenchContextMenuSeparator {

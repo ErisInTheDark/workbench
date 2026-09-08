@@ -398,7 +398,7 @@ export function ProposedCommitThreadIcon({ className = "size-4" }: IconProps) { 
 export function WorkingThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "M8 12h.01", "M12 12h.01", "M16 12h.01"]} />; }
 export function StoppedThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={[bubblePath, "m15 9-6 6", "m9 9 6 6"]} />; }
 export function DiscardDraftIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={["M18 6 6 18", "m6 6 12 12"]} />; }
-export function SettleThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={["M20 6 9 17l-5-5"]} />; }
+export function SettleThreadIcon({ className = "size-4" }: IconProps) { return <MessageCircleIcon className={className} paths={["M18 6 7 17l-5-5", "m22 10-7.5 7.5L13 16"]} />; }
 export function RestoreThreadIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></svg>; }
 export function UnsnoozeThreadIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /><path d="M6.38 18.7 4 21" /><path d="M17.64 18.67 20 21" /></svg>; }
 export function SnoozedThreadIcon({ className = "size-4" }: IconProps) { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d="M4 11h8l-8 10h8" /><path d="M15 4h5l-5 8h5" /></svg>; }
@@ -432,10 +432,10 @@ export function OpenThreadIcon ({ className = "size-4" }: IconProps) {
 
 export function ArchiveIcon ({ className = "size-4" }: IconProps) {
   return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.65" aria-hidden="true" className={className}>
-      <path d="M3.75 5.25H16.25V7.75H3.75V5.25Z" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M5.25 7.75V15.2C5.25 15.78 5.72 16.25 6.3 16.25H13.7C14.28 16.25 14.75 15.78 14.75 15.2V7.75" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M8.25 10.25H11.75" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+      <rect width="20" height="5" x="2" y="3" rx="1" />
+      <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+      <path d="M10 12h4" />
     </svg>
   );
 }

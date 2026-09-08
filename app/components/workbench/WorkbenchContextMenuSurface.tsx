@@ -126,7 +126,7 @@ export default function WorkbenchContextMenuSurface({
         }
 
         if (item.kind === "control-group") {
-          const role = item.presentation === "connected" ? "menuitemradio" : "menuitemcheckbox";
+          const role = item.presentation === "actions" ? "menuitem" : item.presentation === "connected" ? "menuitemradio" : "menuitemcheckbox";
           return (
             <div key={item.id} className="px-2 py-1.5" role="group" aria-label={item.label}>
               <div className="mb-1 px-1 text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-muted">{item.label}</div>
@@ -136,7 +136,7 @@ export default function WorkbenchContextMenuSurface({
                     key={control.id}
                     type="button"
                     role={role}
-                    aria-checked={control.checked}
+                    aria-checked={item.presentation === "actions" ? undefined : control.checked}
                     aria-label={control.label}
                     title={control.label}
                     disabled={control.disabled}

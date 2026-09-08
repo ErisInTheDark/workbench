@@ -187,17 +187,12 @@ function WorkbenchThreadSidebarActionsProvider({
       onSelect: () => onOpenThread(targetForEntry(entry), ownerProjectId),
     }];
 
-    if (terminal && (group === "archived" || entry.lifecycle.settled || isWorkbenchThreadSettlementAvailable(entry))) {
-      items.push(group === "archived" || entry.lifecycle.settled ? {
+    if (terminal && group !== "archived" && entry.lifecycle.settled) {
+      items.push({
         icon: <RestoreThreadIcon className="size-4" />,
         id: "restore",
         label: "Restore",
         onSelect: () => mutateEntry(entry, ownerProjectId, "restore"),
-      } : {
-        icon: <SettleThreadIcon className="size-4" />,
-        id: "settle",
-        label: "Settle",
-        onSelect: () => mutateEntry(entry, ownerProjectId, "settle"),
       });
     }
 
@@ -304,13 +299,34 @@ function WorkbenchThreadSidebarActionsProvider({
       });
     }
 
-    if (terminal && group !== "archived") {
-      items.push({ id: "archive-separator", kind: "separator" }, {
-        icon: <ArchiveIcon className="size-4" />,
-        id: "archive",
-        label: "Archive thread",
-        onSelect: () => mutateEntry(entry, ownerProjectId, "archive/set", true),
-        tone: "danger",
+    if (group === "archived" || (entry.entryKind !== "draft" && isWorkbenchThreadSettlementAvailable(entry))) {
+      items.push({ id: "conclude-separator", kind: "separator" }, {
+        controls: group === "archived" ? [{
+          checked: false,
+          icon: <RestoreThreadIcon className="size-4" />,
+          id: "restore",
+          label: "Restore",
+          onSelect: () => mutateEntry(entry, ownerProjectId, "restore"),
+        }] : [
+          {
+            checked: false,
+            icon: <SettleThreadIcon className="size-4" />,
+            id: "settle",
+            label: "Settle",
+            onSelect: () => mutateEntry(entry, ownerProjectId, "settle"),
+          },
+          {
+            checked: false,
+            icon: <ArchiveIcon className="size-4" />,
+            id: "archive",
+            label: "Archive",
+            onSelect: () => mutateEntry(entry, ownerProjectId, "archive/set", true),
+          },
+        ],
+        id: "conclude",
+        kind: "control-group",
+        label: "Conclude",
+        presentation: "actions",
       });
     }
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}` };
