@@ -14,8 +14,22 @@ import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoo
 import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcController";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 import { applyGitClaimChanges, type GitArcClaimChanges } from "workbench-shared/workbench/git/git-arc-state";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 
 const execFileAsync = promisify(execFile);
+
+test("proposal lookup never mistakes unexpected missing-data errors for an absent proposal", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(local as unknown as WorkbenchGitCheckpointController, new WorkbenchThreadTransitionCoordinator(), async (root) => root);
+  const failure = new Error("proposal metadata missing");
+  let reads = 0;
+  local.getProposal = async () => { reads += 1; throw failure; };
+  await assert.rejects(controller.execute(project, {
+    action: "proposalState", cwd: project.cwd, harness: "codex", threadId: "thread-one", proposalId: "proposal-one", includeNewer: false,
+  }), (error) => error === failure);
+  assert.equal(reads, 1);
+});
 
 test("inherited scope revisions retain unmentioned repositories and qualify exact removals", async () => {
   const local = new FakeLocalGitArcController();
@@ -249,7 +263,7 @@ class FakeLocalGitArcController {
 
   private getStoredProposal(input: { cwd: string; proposalId: string }) {
     const proposal = this.proposals.get(input.proposalId);
-    if (!proposal || proposal.cwd !== input.cwd) throw new Error(`Git arc proposal not found: ${input.proposalId}`);
+    if (!proposal || proposal.cwd !== input.cwd) throw new GitArcRejectionError({ reason: "proposalNotFound", proposalId: input.proposalId });
     return proposal;
   }
 }
@@ -802,7 +816,7 @@ test("workspace partial mutation failure still observes every member's post-fail
   }) as { members: Array<{ checkpointCommit: string; rootId: string }> };
   const start = local.startArc.bind(local);
   local.startArc = async (input: { cwd: string }) => {
-    if (input.cwd === "C:/workspace/web") throw new Error("web start failed");
+    if (input.cwd === "C:/workspace/web") throw new GitArcRejectionError({ reason: "emptyPlan" }, "web start failed");
     return await start(input);
   };
   snapshots.length = 0;
@@ -810,7 +824,13 @@ test("workspace partial mutation failure still observes every member's post-fail
     action: "arcStart",
     refs: plan.members.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })),
     ...identity,
-  }), /after completing api/u);
+  }), (error: Error) => {
+    assert.ok("workspace" in error);
+    assert.deepEqual(error.workspace, { failedRootIds: ["web"], completedRootIds: ["api"], stage: "operation" });
+    assert.ok(error.cause instanceof GitArcRejectionError);
+    assert.deepEqual(error.cause.rejection, { reason: "emptyPlan" });
+    return true;
+  });
   assert.deepEqual(snapshots.map(({ roots }) => roots), [
     [{ paths: ["src/api.ts"], rootId: "api" }],
     [{ paths: [], rootId: "web" }],

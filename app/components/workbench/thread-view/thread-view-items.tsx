@@ -2697,7 +2697,9 @@ function ThreadRenderableBlockViewComponent ({
         tool: block.item.tool,
       });
       const isMcpFailure = block.item.status === "failed" || Boolean(block.item.error);
-      if (shouldUseWorkbenchMcpSpecializedRenderer(route, isMcpFailure) && route?.kind === "specialized" && threadCwdPath) {
+      if (shouldUseWorkbenchMcpSpecializedRenderer(route, isMcpFailure) && route?.kind === "specialized" && (
+        threadCwdPath || route.operation.kind === "gitArc" || route.operation.kind === "gitArcWait"
+      )) {
         return (
           <ThreadWorkbenchCommandItem
             inlineMentionSources={inlineMentionSources}

@@ -1,15 +1,19 @@
 /*
  * Keywords: git, workspace, roots, scope, partial outcomes, inspection.
  * Exports:
+ * - WorkspaceGitArcMemberError: preserve failed/completed member facts around the original failure.
  * - default WorkbenchWorkspaceGitArcController: aggregate repo-local Git arc members, globally page inspection diffs, report workspace dirt, route proposal-owned amendments, and prune thread history. Keywords: git, arc, workspace, multi-root, diff, dirt, proposal, retention.
  * - WorkspaceGitArcMemberState: active repo-local member plus root identity. Keywords: git, arc, active, member.
  * - WorkspaceGitArcLifecycleState: active logical workspace projection. Keywords: git, arc, lifecycle, projection.
  * - WorkspaceGitArcPlanMemberState: planned repo-local member plus root identity. Keywords: git, arc, plan, member.
  * - WorkspaceGitArcPlanState: inactive logical workspace projection. Keywords: git, arc, plan, projection.
+ * - WorkspaceGitArcPlanClaimCollisionResult: project-qualified inactive member collision results.
  * Local mechanics: emit WorkbenchGitClaimSnapshot after mutations while the owning Git transition remains held. Keywords: git, claims, stats.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
+import type { GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 
 import type { ResolvedProjectRoot } from "../lib/project";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -29,6 +33,15 @@ import GitClaimHistoryReader from "../lib/workbench/git/GitClaimHistoryReader";
 import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
+
+export class WorkspaceGitArcMemberError extends Error {
+  constructor(readonly workspace: NonNullable<GitArcFailure["workspace"]>, cause: unknown) {
+    const stage = workspace.stage === "preflight" ? " before any member changed"
+      : workspace.completedRootIds.length ? ` after completing ${workspace.completedRootIds.join(", ")}` : "";
+    super(`Workspace Git arc member ${workspace.failedRootIds.join(", ")} failed${stage}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = "WorkspaceGitArcMemberError";
+  }
+}
 
 interface GitTransitions {
   readMany<TValue>(worktreePaths: readonly string[], operation: () => Promise<TValue>): Promise<TValue>;
@@ -231,7 +244,7 @@ export default class WorkbenchWorkspaceGitArcController {
       for (const member of plan?.members ?? []) refs.set(member.repoRoot, member.checkpointCommit);
     }
     const selected = members.filter((member) => refs.has(member.repoRoot));
-    if (!selected.length) throw new Error("This workspace Git arc has no matching inactive plan members.");
+    if (!selected.length) throw new GitArcRejectionError({ reason: "missingInactiveMembers" }, "This workspace Git arc has no matching inactive plan members.");
     const values = await Promise.all(selected.map(async (member) => ({
       member,
       result: await this.local.findPlanClaimCollisions({
@@ -399,13 +412,13 @@ export default class WorkbenchWorkspaceGitArcController {
     const root = project.project.roots.find((candidate) => (
       candidate.id.toLowerCase() === normalized || candidate.name.toLowerCase() === normalized
     ));
-    if (!root) throw new Error(`Unknown workspace root: ${rootId}`);
+    if (!root) throw new GitArcRejectionError({ reason: "unknownWorkspaceRoot", rootId }, `Unknown workspace root: ${rootId}`);
     return root;
   }
 
   private memberForRoot(members: readonly RepoMember[], root: ResolvedProjectRoot) {
     const member = members.find((candidate) => candidate.roots.some(({ id }) => id === root.id));
-    if (!member) throw new Error(`Workspace root ${root.id} is not inside a Git repository.`);
+    if (!member) throw new GitArcRejectionError({ reason: "rootNotRepository", rootId: root.id }, `Workspace root ${root.id} is not inside a Git repository.`);
     return member;
   }
 
@@ -426,7 +439,7 @@ export default class WorkbenchWorkspaceGitArcController {
     const root = explicit ?? this.findRoot(project, fallbackRootId);
     const value = explicit ? rawPath.slice(root.id.length + 1) : rawPath;
     const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(root.root, value);
-    if (!isInside(absolute, root.root)) throw new Error(`Git arc path escapes workspace root ${root.id}: ${rawPath}`);
+    if (!isInside(absolute, root.root)) throw new GitArcRejectionError({ reason: "pathOutsideWorkspaceRoot", rootId: root.id, path: rawPath }, `Git arc path escapes workspace root ${root.id}: ${rawPath}`);
     return { absolute, root };
   }
 
@@ -472,7 +485,7 @@ export default class WorkbenchWorkspaceGitArcController {
     for (const entry of refs) {
       const member = this.memberForRoot(members, this.findRoot(project, entry.rootId));
       const existing = result.get(member.repoRoot);
-      if (existing && existing !== entry.ref) throw new Error(`Workspace roots in ${member.repoRoot} supplied different arc refs.`);
+      if (existing && existing !== entry.ref) throw new GitArcRejectionError({ reason: "conflictingRootRefs", rootIds: member.roots.map(({ id }) => id) }, `Workspace roots in ${member.repoRoot} supplied different arc refs.`);
       result.set(member.repoRoot, entry.ref);
     }
     return result;
@@ -485,7 +498,7 @@ export default class WorkbenchWorkspaceGitArcController {
     mode: "read" | "write" = "write",
     observation?: { harness: WorkbenchHarness; project: AgentEndpointProjectResolution; threadId: string },
   ) {
-    if (!selected.length) throw new Error("This workspace Git arc has no matching repository members.");
+    if (!selected.length) throw new GitArcRejectionError({ reason: "missingWorkspaceMembers" }, "This workspace Git arc has no matching repository members.");
     const run = mode === "read" ? this.transitions.readMany.bind(this.transitions) : this.transitions.runMany.bind(this.transitions);
     return await run(selected.map(({ repoRoot }) => repoRoot), async () => {
       try {
@@ -494,10 +507,9 @@ export default class WorkbenchWorkspaceGitArcController {
             try {
               await preflight(member);
             } catch (error) {
-              throw new Error(
-                `Workspace Git arc member ${member.roots.map(({ id }) => id).join(", ")} failed before any member changed: ${error instanceof Error ? error.message : String(error)}`,
-                { cause: error },
-              );
+              throw new WorkspaceGitArcMemberError({
+                failedRootIds: member.roots.map(({ id }) => id), completedRootIds: [], stage: "preflight",
+              }, error);
             }
           }
         }
@@ -507,10 +519,9 @@ export default class WorkbenchWorkspaceGitArcController {
             results.push({ member, result: await operation(member) });
           } catch (error) {
             const completed = results.flatMap(({ member: value }) => value.roots.map(({ id }) => id));
-            throw new Error(
-              `Workspace Git arc member ${member.roots.map(({ id }) => id).join(", ")} failed${completed.length ? ` after completing ${completed.join(", ")}` : ""}: ${error instanceof Error ? error.message : String(error)}`,
-              { cause: error },
-            );
+            throw new WorkspaceGitArcMemberError({
+              failedRootIds: member.roots.map(({ id }) => id), completedRootIds: completed, stage: "operation",
+            }, error);
           }
         }
         return results;
@@ -662,7 +673,7 @@ export default class WorkbenchWorkspaceGitArcController {
         inherit: request.inherit,
       };
       if (request.action === "arcClaims" && scope) return await this.local.editArcClaims(input);
-      if (!scope && removePaths.length) throw new Error("Removed paths must exactly match inherited entries.");
+      if (!scope && removePaths.length) throw new GitArcRejectionError({ reason: "unclaimedRemoval", paths: removePaths }, "Removed paths must exactly match inherited entries.");
       return await this.local.editPlanClaims({
         ...input,
         inherit: Boolean(scope) && request.inherit,
@@ -817,7 +828,7 @@ export default class WorkbenchWorkspaceGitArcController {
       selected = unique([...(lifecycle?.members ?? []), ...(plan?.members ?? [])].map(({ repoRoot }) => repoRoot))
         .map((repoRoot) => members.find((member) => member.repoRoot === repoRoot)!);
     }
-    if (!selected.length) throw new Error("This workspace Git arc has no matching repository members.");
+    if (!selected.length) throw new GitArcRejectionError({ reason: "missingWorkspaceMembers" }, "This workspace Git arc has no matching repository members.");
     const selectedRepos = new Set(selected.map(({ repoRoot }) => repoRoot));
     const values = await this.runMembers(members, async (member) => {
       const inspectionSnapshot = await this.local.createInspectionSnapshot(member.repoRoot);
@@ -912,13 +923,13 @@ export default class WorkbenchWorkspaceGitArcController {
       ? await this.findProposalMember(members, { harness: request.harness, proposalId: request.amendProposalId, threadId: request.threadId })
       : null;
     if (project.project.roots.length > 1 && !request.rootId && !inferredMember) {
-      throw new Error("A multi-root Git arc proposal requires rootId so one proposal cannot cross projects.");
+      throw new GitArcRejectionError({ reason: "missingProposalRoot" }, "A multi-root Git arc proposal requires rootId so one proposal cannot cross projects.");
     }
     const root = inferredMember?.roots[0] ?? this.findRoot(project, request.rootId ?? project.root.id);
     const member = inferredMember ?? this.memberForRoot(members, root);
     const requestedPaths = request.paths?.map((value) => this.parseRootPath(project, value, root.id));
     if (requestedPaths?.some((candidate) => candidate.root.id !== root.id)) {
-      throw new Error(`A Git arc proposal for ${root.id} cannot include paths from another workspace root.`);
+      throw new GitArcRejectionError({ reason: "crossRootProposal", rootId: root.id }, `A Git arc proposal for ${root.id} cannot include paths from another workspace root.`);
     }
     let selectedPaths = requestedPaths?.map(({ absolute }) => absolute);
     if (!messageOnlyAmend && !selectedPaths?.length && project.project.roots.length > 1) {
@@ -926,7 +937,7 @@ export default class WorkbenchWorkspaceGitArcController {
       selectedPaths = state?.claimedPaths.filter((candidate) => this.rootForRepoPath(member, candidate).id === root.id) ?? [];
     }
     if (!messageOnlyAmend && project.project.roots.length > 1 && !request.amend && !selectedPaths?.length) {
-      throw new Error(`Workspace root ${root.id} has no claimed paths to propose.`);
+      throw new GitArcRejectionError({ reason: "noClaimedRootPaths", rootId: root.id }, `Workspace root ${root.id} has no claimed paths to propose.`);
     }
     const values = await this.runMembers([member], async () => await this.local.createProposal({
       amend: request.amend,
@@ -948,11 +959,10 @@ export default class WorkbenchWorkspaceGitArcController {
         await this.local.getProposal({ cwd: member.repoRoot, harness: request.harness, includeNewer: false, proposalId: request.proposalId, threadId: request.threadId });
         return member;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!/not found|does not exist|missing/iu.test(message)) throw error;
+        if (!(error instanceof GitArcRejectionError) || error.rejection.reason !== "proposalNotFound") throw error;
       }
     }
-    throw new Error(`Git arc proposal not found: ${request.proposalId}`);
+    throw new GitArcRejectionError({ reason: "proposalNotFound", proposalId: request.proposalId }, `Git arc proposal not found: ${request.proposalId}`);
   }
 
   private async executeProposalOperation(
@@ -993,7 +1003,7 @@ export default class WorkbenchWorkspaceGitArcController {
     const values = await this.runMembers(selected, async (member) => {
       const group = groups.find((candidate) => candidate.member.repoRoot === member.repoRoot);
       const checkpointCommit = refs.get(member.repoRoot);
-      if (!checkpointCommit) throw new Error(`Restore is missing the current ref for ${member.roots[0]!.id}.`);
+      if (!checkpointCommit) throw new GitArcRejectionError({ reason: "missingRestoreRef", rootId: member.roots[0]!.id }, `Restore is missing the current ref for ${member.roots[0]!.id}.`);
       return await this.local.restore({
         checkpointCommit, confirmRestore: request.confirmRestore, cwd: member.repoRoot, harness: request.harness,
         ...(group?.paths.length ? { paths: group.paths } : {}), threadId: request.threadId,

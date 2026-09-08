@@ -47,11 +47,20 @@ export default function ThreadGitArcFailure({
   const liveKeys = new Set(liveEntries.map((entry) => identityKey(entry.identity.harness, entry.identity.threadId)));
   const missingOwners = conflicts.map(({ owner }) => owner).filter((owner) => !liveKeys.has(identityKey(owner.harness, owner.threadId)));
   const canRenderLiveThreads = Boolean(liveEntries.length && resolvedProjectId && presentationContext?.onOpenThread);
+  const rejection = failure.code === "rejection" ? failure.rejection : null;
+  const rejectedPaths = rejection && "paths" in rejection ? rejection.paths
+    : rejection && "path" in rejection ? [rejection.path] : [];
+  const rejectedProjects = rejection && "rootIds" in rejection ? rejection.rootIds
+    : rejection && "rootId" in rejection ? [rejection.rootId] : [];
   const hasStructuredFacts = Boolean(
     (failure.code === "planDrift" && failure.commits.length)
     || failure.code === "acceptedProposals"
     || canRenderLiveThreads
-    || missingOwners.length,
+    || missingOwners.length
+    || rejectedPaths.length
+    || rejectedProjects.length
+    || failure.workspace
+    || (rejection && ("proposalId" in rejection || "refs" in rejection)),
   );
 
   const message = failure.code === "missingArcRef"
@@ -79,6 +88,22 @@ export default function ThreadGitArcFailure({
       </div>
       {hasStructuredFacts ? (
         <div className="mt-1 text-text" data-thread-git-arc-failure-facts="true">
+          {rejectedPaths.length ? (
+            <ProjectFileLinkList paths={rejectedPaths} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath ?? ""} workspaceRoots={workspaceRoots} />
+          ) : null}
+          {rejectedProjects.length ? <p className="m-0 text-muted">Projects: {rejectedProjects.join(", ")}</p> : null}
+          {rejection && "proposalId" in rejection ? <p className="m-0 text-muted">Proposal <ThreadInlineCode>{rejection.proposalId}</ThreadInlineCode></p> : null}
+          {rejection && "refs" in rejection ? <p className="m-0 text-muted">Published on {rejection.refs.join(", ")}</p> : null}
+          {failure.workspace ? (
+            <div className="text-muted">
+              <p className="m-0">Failed in {failure.workspace.failedRootIds.join(", ")}.</p>
+              {failure.workspace.stage === "preflight"
+                ? <p className="m-0">No projects were changed.</p>
+                : failure.workspace.completedRootIds.length
+                  ? <p className="m-0">Completed in {failure.workspace.completedRootIds.join(", ")}.</p>
+                  : null}
+            </div>
+          ) : null}
           {failure.code === "planDrift" && failure.commits.length ? (
             <div className="space-y-1 py-1 text-[0.9em] text-muted">
               {failure.commits.map(({ commit, paths, subject }) => (

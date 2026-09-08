@@ -1,4 +1,5 @@
 /*
+ * Keywords: MCP, Git arc, diagnostics, routing, proposal failure.
  * Exports:
  * - No production exports; tests prove specialized wb MCP operations enter the existing dedicated renderers. Keywords: MCP, Git arc, title, subagent, rendering.
  */
@@ -9,6 +10,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
+import { createGitArcFailureFromError, createGitArcOperationRejected, describeGitArcFailure, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
+import { GitArcRejectionError, gitArcRejectionIssue } from "workbench-shared/workbench/git/git-arc-rejections";
 import { getWorkbenchMcpCommandRoute } from "../../../workbench/thread/thread-command-matchers";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientProvider from "../WorkbenchClientProvider";
@@ -18,6 +21,29 @@ import ThreadGitArcPresentationContext, { type ThreadGitArcPresentation } from "
 import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
+
+test("typed runtime failures render paths and partial workspace outcomes without diagnostics", () => {
+  const failure = {
+    ...createGitArcFailureFromError("arcClaims", new GitArcRejectionError({ reason: "unclaimedRemoval", paths: ["unclaimed-evidence.ts"] }, "agent-only-detail --inherit")),
+    workspace: { failedRootIds: ["failed-project"], completedRootIds: ["completed-project"], stage: "operation" as const },
+  };
+  const html = renderSpecialized(makeItem("git_arc_claims", { inherit: true }, formatGitArcFailureReceipt(failure), "failed"));
+  assert.match(html, /unclaimed-evidence\.ts/u);
+  assert.match(html, /failed-project/u);
+  assert.match(html, /completed-project/u);
+  assert.doesNotMatch(html, /agent-only-detail|--inherit/u);
+});
+
+test("SDK validation renders the typed reason rather than its diagnostic", () => {
+  const rejection = { reason: "conflictingProposalTargets" as const };
+  const issue = gitArcRejectionIssue(rejection, "agent-only-detail --amend --replace");
+  const output = `MCP error -32602: Input validation error: Invalid arguments for tool git_arc_propose: ${JSON.stringify([issue])}`;
+  const html = renderSpecialized(makeItem("git_arc_propose", { amend: true, replace: "other" }, output, "failed"));
+  const expected = describeGitArcFailure(createGitArcFailureFromError("proposalCreate", new GitArcRejectionError(rejection))).message;
+  const encoded = renderToStaticMarkup(createElement("span", null, expected)).slice(6, -7);
+  assert.ok(html.includes(encoded));
+  assert.doesNotMatch(html, /agent-only-detail|--amend|--replace/u);
+});
 
 function makeItem(
   tool: string,
@@ -108,17 +134,17 @@ function threadEntry(
 }
 
 test("Git MCP operations use the existing Git arc card instead of a simple label", () => {
-  const html = renderSpecialized(makeItem("git_arc_plan_add", { paths: ["src/a.ts"] }, ""));
+  const html = renderSpecialized(makeItem("git_arc_claims", { inherit: true, addPaths: ["src/a.ts"] }, ""));
 
-  assert.match(html, /data-thread-git-arc-card="planAdd"/u);
+  assert.match(html, /data-thread-git-arc-card="claims"/u);
 });
 
 test("multi-root Git MCP plans render root-qualified project paths", () => {
-  const html = renderSpecialized(makeItem("git_arc_plan", {
+  const html = renderSpecialized(makeItem("git_plan_claims", {
     intentName: "workspace change",
     roots: [
-      { adoptPaths: ["src/client.ts"], paths: [], rootId: "web" },
-      { adoptPaths: [], paths: ["src/contract.ts"], rootId: "api" },
+      { adoptPaths: ["src/client.ts"], addPaths: [], rootId: "web" },
+      { adoptPaths: [], addPaths: ["src/contract.ts"], rootId: "api" },
     ],
   }, ""));
 
@@ -133,11 +159,11 @@ test("historical overlap failures keep exact duplicate paths in adoption-only pr
     overlaps: [{ adoptedPath: "src/controller.ts", ordinaryPath: "src/controller.ts" }],
     version: 1,
   } as const;
-  const html = renderSpecialized(makeItem("git_arc_plan", {
+  const html = renderSpecialized(makeItem("git_plan_claims", {
     adoptPaths: ["src/controller.ts"],
     intentDescription: "",
     intentName: "Restore titles",
-    paths: ["src/controller.ts"],
+    addPaths: ["src/controller.ts"],
   }, `Adopted paths already join the plan scope.\nWorkbench arc failure: ${JSON.stringify(failure)}\n`, "failed"));
 
   assert.match(html, /data-thread-git-arc-card="plan"/u);
@@ -147,6 +173,33 @@ test("historical overlap failures keep exact duplicate paths in adoption-only pr
   assert.match(html, /data-thread-git-arc-failure="adoptedPathOverlap"/u);
   assert.match(html, /Ordinary and adopted plan scopes overlap/u);
   assert.doesNotMatch(html, /Adopted paths already join|Workbench arc failure:/u);
+});
+
+test("Git failures hide raw diagnostics from both MCP error and result channels", () => {
+  const diagnostic = 'MCP error -32602: [{"message":"agent-only-detail"}] Usage: wb git arc claims --inherit';
+  for (const tool of ["git_arc_diff", "git_plan_claims", "git_arc_claims", "git_arc_propose", "git_arc_unrecognised"]) {
+    for (const transport of ["error", "text", "receipt"]) {
+      const output = transport === "receipt"
+        ? formatGitArcFailureReceipt(createGitArcOperationRejected("unknown", diagnostic))
+        : diagnostic;
+      const item = makeItem(tool, {}, output, "failed");
+      if (transport === "error") {
+        item.error = { message: diagnostic };
+        item.result = null;
+      }
+      const html = renderSpecialized(item);
+      assert.match(html, /data-thread-git-arc-card=/u, `${tool}/${transport}`);
+      assert.match(html, /data-thread-git-arc-failure=/u, `${tool}/${transport}`);
+      assert.doesNotMatch(html, /agent-only-detail|Usage:|MCP error|-32602/u, `${tool}/${transport}`);
+      assert.doesNotMatch(html, /data-thread-checkpoint-card=/u, `${tool}/${transport}`);
+    }
+  }
+});
+
+test("failed waits retain the Git failure boundary", () => {
+  const html = renderSpecialized(makeItem("git_arc_wait", {}, "agent-only-detail", "failed"));
+  assert.match(html, /data-thread-git-arc-failure=/u);
+  assert.doesNotMatch(html, /agent-only-detail/u);
 });
 
 test("Git arc waits use live intersections while running and the start card after completion", () => {

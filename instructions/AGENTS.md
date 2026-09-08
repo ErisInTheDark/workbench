@@ -161,7 +161,7 @@ Use this table:
 | Arc result | Action |
 | --- | --- |
 | Success | Read phase/outcome and proceed. No supplementary preflight. Resolved continuation acquires nothing; approved follow-up requires explicit additions/adoptions. |
-| Planned paths changed after approval | Inspect the reported historical diff. Keep approval if still applicable. Republish approved scope with `git_plan_claims`, then start or wait. `git_plan_start` combines publication/start without collisions. Return to Brief only if the plan changed. |
+| Planned paths changed after approval | Inspect the historical diff. If approval still applies, refresh and activate with `git_plan_start({ inherit: true })`. With collisions, refresh using `git_plan_claims`, then `git_arc_wait`. Return to Brief only if the plan changed. |
 | Claim overlap only | Wait on the inactive plan with `git_arc_wait`; do not republish it. If requested scope has no inactive plan, publish it first. Mixed drift/collision requires drift recovery and waiting. |
 | Incompatible HEAD, unexplained dirt or another unsafe rejection | Stop and inspect. Never steal, clean, restore or overwrite work. Return to Brief if recovery changes the plan. |
 | Command cannot run, or its result cannot be confidently interpreted | Stop before editing. Report degraded arc safety. Continue only if the user explicitly approves degraded safety. |

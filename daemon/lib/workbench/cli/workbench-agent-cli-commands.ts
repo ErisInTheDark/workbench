@@ -7,6 +7,9 @@
  * - parseWorkbenchAgentCliCommand: adapt allowlisted wb argv into the canonical typed command registry. Keywords: workbench, cli, allowlist, cwd.
  */
 import path from "node:path";
+import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
+import { WorkbenchCommandArgumentError } from "../commands/workbench-agent-command-arguments";
 
 import type { OrchestratorReloadScopeDescriptor } from "workbench-shared/workbench/orchestrator-reload";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry";
@@ -280,6 +283,12 @@ export async function parseWorkbenchAgentCliCommand(
   if (!matched) {
     const group = matchHelpGroup(workbenchArgs);
     const help = group ? `wb ${group.words.join(" ")} --help` : "wb --help";
+    if (argv[0] === "git" && (argv[1] === "arc" || argv[1] === "plan")) {
+      const failure = createGitArcFailureFromError("unknown", new GitArcRejectionError(
+        { reason: "unsupportedCommand" }, `Unsupported wb command: ${workbenchArgs.join(" ")}\nRun ${help} for available commands.`,
+      ));
+      return { error: formatGitArcFailureReceipt(failure), kind: "error" };
+    }
     return { error: `Unsupported wb command: ${workbenchArgs.join(" ")}\nRun ${help} for available commands.`, kind: "error" };
   }
   try {
@@ -288,6 +297,14 @@ export async function parseWorkbenchAgentCliCommand(
       request: await matched.definition.buildRequestFromCli(argv.slice(matched.words.length), { callerHarness, callerThreadId, cwd, workbenchOrigin }),
     };
   } catch (error) {
+    if (matched.words[0] === "git" && (matched.words[1] === "arc" || matched.words[1] === "plan")) {
+      const cause = error instanceof WorkbenchCommandArgumentError
+        ? new GitArcRejectionError(error.kind === "unexpectedTrailingArguments"
+          ? { reason: error.kind }
+          : { reason: error.kind, argument: error.argument }, error.message)
+        : error;
+      return { error: `${formatGitArcFailureReceipt(createGitArcFailureFromError("unknown", cause))}\n\nUsage: ${matched.definition.usage}`, kind: "error" };
+    }
     return { error: `${error instanceof Error ? error.message : String(error)}\n\nUsage: ${matched.definition.usage}`, kind: "error" };
   }
 }

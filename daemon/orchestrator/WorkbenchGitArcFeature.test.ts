@@ -15,6 +15,8 @@ import { GitCheckpointIgnoredPathsError } from "../lib/workbench/git/GitArcPlanC
 import { GitArcCollisionError } from "../lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "../lib/workbench/git/GitCheckpointStore";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
+import { WorkspaceGitArcMemberError } from "./WorkbenchWorkspaceGitArcController";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 
@@ -568,6 +570,26 @@ test("ignored path failures remain typed through workspace member wrappers", asy
   assert.match(result.error, /Git ignores the selected file\./u);
   assert.match(result.error, /failed to plan ignored file ignored\/output\.ts/u);
   assert.doesNotMatch(result.error, /Workspace Git arc member failed|operation rejected/u);
+});
+
+test("owner rejections survive the feature boundary without losing structured reasons", async () => {
+  const feature = waitFeature();
+  const workspace = { failedRootIds: ["web"], completedRootIds: ["api"], stage: "operation" as const };
+  Object.defineProperty(feature, "dispatch", {
+    value: async () => {
+      throw new WorkspaceGitArcMemberError(workspace, new GitArcRejectionError({ reason: "unclaimedRemoval", paths: ["one.ts"] }, "agent-only recovery"));
+    },
+  });
+  const response = await feature.executeRequest({
+    action: "arcContinue", cwd: "C:/Git/Project", harness: "codex", threadId: "thread-one",
+  });
+  const result = await response.json() as GitArcFailureEnvelope;
+  assert.equal(response.status, 400);
+  assert.equal(result.gitArcFailure.code, "rejection");
+  if (result.gitArcFailure.code !== "rejection") throw new Error("Typed rejection was lost.");
+  assert.deepEqual(result.gitArcFailure.rejection, { reason: "unclaimedRemoval", paths: ["one.ts"] });
+  assert.equal(result.gitArcFailure.diagnostic, "agent-only recovery");
+  assert.deepEqual(result.gitArcFailure.workspace, workspace);
 });
 
 test("accepted proposal receipts remain structured when a resolved arc cannot continue", async () => {

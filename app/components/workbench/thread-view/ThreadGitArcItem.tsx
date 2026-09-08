@@ -12,7 +12,6 @@ import {
   type GitArcFailureAction,
 } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
-import type { GitArcAction } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 import GitArcIcon from "./GitArcIcon";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
@@ -24,30 +23,19 @@ import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
 const ACTION_LABELS = {
   claims: { completed: "Updated claims", failed: "Failed to update claims", inProgress: "Updating claims", timedOut: "Timed out updating claims" },
   scope: { completed: "Read scope", failed: "Failed to read scope", inProgress: "Reading scope", timedOut: "Timed out reading scope" },
-  add: { completed: "Extended", failed: "Failed to extend", inProgress: "Extending", timedOut: "Timed out extending" },
-  adopt: { completed: "Adopted workspace changes", failed: "Failed to adopt workspace changes", inProgress: "Adopting workspace changes", timedOut: "Timed out adopting workspace changes" },
   compare: { completed: "Compared", failed: "Failed to compare", inProgress: "Comparing", timedOut: "Timed out comparing" },
   continue: { completed: "Continued", failed: "Failed to continue", inProgress: "Continuing", timedOut: "Timed out continuing" },
   diff: { completed: "Diffed", failed: "Failed to diff", inProgress: "Diffing", timedOut: "Timed out diffing" },
   mv: { completed: "Moved", failed: "Failed to move", inProgress: "Moving", timedOut: "Timed out moving" },
   plan: { completed: "Planned", failed: "Failed to plan", inProgress: "Planning", timedOut: "Timed out planning" },
-  planAdd: { completed: "Extended", failed: "Failed to extend plan", inProgress: "Extending plan", timedOut: "Timed out extending plan" },
-  planAdopt: { completed: "Adopted changes", failed: "Failed to adopt changes into plan", inProgress: "Adopting changes into plan", timedOut: "Timed out adopting changes into plan" },
-  planRemove: { completed: "Reduced", failed: "Failed to reduce plan", inProgress: "Reducing plan", timedOut: "Timed out reducing plan" },
   planStart: { completed: "Started", failed: "Failed to create and start", inProgress: "Creating and starting", timedOut: "Timed out creating and starting" },
+  propose: { completed: "Proposed", failed: "Failed to propose", inProgress: "Proposing", timedOut: "Timed out proposing" },
   release: { completed: "Released", failed: "Failed to release", inProgress: "Releasing", timedOut: "Timed out releasing" },
   rescind: { completed: "Rescinded", failed: "Failed to rescind", inProgress: "Rescinding", timedOut: "Timed out rescinding" },
-  remove: { completed: "Reduced", failed: "Failed to reduce", inProgress: "Reducing", timedOut: "Timed out reducing" },
   restore: { completed: "Restored", failed: "Failed to restore", inProgress: "Restoring", timedOut: "Timed out restoring" },
   start: { completed: "Started", failed: "Failed to start", inProgress: "Starting", timedOut: "Timed out starting" },
+  unknown: { completed: "Ran unrecognised action on", failed: "Failed to run action on", inProgress: "Running action on", timedOut: "Timed out running action on" },
 } as const;
-
-function iconAction(action: GitArcCommandAction): GitArcAction {
-  if (action === "planAdd" || action === "planAdopt" || action === "planRemove") return "plan";
-  if (action === "planStart") return "start";
-  if (action === "rescind") return "propose";
-  return action;
-}
 
 function actionState(outcome: ThreadCommandExecutionOutcome) {
   return outcome === "completed" ? "completed" : outcome === "inProgress" ? "inProgress" : outcome === "timedOut" ? "timedOut" : "failed";
@@ -55,25 +43,20 @@ function actionState(outcome: ThreadCommandExecutionOutcome) {
 
 function failureAction(action: GitArcCommandAction): GitArcFailureAction {
   const actions: Record<GitArcCommandAction, GitArcFailureAction> = {
-    add: "arcAdd",
-    adopt: "arcAdopt",
     claims: "arcClaims",
     scope: "arcScope",
     compare: "compare",
     continue: "arcContinue",
     diff: "diff",
     mv: "arcMove",
-    plan: "plan",
-    planAdd: "planAdd",
-    planAdopt: "planAdopt",
-    planRemove: "planRemove",
+    plan: "planClaims",
     planStart: "planStart",
     propose: "proposalCreate",
     release: "arcRelease",
-    remove: "arcRemove",
     rescind: "proposalRescind",
     restore: "restore",
     start: "arcStart",
+    unknown: "unknown",
   };
   return actions[action];
 }
@@ -128,8 +111,7 @@ export default function ThreadGitArcItem({
   receipt: GitArcReceipt | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  if (commandIntent.action === "propose") {
-    if (!proposalRedirect) return null;
+  if (commandIntent.action === "propose" && proposalRedirect) {
     return (
       <article className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] px-2.5 py-1.5" data-thread-git-arc-card="propose">
         <button
@@ -187,22 +169,18 @@ export default function ThreadGitArcItem({
     ? ignoredFailure.paths
     : commandIntent.action === "plan" || commandIntent.action === "planStart"
     ? adoptPaths.length ? ordinarySelectedPaths : claimedPaths.length ? claimedPaths : selectedPaths
-    : commandIntent.action === "add" || commandIntent.action === "adopt" || commandIntent.action === "remove"
-      || commandIntent.action === "release" || commandIntent.action === "restore"
-      || commandIntent.action === "planAdd" || commandIntent.action === "planAdopt" || commandIntent.action === "planRemove"
+    : commandIntent.action === "release" || commandIntent.action === "restore"
       ? selectedPaths
       : commandIntent.action === "start" || commandIntent.action === "continue"
         ? failureClaimPaths(failure)
       : [];
   const primaryPathLabel = state === "timedOut"
     ? commandIntent.action === "plan" ? "Timed out planning"
-      : commandIntent.action === "planAdopt" || commandIntent.action === "adopt" ? "Timed out adopting"
-        : commandIntent.action === "planStart" || commandIntent.action === "start" || commandIntent.action === "continue" || commandIntent.action === "add" ? "Timed out claiming"
+      : commandIntent.action === "planStart" || commandIntent.action === "start" || commandIntent.action === "continue" ? "Timed out claiming"
           : commandIntent.action === "restore" ? "Timed out restoring" : "Timed out changing"
     : state === "failed"
     ? ignoredFailure
-      ? commandIntent.action === "plan" || commandIntent.action === "planAdd"
-        || commandIntent.action === "planAdopt" || commandIntent.action === "planStart"
+      ? commandIntent.action === "plan" || commandIntent.action === "planStart"
         ? "Failed to plan ignored file"
         : "Failed to claim ignored file"
       : failure?.code === "dirtyPaths" && commandIntent.action === "plan"
@@ -211,41 +189,15 @@ export default function ThreadGitArcItem({
         ? "Failed to claim drifted file"
         : commandIntent.action === "plan"
       ? "Failed to plan"
-      : commandIntent.action === "planAdd"
-        ? "Failed to add to plan"
-        : commandIntent.action === "planRemove"
-          ? "Failed to remove from plan"
-          : commandIntent.action === "planAdopt"
-            ? "Failed to adopt"
-            : commandIntent.action === "planStart"
-              ? "Failed to claim"
-              : commandIntent.action === "start" || commandIntent.action === "continue"
-                ? "Failed to claim"
-              : commandIntent.action === "adopt"
-                ? "Failed to adopt"
-                : commandIntent.action === "add"
-                  ? "Failed to claim"
-                  : commandIntent.action === "remove" ? "Failed to remove"
-                    : commandIntent.action === "release" ? "Failed to release" : "Failed to restore"
+      : commandIntent.action === "planStart" || commandIntent.action === "start" || commandIntent.action === "continue"
+        ? "Failed to claim"
+        : commandIntent.action === "release" ? "Failed to release" : "Failed to restore"
     : commandIntent.action === "plan"
       ? "Planned"
-      : commandIntent.action === "planAdd"
-        ? "Added to plan"
-        : commandIntent.action === "planRemove"
-          ? "Removed from plan"
-          : commandIntent.action === "planAdopt"
-            ? "Adopted into plan"
-            : commandIntent.action === "remove"
-              ? "Removed"
-              : commandIntent.action === "release"
-                ? commandIntent.disown ? "Disowned" : "Released"
-              : commandIntent.action === "restore" ? "Restored" : "Claimed";
-  const primaryPathMarker = commandIntent.action === "plan"
-    || commandIntent.action === "planAdd"
-    || commandIntent.action === "planAdopt"
-    || commandIntent.action === "planRemove"
-    ? "planned"
-    : "claimed";
+      : commandIntent.action === "release"
+        ? commandIntent.disown ? "Disowned" : "Released"
+        : commandIntent.action === "restore" ? "Restored" : "Claimed";
+  const primaryPathMarker = commandIntent.action === "plan" ? "planned" : "claimed";
   const showNestedClaims = receipt?.fullScope === undefined && commandIntent.action !== "plan" && commandIntent.action !== "planStart" && claimedPaths.length > 0;
 
   return (
@@ -253,7 +205,7 @@ export default function ThreadGitArcItem({
       <ThreadDisclosure
         contentClassName={state === "inProgress" ? "mt-1" : "mt-1 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]"}
         defaultOpen={commandIntent.action !== "compare" && commandIntent.action !== "diff"}
-        leading={<GitArcIcon action={iconAction(commandIntent.action)} />}
+        leading={<GitArcIcon action={commandIntent.action} />}
         leadingLabel={`${commandIntent.action} git arc`}
         summary={(
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">

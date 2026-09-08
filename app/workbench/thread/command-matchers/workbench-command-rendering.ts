@@ -4,7 +4,8 @@
  * - WorkbenchGitArcOperation: Git operation intent and scope deltas.
  * - WorkbenchSubagentOperation: subagent operation intent.
  * - WorkbenchCommandRendering: shared renderer result.
- * - isWorkbenchCommandPresentationName: recognise current and historical presentation names.
+ * - isWorkbenchCommandPresentationName: recognise supported presentation names.
+ * - getUnknownGitArcCommandRoute: keep unrecognised arc requests inside bounded Git presentation.
  * - WorkbenchCommandPresentationName/WORKBENCH_COMMAND_PRESENTATION_NAMES: canonical wb tool inventory shared by CLI and MCP adapters. Keywords: workbench, command, inventory, questionnaire.
  * - WorkbenchCommandRoute/WorkbenchSpecializedOperation/WorkbenchCommandPresentationContext: route one wb operation with optional path context to a dedicated or simple renderer. Keywords: workbench, command, route, renderer, questionnaire.
  * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay/getWorkbenchCommandRouteSummaryDisplay: resolve structured arguments and routes into shared rendering metadata. Keywords: workbench, CLI, MCP, rendering, questionnaire.
@@ -56,18 +57,10 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_arc_claims",
   "git_arc_scope",
   "git_arc_reword",
-  "git_arc_plan",
-  "git_arc_plan_add",
-  "git_arc_plan_remove",
-  "git_arc_plan_adopt",
-  "git_arc_plan_start",
   "git_arc_start",
   "git_arc_wait",
   "git_arc_continue",
-  "git_arc_add",
-  "git_arc_adopt",
   "git_arc_mv",
-  "git_arc_remove",
   "git_arc_release",
   "git_arc_compare",
   "git_arc_diff",
@@ -84,7 +77,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
 export type WorkbenchCommandPresentationName = typeof WORKBENCH_COMMAND_PRESENTATION_NAMES[number];
 
 export type WorkbenchGitArcOperation = {
-  action: "add" | "adopt" | "claims" | "scope" | "compare" | "continue" | "diff" | "mv" | "plan" | "planAdd" | "planAdopt" | "planRemove" | "planStart" | "propose" | "release" | "remove" | "rescind" | "restore" | "start";
+  action: "claims" | "scope" | "compare" | "continue" | "diff" | "mv" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "start" | "unknown";
   adoptPaths?: string[];
   removePaths?: string[];
   disown?: boolean;
@@ -369,25 +362,24 @@ function gitArcAction(name: WorkbenchCommandPresentationName): WorkbenchGitArcOp
     git_arc_claims: "claims",
     git_arc_scope: "scope",
     git_arc_reword: "propose",
-    git_arc_add: "add",
-    git_arc_adopt: "adopt",
     git_arc_compare: "compare",
     git_arc_continue: "continue",
     git_arc_diff: "diff",
     git_arc_mv: "mv",
-    git_arc_plan: "plan",
-    git_arc_plan_add: "planAdd",
-    git_arc_plan_adopt: "planAdopt",
-    git_arc_plan_remove: "planRemove",
-    git_arc_plan_start: "planStart",
     git_arc_propose: "propose",
     git_arc_release: "release",
-    git_arc_remove: "remove",
     git_arc_rescind: "rescind",
     git_arc_restore: "restore",
     git_arc_start: "start",
   };
   return actions[name] ?? null;
+}
+
+export function getUnknownGitArcCommandRoute(): WorkbenchCommandRoute {
+  return specialized("git-arc.unknown", {
+    kind: "gitArc",
+    operation: { action: "unknown", intentName: null, paths: [], ref: null },
+  });
 }
 
 function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: string]: JsonValue | undefined }) {
@@ -453,23 +445,18 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
   const matcherIds: Record<WorkbenchGitArcOperation["action"], string> = {
     claims: "git-arc.claims",
     scope: "git-arc.scope",
-    add: "git-arc.add",
-    adopt: "git-arc.adopt",
     compare: "git-arc.compare",
     continue: "git-arc.continue",
     diff: "git-arc.diff",
     mv: "git-arc.mv",
     plan: "git-arc.plan",
-    planAdd: "git-arc.plan-add",
-    planAdopt: "git-arc.plan-adopt",
-    planRemove: "git-arc.plan-remove",
     planStart: "git-arc.plan-start",
     propose: "git-arc.propose",
     release: "git-arc.release",
-    remove: "git-arc.remove",
     rescind: "git-arc.rescind",
     restore: "git-arc.restore",
     start: "git-arc.start",
+    unknown: "git-arc.unknown",
   };
   const stats = action === "compare" || action === "diff" || action === "start"
     ? { gitCheckpointDiffs: 1 }

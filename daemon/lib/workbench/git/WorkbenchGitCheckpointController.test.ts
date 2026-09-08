@@ -10,6 +10,7 @@ import { after, before, test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import GitArcPublishState from "./GitArcPublishState";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
 import createGitArcStartDiagnosticError, { GitArcStartDiagnosticError } from "./git-arc-start-diagnostics";
 import { GitCheckpointDirtyPathsError } from "./GitArcPlanController";
@@ -258,7 +259,11 @@ isolatedControllerTest("empty inactive plans remain visible through plan-state r
     cwd: source,
     harness: "codex",
     threadId: "empty-plan-thread",
-  }), /An empty Git arc plan cannot start/u);
+  }), (error: Error) => {
+    assert.ok(error instanceof GitArcRejectionError);
+    assert.deepEqual(error.rejection, { reason: "emptyPlan" });
+    return true;
+  });
   await fs.writeFile(path.join(source, ".gitignore"), "ignored/\n", "utf8");
   const ignoredPlan = await controller.createPlan({
     cwd: source,
@@ -1173,7 +1178,11 @@ isolatedControllerTest("replacement plans target prior pending and committed pro
   })).status, "committed");
   await assert.rejects(controller.getProposal({
     cwd: source, harness: "codex", includeNewer: false, proposalId: replaceTarget.proposalId, threadId: "foreign-thread",
-  }), /Checkpoint proposal not found/u);
+  }), (error: Error) => {
+    assert.ok(error instanceof GitArcRejectionError);
+    assert.deepEqual(error.rejection, { reason: "proposalNotFound", proposalId: replaceTarget.proposalId });
+    return true;
+  });
 });
 
 isolatedControllerTest("combined claims validate the final set without releasing dirty retained coverage", async (context) => {

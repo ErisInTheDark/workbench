@@ -16,6 +16,44 @@ import type { WorkbenchAgentCommandRequest } from "../lib/workbench/commands/wor
 import WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import { WORKBENCH_SHELL_SANDBOX_CAPABILITY } from "./WorkbenchShellController";
+import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
+
+test("MCP preserves typed Git rejections before and after dispatch", async () => {
+  let dispatches = 0;
+  const controller = new WorkbenchAgentMcpController({
+    executeCommand: async () => { dispatches += 1; throw new GitArcRejectionError({ reason: "missingActiveArc" }); },
+    orchestratorOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    lifecycleLogError: () => {},
+    requestCodex: async (request) => ({ id: request.id ?? null, result: { thread: { cwd: "C:/workspace" } } }),
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  try {
+    for (const [name, args, reason] of [
+      ["git_plan_claims", {}, "missingPlanName"],
+      ["git_arc_diff", { paths: ["one.ts"], page: 2 }, "selectedPathPaging"],
+      ["git_arc_propose", { amend: true, replace: "proposal-one" }, "conflictingProposalTargets"],
+    ] as const) {
+      const result = await client.callTool({ name, arguments: args, _meta: { threadId: "native-thread" } });
+      assert.equal(result.isError, true);
+      const failure = parseGitArcFailureReceipt(responseText(result));
+      assert.ok(failure && "rejection" in failure, name);
+      assert.deepEqual(failure.rejection, { reason });
+    }
+    assert.equal(dispatches, 0);
+    const dispatched = await client.callTool({ name: "git_arc_continue", arguments: {}, _meta: { threadId: "native-thread" } });
+    const failure = parseGitArcFailureReceipt(responseText(dispatched));
+    assert.equal(dispatched.isError, true);
+    assert.ok(failure && "rejection" in failure);
+    assert.deepEqual(failure.rejection, { reason: "missingActiveArc" });
+    assert.equal(dispatches, 1);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
 
 for (const failResolution of [false, true]) test(`shell resolves caller identity from thread cwd with resolution failure=${failResolution}`, async () => {
   const identities: object[] = [];

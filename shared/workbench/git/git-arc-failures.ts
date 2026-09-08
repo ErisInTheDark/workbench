@@ -1,6 +1,7 @@
 /*
  * Keywords: git, failures, text protocol, historical receipts, recovery.
  * Exports:
+ * - createGitArcFailureFromError: preserve typed owner/schema rejections with bounded agent diagnostics.
  * - GitArcFailureAction/GitArcFailure/GitArcFailureEnvelope: describe typed Git arc rejection identity, structured facts, and HTTP transport. Keywords: git, arc, failure, contract, transport.
  * - GitArcFailureSchema/GitArcFailureEnvelopeSchema/parseGitArcFailureEnvelope: validate failure payloads at server, CLI, transcript, and browser boundaries. Keywords: git, arc, failure, Zod, boundary.
  * - GitArcFailureException/GitArcMissingClaimSetError/GitArcProposalAlreadyCommittedError/createGitArcOperationRejected: preserve typed operation failures and explicit generic fallback. Keywords: git, arc, error, exception, fallback.
@@ -9,6 +10,7 @@
  */
 import { z } from "zod";
 import { escapeGitArcValue, readGitArcValue } from "./git-arc-receipts";
+import { describeGitArcRejection, GitArcRejectionError, GitArcRejectionSchema, readGitArcValidationRejection } from "./git-arc-rejections";
 
 const FAILURE_RECEIPT_PREFIX = "Workbench arc failure: ";
 const nonEmptyString = z.string().trim().min(1);
@@ -26,6 +28,11 @@ const GitArcFailureActionSchema = z.enum([
 const GitArcFailureBaseSchema = z.object({
   action: GitArcFailureActionSchema,
   version: z.literal(1),
+  workspace: z.object({
+    failedRootIds: z.array(boundedPath).max(20),
+    completedRootIds: z.array(boundedPath).max(20),
+    stage: z.enum(["preflight", "operation"]),
+  }).strict().optional(),
 });
 
 const GitArcOverlapSchema = z.object({
@@ -48,6 +55,11 @@ const GitArcConflictSchema = z.object({
 }).strict();
 
 export const GitArcFailureSchema = z.discriminatedUnion("code", [
+  GitArcFailureBaseSchema.extend({
+    code: z.literal("rejection"),
+    rejection: GitArcRejectionSchema,
+    diagnostic: nonEmptyString.max(4_000),
+  }).strict(),
   GitArcFailureBaseSchema.extend({
     code: z.literal("adoptedPathOverlap"),
     overlaps: z.array(z.object({
@@ -164,8 +176,21 @@ function isPlanningAction(action: GitArcFailureAction) {
   return action === "plan" || action === "planAdd" || action === "planAdopt" || action === "planStart";
 }
 
+export function createGitArcFailureFromError(action: GitArcFailureAction, error: unknown): GitArcFailure {
+  if (error instanceof GitArcFailureException) return error.failure;
+  const rejection = error instanceof GitArcRejectionError
+    ? error.rejection
+    : error instanceof z.ZodError ? readGitArcValidationRejection(error.issues) : null;
+  const diagnostic = boundedMessage(error instanceof Error ? error.message : String(error));
+  return rejection
+    ? { action, code: "rejection", rejection, diagnostic, version: 1 }
+    : createGitArcOperationRejected(action, diagnostic);
+}
+
 export function describeGitArcFailure(failure: GitArcFailure) {
   switch (failure.code) {
+    case "rejection":
+      return { agentRecovery: null, message: describeGitArcRejection(failure.rejection), userHint: null };
     case "adoptedPathOverlap":
       return {
         agentRecovery: "This is a historical failure receipt. Retry the plan with current Git arc behavior, which supports nested ordinary and adopted scope.",
@@ -202,7 +227,7 @@ export function describeGitArcFailure(failure: GitArcFailure) {
     }
     case "planDrift":
       return {
-        agentRecovery: `Call git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. Inspect before revising the plan. If approval still applies, republish with git_plan_claims using inherit: true.${failure.conflicts.length ? " Then call git_arc_wait to wait and activate it. Waiting does not refresh the baseline." : " Then activate with git_arc_start."}`,
+        agentRecovery: `Call git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. Inspect before revising the plan. If approval still applies, ${failure.conflicts.length ? "refresh with git_plan_claims using inherit: true, then call git_arc_wait. Waiting does not refresh the baseline." : "refresh and activate with git_plan_start using inherit: true."}`,
         message: "The plan baseline changed.",
         userHint: "Inspect the changed plan paths. Revise the plan only if the approved work changed.",
       };
@@ -239,7 +264,7 @@ export function describeGitArcFailure(failure: GitArcFailure) {
     case "operationRejected":
       return {
         agentRecovery: null,
-        message: failure.message,
+        message: "The Git arc action could not be completed.",
         userHint: null,
       };
   }
@@ -254,7 +279,7 @@ function appendConflictLines(lines: string[], failure: Extract<GitArcFailure, { 
 
 export function formatGitArcFailureText(failure: GitArcFailure) {
   const presentation = describeGitArcFailure(failure);
-  const lines = [presentation.message];
+  const lines = [failure.code === "operationRejected" ? failure.message : failure.code === "rejection" ? failure.diagnostic : presentation.message];
   if (failure.code === "adoptedPathOverlap") {
     failure.overlaps.forEach(({ adoptedPath, ordinaryPath }) => lines.push(`- adopted ${adoptedPath} overlaps ordinary ${ordinaryPath}`));
   } else if (failure.code === "siblingClaimCollision") {
@@ -287,6 +312,10 @@ export function formatGitArcFailureText(failure: GitArcFailure) {
     }
   }
   if (presentation.agentRecovery) lines.push("", presentation.agentRecovery);
+  if (failure.workspace) {
+    lines.push(`Failed projects: ${failure.workspace.failedRootIds.join(", ")}`);
+    if (failure.workspace.completedRootIds.length) lines.push(`Completed projects: ${failure.workspace.completedRootIds.join(", ")}`);
+  }
   return lines.join("\n");
 }
 
@@ -301,6 +330,10 @@ export function formatGitArcFailureReceipt(failure: GitArcFailure) {
   if ("paths" in facts) list("paths", facts.paths);
   if ("ref" in facts) lines.push(`ref ${facts.ref}`);
   if ("message" in facts) lines.push(`message ${escapeGitArcValue(facts.message)}`);
+  if (facts.code === "rejection") {
+    lines.push(`rejection ${JSON.stringify(facts.rejection)}`, `diagnostic ${escapeGitArcValue(facts.diagnostic)}`);
+  }
+  if (facts.workspace) lines.push(`workspace ${JSON.stringify(facts.workspace)}`);
   if (facts.code === "adoptedPathOverlap") {
     lines.push(`overlaps ${facts.overlaps.length}`);
     facts.overlaps.forEach(({ adoptedPath, ordinaryPath }) => row(adoptedPath, ordinaryPath));
@@ -366,7 +399,9 @@ function parseTextFailure(output: string) {
     seen.add(key);
     if (["paths", "snapshot", "dirty", "claimed"].includes(key)) {
       result[key === "snapshot" ? "snapshotPaths" : key === "dirty" ? "dirtyPaths" : key === "claimed" ? "claimedPaths" : key] = list(count(value));
-    } else if (["ref", "message", "plan-ref", "head"].includes(key)) {
+    } else if (key === "rejection" || key === "workspace") {
+      result[key] = JSON.parse(value);
+    } else if (["ref", "message", "diagnostic", "plan-ref", "head"].includes(key)) {
       result[key === "plan-ref" ? "planRef" : key === "head" ? "headMovement" : key] = readGitArcValue(value);
     } else if (key === "overlaps") {
       result.overlaps = Array.from({ length: count(value) }, () => {
@@ -403,7 +438,17 @@ function parseTextFailure(output: string) {
 export function parseGitArcFailureReceipt(output: string) {
   const line = String(output ?? "").split(/\r?\n/u).find((candidate) => candidate.startsWith(FAILURE_RECEIPT_PREFIX));
   try {
-    if (!line) return parseTextFailure(output);
+    if (!line) {
+      const receipt = parseTextFailure(output);
+      if (receipt) return receipt;
+      // The SDK validates before dispatch and serializes Zod issues, including custom params.
+      const wrapper = /(?:^|\n)(?:MCP error -32602: )?Input validation error: Invalid arguments for tool [\w.-]+: ([\s\S]+)$/u.exec(output);
+      if (!wrapper) return null;
+      const rejection = readGitArcValidationRejection(JSON.parse(wrapper[1]!));
+      return rejection ? GitArcFailureSchema.parse({
+        action: "unknown", code: "rejection", rejection, diagnostic: boundedMessage(output), version: 1,
+      }) : null;
+    }
     const parsed = GitArcFailureSchema.safeParse(JSON.parse(line.slice(FAILURE_RECEIPT_PREFIX.length)));
     return parsed.success ? parsed.data : null;
   } catch {

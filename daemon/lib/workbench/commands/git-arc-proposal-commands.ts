@@ -4,6 +4,7 @@
  * - WORKBENCH_GIT_ARC_PROPOSAL_COMMANDS: explicit content proposals and message-only proposals.
  */
 import { z } from "zod";
+import { gitArcRejectionIssue } from "workbench-shared/workbench/git/git-arc-rejections";
 import { preservePowerShellTrailingPaths, WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import { defineWorkbenchAgentCommand, managedWorkbenchAgentCommandBody, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
@@ -22,17 +23,17 @@ const proposalInput = z.object({
 }).strict().superRefine((input, context) => {
   const replace = input.replace ?? input.replaceProposalId;
   const contentAmend = Boolean(input.amend) || Boolean(input.amendProposalId && input.paths.length);
-  if ((input.amend || input.amendProposalId) && replace) context.addIssue({ code: "custom", message: "replace and amend cannot be combined." });
+  if ((input.amend || input.amendProposalId) && replace) context.addIssue(gitArcRejectionIssue({ reason: "conflictingProposalTargets" }, "replace and amend cannot be combined."));
   if (input.replace && input.replaceProposalId && input.replace !== input.replaceProposalId) {
-    context.addIssue({ code: "custom", message: "Supply one replacement target." });
+    context.addIssue(gitArcRejectionIssue({ reason: "conflictingReplacementTargets" }, "Supply one replacement target."));
   }
   if (typeof input.amend === "string" && input.amendProposalId && input.amend !== input.amendProposalId) {
-    context.addIssue({ code: "custom", message: "Supply one amendment target." });
+    context.addIssue(gitArcRejectionIssue({ reason: "conflictingAmendmentTargets" }, "Supply one amendment target."));
   }
-  if (!contentAmend && !input.title.trim()) context.addIssue({ code: "custom", message: "title is required unless amending content." });
-  if (contentAmend && !input.freshTitle) context.addIssue({ code: "custom", message: "Content amendments require freshTitle. Use reword for message-only changes." });
+  if (!contentAmend && !input.title.trim()) context.addIssue(gitArcRejectionIssue({ reason: "missingCommitTitle" }, "title is required unless amending content."));
+  if (contentAmend && !input.freshTitle) context.addIssue(gitArcRejectionIssue({ reason: "missingFreshTitle" }, "Content amendments require freshTitle. Use reword for message-only changes."));
   if (!contentAmend && (input.freshTitle !== undefined || input.freshDescription !== undefined)) {
-    context.addIssue({ code: "custom", message: "Fresh commit metadata requires content amendment." });
+    context.addIssue(gitArcRejectionIssue({ reason: "unexpectedFreshMetadata" }, "Fresh commit metadata requires content amendment."));
   }
 });
 

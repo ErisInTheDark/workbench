@@ -7,6 +7,7 @@
 import type http from "node:http";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CancelledNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 
@@ -394,6 +395,9 @@ export default class WorkbenchAgentMcpController {
       }
       const message = sanitizeError(error) || "Workbench MCP tool call failed.";
       if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
+      if (definition.words[0] === "git" && (definition.words[1] === "arc" || definition.words[1] === "plan")) {
+        return { content: [{ type: "text" as const, text: formatGitArcFailureReceipt(createGitArcFailureFromError("unknown", error)) }], isError: true };
+      }
       return { content: [{ type: "text" as const, text: `Workbench tool call failed: ${message}` }], isError: true };
     } finally {
       unregister?.();

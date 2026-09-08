@@ -12,6 +12,10 @@ import type { GitCheckpointProposal } from "workbench-shared/workbench/git/check
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import getFinishedThreadTailHiddenItemIds from "./thread-finished-tail";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
+import { ThreadTurnDetails } from "./thread-view-items";
+import WorkbenchClientProvider from "../WorkbenchClientProvider";
+import type { WorkbenchClientController } from "../workbench-client-context";
+import WorkbenchContextMenuProvider from "../WorkbenchContextMenuProvider";
 
 function proposalCommandItem(): Extract<ThreadItem, { type: "commandExecution" }> {
   return {
@@ -129,6 +133,55 @@ function hiddenTailIds(
     projectRootPath: "C:/workspace",
   });
 }
+
+test("failed proposal creation stays an action, while identified proposals retain their card", () => {
+  const client: WorkbenchClientController = {
+    controls: null,
+    explorer: {} as WorkbenchClientController["explorer"],
+    mounted: null,
+    transcriptSource: { status: "idle" },
+  };
+  for (const transport of ["cli", "mcp"]) {
+    for (const outcome of ["completed", "failed", "declined", "timedOut"] as const) {
+      if (transport === "mcp" && (outcome === "declined" || outcome === "timedOut")) continue;
+      const identified = outcome === "completed";
+      const item = transport === "cli" ? proposalCommandItem() : proposalMcpItem();
+      if (!identified) {
+        item.status = "failed";
+        if (item.type === "commandExecution") {
+          item.status = outcome === "declined" ? "declined" : "failed";
+          item.exitCode = outcome === "declined" ? null : outcome === "timedOut" ? 124 : 1;
+          item.aggregatedOutput = "agent-only-detail";
+        } else {
+          item.error = { message: "agent-only-detail" };
+          item.result = null;
+        }
+      }
+      const html = renderToStaticMarkup(createElement(WorkbenchClientProvider, {
+        client,
+        children: createElement(WorkbenchContextMenuProvider, null, createElement(ThreadTurnDetails, {
+          defaultOpenCompletedWork: true,
+          projectRootPath: "C:/workspace",
+          threadId: "thread-one",
+          turn: {
+            completedAt: null, durationMs: 5, error: null, id: "turn-one",
+            items: [item], itemsView: "full", startedAt: null, status: "completed",
+          },
+        })),
+      }));
+      if (identified) {
+        assert.match(html, /data-thread-checkpoint-card=/u, transport);
+        assert.doesNotMatch(html, /data-thread-git-arc-failure=/u);
+        assert.doesNotMatch(html, /data-thread-git-arc-card="propose"/u);
+      } else {
+        assert.match(html, /data-thread-git-arc-card="propose"/u, transport);
+        if (outcome !== "timedOut") assert.match(html, /data-thread-git-arc-failure=/u, transport);
+        assert.doesNotMatch(html, /data-thread-checkpoint-card=/u, transport);
+        assert.doesNotMatch(html, /agent-only-detail/u, transport);
+      }
+    }
+  }
+});
 
 test("claim release restores dirty work and only unclaims clean work", () => {
   assert.equal(getGitArcClaimReleaseAction(0), "unclaim");

@@ -4,6 +4,7 @@
  * - WORKBENCH_GIT_ARC_COMMANDS: typed Git plan, arc, proposal, and restore definitions shared by CLI and MCP. Keywords: workbench, git, arc, plan, commands.
  */
 import { z } from "zod";
+import { GitArcRejectionError, gitArcRejectionIssue } from "workbench-shared/workbench/git/git-arc-rejections";
 import { GitArcClaimsSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { parseGitClaimArguments } from "workbench-shared/workbench/git/git-claim-arguments";
 import { WORKBENCH_GIT_PLAN_COMMANDS } from "./git-plan-command-definitions";
@@ -23,13 +24,13 @@ const rootPathsSchema = z.object({ paths: requiredPaths, rootId: requiredText })
 const memberRefSchema = z.object({ ref: requiredText, rootId: requiredText }).strict();
 
 function requireCallerThreadId(callerThreadId: string | null) {
-  if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
+  if (!callerThreadId) throw new GitArcRejectionError({ reason: "missingManagedIdentity" }, "A managed Workbench thread identity is required.");
   return callerThreadId;
 }
 
 function requireCallerHarness(callerHarness: string) {
   if (callerHarness === "codex" || callerHarness === "copilot" || callerHarness === "opencode") return callerHarness;
-  throw new Error("A managed Workbench harness identity is required.");
+  throw new GitArcRejectionError({ reason: "invalidHarness" }, "A managed Workbench harness identity is required.");
 }
 
 function baseBody(callerHarness: string, callerThreadId: string | null, cwd: string) {
@@ -171,7 +172,7 @@ function inspectionCommand(action: "compare" | "diff") {
         && input.page !== undefined && input.page !== 1
         && (input.paths.length || input.roots.some(({ paths: rootPaths }) => rootPaths.length > 0))
       ) {
-        context.addIssue({ code: "custom", message: "Selected paths return one complete diff. Only page 1 is valid." });
+        context.addIssue(gitArcRejectionIssue({ reason: "selectedPathPaging" }, "Selected paths return one complete diff. Only page 1 is valid."));
       }
     }),
     parseCliArgs(args) {
@@ -262,7 +263,7 @@ const scope = defineWorkbenchAgentCommand({
   words: ["git", "arc", "scope"], usage: "wb git arc scope",
   inputSchema: z.object({}).strict(),
   parseCliArgs(args) {
-    if (args.length) throw new Error("Scope reads the caller's lifecycle and accepts no parameters.");
+    if (args.length) throw new GitArcRejectionError({ reason: "unexpectedScopeArguments" }, "Scope reads the caller's lifecycle and accepts no parameters.");
     return {};
   },
   buildRequest(_input, { callerHarness, callerThreadId, cwd }) {

@@ -1,4 +1,7 @@
-/* No production exports. Regression wards cover the shared `wb git arc mv` argument grammar. */
+/*
+ * Keywords: Git arc, move arguments, typed rejections.
+ * Exports: none. Protect move grammar and its failure reasons.
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -48,7 +51,11 @@ test("arc mv parses stateless regex preview and confirmation", () => {
 test("arc mv rejects mixed and incomplete grammars", () => {
   assert.throws(() => parseGitArcMoveArguments(["only-source.ts"]), /source and one destination/u);
   assert.throws(() => parseGitArcMoveArguments(["--map", "old.ts"]), /requires a value/u);
-  assert.throws(() => parseGitArcMoveArguments(["--map", "old.ts", "new.ts", "extra.ts"]), /cannot mix/u);
   assert.throws(() => parseGitArcMoveArguments(["--regex", "x", "--", "src"]), /both --regex and --replace/u);
   assert.throws(() => parseGitArcMoveArguments(["--regex", "x", "--replace", "y"]), /search root/u);
+  assert.throws(() => parseGitArcMoveArguments(["--map", "old.ts", "new.ts", "extra.ts"]), (error) => {
+    assert.ok(error instanceof Error && "rejection" in error);
+    assert.deepEqual(error.rejection, { reason: "mixedMoveForms" });
+    return true;
+  });
 });

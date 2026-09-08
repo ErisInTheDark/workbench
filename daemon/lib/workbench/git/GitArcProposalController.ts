@@ -7,6 +7,7 @@
  * - GitCheckpointProposalReceipt: durable proposal identity returned after proposal publication. Keywords: git, proposal, receipt, commit.
  */
 import { randomUUID } from "node:crypto";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
@@ -67,7 +68,7 @@ export interface GitArcLifecycleState {
 function normalizeHarness(harness: string | undefined): GitArcHarness {
   const normalized = String(harness ?? "codex").trim().toLowerCase();
   if (normalized === "codex" || normalized === "copilot" || normalized === "opencode") return normalized;
-  throw new Error("A valid checkpoint harness is required.");
+  throw new GitArcRejectionError({ reason: "invalidHarness" }, "A valid checkpoint harness is required.");
 }
 
 function lifecycleEntry(entry: GitArcRegistryEntry) {
@@ -168,7 +169,7 @@ async function readArcChain(
     if (!cursor.metadata?.amendedFrom) break;
     cursor = await store.readCheckpoint(harness, threadId, cursor.metadata.amendedFrom);
   }
-  throw new Error("The proposal no longer belongs to this thread's active Git arc.");
+  throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's active Git arc.");
 }
 
 async function readAcceptedReceipts(
@@ -261,7 +262,7 @@ async function prepareAcceptedClaimTransition({
 
 function commitMessage(title: string, description: string) {
   const normalizedTitle = title.trim();
-  if (!normalizedTitle) throw new Error("A commit title is required.");
+  if (!normalizedTitle) throw new GitArcRejectionError({ reason: "missingCommitTitle" }, "A commit title is required.");
   return description.trim() ? `${normalizedTitle}\n\n${description.trim()}\n` : `${normalizedTitle}\n`;
 }
 
@@ -577,16 +578,16 @@ export default class GitArcProposalController {
     const store = new GitCheckpointStore(repository);
     const target = await store.readProposal(harness, threadId, amendProposalId);
     if (target.metadata.status !== "committed" || !target.metadata.committedSha) {
-      throw new Error("A targeted message amend requires a committed proposal.");
+      throw new GitArcRejectionError({ reason: "proposalRequiresCommittedTarget" }, "A targeted message amend requires a committed proposal.");
     }
     const amendability = await new WorkbenchGitHistoryRewriter(repository).classifyAmendability(target.metadata.committedSha);
-    if (amendability.status === "unavailable") throw new Error(amendability.reason);
+    if (amendability.status === "unavailable") throw new GitArcRejectionError({ reason: "proposalUnavailable" }, amendability.reason);
     const inherited = parseCommitMessage(await repository.readCommitMessage(amendability.resolvedTarget));
     const proposalTitle = title.trim() || inherited.title;
     const proposalDescription = title.trim() ? description.trim() : inherited.description;
     commitMessage(proposalTitle, proposalDescription);
     if (proposalTitle === inherited.title && proposalDescription === inherited.description) {
-      throw new Error("The proposed commit message is unchanged.");
+      throw new GitArcRejectionError({ reason: "unchangedMessage" }, "The proposed commit message is unchanged.");
     }
 
     const source = await store.readCheckpoint(harness, threadId, target.metadata.sourceCheckpoint);
@@ -697,14 +698,14 @@ export default class GitArcProposalController {
         throw proposalAlreadyCommitted(replacementTarget);
       }
       if (replacementTarget.metadata.status !== "proposed" && replacementTarget.metadata.status !== "unavailable") {
-        throw new Error("Only a pending or unavailable proposal can be replaced.");
+        throw new GitArcRejectionError({ reason: "proposalCannotBeReplaced" }, "Only a pending or unavailable proposal can be replaced.");
       }
     }
     let amendTargetProposal: StoredProposal | null = null;
     if (amendProposalId) {
       amendTargetProposal = await store.readProposal(harness, threadId, amendProposalId);
       if (amendTargetProposal.metadata.status !== "committed" || !amendTargetProposal.metadata.committedSha) {
-        throw new Error("A targeted amend requires a committed proposal.");
+        throw new GitArcRejectionError({ reason: "proposalRequiresCommittedTarget" }, "A targeted amend requires a committed proposal.");
       }
       amend = true;
     }
@@ -715,16 +716,16 @@ export default class GitArcProposalController {
       const outsideClaim = requestedPaths.filter((candidate) => (
         !checkpointMetadata.scopePaths.some((scopePath) => pathIsCoveredBy(candidate, scopePath))
       ));
-      if (outsideClaim.length) throw new Error(`Proposed paths must stay within the arc's claimed set: ${outsideClaim.join(", ")}`);
+      if (outsideClaim.length) throw new GitArcRejectionError({ reason: "pathsOutsideClaims", paths: outsideClaim }, `Proposed paths must stay within the arc's claimed set: ${outsideClaim.join(", ")}`);
     }
     const logicalBaseline = (await store.readOutcome(harness, threadId, checkpoint.checkpointCommit))?.acceptedProposals?.at(-1)?.headSha
       ?? checkpoint.parent;
     const headMovement = await repository.classifyHeadMovement(logicalBaseline, requestedPaths, logicalBaseline);
     if (headMovement.kind === "incompatible") {
-      throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before proposing a commit.");
+      throw new GitArcRejectionError({ reason: "incompatibleHead" }, "Repository HEAD moved incompatibly after this arc began. Create a new plan before proposing a commit.");
     }
     if (headMovement.changedPaths.length) {
-      throw new Error(`Proposed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
+      throw new GitArcRejectionError({ reason: "baselineChanged", paths: headMovement.changedPaths }, `Proposed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
     }
     const liveBaseCommit = headMovement.currentHead;
     const amendTargetSha = amendTargetProposal?.metadata.committedSha ?? (amend ? liveBaseCommit : null);
@@ -735,7 +736,7 @@ export default class GitArcProposalController {
     const baseCommit = amendTargetSha ? await repository.resolveParent(amendTargetSha) : liveBaseCommit;
     const proposalTree = await repository.writeScopedWorktreeTree(requestedPaths, amendTargetSha ?? liveBaseCommit);
     const livePaths = await repository.listChangedPaths(liveBaseCommit, proposalTree, requestedPaths);
-    if (!livePaths.length) throw new Error("The selected arc paths do not contain any working-tree changes to propose.");
+    if (!livePaths.length) throw new GitArcRejectionError({ reason: "noChangesToPropose" }, "The selected arc paths do not contain any working-tree changes to propose.");
     const paths = amendTargetSha
       ? await repository.listAllChangedPaths(baseCommit, proposalTree)
       : livePaths;
@@ -847,7 +848,7 @@ export default class GitArcProposalController {
     if (proposal.metadata.status === "committed") {
       throw proposalAlreadyCommitted(proposal);
     }
-    if (proposal.metadata.status !== "proposed") throw new Error("Only a pending proposal can be rescinded.");
+    if (proposal.metadata.status !== "proposed") throw new GitArcRejectionError({ reason: "proposalCannotBeRescinded" }, "Only a pending proposal can be rescinded.");
     const metadata = { ...proposal.metadata, status: "rescinded" as const, unavailableReason: null };
     const stateCommit = await repository.createCommitFromTree(proposal.tree, metadata.baseCommit, proposalMessage(metadata));
     await repository.updateRefs([{ newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef }]);
@@ -870,10 +871,10 @@ export default class GitArcProposalController {
     title: string;
   }) {
     const target = proposal.metadata.committedSha ?? proposal.metadata.amendTargetSha;
-    if (!target) throw new Error("A message amendment requires an exact committed target.");
+    if (!target) throw new GitArcRejectionError({ reason: "messageAmendRequiresTarget" }, "A message amendment requires an exact committed target.");
     const message = commitMessage(title, description);
     if (message.trim() === (await repository.readCommitMessage(target)).trim()) {
-      throw new Error("The amended commit message is unchanged.");
+      throw new GitArcRejectionError({ reason: "unchangedMessage" }, "The amended commit message is unchanged.");
     }
     const store = new GitCheckpointStore(repository);
     const supersededPrior = proposal.metadata.status === "proposed"
@@ -993,22 +994,22 @@ export default class GitArcProposalController {
       return await this.commitMessageAmendment({ description, harness, proposal, repository, threadId, title });
     }
     if (proposal.metadata.status !== "proposed") {
-      throw new Error(proposal.metadata.unavailableReason || "Checkpoint proposal is not available to commit.");
+      throw new GitArcRejectionError({ reason: "proposalUnavailable" }, proposal.metadata.unavailableReason || "Checkpoint proposal is not available to commit.");
     }
     if (proposal.metadata.messageOnly) {
-      if (mode === "commit") throw new Error("Message-only amendment proposals cannot be committed fresh.");
+      if (mode === "commit") throw new GitArcRejectionError({ reason: "messageAmendCannotCommitFresh" }, "Message-only amendment proposals cannot be committed fresh.");
       return await this.commitMessageAmendment({ description, harness, proposal, repository, threadId, title });
     }
     const selectedMode = mode ?? proposal.metadata.mode;
     if (selectedMode === "amend" && proposal.metadata.mode !== "amend") {
-      throw new Error("Only amend proposals can be accepted as amendments.");
+      throw new GitArcRejectionError({ reason: "cannotCommitAsAmend" }, "Only amend proposals can be accepted as amendments.");
     }
     if (
       selectedMode === "commit"
       && proposal.metadata.mode === "amend"
       && !proposal.metadata.freshCommitMessage
     ) {
-      throw new Error("This amend proposal does not include a fresh commit choice.");
+      throw new GitArcRejectionError({ reason: "missingFreshCommitChoice" }, "This amend proposal does not include a fresh commit choice.");
     }
     const store = new GitCheckpointStore(repository);
     const proposalSource = await store.readCheckpoint(harness, threadId, proposal.metadata.sourceCheckpoint);
@@ -1016,7 +1017,7 @@ export default class GitArcProposalController {
     const registry = new GitArcRegistry(repository);
     const active = await registry.find({ harness, threadId });
     if (!active || active.phase === "plan") {
-      throw new Error("The proposal no longer belongs to this thread's Git arc.");
+      throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's Git arc.");
     }
     const activeSource = await store.readCheckpoint(harness, threadId, active.checkpointCommit);
     const activeChain = await readArcChain(store, harness, threadId, activeSource, proposalSource.checkpointCommit);
@@ -1220,7 +1221,7 @@ export default class GitArcProposalController {
     const harness = normalizeHarness(input.harness);
     const registry = new GitArcRegistry(repository);
     const active = await registry.find({ harness, threadId: input.threadId });
-    if (!active || active.phase !== "active") throw new Error("This thread does not own an active Git arc.");
+    if (!active || active.phase !== "active") throw new GitArcRejectionError({ reason: "missingActiveArc" }, "This thread does not own an active Git arc.");
     const checkpoint = await new GitCheckpointStore(repository).readCheckpoint(harness, input.threadId, active.checkpointCommit);
     const metadata = requireArcMetadata(checkpoint.metadata);
     if (

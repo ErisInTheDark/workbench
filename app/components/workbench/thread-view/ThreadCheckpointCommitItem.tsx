@@ -1,4 +1,5 @@
 /*
+ * Keywords: git, proposal, command outcome, commit lifecycle.
  * Exports:
  * - default ThreadCheckpointCommitItem: render and operate a durable checkpoint commit proposal with a frozen file set. Keywords: thread, checkpoint, proposal, commit, newer changes.
  */
@@ -11,7 +12,6 @@ import type { WorkbenchHarness } from "workbench-shared/types";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
-  parseGitArcFailureReceipt,
 } from "workbench-shared/workbench/git/git-arc-failures";
 import type {
   GitCheckpointCommitCommandIntent,
@@ -44,10 +44,8 @@ interface ThreadCheckpointCommitItemProps {
 }
 
 function ThreadCheckpointCommitController({
-  commandOutcome,
   cwd,
   embedded,
-  failureReason,
   harness,
   intent,
   projectFilePaths,
@@ -153,24 +151,7 @@ function ThreadCheckpointCommitController({
 
   useEffect(() => {
     if (!proposalId) {
-      const failure = commandOutcome === "declined"
-        ? "Checkpoint proposal creation was declined."
-        : commandOutcome === "failed"
-          ? "Checkpoint proposal creation failed."
-          : commandOutcome === "timedOut"
-            ? "Checkpoint proposal creation timed out."
-            : null;
-      if (failure) {
-        setState({
-          error: failure,
-          failure: parseGitArcFailureReceipt(failureReason ?? "")
-            ?? createGitArcOperationRejected("proposalCreate", failureReason?.trim() || failure),
-          retryable: false,
-          status: "error",
-        });
-      } else {
-        setState({ status: "pending" });
-      }
+      setState({ status: "pending" });
       return;
     }
     const controller = new AbortController();
@@ -181,7 +162,7 @@ function ThreadCheckpointCommitController({
       controller.abort();
       window.removeEventListener("focus", refreshOnFocus);
     };
-  }, [commandOutcome, failureReason, loadProposal, proposalId]);
+  }, [loadProposal, proposalId]);
 
   const commit = async () => {
     if (!proposalId || !title.trim() || committing) return;
@@ -277,6 +258,23 @@ export default function ThreadCheckpointCommitItem(props: ThreadCheckpointCommit
   const harness = props.harness ?? presentation?.harness ?? "codex";
   const hoistedTargetId = props.proposalId ? `thread-checkpoint-proposal-${props.proposalId}` : null;
   const resolvedIntent = props.intent ?? (props.proposalId ? presentation?.proposalIntents?.get(props.proposalId) ?? null : null);
+  if (!props.proposalId && (
+    props.commandOutcome === "failed" || props.commandOutcome === "declined" || props.commandOutcome === "timedOut"
+  )) {
+    return (
+      <ThreadGitArcItem
+        commandIntent={{ action: "propose", intentName: null, paths: [], ref: null }}
+        durationMs={null}
+        failureReason={props.failureReason}
+        outcome={props.commandOutcome}
+        projectFilePaths={props.projectFilePaths}
+        projectId={props.projectId}
+        projectRootPath={props.projectRootPath}
+        receipt={null}
+        workspaceRoots={props.workspaceRoots}
+      />
+    );
+  }
   if (!props.hoisted && props.proposalId && hoistedTargetId && (
     presentation?.hoistedProposalIds?.has(props.proposalId) || presentation?.hoistedProposalId === props.proposalId
   )) {

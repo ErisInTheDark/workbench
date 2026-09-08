@@ -13,6 +13,7 @@ import GitClaimHistoryReader from "../lib/workbench/git/GitClaimHistoryReader";
 import { GitArcAcceptedProposalsError } from "../lib/workbench/git/GitArcProposalController";
 import {
   createGitArcOperationRejected,
+  createGitArcFailureFromError,
   formatGitArcFailureText,
   GitArcFailureException,
   GitArcMissingClaimSetError,
@@ -29,7 +30,7 @@ import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransiti
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchThreadClaimContext } from "./WorkbenchThreadStateController";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
-import WorkbenchWorkspaceGitArcController, { type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
+import WorkbenchWorkspaceGitArcController, { WorkspaceGitArcMemberError, type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 
@@ -234,7 +235,7 @@ export default class WorkbenchGitArcFeature {
 
   async executeRequest(input: object, signal?: AbortSignal) {
     const parsed = GitCheckpointRequestSchema.safeParse(input);
-    if (!parsed.success) return failureResponse(createGitArcOperationRejected("unknown", "Invalid checkpoint request."));
+    if (!parsed.success) return failureResponse(createGitArcFailureFromError("unknown", parsed.error));
     try {
       const project = await this.resolveProject(parsed.data.cwd);
       const identity = await this.options.identities?.resolve({
@@ -302,10 +303,7 @@ export default class WorkbenchGitArcFeature {
     } catch (error) {
       const failure = error instanceof GitArcFailureException
         ? error.failure
-        : createGitArcOperationRejected(
-          parsed.data.action,
-          error instanceof Error ? error.message : "Unable to run Git arc operation.",
-        );
+        : createGitArcFailureFromError(parsed.data.action, error);
       return failureResponse(failure);
     }
   }
@@ -443,6 +441,16 @@ export default class WorkbenchGitArcFeature {
   }
 
   private async createFailure(projectId: string, request: GitCheckpointRequest, error: unknown): Promise<GitArcFailure> {
+    if (error instanceof WorkspaceGitArcMemberError) {
+      return {
+        ...await this.createFailure(projectId, request, error.cause),
+        workspace: {
+          failedRootIds: error.workspace.failedRootIds.slice(0, 20),
+          completedRootIds: error.workspace.completedRootIds.slice(0, 20),
+          stage: error.workspace.stage,
+        },
+      };
+    }
     if (error instanceof GitArcAcceptedProposalsError) {
       return {
         action: request.action,
@@ -544,10 +552,7 @@ export default class WorkbenchGitArcFeature {
         version: 1,
       };
     }
-    return createGitArcOperationRejected(
-      request.action,
-      error instanceof Error ? error.message : "Unable to run Git arc operation.",
-    );
+    return createGitArcFailureFromError(request.action, error);
   }
 
   private async refreshThreadGitArcState(projectId: string, harness: WorkbenchHarness, threadId: string) {

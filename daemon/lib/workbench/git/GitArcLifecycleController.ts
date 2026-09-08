@@ -10,6 +10,7 @@ import GitArcProposalController from "./GitArcProposalController";
 import { GitCheckpointDirtyPathsError, partitionIgnoredGitArcPaths } from "./GitArcPlanController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 
 interface Identity {
   cwd: string;
@@ -47,7 +48,7 @@ export default class GitArcLifecycleController {
   }
 
   async claims(input: Identity & GitArcClaimChanges) {
-    if (input.inherit !== true) throw new Error("Active claim edits require inherit: true.");
+    if (input.inherit !== true) throw new GitArcRejectionError({ reason: "inheritanceRequired" }, "Active claim edits require inherit: true.");
     return await this.transition(input, input);
   }
 
@@ -60,12 +61,12 @@ export default class GitArcLifecycleController {
     const registry = new GitArcRegistry(repository);
     const store = new GitCheckpointStore(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
-    if (!current) throw new Error("This thread does not own an active Git arc.");
-    if (current.phase === "plan") throw new Error("Activate the inactive plan before editing active claims.");
+    if (!current) throw new GitArcRejectionError({ reason: "missingActiveArc" }, "This thread does not own an active Git arc.");
+    if (current.phase === "plan") throw new GitArcRejectionError({ reason: "inactiveArcRequiresStart" }, "Activate the inactive plan before editing active claims.");
     const checkpoint = await store.readCheckpoint(harness, input.threadId, current.checkpointCommit);
     const metadata = checkpoint.metadata;
     if (!metadata || (metadata.kind !== "arc" && metadata.kind !== "implement")) {
-      throw new Error("The registered lifecycle is not an implementation arc.");
+      throw new GitArcRejectionError({ reason: "notImplementationArc" }, "The registered lifecycle is not an implementation arc.");
     }
     if (input.checkpointCommit && input.checkpointCommit !== current.checkpointCommit) {
       const selected = await store.readCheckpoint(harness, input.threadId, input.checkpointCommit);
@@ -74,7 +75,7 @@ export default class GitArcLifecycleController {
         ancestor = await store.readCheckpoint(harness, input.threadId, ancestor.metadata.amendedFrom);
       }
       if (ancestor.checkpointCommit !== selected.checkpointCommit) {
-        throw new Error("The selected ref does not lead to this thread's registered lifecycle.");
+        throw new GitArcRejectionError({ reason: "wrongLifecycleRef" }, "The selected ref does not lead to this thread's registered lifecycle.");
       }
     }
     const acceptedProposals = await this.proposals.readAcceptedOutcomes({
@@ -96,7 +97,7 @@ export default class GitArcLifecycleController {
     const collisions = findGitArcCollisions(entries, { harness, threadId: input.threadId }, scopePaths);
     if (collisions.length) throw new GitArcCollisionError(collisions);
     const ownedAdoptions = adoptions.paths.filter((candidate) => existing.some((scope) => covers(scope, candidate) || covers(candidate, scope)));
-    if (ownedAdoptions.length) throw new Error(`Adoption requires unclaimed paths: ${ownedAdoptions.join(", ")}`);
+    if (ownedAdoptions.length) throw new GitArcRejectionError({ reason: "adoptionRequiresUnclaimed", paths: ownedAdoptions }, `Adoption requires unclaimed paths: ${ownedAdoptions.join(", ")}`);
     const result: GitArcMutationResult = {
       checkpointCommit: checkpoint.checkpointCommit,
       checkpointRef: checkpoint.checkpointRef,
@@ -120,10 +121,10 @@ export default class GitArcLifecycleController {
     const retained = existing.filter((scope) => scopePaths.some((candidate) => covers(scope, candidate) || covers(candidate, scope)));
     const movement = await repository.classifyHeadMovement(checkpoint.parent, retained, checkpoint.checkpointCommit, head);
     if (current.phase !== "resolved" && movement.kind === "incompatible") {
-      throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
+      throw new GitArcRejectionError({ reason: "incompatibleHead" }, "Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
     }
     if (current.phase !== "resolved" && movement.changedPaths.length) {
-      throw new Error(`Retained paths no longer match the arc baseline: ${movement.changedPaths.join(", ")}`);
+      throw new GitArcRejectionError({ reason: "baselineChanged", paths: movement.changedPaths }, `Retained paths no longer match the arc baseline: ${movement.changedPaths.join(", ")}`);
     }
     if (!changes && metadata.priorProposalId && metadata.amendedFrom) {
       const transition = await store.readOutcome(harness, input.threadId, metadata.amendedFrom);
@@ -141,7 +142,7 @@ export default class GitArcLifecycleController {
         && !adoptions.paths.some((scope) => covers(scope, candidate)));
       if (unexplained.length) throw new GitCheckpointDirtyPathsError(unexplained, "New claims");
       const cleanAdoptions = adoptions.paths.filter((scope) => !dirtyPaths.some((candidate) => covers(scope, candidate)));
-      if (cleanAdoptions.length) throw new Error(`Adoption requires dirty unclaimed paths: ${cleanAdoptions.join(", ")}`);
+      if (cleanAdoptions.length) throw new GitArcRejectionError({ reason: "adoptionRequiresDirty", paths: cleanAdoptions }, `Adoption requires dirty unclaimed paths: ${cleanAdoptions.join(", ")}`);
     }
     const proposalUpdates = scopePaths.length ? await this.proposals.prepareUnavailableUpdates({
       cwd: repository.root, harness, threadId: input.threadId,

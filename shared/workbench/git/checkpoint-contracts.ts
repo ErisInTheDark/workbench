@@ -14,6 +14,7 @@
  * - GitCheckpointProposalSchema/GitCheckpointProposal: shared durable proposal state shown in thread UI. Keywords: git, checkpoint, proposal, commit.
  */
 import { z } from "zod";
+import { gitArcRejectionIssue } from "./git-arc-rejections";
 
 const nonEmptyString = z.string().trim().min(1);
 const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
@@ -39,10 +40,10 @@ export const GitArcPlanClaimsSchema = z.object({
   intentDescription: z.string().optional(),
 }).strict().superRefine((input, context) => {
   if (!input.inherit && !input.intentName) {
-    context.addIssue({ code: "custom", message: "An initial or replacement plan requires intentName.", path: ["intentName"] });
+    context.addIssue(gitArcRejectionIssue({ reason: "missingPlanName" }, "An initial or replacement plan requires intentName.", ["intentName"]));
   }
   if (!input.inherit && (input.removePaths.length || input.roots.some((root) => root.removePaths.length))) {
-    context.addIssue({ code: "custom", message: "Removing planned entries requires inheritance.", path: ["inherit"] });
+    context.addIssue(gitArcRejectionIssue({ reason: "inheritanceRequired" }, "Removing planned entries requires inheritance.", ["inherit"]));
   }
 });
 
@@ -199,10 +200,10 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     ...checkpointBaseRequest,
   }).superRefine((input, context) => {
     if (input.amend && !input.freshTitle) {
-      context.addIssue({ code: "custom", message: "Content amend proposals require freshTitle.", path: ["freshTitle"] });
+      context.addIssue(gitArcRejectionIssue({ reason: "missingFreshTitle" }, "Content amend proposals require freshTitle.", ["freshTitle"]));
     }
     if (!input.amend && (input.freshTitle !== undefined || input.freshDescription !== undefined)) {
-      context.addIssue({ code: "custom", message: "Fresh commit metadata requires amend.", path: ["freshTitle"] });
+      context.addIssue(gitArcRejectionIssue({ reason: "unexpectedFreshMetadata" }, "Fresh commit metadata requires amend.", ["freshTitle"]));
     }
   }),
   z.object({
@@ -246,14 +247,14 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     && !input.paths.length
     && !input.roots.length
   ) {
-    context.addIssue({ code: "custom", message: "At least one path or root scope is required." });
+    context.addIssue(gitArcRejectionIssue({ reason: "missingSelectedPaths" }, "At least one path or root scope is required."));
   }
   if (
     input.action === "diff"
     && input.page !== undefined && input.page !== 1
     && (Boolean(input.paths?.length) || input.roots.some(({ paths }) => paths.length > 0))
   ) {
-    context.addIssue({ code: "custom", message: "Selected paths return one complete diff. Only page 1 is valid." });
+    context.addIssue(gitArcRejectionIssue({ reason: "selectedPathPaging" }, "Selected paths return one complete diff. Only page 1 is valid."));
   }
 });
 

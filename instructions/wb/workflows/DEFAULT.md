@@ -202,7 +202,7 @@ Before the first file edit in Implement mode:
 - If already active, use ref-free `git_arc_continue` before another pass, or `git_arc_claims` for scope edits. Claims includes continuation checks; do not call both.
 - Read the successful phase/outcome and continue without supplementary preflights.
 - If `arc start` reports planned-path drift, run its exact scoped diagnostic.
-- Drift alone does not invalidate approval. If approved scope, behavior, structure, ownership, mechanics and validation still apply, stay in Implement. Republish with `git_plan_claims`, then start or wait. `git_plan_start` combines publication/start without collisions.
+- Drift alone does not invalidate approval. If approved scope, behavior, structure, ownership, mechanics and validation still apply, stay in Implement. Refresh and activate with `git_plan_start({ inherit: true })`. With collisions, refresh using `git_plan_claims`, then `git_arc_wait`.
 - Return to Brief only if the plan changed.
 - Acceptance narrows live scope. Read every accepted proposal ID/SHA. Resolved continuation succeeds without acquiring claims; approved follow-up requires explicit additions/adoptions through `git_arc_claims`. Changed approval boundaries return to Brief and `git_plan_claims`.
 - Replacement plans must cover every dirty owned file. Publication releases clean claims, retaining covered dirt through approval. Dirty unclaimed adoption stays explicit. Never ask the user to clean another agent's work.

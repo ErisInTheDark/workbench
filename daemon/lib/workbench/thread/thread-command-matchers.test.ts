@@ -366,7 +366,7 @@ test("failed Recall MCP calls use the generic error renderer", () => {
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, false), true);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(recallRoute, true), false);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(gitRoute, true), true);
-  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(waitRoute, true), false);
+  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(waitRoute, true), true);
   const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { status: "blocked" }, server: "wbex", tool: "thread_status" });
   const subagentRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { message: "progress", parent: true }, server: "wbex", tool: "subagent_message" });
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(statusRoute, true), false);
@@ -759,7 +759,7 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
   assertRouteOnlyDisplay(diff, "git-arc.diff");
 
   const plan = getThreadCommandDisplay({
-    command: "wb git arc plan -m Update -- src/file.ts",
+    command: "wb git plan claims -m Update -- src/file.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
@@ -775,20 +775,20 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
   assert.doesNotMatch(String(legacyCheckpoint.claimedBy), /git-(?:checkpoint|arc|plan)/u);
 
   const addition = getThreadCommandDisplay({
-    command: "wb git arc add -- src/new.ts",
+    command: "wb git arc claims --inherit -- src/new.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assertRouteOnlyDisplay(addition, "git-arc.add");
+  assertRouteOnlyDisplay(addition, "git-arc.claims");
 
   const adoption = getThreadCommandDisplay({
-    command: "wb git arc adopt -- src/dirty.ts",
+    command: "wb git arc claims --inherit -- '*src/dirty.ts'",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assertRouteOnlyDisplay(adoption, "git-arc.adopt");
+  assertRouteOnlyDisplay(adoption, "git-arc.claims");
 
   const movePreview = getThreadCommandDisplay({
     command: "wb git arc mv --regex ^src/(.+)$ --replace tests/$1 -- src",
@@ -820,12 +820,12 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
   });
 
   const removal = getThreadCommandDisplay({
-    command: "wb git arc remove -- src/old.ts",
+    command: "wb git arc claims --inherit -- -src/old.ts",
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assertRouteOnlyDisplay(removal, "git-arc.remove");
+  assertRouteOnlyDisplay(removal, "git-arc.claims");
 
   const release = getThreadCommandDisplay({
     command: "wb git arc release --disown",
@@ -906,14 +906,6 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
     paths: [],
     title: "Legacy amend title",
   });
-  assert.deepEqual(parseGitCheckpointCommitCommand(
-    "wb git arc propose -m Title",
-  ), {
-    amend: false,
-    description: "",
-    paths: [],
-    title: "Title",
-  });
   assert.equal(parseGitCheckpointCommitCommand("wb git arc propose -- src/one.ts"), null);
   assert.equal(parseGitCheckpointCommitCommand("wb git checkpoint commit --sha abc --m Title -- src/one.ts"), null);
 });
@@ -939,10 +931,10 @@ test("Git arc diff parsing excludes the human inspection trailer", () => {
 
 test("current-plan and proposal-lifecycle commands expose route-only matcher claims", () => {
   const cases = [
-    ["wb git arc plan add -- src/a.ts", "git-arc.plan-add"],
-    ["wb git arc plan remove -- src/a.ts", "git-arc.plan-remove"],
-    ["wb git arc plan adopt -- src/dirty.ts", "git-arc.plan-adopt"],
-    ["wb git arc plan start -m Continue -- src/a.ts", "git-arc.plan-start"],
+    ["wb git plan claims --inherit -- src/a.ts", "git-arc.plan"],
+    ["wb git plan claims --inherit -- -src/a.ts", "git-arc.plan"],
+    ["wb git plan claims --inherit -- '*src/dirty.ts'", "git-arc.plan"],
+    ["wb git plan start -m Continue -- src/a.ts", "git-arc.plan-start"],
     ["wb git arc rescind --proposal proposal-one", "git-arc.rescind"],
   ] as const;
   for (const [command, claimedBy] of cases) {
@@ -950,39 +942,41 @@ test("current-plan and proposal-lifecycle commands expose route-only matcher cla
     assertRouteOnlyDisplay(display, claimedBy);
   }
 
-  assert.deepEqual(parseGitArcCommand("wb git arc plan add -- src/a.ts"), {
-    action: "planAdd", intentName: null, paths: ["src/a.ts"], ref: null,
+  assert.deepEqual(parseGitArcCommand("wb git plan claims --inherit -- src/a.ts -src/old.ts '*src/dirty.ts'"), {
+    action: "plan", intentName: null, paths: ["src/a.ts"], removePaths: ["src/old.ts"], adoptPaths: ["src/dirty.ts"], ref: null,
   });
-  assert.deepEqual(parseGitArcCommand("wb git arc plan remove -- src/a.ts"), {
-    action: "planRemove", intentName: null, paths: ["src/a.ts"], ref: null,
-  });
-  assert.deepEqual(parseGitArcCommand("wb git arc plan adopt -- src/dirty.ts"), {
-    action: "planAdopt", intentName: null, paths: ["src/dirty.ts"], ref: null,
-  });
-  assert.deepEqual(parseGitArcCommand("wb git arc plan start -m Continue -- src/a.ts"), {
-    action: "planStart", intentName: "Continue", paths: ["src/a.ts"], ref: null,
-  });
-  assert.equal(parseGitArcCommand("wb git arc plan start -m Continue --reload-scope server:mcp -- src/a.ts"), null);
-  assert.deepEqual(parseGitArcCommand("wb git arc plan -m Continue --adopt src/dirty-a.ts --adopt src/dirty-b.ts -- src/a.ts"), {
-    action: "plan",
-    adoptPaths: ["src/dirty-a.ts", "src/dirty-b.ts"],
-    intentName: "Continue",
-    paths: ["src/a.ts"],
-    ref: null,
+  assert.deepEqual(parseGitArcCommand("wb git plan start --inherit"), {
+    action: "planStart", intentName: null, paths: [], removePaths: [], adoptPaths: [], ref: null,
   });
   assert.deepEqual(parseGitArcCommand("wb git arc rescind --proposal proposal-one"), {
     action: "rescind", intentName: null, paths: [], proposalId: "proposal-one", ref: null,
   });
-  assert.equal(getGitArcMatcherAction("powershell,git-arc.plan-remove"), "planRemove");
+  assert.equal(getGitArcMatcherAction("powershell,git-arc.plan"), "plan");
 
   const wrappedPlanRemove = getThreadCommandDisplay({
-    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'wb git arc plan remove -- src/a.ts'`,
+    command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command 'wb git plan claims --inherit -- -src/a.ts'`,
     commandActions: [],
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(wrappedPlanRemove.claimedBy, "git-arc.plan-remove");
-  assert.equal(getGitArcMatcherAction(wrappedPlanRemove.claimedBy), "planRemove");
+  assert.equal(wrappedPlanRemove.claimedBy, "git-arc.plan");
+  assert.equal(getGitArcMatcherAction(wrappedPlanRemove.claimedBy), "plan");
+});
+
+test("unrecognised Git arc requests retain a bounded presentation without invented intent", () => {
+  for (const [command, tool] of [
+    ["wb git arc unrecognised -- src/a.ts", "git_arc_unrecognised"],
+    ["wb git plan unrecognised -- src/a.ts", "git_plan_unrecognised"],
+  ]) {
+    const display = getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
+    assert.equal(getGitArcMatcherAction(display.claimedBy), "unknown");
+    const route = getWorkbenchMcpCommandRoute({ argumentsValue: { paths: ["src/a.ts"] }, server: "wb", tool });
+    assert.equal(route?.kind, "specialized");
+    if (route?.kind !== "specialized" || route.operation.kind !== "gitArc") throw new Error("Expected Git arc presentation.");
+    assert.equal(route.operation.operation.action, "unknown");
+    assert.deepEqual(route.operation.operation.paths, []);
+  }
+  assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "other", tool: "git_arc_unrecognised" }), null);
 });
 
 test("PowerShell-wrapped arc proposals preserve escaped titles, descriptions, and apostrophes", () => {

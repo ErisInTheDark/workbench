@@ -13,6 +13,7 @@ import {
 import { remapArcOutcome } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
+import { readGitArcValidationRejection } from "workbench-shared/workbench/git/git-arc-rejections";
 
 function registryFromState(entries: object[]) {
   let nextBlob = 0;
@@ -34,7 +35,9 @@ test("combined active claims require explicit inheritance and preserve literal M
 test("selected diff paths accept redundant page one but never a later page", () => {
   const input = { action: "diff", cwd: "C:/repo", threadId: "thread-one", paths: ["one.ts"] };
   assert.equal(GitCheckpointRequestSchema.safeParse({ ...input, page: 1 }).success, true);
-  assert.equal(GitCheckpointRequestSchema.safeParse({ ...input, page: 2 }).success, false);
+  const rejected = GitCheckpointRequestSchema.safeParse({ ...input, page: 2 });
+  assert.equal(rejected.success, false);
+  if (!rejected.success) assert.deepEqual(readGitArcValidationRejection(rejected.error.issues), { reason: "selectedPathPaging" });
 });
 
 test("plan and arc requests encode claimed-path defaults and successor refs", () => {

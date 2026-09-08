@@ -1,8 +1,20 @@
 /*
  * Exports:
+ * - WorkbenchCommandArgumentError: preserve parser rejection kind and operand independently of diagnostics.
  * - WorkbenchAgentCommandFlags: parse the allowlisted wb CLI option grammar before typed schema validation. Keywords: workbench, command, cli, flags.
  * - preservePowerShellTrailingPaths: recover PowerShell path operands when the launcher consumes the explicit separator. Keywords: workbench, powershell, paths.
  */
+export class WorkbenchCommandArgumentError extends Error {
+  constructor(
+    readonly kind: "unexpectedTrailingArguments" | "unexpectedArgument" | "unknownArgument" | "missingArgument" | "duplicateArgument" | "argumentMustBeUnique" | "argumentMustBeInteger",
+    readonly argument: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "WorkbenchCommandArgumentError";
+  }
+}
+
 interface FlagSpec {
   boolean?: readonly string[];
   leadingDashValues?: readonly string[];
@@ -24,23 +36,23 @@ export class WorkbenchAgentCommandFlags {
     const trailingIndex = args.indexOf("--");
     this.trailing = trailingIndex >= 0 ? args.slice(trailingIndex + 1) : [];
     const optionArgs = trailingIndex >= 0 ? args.slice(0, trailingIndex) : args;
-    if (trailingIndex >= 0 && !spec.trailing) throw new Error("This command does not accept trailing arguments after --.");
+    if (trailingIndex >= 0 && !spec.trailing) throw new WorkbenchCommandArgumentError("unexpectedTrailingArguments", "--", "This command does not accept trailing arguments after --.");
 
     for (let index = 0; index < optionArgs.length; index += 1) {
       const flag = optionArgs[index];
-      if (!flag.startsWith("-")) throw new Error(`Unexpected argument: ${flag}`);
+      if (!flag.startsWith("-")) throw new WorkbenchCommandArgumentError("unexpectedArgument", flag, `Unexpected argument: ${flag}`);
       if (booleanFlags.has(flag)) {
         this.booleans.add(flag);
         continue;
       }
-      if (!valueFlags.has(flag)) throw new Error(`Unsupported option: ${flag}`);
+      if (!valueFlags.has(flag)) throw new WorkbenchCommandArgumentError("unknownArgument", flag, `Unsupported option: ${flag}`);
       const value = optionArgs[index + 1];
       const recognizedOption = value && (booleanFlags.has(value) || valueFlags.has(value));
       if (!value || (value.startsWith("-") && (!leadingDashValueFlags.has(flag) || recognizedOption))) {
-        throw new Error(`${flag} requires a value.`);
+        throw new WorkbenchCommandArgumentError("missingArgument", flag, `${flag} requires a value.`);
       }
       index += 1;
-      if (!repeatableFlags.has(flag) && this.values.has(flag)) throw new Error(`${flag} may only be supplied once.`);
+      if (!repeatableFlags.has(flag) && this.values.has(flag)) throw new WorkbenchCommandArgumentError("duplicateArgument", flag, `${flag} may only be supplied once.`);
       this.values.set(flag, [...(this.values.get(flag) ?? []), value]);
     }
   }
@@ -50,21 +62,21 @@ export class WorkbenchAgentCommandFlags {
   repeated(flag: string) { return this.values.get(flag) ?? []; }
   required(flag: string) {
     const value = this.optional(flag)?.trim();
-    if (!value) throw new Error(`${flag} is required.`);
+    if (!value) throw new WorkbenchCommandArgumentError("missingArgument", flag, `${flag} is required.`);
     return value;
   }
   requiredRepeated(flag: string) {
     const values = this.repeated(flag).map((value) => value.trim());
-    if (!values.length || values.some((value) => !value)) throw new Error(`${flag} is required.`);
-    if (new Set(values).size !== values.length) throw new Error(`${flag} values must be unique.`);
+    if (!values.length || values.some((value) => !value)) throw new WorkbenchCommandArgumentError("missingArgument", flag, `${flag} is required.`);
+    if (new Set(values).size !== values.length) throw new WorkbenchCommandArgumentError("argumentMustBeUnique", flag, `${flag} values must be unique.`);
     return values;
   }
   optionalNonNegativeInteger(flag: string) {
     const value = this.optional(flag);
     if (value === null) return null;
-    if (!/^\d+$/u.test(value)) throw new Error(`${flag} must be a non-negative integer.`);
+    if (!/^\d+$/u.test(value)) throw new WorkbenchCommandArgumentError("argumentMustBeInteger", flag, `${flag} must be a non-negative integer.`);
     const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed)) throw new Error(`${flag} must be a safe non-negative integer.`);
+    if (!Number.isSafeInteger(parsed)) throw new WorkbenchCommandArgumentError("argumentMustBeInteger", flag, `${flag} must be a safe non-negative integer.`);
     return parsed;
   }
 }

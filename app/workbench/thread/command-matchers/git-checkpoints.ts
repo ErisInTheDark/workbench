@@ -14,7 +14,6 @@ import type { FileUpdateChange } from "workbench-shared/codex/generated/app-serv
 import {
   parseGitArcReceipt,
   readGitArcValue,
-  type GitArcAction,
 } from "workbench-shared/workbench/git/git-arc-receipts";
 import { GIT_ARC_DIFF_TRAILER_PREFIX } from "workbench-shared/workbench/git/git-arc-diff-pages";
 import { parseGitArcMoveArguments, type GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
@@ -24,13 +23,11 @@ import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
 import { unwrapLeadingPowerShellLiteralHereStringAssignment } from "./shells";
 import type { CommandMatcherDefinition } from "./types";
-import { getWorkbenchCommandRendering, type WorkbenchCommandPresentationName } from "./workbench-command-rendering";
+import { getUnknownGitArcCommandRoute, getWorkbenchCommandRendering, type WorkbenchCommandPresentationName, type WorkbenchGitArcOperation } from "./workbench-command-rendering";
 
-export type GitArcCommandAction = GitArcAction | "planAdd" | "planAdopt" | "planRemove" | "planStart" | "rescind";
+export type GitArcCommandAction = WorkbenchGitArcOperation["action"];
 
 const ARC_MATCHER_IDS = {
-  add: "git-arc.add",
-  adopt: "git-arc.adopt",
   claims: "git-arc.claims",
   scope: "git-arc.scope",
   compare: "git-arc.compare",
@@ -40,14 +37,11 @@ const ARC_MATCHER_IDS = {
   plan: "git-arc.plan",
   propose: "git-arc.propose",
   release: "git-arc.release",
-  remove: "git-arc.remove",
   restore: "git-arc.restore",
   start: "git-arc.start",
-  planAdd: "git-arc.plan-add",
-  planAdopt: "git-arc.plan-adopt",
-  planRemove: "git-arc.plan-remove",
   planStart: "git-arc.plan-start",
   rescind: "git-arc.rescind",
+  unknown: "git-arc.unknown",
 } as const satisfies Record<GitArcCommandAction, string>;
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^Full diff artifact:\s*([a-f0-9]{64})\s*$/im;
 const CHECKPOINT_PROPOSAL_PATTERN = /^Workbench arc proposal:\s*([A-Za-z0-9._-]+)\s*$/im;
@@ -100,34 +94,9 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
   createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+scope(?:\s|$)/iu, id: ARC_MATCHER_IDS.scope, presentationName: "git_arc_scope" }),
   createMatcher({ commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+reword(?:\s|$)/iu, id: ARC_MATCHER_IDS.propose, presentationName: "git_arc_reword" }),
   createMatcher({
-    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+add(?:\s|$)/iu,
-    id: "git-arc.plan-add",
-    presentationName: "git_arc_plan_add",
-  }),
-  createMatcher({
-    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+remove(?:\s|$)/iu,
-    id: "git-arc.plan-remove",
-    presentationName: "git_arc_plan_remove",
-  }),
-  createMatcher({
-    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+adopt(?:\s|$)/iu,
-    id: "git-arc.plan-adopt",
-    presentationName: "git_arc_plan_adopt",
-  }),
-  createMatcher({
-    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan\s+start(?:\s|$)/iu,
-    id: "git-arc.plan-start",
-    presentationName: "git_arc_plan_start",
-  }),
-  createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+rescind(?:\s|$)/iu,
     id: "git-arc.rescind",
     presentationName: "git_arc_rescind",
-  }),
-  createMatcher({
-    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+plan(?:\s|$)/iu,
-    id: ARC_MATCHER_IDS.plan,
-    presentationName: "git_arc_plan",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+start(?:\s|$)/iu,
@@ -144,16 +113,6 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     id: ARC_MATCHER_IDS.continue,
     presentationName: "git_arc_continue",
   }),
-  createMatcher({
-    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+add(?:\s|$)/iu,
-    id: ARC_MATCHER_IDS.add,
-    presentationName: "git_arc_add",
-  }),
-  createMatcher({
-    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+adopt(?:\s|$)/iu,
-    id: ARC_MATCHER_IDS.adopt,
-    presentationName: "git_arc_adopt",
-  }),
   CommandMatcher({
     id: ARC_MATCHER_IDS.mv,
     match: ({ stage }) => {
@@ -167,11 +126,6 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         },
       })?.result ?? null;
     },
-  }),
-  createMatcher({
-    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+remove(?:\s|$)/iu,
-    id: ARC_MATCHER_IDS.remove,
-    presentationName: "git_arc_remove",
   }),
   createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+release(?:\s|$)/iu,
@@ -197,6 +151,12 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+restore(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.restore,
     presentationName: "git_arc_restore",
+  }),
+  CommandMatcher({
+    id: ARC_MATCHER_IDS.unknown,
+    match: ({ stage }) => /^wb(?:\.cmd)?\s+git\s+(?:arc|plan)(?:\s|$)/iu.test(stage.text.trim())
+      ? getUnknownGitArcCommandRoute().rendering.result
+      : null,
   }),
 ];
 
@@ -241,13 +201,9 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
     }
   }
   if (tokens[cursor] !== "arc") return null;
-  const rootAction = tokens[cursor + 1];
-  const nestedPlanAction = rootAction === "plan"
-    ? ({ add: "planAdd", adopt: "planAdopt", remove: "planRemove", start: "planStart" } as const)[tokens[cursor + 2] as "add" | "adopt" | "remove" | "start"]
-    : undefined;
-  const action = (nestedPlanAction ?? rootAction) as GitArcCommandAction | undefined;
-  if (!action || !(action in ARC_MATCHER_IDS)) return null;
-  cursor += nestedPlanAction ? 3 : 2;
+  const action = tokens[cursor + 1] as GitArcCommandAction | undefined;
+  if (!action || !(action in ARC_MATCHER_IDS) || action === "plan" || action === "planStart" || action === "unknown") return null;
+  cursor += 2;
 
   if (action === "mv") {
     try {
@@ -263,11 +219,9 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
     }
   }
 
-  let intentName: string | null = null;
   let disown = false;
   let proposalId: string | null = null;
   let ref: string | null = null;
-  const adoptPaths: string[] = [];
   for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
     const flag = tokens[cursor];
     if (flag === "--disown") {
@@ -276,31 +230,17 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
       continue;
     }
     const value = tokens[cursor + 1];
-    if (!value || (flag !== "--adopt" && flag !== "--proposal" && flag !== "--ref" && flag !== "-m")) return null;
+    if (!value || (flag !== "--proposal" && flag !== "--ref")) return null;
     if (flag === "--ref") {
       if (ref) return null;
       ref = value;
-    } else if (flag === "--adopt") {
-      if (action !== "plan" && action !== "planStart") return null;
-      adoptPaths.push(value);
     } else if (flag === "--proposal") {
       if (proposalId) return null;
       proposalId = value;
-    } else if ((action === "plan" || action === "planStart") && intentName === null) {
-      intentName = value;
     }
     cursor += 1;
   }
   const paths = tokens[cursor] === "--" ? tokens.slice(cursor + 1) : [];
-  if (action === "plan" || action === "planStart") {
-    return intentName ? {
-      action,
-      ...(adoptPaths.length ? { adoptPaths } : {}),
-      intentName,
-      paths,
-      ref: null,
-    } : null;
-  }
   if (action === "rescind") {
     return proposalId && !ref && !paths.length
       ? { action, intentName: null, paths: [], proposalId, ref: null }
@@ -351,7 +291,6 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
   let replacementProposalId: string | null = null;
   let rootId: string | null = null;
   let title: string | null = null;
-  const legacyMessages: string[] = [];
   const resolveLiteralValue = (value: string) => (
     literalAssignment && value.toLowerCase() === `$${literalAssignment.variableName.toLowerCase()}`
       ? literalAssignment.value
@@ -408,14 +347,11 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
       cursor += 1;
       continue;
     }
-    if (flag !== "-m" || !value || title !== null || description !== null) return null;
-    legacyMessages.push(resolveLiteralValue(value));
-    cursor += 1;
+    return null;
   }
   const paths = tokens[cursor] === "--" ? tokens.slice(cursor + 1) : [];
-  if (legacyMessages.length > 2) return null;
-  title ??= legacyMessages[0] ?? "";
-  description ??= legacyMessages[1] ?? "";
+  title ??= "";
+  description ??= "";
   if (!amend && !title) return null;
   return {
     amend,

@@ -1,4 +1,5 @@
 /*
+ * Keywords: MCP, commands, routing, shell, Git arc failures.
  * Exports:
  * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: resolve a recorded wb MCP call and keep failed Recall calls on the generic MCP error surface. Keywords: workbench, MCP, command, route, failure.
  * - getWorkbenchMcpCommandDisplay: match a simple recorded wb MCP call to its shared summary presentation. Keywords: workbench, MCP, command, rendering.
@@ -15,6 +16,7 @@ import {
 import type { CommandShell, ThreadCommandSummaryDisplay } from "./types";
 import {
   getWorkbenchCommandRoute,
+  getUnknownGitArcCommandRoute,
   getWorkbenchCommandSummaryDisplay,
   isWorkbenchCommandPresentationName,
   type WorkbenchCommandPresentationContext,
@@ -92,7 +94,10 @@ export function getWorkbenchMcpCommandRoute({
   server,
   tool,
 }: WorkbenchMcpCommandInput) {
-  if (!isWorkbenchMcpServer(server) || !isWorkbenchCommandPresentationName(tool)) return null;
+  if (!isWorkbenchMcpServer(server)) return null;
+  if (!isWorkbenchCommandPresentationName(tool)) {
+    return /^git_(?:arc|plan)(?:_|$)/u.test(tool) ? getUnknownGitArcCommandRoute() : null;
+  }
   return getWorkbenchCommandRoute(tool, argumentsValue, context);
 }
 
@@ -103,6 +108,7 @@ export function shouldUseWorkbenchMcpSpecializedRenderer(
   if (route?.kind !== "specialized") return false;
   return !isFailure
     || route.operation.kind === "gitArc"
+    || route.operation.kind === "gitArcWait"
     || route.operation.kind === "threadTitle";
 }
 

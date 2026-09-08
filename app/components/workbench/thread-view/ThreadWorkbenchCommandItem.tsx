@@ -1,4 +1,5 @@
 /*
+ * Keywords: MCP, transcript, Git arc, failures, command routing.
  * Exports:
  * - default ThreadWorkbenchCommandItem: route one typed wb MCP operation through the existing dedicated Workbench renderers. Keywords: workbench, MCP, Git arc, Thread Recall, subagent.
  */
@@ -78,7 +79,7 @@ export default function ThreadWorkbenchCommandItem({
   renderSubagentActivity?: (thread: ThreadPayload | undefined) => ReactNode;
   route: SpecializedRoute;
   subagents: readonly WorkbenchSubagentSummary[];
-  threadCwdPath: string;
+  threadCwdPath?: string;
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
@@ -93,7 +94,7 @@ export default function ThreadWorkbenchCommandItem({
   if (operation.kind === "threadStatus" && (outcome === "completed" || outcome === "inProgress")) {
     return <ThreadStatusCommandItem outcome={outcome} status={operation.status} />;
   }
-  if (operation.kind === "threadRecall") {
+  if (operation.kind === "threadRecall" && threadCwdPath) {
     return (
       <ThreadContextCommandItem
         defaultOpen={item.status !== "completed"}
@@ -108,7 +109,7 @@ export default function ThreadWorkbenchCommandItem({
     );
   }
   if (operation.kind === "gitArcWait") {
-    if (outcome === "completed") {
+    if (outcome !== "inProgress") {
       return (
         <ThreadGitArcItem
           commandIntent={{
@@ -119,6 +120,7 @@ export default function ThreadWorkbenchCommandItem({
           }}
           durationMs={item.durationMs}
           durationPresentation="waited"
+          failureReason={outcome === "failed" ? output : null}
           outcome={outcome}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
@@ -153,7 +155,7 @@ export default function ThreadWorkbenchCommandItem({
       return (
         <ThreadCheckpointCommitItem
           commandOutcome={outcome}
-          cwd={threadCwdPath}
+          cwd={threadCwdPath ?? null}
           failureReason={outcome === "failed" ? output : null}
           intent={intent.proposalIntent ?? null}
           projectFilePaths={projectFilePaths}
@@ -179,7 +181,7 @@ export default function ThreadWorkbenchCommandItem({
         projectRootPath={projectRootPath}
         workspaceRoots={workspaceRoots}
       />
-    ) : diffChanges && (diffChanges.length || diffArtifactId) ? (
+    ) : threadCwdPath && diffChanges && (diffChanges.length || diffArtifactId) ? (
       <ThreadCheckpointDiffItem
         cwd={threadCwdPath}
         output={output}

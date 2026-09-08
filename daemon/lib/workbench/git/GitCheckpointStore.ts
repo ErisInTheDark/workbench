@@ -6,6 +6,7 @@
  */
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import {
   type ArcOutcome,
   CHECKPOINT_METADATA_MARKER,
@@ -165,7 +166,7 @@ export default class GitCheckpointStore {
       if (!resolved) throw new GitCheckpointMissingObjectError(original);
       refs = await this.repository.refsPointingAt(checkpointCommit, checkpointNamespace(harness, threadId), legacyCheckpointNamespace(threadId));
     }
-    if (!refs.length) throw new Error("Checkpoint commit is not in this thread/worktree checkpoint timeline.");
+    if (!refs.length) throw new GitArcRejectionError({ reason: "wrongCheckpointOwnership" }, "Checkpoint commit is not in this thread/worktree checkpoint timeline.");
     if (resolved.identity.parents.length !== 1) throw new Error("Checkpoint commit parent metadata is invalid.");
     return {
       checkpointCommit,
@@ -177,13 +178,13 @@ export default class GitCheckpointStore {
 
   async readProposal(harness: GitArcHarness, threadId: string, proposalId: string): Promise<StoredProposal> {
     const normalizedProposalId = String(proposalId ?? "").trim();
-    if (!/^[A-Za-z0-9._-]+$/u.test(normalizedProposalId)) throw new Error("Invalid checkpoint proposal id.");
+    if (!/^[A-Za-z0-9._-]+$/u.test(normalizedProposalId)) throw new GitArcRejectionError({ reason: "invalidProposalId" }, "Invalid checkpoint proposal id.");
     const canonicalRef = `${proposalNamespace(harness, threadId)}/${normalizedProposalId}`;
     const legacyRef = `${legacyProposalNamespace(threadId)}/${normalizedProposalId}`;
     const canonical = await this.repository.readCommitAt(canonicalRef);
     const proposalRef = canonical ? canonicalRef : legacyRef;
     const resolved = canonical ?? await this.repository.readCommitAt(legacyRef);
-    if (!resolved) throw new Error("Checkpoint proposal not found.");
+    if (!resolved) throw new GitArcRejectionError({ reason: "proposalNotFound", proposalId: normalizedProposalId }, "Checkpoint proposal not found.");
     const parsed = parseMarkedMetadata<ProposalMetadata>(resolved.identity.message, PROPOSAL_METADATA_MARKER);
     if (!parsed || parsed.proposalId !== normalizedProposalId) throw new Error("Checkpoint proposal metadata is invalid.");
     return { metadata: normalizeProposalMetadata(parsed), proposalCommit: resolved.commit, proposalRef, tree: resolved.identity.tree };

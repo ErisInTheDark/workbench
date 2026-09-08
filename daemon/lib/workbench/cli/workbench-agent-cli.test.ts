@@ -42,6 +42,22 @@ function execFileWithInput(command: string, args: string[], input: string, optio
 }
 const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
 
+test("Git argument refusals retain semantic facts before a request exists", async () => {
+  for (const [args, reason] of [
+    [["git", "plan", "claims"], "missingPlanName"],
+    [["git", "arc", "unrecognised"], "unsupportedCommand"],
+    [["git", "arc", "claims"], "inheritanceRequired"],
+    [["git", "arc", "propose", "--amend", "--replace", "proposal-one"], "conflictingProposalTargets"],
+  ] as const) {
+    const result = await parseWorkbenchAgentCliCommand([...args], gitArcOptions);
+    assert.equal(result.kind, "error");
+    if (result.kind !== "error") assert.fail("Expected argument refusal.");
+    const failure = parseGitArcFailureReceipt(result.error);
+    assert.ok(failure && "rejection" in failure);
+    assert.deepEqual(failure.rejection, { reason });
+  }
+});
+
 test("start receipts describe net scope changes rather than reacquired claims", async () => {
   const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "start"], gitArcOptions);
   assert.equal(parsed.kind, "request");
