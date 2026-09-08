@@ -71,6 +71,8 @@ import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { useWorkbenchThread, useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import previousTurnLoadReducer from "./previous-turn-load-state";
+import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./ThreadHistoryPagingController";
+import { getWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 import projectThreadRenderTurns from "./thread-render-turns";
 import getThreadGitArcProposalIntents from "./thread-git-arc-proposal-intents";
@@ -108,13 +110,6 @@ const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
 const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
 
 type RelatedThreadRecord = Record<string, ThreadPayload | undefined>;
-
-interface PendingPreviousTurnScrollRestore {
-  readonly anchorTop: number;
-  readonly beforeTurnId: string;
-  readonly scrollTop: number;
-  readonly target: HTMLDivElement;
-}
 
 const THREAD_HISTORY_TURN_MARKER_SELECTOR = "[data-thread-history-turn-id]";
 
@@ -597,8 +592,8 @@ export default memo(function ThreadView ({
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const [historySentinel, setHistorySentinel] = useState<HTMLDivElement | null>(null);
-  const triggeredHistoryBoundaryRef = useRef<string | null>(null);
-  const pendingPreviousTurnScrollRestoreRef = useRef<PendingPreviousTurnScrollRestore | null>(null);
+  const historyPagingRef = useRef<ThreadHistoryPagingController | null>(null);
+  const historyPagingBindingsRef = useRef<HistoryPagingOptions | null>(null);
   const codeBlockCopyResetTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map());
   const subthreadLoadGenerationRef = useRef(0);
   useEffect(() => {
@@ -663,6 +658,22 @@ export default memo(function ThreadView ({
     [activeThread],
   );
   const renderActiveThread = activeThreadRenderProjection?.thread ?? null;
+  const activeTranscriptSource = transcriptMode !== "json"
+    && renderActiveThread
+    && "threadId" in transcriptSource
+    && transcriptSource.threadId === renderActiveThread.id
+    ? transcriptSource
+    : null;
+  const activeTranscriptProjection: WorkbenchTranscriptProjection | null = activeTranscriptSource
+    && "projection" in activeTranscriptSource
+    ? activeTranscriptSource.projection
+    : null;
+  const historyPagingIdentity = useMemo(() => ({}), [projectId, viewInstanceKey, activeThread?.id, transcriptMode]);
+  const renderedHistoryTurnIds = useMemo(() => (
+    transcriptMode !== "json"
+      ? activeTranscriptProjection?.turns ?? []
+      : renderActiveThread?.turns ?? []
+  ).map(({ id }) => id), [activeTranscriptProjection?.turns, renderActiveThread?.turns, transcriptMode]);
   const activeThreadBrowseResultEntries = activeThreadRenderProjection?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;
   const activeHarnessUserInputRequest = activeThread
     ? threads.pendingQuestionnaire(activeThread.id)
@@ -676,8 +687,6 @@ export default memo(function ThreadView ({
       .filter((entry) => entry.loadState === "loaded")
       .map((entry) => entry.turnId),
   ), [visibleHistoryEntries]);
-  const loadedTurnsById = useMemo(() => new Map(renderActiveThread?.turns.map((turn) => [turn.id, turn]) ?? []), [renderActiveThread?.turns]);
-  const firstVisibleLoadedEntry = visibleHistoryEntries.find((entry) => loadedTurnsById.has(entry.turnId)) ?? null;
   const pageBoundaryIndex = renderActiveThread?.nextPageCursor
     ? visibleHistoryEntries.findIndex((entry) => entry.turnId === renderActiveThread.nextPageCursor)
     : -1;
@@ -837,23 +846,9 @@ export default memo(function ThreadView ({
     const loadGeneration = subthreadLoadGenerationRef.current;
     const targetThreadId = activeThread.id;
     const targetHarness = activeThread.harness;
-    const scrollTarget = scrollViewportRef.current;
-    const historyTurnMarker = firstVisibleLoadedEntry
-      ? findHistoryTurnMarker(threadViewRef.current, firstVisibleLoadedEntry.turnId)
-      : null;
-    if (
-      scrollTarget
-      && scrollTarget.dataset.threadScrollMode === "reading"
-      && firstVisibleLoadedEntry
-      && historyTurnMarker
-    ) {
-      pendingPreviousTurnScrollRestoreRef.current = {
-        anchorTop: historyTurnMarker.getBoundingClientRect().top,
-        beforeTurnId: firstVisibleLoadedEntry.turnId,
-        scrollTop: scrollTarget.scrollTop,
-        target: scrollTarget,
-      };
-    }
+    const historyPaging = historyPagingRef.current;
+    const transaction = historyPaging?.begin();
+    if (!historyPaging || transaction === null || transaction === undefined) return;
     dispatchPreviousTurnLoad({ type: "start", key: previousTurnLoadKey });
 
     try {
@@ -866,7 +861,7 @@ export default memo(function ThreadView ({
         return;
       }
       if (!payload) {
-        pendingPreviousTurnScrollRestoreRef.current = null;
+        historyPaging.fail(transaction);
         dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
         return;
       }
@@ -885,21 +880,22 @@ export default memo(function ThreadView ({
           };
         });
       }
+      historyPaging.succeed(transaction, payload.turns
+        .filter((turn) => getWorkbenchTurnAdmission(turn) !== "connecting")
+        .map(({ id }) => id));
       dispatchPreviousTurnLoad({ type: "succeed", key: previousTurnLoadKey });
     } catch (error) {
       if (loadGeneration !== subthreadLoadGenerationRef.current) {
         return;
       }
-      pendingPreviousTurnScrollRestoreRef.current = null;
+      historyPaging.fail(transaction);
       dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
       console.error("Previous thread turn load failed.", error);
     }
-  }, [activeThread, firstVisibleLoadedEntry, previousTurnLoadKey, previousTurnLoadStatus, scrollViewportRef, subagents, thread.id, threads.read]);
+  }, [activeThread, previousTurnLoadKey, previousTurnLoadStatus, subagents, thread.id, threads.read]);
 
   useEffect(() => {
     subthreadLoadGenerationRef.current += 1;
-    triggeredHistoryBoundaryRef.current = null;
-    pendingPreviousTurnScrollRestoreRef.current = null;
     setActiveThreadId(selectedThreadId ?? thread.id);
     setSubthreadsById({});
     setLoadingThreadIds({});
@@ -968,58 +964,106 @@ export default memo(function ThreadView ({
     };
   }, [loadSubthread, pollingThreadId, subagents, thread.harness]);
 
+  // Reconcile after every parent commit, including SQL's later prepend and skeleton removal.
+  useLayoutEffect(() => {
+    historyPagingBindingsRef.current = {
+      readView: () => {
+        const viewport = scrollViewportRef.current;
+        const root = threadViewRef.current;
+        if (!viewport || !root || !activeThread) return null;
+        const viewportRect = viewport.getBoundingClientRect();
+        const sentinelRect = historySentinel?.getBoundingClientRect();
+        return {
+          identity: historyPagingIdentity,
+          viewport,
+          boundaryKey: previousTurnLoadKey || null,
+          requestStatus: previousTurnLoadStatus,
+          sourceReady: transcriptMode === "json" || activeTranscriptSource?.status === "ready",
+          renderedTurnIds: renderedHistoryTurnIds,
+          nearTop: Boolean(sentinelRect && viewport.clientHeight > 0
+            && sentinelRect.bottom > viewportRect.top - 160 && sentinelRect.top < viewportRect.bottom),
+          mode: viewport.dataset.threadScrollMode === "bottom-following" ? "bottom-following" : "reading",
+          metrics: {
+            clientHeight: viewport.clientHeight,
+            scrollHeight: viewport.scrollHeight,
+            scrollTop: viewport.scrollTop,
+          },
+          get anchor() {
+            const marker = [...root.querySelectorAll<HTMLElement>(THREAD_HISTORY_TURN_MARKER_SELECTOR)]
+              .find((candidate) => renderedHistoryTurnIds.includes(candidate.dataset.threadHistoryTurnId ?? ""));
+            return marker ? {
+              turnId: marker.dataset.threadHistoryTurnId!,
+              top: marker.getBoundingClientRect().top - viewportRect.top,
+            } : null;
+          },
+          anchorTop: (turnId) => {
+            const marker = findHistoryTurnMarker(root, turnId);
+            return marker ? marker.getBoundingClientRect().top - viewport.getBoundingClientRect().top : null;
+          },
+        };
+      },
+      writeScrollTop: (scrollTop) => {
+        const viewport = scrollViewportRef.current;
+        if (viewport) viewport.scrollTop = scrollTop;
+      },
+      load: () => { void loadPreviousTurn(); },
+      schedule: (callback, delayMs) => {
+        const timer = window.setTimeout(callback, delayMs);
+        return () => window.clearTimeout(timer);
+      },
+    };
+    historyPagingRef.current ??= new ThreadHistoryPagingController({
+      readView: () => historyPagingBindingsRef.current?.readView() ?? null,
+      writeScrollTop: (scrollTop) => historyPagingBindingsRef.current?.writeScrollTop(scrollTop),
+      load: () => historyPagingBindingsRef.current?.load(),
+      schedule: historyPagingBindingsRef.current.schedule,
+    });
+    historyPagingRef.current.reconcile();
+  });
+
+  useLayoutEffect(() => () => {
+    historyPagingRef.current?.dispose();
+    historyPagingRef.current = null;
+    historyPagingBindingsRef.current = null;
+  }, []);
+
   useEffect(() => {
     const sentinel = historySentinel;
     const scrollTarget = scrollViewportRef.current;
-    if (!sentinel || !scrollTarget || !canLoadPreviousTurn || !previousTurnLoadKey || previousTurnLoadStatus) {
+    if (!sentinel || !scrollTarget) {
       return;
     }
 
-    const observer = new IntersectionObserver((entries) => {
-      let shouldLoadPreviousTurn = false;
-      for (const entry of entries) {
-        if (!entry.isIntersecting) {
-          triggeredHistoryBoundaryRef.current = null;
-          continue;
-        }
-        if (triggeredHistoryBoundaryRef.current !== previousTurnLoadKey) {
-          triggeredHistoryBoundaryRef.current = previousTurnLoadKey;
-          shouldLoadPreviousTurn = true;
-        }
-      }
-      if (shouldLoadPreviousTurn) {
-        void loadPreviousTurn();
-      }
-    }, {
+    const reconcile = () => historyPagingRef.current?.reconcile();
+    const interrupt = () => historyPagingRef.current?.interrupt();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable=true]")) return;
+      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) interrupt();
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target === scrollTarget) interrupt();
+    };
+    const observer = new IntersectionObserver(reconcile, {
       root: scrollTarget,
       rootMargin: "160px 0px 0px 0px",
       threshold: 0.1,
     });
     observer.observe(sentinel);
+    scrollTarget.addEventListener("scroll", reconcile, { passive: true });
+    scrollTarget.addEventListener("wheel", interrupt, { passive: true });
+    scrollTarget.addEventListener("touchmove", interrupt, { passive: true });
+    scrollTarget.addEventListener("keydown", handleKeyDown);
+    scrollTarget.addEventListener("pointerdown", handlePointerDown);
     return () => {
       observer.disconnect();
+      scrollTarget.removeEventListener("scroll", reconcile);
+      scrollTarget.removeEventListener("wheel", interrupt);
+      scrollTarget.removeEventListener("touchmove", interrupt);
+      scrollTarget.removeEventListener("keydown", handleKeyDown);
+      scrollTarget.removeEventListener("pointerdown", handlePointerDown);
     };
-  }, [canLoadPreviousTurn, historySentinel, loadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus, scrollViewportRef]);
-
-  useLayoutEffect(() => {
-    const pendingRestore = pendingPreviousTurnScrollRestoreRef.current;
-    if (!pendingRestore || firstVisibleLoadedEntry?.turnId === pendingRestore.beforeTurnId) return;
-
-    pendingPreviousTurnScrollRestoreRef.current = null;
-    const scrollTarget = scrollViewportRef.current;
-    if (
-      !scrollTarget
-      || scrollTarget !== pendingRestore.target
-      || scrollTarget.dataset.threadScrollMode !== "reading"
-      || Math.abs(scrollTarget.scrollTop - pendingRestore.scrollTop) > 1
-    ) {
-      return;
-    }
-
-    const historyTurnMarker = findHistoryTurnMarker(threadViewRef.current, pendingRestore.beforeTurnId);
-    if (!historyTurnMarker) return;
-    scrollTarget.scrollTop += historyTurnMarker.getBoundingClientRect().top - pendingRestore.anchorTop;
-  }, [firstVisibleLoadedEntry?.turnId, scrollViewportRef]);
+  }, [historySentinel, scrollViewportRef]);
 
   useEffect(() => () => {
     codeBlockCopyResetTimersRef.current.forEach((timeoutId) => {
@@ -1415,16 +1459,6 @@ export default memo(function ThreadView ({
   const terminalGitArcProposalIds = useMemo(() => terminalGitArc
     ? new Set(terminalGitArc.proposals.map(({ proposalId }) => proposalId))
     : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS, [terminalGitArc]);
-  const activeTranscriptSource = transcriptMode !== "json"
-    && renderActiveThread
-    && "threadId" in transcriptSource
-    && transcriptSource.threadId === renderActiveThread.id
-    ? transcriptSource
-    : null;
-  const activeTranscriptProjection: WorkbenchTranscriptProjection | null = activeTranscriptSource
-    && "projection" in activeTranscriptSource
-    ? activeTranscriptSource.projection
-    : null;
   const transcriptSourceMessage = activeTranscriptSource?.status === "failed"
     ? activeTranscriptSource.message
     : activeTranscriptSource?.status === "absent"
