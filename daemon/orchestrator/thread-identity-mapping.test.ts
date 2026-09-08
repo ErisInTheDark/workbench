@@ -3,6 +3,7 @@
  * No exports. Tests protect canonical references without rewriting provider content or reading bodies.
  */
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 
 import Database from "better-sqlite3";
@@ -753,6 +754,48 @@ test("public request routing resolves thread and turn aliases without touching i
     fixture.database.close();
   }
 });
+
+for (const deliveryFirst of [true, false]) {
+  test(`queued steer identity does not compete with delivered message identity (delivery first: ${deliveryFirst})`, async () => {
+    const { database, owners, native, parent, turn } = await setup();
+    try {
+      const pending = {
+        threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: randomUUID(),
+        entryKey: "queued-steer", input: [{ type: "text" as const, text: "continue", text_elements: [] }],
+        status: "pending" as const, attemptedAt: 1, resolvedAt: null, requestId: "request",
+        clientUserMessageId: randomUUID(), canonicalItemId: null, error: null,
+      };
+      await admitNativeTranscriptObservations(owners, [{ kind: "steer", entry: pending, observedAt: 1 }]);
+      const source: ThreadItem = {
+        type: "userMessage", id: "item-42", clientId: pending.clientUserMessageId, content: pending.input,
+      };
+      const sent = { ...pending, status: "sent" as const, canonicalItemId: source.id, resolvedAt: 2 };
+      if (deliveryFirst) await admitProviderThreadItems(owners, native, [source]);
+      await admitNativeTranscriptObservations(owners, [{ kind: "steer", entry: sent, observedAt: 2 }]);
+      const [delivered] = await admitProviderThreadItems(owners, native, [source]);
+      for (let iteration = 0; iteration < 2; iteration += 1) {
+        await admitNativeTranscriptObservations(owners, [{ kind: "steer", entry: sent, observedAt: 2 }]);
+        const mapped = mapNativeTranscriptObservation(owners, native, { kind: "steer", entry: sent, observedAt: 2 });
+        assert.equal(mapped.kind, "steer");
+        if (mapped.kind !== "steer") throw new Error("Expected steer.");
+        assert.equal(mapped.publicItemId, delivered!.id);
+        assert.equal(mapped.entry.itemId, delivered!.id);
+        assert.equal(mapped.entry.canonicalItemId, delivered!.id);
+      }
+      for (const status of ["failed", "interrupted"] as const) {
+        const attempt = { ...pending, status, resolvedAt: 2 };
+        await admitNativeTranscriptObservations(owners, [{ kind: "steer", entry: attempt, observedAt: 2 }]);
+        const mapped = mapNativeTranscriptObservation(owners, native, {
+          kind: "steer", entry: attempt, observedAt: 2,
+        });
+        if (mapped.kind !== "steer") throw new Error("Expected steer.");
+        assert.equal(mapped.publicItemId, pending.itemId);
+      }
+      assert.equal(owners.items.itemIdForReference(parent.threadId, turn.turnId, pending.itemId), pending.itemId);
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+    } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
+  });
+}
 
 for (const evidence of ["provisional", "retained-collision", "client-only"] as const) {
   test(`sent steer page context reuses its admitted message (${evidence})`, async () => {

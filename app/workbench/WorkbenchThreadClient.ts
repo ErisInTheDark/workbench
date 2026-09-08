@@ -5381,10 +5381,28 @@ function WorkbenchThreadClient(
       if (isApprovalUserInputRequest(pendingRequest.request)) {
         throw new Error("Approval requests cannot be submitted after their owning turn ends.");
       }
-      const thread = getPendingUserInputRequestThread(pendingRequest);
+      let thread = getPendingUserInputRequestThread(pendingRequest);
       const originalTurnId = options.turnId ?? pendingRequest.turnId ?? (thread ? getCurrentTurn(thread)?.id ?? null : null);
-      if (!thread || !originalTurnId) {
-        throw new Error("The original questionnaire turn could not be found.");
+      if (!originalTurnId) {
+        throw new Error("The saved questionnaire has no owning turn ID.");
+      }
+      if (!thread) {
+        const metadata = await sendBridgeRequest<ThreadReadResponse>(pendingRequest.harness, {
+          method: "thread/read",
+          params: { threadId: pendingRequest.threadId, includeTurns: false },
+        });
+        if (!isPendingSubmissionCurrent()) {
+          throw new Error("The pending question changed before its response could be submitted.");
+        }
+        const projectContext = effectiveThreadProjectContext(pendingRequest.harness, pendingRequest.threadId);
+        const projectRoots = getThreadProjectRootPaths(projectContext);
+        if (metadata.thread.id !== pendingRequest.threadId
+          || (projectRoots.length && !isProjectCodexThreadAtExpectedCwd(metadata.thread, projectRoots, undefined))) {
+          throw new Error("Questionnaire metadata does not belong to its thread and project.");
+        }
+        thread = getPendingUserInputRequestThread(pendingRequest) ?? projectStableThreadMetadata(toThreadPayload(
+          metadata.thread, pendingRequest.harness, metadata.thread.model, metadata.thread.reasoningEffort,
+        ));
       }
       const historyEntry: WorkbenchQuestionnaireHistoryEntryState = {
         insertAfterItemId: options.insertAfterItemId ?? legacyAnchorId,

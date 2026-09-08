@@ -44,6 +44,13 @@ function steerSources(entry: WorkbenchSteerHistoryEntry, turnId: string): Workbe
   return [{ turnId, sourceId: resolveSteerTranscriptSourceId(entry), kind: "stable" }];
 }
 
+function steerAttemptReference(entry: WorkbenchSteerHistoryEntry, publicItemId?: string) {
+  // The queued attempt ID is not evidence that it owns the delivered provider message.
+  return entry.status === "sent" && (entry.canonicalItemId || entry.clientUserMessageId)
+    ? undefined
+    : publicItemId ?? entry.itemId ?? undefined;
+}
+
 export async function admitNativeTranscriptObservations(
   owners: NativeTranscriptIdentityOwners,
   observations: readonly WorkbenchTranscriptObservation[],
@@ -84,7 +91,9 @@ export async function admitNativeTranscriptObservations(
       ...(fact.kind === "item" && fact.item.type === "userMessage" && fact.item.clientId
         ? [{ turnId, kind: "client" as const, sourceId: fact.item.clientId }] : []),
     ];
-    const reference = fact.kind === "item" ? fact.publicItemId : fact.publicItemId ?? fact.entry.itemId ?? undefined;
+    const reference = fact.kind === "item" ? fact.publicItemId
+      : fact.kind === "steer" ? steerAttemptReference(fact.entry, fact.publicItemId)
+        : fact.publicItemId ?? fact.entry.itemId ?? undefined;
     const itemId = z.uuid().safeParse(reference).success ? reference : undefined;
     const known = owners.items.findItemIdForSource(threadId, sources[0]!);
     if (known && (!itemId || itemId === known)
@@ -158,7 +167,7 @@ export function mapNativeTranscriptObservation(
       const entry = input.entry;
       const ownerThreadId = threadId(entry.threadId);
       const ownerTurnId = turnId(entry.threadId, entry.turnId);
-      const reference = input.publicItemId ?? entry.itemId;
+      const reference = steerAttemptReference(entry, input.publicItemId);
       const id = reference
         ? itemId(entry.threadId, entry.turnId, reference)
         : owners.items.itemIdForSource(ownerThreadId, steerSources(entry, ownerTurnId)[0]!);
