@@ -2410,9 +2410,16 @@ export default class CodexStdioBridge {
             this.transcriptSqliteFailureReported = true;
           }
           if (reportFailure) {
+            let cause = error;
+            for (let depth = 0; depth < 4 && cause instanceof Error && cause.cause instanceof Error; depth++) {
+              cause = cause.cause;
+            }
             this.transcriptShadowLog?.write({
               event: "capture-failed",
-              fields: { label, message: message.slice(0, 500) },
+              fields: {
+                label, message: message.slice(0, 500),
+                ...(cause !== error ? { cause: sanitizeTranscriptErrorMessage(cause).slice(0, 500) } : {}),
+              },
               level: "error",
               source: "codex-transcript",
             });

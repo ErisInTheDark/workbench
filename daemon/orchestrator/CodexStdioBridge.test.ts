@@ -1890,15 +1890,19 @@ test("detached questionnaire history records directly without answering a provid
   }
 });
 
-test("repeated provider misses report one SQLite capture failure", async () => {
+test("repeated provider misses report one SQLite capture failure with a bounded sanitised root cause", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-report-"));
-  const records: Array<{ event?: string }> = [];
+  const records: Array<{ event?: string; fields?: Record<string, unknown> }> = [];
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
     bridgeUrl: "ws://127.0.0.1:1",
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
-    recordSqliteTranscript: async () => { throw new Error("SQLite transcript failed"); },
+    recordSqliteTranscript: async () => {
+      throw new Error("SQLite transcript failed", {
+        cause: new Error(`constraint failed at C:/private/storage.sqlite token=credential ${"x".repeat(1_000)}`),
+      });
+    },
     resolveProjectFromCwd: async () => null,
     sendToClient() {},
     storageRoot: root,
@@ -1927,6 +1931,11 @@ test("repeated provider misses report one SQLite capture failure", async () => {
     });
     await bridge.waitForIdle();
     assert.equal(records.filter(({ event }) => event === "capture-failed").length, 1);
+    const cause = records.find(({ event }) => event === "capture-failed")?.fields?.cause;
+    assert.equal(typeof cause, "string");
+    assert.ok(typeof cause === "string" && cause.startsWith("constraint failed"));
+    assert.ok(cause.length <= 500);
+    assert.ok(!cause.includes("credential") && !cause.includes("storage.sqlite"));
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
