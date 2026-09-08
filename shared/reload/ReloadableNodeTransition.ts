@@ -69,13 +69,22 @@ export default class ReloadableNodeTransition {
     await this.waitFor(running);
   }
 
-  async step<T>(phase: string, operation: () => Promise<T> | T): Promise<T> {
+  async step<T>(phase: string, operation: (reportPhase: (phase: string) => void) => Promise<T> | T): Promise<T> {
     this.assertActive();
-    this.phase = phase.replace(/\s+/gu, " ").slice(0, 200);
-    const result = await operation();
-    // A deadline does not cancel arbitrary node code. Fence the host's continuation.
-    this.assertActive();
-    return result;
+    const label = phase.replace(/\s+/gu, " ").slice(0, 200);
+    this.phase = label;
+    let reporting = true;
+    try {
+      const result = await operation((detail) => {
+        if (!reporting || this.finished || this.failureValue) return;
+        this.phase = `${label}: ${detail.replace(/\s+/gu, " ").trim().slice(0, 200)}`;
+      });
+      // A deadline does not cancel arbitrary node code. Fence the host's continuation.
+      this.assertActive();
+      return result;
+    } finally {
+      reporting = false;
+    }
   }
 
   finish() {

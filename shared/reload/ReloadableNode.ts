@@ -1,4 +1,5 @@
 /*
+ * Keywords: reload, lifecycle, registry, handoff, startup diagnostics.
  * Exports:
  * - ReloadableNodeLifecycle/ReloadableNodeAccess: node replacement and caller-access policies. Keywords: reload, lifecycle, access.
  * - ReloadableNodeLease/ReloadableNodeRuntimeDrainPending: generation fencing and bounded drain diagnostics. Keywords: lease, drain, diagnostics.
@@ -29,7 +30,7 @@ export interface ReloadableNodeInstance<TObjects extends object, TNotification> 
   listRuntimeDrainPending?(): readonly ReloadableNodeRuntimeDrainPending[];
   observeProviderNotification?(notification: TNotification): Promise<void> | void;
   registrations: Partial<TObjects>;
-  start(): Promise<void> | void;
+  start(reportPhase?: (phase: string) => void): Promise<void> | void;
 }
 
 export interface ReloadableNodeBuild<TObjects extends object> {

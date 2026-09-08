@@ -1,4 +1,5 @@
 /*
+ * Keywords: core, lifecycle, startup diagnostics, disposal, registrations.
  * Exports:
  * - WORKBENCH_CORE_FEATURE_KEYS: feature keys owned by the core lifecycle node. Keywords: core, ownership, graph, questionnaire.
  * - default WorkbenchCoreFeature: core node value and lifecycle owner for state, Git, questionnaire waits, harness routing, and supervisors. Keywords: core, lifecycle, disposal.
@@ -29,7 +30,7 @@ interface WorkbenchCoreFeatureOptions {
   dispose(reportPhase: (phase: string) => void): Promise<void> | void;
   registrations: Pick<OrchestratorRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]>;
   observeProviderNotification(notification: OrchestratorProviderNotification): Promise<void> | void;
-  start(): Promise<void> | void;
+  start(reportPhase: (phase: string) => void): Promise<void> | void;
 }
 
 export default class WorkbenchCoreFeature implements ReloadableNodeInstance<OrchestratorRuntimeObjects, OrchestratorProviderNotification> {
@@ -51,7 +52,7 @@ export default class WorkbenchCoreFeature implements ReloadableNodeInstance<Orch
     await this.options.observeProviderNotification(notification);
   }
 
-  async start() {
-    await this.options.start();
+  async start(reportPhase: (phase: string) => void = () => undefined) {
+    await this.options.start(reportPhase);
   }
 }

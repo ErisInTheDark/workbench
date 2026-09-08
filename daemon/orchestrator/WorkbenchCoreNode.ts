@@ -1,4 +1,5 @@
 /*
+ * Keywords: core, graph, lifecycle, startup diagnostics, registrations.
  * Exports:
  * - default WorkbenchCoreNode: own core state, Git, questionnaire, harness, project, and supervisor registrations plus direct child declarations. Keywords: core, graph, registry.
  * Local helpers: construct reloadable modules, harness capabilities, and the core feature lifecycle. Keywords: reload, harness, lifecycle.
@@ -431,10 +432,14 @@ function createWorkbenchCoreFeature(
       });
     },
     registrations,
-    start: async () => {
+    start: async (reportPhase) => {
+      reportPhase("composer profile startup");
       await profileStore.start();
+      reportPhase("project discovery");
       await projectCatalog.ensureLoaded();
+      reportPhase("loaded harness identity admission");
       await harnesses.restoreLoadedIdentities();
+      reportPhase("claim snapshot reconciliation");
       for (const project of projectCatalog.getCurrentSnapshot().data) {
         try {
           await gitArc.reconcileClaimSnapshots(project.rootPath);
@@ -442,9 +447,13 @@ function createWorkbenchCoreFeature(
           stats.reportCaptureFailure(null, `claim reconciliation for project ${project.id}`, error);
         }
       }
+      reportPhase("stats startup");
       stats.start();
+      reportPhase("subagent startup");
       await subagents.start();
+      reportPhase("thread-state shadow startup");
       void threadStateShadow.start();
+      reportPhase("browse session cleanup startup");
       browseSessionCleanup.start();
     },
   });

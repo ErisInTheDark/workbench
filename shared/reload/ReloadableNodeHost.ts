@@ -367,7 +367,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       if (this.started) {
         for (const nodeId of ordered) {
           this.assertAcceptingWork();
-          await this.lifecycle(nodeId, "start", () => candidates.get(nodeId)!.instance.start());
+          await this.lifecycle(nodeId, "start", (reportPhase) => candidates.get(nodeId)!.instance.start(reportPhase));
         }
       }
       this.assertAcceptingWork();
@@ -409,7 +409,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       if (this.started) {
         for (const nodeId of atomicIds) {
           this.assertAcceptingWork();
-          await this.lifecycle(nodeId, "start", () => candidates.get(nodeId)!.instance.start());
+          await this.lifecycle(nodeId, "start", (reportPhase) => candidates.get(nodeId)!.instance.start(reportPhase));
         }
       }
       this.assertAcceptingWork();
@@ -446,7 +446,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       if (this.started) {
         for (const nodeId of delayedIds) {
           this.assertAcceptingWork();
-          await this.lifecycle(nodeId, "start", () => candidates.get(nodeId)!.instance.start());
+          await this.lifecycle(nodeId, "start", (reportPhase) => candidates.get(nodeId)!.instance.start(reportPhase));
         }
       }
       this.assertAcceptingWork();
@@ -504,7 +504,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         const built = this.createNodes(this.definitions, [nodeId], new Map([...dependencies, ...restored]), new Map([[nodeId, states.get(nodeId)]]), new Set(handoffIds), "restore");
         const node = built.get(nodeId)!;
         restored.set(nodeId, node);
-        if (this.started) await this.lifecycle(nodeId, "restore start", () => node.instance.start());
+        if (this.started) await this.lifecycle(nodeId, "restore start", (reportPhase) => node.instance.start(reportPhase));
       }
     } catch (error) {
       this.transition?.assertActive();
@@ -635,7 +635,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   ) {
     for (const nodeId of ordered) {
       const node = nodes.get(nodeId)!;
-      if (this.started) await this.lifecycle(nodeId, "start", () => node.instance.start());
+      if (this.started) await this.lifecycle(nodeId, "start", (reportPhase) => node.instance.start(reportPhase));
       this.openGate(node);
     }
   }
@@ -918,10 +918,10 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       && this.transition.affectedScopes.has(nodeId);
   }
 
-  private async lifecycle<T>(nodeId: string, phase: string, operation: () => Promise<T> | T) {
+  private async lifecycle<T>(nodeId: string, phase: string, operation: (reportPhase: (phase: string) => void) => Promise<T> | T) {
     return this.transition
       ? await this.transition.step(`${nodeId}: ${phase}`, operation)
-      : await operation();
+      : await operation(() => undefined);
   }
 
   private async waitForOpenDependencyChain(nodeId: string) {
@@ -1033,6 +1033,6 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       if (node.disposalPhase) pending.push(`${node.definition.id}: ${node.disposalPhase}`);
       for (const context of node.instance.listRuntimeDrainPending?.() ?? []) pending.push(`${node.definition.id}: ${boundedLabel(context.label)} (${Math.max(0, context.ageMs)}ms runtime context)`);
     }
-    return `${prefix}. Pending: ${pending.length ? pending.join(", ") : "retirement completion did not settle"}.`;
+    return `${prefix}. ${pending.length ? `Pending: ${pending.join(", ")}.` : "No additional pending-work details."}`;
   }
 }

@@ -10,6 +10,105 @@ import ReloadableNodeTransition from "./ReloadableNodeTransition";
 
 interface Objects { value: string; extra: string }
 
+function signal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => { resolve = complete; });
+  return { promise, resolve };
+}
+
+for (const route of ["atomic", "handoff", "topology", "restore"] as const) {
+  test(`${route} startup reports its blocked inner operation`, async () => {
+    const entered = signal();
+    const finish = signal();
+    const deadline = signal();
+    const detail = `blocked ${route} dependency`;
+    const definition = (replacement: boolean) => new ReloadableNode<null, Objects, never>({
+      access: "agent", children: [], description: "test owner", safeAll: true,
+      lifecycle: route === "atomic" ? "atomic" : "handoff",
+      scope: "server:unit", sources: "unit.ts", requires: [],
+      provides: replacement && route === "topology" ? ["value", "extra"] : ["value"],
+      create: (_context, build) => ({
+        registrations: replacement && route === "topology" ? { value: "new", extra: "new" } : { value: "old" },
+        detachForReload: () => ({}),
+        dispose: () => undefined,
+        start: async (reportPhase?: (phase: string) => void) => {
+          if (build.mode === "initial") return;
+          if (route === "restore" && build.mode === "replacement") throw new Error("candidate rejected");
+          reportPhase?.(detail);
+          entered.resolve();
+          await finish.promise;
+        },
+      }),
+    });
+    const host = new ReloadableNodeHost(null, {
+      load: () => defineReloadableNodeGraph([definition(false)]),
+      reload: () => defineReloadableNodeGraph([definition(true)]),
+    }, {
+      topologyScope: "server:topology",
+      createRuntimeDrainDeadline: () => ({ cancel: () => undefined, expired: deadline.promise }),
+    });
+    await host.start();
+    const reload = host.reload([route === "topology" ? "server:topology" : "server:unit"]);
+    const rejected = assert.rejects(reload, (error: Error) => (
+      error.message.includes("server:unit") && error.message.includes(detail)
+    ));
+    await entered.promise;
+    deadline.resolve();
+    try {
+      await rejected;
+    } finally {
+      finish.resolve();
+    }
+  });
+}
+
+test("a previous reload's startup reporter cannot replace the current diagnostic", async () => {
+  const entered = signal();
+  const finish = signal();
+  const deadlines: Array<ReturnType<typeof signal>> = [];
+  let oldReport: ((phase: string) => void) | undefined;
+  let generation = 0;
+  const graph = () => defineReloadableNodeGraph([new ReloadableNode<null, Objects, never>({
+    access: "agent", children: [], description: "test owner", safeAll: true,
+    lifecycle: "atomic", scope: "server:unit", sources: "unit.ts", requires: [], provides: ["value"],
+    create: () => {
+      const version = generation++;
+      return {
+        registrations: { value: String(version) },
+        dispose: () => undefined,
+        start: async (reportPhase?: (phase: string) => void) => {
+          if (version === 1) oldReport = reportPhase;
+          if (version !== 2) return;
+          reportPhase?.("current dependency");
+          oldReport?.("retired dependency");
+          entered.resolve();
+          await finish.promise;
+        },
+      };
+    },
+  })]);
+  const host = new ReloadableNodeHost(null, { load: graph, reload: graph }, {
+    topologyScope: "server:topology",
+    createRuntimeDrainDeadline: () => {
+      const deadline = signal();
+      deadlines.push(deadline);
+      return { cancel: () => undefined, expired: deadline.promise };
+    },
+  });
+  await host.start();
+  await host.reload(["server:unit"]);
+  const rejected = assert.rejects(host.reload(["server:unit"]), (error: Error) => (
+    error.message.includes("current dependency") && !error.message.includes("retired dependency")
+  ));
+  await entered.promise;
+  deadlines[1]!.resolve();
+  try {
+    await rejected;
+  } finally {
+    finish.resolve();
+  }
+});
+
 test("failed diagnostics cannot suppress the transition deadline", async () => {
   let expire!: () => void;
   let finishHook!: () => void;
