@@ -26,6 +26,7 @@ import {
   type WorkbenchThreadStatusTone,
 } from "./workbench-thread-status-colors";
 import {
+  ArchiveIcon,
   CompletedThreadIcon,
   ComposerDraftIcon,
   DiscardDraftIcon,
@@ -51,6 +52,15 @@ import { getThreadRowActions, type ThreadRowAction } from "./thread-row-actions"
 
 type ThreadAction = ThreadRowAction;
 type ThreadStatusIcon = ComponentType<{ className?: string }>;
+const THREAD_ACTIONS: Record<ThreadAction, { Icon: ThreadStatusIcon; label: string }> = {
+  archive: { Icon: ArchiveIcon, label: "Archive" },
+  complete: { Icon: SettleThreadIcon, label: "Completed" },
+  discard: { Icon: DiscardDraftIcon, label: "Discard draft" },
+  restore: { Icon: RestoreThreadIcon, label: "Restore" },
+  settle: { Icon: SettleThreadIcon, label: "Settle" },
+  snooze: { Icon: SnoozedThreadIcon, label: "Snooze" },
+  wake: { Icon: UnsnoozeThreadIcon, label: "Wake" },
+};
 type ThreadListEntry = WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry;
 type PinnedDraftSummaryEntry = Extract<WorkbenchPinnedThreadSummaryEntry, { entryKind: "draft" }>;
 
@@ -190,8 +200,10 @@ export default function WorkbenchThreadListItem({
   const claimedFileCount = claimedPaths.length;
   const showComposerDraft = claimedFileCount === 0 && hasComposerDraft;
   const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
-  const waiting = entry.entryKind !== "draft" && Boolean(entry.waitingFor);
+  const waiting = entry.entryKind !== "draft" && Boolean(entry.waitingFor)
+    && !(entry.entryKind === "thread" && entry.metadata.snoozed && lifecycle?.kind === "needsAttention");
   const showProposedCommit = !waiting && lifecycle?.kind === "completed" && hasProposedCommit;
+  const archived = entry.entryKind === "thread" && group === "archived";
   const status = waiting
     ? "Waiting"
     : showProposedCommit
@@ -205,34 +217,42 @@ export default function WorkbenchThreadListItem({
   const dateTime = timestamp.toISOString();
   const relativeTime = formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs);
   const exactTime = timestamp.toLocaleString();
-  const { baseAction, canShiftSettle } = getThreadRowActions(entry, group);
-  const action = canShiftSettle && isShiftPressed ? "settle" : baseAction;
+  const { baseAction, shiftAction } = getThreadRowActions(entry, group);
+  const action = isShiftPressed && shiftAction ? shiftAction : baseAction;
   const Icon = entry.entryKind === "draft" ? DraftThreadIcon : waiting ? WorkingThreadIcon : showProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
   const statusTone: WorkbenchThreadStatusTone = waiting
     ? "waiting"
     : lifecycle?.kind === "working"
       ? "working"
     : lifecycle?.kind === "needsAttention"
-      ? getNeedsAttentionThreadStatusTone(hasActiveGitArc)
+      ? getNeedsAttentionThreadStatusTone(entry.entryKind === "subagent" ? hasActiveGitArc : !entry.metadata.snoozed)
       : lifecycle?.kind === "stopped"
         ? "stopped"
         : "completed";
   const statusClassName = entry.entryKind === "draft" ? "text-muted" : getWorkbenchThreadStatusClassName(statusTone);
   const priority = group === "snoozed" ? "snoozed" : showPinPriorityIcon && pinned ? "pinned" : null;
   const PriorityIcon = priority === "snoozed" ? SnoozedThreadIcon : priority === "pinned" ? PinIcon : null;
-  const ActionIcon = action === "discard" ? DiscardDraftIcon : action === "restore" ? RestoreThreadIcon : action === "wake" ? UnsnoozeThreadIcon : SettleThreadIcon;
-  const actionLabel = action === "complete" ? "Completed" : action === "discard" ? "Discard draft" : action === "restore" ? "Restore" : action === "settle" ? "Settle" : "Wake";
+  const actionDisplay = action ? THREAD_ACTIONS[action] : null;
   const projectName = project ? `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
   const rowName = `${projectName}${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} claimed ${claimedFileCount === 1 ? "file" : "files"}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
-  const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled"));
+  const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled" || archived));
   const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
-  const compact = compactOverride ?? group === "settled";
+  const compact = compactOverride ?? (group === "settled" || archived);
   const actionReplacesPriority = showActions && Boolean(action);
-  const actionButton = showActions && action ? (
-    <button type="button" aria-label={actionLabel} title={actionLabel} className={`pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-muted focus-visible:flex focus-visible:text-text${isDragActive ? "" : " hover:text-text group-hover/thread-row:flex group-has-[:focus-visible]/thread-row:flex"} ${compact ? "col-start-3 self-center" : "col-start-2 self-start"} ${action === "discard" ? "p-1" : "gap-1 px-1.5 py-1 text-[0.72rem] font-medium"}`} onClick={(event) => { event.stopPropagation(); onAction?.(canShiftSettle && (event.shiftKey || event.detail > 1) ? "settle" : action); }} onPointerDown={(event) => event.stopPropagation()}>
-      <ActionIcon className="size-4" />
-      {action === "discard" ? null : <span>{actionLabel}</span>}
+  const actionButton = showActions && actionDisplay ? (
+    <button type="button" aria-label={actionDisplay.label} title={actionDisplay.label} className={`
+      pointer-events-auto z-20 row-start-1 -mt-1 -mb-1 ml-0 mr-0 hidden cursor-pointer items-center rounded-lg text-muted focus-visible:flex focus-visible:text-text
+      ${isDragActive ? "" : "hover:text-text group-hover/thread-row:flex group-has-[:focus-visible]/thread-row:flex"}
+      ${compact ? "col-start-3 self-center" : "col-start-2 self-start"}
+      ${action === "discard" ? "p-1" : "gap-1 px-1.5 py-1 text-[0.72rem] font-medium"}
+    `} onClick={(event) => {
+      event.stopPropagation();
+      const selectedAction = event.shiftKey && shiftAction ? shiftAction : baseAction;
+      if (selectedAction) onAction?.(selectedAction);
+    }} onPointerDown={(event) => event.stopPropagation()}>
+      <actionDisplay.Icon className="size-4" />
+      {action === "discard" ? null : <span>{actionDisplay.label}</span>}
     </button>
   ) : null;
   const contextMenuButton = contextMenu ? (

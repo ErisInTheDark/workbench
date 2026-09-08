@@ -8,6 +8,7 @@
 | Skill Load | The act of reading a skill's instruction file so the agent can apply that skill's workflow to the current task |
 | thread state | Durable sidebar state owned by `WorkbenchThreadStateController`. It includes project thread and draft records, project display order, new-thread profile selection, home display order, and pinned layout |
 | thread priority | Sidebar placement state: pinned, main, or snoozed. Settled is lifecycle, not priority. |
+| thread attention | Amber when unsnoozed; purple when snoozed. Existing snooze wake rules apply. |
 | thread display order | Durable manual ordering for pinned, snoozed, and settled sidebar sections. Main remains automatically ordered by claims, lifecycle, and activity. |
 | dependent snooze | Durable thread state that wakes only when its target thread is completed and has no live Git claims. |
 | profile | The exact composer settings snapshot held by a thread or draft. If tied to a stored profile, it also keeps that profile id |

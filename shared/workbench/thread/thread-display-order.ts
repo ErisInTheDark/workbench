@@ -1,5 +1,9 @@
 /*
+ * Keywords: sidebar, thread, folder, archive, ordering.
  * Exports:
+ * - WORKBENCH_THREAD_DISPLAY_SECTIONS/WorkbenchThreadDisplaySection: manually ordered sidebar sections.
+ * - WorkbenchThreadDisplayItem: projected thread or folder row.
+ * - moveWorkbenchThreadDisplayOrder: move a thread at a section root.
  * - WorkbenchThreadDisplayOrderSchema/WorkbenchThreadDisplayOrder/WorkbenchThreadFolder: strict project-level user layout with one-level folders. Keywords: thread, folder, display, ordering, schema.
  * - getWorkbenchThreadDisplayKey/getWorkbenchThreadDisplaySection/getWorkbenchThreadFolderKey: stable row, section, and folder identity. Keywords: thread, folder, pinned, snoozed, settled.
  * - normalizeWorkbenchThreadDisplayOrder/sortThreadSidebarEntries/resolveWorkbenchThreadDisplayOrder: decode legacy state and resolve layered automatic plus user order. Keywords: fallback, claims, lifecycle, user order.
@@ -32,6 +36,7 @@ export type WorkbenchThreadDisplaySection = typeof WORKBENCH_THREAD_DISPLAY_SECT
 enum ThreadSettleSort {
   Unsettled,
   Settled,
+  Archived,
 }
 
 enum ThreadPrioritySort {
@@ -83,6 +88,7 @@ export function normalizeWorkbenchThreadDisplayOrder(candidate: unknown): Workbe
 }
 
 function threadSettleSort(entry: WorkbenchThreadSidebarEntry) {
+  if (entry.entryKind === "thread" && entry.metadata.archived) return ThreadSettleSort.Archived;
   return entry.entryKind !== "draft" && entry.lifecycle.settled
     ? ThreadSettleSort.Settled
     : ThreadSettleSort.Unsettled;

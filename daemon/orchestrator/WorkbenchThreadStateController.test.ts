@@ -345,6 +345,134 @@ async function readGlobalState<T extends object>(storageRoot: string, id: Workbe
   return await testPersistence(storageRoot).readGlobal(id) as T;
 }
 
+test("overdue settlement archives retroactively except pinned threads and restore clears archival", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  const now = 20 * 24 * 60 * 60 * 1_000;
+  const records = ["overdue", "pinned", "recent", "missing-time"].map(threadId => ({
+    activityAt: threadId === "recent" ? now - 1 : 1, entryKind: "thread", title: threadId, identity: { harness: "codex", threadId },
+    metadata: { archived: false, pinned: threadId === "pinned", snoozed: false },
+    lifecycle: threadId === "missing-time"
+      ? { kind: "stopped", reason: "userMarkedStopped", settled: true }
+      : { kind: "completed", reason: "providerInactive", settled: true },
+    settledAt: threadId === "missing-time" ? null : threadId === "recent" ? 1 : now,
+  }));
+  await persistence.writeProject("project", { drafts: [], records, version: 4 });
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "retroactive-archive", threadStateStore: persistence, now: () => now,
+    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => {},
+    reconcileProject: async () => [],
+  });
+  const read = async (id: string) => (await controller.getSnapshot("project")).entries.find(entry => entry.entryKind === "thread" && entry.identity.threadId === id);
+  try {
+    for (const id of ["overdue", "pinned", "recent", "missing-time"]) {
+      const entry = await read(id);
+      assert.ok(entry?.entryKind === "thread");
+      assert.equal(entry.metadata.archived, id === "overdue" || id === "missing-time");
+      assert.equal(entry.lifecycle.kind, id === "missing-time" ? "stopped" : "completed");
+    }
+    await controller.handleRequest("observer", {
+      method: "workbench/thread-state/pin/set", projectId: "project", identity: { harness: "codex", threadId: "pinned" }, pinned: false,
+    });
+    const unpinned = await read("pinned");
+    assert.ok(unpinned?.entryKind === "thread");
+    assert.equal(unpinned.metadata.archived, true);
+    await controller.handleRequest("observer", {
+      method: "workbench/thread-state/restore", projectId: "project", identity: { harness: "codex", threadId: "overdue" },
+    });
+    const restored = await read("overdue");
+    assert.ok(restored?.entryKind === "thread");
+    assert.equal(restored.metadata.archived, false);
+    assert.equal(restored.lifecycle.settled, false);
+  } finally { await controller.dispose(); }
+});
+
+test("failed retroactive archival preserves the visible thread and its settled folder", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  const folderId = "b5bf699f-ea4b-45cf-9583-7449b536ea44";
+  await persistence.writeProject("project", {
+    version: 4, drafts: [],
+    records: [{
+      activityAt: 1, title: "Thread", entryKind: "thread", identity: { harness: "codex", threadId: "overdue" },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+      metadata: { archived: false, pinned: false, snoozed: false }, settledAt: 1,
+    }],
+    displayOrder: { folders: [{ folderId, section: "settled", title: "Keep", threadKeys: ["codex:overdue"] }] },
+  });
+  const write = persistence.writeProject.bind(persistence);
+  persistence.writeProject = async (projectId, document, histories) => {
+    if ((document as { records?: Array<{ metadata?: { archived: boolean } }> }).records?.some(record => record.metadata?.archived)) {
+      throw new Error("archive save failed");
+    }
+    await write(projectId, document, histories);
+  };
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "archive-save-failure", threadStateStore: persistence, now: () => 20 * 24 * 60 * 60 * 1_000,
+    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => {},
+    reconcileProject: async () => [],
+  });
+  try {
+    await assert.rejects(controller.getSnapshot("project"), /archive save failed/u);
+    const snapshot = await controller.getSnapshot("project");
+    const entry = snapshot.entries[0];
+    assert.ok(entry?.entryKind === "thread");
+    assert.equal(entry.metadata.archived, false);
+    assert.deepEqual(snapshot.displayOrder?.folders?.find(folder => folder.folderId === folderId)?.threadKeys, ["codex:overdue"]);
+  } finally { await controller.dispose(); }
+});
+
+test("questionnaire snooze retains input through interruption, then stop dismisses and wakes it", async () => {
+  const question = {
+    itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: "turn",
+    request: { id: "request", title: "Choose", summary: "", submitLabel: "Submit", questions: [
+      { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
+    ] },
+  };
+  const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1, entryKind: "thread", title: "Task", identity: { harness: "codex", threadId: "snooze-question" },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", turnId: "turn", settled: false },
+    pendingQuestionnaire: question,
+  };
+  let interrupts = 0;
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "questionnaire-snooze", threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => {},
+    reconcileProject: async (_project, _signal, accept) => { accept("codex", [provider], { complete: true }); return []; },
+    interruptQuestionnaire: async () => {
+      interrupts++;
+      await controller.applyLifecycle("project", "codex", provider.identity.threadId, { kind: "turnCompleted", status: "interrupted", turnId: "turn" });
+      return true;
+    },
+  });
+  try {
+    await controller.open("observer", "project");
+    await controller.refresh("project");
+    const response = await controller.handleRequest("observer", {
+      method: "workbench/thread-state/questionnaire/snooze", projectId: "project", identity: provider.identity, requestKey: question.requestKey,
+    });
+    assert.equal(response.error, undefined);
+    assert.equal(interrupts, 1);
+    const read = async () => (await controller.getSnapshot("project")).entries.find(entry => entry.entryKind === "thread" && entry.identity.threadId === provider.identity.threadId);
+    let entry = await read();
+    assert.ok(entry?.entryKind === "thread");
+    assert.equal(entry.metadata.snoozed, true);
+    assert.equal(entry.lifecycle.kind, "needsAttention");
+    assert.deepEqual(entry.pendingQuestionnaire, question);
+    await controller.applyLifecycle("project", "codex", provider.identity.threadId, { kind: "turnCompleted", status: "interrupted", turnId: "turn" });
+    entry = await read();
+    assert.ok(entry?.entryKind === "thread");
+    assert.equal(entry.lifecycle.kind, "needsAttention");
+    await controller.handleRequest("observer", {
+      method: "workbench/thread-state/questionnaire/dismiss", projectId: "project", identity: provider.identity, requestKey: question.requestKey,
+    });
+    entry = await read();
+    assert.ok(entry?.entryKind === "thread");
+    assert.equal(entry.lifecycle.kind, "stopped");
+    assert.equal(entry.metadata.snoozed, false);
+    assert.equal(entry.pendingQuestionnaire, null);
+  } finally { await controller.dispose(); }
+});
+
 async function seedProjectState(storageRoot: string, projectId: string, document: object) {
   await testPersistence(storageRoot).writeProject(projectId, document);
 }
@@ -790,13 +918,13 @@ test("version 3 bootstraps every project summary and publishes cross-project cha
   assert.deepEqual(update && "updateKind" in update && update.updateKind === "projectThreadSummary"
     ? {
       lastThreadUpdateAt: update.summary.lastThreadUpdateAt,
-      needsAttention: update.summary.counts.needsAttention,
+      needsAttention: update.summary.counts.needsAttentionActive,
       threadStatuses: update.summary.unsettledThreads.map(({ status }) => status),
     }
     : null, {
     lastThreadUpdateAt: 1,
     needsAttention: 1,
-    threadStatuses: ["needsAttention"],
+    threadStatuses: ["needsAttentionActive"],
   });
   await controller.dispose();
 });
@@ -1666,7 +1794,7 @@ test("legacy settled thread metadata receives a fresh persisted retention grace 
   });
 
   assert.equal(await controller.getMcpGeneration("project", "codex", "legacy-thread"), "legacy:4");
-  assert.equal((await controller.getSnapshot("project")).entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "legacy-thread"), false);
+  assert.equal((await controller.getSnapshot("project")).entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "legacy-thread"), true);
   const migrated = await readProjectState<{ records: Array<{ gitHistoryCleanedAt?: number | null; mcpGeneration?: string | null; settledAt?: number | null }>; version?: number }>(root, "project");
   assert.equal(migrated.version, 4);
   assert.deepEqual(migrated.records.map(({ gitHistoryCleanedAt, mcpGeneration, settledAt }) => ({ gitHistoryCleanedAt, mcpGeneration, settledAt })), [{ gitHistoryCleanedAt: null, mcpGeneration: "legacy:4", settledAt: 1_234 }]);

@@ -1,12 +1,14 @@
 /*
+ * Keywords: sidebar, preferences, persistence, transient disclosure, pagination.
  * Exports:
- * - default WorkbenchSidebarPreferencesProvider: compose global shell and active-project sidebar preferences behind focused intents. Keywords: sidebar, preferences, global, project, home, persistence, provider.
+ * - default WorkbenchSidebarPreferencesProvider: compose persisted preferences and own memory-only settled disclosure state behind focused intents. Keywords: sidebar, preferences, global, project, home, persistence, provider.
  */
 "use client";
 
 import {
   useCallback,
   useMemo,
+  useState,
   type ReactNode,
 } from "react";
 
@@ -22,6 +24,7 @@ import {
 } from "../../workbench/state/workbench-settings";
 import {
   WorkbenchSidebarPreferencesContext,
+  type WorkbenchSidebarDisplayState,
   type WorkbenchSidebarPreferencesValue,
 } from "./workbench-sidebar-preferences-context";
 import {
@@ -38,6 +41,10 @@ export default function WorkbenchSidebarPreferencesProvider({
 }) {
   const controller = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
+  const [displayState, setDisplayState] = useState<WorkbenchSidebarDisplayState>({
+    settledThreadItemLimit: 50,
+    settledThreadsOpen: false,
+  });
   const preferences = useMemo(() => {
     const projectPreferences = projectId
       ? readWorkbenchProjectSidebarPreferences(clientState.daemonRegistrationId, projectId, clientState.records)
@@ -45,8 +52,9 @@ export default function WorkbenchSidebarPreferencesProvider({
     return {
       ...projectPreferences,
       ...readWorkbenchGlobalSidebarPreferences(clientState.daemonRegistrationId, clientState.records),
+      ...displayState,
     };
-  }, [clientState.daemonRegistrationId, clientState.records, projectId]);
+  }, [clientState.daemonRegistrationId, clientState.records, displayState, projectId]);
 
   const persistGlobalPreference = useCallback((
     key: keyof WorkbenchGlobalSidebarPreferences,
@@ -59,7 +67,7 @@ export default function WorkbenchSidebarPreferencesProvider({
   }, [clientState.schemaVersion, controller, preferences]);
   const persistProjectPreference = useCallback((
     key: Exclude<keyof WorkbenchProjectSidebarPreferences, "pinnedFolderIds" | "threadFolderIds">,
-    value: boolean | number,
+    value: boolean,
   ) => {
     if (!projectId || preferences[key] === value) return;
     void writeWorkbenchProjectSidebarPreference(controller, projectId, key, value).catch((error) => {
@@ -68,7 +76,12 @@ export default function WorkbenchSidebarPreferencesProvider({
   }, [controller, preferences, projectId]);
   const setDisclosureOpen = useCallback<WorkbenchSidebarPreferencesValue["setDisclosureOpen"]>(
     (key, open) => {
-      if (key === "projectsOpen") persistGlobalPreference(key, open);
+      if (key === "settledThreadsOpen") {
+        setDisplayState(previous => previous.settledThreadsOpen === open ? previous : {
+          settledThreadsOpen: open,
+          settledThreadItemLimit: open ? 50 : previous.settledThreadItemLimit,
+        });
+      } else if (key === "projectsOpen") persistGlobalPreference(key, open);
       else persistProjectPreference(key, open);
     },
     [persistGlobalPreference, persistProjectPreference],
@@ -113,7 +126,9 @@ export default function WorkbenchSidebarPreferencesProvider({
     setReloadNecessaryOpen: (open) => persistGlobalPreference("reloadNecessaryOpen", open),
     setSettledThreadItemLimit: (limit) => {
       const boundedLimit = Math.max(50, Math.min(5_000, Math.floor(limit)));
-      persistProjectPreference("settledThreadItemLimit", boundedLimit);
+      setDisplayState(previous => previous.settledThreadItemLimit === boundedLimit ? previous : {
+        ...previous, settledThreadItemLimit: boundedLimit,
+      });
     },
     setSidebarCollapsed: (collapsed) => persistGlobalPreference("sidebarCollapsed", collapsed),
     setStatusCountsExpanded: (scope, expanded) => {

@@ -1,8 +1,15 @@
 /*
+ * Keywords: home, sidebar, thread, folder, archive, ordering.
  * Exports:
- * - WorkbenchHomeThreadDisplayOrder schema and types: define folder-free, project-qualified home priority order. Keywords: home, thread, order, project.
- * - projectWorkbenchHomeThreadList: combine project sidebars into one activity-ordered and user-ordered home projection with project-owned folders. Keywords: sidebar, folder, projection.
- * - move/replace/remove helpers: mutate home order by qualified thread blocks and keep project folder membership separate. Keywords: drag, persistence, folder, reconciliation.
+ * - WorkbenchHomeThreadDisplayOrderSchema/WorkbenchHomeThreadDisplayOrder: folder-free, project-qualified home order.
+ * - WorkbenchHomeThreadEntry/WorkbenchHomeThreadDisplayItem/WorkbenchHomeThreadList: qualified rows, folder blocks, and list sections.
+ * - normalizeWorkbenchHomeThreadDisplayOrder: conform persisted home layout.
+ * - getWorkbenchHomeThreadKey/getWorkbenchHomeFolderKey: qualify thread and folder identities.
+ * - resolveWorkbenchHomeThreadSectionKeys: flatten ordered section membership.
+ * - projectWorkbenchHomeThreadList: combine project sidebars with project-owned folders and a separate archived tail. Keywords: sidebar, folder, projection, archive.
+ * - moveWorkbenchHomeThreadDisplayItem: move a qualified thread block.
+ * - replaceWorkbenchHomeThreadDisplayMember/removeWorkbenchHomeThreadDisplayMember: replace or remove home membership.
+ * - removeWorkbenchThreadFromProjectFolder: remove project-owned folder membership separately.
  */
 
 import {
@@ -50,6 +57,7 @@ export type WorkbenchHomeThreadDisplayItem =
   };
 
 export interface WorkbenchHomeThreadList {
+  archivedEntries: WorkbenchHomeThreadEntry[];
   displayOrder: WorkbenchHomeThreadDisplayOrder;
   mainEntries: WorkbenchHomeThreadEntry[];
   pinnedItems: WorkbenchHomeThreadDisplayItem[];
@@ -162,6 +170,7 @@ export function projectWorkbenchHomeThreadList(
   );
   return {
     displayOrder,
+    archivedEntries: entries.filter(({ entry }) => getThreadSidebarGroup(entry) === "archived"),
     mainEntries: entries.filter(({ entry }) => getThreadSidebarGroup(entry) === "main"),
     pinnedItems: projectSection(entries, sidebars, displayOrder, "pinned"),
     settledItems: projectSection(entries, sidebars, displayOrder, "settled"),

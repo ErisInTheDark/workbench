@@ -402,6 +402,14 @@ export function useWorkbenchThread(threadId: string, explicitClient?: WorkbenchC
   const stop = useCallback(async (source: ThreadPayload | null = document) => (
     source ? await client.controls?.stopThread(source) ?? null : null
   ), [client.controls, document]);
+  const snoozeQuestionnaire = useCallback(async (projectId: string, harness: WorkbenchHarness, requestKey: string) => {
+    if (!client.controls) throw new Error("Workbench controls are not ready.");
+    const accepted = await client.controls.updateThreadStateWithAcceptance({
+      method: "workbench/thread-state/questionnaire/snooze",
+      projectId, identity: { harness, threadId }, requestKey,
+    });
+    if (!accepted) throw new Error("The questionnaire changed before it could be snoozed.");
+  }, [client.controls, threadId]);
   const submitQuestionnaire = useCallback(async (
     response: WorkbenchUserInputResponse,
     options?: WorkbenchSubmitUserInputRequestOptions,
@@ -420,6 +428,7 @@ export function useWorkbenchThread(threadId: string, explicitClient?: WorkbenchC
     rateLimits: threads.rateLimits,
     read,
     stop,
+    snoozeQuestionnaire,
     submitQuestionnaire,
     threads,
     updateState: threads.updateState,
@@ -432,6 +441,7 @@ export function useWorkbenchThread(threadId: string, explicitClient?: WorkbenchC
     document,
     read,
     stop,
+    snoozeQuestionnaire,
     submitQuestionnaire,
     threadId,
     threads,

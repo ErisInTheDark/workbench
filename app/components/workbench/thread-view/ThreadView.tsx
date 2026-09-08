@@ -1337,9 +1337,7 @@ export default memo(function ThreadView ({
       onHarnessToggle={handleComposerHarnessToggle}
       highlightSources={inlineMentionSources}
       onSendMessage={handleSendMessage}
-      onStopThread={() => {
-        void handleStopThread();
-      }}
+      onStopThread={handleStopThread}
       onThreadComposerDraftChange={onThreadComposerDraftChange}
       onThreadComposerDraftClear={onThreadComposerDraftClear}
       onThreadQuestionnaireDraftChange={onThreadQuestionnaireDraftChange}

@@ -48,6 +48,15 @@ function sidebars(...projects: WorkbenchThreadSidebarSnapshot[]): WorkbenchProje
   return { projects };
 }
 
+test("home keeps archives available outside settled manual layout", () => {
+  const archived = { ...thread("project", "archive", 99), metadata: { archived: true as const, pinned: false as const, snoozed: false as const } };
+  const settled = { ...thread("project", "settled", 1), lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: true } };
+  const list = projectWorkbenchHomeThreadList(sidebars(sidebar("project", [archived, settled])), {});
+  assert.deepEqual(list.archivedEntries.map(({ entry }) => entry.title), ["project:archive"]);
+  assert.equal(list.settledItems.length, 1);
+  assert.equal(list.mainEntries.length, 0);
+});
+
 test("home projects one list and collapses each project folder at its first globally ordered member", () => {
   const alphaOlder = thread("alpha", "older", 20, { pinned: true });
   const alphaNewer = thread("alpha", "newer", 30, { pinned: true });

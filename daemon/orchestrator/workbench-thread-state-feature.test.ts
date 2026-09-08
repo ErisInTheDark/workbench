@@ -201,6 +201,57 @@ test("failed interruption cannot mark the thread complete or discard its questio
   } finally { await h.feature.dispose(); }
 });
 
+test("composer snooze preserves provider questionnaires and fences failures or raced answers", async () => {
+  for (const harness of ["codex", "copilot", "opencode"] as const) {
+    for (const outcome of ["snooze", "fail", "answer"] as const) {
+      const h = await questionnaireHarness(harness);
+      try {
+        h.state.failInterrupt = outcome === "fail";
+        if (outcome === "answer" && harness === "codex") h.state.beforeRelease = async () => {
+          await h.feature.controller.observeLifecycle(harness, "thread", { kind: "inputResolved", requestKey: h.questionnaire.requestKey });
+        };
+        const snooze = h.feature.controller.handleRequest("observer", {
+          method: "workbench/thread-state/questionnaire/snooze", projectId: "project",
+          identity: { harness, threadId: "thread" }, requestKey: h.questionnaire.requestKey,
+        });
+        if (outcome === "fail") await assert.rejects(snooze, /interrupt failed/u);
+        else {
+          const response = await snooze;
+          assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, outcome !== "answer" || harness !== "codex");
+        }
+        const entry = await h.read();
+        assert.ok(entry?.entryKind === "thread");
+        const answered = outcome === "answer" && harness === "codex";
+        assert.equal(entry.metadata.snoozed, outcome !== "fail" && !answered);
+        if (!answered) assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
+        if (outcome === "snooze") {
+          await h.feature.controller.observeLifecycle(harness, "thread", { kind: "acceptedIntent", turnId: "resumed" });
+          const resumed = await h.read();
+          assert.ok(resumed?.entryKind === "thread");
+          assert.equal(resumed.metadata.snoozed, false);
+        }
+      } finally { await h.feature.dispose(); }
+    }
+  }
+});
+
+test("a retained questionnaire can be snoozed after its thread was marked complete", async () => {
+  const h = await questionnaireHarness();
+  try {
+    await h.complete();
+    const response = await h.feature.controller.handleRequest("observer", {
+      method: "workbench/thread-state/questionnaire/snooze", projectId: "project",
+      identity: h.provider.identity, requestKey: h.questionnaire.requestKey,
+    });
+    assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, true);
+    const entry = await h.read();
+    assert.ok(entry?.entryKind === "thread");
+    assert.equal(entry.metadata.snoozed, true);
+    assert.equal(entry.lifecycle.kind, "needsAttention");
+    assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
+  } finally { await h.feature.dispose(); }
+});
+
 test("other provider questionnaires complete through their existing interrupt without Codex goal or waiter operations", async () => {
   for (const harness of ["copilot", "opencode"] as const) {
     const h = await questionnaireHarness(harness);

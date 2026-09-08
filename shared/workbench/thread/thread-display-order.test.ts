@@ -76,6 +76,20 @@ function ids(entries: readonly WorkbenchThreadSidebarEntry[]) {
 const attention = (): WorkbenchThreadLifecycle => ({ kind: "needsAttention", reason: "noActiveTurn", settled: false });
 const working = (turnId: string): WorkbenchThreadLifecycle => ({ agent: { agentStatus: "working", turnId }, kind: "working", reason: "acceptedIntent", settled: false });
 
+test("archives follow settled layout and snoozed claims stay below working threads", () => {
+  const archived = { ...thread("archive", 999), metadata: { archived: true as const, pinned: false as const, snoozed: false as const } };
+  const entries = [
+    archived,
+    thread("settled", 1, { settled: true }),
+    thread("purple", 100, { claimed: true, snoozed: true, lifecycle: attention() }),
+    thread("working", 1, { lifecycle: working("turn") }),
+  ];
+  assert.deepEqual(ids(resolveWorkbenchThreadDisplayOrder(entries, {}).entries), [
+    "codex:working", "codex:purple", "codex:settled", "codex:archive",
+  ]);
+  assert.equal(getWorkbenchThreadDisplaySection(archived), null);
+});
+
 test("automatic sidebar order applies settlement, priority, claims, lifecycle, and turn time as layers", () => {
   const entries = [
     thread("settled-pinned", 100, { pinned: true, settled: true }),

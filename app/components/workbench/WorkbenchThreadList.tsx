@@ -106,7 +106,7 @@ export default function WorkbenchThreadList({
   getThreadContextMenu?: (entry: WorkbenchThreadSidebarEntry, ownerProjectId: string, folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition | null;
   activeDragPayload?: WorkbenchDragPayload | null;
   nowMs?: number;
-  onAction?: (entry: WorkbenchThreadSidebarEntry, action: "complete" | "discard" | "restore" | "settle" | "wake", ownerProjectId: string) => void;
+  onAction?: (entry: WorkbenchThreadSidebarEntry, action: import("./thread-row-actions").ThreadRowAction, ownerProjectId: string) => void;
   onAutoFocusFolderComplete?: () => void;
   onCreateThread: (folderId?: string) => void;
   onCreateThreadPointerDragStart?: (event: import("react").PointerEvent<HTMLAnchorElement>) => void;
@@ -128,6 +128,10 @@ export default function WorkbenchThreadList({
   const mainEntries = groupedEntries.mainEntries;
   const snoozedItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "snoozed");
   const settledItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "settled");
+  const historyItems: WorkbenchThreadDisplayItem[] = [
+    ...settledItems,
+    ...groupedEntries.archivedEntries.map(entry => ({ entry, itemKind: "thread" as const })),
+  ];
   const isShiftPressed = useNonTextInputShiftKey();
   const {
     preferences,
@@ -135,18 +139,18 @@ export default function WorkbenchThreadList({
     setFolderOpen,
     setSettledThreadItemLimit,
   } = useWorkbenchSidebarPreferences();
-  const displayedSettledItems = settledItems.slice(0, preferences.settledThreadItemLimit);
-  const remainingSettledThreadCount = settledItems.slice(preferences.settledThreadItemLimit).reduce((total, item) => total + itemThreadCount(item), 0);
-  const nextSettledItemCount = Math.min(SETTLED_THREAD_PAGE_SIZE, settledItems.length - displayedSettledItems.length);
-  const nextSettledThreadCount = settledItems.slice(
+  const displayedHistoryItems = historyItems.slice(0, preferences.settledThreadItemLimit);
+  const remainingHistoryThreadCount = historyItems.slice(preferences.settledThreadItemLimit).reduce((total, item) => total + itemThreadCount(item), 0);
+  const nextHistoryItemCount = Math.min(SETTLED_THREAD_PAGE_SIZE, historyItems.length - displayedHistoryItems.length);
+  const nextHistoryThreadCount = historyItems.slice(
     preferences.settledThreadItemLimit,
-    preferences.settledThreadItemLimit + nextSettledItemCount,
+    preferences.settledThreadItemLimit + nextHistoryItemCount,
   ).reduce((total, item) => total + itemThreadCount(item), 0);
   const visibleEntriesForItems = (items: WorkbenchThreadDisplayItem[]) => items.flatMap((item) => item.itemKind === "folder"
     ? preferences.threadFolderIds.includes(item.folder.folderId) ? item.entries : []
     : [item.entry]);
   const primaryEntries = [...visibleEntriesForItems(pinnedItems), ...mainEntries, ...visibleEntriesForItems(snoozedItems)];
-  const navigableEntries = preferences.settledThreadsOpen ? [...primaryEntries, ...visibleEntriesForItems(displayedSettledItems)] : primaryEntries;
+  const navigableEntries = preferences.settledThreadsOpen ? [...primaryEntries, ...visibleEntriesForItems(displayedHistoryItems)] : primaryEntries;
   const hasSelectedEntry = navigableEntries.some((entry) => isWorkbenchThreadTargetSelected(targetForEntry(entry), currentTarget));
   const isDragActive = Boolean(activeDragPayload);
   const moveFocus = (event: ReactKeyboardEvent<HTMLAnchorElement>, index: number) => {
@@ -184,7 +188,8 @@ export default function WorkbenchThreadList({
       && activeDragPayload.ownerProjectId === projectId
       && (reorderSection !== "settled" || activeDragPayload.section === "settled"),
     );
-    const dragTargets = (
+    const archived = entry.entryKind === "thread" && entry.metadata.archived;
+    const dragTargets = archived ? null : (
       <WorkbenchThreadDragTargets
         activePayload={activeDragPayload}
         folderLabel={folder ? `add to ${folder.title}` : "create folder"}
@@ -212,7 +217,7 @@ export default function WorkbenchThreadList({
         entry,
         isShiftPressed,
         nowMs,
-        onAction: (action: "complete" | "discard" | "restore" | "settle" | "wake") => onAction?.(entry, action, projectId),
+        onAction: (action: import("./thread-row-actions").ThreadRowAction) => onAction?.(entry, action, projectId),
         onActivate: (activatedTarget: WorkbenchThreadTarget) => onOpenThread(activatedTarget),
         onDragStart: (event: import("react").DragEvent<HTMLAnchorElement>) => onDragStart(event),
         onKeyDown: (event: ReactKeyboardEvent<HTMLAnchorElement>) => moveFocus(event, index),
@@ -243,7 +248,7 @@ export default function WorkbenchThreadList({
         />
       );
     };
-    const rowDragEnabled = entry.entryKind !== "subagent";
+    const rowDragEnabled = entry.entryKind !== "subagent" && !archived;
     const dropTargetIds = rowDragEnabled
       ? [
           ...(onMove ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID] : []),
@@ -446,7 +451,7 @@ export default function WorkbenchThreadList({
           ? <ul className="m-0 flex flex-col gap-1 p-0">{mainEntries.map((entry) => renderEntry(entry))}</ul>
           : null}
         {snoozedItems.length ? renderReorderableSection(snoozedItems, "snoozed") : priorityTarget("snoozed")}
-        {settledItems.length ? (
+        {historyItems.length ? (
           <ThreadDisclosure
             className="mt-4"
             contentClassName="mt-1"
@@ -455,10 +460,16 @@ export default function WorkbenchThreadList({
             summary="Settled threads"
             summaryClassName="text-[0.72rem] font-medium leading-[1.5] text-muted"
           >
-            {renderReorderableSection(displayedSettledItems, "settled")}
-            {remainingSettledThreadCount > 0 ? (
-              <button type="button" aria-label={`Load ${nextSettledThreadCount} more settled threads`} className={`${workbenchThreadListButtonClassName} mt-1 justify-center text-center text-[0.72rem] font-medium text-muted`} onClick={() => setSettledThreadItemLimit(preferences.settledThreadItemLimit + nextSettledItemCount)}>
-                Load {nextSettledThreadCount} more
+            {renderReorderableSection(displayedHistoryItems.filter(item => item.itemKind === "folder" || item.entry.entryKind !== "thread" || !item.entry.metadata.archived), "settled")}
+            {displayedHistoryItems.some(item => item.itemKind === "thread" && item.entry.entryKind === "thread" && item.entry.metadata.archived) ? (
+              <h3 className="mt-4 mb-1 text-[0.72rem] font-medium text-muted">Archived threads</h3>
+            ) : null}
+            <ul className="m-0 flex flex-col gap-1 p-0">
+              {displayedHistoryItems.flatMap(item => item.itemKind === "thread" && item.entry.entryKind === "thread" && item.entry.metadata.archived ? [renderEntry(item.entry)] : [])}
+            </ul>
+            {remainingHistoryThreadCount > 0 ? (
+              <button type="button" aria-label={`Load ${nextHistoryThreadCount} more historical threads`} className={`${workbenchThreadListButtonClassName} mt-1 justify-center text-center text-[0.72rem] font-medium text-muted`} onClick={() => setSettledThreadItemLimit(preferences.settledThreadItemLimit + nextHistoryItemCount)}>
+                Load {nextHistoryThreadCount} more
               </button>
             ) : null}
           </ThreadDisclosure>

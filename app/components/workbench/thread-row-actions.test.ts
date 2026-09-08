@@ -22,7 +22,7 @@ const pending: typeof stopped = {
 };
 
 test("stopped sidebar rows settle directly while retaining priority and claim blockers", () => {
-  assert.deepEqual(getThreadRowActions(stopped, "main"), { baseAction: "settle", canShiftSettle: false });
+  assert.deepEqual(getThreadRowActions(stopped, "main"), { baseAction: "settle", shiftAction: null });
   assert.equal(getThreadRowActions(stopped, "snoozed").baseAction, "wake");
   assert.equal(getThreadRowActions({ ...stopped, lifecycle: { kind: "stopped", reason: "providerInterrupted", turnId: "turn", settled: true } }, "settled").baseAction, "restore");
   const claimed = { ...stopped, gitArc: {
@@ -33,8 +33,8 @@ test("stopped sidebar rows settle directly while retaining priority and claim bl
 });
 
 test("a sidebar questionnaire offers completion, never the direct-settle shortcut", () => {
-  assert.deepEqual(getThreadRowActions(pending, "main"), { baseAction: "complete", canShiftSettle: false });
-  assert.deepEqual(getThreadRowActions({ ...pending, waitingFor: "other" }, "main"), { baseAction: "complete", canShiftSettle: false });
+  assert.deepEqual(getThreadRowActions(pending, "main"), { baseAction: "complete", shiftAction: "snooze" });
+  assert.deepEqual(getThreadRowActions({ ...pending, waitingFor: "other" }, "main"), { baseAction: "complete", shiftAction: "snooze" });
   assert.equal(getThreadRowActions({ ...pending, pendingQuestionnaire: null }, "main").baseAction, null);
 });
 
@@ -42,7 +42,7 @@ test("pinned summaries preserve questionnaire completion without enabling shift 
   const summary = createWorkbenchProjectThreadSummary("project", [{
     ...pending, metadata: { archived: false, pinned: true, snoozed: false }, waitingFor: "other",
   }], 1);
-  assert.deepEqual(getThreadRowActions(summary.pinnedThreads[0]!, "pinned"), { baseAction: "complete", canShiftSettle: false });
+  assert.deepEqual(getThreadRowActions(summary.pinnedThreads[0]!, "pinned"), { baseAction: "complete", shiftAction: "snooze" });
 });
 
 test("subagent pending input retains its existing action restrictions", () => {
@@ -52,6 +52,11 @@ test("subagent pending input retains its existing action restrictions", () => {
     directSubagentIndex: 0, name: "child", parentThreadId: "parent", pinned: false,
     profileId: "profile", profileName: "profile", projectId: "project",
   };
-  assert.deepEqual(getThreadRowActions(subagent, "main"), { baseAction: null, canShiftSettle: false });
-  assert.deepEqual(getThreadRowActions({ ...subagent, lifecycle: stopped.lifecycle }, "main"), { baseAction: "settle", canShiftSettle: false });
+  assert.deepEqual(getThreadRowActions(subagent, "main"), { baseAction: null, shiftAction: null });
+  assert.deepEqual(getThreadRowActions({ ...subagent, lifecycle: stopped.lifecycle }, "main"), { baseAction: "settle", shiftAction: null });
+});
+
+test("settled rows archive only through shift while archived rows restore", () => {
+  assert.deepEqual(getThreadRowActions({ ...stopped, lifecycle: { kind: "stopped", reason: "userMarkedStopped", settled: true } }, "settled"), { baseAction: "restore", shiftAction: "archive" });
+  assert.deepEqual(getThreadRowActions({ ...stopped, metadata: { archived: true, pinned: false, snoozed: false } }, "archived"), { baseAction: "restore", shiftAction: null });
 });

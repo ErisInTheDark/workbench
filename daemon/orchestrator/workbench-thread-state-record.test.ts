@@ -37,6 +37,17 @@ test("unobserved durable records remain internal until provider facts arrive", (
   assert.equal(projectWorkbenchThreadStateEntry(record), null);
 });
 
+test("settled and archived saved rows remain visible when omitted by provider listings", () => {
+  for (const archived of [false, true]) {
+    const record = parseWorkbenchThreadStateEntry({
+      ...entry, providerObserved: false,
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: !archived },
+      metadata: { archived, pinned: false, snoozed: false },
+    });
+    assert.ok(projectWorkbenchThreadStateEntry(record));
+  }
+});
+
 test("stored-record conformance preserves lifecycle truth when an optional projection is invalid", () => {
   const conformed = conformStoredWorkbenchThreadStateRecord({
     ...entry,

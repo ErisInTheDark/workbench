@@ -77,6 +77,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchHomeThreadDisplayOrderStore from "./WorkbenchHomeThreadDisplayOrderStore";
 import WorkbenchPinnedThreadLayoutStore from "./WorkbenchPinnedThreadLayoutStore";
+import WorkbenchThreadArchiveController from "./WorkbenchThreadArchiveController";
 import type { WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 import {
   conformStoredWorkbenchThreadStateRecord,
@@ -320,6 +321,7 @@ function describeInvalidRequest(input: object, issue: { code: string; message: s
 export default class WorkbenchThreadStateController {
   private static readonly SETTLED_GIT_RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
   private active = true;
+  private readonly archives: WorkbenchThreadArchiveController;
   private readonly connectionProjects = new Map<string, ProjectObservation>();
   private readonly homeDisplayOrder: WorkbenchHomeThreadDisplayOrderStore;
   private readonly now: () => number;
@@ -337,6 +339,31 @@ export default class WorkbenchThreadStateController {
   constructor(options: WorkbenchThreadStateControllerOptions) {
     this.options = options;
     this.now = options.now ?? Date.now;
+    this.archives = new WorkbenchThreadArchiveController({
+      now: this.now,
+      records: () => [...this.projects.values()].flatMap(state => [...state.entries.values()].filter(
+        (entry): entry is WorkbenchThreadStateRecord => entry.entryKind !== "draft",
+      )),
+      expire: async () => {
+        for (const [projectId, state] of this.projects) {
+          if (!this.active) return;
+          await this.enqueue(`${projectId}:archive`, async () => {
+            const previous = new Map(state.entries);
+            if (!this.active || !this.synchronizeSettlementTimestamps(state)) return;
+            try {
+              await this.persist(projectId, state, previous);
+              this.publish(projectId, state);
+            } catch (error) {
+              state.error = `thread-archive: ${sanitizeError(error)}`;
+              state.freshness = "partial";
+              this.publish(projectId, state);
+              throw error;
+            }
+          });
+        }
+      },
+      onError: error => this.options.log?.(`Thread archival failed: ${sanitizeError(error)}`),
+    });
     this.homeDisplayOrder = new WorkbenchHomeThreadDisplayOrderStore(options.threadStateStore, {
       reportRepairs: (repairedPaths) => this.logHomeDisplayOrderRepairs(repairedPaths),
     });
@@ -545,8 +572,12 @@ export default class WorkbenchThreadStateController {
       const gitHistoryCleanedAt = entry.lifecycle.settled && entry.settledAt !== null
         ? entry.gitHistoryCleanedAt
         : null;
-      if (entry.settledAt === settledAt && entry.gitHistoryCleanedAt === gitHistoryCleanedAt) continue;
-      state.entries.set(key, { ...entry, gitHistoryCleanedAt, settledAt });
+      const timed = { ...entry, gitHistoryCleanedAt, settledAt };
+      const archive = this.archives.isDue(timed);
+      if (entry.settledAt === settledAt && entry.gitHistoryCleanedAt === gitHistoryCleanedAt && !archive) continue;
+      state.entries.set(key, archive && timed.entryKind === "thread"
+        ? { ...timed, metadata: { archived: true, pinned: false, snoozed: false }, snoozedUntil: null }
+        : timed);
       changed = true;
     }
     return changed;
@@ -770,7 +801,11 @@ export default class WorkbenchThreadStateController {
       const ownedEvent = existing.entryKind === "subagent" && event.kind === "turnCompleted" && event.status === "completed"
         ? { kind: "agentStatus" as const, status: "completed" as const, turnId: event.turnId }
         : event;
-      const lifecycle = reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
+      const retainedQuestionnaire = existing.entryKind === "thread"
+        && existing.lifecycle.kind === "needsAttention"
+        && existing.pendingQuestionnaire?.turnId === (event.kind === "turnCompleted" ? event.turnId : null)
+        && event.kind === "turnCompleted" && event.status === "interrupted";
+      const lifecycle = retainedQuestionnaire ? existing.lifecycle : reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
       const shouldUnsnooze = existing.entryKind === "thread" && existing.metadata.snoozed && (
         event.kind === "acceptedIntent"
         || event.kind === "inputResolved"
@@ -1044,6 +1079,7 @@ export default class WorkbenchThreadStateController {
 
   async dispose() {
     this.active = false;
+    await this.archives.dispose();
     this.stopReloadDirtSubscription?.();
     this.waitingByThreadKey.clear();
     for (const state of this.projects.values()) {
@@ -1075,12 +1111,14 @@ export default class WorkbenchThreadStateController {
         entries.set(entryKey(record), record);
       }
       const state: ProjectState = { abort: null, displayOrder: stored.displayOrder ?? {}, drafts, entries, error: null, freshness: "loading", generation: 0, newThreadProfile: stored.newThreadProfile, observers: new Set(), reconcilePromise: null, revision: 0, stopProjectObservation: null };
+      const originalEntries = new Map(state.entries);
       const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state);
       this.projects.set(projectId, state);
       this.updatePinnedLayoutEntries(projectId, this.naturallyOrderedEntries(state));
       const pinnedLayoutUpdate = await this.pinnedLayout.importProject(projectId, this.naturallyOrderedEntries(state), state.displayOrder);
       if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
-      if (repairedSettlementTimestamps) await this.persist(projectId, state);
+      if (repairedSettlementTimestamps) await this.persist(projectId, state, originalEntries);
+      this.archives.reschedule();
       setTimeout(() => {
         if (this.active) void this.reconcile(projectId, state);
       }, 0);
@@ -2384,6 +2422,12 @@ export default class WorkbenchThreadStateController {
     const state = await this.getProject(request.projectId);
     const key = `${request.identity.harness}:${request.identity.threadId}`;
     const candidate = state.entries.get(key);
+    const snoozingQuestionnaire = request.method === "workbench/thread-state/questionnaire/snooze";
+    const snoozeQuestionnaire = snoozingQuestionnaire && candidate?.entryKind === "thread"
+      && !candidate.metadata.archived && candidate.lifecycle.kind !== "working"
+      && candidate.pendingQuestionnaire?.requestKey === request.requestKey
+      ? candidate.pendingQuestionnaire : null;
+    if (snoozingQuestionnaire && !snoozeQuestionnaire) return { accepted: false, revision: state.revision };
     const completionQuestionnaire = request.method === "workbench/thread-state/status/set"
       && request.status === "completed" && candidate
       && isWorkbenchSidebarThreadCompletionAvailable(candidate)
@@ -2392,22 +2436,23 @@ export default class WorkbenchThreadStateController {
       : null;
     // Provider I/O must not hold the mutation queue: its interruption notification
     // uses that same queue. Revalidate the captured question after the await.
-    if (completionQuestionnaire) {
+    const interruptedQuestionnaire = snoozeQuestionnaire ?? completionQuestionnaire;
+    if (interruptedQuestionnaire) {
       if (!this.options.interruptQuestionnaire) throw new Error("Questionnaire interruption is unavailable.");
-      if (!await this.options.interruptQuestionnaire(request.projectId, request.identity.harness, request.identity.threadId, completionQuestionnaire)) {
+      if (!await this.options.interruptQuestionnaire(request.projectId, request.identity.harness, request.identity.threadId, interruptedQuestionnaire)) {
         return { accepted: false, revision: state.revision };
       }
     }
     const mutate = async () => await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
       const entry = state.entries.get(key);
       if (!entry || entry.entryKind === "draft") return { accepted: false, revision: state.revision };
-      if (completionQuestionnaire && (
+      if (interruptedQuestionnaire && (
         entry.entryKind !== "thread" || entry.metadata.archived || entry.lifecycle.kind === "working"
-        || entry.pendingQuestionnaire?.requestKey !== completionQuestionnaire.requestKey
-        || entry.pendingQuestionnaire.itemId !== completionQuestionnaire.itemId
-        || entry.pendingQuestionnaire.turnId !== completionQuestionnaire.turnId
+        || entry.pendingQuestionnaire?.requestKey !== interruptedQuestionnaire.requestKey
+        || entry.pendingQuestionnaire.itemId !== interruptedQuestionnaire.itemId
+        || entry.pendingQuestionnaire.turnId !== interruptedQuestionnaire.turnId
         || (getWorkbenchLifecycleTurnId(entry.lifecycle) !== null
-          && getWorkbenchLifecycleTurnId(entry.lifecycle) !== completionQuestionnaire.turnId)
+          && getWorkbenchLifecycleTurnId(entry.lifecycle) !== interruptedQuestionnaire.turnId)
       )) return { accepted: false, revision: state.revision };
       if (request.method === "workbench/thread-state/status/set" && (
         entry.entryKind !== "thread"
@@ -2430,6 +2475,16 @@ export default class WorkbenchThreadStateController {
         return { accepted: false, revision: state.revision };
       }
       let next = entry;
+      if (snoozeQuestionnaire && entry.entryKind === "thread") {
+        next = {
+          ...entry,
+          lifecycle: snoozeQuestionnaire.turnId
+            ? { kind: "needsAttention", reason: "pendingInput", requestKey: snoozeQuestionnaire.requestKey, turnId: snoozeQuestionnaire.turnId, settled: false }
+            : { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+          metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: true },
+          snoozedUntil: null,
+        };
+      }
       if (request.method === "workbench/thread-state/pin/set") next = entry.entryKind === "subagent"
         ? { ...entry, pinned: request.pinned }
         : entry.metadata.archived
@@ -2442,7 +2497,10 @@ export default class WorkbenchThreadStateController {
           ? { ...entry, lifecycle, pinned: false }
           : { ...entry, lifecycle, metadata: entry.metadata.archived ? entry.metadata : { ...entry.metadata, snoozed: false }, snoozedUntil: null };
       }
-      if (request.method === "workbench/thread-state/restore" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "restore" }) };
+      if (request.method === "workbench/thread-state/restore" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = {
+        ...entry, lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "restore" }),
+        ...(entry.entryKind === "thread" && entry.metadata.archived ? { metadata: { archived: false as const, pinned: false, snoozed: false } } : {}),
+      };
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/status/set" && entry.lifecycle.kind !== request.status) {
         // Questionnaire completion has stopped its owning turn. Do not retain
         // that turn's agent marker and let a late provider event reopen it.
@@ -2459,7 +2517,11 @@ export default class WorkbenchThreadStateController {
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: request.archived ? { archived: true, pinned: false, snoozed: false } : { archived: false, pinned: false, snoozed: false }, snoozedUntil: null };
       if (request.method === "workbench/thread-state/questionnaire/dismiss") {
         if (entry.pendingQuestionnaire?.requestKey === request.requestKey) {
-          next = { ...entry, pendingQuestionnaire: null };
+          next = entry.entryKind === "thread" ? {
+            ...entry, pendingQuestionnaire: null,
+            lifecycle: reduceWorkbenchThreadLifecycle(null, { kind: "userStopped" }),
+            metadata: { ...entry.metadata, snoozed: false }, snoozedUntil: null,
+          } : { ...entry, pendingQuestionnaire: null };
         } else if (entry.pendingQuestionnaire) {
           return { accepted: false, revision: state.revision };
         }
@@ -2486,7 +2548,7 @@ export default class WorkbenchThreadStateController {
         const pinnedLayoutUpdate = await this.pinnedLayout.remove(request.projectId, key);
         if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
       }
-      await this.persist(request.projectId, state); this.publish(request.projectId, state, parsed.data);
+      await this.persist(request.projectId, state); this.publish(request.projectId, state, state.entries.get(key));
       return { accepted: true, revision: state.revision };
     });
     const result = request.method === "workbench/thread-state/settle"
@@ -2496,11 +2558,24 @@ export default class WorkbenchThreadStateController {
     return result;
   }
 
-  private persist(projectId: string, state: ProjectState) {
+  private persist(projectId: string, state: ProjectState, previousEntries = new Map(state.entries)) {
+    const previousOrder = state.displayOrder;
     this.synchronizeSettlementTimestamps(state);
     state.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), state.displayOrder);
+    const installedEntries = new Map(state.entries);
+    const installedOrder = state.displayOrder;
     return this.enqueue(`${projectId}:storage:write`, async () => {
-      await this.writeProjectState(projectId, state);
+      try {
+        await this.writeProjectState(projectId, state);
+      } catch (error) {
+        // Undo derived settlement/archival only where no newer intent replaced it.
+        for (const [key, entry] of previousEntries) {
+          if (state.entries.get(key) === installedEntries.get(key)) state.entries.set(key, entry);
+        }
+        if (state.displayOrder === installedOrder) state.displayOrder = previousOrder;
+        throw error;
+      }
+      this.archives.reschedule();
     });
   }
 

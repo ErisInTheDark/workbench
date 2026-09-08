@@ -75,7 +75,7 @@ interface WorkbenchThreadSidebarActionsValue {
   homeDisplayOrder: WorkbenchThreadDisplayOrder;
   homeDisplayOrderSupported: boolean;
   nowMs: number;
-  onAction: (entry: ThreadListEntry, action: "complete" | "discard" | "restore" | "settle" | "wake", ownerProjectId: string) => void;
+  onAction: (entry: ThreadListEntry, action: import("./thread-row-actions").ThreadRowAction, ownerProjectId: string) => void;
   onAutoFocusFolderComplete: () => void;
   onMove: (sourceKey: string, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null, beforeKey: string | null, ownerProjectId?: string) => void;
   onProjectFolderDrop: (payload: WorkbenchThreadRowDragPayload, targetProjectId: string, targetKey: string, section: WorkbenchThreadDisplaySection, destinationFolderId: string | null) => void;
@@ -187,8 +187,8 @@ function WorkbenchThreadSidebarActionsProvider({
       onSelect: () => onOpenThread(targetForEntry(entry), ownerProjectId),
     }];
 
-    if (terminal && (entry.lifecycle.settled || isWorkbenchThreadSettlementAvailable(entry))) {
-      items.push(entry.lifecycle.settled ? {
+    if (terminal && (group === "archived" || entry.lifecycle.settled || isWorkbenchThreadSettlementAvailable(entry))) {
+      items.push(group === "archived" || entry.lifecycle.settled ? {
         icon: <RestoreThreadIcon className="size-4" />,
         id: "restore",
         label: "Restore",
@@ -242,13 +242,14 @@ function WorkbenchThreadSidebarActionsProvider({
     items.push({ id: "priority-separator", kind: "separator" }, {
       controls: [{
         checked: pinned,
+        disabled: group === "archived",
         icon: <PinIcon className="size-4" />,
         id: "pin",
         label: pinned ? "Unpin thread" : "Pin thread",
         onSelect: () => mutateEntry(entry, ownerProjectId, "pin/set", !pinned),
       }, {
         checked: snoozed,
-        disabled: entry.entryKind !== "draft" && entry.lifecycle.settled,
+        disabled: group === "archived" || (entry.entryKind !== "draft" && entry.lifecycle.settled),
         icon: <SnoozedThreadIcon className="size-4" />,
         id: "snooze",
         label: snoozed ? "Wake" : "Snooze thread",
@@ -273,15 +274,15 @@ function WorkbenchThreadSidebarActionsProvider({
       items.push({ id: "status-separator", kind: "separator" }, {
         controls: [{
           checked: entry.lifecycle.kind === "needsAttention",
-          disabled: entry.lifecycle.kind === "working",
+          disabled: group === "archived" || entry.lifecycle.kind === "working",
           icon: <NeedsAttentionThreadIcon className="size-4" />,
           id: "needs-attention",
           label: "Needs attention",
           onSelect: () => selectStatus("needsAttention"),
-          tone: getNeedsAttentionThreadStatusTone(entry.gitArc?.phase === "active"),
+          tone: getNeedsAttentionThreadStatusTone(!entry.metadata.snoozed),
         }, {
           checked: entry.lifecycle.kind === "completed",
-          disabled: providerOwned && !canComplete,
+          disabled: group === "archived" || (providerOwned && !canComplete),
           icon: <CompletedThreadIcon className="size-4" />,
           id: "completed",
           label: "Completed",
@@ -289,7 +290,7 @@ function WorkbenchThreadSidebarActionsProvider({
           tone: "completed",
         }, {
           checked: entry.lifecycle.kind === "stopped",
-          disabled: providerOwned && !thread,
+          disabled: group === "archived" || (providerOwned && !thread),
           icon: <StoppedThreadIcon className="size-4" />,
           id: "stopped",
           label: "Stopped",
@@ -303,7 +304,7 @@ function WorkbenchThreadSidebarActionsProvider({
       });
     }
 
-    if (terminal) {
+    if (terminal && group !== "archived") {
       items.push({ id: "archive-separator", kind: "separator" }, {
         icon: <ArchiveIcon className="size-4" />,
         id: "archive",
@@ -330,10 +331,16 @@ function WorkbenchThreadSidebarActionsProvider({
         if (action === "discard" && !isPinnedDraftSummaryEntry(entry)) void controls?.deleteThreadDraft(entry.draft.draftId);
         return;
       }
-      if (action === "complete") void mutateEntry(entry, ownerProjectId, "status/set", "completed");
-      if (action === "settle") void mutateEntry(entry, ownerProjectId, "settle");
-      if (action === "restore") void mutateEntry(entry, ownerProjectId, "restore");
-      if (action === "wake") void mutateEntry(entry, ownerProjectId, "snooze/set", false);
+      if (action === "discard") return;
+      const mutations = {
+        archive: () => mutateEntry(entry, ownerProjectId, "archive/set", true),
+        complete: () => mutateEntry(entry, ownerProjectId, "status/set", "completed"),
+        restore: () => mutateEntry(entry, ownerProjectId, "restore"),
+        settle: () => mutateEntry(entry, ownerProjectId, "settle"),
+        snooze: () => mutateEntry(entry, ownerProjectId, "snooze/set", true),
+        wake: () => mutateEntry(entry, ownerProjectId, "snooze/set", false),
+      };
+      void mutations[action]().catch(error => console.error("Thread action failed", boundedFolderMutationError(error)));
     },
     onAutoFocusFolderComplete: () => setAutoFocusFolderId(null),
     onMove: (sourceKey, section, destinationFolderId, beforeKey, ownerProjectId = projectId) => {

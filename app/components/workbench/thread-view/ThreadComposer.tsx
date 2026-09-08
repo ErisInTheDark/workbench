@@ -44,7 +44,8 @@ import {
 import type { WorkbenchThreadLifecycle, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
 import StickyCollapsibleSurface from "../StickyCollapsibleSurface";
-import { PlayIcon, StopIcon } from "../workbench-icons";
+import { PlayIcon, SnoozedThreadIcon, StopIcon } from "../workbench-icons";
+import { useWorkbenchThread, useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
 import PlaintextEditable from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import ThreadAgentPicker from "./ThreadAgentPicker";
@@ -173,6 +174,8 @@ export default function ThreadComposer ({
   threadLifecycle: WorkbenchThreadLifecycle | null;
 }) {
   const daemon = useWorkbenchDaemonClient();
+  const threadController = useWorkbenchThread(thread.id);
+  const sidebarEntry = useWorkbenchThreadSidebarEntry(projectId, thread.harness, thread.id);
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const {
     isWithinBottomDistance,
@@ -235,7 +238,11 @@ export default function ThreadComposer ({
   const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(thread, threadLifecycle, hasPendingUserInputRequest, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken || isCopilotAuthRequired;
   const isSendDisabled = isInputDisabled || (!isActiveThread && !hasEffectiveProfile);
-  const stopControlState = getThreadComposerStopControlState({ hasPendingUserInputRequest, isActiveThread, isCommentMode, isStopping });
+  const stopControlState = getThreadComposerStopControlState({
+    hasPendingUserInputRequest, isActiveThread, isCommentMode, isStopping,
+    canSnoozeQuestionnaire: sidebarEntry?.entryKind === "thread" && !sidebarEntry.metadata.archived && !isApprovalBlocked,
+    snoozed: sidebarEntry?.entryKind === "thread" && sidebarEntry.metadata.snoozed,
+  });
   const isStopDisabled = stopControlState.disabled;
   const isMobileTextInput = useMobileTextInputEnvironment();
   const helperText = !hasEffectiveProfile
@@ -581,9 +588,13 @@ export default function ThreadComposer ({
     setIsStopping(true);
     setError("");
     try {
-      await onStopThread(thread.id);
+      if (stopControlState.action === "snooze") {
+        await threadController.snoozeQuestionnaire(projectId, thread.harness, questionnaireRequestKey);
+      } else {
+        await onStopThread(thread.id);
+      }
     } catch (stopError) {
-      setError(stopError instanceof Error ? stopError.message : "Unable to stop that turn.");
+      setError(stopError instanceof Error ? stopError.message : "Unable to update that turn.");
     } finally {
       setIsStopping(false);
     }
@@ -662,18 +673,20 @@ export default function ThreadComposer ({
     );
   };
 
+  const stopLabel = stopControlState.action === "snooze" ? "Snooze questionnaire" : isActiveThread ? "Stop current turn" : "Dismiss questionnaire";
+  const stoppingLabel = stopControlState.action === "snooze" ? "Snoozing questionnaire" : "Stopping current turn";
   const stopButton = showStopButton ? (
     <PrimaryButton
       type="button"
-      aria-label={isStopping ? "Stopping current turn" : isActiveThread ? "Stop current turn" : "Dismiss questionnaire"}
-      title={isStopping ? "Stopping current turn" : isActiveThread ? "Stop current turn" : "Dismiss questionnaire"}
+      aria-label={isStopping ? stoppingLabel : stopLabel}
+      title={stopLabel}
       disabled={isStopDisabled}
       shape="circle"
       onClick={() => {
         void stop();
       }}
     >
-      <StopIcon className="h-4.5 w-4.5" />
+      {stopControlState.action === "snooze" ? <SnoozedThreadIcon className="h-4.5 w-4.5" /> : <StopIcon className="h-4.5 w-4.5" />}
     </PrimaryButton>
   ) : null;
   const resumeButton = canRecoverInterruptedTurn ? (

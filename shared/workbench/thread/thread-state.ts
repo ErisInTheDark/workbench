@@ -1,6 +1,26 @@
 /*
  * Keywords: thread, sidebar, protocol, lifecycle, previous titles, pinned summaries.
  * Exports:
+ * - WorkbenchHarnessSchema/WorkbenchHarnessId: supported provider identities.
+ * - WorkbenchComposerSettingsState/WorkbenchComposerProfileSelectionState: shared composer settings and selected profile types.
+ * - WorkbenchThreadDraft/WorkbenchThreadLifecycle/WorkbenchGitArcPlanState: draft, lifecycle, and inactive-plan types.
+ * - WorkbenchGitArcLifecycleStateSchema/WorkbenchGitArcLifecycleState: active and resolved Git work.
+ * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
+ * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
+ * - WorkbenchThreadSidebarSnapshot/WorkbenchProjectThreadSidebars: project and aggregate sidebar types.
+ * - WorkbenchReloadDirtSnapshotSchema: reload ownership and pending-scope diagnostics.
+ * - WorkbenchProjectThreadSummaryCounts/WorkbenchProjectThreadSummaryEntry/WorkbenchPinnedThreadSummaryEntry/WorkbenchProjectThreadSummary: summary projection types.
+ * - WorkbenchProjectThreadSummariesSchema/WorkbenchProjectThreadSummaries: cross-project summary collection.
+ * - WorkbenchPinnedThreadLayoutSnapshotSchema/WorkbenchPinnedThreadLayoutSnapshot: revisioned global pin layout.
+ * - WorkbenchHomeThreadDisplayOrderSchema/WorkbenchHomeThreadDisplayOrder/WorkbenchHomeThreadDisplayOrderSnapshot: folder-free home order and revision.
+ * - WorkbenchThreadStateOpenResultV2/WorkbenchThreadStateOpenResult: project bootstrap types.
+ * - WorkbenchGlobalThreadStateOpenResultV4Schema/WorkbenchGlobalThreadStateOpenResultV5Schema/WorkbenchGlobalThreadStateOpenResultV6Schema/WorkbenchGlobalThreadStateOpenResult: versioned global bootstrap variants.
+ * - WorkbenchPinnedThreadContextResult: admitted pinned-thread context.
+ * - WorkbenchThreadActivityUpdate: compact activity delta type.
+ * - WorkbenchProjectThreadSummaryUpdateSchema/WorkbenchProjectThreadSummaryUpdate: project summary notification.
+ * - WorkbenchProjectThreadSidebarUpdateSchema/WorkbenchProjectThreadSidebarUpdate: project sidebar notification.
+ * - WorkbenchThreadStateSnapshot/WorkbenchThreadStateRequest/WorkbenchThreadStateMutationResult/WorkbenchThreadTitleMutationResult: notification, intent, and acknowledgement types.
+ * - WorkbenchLifecycleEvent/getWorkbenchLifecycleTurnId: lifecycle inputs and owning turn identity.
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity. Keywords: route, draft, provider, subagent.
  * - WorkbenchComposerProfileSlotSchema/WorkbenchComposerSettingsSchema/WorkbenchComposerProfileSelectionSchema: strict daemon target-profile contracts. Keywords: composer, profile, settings, daemon.
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts. Keywords: zod, lifecycle, plan, questionnaire, sidebar.
@@ -11,7 +31,7 @@
  * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent. Keywords: priority, drag, sidebar.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, project-summary, mutation, title, project, and request protocol. Keywords: orchestrator, websocket, revision.
  * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness. Keywords: git, arc, settlement, proposal, wake.
- * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition already-ordered entries into hidden, pinned, main, snoozed, and settled render sections. Keywords: grouping, pin, sidebar.
+ * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition ordered entries into pinned, main, snoozed, settled, and archived render sections. Keywords: grouping, pin, sidebar, archive.
  * - WorkbenchThreadPlanIntersections/getWorkbenchThreadPlanIntersections/createWorkbenchThreadPlanIntersectionSelector: derive and identity-stabilize sibling active and planned intersections with narrower overlapping paths. Keywords: plan, claim, intersection, sidebar, selector.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback. Keywords: title, preview, uuid.
@@ -583,6 +603,7 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/restore") }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/status/set"), status: z.enum(["needsAttention", "completed", "stopped"]) }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/dismiss"), requestKey: z.string().min(1) }),
+  ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/snooze"), requestKey: z.string().min(1) }),
   ProjectRequestBase.extend({ entry: WorkbenchQuestionnaireHistoryEntrySchema, identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/resolve") }),
   ProjectRequestBase.extend({ archived: z.boolean(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/archive/set") }),
   ProjectRequestBase.extend({
@@ -638,7 +659,7 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
 ]);
 export type WorkbenchThreadStateRequest = z.infer<typeof WorkbenchThreadStateRequestSchema>;
 
-export type WorkbenchThreadSidebarGroup = "pinned" | "main" | "snoozed" | "settled" | "hidden";
+export type WorkbenchThreadSidebarGroup = "pinned" | "main" | "snoozed" | "settled" | "archived" | "hidden";
 
 export function normalizeWorkbenchTimestampMs(timestamp: number) {
   return Math.trunc(timestamp < 100_000_000_000 ? timestamp * 1000 : timestamp);
@@ -674,7 +695,7 @@ export function resolveWorkbenchThreadTitle({
 }
 
 export function getThreadSidebarGroup(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadSidebarGroup {
-  if (entry.entryKind !== "subagent" && entry.metadata.archived) return "hidden";
+  if (entry.entryKind !== "subagent" && entry.metadata.archived) return "archived";
   if (entry.entryKind !== "draft" && entry.lifecycle.settled) return "settled";
   if (entry.entryKind !== "subagent" && entry.metadata.snoozed) return "snoozed";
   const pinned = entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
@@ -692,13 +713,14 @@ export function isWorkbenchThreadSettlementAvailable(entry: WorkbenchThreadSideb
 export function areAllUnsnoozedThreadEntriesSettlementReady(entries: readonly WorkbenchThreadSidebarEntry[]) {
   return entries.every((entry) => {
     const group = getThreadSidebarGroup(entry);
-    return group === "hidden" || group === "snoozed" || group === "settled" || isWorkbenchThreadSettlementAvailable(entry);
+    return group === "hidden" || group === "archived" || group === "snoozed" || group === "settled" || isWorkbenchThreadSettlementAvailable(entry);
   });
 }
 
 export function groupWorkbenchThreadSidebarEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {
   const visibleEntries = entries.filter((entry) => getThreadSidebarGroup(entry) !== "hidden" && entry.entryKind !== "subagent");
   return {
+    archivedEntries: visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === "archived"),
     mainEntries: visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === "main"),
     pinnedEntries: visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === "pinned"),
     settledEntries: visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === "settled"),
@@ -908,13 +930,14 @@ export function createWorkbenchProjectThreadSummary(
   const unsettledThreads: WorkbenchProjectThreadSummaryEntry[] = [];
   const statusByThreadKey = new Map<string, WorkbenchProjectThreadSummaryEntry["status"]>();
   for (const entry of projectedEntries) {
-    if (entry.entryKind !== "thread" || entry.lifecycle.settled || entry.metadata.snoozed) continue;
-    const status: WorkbenchProjectThreadSummaryEntry["status"] = entry.waitingFor
+    if (entry.entryKind !== "thread" || entry.metadata.archived || entry.lifecycle.settled
+      || (entry.metadata.snoozed && entry.lifecycle.kind !== "needsAttention")) continue;
+    const status: WorkbenchProjectThreadSummaryEntry["status"] = entry.waitingFor && !entry.metadata.snoozed
       ? "waiting"
       : entry.lifecycle.kind === "working"
         ? "working"
       : entry.lifecycle.kind === "needsAttention"
-        ? entry.gitArc?.phase === "active" ? "needsAttentionActive" : "needsAttention"
+        ? entry.metadata.snoozed ? "needsAttention" : "needsAttentionActive"
         : entry.lifecycle.kind === "stopped"
           ? "stopped"
           : entry.gitArc?.proposals.some(({ status: proposalStatus }) => proposalStatus === "proposed")

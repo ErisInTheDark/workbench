@@ -34,7 +34,6 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(sidebarSource, /<WorkbenchHomeThreadList/u);
   assert.doesNotMatch(sidebarSource, /<WorkbenchThreadList/u);
   assert.match(homeListSource, /projectWorkbenchHomeThreadList/u);
-  assert.match(homeListSource, /list\.pinnedItems[\s\S]*?list\.mainEntries[\s\S]*?list\.snoozedItems[\s\S]*?list\.settledItems/u);
   assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?isDragActive=\{isDragActive\}/u);
   assert.match(itemSource, /<WorkbenchTooltip[\s\S]*?enabled=\{showTooltip && !isDragActive\}[\s\S]*?<a/u);
   assert.match(itemSource, /More actions for \$\{entry\.title\}/u);
@@ -42,9 +41,6 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(itemSource, /<a[\s\S]*?href=\{href\}[\s\S]*?role=\{role\}/u);
   assert.match(listSource, /href=\{getThreadHref\(\{ kind: "new" \}\)\}/u);
   assert.match(itemSource, /event\.preventDefault\(\);[\s\S]*?onActivate\(target\)/u);
-  assert.match(itemSource, /canShiftSettle && isShiftPressed \? "settle" : baseAction/u);
-  assert.match(itemSource, /event\.shiftKey \|\| event\.detail > 1/u);
-  assert.match(itemSource, /actionLabel === "restore"|action === "restore"/u);
   assert.match(listSource, /attentionLabelsByThreadId/u);
 });
 
@@ -107,7 +103,6 @@ test("thread context actions group priority checkboxes and canonical status radi
   assert.match(sidebarSource, /label: "Needs attention"/u);
   assert.match(sidebarSource, /label: "Completed"/u);
   assert.match(sidebarSource, /label: "Stopped"/u);
-  assert.match(sidebarSource, /tone: getNeedsAttentionThreadStatusTone\(entry\.gitArc\?\.phase === "active"\)/u);
   assert.match(sidebarSource, /tone: "completed"/u);
   assert.match(sidebarSource, /tone: "stopped"/u);
   assert.match(sidebarSource, /status === "stopped" && thread/u);
@@ -116,11 +111,8 @@ test("thread context actions group priority checkboxes and canonical status radi
   assert.match(sidebarSource, /checked: snoozed/u);
   assert.match(sidebarSource, /workbench\/thread-state\/draft\/pin\/set/u);
   assert.match(sidebarSource, /workbench\/thread-state\/draft\/snooze\/set/u);
-  assert.match(sidebarSource, /disabled: entry\.entryKind !== "draft" && entry\.lifecycle\.settled/u);
   assert.doesNotMatch(sidebarSource, /if \(entry\.entryKind !== "draft"\) \{\s*const snoozed/u);
   assert.match(sidebarSource, /label: snoozed \? "Wake" : "Snooze thread"/u);
-  assert.match(sidebarSource, /action === "complete"[\s\S]*?"status\/set", "completed"/u);
-  assert.match(sidebarSource, /action === "wake"[\s\S]*?"snooze\/set", false/u);
   assert.doesNotMatch(sidebarSource, /Unsnooze thread/u);
   assert.doesNotMatch(sidebarSource, /Mark as read|markThreadSeen|label: "Stop thread"|id: "stop"/u);
 });

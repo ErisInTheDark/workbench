@@ -1,15 +1,15 @@
 /*
  * Exports:
  * - WorkbenchThreadStatusTone/WorkbenchThreadStatusControlTone: shared visual tone contracts for thread lifecycle presentation. Keywords: thread, status, color, tone.
- * - getNeedsAttentionThreadStatusTone: distinguish active-arc attention from attention outside an active arc. Keywords: thread, attention, git, arc.
+ * - getNeedsAttentionThreadStatusTone: map attention urgency to amber or purple. Keywords: thread, attention, snooze.
  * - getWorkbenchThreadStatusClassName/getWorkbenchThreadStatusControlClassName: own shared text and context-control color classes. Keywords: thread, status, color, Tailwind.
  */
 
 export type WorkbenchThreadStatusTone = "completed" | "needs-attention" | "needs-attention-active" | "stopped" | "waiting" | "working";
 export type WorkbenchThreadStatusControlTone = Exclude<WorkbenchThreadStatusTone, "waiting" | "working">;
 
-export function getNeedsAttentionThreadStatusTone(hasActiveGitArc: boolean): "needs-attention" | "needs-attention-active" {
-  return hasActiveGitArc ? "needs-attention-active" : "needs-attention";
+export function getNeedsAttentionThreadStatusTone(highPriority: boolean): "needs-attention" | "needs-attention-active" {
+  return highPriority ? "needs-attention-active" : "needs-attention";
 }
 
 export function getWorkbenchThreadStatusClassName(tone: WorkbenchThreadStatusTone) {

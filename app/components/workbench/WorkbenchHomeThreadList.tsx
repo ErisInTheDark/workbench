@@ -101,15 +101,19 @@ export default function WorkbenchHomeThreadList({
     actions.homeDisplayOrder,
   ), [actions.homeDisplayOrder, actions.projectThreadSidebars]);
   const settledLimit = preferences.settledThreadItemLimit;
+  const historyItems: WorkbenchHomeThreadDisplayItem[] = [
+    ...list.settledItems,
+    ...list.archivedEntries.map(entry => ({ entry, itemKind: "thread" as const, threadKeys: [entry.threadKey] as [string] })),
+  ];
   let settledThreadCount = 0;
-  const displayedSettledItems = list.settledItems.filter((item, index) => {
+  const displayedHistoryItems = historyItems.filter((item, index) => {
     const count = itemThreadCount(item);
     if (settledThreadCount >= settledLimit && index > 0) return false;
     settledThreadCount += count;
     return true;
   });
-  const displayedSettledThreadCount = displayedSettledItems.reduce((count, item) => count + itemThreadCount(item), 0);
-  const remainingSettledThreadCount = list.settledItems.reduce((count, item) => count + itemThreadCount(item), 0) - displayedSettledThreadCount;
+  const displayedSettledThreadCount = displayedHistoryItems.reduce((count, item) => count + itemThreadCount(item), 0);
+  const remainingSettledThreadCount = historyItems.reduce((count, item) => count + itemThreadCount(item), 0) - displayedSettledThreadCount;
   const nextSettledThreadCount = Math.min(SETTLED_THREAD_PAGE_SIZE, remainingSettledThreadCount);
   const isDragActive = Boolean(activeDragPayload);
 
@@ -136,7 +140,7 @@ export default function WorkbenchHomeThreadList({
       && activeDragPayload.ownerProjectId === projectId
       && (reorderSection !== "settled" || activeDragPayload.section === "settled"),
     );
-    const dragTargets = (
+    const dragTargets = entry.metadata.archived ? null : (
       <WorkbenchThreadDragTargets
         activePayload={activeDragPayload}
         folderLabel={folder ? `add to ${folder.title}` : "create folder"}
@@ -182,6 +186,7 @@ export default function WorkbenchHomeThreadList({
     );
     return (
       <Draggable
+        disabled={entry.metadata.archived}
         dropTargetIds={[
           ...(actions.homeDisplayOrderSupported ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID] : []),
           WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID,
@@ -388,7 +393,7 @@ export default function WorkbenchHomeThreadList({
           ? <ul className="m-0 flex flex-col gap-1 p-0">{list.mainEntries.map((entry) => renderEntry(entry))}</ul>
           : null}
         {list.snoozedItems.length ? renderSection(list.snoozedItems, "snoozed") : priorityTarget("snoozed")}
-        {list.settledItems.length ? (
+        {historyItems.length ? (
           <ThreadDisclosure
             className="mt-4"
             contentClassName="mt-1"
@@ -397,11 +402,17 @@ export default function WorkbenchHomeThreadList({
             summary="Settled threads"
             summaryClassName="text-[0.72rem] font-medium leading-[1.5] text-muted"
           >
-            {renderSection(displayedSettledItems, "settled")}
+            {renderSection(displayedHistoryItems.filter(item => item.itemKind === "folder" || !item.entry.entry.metadata.archived), "settled")}
+            {displayedHistoryItems.some(item => item.itemKind === "thread" && item.entry.entry.metadata.archived) ? (
+              <h3 className="mt-4 mb-1 text-[0.72rem] font-medium text-muted">Archived threads</h3>
+            ) : null}
+            <ul className="m-0 flex flex-col gap-1 p-0">
+              {displayedHistoryItems.flatMap(item => item.itemKind === "thread" && item.entry.entry.metadata.archived ? [renderEntry(item.entry)] : [])}
+            </ul>
             {remainingSettledThreadCount > 0 ? (
               <button
                 type="button"
-                aria-label={`Load ${nextSettledThreadCount} more settled threads`}
+                aria-label={`Load ${nextSettledThreadCount} more historical threads`}
                 className={`${workbenchThreadListButtonClassName} mt-1 justify-center text-center text-[0.72rem] font-medium text-muted`}
                 onClick={() => setSettledThreadItemLimit(preferences.settledThreadItemLimit + SETTLED_THREAD_PAGE_SIZE)}
               >

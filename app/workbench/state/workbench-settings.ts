@@ -1,11 +1,13 @@
 /*
+ * Keywords: settings, persistent preferences, sidebar, project overrides.
  * Exports:
  * - DEFAULT_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE: editor zoom defaults and bounds. Keywords: settings, editor, zoom.
  * - WorkbenchTheme/WorkbenchEditorFontFamily/WorkbenchFileOpenBehavior/WorkbenchSelectedProjectPinPlacement/WorkbenchSettingKey: setting value contracts. Keywords: settings, theme, editor, pinned, thread.
  * - WorkbenchGlobalSettings, WorkbenchProjectSettings, WorkbenchResolvedSettings: stored and resolved settings shapes. Keywords: settings, global, project override.
+ * - WorkbenchProjectSettingOverride/WorkbenchSettingDefinition: override values and setting metadata.
  * - WorkbenchGlobalSidebarPreferences/WorkbenchProjectSidebarPreferences/WorkbenchSidebarPreferences: global shell, project-local, and combined sidebar state. Keywords: settings, global, project, sidebar, disclosure, folders.
  * - WORKBENCH_SETTING_DEFINITIONS: labels and option metadata for settings UI rendering. Keywords: settings, registry, UI.
- * - createDefaultGlobalWorkbenchSettings/createDefaultWorkbenchGlobalSidebarPreferences/createDefaultWorkbenchProjectSidebarPreferences: create settings and scoped sidebar defaults. Keywords: settings, defaults, sidebar, global, project.
+ * - createDefaultGlobalWorkbenchSettings/createDefaultProjectWorkbenchSettings/createDefaultWorkbenchGlobalSidebarPreferences/createDefaultWorkbenchProjectSidebarPreferences: create settings and scoped sidebar defaults. Keywords: settings, defaults, sidebar, global, project.
  * - readGlobalWorkbenchSettings/writeGlobalWorkbenchSetting: project global settings and write one setting intent. Keywords: settings, app state, global.
  * - readProjectWorkbenchSettings/writeProjectWorkbenchSetting: project explicit project override slots and write one override intent. Keywords: settings, app state, project.
  * - readWorkbenchGlobalSidebarPreferences/writeWorkbenchGlobalSidebarPreference: global shell sidebar state and focused writes. Keywords: settings, app state, global, sidebar, home.
@@ -69,8 +71,6 @@ export interface WorkbenchProjectSidebarPreferences {
   pinnedFolderIds: readonly string[];
   pinnedStatusCountsExpanded: boolean;
   pinnedThreadsOpen: boolean;
-  settledThreadItemLimit: number;
-  settledThreadsOpen: boolean;
   threadFolderIds: readonly string[];
   threadsOpen: boolean;
 }
@@ -205,8 +205,6 @@ export function createDefaultWorkbenchProjectSidebarPreferences(): WorkbenchProj
     pinnedFolderIds: [],
     pinnedStatusCountsExpanded: true,
     pinnedThreadsOpen: true,
-    settledThreadItemLimit: 50,
-    settledThreadsOpen: false,
     threadFolderIds: [],
     threadsOpen: true,
   };
@@ -360,12 +358,8 @@ export function readWorkbenchProjectSidebarPreferences(
         case "explorerOpen":
         case "pinnedStatusCountsExpanded":
         case "pinnedThreadsOpen":
-        case "settledThreadsOpen":
         case "threadsOpen":
           preferences[record.preference.key] = record.preference.value;
-          break;
-        case "settledThreadItemLimit":
-          preferences.settledThreadItemLimit = record.preference.value;
           break;
       }
     }

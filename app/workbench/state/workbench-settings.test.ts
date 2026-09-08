@@ -136,13 +136,13 @@ test("sidebar and ordinary project settings coexist as separate app-state record
   const controller = new WorkbenchClientStateController({ mode: "memory" });
   const sidebar = {
     ...createDefaultWorkbenchProjectSidebarPreferences(),
-    settledThreadItemLimit: 150,
+    explorerOpen: false,
   };
   const settings = createDefaultProjectWorkbenchSettings();
   settings.showUnopenableFiles = { enabled: true, value: true };
   settings.theme = { enabled: true, value: "magical-girl" };
 
-  await writeWorkbenchProjectSidebarPreference(controller, "alpha", "settledThreadItemLimit", 150);
+  await writeWorkbenchProjectSidebarPreference(controller, "alpha", "explorerOpen", false);
   await writeProjectWorkbenchSetting(controller, "alpha", "showUnopenableFiles", settings.showUnopenableFiles);
   await writeProjectWorkbenchSetting(controller, "alpha", "theme", settings.theme);
 
@@ -153,5 +153,21 @@ test("sidebar and ordinary project settings coexist as separate app-state record
   assert.deepEqual(
     readProjectWorkbenchSettings("memory", "alpha", controller.getSnapshot().records),
     settings,
+  );
+});
+
+test("saved settled expansion does not restore transient sidebar state", async () => {
+  const controller = new WorkbenchClientStateController({ mode: "memory" });
+  await controller.put({
+    daemonRegistrationId: "memory", kind: "sidebarPreference", projectId: "alpha",
+    preference: { key: "settledThreadsOpen", value: true },
+  });
+  await controller.put({
+    daemonRegistrationId: "memory", kind: "sidebarPreference", projectId: "alpha",
+    preference: { key: "settledThreadItemLimit", value: 500 },
+  });
+  assert.deepEqual(
+    readWorkbenchProjectSidebarPreferences("memory", "alpha", controller.getSnapshot().records),
+    readWorkbenchProjectSidebarPreferences("memory", "alpha", []),
   );
 });

@@ -749,8 +749,8 @@ test("project summaries count unsettled top-level status after direct-child proj
     parent,
     child,
     { ...thread("waiting", { agent: { agentStatus: "working", turnId: "wait-turn" }, kind: "working", reason: "acceptedIntent", settled: false }), waitingFor: "other" },
-    thread("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }),
-    thread("active-attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }, arc),
+    thread("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }, arc, 1, true),
+    thread("active-attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }),
     thread("stopped", { kind: "stopped", reason: "userMarkedStopped", settled: false }),
     thread("completed", { kind: "completed", reason: "providerInactive", settled: false }, undefined, 4, true),
     thread("proposed", { kind: "completed", reason: "providerInactive", settled: false }, {

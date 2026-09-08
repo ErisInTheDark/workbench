@@ -438,28 +438,6 @@ test("live lifecycle presentation outranks a hanging proposed commit", () => {
   }
 });
 
-test("needs-attention thread rows use amber only during an active Git arc", () => {
-  const needsAttentionLifecycle = { kind: "needsAttention" as const, reason: "pendingInput" as const, requestKey: "questionnaire:one", settled: false as const, turnId: "turn-two" };
-  const inactiveEntry = createThreadEntry({ threadId: "inactive-attention", title: "Inactive attention" });
-  const activeEntry = createThreadEntry({ claimedPaths: ["src/one.ts"], threadId: "active-attention", title: "Active attention" });
-  const resolvedEntry = createThreadEntry({ threadId: "resolved-attention", title: "Resolved attention" });
-  const inactiveHtml = renderThreadItem({ ...inactiveEntry, lifecycle: needsAttentionLifecycle });
-  const activeHtml = renderThreadItem({ ...activeEntry, lifecycle: needsAttentionLifecycle });
-  const resolvedHtml = renderThreadItem({
-    ...resolvedEntry,
-    gitArc: {
-      checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "resolved",
-      phase: "resolved", proposals: [], updatedAt: "2026-08-20T00:00:00.000Z",
-    },
-    lifecycle: needsAttentionLifecycle,
-  });
-
-  for (const html of [inactiveHtml, resolvedHtml]) {
-    assert.match(html, /data-thread-status-tone="needs-attention"/u);
-  }
-  assert.match(activeHtml, /data-thread-status-tone="needs-attention-active"/u);
-});
-
 test("thread rows expose explicit context-menu access alongside interactive tooltips", async () => {
   const entry = createThreadEntry({ threadId: "menu", title: "Menu work" });
   const html = renderThreadItem(entry, {

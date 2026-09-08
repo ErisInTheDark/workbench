@@ -39,8 +39,8 @@ const EMPTY_WORKBENCH_THREAD_STATUS_COUNTS: WorkbenchProjectThreadSummaryCounts 
 };
 
 const WORKBENCH_THREAD_STATUS_ITEMS: WorkbenchThreadStatusItem[] = [
-  { dashed: true, Icon: NeedsAttentionThreadIcon, key: "needsAttentionActive", label: "Needs attention with active work", tone: "needs-attention-active" },
-  { dashed: true, Icon: NeedsAttentionThreadIcon, key: "needsAttention", label: "Needs attention", tone: "needs-attention" },
+  { dashed: true, Icon: NeedsAttentionThreadIcon, key: "needsAttentionActive", label: "Needs attention", tone: "needs-attention-active" },
+  { dashed: true, Icon: NeedsAttentionThreadIcon, key: "needsAttention", label: "Snoozed needs attention", tone: "needs-attention" },
   { dashed: false, Icon: WorkingThreadIcon, key: "working", label: "Working", tone: "working" },
   { dashed: false, Icon: WorkingThreadIcon, key: "waiting", label: "Waiting", tone: "waiting" },
   { dashed: true, Icon: StoppedThreadIcon, key: "stopped", label: "Stopped", tone: "stopped" },

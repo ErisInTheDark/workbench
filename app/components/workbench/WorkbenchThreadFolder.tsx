@@ -55,12 +55,12 @@ function folderStatusRank(entry: FolderEntry) {
 function getFolderStatus(entries: readonly FolderEntry[], attentionLabelsByThreadId: Record<string, string | undefined>) {
   const entry = [...entries].sort((left, right) => folderStatusRank(left) - folderStatusRank(right))[0]!;
   if (entry.entryKind === "draft") return { dashed: true, Icon: DraftThreadIcon as FolderStatusIcon, label: "Draft", statusClassName: "text-muted", strokeOpacity: 0.24 };
-  const waiting = Boolean(entry.waitingFor);
+  const waiting = Boolean(entry.waitingFor) && !(entry.metadata.snoozed && entry.lifecycle.kind === "needsAttention");
   const proposed = !waiting && entry.lifecycle.kind === "completed" && Boolean(entry.gitArc?.proposals.some(({ status }) => status === "proposed"));
   const tone: WorkbenchThreadStatusTone = waiting
     ? "waiting"
     : entry.lifecycle.kind === "needsAttention"
-    ? getNeedsAttentionThreadStatusTone(entry.gitArc?.phase === "active")
+    ? getNeedsAttentionThreadStatusTone(!entry.metadata.snoozed)
     : entry.lifecycle.kind;
   const Icon = waiting ? WorkingThreadIcon : proposed ? ProposedCommitThreadIcon : entry.lifecycle.kind === "needsAttention" ? NeedsAttentionThreadIcon : entry.lifecycle.kind === "working" ? WorkingThreadIcon : entry.lifecycle.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
   return {
