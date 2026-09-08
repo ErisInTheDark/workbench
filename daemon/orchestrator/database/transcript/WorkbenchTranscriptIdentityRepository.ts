@@ -9,10 +9,10 @@ import type Database from "better-sqlite3";
 import { z } from "zod";
 
 import type {
-  WorkbenchTranscriptItemIdentity,
-  WorkbenchTranscriptItemIdentityAdmission,
-  WorkbenchTranscriptItemIdentityLookup,
-  WorkbenchTranscriptItemSource,
+    WorkbenchTranscriptItemIdentity,
+    WorkbenchTranscriptItemIdentityAdmission,
+    WorkbenchTranscriptItemIdentityLookup,
+    WorkbenchTranscriptItemSource,
 } from "./workbench-transcript-types.ts";
 
 interface IdentityRow {
@@ -90,7 +90,7 @@ export default class WorkbenchTranscriptIdentityRepository {
       SELECT item_identity_id FROM workbench_transcript_item_source_aliases
       WHERE thread_id = @threadId AND source_id = @itemId AND (@turnId IS NULL OR turn_id = @turnId)
     `).all({ ...input, turnId: input.turnId ?? null }) as Array<{ item_identity_id: string }>;
-    const itemId = this.singleOwner(candidates.map((row) => row.item_identity_id));
+    const itemId = this.selectOwner(input.threadId, candidates.map((row) => row.item_identity_id));
     return itemId ? this.read(this.row(itemId)!) : null;
   }
 
@@ -114,7 +114,7 @@ export default class WorkbenchTranscriptIdentityRepository {
       `).get(input.threadId, legacy.turnId, legacy.alias) as { item_identity_id: string } | undefined;
       if (existing) candidates.push(existing.item_identity_id);
     }
-    const itemId = this.singleOwner(candidates) ?? randomUUID();
+    const itemId = this.selectOwner(input.threadId, candidates) ?? randomUUID();
     this.prepare(`
       INSERT INTO workbench_transcript_item_identities(id, thread_id) VALUES (?, ?)
       ON CONFLICT(id) DO NOTHING
@@ -162,10 +162,15 @@ export default class WorkbenchTranscriptIdentityRepository {
     }
   }
 
-  private singleOwner(candidates: readonly string[]) {
+  private selectOwner(threadId: string, candidates: readonly string[]) {
     const owners = new Set(candidates);
-    if (owners.size > 1) throw new Error("Transcript item identity is ambiguous; conflicting aliases require same-fact reconciliation.");
-    return owners.values().next().value ?? null;
+    const selectedItemId = owners.values().next().value ?? null;
+    if (owners.size > 1) {
+      console.warn("[workbench-transcript] conflicting aliases retained while selecting an existing identity", {
+        threadId: threadId.slice(0, 100), selectedItemId, candidates: owners.size,
+      });
+    }
+    return selectedItemId;
   }
 
   private row(itemId: string) {

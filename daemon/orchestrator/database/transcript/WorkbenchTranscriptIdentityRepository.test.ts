@@ -77,7 +77,12 @@ test("stable evidence follows one provider while provisional IDs remain turn-sco
     assert.notEqual(admit(otherThreadId, "other", "stable"), first);
     const provisional = admit(threadId, "first", "provisional");
     assert.notEqual(admit(threadId, "second", "provisional"), provisional);
-    assert.throws(() => identity.resolve({ threadId, itemId: "item-1" }), /ambiguous/iu);
+    const resolved = identity.resolve({ threadId, itemId: "item-1" });
+    assert.ok(resolved);
+    assert.equal(resolved.threadId, threadId);
+    assert.equal(new WorkbenchTranscriptIdentityRepository(database).resolve({ threadId, itemId: "item-1" })?.itemId, resolved.itemId);
+    assert.equal(identity.resolve({ threadId, itemId: first })?.itemId, first);
+    assert.equal(identity.resolve({ threadId, itemId: provisional })?.itemId, provisional);
   } finally {
     database.close();
   }
@@ -122,7 +127,30 @@ test("public item identity outranks a source alias and cannot move to another th
   }
 });
 
-test("conflicting evidence rolls back the entire admission", () => {
+test("conflicting aliases warn without losing either identity or blocking structural admission", (context) => {
+  const { database, identity, threadId } = setup();
+  const warnings = context.mock.method(console, "warn", () => undefined);
+  try {
+    const source = { turnId: "first", kind: "stable" as const, sourceId: "native-item" };
+    const alias = { turnId: "first", alias: "retained-reference" };
+    const live = identity.admit({ threadId, sources: [source], legacyAliases: [] });
+    const retained = identity.admit({ threadId, sources: [], legacyAliases: [alias] });
+    for (let pass = 0; pass < 2; pass++) {
+      const admitted = identity.admit({ threadId, sources: [source], legacyAliases: [alias] });
+      assert.equal(admitted.itemId, live.itemId);
+      assert.equal(identity.resolve({ threadId, itemId: source.sourceId })?.itemId, live.itemId);
+      assert.equal(identity.resolve({ threadId, itemId: alias.alias })?.itemId, retained.itemId);
+      assert.equal(identity.resolve({ threadId, itemId: retained.itemId })?.itemId, retained.itemId);
+      assert.deepEqual(database.pragma("foreign_key_check"), []);
+    }
+    assert.equal(warnings.mock.callCount(), 2);
+    assert.deepEqual(warnings.mock.calls[0]!.arguments[1], {
+      threadId, selectedItemId: live.itemId, candidates: 2,
+    });
+  } finally { database.close(); }
+});
+
+test("cross-thread evidence rolls back the entire admission", () => {
   const { database, identity, threadId, otherThreadId } = setup();
   try {
     const itemId = randomUUID();

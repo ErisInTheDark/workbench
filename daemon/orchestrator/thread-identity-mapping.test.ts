@@ -356,8 +356,13 @@ test("repeated provider catalogues admit only new identity evidence without hidi
       threadId: parent.threadId, sources: [{ turnId: turn.turnId, kind: "client", sourceId: "other-client" }],
       legacyAliases: [],
     }]);
+    const otherClientId = repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: "other-client" })!.itemId;
     message.clientId = "other-client";
-    await assert.rejects(admit(), /conflicting aliases/);
+    await admit();
+    assert.equal(mapProviderThread(owners, native, thread).turns[0]!.items[0]!.id, itemId);
+    assert.equal(repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: "other-client" })?.itemId, otherClientId);
+    assert.equal(repository.resolve({ threadId: parent.threadId, turnId: turn.turnId, itemId: "new-client" })?.itemId, itemId);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { owners.items.dispose(); owners.threads.dispose(); database.close(); }
 });
 
