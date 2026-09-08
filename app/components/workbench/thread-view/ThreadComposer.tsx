@@ -263,7 +263,7 @@ export default function ThreadComposer ({
   const selectedModelOption = availableModels.find((model) => model.id === selectedModel) ?? null;
   const defaultModelOption = availableModels.find((model) => model.isDefault) ?? null;
   const modelOptionForControls = selectedModelOption ?? defaultModelOption;
-  const modelButtonLabel = !hasEffectiveProfile ? "Profile unavailable" : selectedModelOption?.displayName
+  const modelButtonLabel = selectedModelOption?.displayName
     ?? selectedModel
     ?? "Default model";
   const supportedReasoningEfforts = modelOptionForControls?.supportedReasoningEfforts ?? [];
@@ -289,7 +289,7 @@ export default function ThreadComposer ({
           : "Continue this thread...";
   const showStopButton = stopControlState.visible;
   const selectedAgent = availableAgents.find((agent) => areWorkbenchAgentPathsEqual(agent.path, thread.agentPath)) ?? null;
-  const agentButtonLabel = !hasEffectiveProfile ? "Profile unavailable" : selectedAgent?.name
+  const agentButtonLabel = selectedAgent?.name
     ?? getWorkbenchAgentPathLabel(thread.agentPath)
     ?? "Default agent";
   const profileSelection = profileSlot
@@ -306,7 +306,7 @@ export default function ThreadComposer ({
   const pickerSelectedAgentPath = profilePickerTarget?.agentPath ?? thread.agentPath;
   const profileButtonLabel = selectedProfile
     ? getComposerProfileDisplayLabel(selectedProfile, agentButtonLabel, modelButtonLabel)
-    : hasEffectiveProfile ? "Custom" : "Choose a profile";
+    : "Custom";
   const currentComposerSettings: WorkbenchComposerSettings = {
     agentPath: thread.agentPath,
     agentSource: selectedAgent?.source ?? null,
@@ -898,7 +898,7 @@ export default function ThreadComposer ({
                       isProfilePanelOpen={isProfilePickerOpen}
                       modelLabel={modelButtonLabel}
                       profileLabel={profileButtonLabel}
-                      selectedProfileLabel={!hasEffectiveProfile || selectedProfile ? profileButtonLabel : null}
+                      selectedProfileLabel={selectedProfile ? profileButtonLabel : null}
                       showsFastModeControl={showsFastModeControl}
                       showsReasoningEffortControl={showsReasoningEffortControl}
                       onAgentOpen={() => {
