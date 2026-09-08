@@ -5,13 +5,13 @@
  */
 import type { ReactNode } from "react";
 
-import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
   createGitArcOperationRejected,
   parseGitArcFailureReceipt,
   type GitArcFailureAction,
 } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
+import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 import GitArcIcon from "./GitArcIcon";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
@@ -37,11 +37,11 @@ const ACTION_LABELS = {
   unknown: { completed: "Ran unrecognised action on", failed: "Failed to run action on", inProgress: "Running action on", timedOut: "Timed out running action on" },
 } as const;
 
-function actionState(outcome: ThreadCommandExecutionOutcome) {
+function actionState (outcome: ThreadCommandExecutionOutcome) {
   return outcome === "completed" ? "completed" : outcome === "inProgress" ? "inProgress" : outcome === "timedOut" ? "timedOut" : "failed";
 }
 
-function failureAction(action: GitArcCommandAction): GitArcFailureAction {
+function failureAction (action: GitArcCommandAction): GitArcFailureAction {
   const actions: Record<GitArcCommandAction, GitArcFailureAction> = {
     claims: "arcClaims",
     scope: "arcScope",
@@ -61,7 +61,7 @@ function failureAction(action: GitArcCommandAction): GitArcFailureAction {
   return actions[action];
 }
 
-function attemptedMoveMappings(commandIntent: GitArcCommandIntent) {
+function attemptedMoveMappings (commandIntent: GitArcCommandIntent) {
   const move = commandIntent.move;
   if (!move || move.kind === "regex") return [];
   if (move.kind === "maps") return move.mappings;
@@ -75,7 +75,7 @@ function attemptedMoveMappings(commandIntent: GitArcCommandIntent) {
   }));
 }
 
-function failureClaimPaths(failure: ReturnType<typeof parseGitArcFailureReceipt>) {
+function failureClaimPaths (failure: ReturnType<typeof parseGitArcFailureReceipt>) {
   if (!failure) return [];
   if (failure.code === "ignoredPaths") return failure.paths;
   if (failure.code !== "siblingClaimCollision" && failure.code !== "planDrift") return [];
@@ -84,7 +84,7 @@ function failureClaimPaths(failure: ReturnType<typeof parseGitArcFailureReceipt>
   return [...new Set(paths)];
 }
 
-export default function ThreadGitArcItem({
+export default function ThreadGitArcItem ({
   commandIntent,
   durationMs,
   durationPresentation = "default",
@@ -150,15 +150,15 @@ export default function ThreadGitArcItem({
     ? { completed: "Previewed", failed: "Failed to preview moves", inProgress: "Previewing moves", timedOut: "Timed out previewing moves" }
     : commandIntent.action === "release" && commandIntent.disown
       ? { completed: "Disowned", failed: "Failed to disown", inProgress: "Disowning", timedOut: "Timed out disowning" }
-    : adoptPaths.length && ordinarySelectedPaths.length && commandIntent.action === "plan"
-      ? { completed: "Planned and adopted changes", failed: "Failed to plan and adopt changes", inProgress: "Planning and adopting changes", timedOut: "Timed out planning and adopting changes" }
-      : adoptPaths.length && commandIntent.action === "plan"
-        ? { completed: "Adopted changes into plan", failed: "Failed to adopt changes", inProgress: "Adopting changes into plan", timedOut: "Timed out adopting changes" }
-        : adoptPaths.length && ordinarySelectedPaths.length && commandIntent.action === "planStart"
-          ? { completed: "Started with adopted changes", failed: "Failed to adopt changes and start", inProgress: "Adopting changes and starting", timedOut: "Timed out adopting changes and starting" }
-          : adoptPaths.length && commandIntent.action === "planStart"
-            ? { completed: "Adopted changes and started", failed: "Failed to adopt and start", inProgress: "Adopting changes and starting", timedOut: "Timed out adopting changes and starting" }
-            : ACTION_LABELS[commandIntent.action];
+      : adoptPaths.length && ordinarySelectedPaths.length && commandIntent.action === "plan"
+        ? { completed: "Planned and adopted changes", failed: "Failed to plan and adopt changes", inProgress: "Planning and adopting changes", timedOut: "Timed out planning and adopting changes" }
+        : adoptPaths.length && commandIntent.action === "plan"
+          ? { completed: "Adopted changes into plan", failed: "Failed to adopt changes", inProgress: "Adopting changes into plan", timedOut: "Timed out adopting changes" }
+          : adoptPaths.length && ordinarySelectedPaths.length && commandIntent.action === "planStart"
+            ? { completed: "Started with adopted changes", failed: "Failed to adopt changes and start", inProgress: "Adopting changes and starting", timedOut: "Timed out adopting changes and starting" }
+            : adoptPaths.length && commandIntent.action === "planStart"
+              ? { completed: "Adopted changes and started", failed: "Failed to adopt and start", inProgress: "Adopting changes and starting", timedOut: "Timed out adopting changes and starting" }
+              : ACTION_LABELS[commandIntent.action];
   const moveMappings = commandIntent.action === "mv" ? receipt?.mappings ?? attemptedMoveMappings(commandIntent) : [];
   const receiptFailure = state === "failed" || state === "timedOut" ? parseGitArcFailureReceipt(failureReason ?? "") : null;
   const failure = receiptFailure ?? (state === "failed"
@@ -168,35 +168,35 @@ export default function ThreadGitArcItem({
   const primaryPaths = ignoredFailure
     ? ignoredFailure.paths
     : commandIntent.action === "plan" || commandIntent.action === "planStart"
-    ? adoptPaths.length ? ordinarySelectedPaths : claimedPaths.length ? claimedPaths : selectedPaths
-    : commandIntent.action === "release" || commandIntent.action === "restore"
-      ? selectedPaths
-      : commandIntent.action === "start" || commandIntent.action === "continue"
-        ? failureClaimPaths(failure)
-      : [];
+      ? adoptPaths.length ? ordinarySelectedPaths : claimedPaths.length ? claimedPaths : selectedPaths
+      : commandIntent.action === "release" || commandIntent.action === "restore"
+        ? selectedPaths
+        : commandIntent.action === "start" || commandIntent.action === "continue"
+          ? failureClaimPaths(failure)
+          : [];
   const primaryPathLabel = state === "timedOut"
     ? commandIntent.action === "plan" ? "Timed out planning"
       : commandIntent.action === "planStart" || commandIntent.action === "start" || commandIntent.action === "continue" ? "Timed out claiming"
-          : commandIntent.action === "restore" ? "Timed out restoring" : "Timed out changing"
+        : commandIntent.action === "restore" ? "Timed out restoring" : "Timed out changing"
     : state === "failed"
-    ? ignoredFailure
-      ? commandIntent.action === "plan" || commandIntent.action === "planStart"
-        ? "Failed to plan ignored file"
-        : "Failed to claim ignored file"
-      : failure?.code === "dirtyPaths" && commandIntent.action === "plan"
-      ? "Failed to plan changed file"
-      : failure?.code === "planDrift"
-        ? "Failed to claim drifted file"
-        : commandIntent.action === "plan"
-      ? "Failed to plan"
-      : commandIntent.action === "planStart" || commandIntent.action === "start" || commandIntent.action === "continue"
-        ? "Failed to claim"
-        : commandIntent.action === "release" ? "Failed to release" : "Failed to restore"
-    : commandIntent.action === "plan"
-      ? "Planned"
-      : commandIntent.action === "release"
-        ? commandIntent.disown ? "Disowned" : "Released"
-        : commandIntent.action === "restore" ? "Restored" : "Claimed";
+      ? ignoredFailure
+        ? commandIntent.action === "plan" || commandIntent.action === "planStart"
+          ? "Failed to plan ignored file"
+          : "Failed to claim ignored file"
+        : failure?.code === "dirtyPaths" && commandIntent.action === "plan"
+          ? "Failed to plan changed file"
+          : failure?.code === "planDrift"
+            ? "Failed to claim drifted file"
+            : commandIntent.action === "plan"
+              ? "Failed to plan"
+              : commandIntent.action === "planStart" || commandIntent.action === "start" || commandIntent.action === "continue"
+                ? "Failed to claim"
+                : commandIntent.action === "release" ? "Failed to release" : "Failed to restore"
+      : commandIntent.action === "plan"
+        ? "Planned"
+        : commandIntent.action === "release"
+          ? commandIntent.disown ? "Disowned" : "Released"
+          : commandIntent.action === "restore" ? "Restored" : "Claimed";
   const primaryPathMarker = commandIntent.action === "plan" ? "planned" : "claimed";
   const showNestedClaims = receipt?.fullScope === undefined && commandIntent.action !== "plan" && commandIntent.action !== "planStart" && claimedPaths.length > 0;
 
@@ -270,7 +270,6 @@ export default function ThreadGitArcItem({
         ))}
         {receipt?.planningDrift?.map((drift) => (
           <div key={drift.previousRef}>
-            <div>Changed since previous plan {drift.previousRef}. Baselines refreshed.</div>
             <ThreadClaimedFileList
               label="Changed since planning"
               paths={drift.paths}
