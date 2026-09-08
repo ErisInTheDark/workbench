@@ -1,4 +1,5 @@
 /*
+ * Keywords: questionnaire, release, answer race, cancellation, reload.
  * No production exports. Tests protect Workbench questionnaire publication, answer correlation, cancellation, dismissal, and disposal. Keywords: questionnaire, freeform, lifecycle, wait.
  */
 import assert from "node:assert/strict";
@@ -113,6 +114,52 @@ test("freeform request publishes one durable question and returns its correlated
   assert.notEqual(nextQuestionnaire.itemId, questionnaire.itemId);
   await next.controller.respond({ requestKey: nextQuestionnaire.requestKey, response, threadId: "thread-one" });
   await nextWaiting;
+});
+
+test("interruption releases only the matching waiter and preserves its durable question after caller abort", async () => {
+  const h = createHarness();
+  const abort = new AbortController();
+  const waiting = h.controller.request(freeformInput, abort.signal);
+  const question = await h.published;
+  await h.controller.releaseForInterruption("thread-one", "stale");
+  assert.equal(h.controller.list().data.length, 1);
+  const rejected = assert.rejects(waiting, /being interrupted/u);
+  await h.controller.releaseForInterruption("thread-one", question.requestKey);
+  await rejected;
+  abort.abort();
+  assert.deepEqual(h.readPending(), question);
+  assert.equal(h.clearCount(), 0);
+  assert.deepEqual(h.controller.list().data, []);
+  await h.controller.dispose();
+  assert.deepEqual(h.readPending(), question);
+});
+
+test("answer persistence wins interruption, while failed persistence retains the saved question", async () => {
+  for (const fails of [false, true]) {
+    const clearing = deferred<void>();
+    const started = deferred<void>();
+    const h = createHarness({ beforeClear: async () => { started.resolve(); await clearing.promise; } });
+    const waiting = h.controller.request(freeformInput, new AbortController().signal);
+    const question = await h.published;
+    const response = { answers: { details: { answers: ["proceed"] } } };
+    const answering = h.controller.respond({ threadId: "thread-one", requestKey: question.requestKey, response });
+    await started.promise;
+    const released = h.controller.releaseForInterruption("thread-one", question.requestKey);
+    if (fails) {
+      const answerFailure = assert.rejects(answering, /write failed/u);
+      const waitFailure = assert.rejects(waiting, /being interrupted/u);
+      clearing.reject(new Error("write failed"));
+      await Promise.all([answerFailure, waitFailure, released]);
+      assert.deepEqual(h.readPending(), question);
+    } else {
+      clearing.resolve();
+      await Promise.all([answering, released]);
+      assert.deepEqual(await waiting, response);
+      assert.equal(h.readPending(), null);
+    }
+    assert.deepEqual(h.controller.list().data, []);
+    await h.controller.dispose();
+  }
 });
 
 test("one thread cannot open concurrent questionnaires or consume a stale answer", async () => {

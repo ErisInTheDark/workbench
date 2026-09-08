@@ -274,6 +274,7 @@ function createWorkbenchCoreFeature(
     },
   });
   threadState = new WorkbenchThreadStateFeature({
+    releaseQuestionnaire: (threadId, requestKey) => questionnaires.releaseForInterruption(threadId, requestKey),
     identities: { threads: threadIdentity, items: transcriptIdentity },
     readComposerProfiles: () => profileStore.read(),
     database,
@@ -492,6 +493,8 @@ export default new ReloadableNode<OrchestratorProcessContext, OrchestratorRuntim
     "daemon/orchestrator/WorkbenchThreadStateStore.ts",
     "daemon/orchestrator/WorkbenchThreadStateShadowController.ts",
     "daemon/orchestrator/WorkbenchQuestionnaireController.ts",
+    "daemon/orchestrator/codex-questionnaire-timeout.ts",
+    "shared/workbench/thread/thread-stop.ts",
     "daemon/orchestrator/BrowseSessionCleanupSupervisor.ts",
     "daemon/orchestrator/CodexHealthMonitor.ts",
     "daemon/lib/project.ts",

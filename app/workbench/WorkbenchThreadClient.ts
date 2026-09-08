@@ -116,7 +116,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { applySteerHistoryToThread, isSyntheticSteerHistoryItem } from "workbench-shared/workbench/thread/thread-steer-history";
-import { stopWorkbenchThread } from "./thread/thread-stop";
+import { stopWorkbenchThread } from "workbench-shared/workbench/thread/thread-stop";
 import {
     getWorkbenchApprovalSupplementalSteerText,
     hasWorkbenchApprovalDecisionSelection,

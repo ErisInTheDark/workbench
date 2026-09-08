@@ -42,7 +42,6 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(itemSource, /<a[\s\S]*?href=\{href\}[\s\S]*?role=\{role\}/u);
   assert.match(listSource, /href=\{getThreadHref\(\{ kind: "new" \}\)\}/u);
   assert.match(itemSource, /event\.preventDefault\(\);[\s\S]*?onActivate\(target\)/u);
-  assert.match(itemSource, /canComplete = entry\.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned\(entry\.lifecycle\)/u);
   assert.match(itemSource, /canShiftSettle && isShiftPressed \? "settle" : baseAction/u);
   assert.match(itemSource, /event\.shiftKey \|\| event\.detail > 1/u);
   assert.match(itemSource, /actionLabel === "restore"|action === "restore"/u);

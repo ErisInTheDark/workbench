@@ -16,6 +16,7 @@
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary. Keywords: timestamp, provider, normalization.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback. Keywords: title, preview, uuid.
  * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: manual-status eligibility, exact-turn transitions, and direct-child status projection. Keywords: working, attention, completed, stopped, parent.
+ * - isWorkbenchSidebarThreadCompletionAvailable: sidebar-only manual completion, including durable questionnaires without granting subagent or approval authority.
  * - countDraftPromptTokens/createDraftTitle: durable draft materialization and title rules. Keywords: draft, threshold, title.
  */
 
@@ -26,6 +27,7 @@ import { areDeeplyEqual } from "../deep-equality.ts";
 import { gitArcPathsOverlap } from "../git/git-arc-paths.ts";
 import { WorkbenchProjectsPayloadSchema, WorkbenchProjectStateUpdateSchema } from "../project/project-state.ts";
 import { ThreadDisplayLayoutSchema } from "./thread-display-layout.ts";
+import { isWorkbenchApprovalRequest } from "./thread-user-input-requests.ts";
 import { WorkbenchThreadTitleHistoryEntrySchema } from "./thread-title-history.ts";
 import {
   projectWorkbenchThreadDisplaySection,
@@ -390,6 +392,7 @@ const PinnedDraftSummaryEntrySchema = SidebarCommonSchema.extend({
   status: z.literal("draft"),
 }).strict();
 const PinnedTopLevelSummaryEntrySchema = SidebarCommonSchema.extend({
+  canCompleteQuestionnaire: z.boolean().default(false),
   previousTitles: z.array(WorkbenchThreadTitleHistoryEntrySchema).max(4).default([]).optional(),
   entryKind: z.literal("thread"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
@@ -786,6 +789,15 @@ export function isWorkbenchThreadStatusProviderOwned(lifecycle: WorkbenchThreadL
   return lifecycle.kind === "working" || (lifecycle.kind === "needsAttention" && lifecycle.reason === "pendingInput");
 }
 
+export function isWorkbenchSidebarThreadCompletionAvailable(entry: WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry) {
+  if (entry.entryKind !== "thread" || entry.metadata.archived) return false;
+  if (entry.lifecycle.kind === "stopped") return true;
+  if (entry.lifecycle.kind !== "needsAttention") return false;
+  if ("canCompleteQuestionnaire" in entry) return entry.lifecycle.reason !== "pendingInput" || entry.canCompleteQuestionnaire;
+  if (entry.pendingQuestionnaire && isWorkbenchApprovalRequest(entry.pendingQuestionnaire.request)) return false;
+  return entry.lifecycle.reason !== "pendingInput" || Boolean(entry.pendingQuestionnaire);
+}
+
 export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle | null, event: WorkbenchLifecycleEvent): WorkbenchThreadLifecycle {
   const currentTurnId = getWorkbenchLifecycleTurnId(current);
   switch (event.kind) {
@@ -934,6 +946,7 @@ export function createWorkbenchProjectThreadSummary(
       if (entry.entryKind !== "thread") return [];
       return [{
         activityAt: entry.activityAt,
+        canCompleteQuestionnaire: Boolean(entry.pendingQuestionnaire) && isWorkbenchSidebarThreadCompletionAvailable(entry),
         entryKind: "thread",
         ...(entry.gitArc !== undefined ? { gitArc: entry.gitArc } : {}),
         identity: entry.identity,

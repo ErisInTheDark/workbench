@@ -1,6 +1,10 @@
-/* No production exports. Tests protect strict lifecycle, durable questionnaires, grouping, cross-project pin summaries, folder mutation, ordering, and draft rules. */
+/*
+ * Keywords: lifecycle, questionnaire, grouping, pinned summaries, ordering, drafts.
+ * Exports: none. Tests protect state transitions, eligibility, durable schemas and sidebar projection.
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema } from "./thread-state.ts";
 import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 
 const EMPTY_CODEX_SETTINGS = {
@@ -11,6 +15,39 @@ const EMPTY_CODEX_SETTINGS = {
   reasoningEffort: null,
   serviceTier: null,
 };
+
+test("sidebar completion and pinned eligibility exclude working threads and approval requests", () => {
+  const question = {
+    itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: "turn",
+    request: { id: "request", title: "Choose", summary: "", submitLabel: "Submit", questions: [] },
+  };
+  const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1, title: "Task", entryKind: "thread", identity: { harness: "codex", threadId: "thread" },
+    metadata: { archived: false, pinned: true, snoozed: false }, pendingQuestionnaire: question,
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", turnId: "turn", settled: false },
+  };
+  assert.equal(isWorkbenchSidebarThreadCompletionAvailable(entry), true);
+  assert.equal(isWorkbenchSidebarThreadCompletionAvailable({ ...entry, pendingQuestionnaire: null }), false);
+  assert.equal(isWorkbenchSidebarThreadCompletionAvailable({
+    ...entry, lifecycle: { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working", turnId: "turn" }, settled: false },
+  }), false);
+  const approval = { ...entry, pendingQuestionnaire: {
+    ...question, request: { ...question.request, questions: [{
+      id: "decision", header: "approval", question: "Allow?", allowOther: false, isSecret: false,
+      options: [{ label: "Allow once", description: "" }, { label: "Decline", description: "" }],
+    }] },
+  } };
+  assert.equal(isWorkbenchSidebarThreadCompletionAvailable(approval), false);
+  for (const [source, expected] of [[entry, true], [approval, false]] as const) {
+    const pin = createWorkbenchProjectThreadSummary("project", [source], 1).pinnedThreads[0]!;
+    assert.equal(pin.entryKind === "thread" && pin.canCompleteQuestionnaire, expected);
+    assert.equal(isWorkbenchSidebarThreadCompletionAvailable(pin), expected);
+    const { canCompleteQuestionnaire: _eligibility, ...legacy } = pin as Extract<typeof pin, { entryKind: "thread" }>;
+    assert.equal(isWorkbenchSidebarThreadCompletionAvailable(WorkbenchPinnedThreadSummaryEntrySchema.parse(legacy)), false);
+  }
+  const completed = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "userCompleted" });
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(completed, { kind: "turnCompleted", status: "interrupted", turnId: "turn" }), completed);
+});
 
 test("live claims prevent thread settlement while proposals do not", () => {
   const resolved = {

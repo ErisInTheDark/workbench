@@ -5,18 +5,8 @@
 
 import type { ReactNode } from "react";
 
-import { getWorkbenchThreadStatusClassName, type WorkbenchThreadStatusTone } from "../workbench-thread-status-colors";
 import { CircleAlertIcon } from "../workbench-icons";
-import { getThreadMarkdownEmphasisTone } from "./thread-markdown-emphasis-colors";
-
-const THREAD_NOTICE_BACKGROUND_CLASS_NAMES = {
-  completed: "bg-[linear-gradient(to_right,color-mix(in_srgb,var(--color-emerald-500)_11%,transparent),transparent_88%)]",
-  "needs-attention": "bg-[linear-gradient(to_right,color-mix(in_srgb,var(--color-violet-500)_11%,transparent),transparent_88%)]",
-  "needs-attention-active": "bg-[linear-gradient(to_right,color-mix(in_srgb,var(--color-amber-500)_11%,transparent),transparent_88%)]",
-  stopped: "bg-[linear-gradient(to_right,color-mix(in_srgb,var(--color-red-500)_11%,transparent),transparent_88%)]",
-  waiting: "bg-[linear-gradient(to_right,color-mix(in_srgb,var(--text)_5%,transparent),transparent_88%)]",
-  working: "bg-[linear-gradient(to_right,color-mix(in_srgb,var(--color-sky-500)_11%,transparent),transparent_88%)]",
-} satisfies Record<WorkbenchThreadStatusTone, string>;
+import { getThreadMarkdownEmphasisColors } from "./thread-markdown-emphasis-colors";
 
 export default function ThreadNotice ({ bodyMarkdown, children, color, source, title }: {
   bodyMarkdown: string;
@@ -25,17 +15,17 @@ export default function ThreadNotice ({ bodyMarkdown, children, color, source, t
   source: string;
   title: string;
 }) {
-  const tone = getThreadMarkdownEmphasisTone(color);
-  if (!tone || !title || !bodyMarkdown.trim()) {
+  const colors = getThreadMarkdownEmphasisColors(color);
+  if (!colors || !title || !bodyMarkdown.trim()) {
     return <p className="mb-[0.9em] whitespace-pre-wrap last:mb-0">{source}</p>;
   }
 
-  const toneClassName = getWorkbenchThreadStatusClassName(tone);
+  const toneClassName = colors.text;
 
   return (
     <aside
       aria-label={title}
-      className={`relative mb-[0.9em] overflow-hidden px-[0.95rem] py-[0.8rem] pl-[1.05rem] last:mb-0 ${THREAD_NOTICE_BACKGROUND_CLASS_NAMES[tone]}`}
+      className={`relative mb-[0.9em] overflow-hidden px-[0.95rem] py-[0.8rem] pl-[1.05rem] last:mb-0 ${colors.background}`}
       data-thread-notice="true"
       data-thread-notice-color={color}
       role="note"

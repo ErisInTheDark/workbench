@@ -15,6 +15,7 @@ import {
   getThreadSidebarGroup,
   isWorkbenchThreadSettlementAvailable,
   isWorkbenchThreadStatusProviderOwned,
+  isWorkbenchSidebarThreadCompletionAvailable,
   type WorkbenchPinnedThreadSummaryEntry,
   type WorkbenchProjectThreadSidebars,
   type WorkbenchProjectThreadSummaries,
@@ -261,8 +262,9 @@ function WorkbenchThreadSidebarActionsProvider({
 
     if (entry.entryKind === "thread") {
       const providerOwned = isWorkbenchThreadStatusProviderOwned(entry.lifecycle);
+      const canComplete = isWorkbenchSidebarThreadCompletionAvailable(entry);
       const selectStatus = (status: "completed" | "needsAttention" | "stopped") => {
-        if (providerOwned) {
+        if (providerOwned && !(status === "completed" && canComplete)) {
           if (status === "stopped" && thread) void stopThread(thread);
           return;
         }
@@ -279,7 +281,7 @@ function WorkbenchThreadSidebarActionsProvider({
           tone: getNeedsAttentionThreadStatusTone(entry.gitArc?.phase === "active"),
         }, {
           checked: entry.lifecycle.kind === "completed",
-          disabled: providerOwned,
+          disabled: providerOwned && !canComplete,
           icon: <CompletedThreadIcon className="size-4" />,
           id: "completed",
           label: "Completed",

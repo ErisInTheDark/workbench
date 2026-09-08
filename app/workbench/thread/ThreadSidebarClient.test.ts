@@ -119,6 +119,7 @@ test("project summaries bootstrap together, merge by revision, and follow select
       lastThreadUpdateAt: 1,
       pinnedThreads: [{
         activityAt: 1,
+        canCompleteQuestionnaire: false,
         entryKind: "thread",
         identity: stoppedEntry.identity,
         lifecycle: stoppedEntry.lifecycle,
@@ -160,6 +161,7 @@ test("project summaries bootstrap together, merge by revision, and follow select
     lastThreadUpdateAt: 0,
     pinnedThreads: [{
       activityAt: 0,
+      canCompleteQuestionnaire: false,
       entryKind: "thread",
       identity: stoppedEntry.identity,
       lifecycle: { agent: { agentStatus: "working", turnId: "new-turn" }, kind: "working", reason: "acceptedIntent", settled: false },

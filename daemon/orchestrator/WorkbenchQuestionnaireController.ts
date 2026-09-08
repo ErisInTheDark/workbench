@@ -40,7 +40,7 @@ type PendingQuestionnaire = {
   projected: boolean;
   questionnaire: WorkbenchDurableQuestionnaire;
   reject: (error: unknown) => void;
-  reloadReason: unknown | null;
+  releaseReason: unknown | null;
   resolve: (response: WorkbenchUserInputResponse) => void;
   signal: AbortSignal;
   status: "waiting" | "responding" | "cancelling";
@@ -79,7 +79,7 @@ export default class WorkbenchQuestionnaireController {
     this.disposed = true;
     this.stopPendingSubscription();
     await Promise.all([...this.pendingByThreadId.values()].map(async (pending) => {
-      if (pending.reloadReason !== null && pending.status === "responding") {
+      if (pending.releaseReason !== null && pending.status === "responding") {
         await pending.completion;
         return;
       }
@@ -150,7 +150,7 @@ export default class WorkbenchQuestionnaireController {
       projected: false,
       questionnaire,
       reject,
-      reloadReason: null,
+      releaseReason: null,
       resolve,
       signal,
       status: "waiting",
@@ -166,7 +166,7 @@ export default class WorkbenchQuestionnaireController {
         const onAbort = () => {
           const reason = signal.reason ?? new Error("The questionnaire caller cancelled.");
           if (isWorkbenchAgentMcpRuntimeReloadInterruption(reason)) {
-            this.releasePendingForReload(pending, reason);
+            this.releasePending(pending, reason);
             return;
           }
           void this.cancelPending(pending, reason);
@@ -205,10 +205,10 @@ export default class WorkbenchQuestionnaireController {
         this.pendingByThreadId.delete(input.threadId);
         pending.stopAbort?.();
         pending.reject(pending.cancelReason);
-      } else if (pending.reloadReason !== null) {
+      } else if (pending.releaseReason !== null) {
         this.pendingByThreadId.delete(input.threadId);
         pending.stopAbort?.();
-        pending.reject(pending.reloadReason);
+        pending.reject(pending.releaseReason);
       } else {
         pending.status = "waiting";
       }
@@ -238,9 +238,18 @@ export default class WorkbenchQuestionnaireController {
     if (this.disposed) throw new Error("The questionnaire controller was disposed.");
   }
 
-  private releasePendingForReload(pending: PendingQuestionnaire, error: unknown) {
+  async releaseForInterruption(threadId: string, requestKey: string) {
+    const pending = this.pendingByThreadId.get(threadId);
+    if (!pending || pending.questionnaire.requestKey !== requestKey) return;
+    this.releasePending(pending, new Error("The questionnaire wait ended because its turn is being interrupted."));
+    // An answer already being persisted wins. Failed persistence releases the wait
+    // through respond's failure path, leaving the durable question available.
+    await pending.completion;
+  }
+
+  private releasePending(pending: PendingQuestionnaire, error: unknown) {
     if (this.pendingByThreadId.get(pending.threadId) !== pending || pending.status === "cancelling") return;
-    pending.reloadReason ??= error;
+    pending.releaseReason ??= error;
     if (pending.status === "responding") return;
     this.pendingByThreadId.delete(pending.threadId);
     pending.stopAbort?.();

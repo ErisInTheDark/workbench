@@ -1,0 +1,1 @@
+- User-facing sidebar threads and subagent threads have separate state semantics. Never infer subagent changes from sidebar thread requests. Plan subagent changes separately and obtain explicit user agreement.

@@ -52,6 +52,7 @@ import {
   getWorkbenchLifecycleTurnId,
   getThreadSidebarGroup,
   isWorkbenchThreadStatusProviderOwned,
+  isWorkbenchSidebarThreadCompletionAvailable,
   projectWorkbenchThreadSidebarEntries,
   reduceWorkbenchThreadLifecycle,
   resolveWorkbenchThreadTitle,
@@ -178,6 +179,7 @@ export interface WorkbenchThreadStateControllerOptions {
   publish: (connectionId: string, snapshot: WorkbenchThreadStateSnapshot) => void;
   pruneExpiredGitState?: (projectId: string, identities: Array<{ harness: WorkbenchHarnessId; threadId: string }>) => Promise<void>;
   renameThread?: (projectId: string, harness: WorkbenchHarnessId, threadId: string, title: string) => Promise<string>;
+  interruptQuestionnaire?: (projectId: string, harness: WorkbenchHarnessId, threadId: string, questionnaire: WorkbenchDurableQuestionnaire) => Promise<boolean>;
   reconcileProject: (
     projectId: string,
     signal: AbortSignal,
@@ -837,6 +839,16 @@ export default class WorkbenchThreadStateController {
     });
     await this.reevaluateDependentSnoozes(projectId, key);
     return result;
+  }
+
+  findPendingSidebarQuestionnaire(harness: WorkbenchHarnessId, threadId: string) {
+    for (const [projectId, state] of this.projects) {
+      const entry = state.entries.get(`${harness}:${threadId}`);
+      if (entry?.entryKind === "thread" && !entry.metadata.archived && entry.pendingQuestionnaire) {
+        return { projectId, entry, questionnaire: entry.pendingQuestionnaire };
+      }
+    }
+    return null;
   }
 
   async observeLifecycle(harness: "codex" | "copilot" | "opencode", threadId: string, event: WorkbenchObservedLifecycleEvent) {
@@ -2371,13 +2383,37 @@ export default class WorkbenchThreadStateController {
   private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/open" | "workbench/thread-state/global/open" | "workbench/thread-state/global/close" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/pin/open" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/move" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" | "workbench/thread-state/priority/set" | "workbench/thread-state/snooze/until" | "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/drop" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" | "workbench/thread-state/home-display-order/move" | "workbench/thread-state/pinned-display-order/folder/create" | "workbench/thread-state/pinned-display-order/folder/drop" | "workbench/thread-state/pinned-display-order/folder/title/set" | "workbench/thread-state/pinned-display-order/move" }>) {
     const state = await this.getProject(request.projectId);
     const key = `${request.identity.harness}:${request.identity.threadId}`;
+    const candidate = state.entries.get(key);
+    const completionQuestionnaire = request.method === "workbench/thread-state/status/set"
+      && request.status === "completed" && candidate
+      && isWorkbenchSidebarThreadCompletionAvailable(candidate)
+      && candidate.entryKind === "thread" && candidate.lifecycle.kind === "needsAttention"
+      ? candidate.pendingQuestionnaire ?? null
+      : null;
+    // Provider I/O must not hold the mutation queue: its interruption notification
+    // uses that same queue. Revalidate the captured question after the await.
+    if (completionQuestionnaire) {
+      if (!this.options.interruptQuestionnaire) throw new Error("Questionnaire interruption is unavailable.");
+      if (!await this.options.interruptQuestionnaire(request.projectId, request.identity.harness, request.identity.threadId, completionQuestionnaire)) {
+        return { accepted: false, revision: state.revision };
+      }
+    }
     const mutate = async () => await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
       const entry = state.entries.get(key);
       if (!entry || entry.entryKind === "draft") return { accepted: false, revision: state.revision };
+      if (completionQuestionnaire && (
+        entry.entryKind !== "thread" || entry.metadata.archived || entry.lifecycle.kind === "working"
+        || entry.pendingQuestionnaire?.requestKey !== completionQuestionnaire.requestKey
+        || entry.pendingQuestionnaire.itemId !== completionQuestionnaire.itemId
+        || entry.pendingQuestionnaire.turnId !== completionQuestionnaire.turnId
+        || (getWorkbenchLifecycleTurnId(entry.lifecycle) !== null
+          && getWorkbenchLifecycleTurnId(entry.lifecycle) !== completionQuestionnaire.turnId)
+      )) return { accepted: false, revision: state.revision };
       if (request.method === "workbench/thread-state/status/set" && (
         entry.entryKind !== "thread"
         || entry.metadata.archived
-        || isWorkbenchThreadStatusProviderOwned(entry.lifecycle)
+        || (isWorkbenchThreadStatusProviderOwned(entry.lifecycle)
+          && !(request.status === "completed" && completionQuestionnaire))
       )) {
         return { accepted: false, revision: state.revision };
       }
@@ -2408,8 +2444,10 @@ export default class WorkbenchThreadStateController {
       }
       if (request.method === "workbench/thread-state/restore" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, lifecycle: reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "restore" }) };
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/status/set" && entry.lifecycle.kind !== request.status) {
+        // Questionnaire completion has stopped its owning turn. Do not retain
+        // that turn's agent marker and let a late provider event reopen it.
         const lifecycle = reduceWorkbenchThreadLifecycle(
-          entry.lifecycle,
+          completionQuestionnaire ? null : entry.lifecycle,
           request.status === "needsAttention"
             ? { kind: "userNeedsAttention" }
             : request.status === "stopped"

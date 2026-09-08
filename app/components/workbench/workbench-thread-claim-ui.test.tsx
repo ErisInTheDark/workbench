@@ -1,4 +1,5 @@
 /*
+ * Keywords: sidebar, claims, drafts, settlement, priority, drag.
  * Exports:
  * - No production exports; rendered regression checks protect claim and draft status, settlement, priority ordering, and compatible sidebar drag targets. Keywords: sidebar, thread, claim, composer, draft, settlement, priority, drag, folder, snooze.
  */
@@ -492,6 +493,7 @@ test("global pinned disclosure starts open, omits thread creation, and identifie
       lastThreadUpdateAt: localPinned.activityAt,
       pinnedThreads: [{
         activityAt: localPinned.activityAt,
+        canCompleteQuestionnaire: false,
         entryKind: "thread",
         identity: localPinned.identity,
         lifecycle: localPinned.lifecycle,
@@ -507,6 +509,7 @@ test("global pinned disclosure starts open, omits thread creation, and identifie
       lastThreadUpdateAt: localPinned.activityAt,
       pinnedThreads: [{
         activityAt: localPinned.activityAt,
+        canCompleteQuestionnaire: false,
         entryKind: "thread",
         identity: { harness: "codex", threadId: "remote-pin" },
         lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn-remote" },

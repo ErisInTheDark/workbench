@@ -11,9 +11,6 @@ import type { ComponentType, DragEventHandler, KeyboardEvent as ReactKeyboardEve
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import {
   getThreadSidebarGroup,
-  gitArcPreventsThreadSettlement,
-  isWorkbenchThreadSettlementAvailable,
-  isWorkbenchThreadStatusProviderOwned,
   type WorkbenchPinnedThreadSummaryEntry,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadTarget,
@@ -50,8 +47,9 @@ import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
 import WorkbenchThreadTitleHistory from "./WorkbenchThreadTitleHistory";
+import { getThreadRowActions, type ThreadRowAction } from "./thread-row-actions";
 
-type ThreadAction = "complete" | "discard" | "restore" | "settle" | "wake";
+type ThreadAction = ThreadRowAction;
 type ThreadStatusIcon = ComponentType<{ className?: string }>;
 type ThreadListEntry = WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry;
 type PinnedDraftSummaryEntry = Extract<WorkbenchPinnedThreadSummaryEntry, { entryKind: "draft" }>;
@@ -207,11 +205,7 @@ export default function WorkbenchThreadListItem({
   const dateTime = timestamp.toISOString();
   const relativeTime = formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs);
   const exactTime = timestamp.toLocaleString();
-  const canComplete = entry.entryKind === "thread" && !isWorkbenchThreadStatusProviderOwned(entry.lifecycle) && !waiting && (entry.lifecycle.kind === "needsAttention" || entry.lifecycle.kind === "stopped");
-  const settlementBlocked = gitArcPreventsThreadSettlement(gitArc);
-  const settlementAvailable = isPinnedDraftSummaryEntry(entry) ? false : isWorkbenchThreadSettlementAvailable(entry);
-  const baseAction: ThreadAction | null = entry.entryKind === "draft" ? "discard" : group === "settled" ? "restore" : group === "snoozed" ? "wake" : canComplete ? "complete" : settlementAvailable ? "settle" : null;
-  const canShiftSettle = canComplete && !settlementBlocked;
+  const { baseAction, canShiftSettle } = getThreadRowActions(entry, group);
   const action = canShiftSettle && isShiftPressed ? "settle" : baseAction;
   const Icon = entry.entryKind === "draft" ? DraftThreadIcon : waiting ? WorkingThreadIcon : showProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
   const statusTone: WorkbenchThreadStatusTone = waiting

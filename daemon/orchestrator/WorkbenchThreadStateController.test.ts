@@ -281,6 +281,66 @@ async function readProjectState<T extends object>(storageRoot: string, projectId
   return await testPersistence(storageRoot).readProject(projectId) as T;
 }
 
+test("questionnaire completion revalidates the captured item after interruption and never grants subagent authority", async () => {
+  for (const outcome of ["complete", "replace", "fail", "subagent"] as const) {
+    const question = {
+      itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: "turn",
+      request: { id: "request", title: "Choose", summary: "", submitLabel: "Submit", questions: [
+        { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
+      ] },
+    };
+    const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+      activityAt: 1, entryKind: "thread", title: "Task", identity: { harness: "codex", threadId: "thread" },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", turnId: "turn", settled: false },
+      pendingQuestionnaire: question,
+    };
+    let interrupts = 0;
+    const { metadata: _metadata, ...common } = provider;
+    const record: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> = outcome === "subagent" ? {
+      ...common, entryKind: "subagent", createdAt: 1, updatedAt: 1, cwd: "C:/workspace", directSubagentIndex: 0,
+      name: "child", parentThreadId: "parent", pinned: false, profileId: "profile", profileName: "profile", projectId: "project",
+    } : provider;
+    const controller = new WorkbenchThreadStateController({
+      storageRoot: `questionnaire-completion-${outcome}`, threadStateStore: new MemoryThreadStatePersistence(),
+      getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => {},
+      reconcileProject: async (_project, _signal, accept) => {
+        accept("codex", [record], { complete: true });
+        return [];
+      },
+      interruptQuestionnaire: async () => {
+        interrupts++;
+        if (outcome === "fail") throw new Error("stop failed");
+        if (outcome === "replace") await controller.observeLifecycle("codex", "thread", {
+          kind: "pendingInput", requestKey: "request", turnId: "turn",
+          questionnaire: { ...question, itemId: "984090b6-1d94-44cc-ab26-e6470965597e" },
+        });
+        return true;
+      },
+    });
+    try {
+      await controller.open("observer", "project");
+      await controller.refresh("project");
+      await controller.ensureProviderEntry("project", record);
+      await controller.observeLifecycle("codex", "thread", {
+        kind: "pendingInput", questionnaire: question, requestKey: question.requestKey, turnId: question.turnId,
+      });
+      const completing = controller.handleRequest("observer", {
+        method: "workbench/thread-state/status/set", projectId: "project", identity: provider.identity, status: "completed",
+      });
+      if (outcome === "fail") await assert.rejects(completing, /stop failed/u);
+      else {
+        const response = await completing;
+        assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, outcome === "complete", outcome);
+      }
+      assert.equal(interrupts, outcome === "subagent" ? 0 : 1);
+      const current = (await controller.getSnapshot("project")).entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === "thread");
+      assert.equal(current?.entryKind !== "draft" && current?.lifecycle.kind, outcome === "complete" ? "completed" : "needsAttention");
+      assert.ok(current && current.entryKind !== "draft" && current.pendingQuestionnaire);
+    } finally { await controller.dispose(); }
+  }
+});
+
 async function readGlobalState<T extends object>(storageRoot: string, id: WorkbenchThreadStateGlobalDocumentId) {
   return await testPersistence(storageRoot).readGlobal(id) as T;
 }

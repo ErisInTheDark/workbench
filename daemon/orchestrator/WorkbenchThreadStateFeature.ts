@@ -1,5 +1,5 @@
 /*
- * Keywords: provider, sidebar, explicit title, fallback, lifecycle, reconciliation.
+ * Keywords: provider, sidebar, explicit title, fallback, lifecycle, reconciliation, questionnaire interruption.
  * Exports:
  * - WorkbenchThreadStateFeatureContext: stable database, sidebar, lifecycle, Git retention, and shared project-observation ports. Keywords: dependency injection, thread state, retention, project, sqlite.
  * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result. Keywords: lifecycle, observation, persistence.
@@ -12,7 +12,10 @@ import { normalizeThreadTitle } from "../lib/thread-bootstrap";
 import type { WorkbenchComposerProfileStorePayload, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { GitArcActiveClaim, GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "../lib/workbench/git/WorkbenchGitCheckpointController";
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
-import { getWorkbenchLifecycleTurnId, WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, WorkbenchDurableQuestionnaireSchema, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { stopWorkbenchThread } from "workbench-shared/workbench/thread/thread-stop";
+import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
+import { getCodexQuestionnaireTimeout } from "./codex-questionnaire-timeout";
 import type { HarnessKind, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
@@ -71,6 +74,7 @@ export interface WorkbenchThreadStateFeatureContext {
   harnesses: Pick<WorkbenchHarnessController, "listHarnesses" | "request" | "resumeThread">;
   listSubagents(projectId: string): Promise<SubagentRelationshipList>;
   log?: (message: string) => void;
+  releaseQuestionnaire?: (threadId: string, requestKey: string) => Promise<void>;
   projectState: {
     getCurrentUpdate(projectId: string): WorkbenchProjectStateUpdate | null;
     handleRequest(projectId: string, request: WorkbenchProjectStateRequest): Promise<unknown>;
@@ -226,6 +230,7 @@ export default class WorkbenchThreadStateFeature {
         subscribeReloadDirt: (listener: () => void) => context.reloadDirt!.subscribe(listener),
       } : {}),
       log: context.log,
+      interruptQuestionnaire: (projectId, harness, threadId, questionnaire) => this.interruptQuestionnaire(projectId, harness, threadId, questionnaire),
       getProjectCatalog: context.getProjectCatalog,
       projectState: context.projectState,
       publish: context.publish,
@@ -276,6 +281,14 @@ export default class WorkbenchThreadStateFeature {
   }
 
   async observeProviderNotification(harness: HarnessKind, notification: JsonRpcNotification) {
+    const timeout = harness === "codex" ? getCodexQuestionnaireTimeout(notification) : null;
+    if (timeout) {
+      const pending = this.controller.findPendingSidebarQuestionnaire(harness, timeout.threadId);
+      if (pending && pending.questionnaire.turnId === timeout.turnId) {
+        await this.interruptQuestionnaire(pending.projectId, harness, timeout.threadId, pending.questionnaire);
+      }
+      return null;
+    }
     const mapped = mapProviderLifecycleNotification(notification);
     let observation: WorkbenchProviderLifecycleObservation | null = null;
     if (mapped) {
@@ -302,6 +315,65 @@ export default class WorkbenchThreadStateFeature {
       params: { cwd, name: title, threadId },
     });
     if (response.error) throw new Error(response.error.message);
+  }
+
+  private async interruptQuestionnaire(projectId: string, harness: WorkbenchHarness, threadId: string, questionnaire: WorkbenchDurableQuestionnaire) {
+    const isCurrent = () => {
+      const current = this.controller.findPendingSidebarQuestionnaire(harness, threadId);
+      if (!current || current.projectId !== projectId || current.entry.lifecycle.kind === "working") return false;
+      const turnId = getWorkbenchLifecycleTurnId(current.entry.lifecycle);
+      return current.questionnaire.requestKey === questionnaire.requestKey
+        && current.questionnaire.itemId === questionnaire.itemId
+        && current.questionnaire.turnId === questionnaire.turnId
+        && (turnId === null || turnId === questionnaire.turnId)
+        && !isWorkbenchApprovalRequest(current.questionnaire.request);
+    };
+    if (!isCurrent()) return false;
+    try {
+      const project = await this.context.resolveProjectById(projectId);
+      // Thread-state records and provider observations retain native IDs. Public
+      // sidebar mutation IDs have already passed through the identity boundary.
+      const response = await this.context.harnesses.request(harness, {
+        id: `questionnaire:read:${threadId}`,
+        method: harness === "codex" ? "thread/turns/list" : "thread/read",
+        params: harness === "codex"
+          ? { cwd: project.rootPath, threadId, itemsView: "notLoaded", limit: 1, sortDirection: "desc" }
+          : { cwd: project.rootPath, threadId, includeTurns: true },
+      });
+      if (response.error) throw new Error(response.error.message);
+      const result = asRecord(response.result);
+      const turns = harness === "codex" ? result?.data : asRecord(result?.thread)?.turns;
+      if (!Array.isArray(turns)) throw new Error("Provider returned no turn metadata for questionnaire interruption.");
+      const turn = harness === "codex" ? asRecord(turns[0]) : asRecord(turns.at(-1));
+      if (turns.length && (!turn || typeof turn.id !== "string" || !turn.id
+        || typeof turn.status !== "string" || !["inProgress", "completed", "interrupted", "failed"].includes(turn.status))) {
+        throw new Error("Provider returned invalid turn metadata for questionnaire interruption.");
+      }
+      const active = turn?.status === "inProgress";
+      if (!isCurrent() || (active && turn?.id !== questionnaire.turnId)) return false;
+      if (harness === "codex") {
+        if (!this.context.releaseQuestionnaire) throw new Error("Live questionnaire release is unavailable.");
+        await this.context.releaseQuestionnaire(threadId, questionnaire.requestKey);
+      }
+      if (!isCurrent()) return false;
+      if (!active) return true;
+      if (!questionnaire.turnId) return false;
+      await stopWorkbenchThread({
+        harness, threadId, turnId: questionnaire.turnId,
+        sendRequest: async (targetHarness, request) => {
+          if (!isCurrent()) throw new Error("The questionnaire changed before interruption completed.");
+          const response = await this.context.harnesses.request(targetHarness, {
+            ...request, id: `questionnaire:stop:${threadId}`,
+            params: { ...request.params, cwd: project.rootPath },
+          });
+          if (response.error) throw new Error(response.error.message);
+        },
+      });
+      return isCurrent();
+    } catch (error) {
+      this.context.log?.("Questionnaire interruption failed; the saved question was retained.");
+      throw error;
+    }
   }
 
   async handleManagedThreadRequest(request: JsonRpcRequest): Promise<JsonRpcResponse> {

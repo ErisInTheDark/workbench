@@ -10,7 +10,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
-import type { WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchDurableQuestionnaire, WorkbenchThreadSidebarEntry, WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchDatabaseMutation, WorkbenchDatabaseQuery, WorkbenchDatabaseRow, WorkbenchDatabaseValue } from "workbench-shared/database/workbench-database-statements";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchThreadStateFeature, { mapProviderActivityNotification, mapProviderLifecycleNotification, normalizeProviderSidebarEntry, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
@@ -77,6 +77,195 @@ function createThreadStateDatabase() {
     operations,
   };
 }
+
+async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
+  const requests: JsonRpcRequest[] = [];
+  const releases: string[] = [];
+  const questionnaire: WorkbenchDurableQuestionnaire = {
+    itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44",
+    requestKey: "workbench-mcp:question",
+    turnId: "turn",
+    request: {
+      id: "question", title: "Choose", summary: "", submitLabel: "Submit",
+      questions: [{ id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false }],
+    },
+  };
+  const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1, entryKind: "thread", identity: { harness, threadId: "thread" },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: questionnaire.requestKey, settled: false, turnId: "turn" },
+    metadata: { archived: false, pinned: false, snoozed: false }, title: "Task", pendingQuestionnaire: questionnaire,
+  };
+  const state = {
+    turn: { id: "turn", status: "inProgress" },
+    failInterrupt: false,
+    beforeRelease: async () => {},
+  };
+  const options = {
+    database: createThreadStateDatabase(),
+    getProjectCatalog: () => ({ data: [], rootPath: "C:/workspace" }),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    listSubagents: async () => ({ subagents: [] }),
+    projectState: { getCurrentUpdate: () => null, handleRequest: async () => ({}), observe: () => () => {} },
+    publish: () => {},
+    releaseQuestionnaire: async (_threadId: string, requestKey: string) => {
+      releases.push(requestKey);
+      await state.beforeRelease();
+    },
+    harnesses: createHarnesses(async (_harness, request) => {
+      requests.push(request);
+      if (request.method === "thread/turns/list") return { id: request.id ?? null, result: { data: [state.turn], nextCursor: null } };
+      if (request.method === "thread/read") return { id: request.id ?? null, result: { thread: { turns: [state.turn] } } };
+      if (request.method === "thread/list" && _harness === harness) {
+        return { id: request.id ?? null, result: { data: [{ id: "thread", name: "Task", status: { type: "active" }, currentTurnId: state.turn.id, updatedAt: 1 }], nextCursor: null } };
+      }
+      if (request.method === "turn/interrupt" && state.failInterrupt) throw new Error("interrupt failed");
+      return { id: request.id ?? null, result: { data: [], nextCursor: null } };
+    }),
+    resolveProjectById: async () => ({ id: "project", rootPath: "C:/workspace" }),
+    resolveProjectFromCwd: async (cwd: string) => ({ cwd, project: { id: "project", rootPath: cwd } }),
+    transitions: { run: async <T>(_: string, operation: () => Promise<T>) => await operation() },
+  };
+  const feature = new WorkbenchThreadStateFeature(options);
+  await feature.controller.open("observer", "project");
+  await feature.controller.refresh("project");
+  await feature.controller.ensureProviderEntry("project", provider);
+  await feature.controller.observeLifecycle(harness, "thread", {
+    kind: "pendingInput", questionnaire, requestKey: questionnaire.requestKey, turnId: "turn",
+  });
+  requests.length = 0;
+  return {
+    feature, provider, questionnaire, releases, requests, state,
+    read: async () => (await feature.controller.getSnapshot("project")).entries.find((entry) => entry.entryKind === "thread"),
+    complete: () => feature.controller.handleRequest("observer", {
+      identity: provider.identity, method: "workbench/thread-state/status/set", projectId: "project", status: "completed",
+    }),
+    timeout: () => feature.observeProviderNotification("codex", {
+      method: "item/completed",
+      params: {
+        threadId: "thread", turnId: "turn",
+        item: { type: "mcpToolCall", id: "call", server: "wb", tool: "request_user_input", status: "failed", error: { message: "tool call error: timed out awaiting tools/call after 21600s" } },
+      },
+    }),
+  };
+}
+
+test("questionnaire timeout releases the live wait and stops only its owning sidebar turn", async () => {
+  const h = await questionnaireHarness();
+  try {
+    await h.timeout();
+    assert.deepEqual(h.releases, [h.questionnaire.requestKey]);
+    assert.deepEqual(h.requests.map((request) => request.method), ["thread/turns/list", "thread/goal/clear", "turn/interrupt"]);
+    assert.deepEqual(h.requests.at(-1)?.params, { cwd: "C:/workspace", threadId: "thread", turnId: "turn" });
+    const entry = await h.read();
+    assert.ok(entry && entry.entryKind === "thread");
+    assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
+  } finally { await h.feature.dispose(); }
+});
+
+test("manual questionnaire completion preserves its question and survives a late interrupted notification", async () => {
+  const h = await questionnaireHarness();
+  try {
+    const response = await h.complete();
+    assert.deepEqual(response, { result: { accepted: true, revision: (await h.feature.controller.getSnapshot("project")).revision } });
+    assert.deepEqual(h.releases, [h.questionnaire.requestKey]);
+    await h.feature.observeProviderNotification("codex", {
+      method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "interrupted" } },
+    });
+    const entry = await h.read();
+    assert.ok(entry && entry.entryKind === "thread");
+    assert.equal(entry.lifecycle.kind, "completed");
+    assert.deepEqual(entry.pendingQuestionnaire, h.questionnaire);
+  } finally { await h.feature.dispose(); }
+});
+
+test("completing an agent-blocked sidebar questionnaire fences late events from its interrupted turn", async () => {
+  const h = await questionnaireHarness();
+  try {
+    await h.feature.controller.observeLifecycle("codex", "thread", { kind: "agentStatus", status: "blocked", turnId: "turn" });
+    await h.complete();
+    await h.feature.observeProviderNotification("codex", {
+      method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "interrupted" } },
+    });
+    assert.equal((await h.read())?.lifecycle.kind, "completed");
+  } finally { await h.feature.dispose(); }
+});
+
+test("failed interruption cannot mark the thread complete or discard its question", async () => {
+  const h = await questionnaireHarness();
+  try {
+    h.state.failInterrupt = true;
+    await assert.rejects(h.complete(), /interrupt failed/u);
+    const entry = await h.read();
+    assert.equal(entry?.lifecycle.kind, "needsAttention");
+    assert.deepEqual(entry?.entryKind === "thread" && entry.pendingQuestionnaire, h.questionnaire);
+  } finally { await h.feature.dispose(); }
+});
+
+test("other provider questionnaires complete through their existing interrupt without Codex goal or waiter operations", async () => {
+  for (const harness of ["copilot", "opencode"] as const) {
+    const h = await questionnaireHarness(harness);
+    try {
+      const response = await h.complete();
+      assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, true);
+      assert.deepEqual(h.requests.map(request => request.method), ["thread/read", "turn/interrupt"]);
+      assert.deepEqual(h.releases, []);
+    } finally { await h.feature.dispose(); }
+  }
+});
+
+test("questionnaire completion does not interrupt ended turns or newer active turns", async () => {
+  for (const newer of [false, true]) {
+    const h = await questionnaireHarness();
+    try {
+      h.state.turn = newer ? { id: "new-turn", status: "inProgress" } : { id: "turn", status: "interrupted" };
+      const response = await h.complete();
+      assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, !newer);
+      assert.deepEqual(h.requests.map(request => request.method), ["thread/turns/list"]);
+      assert.deepEqual(h.releases, newer ? [] : [h.questionnaire.requestKey]);
+    } finally { await h.feature.dispose(); }
+  }
+});
+
+test("unrecognised provider turn status cannot release a question or report completion", async () => {
+  const h = await questionnaireHarness();
+  try {
+    h.state.turn.status = "unexpected";
+    await assert.rejects(h.complete(), /turn metadata/u);
+    assert.deepEqual(h.releases, []);
+    assert.equal((await h.read())?.lifecycle.kind, "needsAttention");
+  } finally { await h.feature.dispose(); }
+});
+
+test("questionnaire timeout leaves subagent turns and waiters under their existing owner", async () => {
+  const h = await questionnaireHarness();
+  try {
+    const { metadata: _metadata, ...common } = h.provider;
+    await h.feature.controller.ensureProviderEntry("project", {
+      ...common, entryKind: "subagent", createdAt: 1, updatedAt: 1, cwd: "C:/workspace", directSubagentIndex: 0,
+      name: "child", parentThreadId: "parent", pinned: false, profileId: "profile", profileName: "profile", projectId: "project",
+    });
+    h.requests.length = 0;
+    await h.timeout();
+    assert.deepEqual(h.requests, []);
+    assert.deepEqual(h.releases, []);
+  } finally { await h.feature.dispose(); }
+});
+
+test("answer or newer-turn observations during release prevent stale completion without blocking the mutation queue", async () => {
+  for (const answer of [false, true]) {
+    const h = await questionnaireHarness();
+    try {
+      h.state.beforeRelease = async () => {
+        await h.feature.controller.observeLifecycle("codex", "thread", answer
+          ? { kind: "inputResolved", requestKey: h.questionnaire.requestKey }
+          : { kind: "acceptedIntent", turnId: "new-turn" });
+      };
+      const response = await h.complete();
+      assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, false);
+      assert.equal(h.requests.some(request => request.method === "turn/interrupt"), false);
+    } finally { await h.feature.dispose(); }
+  }
+});
 
 test("provider sidebar normalization converts seconds at the reloadable feature boundary", () => {
   const entry = normalizeProviderSidebarEntry("codex", {

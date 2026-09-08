@@ -5,9 +5,8 @@
 
 import type { ComponentType } from "react";
 
-import { getWorkbenchThreadStatusClassName } from "../workbench-thread-status-colors";
 import { CircleAlertIcon } from "../workbench-icons";
-import { getThreadMarkdownEmphasisTone } from "./thread-markdown-emphasis-colors";
+import { getThreadMarkdownEmphasisColors } from "./thread-markdown-emphasis-colors";
 
 type InlineIconComponent = ComponentType<{ className?: string }>;
 
@@ -21,15 +20,15 @@ export default function ThreadInlineIcon ({ color, iconType, source }: {
   source: string;
 }) {
   const Icon = THREAD_INLINE_ICON_REGISTRY.get(iconType);
-  const tone = getThreadMarkdownEmphasisTone(color);
-  if (!Icon || !tone) {
+  const colors = getThreadMarkdownEmphasisColors(color);
+  if (!Icon || !colors) {
     return source;
   }
 
   return (
     <span
       aria-label={`${color} ${iconType} marker`}
-      className={`inline-flex size-[1em] align-[-0.12em] ${getWorkbenchThreadStatusClassName(tone)}`}
+      className={`inline-flex size-[1em] align-[-0.12em] ${colors.text}`}
       data-thread-inline-icon={iconType}
       data-thread-inline-icon-color={color}
       role="img"
