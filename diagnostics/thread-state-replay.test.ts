@@ -20,6 +20,7 @@ import WorkbenchTranscriptIdentityRepository from "../daemon/orchestrator/databa
 import { admitProviderThreads, mapProviderThread } from "../daemon/orchestrator/thread-identity-provider-mapping";
 import { admitNativeTranscriptObservations, mapNativeTranscriptObservation } from "../daemon/orchestrator/thread-identity-transcript-mapping";
 import { createCodexTranscriptSqliteImport } from "../daemon/orchestrator/codex-transcript-sqlite-import";
+import { createCodexTranscriptProviderTurnScopeObservation } from "../daemon/orchestrator/codex-transcript-provider-observations";
 import { mapNativeProviderResponse } from "../daemon/orchestrator/thread-identity-workbench-mapping";
 
 const input = process.env.WORKBENCH_REPLAY_DATABASE;
@@ -114,7 +115,8 @@ test("retained database upgrades and resolves existing identities without modify
   }
 });
 
-test("retained history imports and projects repeatedly through production identity owners", {
+for (const settlement of ["compatibility", "provider"] as const) {
+test(`retained history imports and projects repeatedly through ${settlement} settlement`, {
   skip: !process.env.WORKBENCH_REPLAY_HISTORY,
 }, async () => {
   const workspace = path.resolve(process.cwd(), "..");
@@ -200,13 +202,22 @@ test("retained history imports and projects repeatedly through production identi
         method: "workbench/thread/page/read", params: { threadId: thread.id, cursor: null },
       }, { id: 1, result: { ...entries, thread, nextCursor: null } }));
       assert.ok(page.result);
-      report.stage = `compatibility import ${pass}`;
-      const observation = createCodexTranscriptSqliteImport({
-        ...entries, context, thread, browseAssets: new Map(),
-      });
-      await admitNativeTranscriptObservations(owners, [observation]);
-      const mapped = mapNativeTranscriptObservation(owners, native, observation);
-      await measure(`body settlement ${pass}`, () => transcript.settle([mapped]));
+      report.stage = `${settlement} settlement ${pass}`;
+      if (settlement === "provider") {
+        for (const turn of thread.turns) {
+          const scope = createCodexTranscriptProviderTurnScopeObservation({ context, threadId: thread.id, turn });
+          await admitNativeTranscriptObservations(owners, [scope]);
+          const mappedScope = mapNativeTranscriptObservation(owners, native, scope);
+          await measure(`provider settlement ${pass}`, () => transcript.settle([mappedScope]));
+        }
+      } else {
+        const observation = createCodexTranscriptSqliteImport({
+          ...entries, context, thread, browseAssets: new Map(),
+        });
+        await admitNativeTranscriptObservations(owners, [observation]);
+        const mapped = mapNativeTranscriptObservation(owners, native, observation);
+        await measure(`body settlement ${pass}`, () => transcript.settle([mapped]));
+      }
       report.stage = `public projection ${pass}`;
       const publicThread = mapProviderThread(owners, native, thread);
       const snapshot = transcript.read({ threadId: publicThread.id, turnLimit: manifest.turnIds.length,
@@ -233,3 +244,4 @@ test("retained history imports and projects repeatedly through production identi
     console.log(`Retained-history replay evidence: ${output}`);
   }
 });
+}

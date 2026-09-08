@@ -1256,6 +1256,68 @@ test("provider scopes preserve directly recorded items omitted by later snapshot
   }
 });
 
+test("provider settlement converts retained bodies before reconciliation without requiring a browser read", () => {
+  const { database, repository } = createRepository();
+  try {
+    const message = (id: string) => withWorkbenchThreadItemIdentity({
+      id, type: "agentMessage" as const, text: "retained commentary", phase: "commentary" as const,
+      memoryCitation: null, delivery: null, questions: null,
+    }, id === "item-1" ? "provisional" : "stable");
+    repository.settle([threadObservation(), turnObservation("older", 0), turnObservation("turn", 1), {
+      kind: "item", threadId: "thread", turnId: "older", lifecycle: "completed", observedAt: 3,
+      item: { id: "older-reasoning", type: "reasoning", summary: ["older"], content: [] },
+    }, {
+      kind: "item", threadId: "thread", turnId: "turn", lifecycle: "completed", observedAt: 4,
+      item: message("item-1"),
+    }]);
+    const identities = new WorkbenchThreadIdentityRepository(database);
+    const thread = identities.resolve({ threadId: "native-thread" })!;
+    const turn = identities.resolveTurn({ threadId: thread.threadId, turnId: "turn" })!;
+    const items = new WorkbenchTranscriptIdentityRepository(database);
+    items.admit({
+      threadId: thread.threadId,
+      sources: [{ turnId: turn.turnId, kind: "provisional", sourceId: "item-1" }],
+      legacyAliases: [],
+    });
+    const target = items.admit({
+      threadId: thread.threadId,
+      sources: [{ turnId: turn.turnId, kind: "stable", sourceId: "canonical-message" }],
+      legacyAliases: [],
+    });
+    const original = database.prepare("SELECT id, item_position FROM thread_items WHERE source_id = 'item-1'").get();
+    const incoming: WorkbenchTranscriptAtomicObservation = {
+      kind: "item", threadId: thread.threadId, turnId: turn.turnId, publicItemId: target.itemId,
+      lifecycle: "completed", observedAt: 5, item: message("canonical-message"),
+    };
+    const scope = providerTurnScope([
+      { ...turnObservation("turn", 1, thread.threadId), turnId: turn.turnId },
+      incoming,
+    ], [turn.turnId], thread.threadId);
+    assert.throws(() => repository.settle([scope, { ...incoming, threadId: "wrong-owner" }]));
+    assert.equal((database.prepare("SELECT public_id FROM thread_items WHERE source_id = 'item-1'").get() as { public_id: string | null }).public_id, null,
+      "Failed settlement must roll back retained identity conversion");
+    repository.settle([scope]);
+    repository.settle([scope]);
+    const snapshot = new WorkbenchTranscriptRepository(database).read({
+      threadId: thread.threadId, turnIds: [turn.turnId], turnLimit: 1,
+    })!;
+    assert.equal(snapshot.rows.threadItems.length, 1);
+    assert.deepEqual(snapshot.rows.threadItems.map(({ id, item_position }) => ({ id, item_position })), [original]);
+    assert.equal(snapshot.rows.threadItems[0]!.public_id, target.itemId);
+    assert.equal(snapshot.rows.threadItemAssistantMessages[0]!.text, message("canonical-message").text);
+    for (const itemId of ["item-1", "canonical-message", target.itemId]) {
+      assert.equal(new WorkbenchTranscriptIdentityRepository(database).resolve({
+        threadId: thread.threadId, turnId: turn.turnId, itemId,
+      })?.itemId, target.itemId);
+    }
+    assert.equal((database.prepare("SELECT public_id FROM thread_items WHERE source_id = 'older-reasoning'").get() as { public_id: string | null }).public_id, null,
+      "Other turns must remain untouched");
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally {
+    database.close();
+  }
+});
+
 for (const targetHasBody of [false, true]) {
   test(`same-fact reconciliation preserves public aliases and body evidence (target body ${targetHasBody})`, () => {
     const { database, repository } = createRepository();

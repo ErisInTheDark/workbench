@@ -526,6 +526,14 @@ export default class WorkbenchTranscriptRepository {
       }
       const existingItems = [...(index.itemsByTurnId.get(turnId)?.values() ?? [])]
         .sort((left, right) => left.item_position - right.item_position);
+      if (index.thread.identity_origin === "workbench" && existingItems.some((item) => item.public_id === null)) {
+        this.#promoteLegacyToolOutputs(existingItems);
+        this.#admitRetainedItems(existingItems, [...index.turnsById.values()]);
+        for (const item of existingItems) {
+          const prior = index.itemsByTurnId.get(turnId)!.get(item.id)!;
+          if (prior !== item) this.#replaceCanonicalItem(index, prior, item);
+        }
+      }
       const enrichedItemIds = this.#providerReplacementEnrichedItemIds(existingItems);
       const rows = this.#readRows(scope.threadId, existingItems);
       const projection = projectWorkbenchTranscriptItems(rows);

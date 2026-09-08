@@ -3577,6 +3577,63 @@ test("exact transcript windows await ordered import and Thread Recall reuses the
   }
 });
 
+test("durable transcript and recall materialisation propagate SQLite failure and can retry after recovery", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-materialisation-failure-"));
+  const failure = new Error("Recorded compatibility failure");
+  const materialized = new Set<string>();
+  let failing = true;
+  let imports = 0;
+  const bridge = new CodexStdioBridge({
+    appServer: { send() { throw new Error("Materialisation must not call the provider"); } } as unknown as CodexAppServer,
+    bridgeUrl: "ws://127.0.0.1:1",
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    onNotification() {},
+    readSqliteTranscriptMaterializedTurnIds: async (_threadId, turnIds) => turnIds.filter((id) => materialized.has(id)),
+    recordSqliteTranscript: async (observations) => {
+      if (failing) throw failure;
+      for (const observation of observations) {
+        if (observation.kind !== "canonicalWindow") continue;
+        imports++;
+        for (const id of observation.materializedTurnIds) materialized.add(id);
+      }
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: "project", kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    sendToClient() {},
+    storageRoot: root,
+  });
+  try {
+    const store = (bridge as unknown as { ensureTranscriptStore(): CodexTranscriptStore }).ensureTranscriptStore();
+    const metadata = { ...bridgeThread(), turns: [] } as Thread;
+    const turn = bridgeThread().turns[0]!;
+    await store.recordProviderTurnCatalog(metadata, [turn], { cursor: null, turnId: turn.id });
+    await store.recordProviderTurnPage(metadata, turn, null);
+    const requests = [
+      { id: 1, method: "workbench/transcript/materialize", params: { threadId: metadata.id, turnIds: [turn.id] } },
+      { id: 2, method: "workbench/thread-recall/materialize", params: { threadId: metadata.id, turnId: turn.id } },
+    ];
+    for (const request of requests) {
+      const response = await bridge.handleBridgeRequest(request);
+      assert.equal(response?.error?.message, failure.message);
+      assert.equal(response?.result, undefined);
+    }
+    failing = false;
+    for (const request of requests) {
+      const response = await bridge.handleBridgeRequest(request);
+      assert.equal(response?.error, undefined);
+      assert.deepEqual(response?.result, { materializedTurnIds: [turn.id], threadId: metadata.id });
+    }
+    assert.equal(imports, 1, "Recovered materialisation must be reused");
+  } finally {
+    await bridge.dispose();
+    await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
 test("transcript materialisation waits for an admitted live turn before consulting compatibility storage", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-live-materialisation-"));
   const liveTurnRecordingStarted = deferred<void>();

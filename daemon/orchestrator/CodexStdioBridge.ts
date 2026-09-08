@@ -2358,7 +2358,7 @@ export default class CodexStdioBridge {
   private async captureTranscript(
     label: string,
     task: () => Promise<unknown>,
-    options: { propagateFailure?: boolean } = {},
+    options: { propagateFailure?: boolean; requireSqlite?: boolean } = {},
   ) {
     const taskId = this.nextTranscriptTaskId;
     this.nextTranscriptTaskId += 1;
@@ -2383,7 +2383,7 @@ export default class CodexStdioBridge {
               source: "codex-transcript",
             });
           }
-          if (options.propagateFailure && !(error instanceof CodexTranscriptSqliteRecordingFailure)) {
+          if (options.requireSqlite || (options.propagateFailure && !(error instanceof CodexTranscriptSqliteRecordingFailure))) {
             throw error;
           }
         }
@@ -2866,7 +2866,7 @@ export default class CodexStdioBridge {
     await this.resolveProjectFromCwd(threadCwd, { endpointName });
     await this.captureTranscript(source, () => (
       this.importSqliteCompatibilityWindow(thread, transcriptStore)
-    ), { propagateFailure: true });
+    ), { propagateFailure: true, requireSqlite: true });
     return {
       materializedTurnIds: requestedTurnIds ?? thread.turns.map(({ id }) => id),
       threadId,
