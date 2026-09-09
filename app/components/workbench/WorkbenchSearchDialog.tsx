@@ -1,4 +1,5 @@
 /*
+ * Keywords: search, dialog, listbox, keyboard, project row, thread row.
  * Exports:
  * - default WorkbenchSearchDialog: full-screen accessible search dialog and keyboard-driven result list. Keywords: search, dialog, listbox, keyboard.
  */
@@ -6,9 +7,20 @@
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
+import type { WorkbenchProjectOption } from "workbench-shared/types";
+import { createThreadHref } from "workbench-shared/workbench/navigation/workbench-route";
+import type { WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchSearchController from "../../workbench/search/WorkbenchSearchController";
+import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
+import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
+import WorkbenchSearchResultItem from "./WorkbenchSearchResultItem";
 
-export default function WorkbenchSearchDialog({ controller }: { controller: WorkbenchSearchController }) {
+export default function WorkbenchSearchDialog({ controller, projects, projectSidebars, projectSummaries }: {
+  controller: WorkbenchSearchController;
+  projects: readonly WorkbenchProjectOption[];
+  projectSidebars: WorkbenchProjectThreadSidebars;
+  projectSummaries: WorkbenchProjectThreadSummaries;
+}) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const inputRef = useRef<HTMLInputElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
@@ -40,7 +52,7 @@ export default function WorkbenchSearchDialog({ controller }: { controller: Work
           return;
         }
         if (event.key !== "Tab") return;
-        const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("input, button:not([disabled])"));
+        const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("input, button:not([disabled]), a[href]"));
         const first = focusable[0];
         const last = focusable.at(-1);
         if (event.shiftKey && document.activeElement === first) {
@@ -78,7 +90,7 @@ export default function WorkbenchSearchDialog({ controller }: { controller: Work
         </div>
         <div className="h-px shrink-0 bg-gradient-to-r from-transparent via-text/15 to-transparent" />
         <div
-          className="explorer-scrollbar min-h-24 flex-1 overflow-y-auto px-2 py-3 md:px-4"
+          className="explorer-scrollbar flex min-h-24 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-2 text-[0.9rem] leading-6 md:px-4"
           id="workbench-search-results"
           role="listbox"
         >
@@ -86,25 +98,63 @@ export default function WorkbenchSearchDialog({ controller }: { controller: Work
           {!snapshot.error && !snapshot.isLoading && snapshot.results.length === 0 ? (
             <p className="px-4 py-5 text-sm text-muted">No matching results.</p>
           ) : null}
-          {snapshot.results.map((result, index) => (
-            <button
-              aria-selected={index === snapshot.selectedIndex}
-              className={`grid w-full grid-cols-[minmax(0,1fr)_auto] gap-x-4 rounded-2xl px-4 py-3 text-left outline-none transition hover:bg-text/[0.06] focus-visible:bg-text/[0.06]${index === snapshot.selectedIndex ? " bg-accent-soft" : ""}`}
-              id={`workbench-search-result-${index}`}
-              key={result.id}
-              onClick={() => controller.activate(result)}
-              onMouseMove={() => {
-                const delta = index - controller.getSnapshot().selectedIndex;
-                if (delta) controller.moveSelection(delta);
-              }}
-              role="option"
-              type="button"
-            >
-              <span className="min-w-0 truncate text-base font-medium text-text">{result.title}</span>
-              <span className="self-center text-[0.7rem] uppercase tracking-[0.12em] text-muted">{result.kind}</span>
-              <span className="col-span-2 min-w-0 truncate text-sm text-muted">{result.detail}</span>
-            </button>
-          ))}
+          {snapshot.results.map((result, index) => {
+            const id = `workbench-search-result-${index}`;
+            const selected = index === snapshot.selectedIndex;
+            const project = result.kind === "action" ? undefined : projects.find(({ id }) => id === result.projectId);
+            const summary = projectSummaries.projects.find(({ projectId }) => projectId === project?.id) ?? null;
+            const thread = result.kind === "thread"
+              ? projectSidebars.projects.find(({ projectId }) => projectId === result.projectId)?.entries.find((entry) => (
+                entry.entryKind !== "draft" && entry.identity.harness === result.harnessId && entry.identity.threadId === result.threadId
+              ))
+              : undefined;
+            return (
+              <div
+                className="shrink-0"
+                key={result.id}
+                onMouseMove={() => {
+                  const delta = index - controller.getSnapshot().selectedIndex;
+                  if (delta) controller.moveSelection(delta);
+                }}
+                role="presentation"
+              >
+                {result.kind === "project" && project ? (
+                  <WorkbenchProjectListItem
+                    compact
+                    entry={{ activityAt: summary?.lastThreadUpdateAt ?? project.lastCommitTimeMs, project, summary }}
+                    id={id}
+                    nowMs={Date.now()}
+                    onProjectLinkClick={(event) => { event.preventDefault(); controller.activate(result); }}
+                    role="option"
+                    selected={selected}
+                    showTooltip={false}
+                  />
+                ) : result.kind === "thread" && thread && thread.entryKind !== "draft" ? (
+                  <WorkbenchThreadListItem
+                    compact
+                    dimmedOverride={false}
+                    entry={thread}
+                    href={createThreadHref(result.projectId, { kind: "provider", harness: thread.identity.harness, threadId: result.threadId })}
+                    id={id}
+                    onActivate={() => controller.activate(result)}
+                    project={project}
+                    projectId={result.projectId}
+                    role="option"
+                    secondaryRow={(
+                      <span className="flex min-w-0 gap-2 pl-5 text-[0.72rem] leading-4 text-muted">
+                        <span className="max-w-40 shrink-0 truncate">{project?.name || result.projectId}</span>
+                        {result.detail !== result.projectId ? <span className="min-w-0 truncate" title={result.detail}>{result.detail}</span> : null}
+                      </span>
+                    )}
+                    selected={selected}
+                    showTooltip={false}
+                  />
+                ) : (
+                  <WorkbenchSearchResultItem id={id} onActivate={() => controller.activate(result)} result={result} selected={selected} />
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

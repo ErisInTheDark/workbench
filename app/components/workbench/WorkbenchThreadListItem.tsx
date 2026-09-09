@@ -1,5 +1,5 @@
 /*
- * Keywords: thread row, tooltip, title history, navigation, actions.
+ * Keywords: thread row, tooltip, title history, navigation, actions, listbox.
  * Exports:
  * - default WorkbenchThreadListItem: render one reusable full or collapsed thread row with optional project context, draft presence, direct navigation, tooltip detail, drag targets, and explicit context-menu access. Keywords: thread, project, sidebar, navigation, tooltip, context menu, claim, composer, draft, priority, pin, snooze, compact, drag.
  * - Local helpers: derive full or compact pinned-draft row targets and render bounded thread tooltip details. Compact rows accept secondary content. Keywords: thread, draft, target, tooltip, status, secondary row.
@@ -138,6 +138,7 @@ export default function WorkbenchThreadListItem({
   dragTargets,
   entry,
   href,
+  id,
   isDragActive = false,
   isShiftPressed = false,
   nowMs = Date.now(),
@@ -167,6 +168,7 @@ export default function WorkbenchThreadListItem({
   dragTargets?: ReactNode;
   entry: ThreadListEntry;
   href: string;
+  id?: string;
   isDragActive?: boolean;
   isShiftPressed?: boolean;
   nowMs?: number;
@@ -177,7 +179,7 @@ export default function WorkbenchThreadListItem({
   onPointerDown?: (event: PointerEvent<HTMLAnchorElement>) => void;
   project?: WorkbenchProjectOption;
   projectId: string;
-  role?: "tab";
+  role?: "tab" | "option";
   selected?: boolean;
   secondaryRow?: ReactNode;
   showActions?: boolean;
@@ -272,7 +274,15 @@ export default function WorkbenchThreadListItem({
     </button>
   ) : null;
   return (
-    <li className={`group/thread-row relative isolate m-0 min-h-11 list-none md:min-h-0${dimmed ? ` opacity-50${isDragActive ? "" : " hover:opacity-100 has-[:focus-visible]:opacity-100"}` : ""}${className ? ` ${className}` : ""}`} data-thread-status-tone={entry.entryKind === "draft" ? "draft" : statusTone}>
+    <li
+      className={`
+        group/thread-row relative isolate m-0 min-h-11 list-none md:min-h-0
+        ${dimmed ? `opacity-50 ${isDragActive ? "" : "hover:opacity-100 has-[:focus-visible]:opacity-100"}` : ""}
+        ${className}
+      `}
+      data-thread-status-tone={entry.entryKind === "draft" ? "draft" : statusTone}
+      role={role === "option" ? "presentation" : undefined}
+    >
       <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out ${statusClassName} ${selected ? "opacity-100" : `opacity-0${isDragActive ? "" : " group-hover/thread-row:opacity-100 group-has-[:focus-visible]/thread-row:opacity-100"}`}`}>
         <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="12.8" fill="color-mix(in srgb, var(--text) 4%, transparent)" stroke="currentColor" strokeWidth="1" strokeOpacity={strokeOpacity} strokeDasharray={hasDashedBorder ? "6 4" : undefined} vectorEffect="non-scaling-stroke" />
       </svg>
@@ -287,9 +297,10 @@ export default function WorkbenchThreadListItem({
             ref={anchorRef}
             draggable={draggable}
             href={href}
+            id={id}
             role={role}
             tabIndex={tabIndex}
-            aria-selected={role === "tab" ? selected : undefined}
+            aria-selected={role ? selected : undefined}
             aria-label={rowName}
             className="absolute inset-0 z-10 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
             onClick={onActivate ? (event: MouseEvent<HTMLAnchorElement>) => {

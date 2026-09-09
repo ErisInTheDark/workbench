@@ -2644,7 +2644,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         >
           {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
           <WorkbenchTabIcon state={tabIconState} />
-          <WorkbenchSearchDialog controller={searchController} />
+          <WorkbenchSearchDialog
+            controller={searchController}
+            projects={explorer.projects}
+            projectSidebars={projectThreadSidebars}
+            projectSummaries={projectThreadSummaries}
+          />
           {isEffectiveDesktopSidebarCollapsed ? (
             <>
               <button
@@ -2688,7 +2693,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden py-3 pr-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:pr-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
                 <DropTargetBoundary className="explorer-scrollbar flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto pr-2">
-                <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto_auto] items-center gap-1 pb-5">
+                <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto_auto] items-center gap-1 pb-2">
                   <span className="min-w-0 truncate pl-5 text-xl font-semibold leading-tight text-text">workbench</span>
                   <a
                     aria-label="Open home"

@@ -1,23 +1,23 @@
 /*
+ * Keywords: search, sidebar, trigger.
  * Exports:
- * - default WorkbenchSearchInput: accessible sidebar trigger styled as a search input. Keywords: search, sidebar, trigger.
+ * - default WorkbenchSearchInput: accessible sidebar search button.
  */
 "use client";
 
 export default function WorkbenchSearchInput({ onOpen }: { onOpen(): void }) {
   return (
-    <input
+    <button
       aria-label="Open workspace search"
-      className="mx-2 mb-4 h-10 shrink-0 cursor-pointer rounded-xl bg-text/[0.035] px-3 text-sm text-text outline-none transition placeholder:text-muted hover:bg-text/[0.07] focus-visible:ring-2 focus-visible:ring-accent-soft"
+      className="ml-5 mb-4 flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-xl px-3 text-left text-sm text-muted outline-none transition hover:bg-text/[0.07] hover:text-text focus-visible:ring-2 focus-visible:ring-accent-soft"
       onClick={onOpen}
-      onKeyDown={(event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        onOpen();
-      }}
-      placeholder="Search"
-      readOnly
-      type="search"
-    />
+      type="button"
+    >
+      <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-search-icon lucide-search shrink-0">
+        <path d="m21 21-4.34-4.34" />
+        <circle cx="11" cy="11" r="8" />
+      </svg>
+      <span>Search</span>
+    </button>
   );
 }
