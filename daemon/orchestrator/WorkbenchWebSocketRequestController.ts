@@ -186,6 +186,7 @@ export default class WorkbenchWebSocketRequestController {
   private generation = new AbortController();
   private readonly reportDelivery: WorkbenchWebSocketRequestControllerOptions["reportDelivery"];
   private readonly eventLog: WorkbenchWebSocketEventLog;
+  private readonly loggedThreadStateProjections = new WeakSet<object>();
   private readonly harnesses: WorkbenchWebSocketRequestControllerOptions["harnesses"];
   private readonly identities: WorkbenchWebSocketRequestControllerOptions["identities"];
   private readonly threadStateIdentities: NativeThreadStateIdentityOwners | undefined;
@@ -477,16 +478,23 @@ export default class WorkbenchWebSocketRequestController {
         }
       } else {
         if (envelope?.method === "workbench/thread-state/updated") {
+          const source = envelope.params as WorkbenchThreadStateSnapshot;
           const projectionStartedAt = this.now();
-          const params = await mapNativeThreadStateSnapshot(this.threadStateIdentities!, envelope.params as WorkbenchThreadStateSnapshot);
+          const params = await mapNativeThreadStateSnapshot(this.threadStateIdentities!, source);
           const projectionMs = this.now() - projectionStartedAt;
           signal.throwIfAborted();
           message = { ...envelope, params };
           const kind = "updateKind" in params ? params.updateKind : "sidebar";
           const snapshot = "sidebar" in params ? params.sidebar : "summary" in params ? params.summary : params;
           const entries = "entries" in snapshot ? snapshot.entries.length : 0;
-          // Temporary, unthrottled measurement: traffic summaries cannot locate projection delays.
-          this.writeLine(` WS out wb:thread-state/updated projection in ${formatDuration(projectionMs)} ${dimWebSocketDetail(`(kind: ${kind}, revision: ${snapshot.revision}, entries: ${entries})`)}`);
+          const sourceSnapshot = "sidebar" in source ? source.sidebar : "summary" in source ? source.summary : source;
+          // Fanout wrappers can differ, but share the source entries or summary.
+          const publication = "entries" in sourceSnapshot ? sourceSnapshot.entries : sourceSnapshot;
+          if (!this.loggedThreadStateProjections.has(publication)) {
+            this.loggedThreadStateProjections.add(publication);
+            // Temporary, unthrottled measurement of the first successful projection.
+            this.writeLine(` WS out wb:thread-state/updated projection in ${formatDuration(projectionMs)} ${dimWebSocketDetail(`(kind: ${kind}, revision: ${snapshot.revision}, entries: ${entries})`)}`);
+          }
         } else if (envelope?.[WORKBENCH_HARNESS_FIELD]) {
           const harness = this.harnesses.resolveHarness(envelope[WORKBENCH_HARNESS_FIELD]);
           const params = asRecord(envelope.params);

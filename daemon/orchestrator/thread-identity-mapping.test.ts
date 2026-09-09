@@ -645,7 +645,7 @@ test("public socket routing and reload handoff retain native request correlation
       }
       return resolveThread(input);
     });
-    const sidebarSending = controller.sendJsonToClient(client, { method: "workbench/thread-state/updated", params: {
+    const sidebarMessage = { method: "workbench/thread-state/updated", params: {
       projectId: "project", revision: 1, error: null, freshness: "fresh",
       entries: [{
         entryKind: "thread", activityAt: 1, title: native.nativeThreadId,
@@ -655,7 +655,8 @@ test("public socket routing and reload handoff retain native request correlation
           agent: { agentStatus: "working", turnId: native.nativeTurnId } },
       }],
       displayOrder: { pinned: { [`codex:${native.nativeThreadId}`]: { above: [], below: [] } } },
-    } });
+    } };
+    const sidebarSending = controller.sendJsonToClient(client, sidebarMessage);
     await entered;
     assert.equal(lines.filter(line => line.includes(" projection ")).length, 0);
     now += 37;
@@ -667,18 +668,31 @@ test("public socket routing and reload handoff retain native request correlation
     assert.match(projectionLines[0]!, /projection in 37ms/);
     assert.match(projectionLines[0]!, /kind: sidebar, revision: 1, entries: 1/);
     assert.ok(!projectionLines[0]!.includes(native.nativeThreadId));
+    const secondClient: BridgeClient = { ...client };
+    const beforeFanout = emitted.length;
+    await controller.sendJsonToClient(secondClient, {
+      method: sidebarMessage.method,
+      params: { updateKind: "projectThreadSidebar", sidebar: { ...sidebarMessage.params } },
+    });
+    assert.equal(emitted.length, beforeFanout + 1);
+    assert.equal(lines.filter(line => line.includes(" projection ")).length, 1);
+    const nextPublication = {
+      ...sidebarMessage,
+      params: { ...sidebarMessage.params, entries: [...sidebarMessage.params.entries] },
+    };
     const lookupFailure = new Error("controlled identity lookup failure");
     const failedLookup = t.mock.method(owners.threads, "resolve", async () => { throw lookupFailure; });
     const sentBeforeFailure = emitted.length;
-    await assert.rejects(controller.sendJsonToClient(client, {
-      method: "workbench/thread-state/updated",
-      params: { projectId: "project", revision: 2, error: null, freshness: "fresh", entries: [{
-        entryKind: "thread", identity: { harness: "codex", threadId: native.nativeThreadId },
-      }] },
-    }), /controlled identity lookup failure/);
+    await assert.rejects(controller.sendJsonToClient(client, nextPublication), /controlled identity lookup failure/);
     failedLookup.mock.restore();
     assert.equal(emitted.length, sentBeforeFailure);
     assert.equal(lines.filter(line => line.includes(" projection ")).length, 1);
+    await controller.sendJsonToClient(client, nextPublication);
+    assert.equal(lines.filter(line => line.includes(" projection ")).length, 2);
+    const summary = { projectId: "project", revision: 1, counts: {}, unsettledThreads: [], pinnedThreads: [] };
+    await controller.sendJsonToClient(client, { method: sidebarMessage.method, params: { updateKind: "projectThreadSummary", summary } });
+    await controller.sendJsonToClient(secondClient, { method: sidebarMessage.method, params: { updateKind: "projectThreadSummary", summary } });
+    assert.equal(lines.filter(line => line.includes(" projection ")).length, 3);
     const sidebar = emitted.find((message) => message.method === "workbench/thread-state/updated")?.params as {
       entries: Array<{ identity: { threadId: string }; lifecycle: { agent: { turnId: string } }; title: string }>;
       displayOrder: { pinned: Record<string, object> };
