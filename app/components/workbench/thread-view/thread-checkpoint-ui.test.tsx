@@ -139,7 +139,6 @@ test("failed proposal creation stays an action, while identified proposals retai
     controls: null,
     explorer: {} as WorkbenchClientController["explorer"],
     mounted: null,
-    transcriptSource: { status: "idle" },
   };
   for (const transport of ["cli", "mcp"]) {
     for (const outcome of ["completed", "failed", "declined", "timedOut"] as const) {

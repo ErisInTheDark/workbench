@@ -17,12 +17,8 @@ import type {
   WorkbenchComposerSettings,
   WorkbenchListModelsOptions,
   WorkbenchModelOption,
-  WorkbenchPendingUserInputRequest,
-  WorkbenchQuestionnaireDraft,
   WorkbenchSkillSummary,
-  WorkbenchSubmitUserInputRequestOptions,
   WorkbenchComposerInputDraft,
-  WorkbenchUserInputResponse,
 } from "workbench-shared/types";
 import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 import {
@@ -41,11 +37,11 @@ import {
   createWorkbenchThreadRecoveryInput,
   isWorkbenchThreadRecoveryEligible,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
-import type { WorkbenchThreadLifecycle, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
 import StickyCollapsibleSurface from "../StickyCollapsibleSurface";
 import { PlayIcon, SnoozedThreadIcon, StopIcon } from "../workbench-icons";
-import { useWorkbenchThread, useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
+import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
 import PlaintextEditable from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import ThreadAgentPicker from "./ThreadAgentPicker";
@@ -99,15 +95,12 @@ export default function ThreadComposer ({
   onStopThread,
   onThreadComposerDraftChange,
   onThreadComposerDraftClear,
-  onThreadQuestionnaireDraftChange,
-  onThreadQuestionnaireDraftClear,
-  onSubmitUserInputRequest,
+  onQuestionnaireError,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadServiceTierChange,
   onThreadSettingsChange,
   onThreadModelChange,
-  pendingUserInputRequest,
   projectId,
   projectRootPath,
   profileSlot,
@@ -118,9 +111,7 @@ export default function ThreadComposer ({
   stickyMode = false,
   leadingActions,
   trailingActions,
-  threadQuestionnaireDraft,
   threadComposerDraft,
-  threadLifecycle,
   knownSkills,
   highlightSources,
   thread,
@@ -142,19 +133,12 @@ export default function ThreadComposer ({
   onStopThread: (threadId: string) => Promise<void> | void;
   onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
   onThreadComposerDraftClear: (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => Promise<void> | void;
-  onThreadQuestionnaireDraftChange: (projectId: string, threadId: string, requestKey: string, update: DraftUpdate<WorkbenchQuestionnaireDraft>) => Promise<WorkbenchQuestionnaireDraft> | WorkbenchQuestionnaireDraft;
-  onThreadQuestionnaireDraftClear: (projectId: string, threadId: string, requestKey: string) => Promise<void> | void;
-  onSubmitUserInputRequest: (
-    threadId: string,
-    response: WorkbenchUserInputResponse,
-    options?: WorkbenchSubmitUserInputRequestOptions,
-  ) => Promise<void>;
+  onQuestionnaireError?: (message: string) => void;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadServiceTierChange: (threadId: string, serviceTier: string | null) => void;
   onThreadSettingsChange?: (threadId: string, settings: WorkbenchComposerSettings) => void;
   onThreadModelChange: (threadId: string, model: string) => void;
-  pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
   projectId: string;
   projectRootPath: string;
   profileSlot?: WorkbenchComposerProfileSlot;
@@ -165,17 +149,21 @@ export default function ThreadComposer ({
   stickyMode?: boolean;
   leadingActions?: ReactNode;
   trailingActions?: ReactNode;
-  threadQuestionnaireDraft: WorkbenchQuestionnaireDraft | null;
   threadComposerDraft: WorkbenchComposerInputDraft | null;
   knownSkills: WorkbenchSkillSummary[];
   highlightSources: InlineMentionHighlightSources;
   thread: ThreadPayload;
   threadTarget?: WorkbenchThreadTarget | null;
-  threadLifecycle: WorkbenchThreadLifecycle | null;
 }) {
   const daemon = useWorkbenchDaemonClient();
-  const threadController = useWorkbenchThread(thread.id);
-  const sidebarEntry = useWorkbenchThreadSidebarEntry(projectId, thread.harness, thread.id);
+  const questionnaire = useWorkbenchQuestionnaire(projectId, thread.isDraft ? null
+    : threadTarget?.kind === "subagent" && threadTarget.threadId === thread.id ? threadTarget
+    : { kind: "provider", harness: thread.harness, threadId: thread.id }, onQuestionnaireError);
+  const threadController = questionnaire.thread;
+  const sidebarEntry = threadController.state.entry;
+  const threadLifecycle = sidebarEntry?.lifecycle ?? null;
+  const pendingUserInputRequest = questionnaire.request;
+  const threadQuestionnaireDraft = questionnaire.draft;
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const {
     isWithinBottomDistance,
@@ -478,12 +466,6 @@ export default function ThreadComposer ({
       }, PICKER_REFRESH_COOLDOWN_MS);
     });
   }, [isLoadingModels, isModelRefreshCoolingDown, isModelRefreshPending, loadAvailableModels, pickerHarness]);
-  const handleQuestionnaireDraftChange = useCallback((update: DraftUpdate<WorkbenchQuestionnaireDraft>) => {
-    return onThreadQuestionnaireDraftChange(projectId, thread.id, questionnaireRequestKey, update);
-  }, [onThreadQuestionnaireDraftChange, projectId, questionnaireRequestKey, thread.id]);
-  const handleQuestionnaireDraftClear = useCallback(() => {
-    return onThreadQuestionnaireDraftClear(projectId, thread.id, questionnaireRequestKey);
-  }, [onThreadQuestionnaireDraftClear, projectId, questionnaireRequestKey, thread.id]);
   const composerHighlights = useMemo(() => (
     buildInlineMentionHighlights(value, highlightSources)
   ), [highlightSources, value]);
@@ -589,7 +571,7 @@ export default function ThreadComposer ({
     setError("");
     try {
       if (stopControlState.action === "snooze") {
-        await threadController.snoozeQuestionnaire(projectId, thread.harness, questionnaireRequestKey);
+        await threadController.actions.snoozeQuestionnaire(questionnaireRequestKey);
       } else {
         await onStopThread(thread.id);
       }
@@ -786,8 +768,8 @@ export default function ThreadComposer ({
                   knownSkills={knownSkills}
                   leadingActions={questionnaireToggleButton}
                   spellCheck={composerSpellCheck}
-                  onDraftChange={handleQuestionnaireDraftChange}
-                  onDraftClear={handleQuestionnaireDraftClear}
+                  onDraftChange={questionnaire.save}
+                  onDraftClear={questionnaire.clear}
                   projectRootPath={projectRootPath}
                   request={visiblePendingUserInputRequest.request}
                   workspaceRoots={workspaceRoots}
@@ -796,8 +778,7 @@ export default function ThreadComposer ({
                     if (visiblePendingUserInputRequest.responseMode === "newTurn" && !hasEffectiveProfile) {
                       throw new Error("The daemon composer profile is unavailable.");
                     }
-                    await onSubmitUserInputRequest(
-                      thread.id,
+                    await questionnaire.submit(
                       response,
                       {
                         ...buildPendingUserInputRequestSubmissionOptions(thread, visiblePendingUserInputRequest),

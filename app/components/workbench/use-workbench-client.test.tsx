@@ -9,8 +9,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
+import ThreadObservationController from "../../workbench/thread/ThreadObservationController";
 import type { WorkbenchClientController } from "./workbench-client-context";
 import { useWorkbenchThreadSidebarEntry, useWorkbenchThreadTitleHistory } from "./use-workbench-client";
+import WorkbenchThreadController from "../../workbench/WorkbenchThreadController";
 
 const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
   activityAt: 10,
@@ -53,13 +55,22 @@ const client = {
   controls: null,
   explorer: {} as WorkbenchClientController["explorer"],
   mounted: {
+    getThreadController: (projectId, target) => new WorkbenchThreadController(projectId, target, {
+      getChild: () => { throw new Error("Unexpected child."); },
+      observations: new ThreadObservationController({ request: async () => { throw new Error("Unexpected observation during static rendering."); } }),
+      controls: {} as NonNullable<WorkbenchClientController["controls"]>,
+      readNative: () => ({ document: null, pendingQuestionnaire: null, rateLimits: null }),
+      subscribeNative: () => () => {},
+      read: async () => null,
+      createTranscript: () => { throw new Error("Unexpected transcript during static rendering."); },
+      reportError: message => { throw new Error(message); },
+    }),
     controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
     dispose: () => undefined,
     threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],
     threadSidebar: globalStore,
     threadTextPresentation: {} as NonNullable<WorkbenchClientController["mounted"]>["threadTextPresentation"],
   },
-  transcriptSource: { status: "idle" },
 } satisfies WorkbenchClientController;
 
 function ThreadStateProbe({ projectId }: { projectId: string }) {

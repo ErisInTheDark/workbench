@@ -99,13 +99,62 @@ function emptySnapshot(threadId: string): WorkbenchTranscriptSnapshot {
   };
 }
 
+test("independent thread projections use distinct subscriptions and dispose only their own stream", async () => {
+  const subscriptions: WorkbenchTranscriptSubscribeParams[] = [];
+  const released: string[] = [];
+  let accepted!: () => void;
+  const opened = new Promise<void>(resolve => { accepted = resolve; });
+  let closed!: () => void;
+  const closing = new Promise<void>(resolve => { closed = resolve; });
+  const transcripts = {
+    reportParity: async () => undefined,
+    subscribe: async (params: WorkbenchTranscriptSubscribeParams) => {
+      subscriptions.push(params);
+      if (subscriptions.length === 2) accepted();
+    },
+    unsubscribe: async ({ subscriptionId }: { subscriptionId: string }) => { released.push(subscriptionId); closed(); },
+  };
+  const first = new ThreadTranscriptProjectionController({ available: true, transcripts, turnLimit: 4 });
+  const second = new ThreadTranscriptProjectionController({ available: true, transcripts, turnLimit: 4 });
+  first.select({ thread: thread("first"), browseResultEntries: [] });
+  second.select({ thread: thread("second"), browseResultEntries: [] });
+  await opened;
+  assert.notEqual(subscriptions[0]?.subscriptionId, subscriptions[1]?.subscriptionId);
+  first.dispose();
+  await closing;
+  assert.deepEqual(released, [subscriptions[0]?.subscriptionId]);
+  second.dispose();
+});
+
+test("disposal releases the active stream even when a replacement is already queued", async () => {
+  const subscriptions: string[] = [];
+  const releases: string[] = [];
+  let accepted!: () => void;
+  const ready = new Promise<void>(resolve => { accepted = resolve; });
+  const controller = new ThreadTranscriptProjectionController({
+    available: true, turnLimit: 4,
+    transcripts: {
+      reportParity: async () => {},
+      subscribe: async ({ subscriptionId }) => { subscriptions.push(subscriptionId); accepted(); },
+      unsubscribe: async ({ subscriptionId }) => { releases.push(subscriptionId); },
+    },
+  });
+  controller.select({ thread: thread("first"), browseResultEntries: [] });
+  await ready;
+  controller.select({ thread: thread("second"), browseResultEntries: [] });
+  await controller.dispose();
+  assert.equal(subscriptions.length, 1);
+  assert.deepEqual(releases, subscriptions);
+});
+
 test("selection changes serialize unsubscribe before the replacement subscription", async () => {
   const events: string[] = [];
+  const subscriptions: string[] = [];
   const controller = new ThreadTranscriptProjectionController({
     available: true,
     transcripts: {
       reportParity: async () => undefined,
-      subscribe: async (params) => { events.push(`subscribe:${params.threadId}`); },
+      subscribe: async (params) => { subscriptions.push(params.subscriptionId); events.push(`subscribe:${params.threadId}`); },
       unsubscribe: async (params) => { events.push(`unsubscribe:${params.subscriptionId}`); },
     },
     turnLimit: 4,
@@ -118,7 +167,7 @@ test("selection changes serialize unsubscribe before the replacement subscriptio
   await flush();
 
   assert.equal(events[0], "subscribe:one");
-  assert.match(events[1] ?? "", /^unsubscribe:thread-transcript-projection:1$/u);
+  assert.equal(events[1], `unsubscribe:${subscriptions[0]}`);
   assert.equal(events[2], "subscribe:two");
   controller.dispose();
 });
@@ -128,6 +177,7 @@ test("a failed subscription reports immediately without poisoning replacement wo
   const events: string[] = [];
   const states: string[] = [];
   let subscriptions = 0;
+  let firstSubscriptionId = "";
   const controller = new ThreadTranscriptProjectionController({
     available: true,
     onError: (error) => { errors.push(error); },
@@ -136,6 +186,7 @@ test("a failed subscription reports immediately without poisoning replacement wo
       reportParity: async () => undefined,
       subscribe: async (params) => {
         subscriptions += 1;
+        if (subscriptions === 1) firstSubscriptionId = params.subscriptionId;
         events.push(`subscribe:${params.threadId}`);
         if (subscriptions === 1) throw new Error("subscription failed");
       },
@@ -156,7 +207,7 @@ test("a failed subscription reports immediately without poisoning replacement wo
   await flush();
   assert.deepEqual(events, [
     "subscribe:one",
-    "unsubscribe:thread-transcript-projection:1",
+    `unsubscribe:${firstSubscriptionId}`,
     "subscribe:two",
   ]);
   controller.dispose();
@@ -448,21 +499,27 @@ test("the subscription follows the exact loaded turns and replaces itself when t
   await flush();
   await flush();
 
+  const first = events[0];
+  const replacement = events[2];
+  assert.equal(first?.kind, "subscribe");
+  assert.equal(replacement?.kind, "subscribe");
+  if (first?.kind !== "subscribe" || replacement?.kind !== "subscribe") return;
+  assert.notEqual(first.params.subscriptionId, replacement.params.subscriptionId);
   assert.deepEqual(events, [
     {
       kind: "subscribe",
       params: {
-        subscriptionId: "thread-transcript-projection:1",
+        subscriptionId: first.params.subscriptionId,
         threadId: "thread",
         turnIds: ["turn-2"],
         turnLimit: 4,
       },
     },
-    { kind: "unsubscribe", subscriptionId: "thread-transcript-projection:1" },
+    { kind: "unsubscribe", subscriptionId: first.params.subscriptionId },
     {
       kind: "subscribe",
       params: {
-        subscriptionId: "thread-transcript-projection:2",
+        subscriptionId: replacement.params.subscriptionId,
         threadId: "thread",
         turnIds: ["turn-1", "turn-2"],
         turnLimit: 4,
@@ -550,22 +607,22 @@ test("selection stays inert until capability and reconnect capability creates a 
 
   controller.select({ browseResultEntries: [], thread: thread("thread") });
   await flush();
-  assert.deepEqual(events, []);
+  assert.equal(events.length, 0);
   assert.equal(states.at(-1), "loading");
 
   controller.setAvailable(true);
   await flush();
-  assert.deepEqual(events, ["subscribe:thread-transcript-projection:2"]);
+  assert.equal(events.length, 1);
+  assert.ok(events[0]?.startsWith("subscribe:"));
 
   controller.setAvailable(false);
   assert.equal(states.at(-1), "unavailable");
   controller.setAvailable(true);
   await flush();
   await flush();
-  assert.deepEqual(events, [
-    "subscribe:thread-transcript-projection:2",
-    "subscribe:thread-transcript-projection:4",
-  ]);
+  assert.equal(events.length, 2);
+  assert.ok(events[1]?.startsWith("subscribe:"));
+  assert.notEqual(events[0], events[1]);
   controller.dispose();
 });
 

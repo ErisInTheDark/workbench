@@ -11,7 +11,7 @@ import ContextMenuCapability from "../ContextMenuCapability";
 import { CompletedThreadIcon, LockIcon, NeedsAttentionThreadIcon, RestoreThreadIcon, SettleThreadIcon, StoppedThreadIcon, UnlockIcon, WorkingThreadIcon } from "../workbench-icons";
 import { getThreadAgentAccentHue } from "../../../workbench/thread/thread-subagents";
 import type { IdentityAccentStyle } from "../../../workbench/identity-accent-color";
-import { useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
+import { useWorkbenchThread } from "../use-workbench-thread";
 import ThreadAgentName from "./ThreadAgentName";
 
 interface SubagentTab {
@@ -88,7 +88,8 @@ export default function ThreadAgentTabs ({
   projectId: string;
   tabs: readonly SubagentTab[];
 }) {
-  const mainThreadLifecycle = useWorkbenchThreadSidebarEntry(projectId, mainThreadHarness, mainThreadId)?.lifecycle ?? null;
+  const mainThread = useWorkbenchThread(projectId, { kind: "provider", harness: mainThreadHarness, threadId: mainThreadId });
+  const mainThreadLifecycle = mainThread.state.entry?.lifecycle ?? null;
   if (!tabs.length && !hasSettledSubagents) return null;
   const unsettledTabs = tabs.filter((tab) => !tab.subagent?.lifecycle?.settled);
   const settledTabs = tabs.filter((tab) => tab.subagent?.lifecycle?.settled);

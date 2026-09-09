@@ -41,7 +41,6 @@ import {
 } from "workbench-shared/workbench/navigation/workbench-route";
 import FileDraftStore from "./workbench/state/FileDraftStore";
 import WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController";
-import type { ThreadTranscriptProjectionState } from "./workbench/transcript/ThreadTranscriptProjectionController";
 import type ThreadTextPresentationController from "./workbench/thread/ThreadTextPresentationController";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import SessionState from "./workbench/state/SessionState";
@@ -77,6 +76,7 @@ type MountedWorkbenchControls = WorkbenchControls & {
 };
 
 export interface MountedWorkbenchClient {
+  getThreadController: ReturnType<typeof WorkbenchThreadClient>["getThreadController"];
   controls: WorkbenchControls;
   dispose: () => void;
   threadRuntime: WorkbenchThreadRuntimeStore;
@@ -294,7 +294,6 @@ export async function WorkbenchClient(
   bindings: WorkbenchBindings & {
     clientStateController?: WorkbenchClientStateController;
     dom?: WorkbenchDomSurfaces | null;
-    onTranscriptSourceChange?: (state: ThreadTranscriptProjectionState) => void;
   } = {},
 ): Promise<MountedWorkbenchClient> {
   const { ...workbenchBindings } = bindings;
@@ -309,6 +308,8 @@ export async function WorkbenchClient(
     throw new Error("The thread sidebar coordinator is not ready.");
   };
   const threadClient = WorkbenchThreadClient({
+    updateThreadStateWithAcceptance: request => updateThreadStateWithAcceptance(request),
+    getProjectById: (projectId) => projectClient.getSnapshot().projects.find(project => project.id === projectId),
     resolveThreadIdentity: (request) => threadIdentity.resolve(request),
     clientStateController: workbenchBindings.clientStateController,
     onStatusMessage: (message) => {
@@ -320,7 +321,6 @@ export async function WorkbenchClient(
       }
       emitExplorerStateChange();
     },
-    onTranscriptSourceChange: (state) => workbenchBindings.onTranscriptSourceChange?.(state),
     publishAcceptedIntent: (event) => coordinateAcceptedIntent(event),
   });
   const daemon = new WorkbenchDaemonClient({
@@ -406,12 +406,8 @@ export async function WorkbenchClient(
   function installCurrentThreadStateSources(
     activeProjectSnapshot = threadSidebarClient.getSnapshot(),
   ) {
-    const durableQuestionnaireEntries = activeProjectSnapshot
-      ? activeProjectSnapshot.entries
-      : threadSidebarClient.getProjectThreadSidebars().projects.flatMap((projectSnapshot) => projectSnapshot.entries);
     threadClient.installThreadStateSources({
       activeProjectSnapshot,
-      durableQuestionnaireEntries,
     });
   }
   coordinateAcceptedIntent = async (event) => {
@@ -436,6 +432,8 @@ export async function WorkbenchClient(
       return;
     }
     if (notification.method === "workbench/thread-state/updated") {
+      if (notification.params && typeof notification.params === "object"
+        && "updateKind" in notification.params && notification.params.updateKind === "threadObservation") return;
       const parsed = WorkbenchThreadStateSnapshotSchema.safeParse(notification.params);
       if (!parsed.success) {
         reportClientSchemaError("Repaired workbench thread-state update", parsed.error);
@@ -448,14 +446,18 @@ export async function WorkbenchClient(
         else if (conformed.updateKind === "projectThreadSidebar") threadSidebarClient.acceptProjectThreadSidebar(conformed);
         else if (conformed.updateKind === "projectThreadSummary") threadSidebarClient.acceptProjectThreadSummary(conformed);
         else if (conformed.updateKind === "pinnedThreadLayout") threadSidebarClient.acceptPinnedThreadLayout(conformed);
-        else threadSidebarClient.acceptActivity(conformed);
+        else if (conformed.updateKind === "activity") threadSidebarClient.acceptActivity(conformed);
       } else {
         threadSidebarClient.accept(conformed);
       }
       return;
     }
     projectClient.resetObservation();
-    void threadSidebarClient.reopen();
+    void threadSidebarClient.reopen().then(async () => {
+      if (coordinatorLifecycle.isDisposed) return;
+      threadClient.threadObservations.reset();
+      await threadClient.recoverThreadControllers();
+    }).catch(error => reportConnectionRecoveryFailure("Unable to restore thread observation admission.", error));
   }));
   const initialThreadSnapshot = threadClient.getSnapshot();
   const sessionState = SessionState({
@@ -538,11 +540,11 @@ export async function WorkbenchClient(
     await orchestratorRuntime.open();
     await threadSidebarClient.reopen();
     if (coordinatorLifecycle.isDisposed) return;
+    threadClient.threadObservations.reset();
     if (continuity === "lost") {
       await applyRoute(activeRoute);
-    } else {
-      await threadClient.refreshCurrentThread();
     }
+    await threadClient.recoverThreadControllers();
     if (activeRoute.view === "thread") await refreshRateLimits();
     const fileRefreshes = await Promise.allSettled(
       [...mountedFilePanelClients].map(async (client) => await client.refreshCurrentFileFromDiskIfSafe()),
@@ -760,7 +762,7 @@ export async function WorkbenchClient(
 
   function applyDraftEntryToCurrentView(
     entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>,
-    options: { entries?: readonly WorkbenchThreadSidebarEntry[]; project?: WorkbenchProjectOption } = {},
+    options: { project?: WorkbenchProjectOption } = {},
   ) {
     const draft = {
       ...threadClient.createThread(entry.draft.composerSettings.harness, entry.draft.draftId, options),
@@ -816,25 +818,23 @@ export async function WorkbenchClient(
   async function openThread(
     threadId: string,
     {
-      entries = [],
       harness,
       project,
       source = "open",
     }: {
-      entries?: readonly WorkbenchThreadSidebarEntry[];
       harness?: WorkbenchHarness;
       project?: WorkbenchProjectOption;
       source?: "open" | "reload";
     } = {},
   ): Promise<WorkbenchRouteLoadResult> {
     if (threadClient.isDraftThreadId(threadId)) {
-      const draftThread = threadClient.createThread(harness ?? readInitialHarness(workbenchBindings.clientStateController), threadId, { entries, project });
+      const draftThread = threadClient.createThread(harness ?? readInitialHarness(workbenchBindings.clientStateController), threadId, { project });
       applyThreadPayloadToCurrentView(draftThread);
       emitExplorerStateChange();
       return { ok: true };
     }
 
-    const outcome = await threadClient.openThread(threadId, { entries, harness, project, source });
+    const outcome = await threadClient.openThread(threadId, { harness, project, source });
     if (outcome.kind === "failure") {
       return {
         error: `Unable to open ${outcome.failure.harness} thread ${threadId}: ${outcome.failure.message}`,
@@ -1054,6 +1054,7 @@ export async function WorkbenchClient(
       clearCurrentSelectionView();
       emitExplorerStateChange();
       void hydrateProjectSidebarData(route, routeGeneration);
+      if (route.view === "mosaic") threadClient.activateThreadControllers();
       return { ok: true };
     }
 
@@ -1100,7 +1101,6 @@ export async function WorkbenchClient(
           return { error: "Pinned routes cannot open a new thread.", ok: false };
         }
         const draft = threadClient.createThread("codex", crypto.randomUUID(), {
-          entries: ownerEntries,
           project: ownerProject,
         });
         applyThreadPayloadToCurrentView(draft);
@@ -1117,12 +1117,11 @@ export async function WorkbenchClient(
         }
         selectedPinnedThreadDraft = isHomeThread || isForeignPin ? cloneThreadDraft(entry.draft) : null;
         threadSidebarClient.receiveDraft(entry.draft);
-        applyDraftEntryToCurrentView(entry, { entries: ownerEntries, project: ownerProject });
+        applyDraftEntryToCurrentView(entry, { project: ownerProject });
         return { ok: true };
       }
       const rootThreadId = target.kind === "subagent" ? target.parentThreadId : target.threadId;
       const openResult = await openThread(rootThreadId, {
-        entries: ownerEntries,
         harness: target.harness,
         project: ownerProject,
       });
@@ -1139,6 +1138,13 @@ export async function WorkbenchClient(
   async function applyRoute(route: WorkbenchRoute): Promise<WorkbenchRouteLoadResult> {
     let result: WorkbenchRouteLoadResult = { ok: false };
     await threadSidebarClient.guardNavigation(async () => { result = await applyRouteOwned(route); });
+    if (route.view === "thread" && activeRoute === route && !result.ok && result.error) {
+      const target = route.threadTarget ?? { kind: "provider" as const, threadId: route.threadId };
+      if (target.kind !== "new") {
+        threadClient.getThreadController(route.threadOwnerProjectId || route.projectId, target.kind === "subagent"
+          ? { kind: "provider", threadId: target.parentThreadId } : target).fail(new Error(result.error));
+      }
+    }
     return result;
   }
 
@@ -1305,5 +1311,6 @@ export async function WorkbenchClient(
     threadRuntime,
     threadSidebar: threadSidebarClient,
     threadTextPresentation: threadClient.textPresentation,
+    getThreadController: threadClient.getThreadController,
   };
 }

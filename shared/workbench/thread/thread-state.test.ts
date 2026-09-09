@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema } from "./thread-state.ts";
+import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema } from "./thread-state.ts";
 import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 
 const EMPTY_CODEX_SETTINGS = {
@@ -15,6 +15,43 @@ const EMPTY_CODEX_SETTINGS = {
   reasoningEffort: null,
   serviceTier: null,
 };
+
+test("observations carry a complete entry without admitting a different thread family", () => {
+  const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1, title: "Thread", entryKind: "thread", identity: { harness: "codex", threadId: "thread" },
+    metadata: { archived: false, pinned: true, snoozed: false },
+    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    previousTitles: [{ title: "Earlier", usedAt: 1 }],
+    pendingQuestionnaire: {
+      itemId: "743c92b1-b79c-49d4-98a4-5b402bf6de6f", requestKey: "request", turnId: "turn",
+      request: { id: "question", title: "Choose", summary: "", submitLabel: "Send", questions: [
+        { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
+      ] },
+    },
+  };
+  const observation = {
+    projectId: "project", subscriptionId: "7a74a3d2-8223-4cf1-b348-92d299480570",
+    target: { kind: "provider", harness: "codex", threadId: "thread" },
+    entries: [entry], error: null, freshness: "fresh", revision: 1, updateKind: "threadObservation", version: 1,
+  };
+  assert.deepEqual(WorkbenchThreadObservationSnapshotSchema.parse(observation).entries, [entry]);
+  assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse({ ...observation, entries: [] }).success, true);
+  assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse({
+    ...observation, target: { ...observation.target, threadId: "another" },
+  }).success, false);
+  assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse({ ...observation, entries: [entry, entry] }).success, false);
+  const child = {
+    activityAt: 1, createdAt: 1, updatedAt: 1, cwd: "/repo", directSubagentIndex: 0, entryKind: "subagent",
+    identity: { harness: "opencode", threadId: "child" }, lifecycle: entry.lifecycle,
+    name: "Child", parentThreadId: "thread", pinned: false, profileId: "profile", profileName: "Profile", projectId: "project", title: "Child",
+  };
+  const childObservation = { ...observation, entries: [entry, child],
+    target: { kind: "subagent", harness: "opencode", threadId: "child", parentThreadId: "thread" } };
+  assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse(childObservation).success, true);
+  assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse({
+    ...childObservation, target: { ...childObservation.target, harness: "codex" },
+  }).success, false);
+});
 
 test("sidebar completion and pinned eligibility exclude working threads and approval requests", () => {
   const question = {

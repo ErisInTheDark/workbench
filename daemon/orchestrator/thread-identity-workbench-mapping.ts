@@ -3,9 +3,9 @@
  * Exports:
  * - mapWorkbenchProviderRequest: resolve public references at ingress without changing payload or send ownership.
  * - mapNativeProviderResponse: project declared provider response references through committed identities.
- * - mapNativeThreadStateSnapshot: project sidebar, lifecycle and layout references without changing their owners.
- * - mapNativeThreadStateResult: project thread-state open and target responses.
- * - mapWorkbenchThreadStateRequest: resolve public mutation targets while retaining native storage keys.
+ * - mapNativeThreadStateSnapshot: project sidebar, observation, lifecycle and layout references without changing their owners.
+ * - mapNativeThreadStateResult: project thread-state open, observation and target responses.
+ * - mapWorkbenchThreadStateRequest: resolve public mutation and observation targets while retaining native storage keys.
  * - mapNativeSubagentResult: project relationship references before agent formatting.
  * - NativeThreadStateIdentityOwners: committed identity lookup plus metadata-only cold admission.
  */
@@ -22,7 +22,7 @@ import type {
   WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateSnapshot,
   WorkbenchProjectThreadSummary, WorkbenchThreadLifecycle, WorkbenchDurableQuestionnaire,
   WorkbenchThreadStateRequest, WorkbenchThreadStateOpenResult, WorkbenchGlobalThreadStateOpenResult,
-  WorkbenchPinnedThreadContextResult, WorkbenchThreadTarget,
+  WorkbenchPinnedThreadContextResult, WorkbenchThreadTarget, WorkbenchThreadObservationSnapshot,
 } from "workbench-shared/workbench/thread/thread-state";
 import {
   getProjectQualifiedThreadDisplayKey, parseProjectQualifiedThreadDisplayKey,
@@ -294,6 +294,7 @@ async function mapNativeProjectSummary(owners: NativeTranscriptIdentityOwners, s
 export async function mapNativeThreadStateSnapshot(owners: NativeThreadStateIdentityOwners, snapshot: WorkbenchThreadStateSnapshot): Promise<WorkbenchThreadStateSnapshot> {
   if (!("updateKind" in snapshot)) return mapNativeSidebar(owners, snapshot);
   switch (snapshot.updateKind) {
+    case "threadObservation": return mapNativeThreadObservation(owners, snapshot);
     case "activity": return { ...snapshot,
       identity: { ...snapshot.identity, threadId: (await resolveNativeReference(owners, snapshot.identity, snapshot.projectId)).threadId },
       ...(snapshot.displayOrder ? { displayOrder: await mapNativeLayout(owners, snapshot.displayOrder, snapshot.projectId) } : {}),
@@ -304,6 +305,13 @@ export async function mapNativeThreadStateSnapshot(owners: NativeThreadStateIden
     case "homeThreadDisplayOrder": return { ...snapshot, displayOrder: await mapNativeLayout(owners, snapshot.displayOrder) };
     default: return snapshot;
   }
+}
+
+async function mapNativeThreadObservation(owners: NativeThreadStateIdentityOwners, observation: WorkbenchThreadObservationSnapshot): Promise<WorkbenchThreadObservationSnapshot> {
+  const target = await mapThreadTarget(owners, observation.target, observation.projectId, "public");
+  if (target.kind === "draft" || target.kind === "new") throw new Error("Thread observation projection changed its target kind.");
+  const { entries } = await mapNativeSidebarEntries(owners, observation.projectId, observation.entries);
+  return { ...observation, target, entries };
 }
 
 async function mapThreadTarget(owners: NativeTranscriptIdentityOwners, target: WorkbenchThreadTarget, projectId: string | undefined, direction: "public" | "native"): Promise<WorkbenchThreadTarget> {
@@ -323,6 +331,9 @@ async function mapThreadTarget(owners: NativeTranscriptIdentityOwners, target: W
 export async function mapNativeThreadStateResult(owners: NativeThreadStateIdentityOwners, value: unknown): Promise<unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   let result = value as Record<string, unknown>;
+  if ("observation" in result) {
+    result = { ...result, observation: await mapNativeThreadObservation(owners, result.observation as WorkbenchThreadObservationSnapshot) };
+  }
   if ("sidebar" in result) {
     const opened = value as WorkbenchThreadStateOpenResult;
     result = { ...result, sidebar: await mapNativeSidebar(owners, opened.sidebar),
@@ -371,6 +382,10 @@ export async function mapWorkbenchThreadStateRequest(owners: NativeTranscriptIde
   }
   if (request.method === "workbench/thread-state/pin/open") {
     result = { ...request, target: await mapThreadTarget(owners, request.target, request.projectId, "native") };
+  } else if (request.method === "workbench/thread-state/observe") {
+    const target = await mapThreadTarget(owners, request.target, request.projectId, "native");
+    if (target.kind === "draft" || target.kind === "new") throw new Error("Thread observation routing changed its target kind.");
+    result = { ...request, target };
   } else if (request.method === "workbench/thread-state/snooze/until") {
     const mapped = await mapWorkbenchProviderRequest(owners.threads, request.target.identity.harness, { params: { threadId: request.target.identity.threadId } });
     result = { ...result, target: { ...request.target,

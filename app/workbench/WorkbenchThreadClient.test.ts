@@ -93,13 +93,16 @@ function readManagedStartRequest(request: SocketRequest) {
 
 class FakeWebSocket {
   static readonly OPEN = 1;
+  static current: FakeWebSocket;
   static intercept: ((socket: FakeWebSocket, request: SocketRequest) => boolean) | null = null;
   readonly OPEN = 1;
   readyState = 1;
   readonly requests: SocketRequest[] = [];
+  observationRevision = 1;
   private readonly listeners = new Map<string, Listener[]>();
 
   constructor(_url: string) {
+    FakeWebSocket.current = this;
     queueMicrotask(() => this.emit("open", {}));
   }
 
@@ -174,6 +177,18 @@ class FakeWebSocket {
       queueMicrotask(() => this.respond(request.id, { unsubscribed: true }));
     } else if (request.method === "workbench/transcript/parity/report") {
       queueMicrotask(() => this.respond(request.id, { reported: true }));
+    } else if (request.method === "workbench/thread-state/observe") {
+      const target = request.params?.target as { threadId: string; harness?: string };
+      queueMicrotask(() => this.respond(request.id, { observation: {
+        ...request.params, entries: [{
+          activityAt: 1, title: "Thread", entryKind: "thread",
+          identity: { threadId: target.threadId, harness: target.harness ?? "codex" },
+          metadata: { archived: false, pinned: true, snoozed: false },
+          lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+        }], error: null, freshness: "fresh", revision: 1, updateKind: "threadObservation",
+      } }));
+    } else if (request.method === "workbench/thread-state/release") {
+      queueMicrotask(() => this.respond(request.id, { accepted: true }));
     } else if (request.method === "workbench/thread-state/intent/accept" || request.method === "workbench/thread-state/questionnaire/dismiss" || request.method === "workbench/thread-state/questionnaire/resolve") {
       queueMicrotask(() => this.respond(request.id, { accepted: true, revision: 1 }));
     } else {
@@ -219,11 +234,38 @@ async function waitForCondition(predicate: () => boolean, message: string) {
   throw new Error(message);
 }
 
-function installProjectThreadState(
+async function installObservedThreadState(
+  client: ReturnType<typeof WorkbenchThreadClient>,
+  source: { activeProjectSnapshot: WorkbenchThreadSidebarSnapshot | null; durableQuestionnaireEntries: readonly WorkbenchThreadSidebarEntry[] },
+) {
+  client.installThreadStateSources({ activeProjectSnapshot: source.activeProjectSnapshot });
+  const projectId = source.activeProjectSnapshot?.projectId ?? "project";
+  for (const entry of source.durableQuestionnaireEntries) {
+    if (entry.entryKind === "draft") continue;
+    client.threadObservations.acquire(projectId, {
+      kind: "provider", harness: entry.identity.harness,
+      threadId: entry.entryKind === "subagent" ? entry.parentThreadId : entry.identity.threadId,
+    });
+  }
+  await client.requestWorkbench("workbench/thread-state/release", { subscriptionId: "fixture-barrier" });
+  const socket = FakeWebSocket.current;
+  const revision = ++socket.observationRevision;
+  for (const request of socket.requests.filter(request => request.method === "workbench/thread-state/observe" && request.params?.projectId === projectId)) {
+    const target = request.params?.target as { harness: string; threadId: string };
+    const entries = source.durableQuestionnaireEntries.filter(entry => entry.entryKind !== "draft"
+      && entry.identity.harness === target.harness
+      && (entry.entryKind === "thread" ? entry.identity.threadId === target.threadId : entry.parentThreadId === target.threadId));
+    socket.notify("workbench/thread-state/updated", {
+      ...request.params, entries, revision, error: null, freshness: "fresh", updateKind: "threadObservation",
+    });
+  }
+}
+
+async function installProjectThreadState(
   client: ReturnType<typeof WorkbenchThreadClient>,
   snapshot: WorkbenchThreadSidebarSnapshot,
 ) {
-  client.installThreadStateSources({
+  await installObservedThreadState(client, {
     activeProjectSnapshot: snapshot,
     durableQuestionnaireEntries: snapshot.entries,
   });
@@ -252,7 +294,13 @@ async function withClient(
       socket = this;
     }
   } as unknown as typeof WebSocket;
-  const client = WorkbenchThreadClient(clientOptions);
+  const client = WorkbenchThreadClient({
+    getProjectById: projectId => projectId === "owner" ? {
+      id: "owner", kind: "git", lastCommitTimeMs: null, name: "owner", relativePath: "owner", rootPath: "C:/owner",
+      roots: [{ id: "owner", isPrimary: true, name: "owner", relativePath: "owner", rootPath: "C:/owner" }],
+    } : undefined,
+    ...clientOptions,
+  });
   try {
     client.setProjectContext({ projectId: "project", root: "repo", rootPath: "C:/repo" });
     await client.refreshRateLimits();
@@ -335,7 +383,9 @@ function questionnaireEntry(
     insertAfterItemId: `anchor-${turnId}`,
     insertAfterItemIndex: 0,
     itemId,
-    request: { id: itemId, questions: [], submitLabel: "Submit", summary: "", title: itemId },
+    request: { id: itemId, questions: [
+      { id: "details", header: "details", question: "Proceed?", options: [], allowOther: true, isSecret: false },
+    ], submitLabel: "Submit", summary: "", title: itemId },
     requestKey: "reused",
     resolvedAt: turnId === "older" ? 1 : 2,
     response: { answers: {} },
@@ -347,6 +397,7 @@ function questionnaireEntry(
 test("normal message admission stays independent until transcript capability is advertised", async () => withClient(async (client, socket) => {
   const source = activeThread("codex", "idle", "completed");
   client.selectThreadPayload(source);
+  const release = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: source.id }).acquire("view");
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(socket.requests.some((request) => request.method.startsWith("workbench/transcript/")), false);
 
@@ -357,12 +408,19 @@ test("normal message admission stays independent until transcript capability is 
 
   socket.notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 1 });
   await waitForRequest(socket, "workbench/transcript/subscribe");
+  release();
 }));
 
 test("SQLite transcript source lifecycle publishes through the thread client and becomes unavailable on disconnect", async () => {
   const publications: Array<{ status: string; threadId: string | null }> = [];
   await withClient(async (client, socket) => {
     client.selectThreadPayload(activeThread("codex", "thread", "completed"));
+    const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: "thread" });
+    const stop = owner.subscribe(() => {
+      const state = owner.getSnapshot().transcript;
+      publications.push({ status: state.status, threadId: "threadId" in state ? state.threadId : null });
+    });
+    const release = owner.acquire("view");
     socket.notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 1 });
     await waitForRequest(socket, "workbench/transcript/subscribe");
     assert.deepEqual(publications.at(-1), { status: "loading", threadId: "thread" });
@@ -373,13 +431,8 @@ test("SQLite transcript source lifecycle publishes through the thread client and
       "expected SQLite transcript source to become unavailable after disconnect",
     );
     assert.deepEqual(publications.at(-1), { status: "unavailable", threadId: "thread" });
-  }, {
-    onTranscriptSourceChange: (state) => {
-      publications.push({
-        status: state.status,
-        threadId: "threadId" in state ? state.threadId : null,
-      });
-    },
+    stop();
+    release();
   });
 });
 
@@ -995,6 +1048,17 @@ test("foreign pinned thread context owns provider cwd, subagents, and late-read 
   }];
   let deferredRead: SocketRequest | null = null;
   FakeWebSocket.intercept = (target, request) => {
+    if (request.method === "workbench/thread-state/observe") {
+      queueMicrotask(() => target.respond(request.id, { observation: {
+        ...request.params, error: null, freshness: "fresh", revision: 1, updateKind: "threadObservation",
+        entries: [{
+          activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: request.params?.target && (request.params.target as { threadId: string }).threadId },
+          lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+          metadata: { archived: false, pinned: true, snoozed: false }, title: "Root",
+        }, ...(request.params?.target && (request.params.target as { threadId: string }).threadId === "root" ? entries : [])],
+      } }));
+      return true;
+    }
     if (request.method !== "workbench/thread/page/read") return false;
     if (request.params?.threadId === "late") {
       deferredRead = request;
@@ -1012,12 +1076,28 @@ test("foreign pinned thread context owns provider cwd, subagents, and late-read 
     return true;
   };
 
-  await client.openThread("root", { entries, harness: "codex", project: ownerProject });
+  await client.openThread("root", { harness: "codex", project: ownerProject });
   const ownerRead = socket.requests.find((request) => request.method === "workbench/thread/page/read" && request.params?.threadId === "root");
   assert.equal(ownerRead?.params?.cwd, "C:/owner");
   assert.equal(client.getSnapshot().subagents[0]?.threadId, "child");
+  await installObservedThreadState(client, {
+    activeProjectSnapshot: {
+      entries: [{
+        activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: "root" },
+        lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+        metadata: { archived: false, pinned: true, snoozed: false }, title: "Root",
+      }, ...entries.map(entry => ({ ...entry, title: "Updated child" }))],
+      projectId: "owner", error: null, freshness: "fresh", revision: 2,
+    },
+    durableQuestionnaireEntries: [{
+      activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: "root" },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      metadata: { archived: false, pinned: true, snoozed: false }, title: "Root",
+    }, ...entries.map(entry => ({ ...entry, title: "Updated child" }))],
+  });
+  assert.equal(client.getSnapshot().subagents[0]?.title, "Updated child");
 
-  const lateOpen = client.openThread("late", { entries, harness: "codex", project: ownerProject });
+  const lateOpen = client.openThread("late", { harness: "codex", project: ownerProject });
   await waitForRequest(socket, "workbench/thread/page/read", 1);
   const replacement = client.createThread("codex", "00000000-0000-4000-8000-000000000090");
   const lateThread = wireThread("late");
@@ -1767,6 +1847,64 @@ test("status and token owners survive canonical updates, authoritative nulls, an
 
   await client.compactThread(client.getSnapshot().currentThread!);
   assert.equal(client.getSnapshot().currentThread?.tokenUsage?.total.totalTokens, 20);
+}));
+
+test("a thread controller changes its own preferences without changing the selected thread", async () => withClient(async client => {
+  client.selectThreadPayload(activeThread("codex", "background"));
+  client.selectThreadPayload(activeThread("codex", "selected"));
+  const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: "background" });
+  owner.actions.changeSettings({
+    harness: "codex", model: "background-model", reasoningEffort: "high", serviceTier: "fast", agentPath: null, agentSource: null,
+  });
+  const snapshot = client.getSnapshot();
+  const key = snapshot.threadDocuments.keysByThreadId.background!;
+  assert.equal(snapshot.threadDocuments.documentsByKey[key]?.model, "background-model");
+  assert.equal(snapshot.threadDocuments.documentsByKey[key]?.reasoningEffort, "high");
+  assert.equal(snapshot.threadDocuments.documentsByKey[key]?.serviceTier, "fast");
+  assert.equal(snapshot.currentThread?.model, "model");
+  assert.equal(snapshot.currentThreadId, "selected");
+}));
+
+test("changing shell projects preserves a mounted thread's canonical document", async () => withClient(async client => {
+  client.selectThreadPayload(activeThread("codex", "pinned"));
+  const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: "pinned" });
+  const release = owner.acquire("view");
+  client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+  const snapshot = client.getSnapshot();
+  const key = snapshot.threadDocuments.keysByThreadId.pinned!;
+  assert.equal(snapshot.threadDocuments.documentsByKey[key]?.id, "pinned");
+  assert.equal(snapshot.currentThread, null);
+  release();
+}));
+
+test("a mounted thread read survives unrelated shell project selection", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread("codex", "pinned"));
+  const owner = client.getThreadController("project", { kind: "provider", harness: "codex", threadId: "pinned" });
+  const release = owner.acquire("view");
+  FakeWebSocket.intercept = (_socket, request) => request.method === "workbench/thread/page/read";
+  const pending = owner.read();
+  const request = await waitForRequest(socket, "workbench/thread/page/read");
+  client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+  socket.respond(request.id, {
+    thread: wireThread("pinned"), browseResultEntries: [], questionnaireEntries: [], steerEntries: [], nextCursor: null,
+  });
+  assert.equal((await pending)?.id, "pinned");
+  assert.equal(client.getSnapshot().currentThread, null);
+  release();
+}));
+
+test("an unselected draft remains owned and changes provider without moving selection", async () => withClient(async client => {
+  client.selectThreadPayload(activeThread("codex", "selected"));
+  const draft = client.createThread("codex", "draft", { select: false });
+  const owner = client.getThreadController("project", { kind: "draft", draftId: draft.id });
+  const release = owner.acquire("view");
+  assert.equal(owner.getSnapshot().document?.id, draft.id);
+  owner.actions.changeSettings({
+    agentPath: null, agentSource: null, harness: "opencode", model: "draft-model", reasoningEffort: null, serviceTier: null,
+  });
+  assert.equal(owner.getSnapshot().document?.harness, "opencode");
+  assert.equal(client.getSnapshot().currentThreadId, "selected");
+  release();
 }));
 
 test("opening a thread restores reported context usage without provider activity", async () => withClient(async (client) => {
@@ -2563,7 +2701,7 @@ test("questionnaire history keeps last-known answers through refresh failures an
   }, { onStatusMessage: (message) => statusMessages.push(message) });
 });
 
-test("sidebar history preserves questionnaires with reused request keys", async () => withClient(async (client) => {
+test("observed history preserves questionnaires with reused request keys", async () => withClient(async (client) => {
   const source = activeThread();
   source.turns = ["older", "newer"].map((turnId) => ({
     completedAt: 2,
@@ -2583,7 +2721,7 @@ test("sidebar history preserves questionnaires with reused request keys", async 
     startedAt: 1,
     status: "completed",
   }));
-  installProjectThreadState(client, {
+  await installProjectThreadState(client, {
     entries: [{
       activityAt: 2,
       entryKind: "thread",
@@ -2764,7 +2902,7 @@ test("interrupted proper questionnaires detach while approvals are discarded", a
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
 }));
 
-test("global home thread state restores durable questionnaires without an active project snapshot", async () => withClient(async (client, socket) => {
+test("observed questionnaires survive shell project changes while native requests retain precedence", async () => withClient(async (client, socket) => {
   const source = activeThread("codex", "thread", "interrupted");
   client.selectThreadPayload(source);
   const durableRequest = {
@@ -2784,18 +2922,14 @@ test("global home thread state restores durable questionnaires without an active
     title: "Thread",
   };
 
-  client.installThreadStateSources({
+  await installObservedThreadState(client, {
     activeProjectSnapshot: null,
     durableQuestionnaireEntries: [durableEntry],
   });
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "newTurn");
   client.setProjectContext({ projectId: "", root: "", rootPath: "" });
-  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
-  client.installThreadStateSources({
-    activeProjectSnapshot: null,
-    durableQuestionnaireEntries: [durableEntry],
-  });
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "newTurn");
+  await client.requestWorkbench("workbench/thread-state/release", { subscriptionId: "fixture-barrier" });
 
   socket.notify("questionnaire/requested", {
     itemId: "native-item",
@@ -2807,7 +2941,7 @@ test("global home thread state restores durable questionnaires without an active
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey, "native");
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "native");
 
-  client.installThreadStateSources({
+  await installObservedThreadState(client, {
     activeProjectSnapshot: null,
     durableQuestionnaireEntries: [],
   });
@@ -2826,7 +2960,7 @@ test("stop dismisses detached questionnaires without interrupting an inactive pr
     summary: "Choose",
     title: "Questionnaire",
   };
-  installProjectThreadState(client, {
+  await installProjectThreadState(client, {
     entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
     error: null, freshness: "fresh", projectId: "project", revision: 1,
   });
@@ -2884,7 +3018,7 @@ test("durable detached questionnaire responses resolve after admission even when
     pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" },
     title: "Thread",
   };
-  installProjectThreadState(client, {
+  await installProjectThreadState(client, {
     entries: [durableEntry],
     error: null,
     freshness: "fresh",
@@ -2951,7 +3085,7 @@ test("durable detached questionnaire responses resolve after admission even when
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
   const originalTurn = client.getSnapshot().currentThread?.turns.find((turn) => turn.id === "turn");
   assert.equal(originalTurn?.items.some(isSyntheticQuestionnaireHistoryItem), true);
-  client.installThreadStateSources({
+  await installObservedThreadState(client, {
     activeProjectSnapshot: null,
     durableQuestionnaireEntries: [{
       ...durableEntry,
@@ -2973,7 +3107,7 @@ test("durable detached questionnaire responses resolve after admission even when
     true,
   );
 
-  client.installThreadStateSources({
+  await installObservedThreadState(client, {
     activeProjectSnapshot: null,
     durableQuestionnaireEntries: [{
       ...durableEntry,
@@ -2993,7 +3127,7 @@ test("Workbench MCP questionnaires submit natively while their Codex turn is act
     queueMicrotask(() => target.respond(candidate.id, { data: pending ? [pending] : [] }));
     return true;
   };
-  installProjectThreadState(client, {
+  await installProjectThreadState(client, {
     entries: [{
       activityAt: 2,
       entryKind: "thread",
@@ -3035,7 +3169,7 @@ test("Workbench MCP questionnaires submit natively while their Codex turn is act
   assert.equal(socket.requests.some((candidate) => candidate.method === "turn/start"), false);
 }));
 
-function installRecoveredWorkbenchQuestionnaire(
+async function installRecoveredWorkbenchQuestionnaire(
   client: ReturnType<typeof WorkbenchThreadClient>,
   requestKey = "workbench-mcp:recovered",
 ) {
@@ -3054,14 +3188,15 @@ function installRecoveredWorkbenchQuestionnaire(
     title: "details",
   };
   const pending = { itemId: null, request, requestKey, threadId: "thread", turnId: "turn" };
-  installProjectThreadState(client, {
+  const { threadId: _threadId, ...durable } = pending;
+  await installProjectThreadState(client, {
     entries: [{
       activityAt: 2,
       entryKind: "thread",
       identity: { harness: "codex", threadId: "thread" },
       lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" },
       metadata: { archived: false, pinned: false, snoozed: false },
-      pendingQuestionnaire: pending,
+      pendingQuestionnaire: durable,
       title: "Thread",
     }],
     error: null,
@@ -3074,7 +3209,7 @@ function installRecoveredWorkbenchQuestionnaire(
 
 test("saved Workbench questionnaires recover through admission and durable history without a live waiter", async () => withClient(async (client, socket) => {
   client.selectThreadPayload(activeThread("codex", "thread", "interrupted"));
-  const pending = installRecoveredWorkbenchQuestionnaire(client);
+  const pending = await installRecoveredWorkbenchQuestionnaire(client);
   const response = { answers: { details: { answers: ["Keep one owner."] } } };
   await client.submitPendingUserInputRequest("thread", response);
 
@@ -3088,7 +3223,7 @@ test("saved Workbench questionnaires recover through admission and durable histo
 }));
 
 test("saved questionnaire admission needs metadata, not a readable transcript", async () => withClient(async (client, socket) => {
-  installRecoveredWorkbenchQuestionnaire(client);
+  await installRecoveredWorkbenchQuestionnaire(client);
   FakeWebSocket.intercept = (target, request) => {
     if (request.method === "workbench/thread/page/read") {
       queueMicrotask(() => target.fail(request.id, "transcript unavailable"));
@@ -3124,18 +3259,20 @@ test("saved questionnaire admission needs metadata, not a readable transcript", 
 
 for (const outcome of ["failed", "replaced", "projectChanged", "wrongThread", "wrongProject"] as const) {
   test(`unloaded questionnaire metadata ${outcome} leaves the answer unsent`, async () => withClient(async (client, socket) => {
-    installRecoveredWorkbenchQuestionnaire(client);
+    await installRecoveredWorkbenchQuestionnaire(client);
     FakeWebSocket.intercept = (target, request) => {
       if (request.method !== "thread/read") return false;
       if (outcome === "failed") {
         queueMicrotask(() => target.fail(request.id, "metadata unavailable"));
       } else {
-        if (outcome === "replaced") installRecoveredWorkbenchQuestionnaire(client, "workbench-mcp:replacement");
-        if (outcome === "projectChanged") client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
-        queueMicrotask(() => target.respond(request.id, { thread: {
-          ...wireThread(outcome === "wrongThread" ? "other" : "thread"), turns: [],
-          cwd: outcome === "wrongProject" ? "C:/other" : "C:/repo",
-        } }));
+        queueMicrotask(async () => {
+          if (outcome === "replaced") await installRecoveredWorkbenchQuestionnaire(client, "workbench-mcp:replacement");
+          if (outcome === "projectChanged") client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+          target.respond(request.id, { thread: {
+            ...wireThread(outcome === "wrongThread" ? "other" : "thread"), turns: [],
+            cwd: outcome === "wrongProject" ? "C:/other" : "C:/repo",
+          } });
+        });
       }
       return true;
     };
@@ -3148,8 +3285,95 @@ for (const outcome of ["failed", "replaced", "projectChanged", "wrongThread", "w
   }));
 }
 
+test("clearing project selection releases its observation rather than retaining it as a document cache", async () => withClient(async client => {
+  await client.openThread("thread", { harness: "codex" });
+  assert.equal(client.threadObservations.getObservations().length, 1);
+  client.setProjectContext({ projectId: "other", root: "other", rootPath: "C:/other" });
+  assert.equal(client.getSnapshot().currentThread, null);
+  assert.equal(client.threadObservations.getObservations().length, 0);
+}));
+
+test("server reset waits for restored project admission before reopening retained observations", async () => withClient(async (client, socket) => {
+  await client.openThread("thread", { harness: "codex" });
+  const count = () => socket.requests.filter(request => request.method === "workbench/thread-state/observe").length;
+  assert.equal(count(), 1);
+  socket.notify("workbench/thread-state/reset", {});
+  // An acknowledged socket request drains earlier sends without a timer or guessed delay.
+  await client.requestWorkbench("workbench/thread-state/release", { subscriptionId: "unused" });
+  assert.equal(count(), 1);
+  client.threadObservations.reset();
+  await client.requestWorkbench("workbench/thread-state/release", { subscriptionId: "unused" });
+  assert.equal(count(), 2);
+}));
+
+test("live observed questionnaires arrive and clear without sidebar questionnaire installation", async () => withClient(async (client, socket) => {
+  const question = {
+    itemId: null, requestKey: "observed-question", turnId: "turn",
+    request: { id: "question", title: "Choose", summary: "", submitLabel: "Send", questions: [
+      { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
+    ] },
+  };
+  let observation!: Record<string, unknown>;
+  FakeWebSocket.intercept = (target, request) => {
+    if (request.method !== "workbench/thread-state/observe") return false;
+    observation = {
+      ...request.params, revision: 1, freshness: "fresh", error: null, updateKind: "threadObservation",
+      entries: [{
+        activityAt: 1, entryKind: "thread", title: "Thread", identity: { harness: "codex", threadId: "thread" },
+        metadata: { archived: false, pinned: true, snoozed: false },
+        lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: question.requestKey, turnId: "turn", settled: false },
+        pendingQuestionnaire: question,
+      }],
+    };
+    queueMicrotask(() => target.respond(request.id, { observation }));
+    return true;
+  };
+  await client.openThread("thread", { harness: "codex" });
+  const pending = client.getSnapshot().pendingUserInputRequestsByThreadId.thread;
+  assert.equal(pending?.requestKey, question.requestKey);
+  assert.equal(pending?.responseMode, "newTurn");
+  socket.notify("workbench/thread-state/updated", { ...observation, entries: [], revision: 2 });
+  assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread, undefined);
+}));
+
+test("opening a thread does not publish its document before its durable state is admitted", async () => withClient(async (client, socket) => {
+  let opening!: SocketRequest;
+  FakeWebSocket.intercept = (_socket, request) => {
+    if (request.method !== "workbench/thread-state/observe") return false;
+    opening = request;
+    return true;
+  };
+  const read = client.openThread("thread", { harness: "codex" });
+  await waitForRequest(socket, "workbench/thread-state/observe");
+  await client.requestWorkbench("workbench/thread-state/release", { subscriptionId: "fixture-barrier" });
+  assert.equal(client.getSnapshot().currentThread, null);
+  socket.respond(opening.id, { observation: {
+    ...opening.params, revision: 1, freshness: "fresh", error: null, updateKind: "threadObservation",
+    entries: [{
+      activityAt: 1, entryKind: "thread", title: "Thread", identity: { harness: "codex", threadId: "thread" },
+      metadata: { archived: false, pinned: true, snoozed: false },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    }],
+  } });
+  assert.equal((await read).kind, "success");
+  assert.equal(client.getSnapshot().currentThread?.id, "thread");
+}));
+
+test("repeated opens of one identity share the pending read without invalidating it", async () => withClient(async (client, socket) => {
+  FakeWebSocket.intercept = (_socket, request) => request.method === "workbench/thread/page/read";
+  const first = client.openThread("thread", { harness: "codex" });
+  const request = await waitForRequest(socket, "workbench/thread/page/read");
+  const second = client.openThread("thread", { harness: "codex" });
+  socket.respond(request.id, {
+    thread: wireThread("thread"), browseResultEntries: [], questionnaireEntries: [], steerEntries: [], nextCursor: null,
+  });
+  assert.equal((await first).kind, "success");
+  assert.equal((await second).kind, "success");
+  assert.equal(socket.requests.filter(request => request.method === "workbench/thread/page/read").length, 1);
+}));
+
 test("questionnaire metadata completion preserves a thread and preferences loaded meanwhile", async () => withClient(async (client, socket) => {
-  installRecoveredWorkbenchQuestionnaire(client);
+  await installRecoveredWorkbenchQuestionnaire(client);
   let supplied = false;
   FakeWebSocket.intercept = (target, request) => {
     if (request.method !== "thread/read" || supplied) return false;
@@ -3180,7 +3404,7 @@ test("reopened questionnaire answers preserve explicit default-agent and service
   });
   const reopened = activeThread("codex", "thread", "interrupted");
   client.selectThreadPayload(reopened);
-  installRecoveredWorkbenchQuestionnaire(client);
+  await installRecoveredWorkbenchQuestionnaire(client);
   await client.submitPendingUserInputRequest("thread", { answers: { details: { answers: ["Continue."] } } });
   const admission = socket.requests.find((candidate) => candidate.method === "workbench/codex/message/admit");
   assert.ok(admission);
@@ -3204,7 +3428,7 @@ test("a Workbench waiter lost after live observation is reconciled before answer
     }
     return false;
   };
-  const pending = installRecoveredWorkbenchQuestionnaire(client);
+  const pending = await installRecoveredWorkbenchQuestionnaire(client);
   const response = { answers: { details: { answers: ["Continue"] } } };
   await assert.rejects(client.submitPendingUserInputRequest("thread", response), /provider restarted/u);
   assert.equal(client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.responseMode, "native");
@@ -3227,7 +3451,7 @@ test("failed Workbench live ownership lookup preserves the question and sends no
       queueMicrotask(() => target.fail(candidate.id, "owner lookup unavailable"));
       return true;
     };
-    const pending = installRecoveredWorkbenchQuestionnaire(client);
+    const pending = await installRecoveredWorkbenchQuestionnaire(client);
     socket.notify("questionnaire/requested", pending);
     await assert.rejects(
       client.submitPendingUserInputRequest("thread", { answers: { details: { answers: ["Continue"] } } }),
@@ -3243,16 +3467,16 @@ test("failed Workbench live ownership lookup preserves the question and sends no
 
 test("Workbench answers are fenced when the question changes during ownership lookup", async () => withClient(async (client, socket) => {
   client.selectThreadPayload(activeThread("codex", "thread", "interrupted"));
-  let nextPending: ReturnType<typeof installRecoveredWorkbenchQuestionnaire> | null = null;
+  let nextPending: Awaited<ReturnType<typeof installRecoveredWorkbenchQuestionnaire>> | null = null;
   FakeWebSocket.intercept = (target, candidate) => {
     if (candidate.method !== "questionnaire/list" || candidate.workbenchHarness !== "codex") return false;
-    queueMicrotask(() => {
-      nextPending = installRecoveredWorkbenchQuestionnaire(client, "workbench-mcp:replacement");
+    queueMicrotask(async () => {
+      nextPending = await installRecoveredWorkbenchQuestionnaire(client, "workbench-mcp:replacement");
       target.respond(candidate.id, { data: [] });
     });
     return true;
   };
-  installRecoveredWorkbenchQuestionnaire(client);
+  await installRecoveredWorkbenchQuestionnaire(client);
   await assert.rejects(
     client.submitPendingUserInputRequest("thread", { answers: { details: { answers: ["Old answer"] } } }),
     /pending question changed/iu,
@@ -3273,7 +3497,7 @@ test("Workbench answers do not cross projects when ownership lookup completes la
     });
     return true;
   };
-  installRecoveredWorkbenchQuestionnaire(client);
+  await installRecoveredWorkbenchQuestionnaire(client);
   await assert.rejects(
     client.submitPendingUserInputRequest("thread", { answers: { details: { answers: ["Old project answer"] } } }),
     /pending question changed/iu,
@@ -3289,7 +3513,7 @@ test("failed Workbench recovery admission keeps the saved answer request retryab
     queueMicrotask(() => target.fail(candidate.id, "admission failed"));
     return true;
   };
-  const pending = installRecoveredWorkbenchQuestionnaire(client);
+  const pending = await installRecoveredWorkbenchQuestionnaire(client);
   await assert.rejects(
     client.submitPendingUserInputRequest("thread", { answers: { details: { answers: ["Continue"] } } }),
     /admission failed/u,
@@ -3310,7 +3534,7 @@ test("failed detached questionnaire transcript recording still resolves durable 
       summary: "Choose",
       title: "Questionnaire",
     };
-    installProjectThreadState(client, {
+    await installProjectThreadState(client, {
       entries: [{
         activityAt: 2,
         entryKind: "thread",
@@ -3359,7 +3583,7 @@ test("failed detached questionnaire admission leaves the durable request retryab
     summary: "Choose",
     title: "Questionnaire",
   };
-  installProjectThreadState(client, {
+  await installProjectThreadState(client, {
     entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
     error: null, freshness: "fresh", projectId: "project", revision: 1,
   });
@@ -3384,7 +3608,7 @@ test("rejected durable questionnaire resolution does not clear the detached requ
     summary: "Choose",
     title: "Questionnaire",
   };
-  installProjectThreadState(client, {
+  await installProjectThreadState(client, {
     entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: "thread" }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: "turn" }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: "turn" }, title: "Thread" }],
     error: null, freshness: "fresh", projectId: "project", revision: 1,
   });

@@ -66,6 +66,7 @@ interface ThreadTranscriptProjectionControllerOptions {
 }
 
 export default class ThreadTranscriptProjectionController {
+  readonly #subscriptionPrefix = `thread-transcript-projection:${crypto.randomUUID()}`;
   readonly #cancelComparison: NonNullable<ThreadTranscriptProjectionControllerOptions["cancelComparison"]>;
   readonly #onError: NonNullable<ThreadTranscriptProjectionControllerOptions["onError"]>;
   readonly #onStateChange: NonNullable<ThreadTranscriptProjectionControllerOptions["onStateChange"]>;
@@ -106,7 +107,7 @@ export default class ThreadTranscriptProjectionController {
   }
 
   dispose() {
-    if (this.#disposed) return;
+    if (this.#disposed) return this.#lifecycle;
     this.#disposed = true;
     this.#cancelScheduledComparison();
     this.#selection = null;
@@ -114,7 +115,14 @@ export default class ThreadTranscriptProjectionController {
     this.#onStateChange({ status: "idle" });
     this.#lastDiagnostic = null;
     this.#generation += 1;
-    this.#activeSubscriptionId = null;
+    this.#lifecycle = this.#lifecycle.then(async () => {
+      const subscriptionId = this.#activeSubscriptionId;
+      this.#activeSubscriptionId = null;
+      if (subscriptionId && this.#available) await this.#transcripts.unsubscribe({ subscriptionId });
+    }).catch(error => {
+      if (this.#available) this.#onError(new Error("Unable to release the SQLite transcript subscription.", { cause: error }));
+    });
+    return this.#lifecycle;
   }
 
   setAvailable(available: boolean) {
@@ -315,7 +323,8 @@ export default class ThreadTranscriptProjectionController {
     const selection = this.#selection;
     this.#lifecycle = this.#lifecycle
       .then(async () => {
-        if (this.#disposed || !this.#available) {
+        if (this.#disposed) return;
+        if (!this.#available) {
           this.#activeSubscriptionId = null;
           return;
         }
@@ -325,7 +334,7 @@ export default class ThreadTranscriptProjectionController {
           await this.#transcripts.unsubscribe({ subscriptionId: activeSubscriptionId });
         }
         if (this.#disposed || !this.#available || generation !== this.#generation || !selection) return;
-        const subscriptionId = `thread-transcript-projection:${generation}`;
+        const subscriptionId = `${this.#subscriptionPrefix}:${generation}`;
         this.#activeSubscriptionId = subscriptionId;
         await this.#transcripts.subscribe({
           subscriptionId,
@@ -333,9 +342,7 @@ export default class ThreadTranscriptProjectionController {
           turnIds: durableTurnIds(selection.thread.turns),
           turnLimit: this.#turnLimit,
         }, (snapshot) => this.#receiveSnapshot(generation, snapshot));
-        if (this.#disposed) {
-          if (this.#activeSubscriptionId === subscriptionId) this.#activeSubscriptionId = null;
-        } else if (generation !== this.#generation) {
+        if (!this.#disposed && generation !== this.#generation) {
           if (this.#activeSubscriptionId === subscriptionId) this.#activeSubscriptionId = null;
           await this.#transcripts.unsubscribe({ subscriptionId });
         }

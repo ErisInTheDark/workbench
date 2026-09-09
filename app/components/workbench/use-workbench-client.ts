@@ -3,7 +3,6 @@
  * Exports:
  * - useWorkbenchClientMount: own async Workbench client mount and disposal around root-owned DOM surfaces. Keywords: lifecycle, bootstrap, client.
  * - useWorkbenchThreads: read and act on the route-owned thread collection through one visible namespace. Keywords: threads, runtime, controller.
- * - useWorkbenchThread: bind thread reads and intent methods to one thread identity. Keywords: thread, identity, questionnaire.
  * - useWorkbenchProjectThreadSidebar: read one project-owned sidebar in every observation mode. Keywords: project, sidebar, snapshot.
  * - useWorkbenchThreadSidebarEntry: read one project-owned thread sidebar entry by identity. Keywords: thread, sidebar, lifecycle.
  * - useWorkbenchThreadTitleHistory: read previous titles and apply project-qualified rename/dismiss intent. Keywords: title, history, project.
@@ -30,7 +29,6 @@ import {
 import type { MountedWorkbenchClient } from "../../WorkbenchClient";
 import type {
   ExplorerSnapshot,
-  ThreadPayload,
   WorkbenchControls,
   WorkbenchHarness,
   WorkbenchReadThreadOptions,
@@ -52,7 +50,8 @@ import type { WorkbenchThreadStateRequest } from "workbench-shared/workbench/thr
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkbenchDomSurfaces } from "../../workbench/workbench-dom";
 import type { ThreadTextPresentationKey } from "../../workbench/thread/ThreadTextPresentationController";
-import WorkbenchClientContext, { type WorkbenchClientController } from "./workbench-client-context";
+import WorkbenchClientContext, { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";
+import { useWorkbenchThread } from "./use-workbench-thread";
 
 const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   changes: {},
@@ -118,9 +117,6 @@ interface WorkbenchClientMountOptions {
 export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): WorkbenchClientController {
   const [mounted, setMounted] = useState<MountedWorkbenchClient | null>(null);
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
-  const [transcriptSource, setTranscriptSource] = useState<WorkbenchClientController["transcriptSource"]>({
-    status: "idle",
-  });
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -139,10 +135,6 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
             startTransition(() => {
               if (!cancelled) setExplorer(snapshot);
             });
-          },
-          onTranscriptSourceChange: (state) => {
-            if (cancelled) return;
-            setTranscriptSource(state);
           },
         });
         if (cancelled) {
@@ -165,17 +157,7 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
     controls: mounted?.controls ?? null,
     explorer,
     mounted,
-    transcriptSource,
-  }), [explorer, mounted, transcriptSource]);
-}
-
-function useWorkbenchClientController(explicitClient?: WorkbenchClientController) {
-  const providedClient = useContext(WorkbenchClientContext);
-  const client = explicitClient ?? providedClient;
-  if (!client) {
-    throw new Error("Workbench domain hooks require WorkbenchClientProvider.");
-  }
-  return client;
+  }), [explorer, mounted]);
 }
 
 export function useWorkbenchThreadTextPresentationField(
@@ -251,11 +233,8 @@ export function useWorkbenchProjectThreadSidebars(explicitClient?: WorkbenchClie
 
 export function useWorkbenchThreadTitleHistory(projectId: string, harness: WorkbenchHarness, threadId: string) {
   const client = useWorkbenchClientController();
-  const entry = useWorkbenchThreadSidebarEntry(projectId, harness, threadId);
-  const summaries = useWorkbenchProjectThreadSummaries();
-  const pinned = summaries.projects.find((project) => project.projectId === projectId)?.pinnedThreads.find((candidate) => (
-    candidate.entryKind === "thread" && candidate.identity.harness === harness && candidate.identity.threadId === threadId
-  ));
+  const thread = useWorkbenchThread(projectId, { kind: "provider", harness, threadId });
+  const entry = thread.state.entry;
   const reapply = useCallback(async (title: string) => {
     if (!client.controls) throw new Error("Workbench controls are not ready.");
     await client.controls.setThreadTitle({ projectId, harness, threadId, title });
@@ -268,7 +247,7 @@ export function useWorkbenchThreadTitleHistory(projectId: string, harness: Workb
     if (!accepted) throw new Error("The current title cannot be dismissed.");
   }, [client.controls, harness, projectId, threadId]);
   return {
-    previousTitles: entry?.previousTitles ?? (pinned?.entryKind === "thread" ? pinned.previousTitles : null) ?? [],
+    previousTitles: entry?.previousTitles ?? [],
     reapply,
     dismiss,
   };
@@ -374,76 +353,5 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController) 
     runtime,
     submitQuestionnaire,
     updateState,
-  ]);
-}
-
-export function useWorkbenchThread(threadId: string, explicitClient?: WorkbenchClientController) {
-  const client = useWorkbenchClientController(explicitClient);
-  const threads = useWorkbenchThreads(client);
-  const document = threads.document(threadId) ?? null;
-  const changeAgent = useCallback((agentPath: string | null) => {
-    client.controls?.setCurrentThreadAgent(threadId, agentPath);
-  }, [client.controls, threadId]);
-  const changeModel = useCallback((model: string) => {
-    client.controls?.setCurrentThreadModel(threadId, model);
-  }, [client.controls, threadId]);
-  const changeReasoningEffort = useCallback((effort: string | null) => {
-    client.controls?.setCurrentThreadReasoningEffort(threadId, effort);
-  }, [client.controls, threadId]);
-  const changeServiceTier = useCallback((serviceTier: string | null) => {
-    client.controls?.setCurrentThreadServiceTier(threadId, serviceTier);
-  }, [client.controls, threadId]);
-  const compact = useCallback(async (source: ThreadPayload | null = document) => (
-    source ? await client.controls?.compactThread(source) ?? null : null
-  ), [client.controls, document]);
-  const read = useCallback(async (harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => (
-    await threads.read(threadId, harness, options)
-  ), [threadId, threads.read]);
-  const stop = useCallback(async (source: ThreadPayload | null = document) => (
-    source ? await client.controls?.stopThread(source) ?? null : null
-  ), [client.controls, document]);
-  const snoozeQuestionnaire = useCallback(async (projectId: string, harness: WorkbenchHarness, requestKey: string) => {
-    if (!client.controls) throw new Error("Workbench controls are not ready.");
-    const accepted = await client.controls.updateThreadStateWithAcceptance({
-      method: "workbench/thread-state/questionnaire/snooze",
-      projectId, identity: { harness, threadId }, requestKey,
-    });
-    if (!accepted) throw new Error("The questionnaire changed before it could be snoozed.");
-  }, [client.controls, threadId]);
-  const submitQuestionnaire = useCallback(async (
-    response: WorkbenchUserInputResponse,
-    options?: WorkbenchSubmitUserInputRequestOptions,
-  ) => {
-    await threads.submitQuestionnaire(threadId, response, options);
-  }, [threadId, threads.submitQuestionnaire]);
-
-  return useMemo(() => ({
-    changeAgent,
-    changeModel,
-    changeReasoningEffort,
-    changeServiceTier,
-    compact,
-    document,
-    pendingQuestionnaire: threads.pendingQuestionnaire(threadId),
-    rateLimits: threads.rateLimits,
-    read,
-    stop,
-    snoozeQuestionnaire,
-    submitQuestionnaire,
-    threads,
-    updateState: threads.updateState,
-  }), [
-    changeAgent,
-    changeModel,
-    changeReasoningEffort,
-    changeServiceTier,
-    compact,
-    document,
-    read,
-    stop,
-    snoozeQuestionnaire,
-    submitQuestionnaire,
-    threadId,
-    threads,
   ]);
 }

@@ -21,7 +21,6 @@ import type {
     WorkbenchHarness,
     WorkbenchLocalCapabilitySettings,
     WorkbenchProjectOption,
-    WorkbenchQuestionnaireDraft,
     WorkbenchSendThreadMessageOptions,
 } from "workbench-shared/types";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
@@ -110,7 +109,7 @@ import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-docume
 import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
 import { type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import {
-  clearComposerDraft, clearQuestionnaireDraft, saveComposerDraft, saveQuestionnaireDraft, sidebarDraftToInput,
+  clearComposerDraft, saveComposerDraft, sidebarDraftToInput,
   type ComposerDraftTarget,
 } from "../workbench/state/draft-persistence";
 import type { WorkbenchDomSurfaces } from "../workbench/workbench-dom";
@@ -488,7 +487,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     [groupedSidebarProjects],
   );
   const currentThread = threads.current;
-  const transcriptSource = workbenchClient.transcriptSource;
   const transcriptMode = useMemo(
     () => readWorkbenchTranscriptMode(clientState.records),
     [clientState.records],
@@ -677,16 +675,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         && record.daemonRegistrationId === clientState.daemonRegistrationId
         && record.projectId === selectedThreadProjectId
           ? [[record.threadId, record.value]]
-          : []
-      )),
-    )
-  ), [clientState.daemonRegistrationId, clientState.records, selectedThreadProjectId]);
-  const threadQuestionnaireDraftsByKey = useMemo(() => (
-    !selectedThreadProjectId ? {} : Object.fromEntries(
-      clientState.records.flatMap((record) => (
-        record.kind === "questionnaireDraft"
-        && record.daemonRegistrationId === clientState.daemonRegistrationId
-          ? [[`${record.projectId}:${record.threadId}:${record.requestKey}`, record.value]]
           : []
       )),
     )
@@ -1608,26 +1596,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
   }, [clientStateController, getComposerDraftTarget]);
 
-  const handleThreadQuestionnaireDraftChange = useCallback(async (
-    projectId: string, threadId: string, requestKey: string, update: (draft: WorkbenchQuestionnaireDraft) => WorkbenchQuestionnaireDraft,
-  ) => {
-    try {
-      return await saveQuestionnaireDraft(clientStateController, { daemonRegistrationId: clientState.daemonRegistrationId, projectId, threadId, requestKey }, update);
-    } catch (error) {
-      setSelectionError(error instanceof Error ? error.message : "Unable to save questionnaire draft.");
-      throw error;
-    }
-  }, [clientState.daemonRegistrationId, clientStateController]);
-
-  const handleThreadQuestionnaireDraftClear = useCallback(async (projectId: string, threadId: string, requestKey: string) => {
-    try {
-      await clearQuestionnaireDraft(clientStateController, { daemonRegistrationId: clientState.daemonRegistrationId, projectId, threadId, requestKey });
-    } catch (error) {
-      setSelectionError(error instanceof Error ? error.message : "Unable to clear questionnaire draft.");
-      throw error;
-    }
-  }, [clientState.daemonRegistrationId, clientStateController]);
-
   const setThreadComposerSettings = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
     if (currentThread?.id === threadId && currentThread.isDraft && currentThread.harness !== settings.harness) {
       void clientStateController.put({
@@ -1638,8 +1606,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
     controls?.setCurrentThreadComposerSettings(threadId, settings);
   }, [clientStateController, controls, currentThread]);
-
-  const submitUserInputRequest = threads.submitQuestionnaire;
 
   const workbenchControls = useMemo<WorkbenchControls | null>(() => {
     if (!controls) {
@@ -1767,18 +1733,28 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const activeThreadId = showThreadView ? threadViewInstanceKey : "";
   const activeFilePath = showFileView ? effectiveFilePath : "";
   const visibleUserInputRequestsByThreadId = harnessUserInputRequestsByThreadId;
-  const threadAttentionLabelsById = useMemo(() => Object.fromEntries(
-    Object.entries(visibleUserInputRequestsByThreadId).flatMap(([threadId, pending]) => {
-      const title = getQuestionnaireTitle(pending.request);
-      return title ? [[threadId, title]] : [];
-    }),
-  ), [visibleUserInputRequestsByThreadId]);
+  const threadAttentionLabelsById = useMemo(() => {
+    const labels: Record<string, string> = {};
+    for (const project of projectThreadSummaries.projects) {
+      for (const entry of project.pinnedThreads) {
+        if (entry.entryKind === "thread" && (entry.canCompleteQuestionnaire || (entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput"))) {
+          labels[entry.identity.threadId] = "Questionnaire";
+        }
+      }
+    }
+    for (const project of projectThreadSidebars.projects) {
+      for (const entry of project.entries) {
+        if (entry.entryKind !== "draft" && entry.pendingQuestionnaire) labels[entry.identity.threadId] = getQuestionnaireTitle(entry.pendingQuestionnaire.request);
+      }
+    }
+    for (const [threadId, pending] of Object.entries(visibleUserInputRequestsByThreadId)) labels[threadId] = getQuestionnaireTitle(pending.request);
+    return labels;
+  }, [projectThreadSidebars.projects, projectThreadSummaries.projects, visibleUserInputRequestsByThreadId]);
   const pendingQuestionnaireThreadIds = useMemo(
-    () => new Set(Object.entries(visibleUserInputRequestsByThreadId)
-      .map(([threadId]) => threadId)),
-    [visibleUserInputRequestsByThreadId],
+    () => new Set(Object.keys(threadAttentionLabelsById)),
+    [threadAttentionLabelsById],
   );
-  const threadProjectId = route.view === "thread" ? route.threadOwnerProjectId || activeProjectId : activeProjectId;
+  const threadProjectId = route.view === "thread" ? route.threadOwnerProjectId || route.projectId : route.projectId || activeProjectId;
   const threadProject = explorer.projects.find((project) => project.id === threadProjectId) ?? null;
   const isHomeDraftRoute = route.view === "thread"
     && !route.projectId
@@ -1836,7 +1812,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     const pendingRequest = visibleUserInputRequestsByThreadId[threadId] ?? null;
     const proposalId = entry.gitArc?.proposals.find(({ status }) => status === "proposed")?.proposalId ?? null;
     const hasPlannedWork = Boolean(entry.gitArcPlan?.scopePaths.length);
-    if (!pendingRequest && !proposalId && !hasPlannedWork) return null;
+    const hasQuestionnaire = Boolean(pendingRequest || entry.pendingQuestionnaire || ("canCompleteQuestionnaire" in entry && entry.canCompleteQuestionnaire)
+      || (entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput"));
+    if (!hasQuestionnaire && !proposalId && !hasPlannedWork) return null;
     const rootThreadId = entry.entryKind === "subagent" ? entry.parentThreadId : threadId;
     const cwd = entry.entryKind === "subagent"
       ? entry.cwd
@@ -1847,27 +1825,19 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       pinnedThreads.some((candidate) => candidate.entryKind === "thread" && candidate.identity.harness === entry.identity.harness && candidate.identity.threadId === threadId)
       || unsettledThreads.some((candidate) => candidate.identity.harness === entry.identity.harness && candidate.identity.threadId === threadId)
     ))?.projectId ?? activeProjectId;
-    const questionnaireDraft = pendingRequest
-      ? threadQuestionnaireDraftsByKey[`${ownerProjectId}:${threadId}:${pendingRequest.requestKey}`] ?? null
-      : null;
     return (
       <WorkbenchThreadTooltipDetails
         cwd={cwd}
         harness={entry.identity.harness}
         materialized={materializedThreadRootIds.has(rootThreadId)}
-        onDraftChange={(update) => handleThreadQuestionnaireDraftChange(ownerProjectId, threadId, pendingRequest?.requestKey ?? "", update)}
-        onDraftClear={() => handleThreadQuestionnaireDraftClear(ownerProjectId, threadId, pendingRequest?.requestKey ?? "")}
+        onQuestionnaireError={setSelectionError}
         onOpenThread={openThreadFromExplorer}
-        onReadThread={controls ? threads.read : null}
-        onSubmitUserInputRequest={submitUserInputRequest}
-        pendingRequest={pendingRequest}
         projectFilePaths={explorer.projectFilePaths}
         projectId={ownerProjectId}
         projectRootPath={explorer.rootPath}
-        proposalId={proposalId}
-        questionnaireDraft={questionnaireDraft}
         spellCheck={resolvedSettings.composerSpellCheck}
         threadId={threadId}
+        parentThreadId={entry.entryKind === "subagent" ? entry.parentThreadId : undefined}
         workspaceRoots={projectFileLinkRoots}
       />
     );
@@ -1876,17 +1846,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     controls,
     explorer.projectFilePaths,
     explorer.rootPath,
-    handleThreadQuestionnaireDraftChange,
-    handleThreadQuestionnaireDraftClear,
     materializedThreadRootIds,
     openThreadFromExplorer,
     projectFileLinkRoots,
     projectThreadSidebars.projects,
     projectThreadSummaries.projects,
     resolvedSettings.composerSpellCheck,
-    submitUserInputRequest,
     threads,
-    threadQuestionnaireDraftsByKey,
     threadSummariesById,
     visibleUserInputRequestsByThreadId,
   ]);
@@ -3054,8 +3020,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 aria-busy={isSelectionPending}
               >
                 {showThreadView && !shouldRenderMainLayout ? (
-                  isThreadViewReady && threadForThreadView ? (
                     <ThreadView
+                      routeOwned
+                      routeError={selectionError}
                       key={`${threadProjectId}:${threadViewInstanceKey}`}
                       thread={threadForThreadView}
                       composerSpellCheck={resolvedSettings.composerSpellCheck}
@@ -3072,8 +3039,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       onSendMessage={sendThreadMessage}
                       onThreadComposerDraftChange={handleThreadComposerDraftChange}
                       onThreadComposerDraftClear={handleThreadComposerDraftClear}
-                      onThreadQuestionnaireDraftChange={handleThreadQuestionnaireDraftChange}
-                      onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
+                      onQuestionnaireError={setSelectionError}
                       onThreadSettingsChange={setThreadComposerSettings}
                       selectedThreadId={selectedThreadIdForView}
                       onSelectedThreadChange={handleSelectedThreadChange}
@@ -3086,27 +3052,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       projectFileLinkRoots={threadProjectFileLinkRoots}
                       projectRootPath={threadProjectRootPath}
                       projectRoots={threadProjectRoots}
-                      knownSubagents={explorer.subagents}
                       scrollViewportRef={directThreadScrollViewportRef}
                       threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
                       threadComposerDraft={activeThreadComposerDraft}
                       threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
-                      threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
-                      transcriptSource={transcriptSource}
                       transcriptMode={effectiveTranscriptMode}
                       viewInstanceKey={threadViewInstanceKey}
                     />
-                  ) : selectionError ? (
-                    <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-[56rem] items-center justify-center py-8">
-                      <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] px-5 py-4 text-left">
-                        <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Thread</p>
-                        <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open thread</p>
-                        <p className="m-0 break-all text-[0.84rem] leading-6 text-muted">{selectionError}</p>
-                      </div>
-                    </div>
-                  ) : (
-                    <ThreadLoadingSkeleton fillAvailableHeight />
-                  )
                 ) : null}
                 {showSettingsView && !shouldRenderMainLayout ? (
                   <div className="mx-auto flex w-full max-w-[56rem] flex-col gap-8 py-8">
@@ -3295,6 +3247,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       if (target.kind === "thread") {
                         return (
                           <WorkbenchThreadPanel
+                            routeOwned
                             composerSpellCheck={resolvedSettings.composerSpellCheck}
                             fallbackThreadSummary={target.target.kind === "provider" || target.target.kind === "subagent" ? threadSummariesById.get(getWorkbenchThreadTargetRootId(target.target)) ?? null : null}
                             fontSizeRem={resolvedSettings.editorFontSize}
@@ -3302,15 +3255,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             isFocused={isFocused}
                             isMinimized={isMinimized}
                             isMinimizedVertical={isMinimizedVertical}
-                            knownSubagents={explorer.subagents}
                             onDraftHarnessChange={handleHarnessChange}
                             onOpenThread={openThreadFromExplorer}
                             onCreateDraftThread={() => controls?.createThreadDraft(harness) ?? null}
                             onSendMessage={sendThreadMessage}
                             onThreadComposerDraftChange={handleThreadComposerDraftChange}
                             onThreadComposerDraftClear={handleThreadComposerDraftClear}
-                            onThreadQuestionnaireDraftChange={handleThreadQuestionnaireDraftChange}
-                            onThreadQuestionnaireDraftClear={handleThreadQuestionnaireDraftClear}
+                            onQuestionnaireError={setSelectionError}
                             onThreadSettingsChange={setThreadComposerSettings}
                             selectedThreadId={getWorkbenchThreadTargetSelectedId(target.target)}
                             onSelectedThreadChange={(selectedThreadId) => {
@@ -3325,7 +3276,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                               navigateToRoute(createMosaicRoute(route.projectId, replaceWorkbenchMosaicTarget(route.mosaicNode, target, nextTarget)));
                             }}
                             onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
-                            projectId={activeProjectId}
+                            projectId={route.projectId}
                             projectFileCandidates={explorer.projectFileCandidates}
                             projectFileIndexId={explorer.projectFileIndexId}
                             projectFilePaths={explorer.projectFilePaths}
@@ -3335,7 +3286,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             threadTarget={target.target}
                             threadComposerDraft={getThreadComposerDraftForTarget(target.target)}
                             threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
-                            threadQuestionnaireDraftsByKey={threadQuestionnaireDraftsByKey}
                             onClose={showMosaicView ? () => {
                               closeMosaicPanel(target);
                             } : undefined}

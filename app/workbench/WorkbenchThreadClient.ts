@@ -4,10 +4,12 @@
  * - WorkbenchThreadState: owned thread, rate-limit, and model cache state for the workbench. Keywords: workbench, thread, state, codex.
  * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator. Keywords: workbench, thread, sidebar, intent.
  * - WorkbenchThreadClientOptions: creation options for the thread client manager hooks. Keywords: workbench, thread, status, callbacks.
- * - default WorkbenchThreadClient: own provider thread state, live questionnaire reconciliation, durable answer recovery, and notifications. Keywords: workbench, thread, codex, copilot, opencode, questionnaire, restart, global home.
+ * - default WorkbenchThreadClient: own provider thread state, observation leases, live questionnaire reconciliation, durable answer recovery, and notifications. Keywords: workbench, thread, codex, copilot, opencode, questionnaire, restart, global home.
  */
 
 import { CodexAppServerClient } from "workbench-shared/codex/app-server-client";
+import ThreadObservationController, { getThreadObservationKey } from "./thread/ThreadObservationController";
+import WorkbenchThreadController, { type ThreadControllerTarget } from "./WorkbenchThreadController";
 import type { CodexAppServerNotification } from "workbench-shared/codex/app-server-notifications";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "workbench-shared/workbench/orchestrator-reload";
 import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbench/stats/workbench-stats-contract";
@@ -15,6 +17,7 @@ import type { GetAccountRateLimitsResponse } from "workbench-shared/codex/genera
 import type { Model as CodexModel } from "workbench-shared/codex/generated/app-server/v2/Model";
 import type { ModelListResponse } from "workbench-shared/codex/generated/app-server/v2/ModelListResponse";
 import type { RateLimitSnapshot } from "workbench-shared/codex/generated/app-server/v2/RateLimitSnapshot";
+import type { WorkbenchControls } from "workbench-shared/types";
 import type { SandboxPolicy } from "workbench-shared/codex/generated/app-server/v2/SandboxPolicy";
 import type { ThreadActiveFlag } from "workbench-shared/codex/generated/app-server/v2/ThreadActiveFlag";
 import { ThreadTokenUsageSchema } from "workbench-shared/workbench/thread/thread-context-usage";
@@ -116,7 +119,7 @@ import {
     createWorkbenchThreadRecoveryId,
     isWorkbenchThreadRecoveryInput,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
-import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { applySteerHistoryToThread, isSyntheticSteerHistoryItem } from "workbench-shared/workbench/thread/thread-steer-history";
 import { stopWorkbenchThread } from "workbench-shared/workbench/thread/thread-stop";
 import {
@@ -124,9 +127,7 @@ import {
     hasWorkbenchApprovalDecisionSelection,
     isWorkbenchApprovalRequest,
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
-import ThreadTranscriptProjectionController, {
-    type ThreadTranscriptProjectionState,
-} from "./transcript/ThreadTranscriptProjectionController";
+import ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptProjectionController";
 import reconcileTranscriptProjectionWithLiveThread from "./transcript/reconcile-transcript-projection-with-live-thread";
 
 const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
@@ -206,18 +207,23 @@ export interface WorkbenchAcceptedIntent {
 }
 
 export interface WorkbenchThreadClientOptions {
+  updateThreadStateWithAcceptance?: WorkbenchControls["updateThreadStateWithAcceptance"];
+  getProjectById?: (projectId: string) => WorkbenchProjectOption | undefined;
   clientStateController?: WorkbenchClientStateController;
   onStatusMessage?: (message: string) => void;
   onThreadStarted?: (thread: ThreadPayload) => void;
-  onTranscriptSourceChange?: (state: ThreadTranscriptProjectionState) => void;
   publishAcceptedIntent?: (event: WorkbenchAcceptedIntent) => Promise<void>;
   resolveThreadIdentity?: (request: WorkbenchThreadIdentityResolveRequest) => Promise<WorkbenchThreadIdentityResolution | null>;
 }
 
 interface WorkbenchThreadClient {
+  threadObservations: ThreadObservationController;
+  getThreadController: (projectId: string, target: ThreadControllerTarget) => WorkbenchThreadController;
+  recoverThreadControllers: () => Promise<void>;
+  activateThreadControllers: () => void;
   applyAcceptedThreadTitle: (threadId: string, harness: WorkbenchHarness, title: string) => boolean;
   clearThreadSelection: () => void;
-  createThread: (harness: WorkbenchHarness, threadId?: string, options?: { entries?: readonly WorkbenchThreadSidebarEntry[]; project?: WorkbenchProjectOption; select?: boolean }) => ThreadPayload;
+  createThread: (harness: WorkbenchHarness, threadId?: string, options?: { project?: WorkbenchProjectOption; select?: boolean }) => ThreadPayload;
   dispose: () => void;
   getSnapshot: () => WorkbenchThreadRuntimeSnapshot;
   hasThread: (threadId: string) => boolean;
@@ -225,10 +231,9 @@ interface WorkbenchThreadClient {
   isDraftThreadId: (threadId: string) => boolean;
   installThreadStateSources: (sources: {
     activeProjectSnapshot: WorkbenchThreadSidebarSnapshot | null;
-    durableQuestionnaireEntries: readonly WorkbenchThreadSidebarEntry[];
   }) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
-  openThread: (threadId: string, options?: { entries?: readonly WorkbenchThreadSidebarEntry[]; harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" }) => Promise<ThreadPayloadFetchOutcome>;
+  openThread: (threadId: string, options?: { harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" }) => Promise<ThreadPayloadFetchOutcome>;
   onReconnect: (listener: () => void) => () => void;
   onWorkbenchNotification: (listener: (notification: {
     method: "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
@@ -284,6 +289,10 @@ interface ThreadReadFailure {
   transientRollout: boolean;
 }
 
+class ThreadPayloadReadError extends Error {
+  constructor(readonly failure: ThreadReadFailure) { super(failure.message); }
+}
+
 type ThreadPayloadFetchOutcome =
   | { kind: "failure"; failure: ThreadReadFailure }
   | { kind: "success"; payload: ThreadPayload }
@@ -299,6 +308,7 @@ interface ThreadOverlayRevisionRecord {
 }
 
 interface ThreadOperationFence {
+  ownerIsCurrent?: () => boolean;
   overlayRevisions: Omit<ThreadOverlayRevisionRecord, "key">;
   projectContextGeneration: number;
   projectId: string;
@@ -318,10 +328,10 @@ type ThreadProjectContext = {
   projectRootPath: string;
   projectRoots: WorkbenchProjectRoot[];
 };
-type SelectedThreadProjectContext = ThreadProjectContext & {
+type SelectedThreadProjectContext = {
+  projectId: string;
   harness: WorkbenchHarness;
   rootThreadId: string;
-  subagents: WorkbenchSubagentSummary[];
 };
 
 interface ThreadReadResult {
@@ -794,6 +804,18 @@ function WorkbenchThreadClient(
     return response.result;
   }
 
+  const threadObservations = new ThreadObservationController({ request: requestWorkbench });
+  lifecycle.addUnsubscribe(codexClient.onConnectionClose(() => threadObservations.disconnect()));
+  lifecycle.addUnsubscribe(codexClient.onWorkbenchNotification(notification => {
+    if (notification.method === "workbench/thread-state/reset") threadObservations.disconnect();
+    else if (notification.method === "workbench/thread-state/updated"
+      && notification.params && typeof notification.params === "object"
+      && "updateKind" in notification.params && notification.params.updateKind === "threadObservation") {
+      threadObservations.accept(notification.params);
+    }
+  }));
+  let selectedObservation: ReturnType<ThreadObservationController["acquire"]> | null = null;
+
   function onWorkbenchNotification(listener: (notification: {
     method: "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
     params: unknown;
@@ -844,29 +866,84 @@ function WorkbenchThreadClient(
     areDocumentsEquivalent: areThreadPayloadsEquivalent,
   });
   const threadSources = ThreadSourceStore();
+  const threadControllers = new Map<string, WorkbenchThreadController>();
   const overlayRevisionsByKey = new Map<string, ThreadOverlayRevisionRecord>();
   const stablePreferencesByKey = new Map<string, ThreadStablePreferenceRecord>();
   const statusRecordsByKey = new Map<string, ThreadStatusRecord>();
   const streamingReconciler = new ThreadStreamingReconciler();
   const textPresentation = new ThreadTextPresentationController();
-  const transcriptProjection = new ThreadTranscriptProjectionController({
-    onError: (error) => console.error("Workbench SQLite transcript projection lifecycle failed.", error),
-    onStateChange: (state) => options.onTranscriptSourceChange?.(state),
-    reconcileProjection: (projection, selection) => reconcileTranscriptProjectionWithLiveThread({
-      mergeLiveTurn: (incomingTurn, liveTurn) => mergeLiveStreamingTurn(
-        incomingTurn,
-        liveTurn,
-        { settleStreamingKeys: false },
-      ),
-      projection,
-      thread: selection.thread,
-    }),
-    transcripts,
-    turnLimit: 4,
-  });
-  lifecycle.addUnsubscribe(transcripts.onAvailabilityChange((available) => {
-    transcriptProjection.setAvailable(available);
-  }));
+  function getThreadController(projectId: string, target: ThreadControllerTarget) {
+    const threadId = target.kind === "draft" ? target.draftId : target.threadId;
+    const key = `${projectId}\0${threadId}`;
+    let controller = threadControllers.get(key);
+    if (!controller) {
+      controller = new WorkbenchThreadController(projectId, target, {
+        controls: {
+          compactThread, stopThread, setCurrentThreadAgent, setCurrentThreadModel,
+          setCurrentThreadReasoningEffort, setCurrentThreadServiceTier, setCurrentThreadComposerSettings,
+          submitPendingUserInputRequest,
+          updateThreadStateWithAcceptance: request => {
+            if (!options.updateThreadStateWithAcceptance) throw new Error("Thread state mutations are not connected.");
+            return options.updateThreadStateWithAcceptance(request);
+          },
+        },
+        observations: threadObservations,
+        getChild: subagent => getThreadController(projectId, {
+          kind: "subagent", harness: subagent.harness, parentThreadId: subagent.parentThreadId, threadId: subagent.threadId,
+        }),
+        readNative: () => {
+          const document = threadDocuments.getDocumentByThreadId(threadId);
+          return {
+            document,
+            pendingQuestionnaire: state.pendingUserInputRequestsByThreadId.get(threadId) ?? null,
+            rateLimits: state.rateLimitsByHarness.get(document?.harness ?? (target.kind === "draft" ? "codex" : target.harness ?? "codex")) ?? null,
+          };
+        },
+        subscribeNative: listener => subscribe(listener),
+        read: async (readOptions, beforeCommit, selectionBound) => {
+          await beforeCommit();
+          const observed = target.kind === "draft" ? null : threadObservations.getSnapshot(getThreadObservationKey(projectId, target))
+            .observation?.entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === threadId);
+          const harness = observed && observed.entryKind !== "draft" ? observed.identity.harness
+            : target.kind === "draft" ? "codex" : target.harness ?? getKnownThreadHarness(threadId) ?? "codex";
+          const cwd = observed?.entryKind === "subagent" ? observed.cwd : options.getProjectById?.(projectId)?.rootPath;
+          readOptions = { ...(cwd ? { cwd } : {}), ...readOptions };
+          const outcome = await fetchThreadPayload(threadId, harness, readOptions, payload => selectedThreadProjectContext?.projectId === projectId && selectedThreadProjectContext.rootThreadId === threadId
+            ? (setCurrentThread(payload), state.currentThread)
+            : upsertThreadDocument(payload, { emitChange: true }), {
+              selectionBound, beforeCommit, ownerIsCurrent: selectionBound ? undefined : controller!.captureLifetime(),
+            });
+          if (outcome.kind === "failure") throw new ThreadPayloadReadError(outcome.failure);
+          return outcome.kind === "success" ? outcome.payload : null;
+        },
+        createTranscript: publish => {
+          const projection = new ThreadTranscriptProjectionController({
+            onError: error => console.error("Workbench SQLite transcript projection lifecycle failed.", error),
+            onStateChange: publish,
+            reconcileProjection: (projection, selection) => reconcileTranscriptProjectionWithLiveThread({
+              mergeLiveTurn: (incoming, live) => mergeLiveStreamingTurn(incoming, live, { settleStreamingKeys: false }),
+              projection, thread: selection.thread,
+            }),
+            transcripts: {
+              reportParity: diagnostic => transcripts.reportParity(diagnostic),
+              subscribe: (params, listener) => transcripts.subscribe(params, listener),
+              unsubscribe: async params => {
+                // Closing this client closes the shared socket and releases all server subscriptions.
+                if (disposed) return;
+                try { await transcripts.unsubscribe(params); }
+                catch (error) { if (!disposed) throw error; }
+              },
+            },
+            turnLimit: 4,
+          });
+          return { controller: projection, stopAvailability: transcripts.onAvailabilityChange(available => projection.setAvailable(available)) };
+        },
+        reportError: message => emitStatusMessage(message),
+      });
+      threadControllers.set(key, controller);
+    }
+    return controller;
+  }
   async function publishAcceptedIntent({
     draftId,
     harness,
@@ -924,7 +1001,12 @@ function WorkbenchThreadClient(
   const pendingUserInputRequestGenerationsByHarness = new Map<WorkbenchHarness, number>();
   const questionnaireListSyncPromisesByHarness = new Map<WorkbenchHarness, Promise<boolean>>();
   const questionnaireListSyncedHarnesses = new Set<WorkbenchHarness>();
-  let installedDurableQuestionnaireEntries: readonly WorkbenchThreadSidebarEntry[] = [];
+  lifecycle.addUnsubscribe(threadObservations.subscribe(() => {
+    if (disposed) return;
+    reconcileObservedSubagents();
+    reconcileObservedQuestionnaires();
+    emit();
+  }));
   const resolvedDurableQuestionnaireKeysByThreadId = new Map<string, string>();
   const browseResultReadGenerationByKey = new Map<string, number>();
   const questionnaireHistoryReadGenerationByKey = new Map<string, number>();
@@ -995,33 +1077,40 @@ function WorkbenchThreadClient(
     };
   }
 
-  function selectedProjectContextForThread(harness: WorkbenchHarness, threadId: string): SelectedThreadProjectContext | null {
-    if (!selectedThreadProjectContext || selectedThreadProjectContext.harness !== harness) return null;
-    if (selectedThreadProjectContext.rootThreadId === threadId) return selectedThreadProjectContext;
-    return selectedThreadProjectContext.subagents.some((subagent) => (
-      subagent.harness === harness && subagent.threadId === threadId
-    )) ? selectedThreadProjectContext : null;
-  }
-
   function effectiveThreadProjectContext(harness: WorkbenchHarness, threadId: string) {
-    return selectedProjectContextForThread(harness, threadId) ?? currentThreadProjectContext();
+    const observed = threadObservations.getObservations().find(snapshot => snapshot.entries.some(entry => (
+      entry.entryKind !== "draft" && entry.identity.harness === harness && entry.identity.threadId === threadId
+    )));
+    const selected = selectedThreadProjectContext;
+    const projectId = observed?.projectId ?? (selected?.harness === harness && selected.rootThreadId === threadId ? selected.projectId : state.projectId);
+    if (projectId === state.projectId) return currentThreadProjectContext();
+    const project = options.getProjectById?.(projectId);
+    if (!project) throw new Error("The thread's owning project is unavailable.");
+    return projectThreadContext(project);
   }
 
   function installSelectedThreadProjectContext(
     harness: WorkbenchHarness,
     rootThreadId: string,
     project: WorkbenchProjectOption | undefined,
-    entries: readonly WorkbenchThreadSidebarEntry[] = [],
   ) {
-    threadProjectContextGeneration += 1;
-    selectedThreadProjectContext = project && project.id !== state.projectId
-      ? {
-        ...projectThreadContext(project),
-        harness,
-        rootThreadId,
-        subagents: projectWorkbenchSubagents(entries),
-      }
-      : null;
+    const projectId = project?.id ?? state.projectId;
+    const target = { kind: "provider" as const, harness, threadId: rootThreadId };
+    const observationKey = projectId && !isDraftThreadId(rootThreadId) ? getThreadObservationKey(projectId, target) : null;
+    if (selectedObservation?.key !== observationKey) {
+      selectedObservation?.release();
+      selectedObservation = observationKey ? { key: observationKey, release: getThreadController(projectId, target).acquire("summary") } : null;
+    }
+    if (selectedThreadProjectContext?.projectId !== projectId
+      || selectedThreadProjectContext.harness !== harness
+      || selectedThreadProjectContext.rootThreadId !== rootThreadId) threadProjectContextGeneration += 1;
+    selectedThreadProjectContext = { projectId, harness, rootThreadId };
+    reconcileObservedSubagents();
+  }
+
+  function reconcileObservedSubagents() {
+    const subagents = selectedObservation ? threadObservations.getSubagents(selectedObservation.key) : [];
+    if (!areDeeplyEqual(state.subagents, subagents)) state.subagents = subagents;
   }
 
   function getSnapshot(): WorkbenchThreadRuntimeSnapshot {
@@ -1031,7 +1120,7 @@ function WorkbenchThreadClient(
       isLoading: state.isLoading,
       pendingUserInputRequestsByThreadId: serializePendingUserInputRequests(),
       rateLimits: state.rateLimits,
-      subagents: selectedThreadProjectContext?.subagents ?? state.subagents,
+      subagents: state.subagents,
       threadDocuments: threadDocuments.getSnapshot(),
       threads: state.threads,
       threadsError: state.threadsError,
@@ -1065,6 +1154,11 @@ function WorkbenchThreadClient(
   }
 
   function resetProjectThreadState({ emitChange = true }: { emitChange?: boolean } = {}) {
+    selectedObservation?.release();
+    selectedObservation = null;
+    const retainedThreadIds = new Set([...threadControllers.values()].filter(controller => controller.hasConsumers).map(controller => controller.threadId));
+    const retainedKeys = new Set(Object.entries(threadDocuments.getSnapshot().documentsByKey)
+      .filter(([, document]) => document && retainedThreadIds.has(document.id)).map(([key]) => key));
     projectContextGeneration += 1;
     threadProjectContextGeneration += 1;
     selectedThreadProjectContext = null;
@@ -1080,33 +1174,40 @@ function WorkbenchThreadClient(
     state.threads = [];
     state.currentThread = null;
     state.currentThreadId = "";
-    transcriptProjection.select(null);
     state.threadsError = "";
     state.hasLoadedThreads = false;
     state.isLoading = Boolean(getProjectRootPaths(state).length);
     state.rateLimits = null;
-    threadDocuments.clear();
-    threadSources.clear();
-    optimisticInputs.clear();
-    overlayRevisionsByKey.clear();
-    stablePreferencesByKey.clear();
-    statusRecordsByKey.clear();
+    threadDocuments.selectDocumentKey("");
+    for (const key of Object.keys(threadDocuments.getSnapshot().documentsByKey)) {
+      if (retainedKeys.has(key)) continue;
+      threadDocuments.deleteDocumentKey(key);
+      threadSources.delete(key);
+      optimisticInputs.deleteThread(key);
+      threadRenderPipeline.delete(key);
+    }
+    for (const map of [overlayRevisionsByKey, stablePreferencesByKey, statusRecordsByKey]) {
+      for (const key of map.keys()) if (!retainedKeys.has(key)) map.delete(key);
+    }
     browseResultReadGenerationByKey.clear();
     questionnaireHistoryReadGenerationByKey.clear();
     questionnaireHistoryWarningKeys.clear();
     steerHistoryReadGenerationByKey.clear();
     steerHistoryWarningKeys.clear();
-    state.questionnaireHistoryByThreadId.clear();
-    state.steerHistoryByThreadId.clear();
-    state.browseResultEntriesByThreadId.clear();
-    state.pendingUserInputRequestsByThreadId.clear();
+    for (const map of [state.questionnaireHistoryByThreadId, state.steerHistoryByThreadId, state.browseResultEntriesByThreadId, state.pendingUserInputRequestsByThreadId]) {
+      for (const threadId of map.keys()) if (!retainedThreadIds.has(threadId)) map.delete(threadId);
+    }
     questionnaireListSyncPromisesByHarness.clear();
     questionnaireListSyncedHarnesses.clear();
-    installedDurableQuestionnaireEntries = [];
     resolvedDurableQuestionnaireKeysByThreadId.clear();
-    threadRenderPipeline.clear();
-    textPresentation.clear();
-    streamingReconciler.clearClientCreatedItemKeys();
+    if (!retainedKeys.size) {
+      threadSources.clear();
+      optimisticInputs.clear();
+      threadRenderPipeline.clear();
+      textPresentation.clear();
+      streamingReconciler.clearClientCreatedItemKeys();
+    }
+    if (!disposed) reconcileObservedQuestionnaires();
     if (emitChange) {
       emit();
     }
@@ -1426,11 +1527,12 @@ function WorkbenchThreadClient(
   function captureThreadOperationFence(
     harness: WorkbenchHarness,
     threadId: string,
-    { selectionBound = false }: { selectionBound?: boolean } = {},
+    { selectionBound = false, ownerIsCurrent }: { selectionBound?: boolean; ownerIsCurrent?: () => boolean } = {},
   ): ThreadOperationFence {
     const threadKey = getThreadStateKey(harness, threadId);
     const overlay = getOverlayRevisionRecord(threadKey);
     return {
+      ownerIsCurrent,
       overlayRevisions: {
         browseResultRevision: overlay.browseResultRevision,
         optimisticRevision: overlay.optimisticRevision,
@@ -1450,15 +1552,12 @@ function WorkbenchThreadClient(
     };
   }
 
-  function installThreadStateSources({
-    activeProjectSnapshot,
-    durableQuestionnaireEntries,
-  }: {
-    activeProjectSnapshot: WorkbenchThreadSidebarSnapshot | null;
-    durableQuestionnaireEntries: readonly WorkbenchThreadSidebarEntry[];
-  }) {
-    installedDurableQuestionnaireEntries = durableQuestionnaireEntries;
+  function observedQuestionnaireEntries() {
+    return threadObservations.getObservations().flatMap(observation => observation.entries);
+  }
 
+  function reconcileObservedQuestionnaires() {
+    const durableQuestionnaireEntries = observedQuestionnaireEntries();
     const durableQuestionnairesByThreadId = new Map(
       durableQuestionnaireEntries.flatMap((entry) => (
         entry.entryKind !== "draft" && entry.pendingQuestionnaire
@@ -1494,9 +1593,10 @@ function WorkbenchThreadClient(
         void refreshPendingUserInputRequests(harness);
       }
     }
+  }
 
+  function installThreadStateSources({ activeProjectSnapshot }: { activeProjectSnapshot: WorkbenchThreadSidebarSnapshot | null }) {
     if (!activeProjectSnapshot) {
-      state.subagents = [];
       state.threads = [];
       state.threadsError = "";
       state.hasLoadedThreads = false;
@@ -1525,35 +1625,14 @@ function WorkbenchThreadClient(
         updatedAt: activitySeconds,
       }];
     });
-    state.subagents = projectWorkbenchSubagents(activeProjectSnapshot.entries);
     state.threadsError = activeProjectSnapshot.error ?? "";
     state.hasLoadedThreads = activeProjectSnapshot.freshness !== "loading";
     state.isLoading = activeProjectSnapshot.freshness === "loading";
     emit();
   }
 
-  function projectWorkbenchSubagents(entries: readonly WorkbenchThreadSidebarEntry[]) {
-    return entries.flatMap((entry): WorkbenchSubagentSummary[] => entry.entryKind === "subagent" ? [{
-      activityStatus: entry.lifecycle.kind === "working" ? "active" : "inactive",
-      createdAt: entry.createdAt,
-      cwd: entry.cwd,
-      directSubagentIndex: entry.directSubagentIndex,
-      harness: entry.identity.harness,
-      lastActivityAt: entry.activityAt,
-      lifecycle: entry.lifecycle,
-      name: entry.name,
-      parentThreadId: entry.parentThreadId,
-      pinned: entry.pinned,
-      profileId: entry.profileId,
-      profileName: entry.profileName,
-      projectId: entry.projectId,
-      threadId: entry.identity.threadId,
-      title: entry.title,
-      updatedAt: entry.updatedAt,
-    }] : []);
-  }
-
   function isThreadOperationIdentityCurrent(fence: ThreadOperationFence) {
+    if (fence.ownerIsCurrent) return !disposed && fence.ownerIsCurrent();
     return !disposed
       && fence.projectContextGeneration === projectContextGeneration
       && fence.projectId === state.projectId
@@ -1780,16 +1859,10 @@ function WorkbenchThreadClient(
     nextThread: ThreadPayload | null,
     {
       publishRuntime = true,
-      publishTranscriptSource = true,
     }: {
       publishRuntime?: boolean;
-      publishTranscriptSource?: boolean;
     } = {},
   ) {
-    transcriptProjection.select(nextThread && nextThread.harness === "codex" && !nextThread.isDraft ? {
-      browseResultEntries: state.browseResultEntriesByThreadId.get(nextThread.id) ?? nextThread.browseResultEntries ?? [],
-      thread: nextThread,
-    } : null, { publishState: publishTranscriptSource });
     if (areThreadPayloadsEquivalent(state.currentThread, nextThread)) {
       return;
     }
@@ -1799,7 +1872,6 @@ function WorkbenchThreadClient(
     state.currentThread = nextThread;
     state.currentThreadId = nextThread?.id ?? "";
     if (selectionChanged) {
-      textPresentation.clear();
       state.rateLimits = nextThread ? state.rateLimitsByHarness.get(nextThread.harness) ?? null : null;
     }
     if (publishRuntime) emit();
@@ -1816,7 +1888,6 @@ function WorkbenchThreadClient(
 
   function flushSelectedThreadRendering(options: {
     publishRuntime?: boolean;
-    publishTranscriptSource?: boolean;
   } = {}) {
     const selectedThreadKey = threadDocuments.getSelectedThreadKey();
     if (!selectedThreadKey) {
@@ -2078,7 +2149,6 @@ function WorkbenchThreadClient(
     if (threadDocuments.getSelectedThreadKey() === key) {
       flushSelectedThreadRendering({
         publishRuntime: options.publishSelected,
-        publishTranscriptSource: options.publishSelected,
       });
     }
     return true;
@@ -2563,7 +2633,7 @@ function WorkbenchThreadClient(
     for (const request of requests) {
       nextRequests.set(request.threadId, { ...request, responseMode: "native" });
     }
-    for (const entry of installedDurableQuestionnaireEntries) {
+    for (const entry of observedQuestionnaireEntries()) {
       if (entry.entryKind === "draft" || entry.identity.harness !== harness || !entry.pendingQuestionnaire) continue;
       if (resolvedDurableQuestionnaireKeysByThreadId.get(entry.identity.threadId) === entry.pendingQuestionnaire.requestKey) continue;
       if (!nextRequests.has(entry.identity.threadId)) {
@@ -2792,7 +2862,7 @@ function WorkbenchThreadClient(
   }
 
   function setQuestionnaireHistoryEntries(threadId: string, entries: WorkbenchQuestionnaireHistoryEntry[]) {
-    const durableEntries = installedDurableQuestionnaireEntries.flatMap((entry) => (
+    const durableEntries = observedQuestionnaireEntries().flatMap((entry) => (
       entry.entryKind !== "draft" && entry.identity.threadId === threadId
         ? (entry.questionnaireHistory ?? []).map(normalizeQuestionnaireHistoryEntryState)
         : []
@@ -3115,9 +3185,9 @@ function WorkbenchThreadClient(
     harness: WorkbenchHarness,
     options: WorkbenchReadThreadOptions = {},
     commit: (payload: ThreadPayload) => ThreadPayload | null = (payload) => payload,
-    { selectionBound = false }: { selectionBound?: boolean } = {},
+    { selectionBound = false, beforeCommit, ownerIsCurrent }: { selectionBound?: boolean; beforeCommit?: () => Promise<void>; ownerIsCurrent?: () => boolean } = {},
   ): Promise<ThreadPayloadFetchOutcome> {
-    const operationFence = captureThreadOperationFence(harness, threadId, { selectionBound });
+    const operationFence = captureThreadOperationFence(harness, threadId, { selectionBound, ownerIsCurrent });
     const cursor = options.cursor ?? null;
     const projectContext = effectiveThreadProjectContext(harness, threadId);
     const requestedCwd = options.cwd?.trim() || projectContext.projectRootPath || null;
@@ -3173,6 +3243,7 @@ function WorkbenchThreadClient(
           pageResponse.nextCursor,
         ),
       };
+      await beforeCommit?.();
       const payload = commitThreadReadResult(operationFence, cursor, result, commit);
       return payload
         ? { kind: "success", payload }
@@ -4335,11 +4406,10 @@ function WorkbenchThreadClient(
   async function openThread(
     threadId: string,
     {
-      entries = [],
       harness,
       project,
       source = "open",
-    }: { entries?: readonly WorkbenchThreadSidebarEntry[]; harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" } = {},
+    }: { harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload" } = {},
   ) {
     if (source === "open") messageAdmissionIntentRevision += 1;
     const intentRevision = messageAdmissionIntentRevision;
@@ -4360,24 +4430,29 @@ function WorkbenchThreadClient(
     const resolvedHarness = harness ?? getKnownThreadHarness(threadId) ?? "codex";
     const nextProjectId = project?.id ?? state.projectId;
     const selectedProjectId = selectedThreadProjectContext?.projectId ?? state.projectId;
-    if (
+    const reuseCurrent = (
       source === "open"
       && state.currentThread?.id === threadId
       && state.currentThread.harness === resolvedHarness
       && nextProjectId === selectedProjectId
-    ) {
-      return { kind: "success", payload: state.currentThread } satisfies ThreadPayloadFetchOutcome;
-    }
-    installSelectedThreadProjectContext(resolvedHarness, threadId, project, entries);
+    );
+    installSelectedThreadProjectContext(resolvedHarness, threadId, project);
 
-    const outcome = await fetchThreadPayload(threadId, resolvedHarness, {}, (payload) => {
-      setCurrentThread(payload);
-      return state.currentThread;
-    }, { selectionBound: source === "open" });
-    if (outcome.kind === "failure") {
-      emitStatusMessage(outcome.failure.message);
+    try {
+      const owner = getThreadController(nextProjectId, { kind: "provider", harness: resolvedHarness, threadId });
+      if (reuseCurrent) {
+        await owner.waitForAdmission();
+        if (intentRevision !== messageAdmissionIntentRevision || state.currentThread?.id !== threadId) return { kind: "superseded" } as const;
+        return { kind: "success", payload: state.currentThread } as const;
+      }
+      const payload = await owner.read({}, { selectionBound: source === "open" });
+      return payload ? { kind: "success", payload } as const : { kind: "superseded" } as const;
+    } catch (error) {
+      return { kind: "failure", failure: error instanceof ThreadPayloadReadError ? error.failure : {
+        harness: resolvedHarness, transientRollout: false,
+        message: error instanceof Error ? error.message : "Unable to open thread.",
+      } } as const;
     }
-    return outcome;
   }
 
   function selectThreadPayload(thread: ThreadPayload) {
@@ -5632,6 +5707,8 @@ function WorkbenchThreadClient(
   });
 
   function clearThreadSelection() {
+    selectedObservation?.release();
+    selectedObservation = null;
     if (!state.currentThread && !state.currentThreadId && !state.rateLimits && !selectedThreadProjectContext) {
       return;
     }
@@ -5642,7 +5719,6 @@ function WorkbenchThreadClient(
     messageAdmissionIntentRevision += 1;
     state.currentThreadId = "";
     state.currentThread = null;
-    transcriptProjection.select(null);
     setRateLimits(null);
     emit();
   }
@@ -5652,16 +5728,14 @@ function WorkbenchThreadClient(
   }
 
   function setCurrentThreadModel(threadId: string, model: string) {
-    if (!state.currentThread || state.currentThread.id !== threadId) {
-      return;
-    }
-
-    const reasoningEffort = resolvePreferredReasoningEffort(state.currentThread.harness, model);
-    updateStablePreferenceSource(state.currentThread, (record) => {
+    const thread = threadDocuments.getDocumentByThreadId(threadId);
+    if (!thread) return;
+    const reasoningEffort = resolvePreferredReasoningEffort(thread.harness, model);
+    updateStablePreferenceSource(thread, (record) => {
       record.model = model;
       record.reasoningEffort = reasoningEffort;
     });
-    updateThreadSourceFields(state.currentThread, {
+    updateThreadSourceFields(thread, {
       model,
       reasoningEffort,
     });
@@ -5672,26 +5746,24 @@ function WorkbenchThreadClient(
   }
 
   function setCurrentThreadAgent(threadId: string, agentPath: string | null) {
-    if (!state.currentThread || state.currentThread.id !== threadId) {
-      return;
-    }
+    const thread = threadDocuments.getDocumentByThreadId(threadId);
+    if (!thread) return;
 
     const normalizedAgentPath = normalizeWorkbenchAgentPath(agentPath);
-    updateStablePreferenceSource(state.currentThread, (record) => {
+    updateStablePreferenceSource(thread, (record) => {
       record.agentPath = normalizedAgentPath;
     });
-    updateThreadSourceFields(state.currentThread, { agentPath: normalizedAgentPath });
+    updateThreadSourceFields(thread, { agentPath: normalizedAgentPath });
   }
 
   function setCurrentThreadReasoningEffort(threadId: string, effort: string | null) {
-    if (!state.currentThread || state.currentThread.id !== threadId || !state.currentThread.model) {
-      return;
-    }
+    const thread = threadDocuments.getDocumentByThreadId(threadId);
+    if (!thread?.model) return;
 
-    updateStablePreferenceSource(state.currentThread, (record) => {
+    updateStablePreferenceSource(thread, (record) => {
       record.reasoningEffort = effort;
     });
-    updateThreadSourceFields(state.currentThread, { reasoningEffort: effort });
+    updateThreadSourceFields(thread, { reasoningEffort: effort });
   }
 
   async function compactThread(thread: ThreadPayload) {
@@ -5710,27 +5782,25 @@ function WorkbenchThreadClient(
   }
 
   function setCurrentThreadServiceTier(threadId: string, serviceTier: string | null) {
-    if (!state.currentThread || state.currentThread.id !== threadId || state.currentThread.harness !== "codex") {
-      return;
-    }
+    const thread = threadDocuments.getDocumentByThreadId(threadId);
+    if (!thread || thread.harness !== "codex") return;
 
     const nextServiceTier = serviceTier === "fast" ? "fast" : null;
-    updateStablePreferenceSource(state.currentThread, (record) => {
+    updateStablePreferenceSource(thread, (record) => {
       record.serviceTier = nextServiceTier;
     });
-    updateThreadSourceFields(state.currentThread, { serviceTier: nextServiceTier });
+    updateThreadSourceFields(thread, { serviceTier: nextServiceTier });
   }
 
   function setCurrentThreadComposerSettings(threadId: string, settings: WorkbenchComposerSettings) {
-    if (!state.currentThread || state.currentThread.id !== threadId) {
-      return;
-    }
-    if (!state.currentThread.isDraft && state.currentThread.harness !== settings.harness) {
+    const thread = threadDocuments.getDocumentByThreadId(threadId);
+    if (!thread) return;
+    if (!thread.isDraft && thread.harness !== settings.harness) {
       return;
     }
 
-    if (state.currentThread.isDraft && state.currentThread.harness !== settings.harness) {
-      setDraftThreadHarness(settings.harness);
+    if (thread.isDraft && thread.harness !== settings.harness) {
+      setDraftThreadHarness(settings.harness, threadId);
     }
     setCurrentThreadModel(threadId, settings.model);
     setCurrentThreadReasoningEffort(threadId, settings.reasoningEffort);
@@ -5738,12 +5808,10 @@ function WorkbenchThreadClient(
     setCurrentThreadServiceTier(threadId, settings.serviceTier);
   }
 
-  function setDraftThreadHarness(harness: WorkbenchHarness) {
-    if (!state.currentThread?.isDraft) {
-      return;
-    }
-
-    const currentThread = state.currentThread;
+  function setDraftThreadHarness(harness: WorkbenchHarness, threadId = state.currentThreadId) {
+    const currentThread = threadDocuments.getDocumentByThreadId(threadId);
+    if (!currentThread?.isDraft) return;
+    const selected = state.currentThreadId === threadId;
     const oldKey = getThreadSourceKey(currentThread);
     const nextThread: ThreadPayload = {
       ...currentThread,
@@ -5755,18 +5823,19 @@ function WorkbenchThreadClient(
       source: harness,
     };
     const newKey = installAuthoritativeThreadSource(nextThread);
-    threadDocuments.materializeFinalVisibleDocument(newKey, projectThreadSource(newKey) ?? nextThread, { select: true });
+    threadDocuments.materializeFinalVisibleDocument(newKey, projectThreadSource(newKey) ?? nextThread, { select: selected });
     if (newKey !== oldKey) {
       deleteThreadOwnedState(oldKey);
       messageAdmissionIntentRevision += 1;
     }
-    flushSelectedThreadRendering();
+    if (selected) flushSelectedThreadRendering();
+    else emit();
   }
 
   function createThread(
     harness: WorkbenchHarness,
     threadId?: string,
-    options: { entries?: readonly WorkbenchThreadSidebarEntry[]; project?: WorkbenchProjectOption; select?: boolean } = {},
+    options: { project?: WorkbenchProjectOption; select?: boolean } = {},
   ) {
     const rootThreadId = threadId ?? createDraftThreadId();
     const projectContext = options.project ? projectThreadContext(options.project) : currentThreadProjectContext();
@@ -5775,18 +5844,22 @@ function WorkbenchThreadClient(
       cwd: projectContext.projectRootPath || projectContext.projectRoot,
     };
     if (options.select !== false) {
-      installSelectedThreadProjectContext(harness, rootThreadId, options.project, options.entries);
+      installSelectedThreadProjectContext(harness, rootThreadId, options.project);
       messageAdmissionIntentRevision += 1;
       setCurrentThread(draftThread);
-    }
+    } else upsertThreadDocument(draftThread, { emitChange: true });
     return draftThread;
   }
 
   function dispose() {
     disposed = true;
+    for (const controller of threadControllers.values()) controller.dispose({ transportClosing: true });
+    threadControllers.clear();
+    // This owner closes the shared socket below, so disconnect owns server subscription cleanup.
+    threadObservations.disconnect();
+    threadObservations.dispose();
     resetProjectThreadState({ emitChange: false });
     listeners.clear();
-    transcriptProjection.dispose();
     transcripts.dispose();
     threadGoals.dispose();
     textPresentation.dispose();
@@ -5794,6 +5867,18 @@ function WorkbenchThreadClient(
   }
 
   return {
+    threadObservations,
+    getThreadController,
+    recoverThreadControllers: async () => {
+      const results = await Promise.allSettled([...threadControllers.values()].map(controller => controller.recover()));
+      const failed = results.find(result => result.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+    },
+    activateThreadControllers: () => {
+      for (const controller of threadControllers.values()) {
+        void controller.activate().catch(() => { /* The thread owner publishes and reports activation failures. */ });
+      }
+    },
     applyAcceptedThreadTitle,
     clearThreadSelection,
     createThread,

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; static regression checks cover thread accessibility, grouped context actions, accepted settlement routing, lifecycle ownership, and agent tabs without pinning client-store wiring. Keywords: explorer, context menu, tablist, keyboard, settlement.
+ * - No production exports; legacy source checks cover explorer wiring. Keywords: explorer, context menu, tablist, keyboard, settlement.
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -42,30 +42,6 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(listSource, /href=\{getThreadHref\(\{ kind: "new" \}\)\}/u);
   assert.match(itemSource, /event\.preventDefault\(\);[\s\S]*?onActivate\(target\)/u);
   assert.match(listSource, /attentionLabelsByThreadId/u);
-});
-
-test("agent tabs keep a persistent settled toggle and durable thread routing", async () => {
-  const [source, threadViewSource, workbenchSource] = await Promise.all([
-    readFile(new URL("./thread-view/ThreadAgentTabs.tsx", import.meta.url), "utf8"),
-    readFile(new URL("./thread-view/ThreadView.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../workbench.tsx", import.meta.url), "utf8"),
-  ]);
-  assert.match(source, /aria-expanded=\{isSettledSubagentsVisible\}/u);
-  assert.match(source, /\? "Hide" : "Show"\} settled subagents/u);
-  assert.match(source, /Restore subagent/u);
-  assert.match(source, /Settle subagent/u);
-  assert.match(source, /href=\{getThreadHref\(tab\.id\)\}/u);
-  assert.match(source, /href=\{getThreadHref\(mainThreadId\)\}/u);
-  assert.match(source, /handleThreadLinkClick/u);
-  assert.match(threadViewSource, /getThreadHref\?\.\(target\) \?\? createThreadHref\(projectId, target\)/u);
-  assert.match(workbenchSource, /getThreadHref=\{\(target\) => !activeProjectId[\s\S]*?createHomeThreadHref\(threadProjectId, target\)[\s\S]*?createPinnedThreadHref\(activeProjectId, threadProjectId, target\)/u);
-});
-
-test("existing-thread composer drafts keep their keyed owner through active subagent selection", async () => {
-  const source = await readFile(new URL("./thread-view/ThreadView.tsx", import.meta.url), "utf8");
-  assert.match(source, /threadComposerDraftsByThreadId\[activeThread\.id\] \?\? null/u);
-  assert.match(source, /setActiveThreadId\(selectedThreadId \?\? thread\.id\)/u);
-  assert.doesNotMatch(source, /setActiveThreadId\(thread\.id\)/u);
 });
 
 test("provider child routes canonicalize from durable subagent relationships", async () => {

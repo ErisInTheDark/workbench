@@ -7,10 +7,9 @@
 import { useEffect, useRef, useState, type ComponentProps, type PointerEvent } from "react";
 
 import type { ThreadPayload, ThreadSummary } from "workbench-shared/types";
-import ThreadLoadingSkeleton from "../thread-view/ThreadLoadingSkeleton";
 import ThreadScrollViewport from "../thread-view/ThreadScrollViewport";
 import ThreadView from "../thread-view/ThreadView";
-import { useWorkbenchThread } from "../use-workbench-client";
+import { useWorkbenchThread } from "../use-workbench-thread";
 import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-formatters";
 import { workbenchIconButtonClassName } from "../workbench-class-names";
@@ -57,7 +56,7 @@ export default function WorkbenchThreadPanel ({
   threadId,
   ...threadViewProps
 }: WorkbenchThreadPanelProps) {
-  const threadController = useWorkbenchThread(threadId);
+  const threadController = useWorkbenchThread(threadViewProps.projectId, threadViewProps.threadTarget, undefined, threadViewProps.routeOwned ? "route" : "summary");
   const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
   const scrollViewportRef = useRef<HTMLDivElement>(null);
 
@@ -69,25 +68,8 @@ export default function WorkbenchThreadPanel ({
     onCreateDraftThread?.();
   }, [onCreateDraftThread, thread?.id, threadId]);
 
-  useEffect(() => {
-    if (thread?.id === threadId) {
-      return;
-    }
-    if (threadId === "new") {
-      return;
-    }
-
-    async function loadThread() {
-      await threadController.read(undefined, {
-        cursor: null,
-      });
-    }
-
-    void loadThread();
-  }, [thread?.id, threadController.read, threadId]);
-
   const fallbackSummary = fallbackThreadSummary?.id === threadId ? fallbackThreadSummary : null;
-  const threadDisplaySource = thread ?? fallbackSummary;
+  const threadDisplaySource = threadController.state.document ?? thread ?? fallbackSummary;
   const threadActivityTimestampMs = resolveThreadActivityTimestampMs(threadDisplaySource, fallbackSummary);
   const threadLabel = threadDisplaySource ? getThreadTitle(threadDisplaySource) : "";
   const threadStatusLabel = threadActivityTimestampMs
@@ -108,20 +90,6 @@ export default function WorkbenchThreadPanel ({
       window.clearInterval(intervalId);
     };
   }, [threadActivityTimestampMs, threadDisplaySource?.id]);
-
-  if (!thread) {
-    return (
-      <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden px-5 md:px-6">
-        <ThreadLoadingSkeleton
-          contained
-          fillAvailableHeight
-          showHeader
-          statusLabel={threadStatusLabel}
-          title={threadLabel}
-        />
-      </div>
-    );
-  }
 
   const effectiveFontSizeRem = Math.min(1.72, Math.max(0.84, Number((threadViewProps.fontSizeRem + panelZoomDelta * 0.08).toFixed(2))));
 

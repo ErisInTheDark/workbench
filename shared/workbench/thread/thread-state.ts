@@ -16,6 +16,9 @@
  * - WorkbenchThreadStateOpenResultV2/WorkbenchThreadStateOpenResult: project bootstrap types.
  * - WorkbenchGlobalThreadStateOpenResultV4Schema/WorkbenchGlobalThreadStateOpenResultV5Schema/WorkbenchGlobalThreadStateOpenResultV6Schema/WorkbenchGlobalThreadStateOpenResult: versioned global bootstrap variants.
  * - WorkbenchPinnedThreadContextResult: admitted pinned-thread context.
+ * - WorkbenchObservedThreadTargetSchema/WorkbenchObservedThreadTarget: provider and subagent observation targets.
+ * - WorkbenchThreadObservationSnapshotSchema/WorkbenchThreadObservationSnapshot: revisioned full thread-family observation.
+ * - WorkbenchThreadObservationResultSchema: initial observation acknowledgement.
  * - WorkbenchThreadActivityUpdate: compact activity delta type.
  * - WorkbenchProjectThreadSummaryUpdateSchema/WorkbenchProjectThreadSummaryUpdate: project summary notification.
  * - WorkbenchProjectThreadSidebarUpdateSchema/WorkbenchProjectThreadSidebarUpdate: project sidebar notification.
@@ -109,6 +112,11 @@ export const WorkbenchThreadTargetSchema = z.discriminatedUnion("kind", [
   z.object({ harness: WorkbenchHarnessSchema.optional(), kind: z.literal("subagent"), parentThreadId: z.string().trim().min(1), threadId: z.string().trim().min(1) }).strict(),
 ]);
 export type WorkbenchThreadTarget = z.infer<typeof WorkbenchThreadTargetSchema>;
+export const WorkbenchObservedThreadTargetSchema = z.discriminatedUnion("kind", [
+  WorkbenchThreadTargetSchema.options[2],
+  WorkbenchThreadTargetSchema.options[3],
+]);
+export type WorkbenchObservedThreadTarget = z.infer<typeof WorkbenchObservedThreadTargetSchema>;
 
 const WorkbenchThreadDraftInputSchema = z.object({
   agent: z.string().nullable(),
@@ -506,6 +514,46 @@ export const WorkbenchPinnedThreadContextResultSchema = z.object({
 }).strict();
 export type WorkbenchPinnedThreadContextResult = z.infer<typeof WorkbenchPinnedThreadContextResultSchema>;
 
+export const WorkbenchThreadObservationSnapshotSchema = z.object({
+  entries: z.array(WorkbenchThreadSidebarEntrySchema),
+  error: z.string().max(500).nullable(),
+  freshness: z.enum(["loading", "fresh", "partial"]),
+  projectId: z.string().min(1),
+  revision: z.number().int().nonnegative(),
+  subscriptionId: CanonicalUuidSchema,
+  target: WorkbenchObservedThreadTargetSchema,
+  updateKind: z.literal("threadObservation"),
+  version: z.literal(1),
+}).strict().superRefine((observation, context) => {
+  if (!observation.entries.length) return;
+  const rootId = observation.target.kind === "subagent" ? observation.target.parentThreadId : observation.target.threadId;
+  const roots = observation.entries.filter(entry => entry.entryKind === "thread");
+  const root = roots[0];
+  if (roots.length !== 1 || root?.identity.threadId !== rootId
+    || (observation.target.kind === "provider" && observation.target.harness && root.identity.harness !== observation.target.harness)) {
+    context.addIssue({ code: "custom", message: "Observation must contain its requested root.", path: ["entries"] });
+  }
+  const identities = new Set<string>();
+  for (const [index, entry] of observation.entries.entries()) {
+    if (entry.entryKind === "draft" || (entry.entryKind === "subagent" && entry.parentThreadId !== rootId)) {
+      context.addIssue({ code: "custom", message: "Entry does not belong to the observed family.", path: ["entries", index] });
+      continue;
+    }
+    const key = `${entry.identity.harness}\0${entry.identity.threadId}`;
+    if (identities.has(key)) context.addIssue({ code: "custom", message: "Duplicate observed thread identity.", path: ["entries", index] });
+    identities.add(key);
+  }
+  if (observation.target.kind === "subagent" && !observation.entries.some(entry => entry.entryKind === "subagent"
+    && entry.identity.threadId === observation.target.threadId
+    && (!observation.target.harness || entry.identity.harness === observation.target.harness))) {
+    context.addIssue({ code: "custom", message: "Observation must contain its requested subagent.", path: ["entries"] });
+  }
+});
+export type WorkbenchThreadObservationSnapshot = z.infer<typeof WorkbenchThreadObservationSnapshotSchema>;
+export const WorkbenchThreadObservationResultSchema = z.object({
+  observation: WorkbenchThreadObservationSnapshotSchema,
+}).strict();
+
 export const WorkbenchThreadActivityUpdateSchema = z.object({
   activityAt: z.number().int().nonnegative(),
   displayOrder: WorkbenchThreadDisplayOrderSchema.optional(),
@@ -530,6 +578,7 @@ export const WorkbenchProjectThreadSidebarUpdateSchema = z.object({
 export type WorkbenchProjectThreadSidebarUpdate = z.infer<typeof WorkbenchProjectThreadSidebarUpdateSchema>;
 
 export const WorkbenchThreadStateSnapshotSchema = z.union([
+  WorkbenchThreadObservationSnapshotSchema,
   WorkbenchThreadSidebarSnapshotSchema,
   WorkbenchThreadActivityUpdateSchema,
   WorkbenchHomeThreadDisplayOrderSnapshotSchema,
@@ -568,6 +617,13 @@ const requireOneFolderDestination = (value: { destinationFolderId?: string | nul
   }
 };
 export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", [
+  ProjectRequestBase.extend({
+    method: z.literal("workbench/thread-state/observe"),
+    subscriptionId: CanonicalUuidSchema,
+    target: WorkbenchObservedThreadTargetSchema,
+    version: z.literal(1),
+  }),
+  z.object({ method: z.literal("workbench/thread-state/release"), subscriptionId: CanonicalUuidSchema }).strict(),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.union([z.literal(2), z.literal(3), z.literal(4)]).optional() }),
   z.object({ method: z.literal("workbench/thread-state/global/open"), version: z.union([z.literal(4), z.literal(5), z.literal(6)]) }).strict(),
   z.object({ method: z.literal("workbench/thread-state/global/close") }).strict(),

@@ -1,23 +1,29 @@
 /*
  * Exports:
- * - WorkbenchClientController: mounted Workbench client, explorer, and SQLite transcript source read model. Keywords: client, controller, explorer, transcript.
+ * - WorkbenchClientController: mounted Workbench client and explorer read model. Keywords: client, controller, explorer.
  * - default WorkbenchClientContext: provide one mounted Workbench client to domain hooks. Keywords: React, context, provider.
+ * - useWorkbenchClientController: resolve the explicit or provided domain owner.
  */
 "use client";
 
-import { createContext } from "react";
+import { createContext, useContext } from "react";
 
 import type { ExplorerSnapshot, WorkbenchControls } from "workbench-shared/types";
 import type { MountedWorkbenchClient } from "../../WorkbenchClient";
-import type { ThreadTranscriptProjectionState } from "../../workbench/transcript/ThreadTranscriptProjectionController";
 
 export interface WorkbenchClientController {
   controls: WorkbenchControls | null;
   explorer: ExplorerSnapshot;
   mounted: MountedWorkbenchClient | null;
-  transcriptSource: ThreadTranscriptProjectionState;
 }
 
 const WorkbenchClientContext = createContext<WorkbenchClientController | null>(null);
+
+export function useWorkbenchClientController(explicitClient?: WorkbenchClientController) {
+  const providedClient = useContext(WorkbenchClientContext);
+  const client = explicitClient ?? providedClient;
+  if (!client) throw new Error("Workbench domain hooks require WorkbenchClientProvider.");
+  return client;
+}
 
 export default WorkbenchClientContext;

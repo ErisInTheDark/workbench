@@ -13,7 +13,7 @@ import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection,
 import { getProjectQualifiedThreadDisplayKey, getThreadDisplayFolderKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import { getWorkbenchHomeFolderKey } from "workbench-shared/workbench/thread/home-thread-display-order";
 import { projectWorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
-import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadObservationResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory, type WorkbenchThreadStateGlobalDocumentId, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 import { normalizeProviderSidebarEntry } from "./WorkbenchThreadStateFeature";
@@ -327,6 +327,75 @@ function projectOption(id: string, rootPath: string) {
     roots: [{ id, isPrimary: true, name: id, relativePath: id, rootPath }],
   };
 }
+
+test("a pinned thread observation receives full live state without observing its project sidebar", async () => {
+  const identity = { harness: "codex" as const, threadId: "foreign-thread" };
+  const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1, entryKind: "thread", title: "Foreign", identity,
+    metadata: { archived: false, pinned: true, snoozed: false },
+    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+  };
+  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "foreign-thread-observation",
+    threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: () => ({
+      data: [projectOption("alpha", "C:/alpha"), projectOption("beta", "C:/beta")],
+      rootPath: "C:/",
+    }),
+    projectState: projectState(),
+    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
+    reconcileProject: async () => [{ harness: "opencode", message: "Unrelated provider is unavailable." }],
+  });
+  try {
+    await controller.ensureProviderEntry("beta", provider);
+    await controller.refresh("beta");
+    await controller.open("viewer", "alpha", 4);
+    const subscriptionId = "4f603f09-c04c-43ab-b879-6fbe4133b94a";
+    const response = await controller.handleRequest("viewer", {
+      method: "workbench/thread-state/observe",
+      projectId: "beta",
+      subscriptionId,
+      target: { kind: "provider", ...identity },
+      version: 1,
+    });
+    assert.ok("result" in response, "a visible foreign pin must acquire its own observation");
+    const result = WorkbenchThreadObservationResultSchema.parse(response.result);
+    assert.equal(result.observation.entries[0]?.entryKind, "thread");
+    assert.equal(result.observation.error, null);
+    assert.equal(result.observation.freshness, "fresh");
+    assert.ok((await controller.getSnapshot("beta")).error, "the project retains its own reconciliation failure");
+    const question = {
+      itemId: "6f78b24c-db99-4161-a768-40f1cab6b58d",
+      requestKey: "pending",
+      turnId: "turn",
+      request: { id: "question", title: "Continue?", summary: "", submitLabel: "Send", questions: [
+        { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
+      ] },
+    };
+    await controller.observeLifecycle("codex", identity.threadId, {
+      kind: "pendingInput", questionnaire: question, requestKey: question.requestKey, turnId: question.turnId,
+    });
+    const observationUpdates = () => publications.flatMap(({ connectionId, snapshot }) => (
+      connectionId === "viewer" && "updateKind" in snapshot && snapshot.updateKind === "threadObservation"
+        ? [snapshot]
+        : []
+    ));
+    const pending = observationUpdates().at(-1)?.entries[0];
+    assert.ok(pending && pending.entryKind !== "draft");
+    assert.deepEqual(pending.pendingQuestionnaire, question);
+    await controller.observeLifecycle("codex", identity.threadId, { kind: "inputResolved", requestKey: question.requestKey });
+    const cleared = observationUpdates().at(-1)?.entries[0];
+    assert.ok(cleared && cleared.entryKind !== "draft");
+    assert.equal(cleared.pendingQuestionnaire, null);
+    await controller.handleRequest("viewer", { method: "workbench/thread-state/release", subscriptionId });
+    const count = observationUpdates().length;
+    await controller.setTitle("beta", "codex", identity.threadId, "Updated");
+    assert.equal(observationUpdates().length, count);
+  } finally {
+    await controller.dispose();
+  }
+});
 
 async function readProjectState<T extends object>(storageRoot: string, projectId: string) {
   return await testPersistence(storageRoot).readProject(projectId) as T;
@@ -1046,7 +1115,7 @@ test("pinned context admits only an unsnoozed root and its direct subagents, the
     cwd: path.join(root, "owner"),
     directSubagentIndex: 0,
     entryKind: "subagent",
-    identity: { harness: "codex", threadId: "child-thread" },
+    identity: { harness: "opencode", threadId: "child-thread" },
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
     name: "Child",
     parentThreadId: "root-thread",
@@ -1066,7 +1135,10 @@ test("pinned context admits only an unsnoozed root and its direct subagents, the
     publish: () => undefined,
     renameThread: async (_projectId, _harness, _threadId, title) => title,
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
-      if (projectId === "owner") acceptProviderSnapshot("codex", [pinnedRoot, directSubagent], { complete: true });
+      if (projectId === "owner") {
+        acceptProviderSnapshot("codex", [pinnedRoot], { complete: true });
+        acceptProviderSnapshot("opencode", [directSubagent], { complete: true });
+      }
       return [];
     },
     storageRoot: root,
@@ -1075,10 +1147,23 @@ test("pinned context admits only an unsnoozed root and its direct subagents, the
   await waitFor(async () => (await controller.getSnapshot("owner")).entries.length === 2, "Pinned owner did not load.");
   await controller.open("viewer", "viewed");
 
+  const observed = await controller.handleRequest("viewer", {
+    method: "workbench/thread-state/observe", projectId: "owner", version: 1,
+    subscriptionId: "8a1f2219-334a-48ce-a016-bd3c595402ee",
+    target: { harness: "opencode", kind: "subagent", parentThreadId: "root-thread", threadId: "child-thread" },
+  });
+  assert.deepEqual(WorkbenchThreadObservationResultSchema.parse(observed.result).observation.entries.map(entry =>
+    entry.entryKind === "draft" ? entry.draft.draftId : entry.identity.threadId), ["root-thread", "child-thread"]);
+  const readingDoesNotGrantMutation = await controller.handleRequest("viewer", {
+    identity: { harness: "codex", threadId: "root-thread" },
+    method: "workbench/thread-state/title/set", projectId: "owner", title: "Must not rename from child observation",
+  });
+  assert.equal(readingDoesNotGrantMutation.error?.code, "invalidProjectObservation");
+
   const opened = await controller.handleRequest("viewer", {
     method: "workbench/thread-state/pin/open",
     projectId: "owner",
-    target: { harness: "codex", kind: "subagent", parentThreadId: "root-thread", threadId: "child-thread" },
+    target: { harness: "opencode", kind: "subagent", parentThreadId: "root-thread", threadId: "child-thread" },
   });
   const openedContext = WorkbenchPinnedThreadContextResultSchema.parse(opened.result);
   assert.deepEqual(openedContext.context
@@ -1106,6 +1191,11 @@ test("pinned context admits only an unsnoozed root and its direct subagents, the
     target: { kind: "provider", threadId: "root-thread" },
   });
   assert.equal(WorkbenchPinnedThreadContextResultSchema.parse(snoozed.result).context, null);
+  await assert.rejects(controller.handleRequest("new-viewer", {
+    method: "workbench/thread-state/observe", projectId: "owner", version: 1,
+    subscriptionId: "bb7efb3d-4670-4198-a8ab-8926782c4ed3",
+    target: { kind: "provider", harness: "codex", threadId: "root-thread" },
+  }), /not available/);
 
   await controller.close("viewer");
   await controller.open("viewer", "viewed");

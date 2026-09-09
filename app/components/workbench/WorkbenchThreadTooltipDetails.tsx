@@ -5,61 +5,50 @@
  */
 "use client";
 
-import type {
-  WorkbenchControls,
-  WorkbenchHarness,
-  WorkbenchPendingUserInputRequest,
-  WorkbenchQuestionnaireDraft,
-  WorkbenchSubmitUserInputRequestOptions,
-  WorkbenchUserInputResponse,
-} from "workbench-shared/types";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
 import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import ThreadCheckpointCommitItem from "./thread-view/ThreadCheckpointCommitItem";
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
 import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
-import type { DraftUpdate } from "./thread-view/DraftSessionController";
-import { buildPendingUserInputRequestSubmissionOptions } from "./thread-view/thread-user-input-request-submission";
+import useWorkbenchQuestionnaire from "./use-workbench-questionnaire";
+import ThreadLoadingSkeleton from "./thread-view/ThreadLoadingSkeleton";
 
 export default function WorkbenchThreadTooltipDetails({
   cwd,
   harness,
   materialized,
-  onDraftChange,
-  onDraftClear,
+  onQuestionnaireError,
   onOpenThread,
-  onReadThread,
-  onSubmitUserInputRequest,
-  pendingRequest,
   projectFilePaths,
   projectId,
   projectRootPath,
-  proposalId,
-  questionnaireDraft,
   spellCheck,
   threadId,
+  parentThreadId,
   workspaceRoots,
 }: {
   cwd: string | null;
   harness: WorkbenchHarness;
   materialized: boolean;
-  onDraftChange: (update: DraftUpdate<WorkbenchQuestionnaireDraft>) => Promise<WorkbenchQuestionnaireDraft> | WorkbenchQuestionnaireDraft;
-  onDraftClear: () => Promise<void> | void;
+  onQuestionnaireError?: (message: string) => void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
-  onReadThread: WorkbenchControls["readThread"] | null;
-  onSubmitUserInputRequest: (threadId: string, response: WorkbenchUserInputResponse, options?: WorkbenchSubmitUserInputRequestOptions) => Promise<void>;
-  pendingRequest: WorkbenchPendingUserInputRequest | null;
   projectFilePaths?: readonly string[];
   projectId: string;
   projectRootPath?: string;
-  proposalId: string | null;
-  questionnaireDraft: WorkbenchQuestionnaireDraft | null;
   spellCheck: boolean;
   threadId: string;
+  parentThreadId?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const questionnaireIsLive = Boolean(pendingRequest && !materialized && onReadThread);
+  const questionnaire = useWorkbenchQuestionnaire(projectId, parentThreadId
+    ? { kind: "subagent", harness, parentThreadId, threadId } : { kind: "provider", harness, threadId }, onQuestionnaireError);
+  const pendingRequest = questionnaire.request;
+  const proposalId = questionnaire.thread.state.entry?.gitArc?.proposals.find(proposal => proposal.status === "proposed")?.proposalId ?? null;
+  const questionnaireIsLive = Boolean(pendingRequest && !materialized && questionnaire.thread.state.canRead);
+  if (questionnaire.thread.state.status === "loading") return <ThreadLoadingSkeleton />;
+  if (questionnaire.thread.state.status === "failed") return null;
   return (
     <div className="flex min-w-0 flex-col gap-2" data-thread-tooltip-details="true">
       {pendingRequest ? (
@@ -71,18 +60,12 @@ export default function WorkbenchThreadTooltipDetails({
           {questionnaireIsLive ? (
             <ThreadUserInputRequest
               key={`${projectId}:${threadId}:${pendingRequest.requestKey}`}
-              draft={questionnaireDraft}
+              draft={questionnaire.draft}
               mode="live"
-              onDraftChange={onDraftChange}
-              onDraftClear={onDraftClear}
+              onDraftChange={questionnaire.save}
+              onDraftClear={questionnaire.clear}
               onSubmit={async (response, supplementalInput?: UserInput[]) => {
-                const thread = await onReadThread?.(
-                  threadId,
-                  pendingRequest.harness,
-                  cwd ? { cwd } : undefined,
-                ) ?? null;
-                await onSubmitUserInputRequest(threadId, response, {
-                  ...buildPendingUserInputRequestSubmissionOptions(thread, pendingRequest),
+                await questionnaire.submit(response, {
                   ...(supplementalInput?.length ? { supplementalInput } : {}),
                 });
               }}
@@ -94,7 +77,7 @@ export default function WorkbenchThreadTooltipDetails({
             />
           ) : (
             <ThreadUserInputRequest
-              draft={questionnaireDraft}
+              draft={questionnaire.draft}
               mode="preview"
               presentation="compact"
               projectRootPath={projectRootPath}
