@@ -143,7 +143,7 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
       method: "item/completed",
       params: {
         threadId: "thread", turnId: "turn",
-        item: { type: "mcpToolCall", id: "call", server: "wb", tool: "request_user_input", status: "failed", error: { message: "tool call error: timed out awaiting tools/call after 21600s" } },
+        item: { type: "mcpToolCall", id: "call", server: "wb", tool: "request_user_input", status: "failed", error: { message: "tool call error: tool call failed for `wb/request_user_input`\n\nCaused by:\n    timed out awaiting tools/call after 21600s" } },
       },
     }),
   };

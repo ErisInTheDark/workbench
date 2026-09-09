@@ -11,6 +11,15 @@ const item = {
   error: { message: "tool call error: timed out awaiting tools/call after 21600s" },
 };
 const notification = { method: "item/completed", params: { threadId: "thread", turnId: "turn", item } };
+const wrappedTimeout = "tool call error: tool call failed for `wb/request_user_input`\n\nCaused by:\n    timed out awaiting tools/call after 21600s";
+
+test("recorded Codex error chains admit the questionnaire deadline with either line ending", () => {
+  for (const message of [wrappedTimeout, wrappedTimeout.replaceAll("\n", "\r\n")]) {
+    assert.deepEqual(getCodexQuestionnaireTimeout({
+      ...notification, params: { ...notification.params, item: { ...item, error: { message } } },
+    }), { threadId: "thread", turnId: "turn" });
+  }
+});
 
 test("provider questionnaire deadlines identify their owning turn without depending on extra item fields", () => {
   assert.deepEqual(getCodexQuestionnaireTimeout(notification), { threadId: "thread", turnId: "turn" });
@@ -26,6 +35,10 @@ test("unrelated failures, tools, events and malformed ownership never interrupt 
     { ...item, error: { message: "connection closed" } },
     { ...item, error: { message: "timed out awaiting initialize after 30s" } },
     { ...item, error: { message: "example: timed out awaiting tools/call after 21600s" } },
+    { ...item, error: { message: wrappedTimeout.replace("wb/request_user_input", "wb/shell") } },
+    { ...item, error: { message: wrappedTimeout.replace("timed out awaiting tools/call after 21600s", "connection closed") } },
+    { ...item, error: { message: wrappedTimeout.replace("    timed out", "    example: timed out") } },
+    { ...item, error: { message: `quoted failure:\n${wrappedTimeout}` } },
   ]) assert.equal(getCodexQuestionnaireTimeout({ ...notification, params: { ...notification.params, item: otherItem } }), null);
   assert.equal(getCodexQuestionnaireTimeout({ ...notification, method: "item/started" }), null);
   assert.equal(getCodexQuestionnaireTimeout({ ...notification, params: { ...notification.params, turnId: "" } }), null);

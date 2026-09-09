@@ -27,6 +27,11 @@ export function getCodexQuestionnaireTimeout(notification: JsonRpcNotification) 
   if (!parsed.success) return null;
   // Codex's operation deadline reports failure on the tool item. It does not
   // require an MCP cancellation notification to reach the server.
-  if (!/^(?:tool call error: )?timed out awaiting tools\/call after \d+(?:\.\d+)?(?:ms|s|m|h)\b/u.test(parsed.data.params.item.error.message)) return null;
+  // Its tool handler can wrap that deadline in an anyhow error chain.
+  const cause = parsed.data.params.item.error.message.replace(
+    /^(?:tool call error: )?tool call failed for `wb\/request_user_input`\r?\n\r?\nCaused by:\r?\n[ \t]+/u,
+    "",
+  );
+  if (!/^(?:tool call error: )?timed out awaiting tools\/call after \d+(?:\.\d+)?(?:ms|s|m|h)\s*$/u.test(cause)) return null;
   return { threadId: parsed.data.params.threadId, turnId: parsed.data.params.turnId };
 }
