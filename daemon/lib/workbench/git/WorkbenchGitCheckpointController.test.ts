@@ -513,8 +513,6 @@ isolatedControllerTest("arc start reports only causal commits, sibling claims, a
   assert.match(error.message, /claims `two\.txt` through planned path `two\.txt`/u);
   assert.match(error.message, /claims `claimed-dirty\.txt` through planned path `claimed-dirty\.txt`/u);
   assert.deepEqual(error.details.dirtyUnclaimedPaths, ["three.txt"]);
-  assert.match(error.message, new RegExp(`git_arc_diff.*${planHead}`, "u"));
-  assert.match(error.message, /git_plan_claims/u);
 
   const controller = new WorkbenchGitCheckpointController();
   const claimedPlan = await controller.createPlan({
@@ -533,6 +531,8 @@ isolatedControllerTest("arc start reports only causal commits, sibling claims, a
     }]);
     return true;
   };
+  const baseline = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "target-thread" });
+  await fs.writeFile(path.join(source, "claimed-dirty.txt"), "sibling changed this after publication\n");
   await assert.rejects(controller.startArc({
     checkpointCommit: claimedPlan.checkpointCommit,
     cwd: source,
@@ -565,6 +565,30 @@ isolatedControllerTest("arc start reports only causal commits, sibling claims, a
     paths: ["claimed-dirty.txt"],
     threadId: "add-thread",
   }), assertSiblingCollision);
+  assert.deepEqual(await new GitArcRegistry(repository).find({ harness: "codex", threadId: "target-thread" }), baseline);
+  await new GitArcRegistry(repository).release({ harness: "opencode", threadId: "sibling-thread" });
+  await assert.rejects(controller.startArc({
+    checkpointCommit: claimedPlan.checkpointCommit, cwd: source, harness: "codex", threadId: "target-thread",
+  }), (failure: unknown) => {
+    assert(failure instanceof GitArcStartDiagnosticError);
+    assert.deepEqual(failure.details.collisions, []);
+    assert.deepEqual(failure.details.snapshotDrift, ["claimed-dirty.txt"]);
+    return true;
+  });
+  assert.deepEqual(await new GitArcRegistry(repository).find({ harness: "codex", threadId: "target-thread" }), baseline);
+  assert.match(error.message, /git_arc_wait/u);
+  assert.doesNotMatch(error.message, /git_arc_diff|git_plan_claims|git_plan_start/u);
+  const identity = { cwd: source, harness: "codex" as const, threadId: "historical-start-thread" };
+  const arc = await controller.createAndStartPlan({ ...identity, intentName: "historical activation", paths: ["one.txt"] });
+  const registry = new GitArcRegistry(repository);
+  await registry.release(identity);
+  await controller.createAndStartPlan({ cwd: source, harness: "codex", threadId: "historical-sibling", intentName: "sibling work", paths: ["one.txt"] });
+  await fs.writeFile(path.join(source, "one.txt"), "sibling changed the historical snapshot\n");
+  await assert.rejects(controller.startArc({ ...identity, checkpointCommit: arc.checkpointCommit }), GitArcCollisionError);
+  assert.equal(await registry.find(identity), null);
+  await registry.release({ harness: "codex", threadId: "historical-sibling" });
+  await assert.rejects(controller.startArc({ ...identity, checkpointCommit: arc.checkpointCommit }), GitArcStartDiagnosticError);
+  assert.equal(await registry.find(identity), null);
 });
 
 isolatedControllerTest("arc adopt keeps staged ignored deletions claimable and preserves worktree and index state", async (context) => {

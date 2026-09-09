@@ -402,6 +402,9 @@ export default class GitArcPlanController {
       if (!paths.length && partitioned.skippedIgnoredPaths.length) {
         return createGitArcNoopResult(repository, partitioned.skippedIgnoredPaths);
       }
+      const registryEntries = await registry.list();
+      const collisions = findGitArcCollisions(registryEntries, { harness, threadId: input.threadId }, paths);
+      if (collisions.length) throw new GitArcCollisionError(collisions);
       const currentTree = await repository.writeScopedWorktreeTree(paths);
       const changes = await repository.buildFileChanges(plan.checkpointCommit, currentTree, paths);
       if (metadata.version >= 3 && changes.length && current?.checkpointCommit !== plan.checkpointCommit) {
@@ -413,7 +416,7 @@ export default class GitArcPlanController {
           planBaseCommit: plan.parent,
           planCheckpointCommit: plan.checkpointCommit,
           planPaths: paths,
-          registryEntries: await registry.list(),
+          registryEntries,
           repository,
           snapshotDrift: changes.map(({ path }) => path),
           threadId: input.threadId,
@@ -454,10 +457,12 @@ export default class GitArcPlanController {
     const adoptedPaths = metadata.adoptedPaths?.length
       ? (await partitionIgnoredGitArcPaths(repository, metadata.adoptedPaths)).paths
       : [];
+    const registryEntries = await registry.list();
+    const collisions = findGitArcCollisions(registryEntries, { harness, threadId: input.threadId }, paths);
+    if (collisions.length) throw new GitArcCollisionError(collisions);
     const currentTree = await repository.writeScopedWorktreeTree(paths);
     const snapshotDrift = await repository.listChangedPaths(plan.checkpointCommit, currentTree, paths);
     const head = await repository.headOrNull();
-    const registryEntries = await registry.list();
     if (snapshotDrift.length) {
       throw await createGitArcStartDiagnosticError({
         adoptedPaths,
@@ -473,8 +478,6 @@ export default class GitArcPlanController {
         threadId: input.threadId,
       });
     }
-    const collisions = findGitArcCollisions(registryEntries, { harness, threadId: input.threadId }, paths);
-    if (collisions.length) throw new GitArcCollisionError(collisions);
     const dirtyPaths = await repository.listChangedPaths(head, currentTree, paths);
     const retainedClaims = current?.phase === "plan" ? current.retainedArc?.claimedPaths ?? [] : [];
     const permittedDirty = [...adoptedPaths, ...retainedClaims];

@@ -44,15 +44,15 @@ test("plain failures preserve collision facts without a duplicate JSON envelope"
   assert.match(activeRecovery, /git_plan_claims/u);
 });
 
-test("mixed drift and collision recovery requires inspection and waiting", () => {
+test("mixed drift and collision receipts defer baseline recovery until claims clear", () => {
   const failure: GitArcFailure = {
     action: "arcStart", code: "planDrift", commits: [], conflicts: [conflict], dirtyPaths: [],
     headMovement: "same", planRef: ref, snapshotPaths: ["one.ts"], version: 1,
   };
   assert.deepEqual(parseGitArcFailureReceipt(formatGitArcFailureReceipt(failure)), failure);
   const recovery = describeGitArcFailure(failure).agentRecovery!;
-  assert.match(recovery, /git_arc_diff/u);
   assert.match(recovery, /git_arc_wait/u);
+  assert.doesNotMatch(recovery, /git_arc_diff|git_plan_claims|git_plan_start/u);
   const uncontestedRecovery = describeGitArcFailure({ ...failure, conflicts: [] }).agentRecovery!;
   assert.match(uncontestedRecovery, /git_plan_start/u);
   assert.doesNotMatch(uncontestedRecovery, /git_arc_start/u);

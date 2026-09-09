@@ -125,7 +125,7 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
 
   const hasDrift = snapshotDrift.length > 0 || movement.kind === "incompatible";
   const lines = [
-    hasDrift ? "Arc start blocked because the stored plan no longer matches the current workspace." : "Arc start blocked by sibling claims.",
+    collisions.length ? "Arc start blocked by sibling claims." : "Arc start blocked because the stored plan no longer matches the current workspace.",
     "",
     "New commits affecting planned files:",
   ];
@@ -153,14 +153,14 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     if (dirtyUnclaimed.length > MAX_PATHS) lines.push(`- ... ${dirtyUnclaimed.length - MAX_PATHS} more`);
   }
   const diagnosticPaths = snapshotDrift.slice(0, MAX_PATHS).map((filePath) => boundedText(filePath));
-  if (hasDrift) lines.push(
+  if (hasDrift && !collisions.length) lines.push(
     "",
     "Only intentional dirty unclaimed paths can be adopted. Committed paths remain ordinary scope.",
     `Inspect git_arc_diff ${JSON.stringify({ paths: diagnosticPaths, ref: planCheckpointCommit })}.`,
-    "Keep approval if still applicable. Republish with git_plan_claims before activation.",
+    "Keep approval if still applicable. Refresh and activate with git_plan_start using inherit: true.",
   );
-  if (collisions.length) lines.push("Use git_arc_wait to wait for sibling claims and activate the inactive plan. Waiting does not refresh baselines.");
-  if (snapshotDrift.length > MAX_PATHS) {
+  if (collisions.length) lines.push("Call git_arc_wait. Do not republish while sibling claims intersect. Waiting rechecks the original baseline after claims clear.");
+  if (!collisions.length && snapshotDrift.length > MAX_PATHS) {
     lines.push(`${snapshotDrift.length - MAX_PATHS} more affected paths were omitted. Run the scoped diff again for those paths if needed.`);
   }
   return new GitArcStartDiagnosticError(lines.join("\n"), {

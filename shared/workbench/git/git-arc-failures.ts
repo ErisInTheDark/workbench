@@ -226,8 +226,15 @@ export function describeGitArcFailure(failure: GitArcFailure) {
       };
     }
     case "planDrift":
+      if (failure.conflicts.length) {
+        return {
+          agentRecovery: "Call git_arc_wait. Do not republish the plan while sibling claims intersect. After claims clear, waiting rechecks the original baseline and reports any remaining drift.",
+          message: "Another thread owns the requested paths. The plan baseline also changed.",
+          userHint: "Wait for the owning thread to finish before reviewing the changed baseline.",
+        };
+      }
       return {
-        agentRecovery: `Call git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. Inspect before revising the plan. If approval still applies, ${failure.conflicts.length ? "refresh with git_plan_claims using inherit: true, then call git_arc_wait. Waiting does not refresh the baseline." : "refresh and activate with git_plan_start using inherit: true."}`,
+        agentRecovery: `Call git_arc_diff with ${JSON.stringify({ paths: failure.snapshotPaths, ref: failure.planRef })}. Inspect before revising the plan. If approval still applies, refresh and activate with git_plan_start using inherit: true.`,
         message: "The plan baseline changed.",
         userHint: "Inspect the changed plan paths. Revise the plan only if the approved work changed.",
       };

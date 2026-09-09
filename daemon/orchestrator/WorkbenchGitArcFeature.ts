@@ -254,7 +254,11 @@ export default class WorkbenchGitArcFeature {
         throw new Error("The managed thread creation timestamp is unavailable for Git arc inspection.");
       }
       if (request.action === "arcWait") {
-        return Response.json(await this.waitForPlanAndStart(project, request, signal));
+        try {
+          return Response.json(await this.waitForPlanAndStart(project, request, signal));
+        } catch (error) {
+          throw new GitArcFailureException(await this.createFailure(project.project.id, request, error));
+        }
       }
       if (mutatesGitArcState(request)) this.fencePendingCardReads(project.cwd);
       const execute = async () => {

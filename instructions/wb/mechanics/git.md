@@ -55,9 +55,9 @@ CLI: `wb git plan claims -m "intent" -- new.ts`, then `wb git plan claims --inhe
 
 For an inactive plan's first Implement pass, call `mcp__wbex__git_arc_start`. Pass `ref` only to select an exact historical plan. Successful start creates the active baseline and reports released and acquired claims.
 
-If start reports drift, inspect its historical diff. If approval still applies and no collision remains, use `git_plan_start({ inherit: true })` to refresh and activate. With collisions, refresh using `git_plan_claims`, then `git_arc_wait`. Return to Brief only if the plan changed.
+If start reports drift, inspect its historical diff. If approval still applies, use `git_plan_start({ inherit: true })` to refresh and activate. Return to Brief only if the plan changed.
 
-`git_arc_wait` waits for sibling claims, then activates the inactive plan. Do not republish that plan for collisions alone. If requested scope has no inactive plan, publish it first. Mixed failures require drift inspection/publication and waiting. Waiting never refreshes baselines. Treat it as a Workbench Long Wait.
+`git_arc_wait` waits for sibling claims, then activates the inactive plan. Do not republish that plan for collisions. If requested scope has no inactive plan, publish it first. Waiting never refreshes baselines. Treat it as a Workbench Long Wait.
 
 ### continue or extend an active arc
 

@@ -19,6 +19,7 @@ import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rej
 import { WorkspaceGitArcMemberError } from "./WorkbenchWorkspaceGitArcController";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
+import { GitArcStartDiagnosticError } from "../lib/workbench/git/git-arc-start-diagnostics";
 
 function waitFeature() {
   return new WorkbenchGitArcFeature({
@@ -79,7 +80,7 @@ test("startup claim reconciliation seeds current scopes at observation time", as
   assert.ok((snapshots[0]?.observedAt ?? 0) >= startedAt);
 });
 
-test("competing Git arc waits return one active owner and keep the loser waiting until release", async () => {
+for (const driftAfterRelease of [false, true]) test(`competing Git arc waits revalidate after release with drift=${driftAfterRelease}`, async () => {
   const transitions = new WorkbenchThreadTransitionCoordinator();
   const feature = new WorkbenchGitArcFeature({
     getThreadCreatedAt: async () => 1,
@@ -117,6 +118,12 @@ test("competing Git arc waits return one active owner and keep the loser waiting
     };
   };
   internal.controller.startArc = async ({ checkpointCommit, threadId }) => {
+    if (driftAfterRelease && threadId === "thread-two") {
+      throw new GitArcStartDiagnosticError("Plan changed after publication.", {
+        collisions: [], commitChanges: [], dirtyUnclaimedPaths: ["src/a.ts"], headMovement: "same",
+        planCheckpointCommit: checkpointCommit!, snapshotDrift: ["src/a.ts"],
+      });
+    }
     owner = threadId;
     return {
       acquiredClaims: ["src/a.ts"],
@@ -153,9 +160,19 @@ test("competing Git arc waits return one active owner and keep the loser waiting
     action: "arcRelease", cwd: "C:/Git/Project", disown: false, harness: "codex", threadId: "thread-one",
   })).status, 200);
   const secondResponse = await second;
-  assert.equal(secondResponse.status, 200);
-  assert.equal((await secondResponse.json() as { checkpointCommit: string }).checkpointCommit, "b".repeat(40));
-  assert.equal(owner, "thread-two");
+  if (driftAfterRelease) {
+    assert.equal(secondResponse.status, 400);
+    const result = await secondResponse.json() as GitArcFailureEnvelope;
+    assert.equal(result.gitArcFailure.code, "planDrift");
+    if (result.gitArcFailure.code !== "planDrift") throw new Error("Expected drift after release.");
+    assert.equal(result.gitArcFailure.planRef, "b".repeat(40));
+    assert.deepEqual(result.gitArcFailure.snapshotPaths, ["src/a.ts"]);
+    assert.equal(owner, null);
+  } else {
+    assert.equal(secondResponse.status, 200);
+    assert.equal((await secondResponse.json() as { checkpointCommit: string }).checkpointCommit, "b".repeat(40));
+    assert.equal(owner, "thread-two");
+  }
 });
 
 test("Git arc wait stops on caller cancellation and feature disposal", async () => {
