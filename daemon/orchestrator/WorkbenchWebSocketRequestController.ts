@@ -477,8 +477,16 @@ export default class WorkbenchWebSocketRequestController {
         }
       } else {
         if (envelope?.method === "workbench/thread-state/updated") {
-          message = { ...envelope, params: await mapNativeThreadStateSnapshot(this.threadStateIdentities!, envelope.params as WorkbenchThreadStateSnapshot) };
+          const projectionStartedAt = this.now();
+          const params = await mapNativeThreadStateSnapshot(this.threadStateIdentities!, envelope.params as WorkbenchThreadStateSnapshot);
+          const projectionMs = this.now() - projectionStartedAt;
           signal.throwIfAborted();
+          message = { ...envelope, params };
+          const kind = "updateKind" in params ? params.updateKind : "sidebar";
+          const snapshot = "sidebar" in params ? params.sidebar : "summary" in params ? params.summary : params;
+          const entries = "entries" in snapshot ? snapshot.entries.length : 0;
+          // Temporary, unthrottled measurement: traffic summaries cannot locate projection delays.
+          this.writeLine(` WS out wb:thread-state/updated projection in ${formatDuration(projectionMs)} ${dimWebSocketDetail(`(kind: ${kind}, revision: ${snapshot.revision}, entries: ${entries})`)}`);
         } else if (envelope?.[WORKBENCH_HARNESS_FIELD]) {
           const harness = this.harnesses.resolveHarness(envelope[WORKBENCH_HARNESS_FIELD]);
           const params = asRecord(envelope.params);
